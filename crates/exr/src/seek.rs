@@ -6,8 +6,10 @@
 //!   checking what they declare against [`Limits`] and the source's length. It allocates nothing
 //!   sized by pixels, and the index holds no pixel data, so it can be kept per file.
 //! - [`read_bands`] reads what a [`Request`] asks for and delivers it incrementally: each
-//!   compression block that has been decoded becomes [`Band`]s (one per requested channel: a
-//!   rectangle of rows) handed to a callback, in file order, as soon as the block is decoded. A
+//!   compression block becomes [`Band`]s (one per requested channel: a rectangle of rows) handed
+//!   to a callback on the calling thread, in file order. Blocks are decoded on worker threads; the
+//!   calling thread hands over what has been decoded each time it has read a piece of the file
+//!   and while it waits, so the first bands arrive long before the request has been read. A
 //!   caller that writes into tiles or shows lines while the rest is still being read never holds
 //!   a whole plane.
 //! - [`read_planes`] is a collector over [`read_bands`]: the same request delivered as one
@@ -15,25 +17,37 @@
 //!
 //! A request names channels as `(part, channel)` pairs (positions in [`Index::parts`]), a range of
 //! display-window rows, and a level: level `n` keeps every `2^n`-th row and column of the display
-//! window, so a reduced picture is made without allocating the full-resolution one. Only the
-//! chunks that hold a requested channel and a requested row are fetched, chunks that follow each
-//! other in the file in one read, and they are decompressed on several threads while the next
-//! ones are being read. Samples are converted to `f32`; outside a part's data window (and in rows
-//! no chunk holds) a plane has the channel's fill value.
+//! window, so a reduced picture is made without allocating the full-resolution one. Rows and band
+//! positions count from the display window's top-left corner (0, 0), not in the file's absolute
+//! coordinates (which [`PartInfo`]'s windows use). Only the chunks that hold a requested channel
+//! and a requested row are fetched, chunks that follow each other in the file in one read, and
+//! they are decompressed on several threads while the next ones are being read. Samples are
+//! converted to `f32` (integer samples above 2^24 lose precision); outside a part's data window
+//! (and in rows no chunk holds) a plane has the channel's fill value.
 //!
 //! Deep parts are not read here (see [`crate::deep`]); a flat part beside them is. Tiled parts
 //! are read from their largest resolution level. Every size a header declares is checked before
-//! it is used, every allocation is bounded by the caller's [`Request::max_bytes`] or reserved
-//! fallibly, and nothing panics on hostile input.
+//! it is used and every allocation is bounded by a limit or reserved fallibly.
+//!
+//! Panics: the `exr` crate's header parser and decompressors can panic on some damaged input.
+//! Where panics unwind (native targets), those calls are wrapped in `catch_unwind` and a panic
+//! becomes [`Error::Malformed`]. Where panics abort (`wasm32-unknown-unknown`), `catch_unwind`
+//! does nothing, so this module checks beforehand what it knows the crate would panic on: the
+//! chunk layout is computed here with checked arithmetic instead of the crate's (which panics on
+//! some sizes), the crate's block-size formula is checked for overflow, and a chunk's coordinates
+//! and level are checked before the crate interprets them. A panic inside the crate's header
+//! parsing or a decompressor on damaged data is not ruled out there.
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use exr::block::UncompressedBlock;
-use exr::block::chunk::Chunk;
+use exr::block::chunk::{Chunk, CompressedBlock};
+use exr::math::Vec2;
 use exr::meta::MetaData;
 use exr::meta::attribute::SampleType as ExrSample;
 use exr::meta::header::Header;
@@ -46,14 +60,16 @@ pub enum Error {
     /// The file is damaged, or a chunk can't be decompressed.
     #[error("OpenEXR: {0}")]
     Malformed(String),
-    /// A valid file this reader does not cover (HTJ2K compression, subsampled channels).
+    /// A valid file this reader does not cover (HTJ2K compression, subsampled channels, channels
+    /// of deep parts).
     #[error("unsupported OpenEXR: {0}")]
     Unsupported(String),
-    /// The file declares more than [`Limits`] allow, or the request needs more than
-    /// [`Request::max_bytes`] (or than the system can give).
+    /// The file declares more than [`Limits`] (or this module's own bounds) allow, or the request
+    /// needs more than [`Request::max_bytes`] (or than the system can give).
     #[error("OpenEXR exceeds a limit: {0}")]
     LimitExceeded(String),
-    /// The source failed just now (a seek or read error): another attempt may succeed.
+    /// The source failed just now (a seek or read error other than the file ending early):
+    /// another attempt may succeed.
     #[error("OpenEXR: cannot read: {0}")]
     Io(String),
     /// The `cancel` callback asked to stop.
@@ -72,6 +88,12 @@ fn io(e: impl std::fmt::Display) -> Error {
     Error::Io(e.to_string())
 }
 
+/// A failed `read_exact` of the headers or tables: the file ending early is a damaged file, any
+/// other error is the source failing.
+fn read_failed(e: std::io::Error) -> Error {
+    if e.kind() == std::io::ErrorKind::UnexpectedEof { malformed(e) } else { io(e) }
+}
+
 fn exr_error(e: exr::error::Error) -> Error {
     match e {
         exr::error::Error::NotSupported(message) => Error::Unsupported(message.to_string()),
@@ -85,6 +107,11 @@ const MAGIC: [u8; 4] = [0x76, 0x2f, 0x31, 0x01];
 const META_BYTES: usize = 8 << 20;
 const MAX_PARTS: usize = 1024;
 const MAX_ATTRIBUTES: usize = 4096;
+/// The most chunks all parts of a file may have together. The offset tables and the index hold
+/// a few bytes per chunk, so a header declaring billions of tiny tiles (whose tables a short file
+/// can't hold anyway) is refused before anything is sized by it. 16 million chunks is a 64K ×
+/// 64K picture in 16 × 16 tiles.
+const MAX_CHUNKS: usize = 1 << 24;
 /// The most bytes one uncompressed block of a part may take: the decompressor allocates that much
 /// for a block before it looks at the data, so a hostile header (a data window a billion pixels
 /// wide over one tiny chunk) would otherwise ask for gigabytes.
@@ -97,19 +124,28 @@ const MAX_BLOCK_BYTES: usize = 256 << 20;
 const FIRST_PIECE_BYTES: u64 = 256 << 10;
 const PIECE_BYTES: u64 = 4 << 20;
 const PIECE_CHUNKS: usize = 256;
+/// The most decoded bytes a read keeps in flight: the decompressed blocks and the bands of the
+/// chunks read but not yet handed to the sink. Compressed bytes say little about this (a flat
+/// colour compresses a thousandfold), so the reader estimates each chunk's decoded size from its
+/// header and waits for the sink to catch up before reading more.
+const IN_FLIGHT_BYTES: u64 = 64 << 20;
+/// How often a wait for the workers polls `cancel`.
+const CANCEL_POLL: Duration = Duration::from_millis(50);
 
-/// One chunk of a part, in offset-table order.
+/// One chunk of the full-resolution level of a part, in offset-table order.
 #[derive(Debug, Clone, Copy)]
 struct ChunkRef {
     /// Where it starts in the file, and how many bytes to read for it (0: its offset is not valid,
     /// it is never read).
     offset: u64,
     len: u64,
-    /// Its first row in the part's data window and how many rows it holds.
-    y: i64,
+    /// Its top-left pixel in the part's data window (0-based) and its size.
+    x: usize,
+    y: usize,
+    cols: usize,
     rows: usize,
-    /// Of the full-resolution level (tiled files also store reduced levels).
-    largest: bool,
+    /// Its tile column and row (scan-line blocks: column 0, row = block number).
+    tile: (usize, usize),
 }
 
 /// Where one part's samples go in the display window, and its chunks.
@@ -119,6 +155,9 @@ struct PartLayout {
     offset: (i64, i64),
     /// The data window's size.
     size: (usize, usize),
+    /// The bytes of one pixel of all its channels, uncompressed.
+    pixel_bytes: usize,
+    /// The chunks of the full-resolution level (smaller levels of tiled parts are never read).
     chunks: Vec<ChunkRef>,
 }
 
@@ -143,7 +182,8 @@ impl Index {
         source.seek(SeekFrom::Start(0)).map_err(io)?;
         let prefix = read_headers(source, cancel)?;
         check_previews(&prefix).map_err(malformed)?;
-        // (the crate's own parsing panics on some malformed headers: reported, never raised)
+        // (the crate's own parsing panics on some malformed headers: reported, never raised,
+        // where panics unwind)
         let meta = catch_unwind(AssertUnwindSafe(|| MetaData::read_from_buffered(Cursor::new(&prefix), false)))
             .map_err(|_| malformed("invalid OpenEXR headers"))?
             .map_err(exr_error)?;
@@ -165,8 +205,7 @@ impl Index {
         }
         let tables = read_tables(source, &meta, prefix.len() as u64, len, cancel)?;
         let chunks_start = prefix.len() as u64 + tables.iter().map(|t| t.len() as u64 * 8).sum::<u64>();
-        let layout = catch_unwind(AssertUnwindSafe(|| layout_of(&meta, &tables, chunks_start, len)))
-            .map_err(|_| malformed("invalid OpenEXR chunk layout"))??;
+        let layout = layout_of(&meta, &tables, chunks_start, len)?;
         let mut parts: Vec<PartInfo> = meta.headers.iter().enumerate().map(|(i, h)| part_info(i, h)).collect();
         // (an index stays small however much a renderer writes into the headers: the text
         // attributes are kept in the part infos, the crate's own copies are dropped)
@@ -184,12 +223,13 @@ impl Index {
     }
 
     /// Every part's header facts: channels (in the order a request's `(part, channel)` pairs
-    /// count them), windows, compression and text attributes.
+    /// count them), windows (in the file's absolute coordinates), compression and text attributes.
     pub fn parts(&self) -> &[PartInfo] {
         &self.parts
     }
 
-    /// The display window of the file (the first part's): every plane covers it.
+    /// The display window of the file (the first part's, in absolute coordinates): every plane
+    /// covers it, and a request's rows and a band's position count from its top-left corner.
     pub fn display(&self) -> Window {
         self.display
     }
@@ -219,7 +259,7 @@ impl Index {
 /// bytes: bounded in size, parts and attributes before anything parses them.
 fn read_headers<R: Read + ?Sized>(r: &mut R, cancel: &dyn Fn() -> bool) -> Result<Vec<u8>> {
     let mut start = [0u8; 8];
-    r.read_exact(&mut start).map_err(malformed)?;
+    r.read_exact(&mut start).map_err(read_failed)?;
     if start.get(..4) != Some(&MAGIC[..]) {
         return Err(malformed("OpenEXR signature"));
     }
@@ -244,7 +284,7 @@ fn read_headers<R: Read + ?Sized>(r: &mut R, cancel: &dyn Fn() -> bool) -> Resul
             }
             read_name(r, &mut prefix, None)?;
             let mut size = [0u8; 4];
-            r.read_exact(&mut size).map_err(malformed)?;
+            r.read_exact(&mut size).map_err(read_failed)?;
             prefix.extend_from_slice(&size);
             let n = usize::try_from(i32::from_le_bytes(size)).map_err(malformed)?;
             let end =
@@ -256,7 +296,7 @@ fn read_headers<R: Read + ?Sized>(r: &mut R, cancel: &dyn Fn() -> bool) -> Resul
                 if cancel() {
                     return Err(Error::Cancelled);
                 }
-                r.read_exact(bytes).map_err(malformed)?;
+                r.read_exact(bytes).map_err(read_failed)?;
             }
         }
         headers += 1;
@@ -268,7 +308,7 @@ fn read_headers<R: Read + ?Sized>(r: &mut R, cancel: &dyn Fn() -> bool) -> Resul
         }
         // A multi-part header list ends with one more empty name.
         let mut next = [0u8; 1];
-        r.read_exact(&mut next).map_err(malformed)?;
+        r.read_exact(&mut next).map_err(read_failed)?;
         match next.first().copied() {
             Some(0) | None => {
                 prefix.push(0);
@@ -289,7 +329,7 @@ fn read_name<R: Read + ?Sized>(r: &mut R, prefix: &mut Vec<u8>, first: Option<u8
             Some(b) => b,
             None => {
                 let mut one = [0u8; 1];
-                r.read_exact(&mut one).map_err(malformed)?;
+                r.read_exact(&mut one).map_err(read_failed)?;
                 one.first().copied().unwrap_or(0)
             }
         };
@@ -311,6 +351,9 @@ fn check_part(index: usize, h: &Header, limits: &Limits) -> Result<()> {
         return Ok(());
     }
     let (w, ht) = (h.layer_size.0, h.layer_size.1);
+    if w == 0 || ht == 0 {
+        return Err(malformed(format!("empty data window of part {index}")));
+    }
     if w > limits.max_width as usize || ht > limits.max_height as usize || (w as u64).saturating_mul(ht as u64) > limits.max_pixels {
         return Err(Error::LimitExceeded(format!("part {index} of {w}x{ht}")));
     }
@@ -321,30 +364,41 @@ fn check_part(index: usize, h: &Header, limits: &Limits) -> Result<()> {
     Ok(())
 }
 
-/// The bytes of one uncompressed block of `h` (its pixel bytes times a block's pixels, checked):
-/// `None` past [`MAX_BLOCK_BYTES`] or when it doesn't fit in a `usize`.
+/// The bytes of all channels of one pixel of `h`, checked.
+fn pixel_bytes(h: &Header) -> Option<usize> {
+    h.channels.list.iter().map(|c| c.sample_type.bytes_per_sample()).try_fold(0usize, usize::checked_add)
+}
+
+/// The most bytes a block of `h` may take, by the formula the `exr` crate uses to cap what it
+/// reads and decompresses for one chunk (`Header::max_block_byte_size`: a pixel's bytes times a
+/// tile's area, or times the width and the scan lines a block holds, even when the part has
+/// fewer rows), computed with checked arithmetic: `None` past [`MAX_BLOCK_BYTES`] or when it
+/// overflows. Checking it here keeps the crate's own (unchecked) computation from overflowing.
 fn block_bytes(h: &Header) -> Option<usize> {
-    let (w, rows) = match h.blocks {
-        exr::meta::BlockDescription::Tiles(t) => (t.tile_size.0, t.tile_size.1),
-        exr::meta::BlockDescription::ScanLines => (h.layer_size.0, h.compression.scan_lines_per_block().min(h.layer_size.1.max(1))),
+    let pixels = match h.blocks {
+        exr::meta::BlockDescription::Tiles(t) => t.tile_size.0.checked_mul(t.tile_size.1)?,
+        exr::meta::BlockDescription::ScanLines => h.compression.scan_lines_per_block().checked_mul(h.layer_size.0)?,
     };
-    let per_pixel = h.channels.list.iter().map(|c| c.sample_type.bytes_per_sample()).try_fold(0usize, usize::checked_add)?;
-    per_pixel.checked_mul(w)?.checked_mul(rows).filter(|b| *b <= MAX_BLOCK_BYTES)
+    pixel_bytes(h)?.checked_mul(pixels).filter(|b| *b <= MAX_BLOCK_BYTES)
 }
 
 /// The offset tables, one per part, read from where the headers end.
 fn read_tables<R: Read + Seek + ?Sized>(r: &mut R, meta: &MetaData, headers_end: u64, len: u64, cancel: &dyn Fn() -> bool) -> Result<Vec<Vec<u64>>> {
+    let chunks: usize = meta.headers.iter().map(|h| h.chunk_count).fold(0, usize::saturating_add);
+    if chunks > MAX_CHUNKS {
+        return Err(Error::LimitExceeded(format!("{chunks} chunks, more than {MAX_CHUNKS}")));
+    }
     // Eight bytes of table per chunk: a header can't claim more chunks than the file holds.
-    let chunks: u64 = meta.headers.iter().map(|h| h.chunk_count as u64).fold(0, u64::saturating_add);
-    if chunks.saturating_mul(8) > len.saturating_sub(headers_end) {
+    if (chunks as u64).saturating_mul(8) > len.saturating_sub(headers_end) {
         return Err(malformed("offset tables longer than the file"));
     }
     r.seek(SeekFrom::Start(headers_end)).map_err(io)?;
-    let mut tables = Vec::with_capacity(meta.headers.len());
+    let mut tables = Vec::new();
+    tables.try_reserve_exact(meta.headers.len()).map_err(|_| Error::LimitExceeded("offset table allocation".into()))?;
+    let mut buf = vec![0u8; 8 * 8192];
     for h in &meta.headers {
         let mut table: Vec<u64> = Vec::new();
         table.try_reserve_exact(h.chunk_count).map_err(|_| Error::LimitExceeded("offset table allocation".into()))?;
-        let mut buf = vec![0u8; 8 * 8192];
         let mut left = h.chunk_count;
         while left > 0 {
             if cancel() {
@@ -352,7 +406,7 @@ fn read_tables<R: Read + Seek + ?Sized>(r: &mut R, meta: &MetaData, headers_end:
             }
             let take = left.min(8192);
             let bytes = buf.get_mut(..take * 8).ok_or_else(|| malformed("table buffer"))?;
-            r.read_exact(bytes).map_err(malformed)?;
+            r.read_exact(bytes).map_err(read_failed)?;
             table.extend(bytes.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)));
             left -= take;
         }
@@ -361,50 +415,63 @@ fn read_tables<R: Read + Seek + ?Sized>(r: &mut R, meta: &MetaData, headers_end:
     Ok(tables)
 }
 
-/// Each part's chunks: where they are and which rows they hold. A chunk ends where the next one
-/// in the file starts (or at the end of the file); an offset outside the chunk area is kept
-/// as a chunk that is never read.
+/// Each part's chunks of the full-resolution level: where they are and which pixels they hold. A
+/// chunk ends where the next one in the file starts (or at the end of the file); an offset
+/// outside the chunk area is kept as a chunk that is never read.
+///
+/// The layout is computed here rather than with the `exr` crate's block iterator, which allocates
+/// for every level and panics on some sizes. The full-resolution level comes first in the offset
+/// table of every level mode (scan lines, single-level tiles, mip and rip maps), its blocks row by
+/// row and left to right.
 fn layout_of(meta: &MetaData, tables: &[Vec<u64>], chunks_start: u64, len: u64) -> Result<Vec<PartLayout>> {
+    let allocation = |_| Error::LimitExceeded("chunk layout allocation".into());
     let first = meta.headers.first().ok_or_else(|| malformed("missing header"))?;
     let display = first.shared_attributes.display_window;
-    let mut starts: Vec<u64> = tables.iter().flatten().copied().filter(|o| *o >= chunks_start && *o < len).collect();
+    let mut starts: Vec<u64> = Vec::new();
+    starts.try_reserve_exact(tables.iter().map(Vec::len).fold(0, usize::saturating_add)).map_err(allocation)?;
+    starts.extend(tables.iter().flatten().copied().filter(|o| *o >= chunks_start && *o < len));
     starts.sort_unstable();
     starts.dedup();
     let end_of = |offset: u64| match starts.binary_search(&offset) {
         Ok(i) => starts.get(i + 1).copied().unwrap_or(len),
         Err(_) => offset,
     };
-    let mut out = Vec::with_capacity(meta.headers.len());
+    let mut out = Vec::new();
+    out.try_reserve_exact(meta.headers.len()).map_err(allocation)?;
     for (pi, h) in meta.headers.iter().enumerate() {
         let pos = h.own_attributes.layer_position;
         let offset = (i64::from(pos.0) - i64::from(display.position.0), i64::from(pos.1) - i64::from(display.position.1));
         if h.deep {
-            out.push(PartLayout { offset, size: (0, 0), chunks: Vec::new() });
+            out.push(PartLayout { offset, size: (0, 0), pixel_bytes: 0, chunks: Vec::new() });
             continue;
         }
         let table = tables.get(pi).ok_or_else(|| malformed("offset table"))?;
         // A chunk is at most its block's bytes plus its own small header (part number, position
         // and sizes): never read more for one.
         let most = (block_bytes(h).ok_or_else(|| malformed("block size"))? as u64).saturating_add(64);
-        let blocks = h.blocks_increasing_y_order();
-        if blocks.len() != h.chunk_count {
-            return Err(malformed(format!("chunk count of part {pi}")));
+        let (w, ht) = (h.layer_size.0, h.layer_size.1);
+        let (bw, bh) = match h.blocks {
+            exr::meta::BlockDescription::Tiles(t) => (t.tile_size.0, t.tile_size.1),
+            exr::meta::BlockDescription::ScanLines => (w, h.compression.scan_lines_per_block()),
+        };
+        if bw == 0 || bh == 0 {
+            return Err(malformed(format!("block size of part {pi}")));
         }
-        let mut chunks = Vec::with_capacity(h.chunk_count);
-        for (i, tile) in blocks.enumerate() {
-            let bounds = h.get_absolute_block_pixel_coordinates(tile.location).map_err(exr_error)?;
-            let at = table.get(i).copied().unwrap_or(0);
+        let across = w.div_ceil(bw);
+        let count =
+            across.checked_mul(ht.div_ceil(bh)).filter(|n| *n <= table.len()).ok_or_else(|| malformed(format!("chunk count of part {pi}")))?;
+        let mut chunks = Vec::new();
+        chunks.try_reserve_exact(count).map_err(allocation)?;
+        for (i, at) in table.iter().copied().enumerate().take(count) {
+            let tile = (i % across, i / across);
+            // (inside the data window: a tile index is below the count of blocks across or down)
+            let (x, y) = (tile.0.saturating_mul(bw), tile.1.saturating_mul(bh));
             let valid = at >= chunks_start && at < len;
             let bytes = if valid { end_of(at).saturating_sub(at).min(most) } else { 0 };
-            chunks.push(ChunkRef {
-                offset: at,
-                len: bytes,
-                y: i64::from(bounds.position.1),
-                rows: bounds.size.1,
-                largest: tile.location.is_largest_resolution_level(),
-            });
+            chunks.push(ChunkRef { offset: at, len: bytes, x, y, cols: bw.min(w.saturating_sub(x)), rows: bh.min(ht.saturating_sub(y)), tile });
         }
-        out.push(PartLayout { offset, size: (h.layer_size.0, h.layer_size.1), chunks });
+        let pixel_bytes = pixel_bytes(h).ok_or_else(|| malformed("pixel size"))?;
+        out.push(PartLayout { offset, size: (w, ht), pixel_bytes, chunks });
     }
     Ok(out)
 }
@@ -414,24 +481,30 @@ fn layout_of(meta: &MetaData, tables: &[Vec<u64>], chunks_start: u64, len: u64) 
 pub struct Request<'a> {
     /// The channels wanted as `(part, channel)` (positions in [`Index::parts`] and in the part's
     /// [`PartInfo::channels`]), in the order [`Band::slot`] and the planes of [`read_planes`] count
-    /// them. A channel of a deep part is refused.
+    /// them. A channel may be named more than once (each slot gets its own bands). A channel of a
+    /// deep part is refused.
     pub channels: &'a [(usize, usize)],
     /// The value of each requested channel (same order) where the file has no samples; missing
-    /// entries count as 0.
+    /// entries count as 0. Only [`read_planes`] uses it ([`read_bands`] delivers samples only).
     pub fill: &'a [f32],
-    /// The rows of the display window (full resolution) to read; `None`: all.
+    /// The rows to read, counted from the display window's top row (0, whatever the display
+    /// window's absolute position), at full resolution; `None`: all.
     pub rows: Option<Range<i64>>,
     /// Every `2^level`-th row and column of the display window (0: full resolution, at most 16).
     pub level: u32,
-    /// The most bytes of planes [`read_planes`] may allocate (and the check [`read_bands`] makes
-    /// against what the request would take as planes).
+    /// The most bytes of samples the read may produce: [`read_bands`] checks the requested rows
+    /// at the level, [`read_planes`] the whole display-window planes it allocates.
     pub max_bytes: usize,
+    /// The most threads that decompress (`None`: as many as the machine runs at once; `Some(0)`:
+    /// none, everything is decoded on the calling thread). Never more than the chunks need.
+    pub workers: Option<usize>,
 }
 
 impl<'a> Request<'a> {
-    /// Every row of `channels` at full resolution, fill 0, up to `max_bytes` of planes.
+    /// Every row of `channels` at full resolution, fill 0, up to `max_bytes` of samples, with as
+    /// many decoding threads as the machine runs at once.
     pub fn new(channels: &'a [(usize, usize)], max_bytes: usize) -> Request<'a> {
-        Request { channels, fill: &[], rows: None, level: 0, max_bytes }
+        Request { channels, fill: &[], rows: None, level: 0, max_bytes, workers: None }
     }
 }
 
@@ -442,8 +515,9 @@ pub fn level_size((width, height): (usize, usize), level: u32) -> (usize, usize)
 }
 
 /// A rectangle of rows of one requested channel, decoded: `samples` holds `height` rows of
-/// `width` values, row by row. `x` and `y` are in the output grid: display-window pixels at level
-/// 0, every `2^level`-th pixel above.
+/// `width` values, row by row. `x` and `y` are in the output grid, counted from the display
+/// window's top-left corner (0, 0, not its absolute position): display-window pixels at level 0,
+/// every `2^level`-th pixel above.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Band {
     /// The position of the channel in [`Request::channels`].
@@ -464,6 +538,9 @@ pub struct Stats {
     pub bytes: u64,
     /// Scan lines (or tile rows) decompressed.
     pub lines: usize,
+    /// The most decoded bytes the read had in flight at once, as estimated from the headers: the
+    /// decompressed blocks and the bands of the chunks read but not yet handed to the sink.
+    pub in_flight: u64,
 }
 
 /// The planes of [`read_planes`]: one per requested channel, `width` × `height` (the display
@@ -484,8 +561,8 @@ struct Geometry<'a> {
     stride: i64,
     /// The display rows read.
     rows: Range<i64>,
-    /// Each part's channel → request slot.
-    slots: &'a [Vec<Option<usize>>],
+    /// Each part's channel → the request slots that name it.
+    slots: &'a [Vec<Vec<usize>>],
 }
 
 impl Geometry<'_> {
@@ -500,55 +577,73 @@ impl Geometry<'_> {
         let first = first + (self.stride - first.rem_euclid(self.stride)) % self.stride;
         first < b.min(self.rows.end)
     }
+
+    /// How many rows are read (in the rows, on the level's grid).
+    fn rows_read(&self) -> usize {
+        let (a, b) = (self.rows.start.max(0), self.rows.end.max(0));
+        let count = |n: i64| n.saturating_add(self.stride - 1) / self.stride;
+        usize::try_from(count(b).saturating_sub(count(a))).unwrap_or(0)
+    }
+}
+
+/// A chunk the request needs, in the order the jobs are numbered (file order).
+struct Planned {
+    part: usize,
+    offset: u64,
+    len: u64,
+    chunk: ChunkRef,
+    /// Its estimated decoded bytes: the decompressed block and the bands of the requested slots.
+    cost: u64,
 }
 
 /// The bands of what `request` asks for, handed to `sink` one decoded block at a time, in file
-/// order.
+/// order: by offset in the file, so a part written bottom-up (`LineOrder::Decreasing`) arrives
+/// bottom-up, and the chunks of several parts arrive interleaved as the file stores them. Within
+/// a block, the bands come by request slot.
 ///
 /// The chunks are read on the calling thread, in pieces of chunks that follow each other in the
-/// file, and decompressed on worker threads while the next piece is read. Between pieces the
-/// calling thread hands every band decoded so far to `sink`, so the first bands arrive after the
-/// first few hundred kilobytes have been read, not after the whole request, and `sink` needs to be
-/// neither `Send` nor `Sync`. At most one piece is read ahead of what has been delivered, which
-/// keeps the memory a read holds at about two pieces whatever the file's size. Where threads
-/// can't be started (WebAssembly), the chunks are decoded on the calling thread instead. `cancel`
-/// is polled before each piece and while waiting for the workers.
+/// file, and decompressed on worker threads ([`Request::workers`]) while the next piece is read.
+/// Each time a piece has been read, and while waiting, the calling thread hands every band that
+/// is next in file order to `sink`, so the first bands arrive after the first few hundred
+/// kilobytes have been read, not after the whole request, and `sink` needs to be neither `Send`
+/// nor `Sync`. Memory is bounded: at most one piece is read ahead of what has been delivered (so
+/// at most two pieces of compressed bytes, 8 MiB, or one larger chunk, are held), and the
+/// decoded bytes in flight (decompressed blocks and waiting bands, estimated from the headers,
+/// see [`Stats::in_flight`]) stay within 64 MiB or one chunk's worth. Where threads can't be
+/// started (WebAssembly) the chunks are decoded on the calling thread instead. `cancel` is polled
+/// before each piece and at least every 50 ms while waiting for the workers.
 ///
 /// A band lies inside the planes the request describes ([`level_size`] of the display window);
-/// rows or columns no chunk or data window covers are not delivered (they keep the channel's
-/// fill value in [`read_planes`]).
+/// rows or columns no chunk or data window covers are not delivered. A chunk the request needs
+/// whose offset lies outside the file fails the whole read ([`Error::Malformed`]), as does a
+/// chunk that can't be decoded or isn't the block its offset-table entry stands for; the bands
+/// before it have been delivered by then.
 pub fn read_bands<R: Read + Seek + ?Sized>(
     source: &mut R,
     index: &Index,
     request: &Request,
-    cancel: &(dyn Fn() -> bool + Sync),
+    cancel: &dyn Fn() -> bool,
     sink: &mut dyn FnMut(Band),
 ) -> Result<Stats> {
-    let workers = std::thread::available_parallelism().map_or(1, usize::from);
-    read_bands_on(source, index, request, cancel, sink, workers)
+    read_bands_within(source, index, request, cancel, sink, IN_FLIGHT_BYTES)
 }
 
-/// [`read_bands`] with at most `workers` decoding threads (0: decode on the calling thread, as
-/// where threads can't be started; the tests use it to cover that path natively).
-pub(crate) fn read_bands_on<R: Read + Seek + ?Sized>(
+/// [`read_bands`] keeping at most `budget` decoded bytes in flight (the tests use a small one).
+pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
     source: &mut R,
     index: &Index,
     request: &Request,
-    cancel: &(dyn Fn() -> bool + Sync),
+    cancel: &dyn Fn() -> bool,
     sink: &mut dyn FnMut(Band),
-    workers: usize,
+    budget: u64,
 ) -> Result<Stats> {
     let mut stats = Stats { chunks: vec![0; index.layout.len()], ..Default::default() };
     let level = request.level.min(16);
     let stride = 1i64 << level;
     let (w, h) = (index.display.width as usize, index.display.height as usize);
     let out = level_size((w, h), level);
-    let need = plane_bytes(out, request.channels.len());
-    if need > request.max_bytes {
-        return Err(Error::LimitExceeded(format!("{w}×{h} channels need {} bytes, more than the {} the read may use", need, request.max_bytes)));
-    }
-    // Per part: the request slot of each of its channels (`None`: not requested).
-    let mut slots: Vec<Vec<Option<usize>>> = index.parts.iter().map(|p| vec![None; p.channels.len()]).collect();
+    // Per part and channel: the request slots that name it.
+    let mut slots: Vec<Vec<Vec<usize>>> = index.parts.iter().map(|p| vec![Vec::new(); p.channels.len()]).collect();
     for (slot, (part, channel)) in request.channels.iter().enumerate() {
         let info = index.parts.get(*part).ok_or_else(|| malformed("no such part"))?;
         if info.deep {
@@ -559,33 +654,44 @@ pub(crate) fn read_bands_on<R: Read + Seek + ?Sized>(
             return Err(Error::Unsupported("a subsampled channel".into()));
         }
         if let Some(s) = slots.get_mut(*part).and_then(|p| p.get_mut(*channel)) {
-            *s = Some(slot);
+            s.push(slot);
         }
     }
     let rows = request.rows.clone().unwrap_or(0..h as i64);
     let geometry = Geometry { size: (w, h), out, stride, rows: rows.start.max(0)..rows.end.min(h as i64), slots: &slots };
+    // What the request delivers: the rows read, at the level, of every requested channel.
+    let need = plane_bytes((out.0, geometry.rows_read()), request.channels.len());
+    if need > request.max_bytes {
+        return Err(Error::LimitExceeded(format!("the requested rows need {need} bytes, more than the {} the read may use", request.max_bytes)));
+    }
     // The chunks to read, in file order.
-    let mut jobs: Vec<(usize, u64, u64)> = Vec::new();
+    let mut jobs: Vec<Planned> = Vec::new();
     for (pi, part) in index.layout.iter().enumerate() {
-        if !slots.get(pi).is_some_and(|s| s.iter().any(Option::is_some)) {
+        let requested = slots.get(pi).map_or(0, |s| s.iter().map(Vec::len).sum::<usize>());
+        if requested == 0 {
             continue;
         }
         for c in &part.chunks {
-            let top = c.y.saturating_add(part.offset.1);
-            if !c.largest || !geometry.any_wanted(top, top.saturating_add(c.rows as i64)) {
+            let top = (c.y as i64).saturating_add(part.offset.1);
+            if !geometry.any_wanted(top, top.saturating_add(c.rows as i64)) {
                 continue;
             }
             if c.len == 0 {
                 return Err(malformed("a chunk offset outside the file"));
             }
-            jobs.push((pi, c.offset, c.len));
+            let pixels = (c.cols as u64).saturating_mul(c.rows as u64);
+            let cost = pixels.saturating_mul(part.pixel_bytes as u64).saturating_add(pixels.saturating_mul(requested as u64).saturating_mul(4));
+            jobs.try_reserve(1).map_err(|_| Error::LimitExceeded("chunk list allocation".into()))?;
+            jobs.push(Planned { part: pi, offset: c.offset, len: c.len, chunk: *c, cost });
         }
     }
-    jobs.sort_by_key(|(_, offset, _)| *offset);
+    jobs.sort_by_key(|j| j.offset);
     if jobs.is_empty() {
         return Ok(stats);
     }
-    let workers = workers.min(jobs.len());
+    // (no more threads than chunks can be in flight: two pieces)
+    let workers =
+        request.workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from)).min(jobs.len()).min(2 * PIECE_CHUNKS);
     // (declared outside the scope because the workers borrow the receiving end)
     let (to_workers, queue) = mpsc::channel::<Job>();
     let queue = Mutex::new(queue);
@@ -606,34 +712,45 @@ pub(crate) fn read_bands_on<R: Read + Seek + ?Sized>(
         drop(done);
         let mut order = InOrder::default();
         let mut pos: Option<u64> = None;
-        let mut rest = jobs.as_slice();
         let mut most = FIRST_PIECE_BYTES;
         let mut submitted = 0usize;
+        // The decoded bytes of the chunks submitted and not yet delivered.
+        let mut in_flight = 0u64;
         // The sequence number of the first chunk of the piece read last.
         let mut last_piece = 0usize;
-        while !rest.is_empty() {
+        // Hands over what is next in order and takes it off the bytes in flight.
+        let mut deliver = |order: &mut InOrder, in_flight: &mut u64, stats: &mut Stats| -> Result<()> {
+            let before = order.next;
+            let delivered = order.deliver(sink, stats);
+            let done: u64 = jobs.get(before..order.next).unwrap_or_default().iter().map(|j| j.cost).fold(0, u64::saturating_add);
+            *in_flight = in_flight.saturating_sub(done);
+            delivered
+        };
+        while submitted < jobs.len() {
             if cancel() {
                 return Err(Error::Cancelled);
             }
-            // Read ahead by one piece at most: everything before the piece read last must have
-            // reached the sink first. (`order.next` is a chunk not received yet whenever this
-            // waits, so a result is on its way.)
-            while order.next < last_piece {
-                let (seq, result) = results.recv().map_err(|_| malformed("a decoding thread stopped"))?;
+            let rest = jobs.get(submitted..).unwrap_or_default();
+            let take = piece_len(rest, most, budget);
+            let piece = rest.get(..take).unwrap_or_default();
+            let cost = piece.iter().map(|j| j.cost).fold(0, u64::saturating_add);
+            // Read ahead by one piece at most, and keep the decoded bytes in flight within the
+            // budget (a piece over it alone is read once everything before it is delivered).
+            // (`order.next` is a chunk not received yet whenever this waits, so a result is on
+            // its way: everything decoded on this thread is delivered at once.)
+            while order.next < last_piece || (order.next < submitted && in_flight.saturating_add(cost) > budget) {
+                let (seq, result) = next_result(&results, cancel)?;
                 order.accept(seq, result);
-                order.deliver(sink, &mut stats)?;
-                if cancel() {
-                    return Err(Error::Cancelled);
-                }
+                deliver(&mut order, &mut in_flight, &mut stats)?;
             }
-            let (piece, more) = rest.split_at(piece_len(rest, most));
-            rest = more;
             most = most.saturating_mul(2).min(PIECE_BYTES);
             let Piece { data, chunks } = read_piece(source, piece, &mut pos, &mut stats)?;
             let data = Arc::new(data);
             last_piece = submitted;
-            for (part, range) in chunks {
-                let job = Job { seq: submitted, part, data: Arc::clone(&data), range };
+            in_flight = in_flight.saturating_add(cost);
+            stats.in_flight = stats.in_flight.max(in_flight);
+            for (planned, range) in piece.iter().zip(chunks) {
+                let job = Job { seq: submitted, part: planned.part, chunk: planned.chunk, data: Arc::clone(&data), range };
                 submitted += 1;
                 if started == 0 {
                     order.accept(job.seq, decode_job(index, &geometry, &job));
@@ -646,26 +763,44 @@ pub(crate) fn read_bands_on<R: Read + Seek + ?Sized>(
             while let Ok((seq, result)) = results.try_recv() {
                 order.accept(seq, result);
             }
-            order.deliver(sink, &mut stats)?;
+            deliver(&mut order, &mut in_flight, &mut stats)?;
         }
         // Everything is read: the rest as it is decoded.
         while order.next < submitted {
             if cancel() {
                 return Err(Error::Cancelled);
             }
-            let (seq, result) = results.recv().map_err(|_| malformed("a decoding thread stopped"))?;
+            let (seq, result) = next_result(&results, cancel)?;
             order.accept(seq, result);
-            order.deliver(sink, &mut stats)?;
+            deliver(&mut order, &mut in_flight, &mut stats)?;
         }
         Ok(stats)
     })
 }
 
-/// [`read_bands`] collected: one plane per requested channel, the display window at the request's
-/// level, filled with [`Request::fill`] where nothing was read. The planes are reserved up front
-/// (an allocation the system refuses is [`Error::LimitExceeded`], not an abort), so the cost is
-/// known before the first chunk is read.
-pub fn read_planes<R: Read + Seek + ?Sized>(source: &mut R, index: &Index, request: &Request, cancel: &(dyn Fn() -> bool + Sync)) -> Result<Planes> {
+/// The next decoded chunk from the workers, polling `cancel` while waiting. (Only called while a
+/// worker holds a chunk: on the calling thread everything is decoded before it would wait.)
+fn next_result(results: &Receiver<(usize, Decoded)>, cancel: &dyn Fn() -> bool) -> Result<(usize, Decoded)> {
+    loop {
+        match results.recv_timeout(CANCEL_POLL) {
+            Ok(result) => return Ok(result),
+            Err(RecvTimeoutError::Timeout) => {
+                if cancel() {
+                    return Err(Error::Cancelled);
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => return Err(malformed("a decoding thread stopped")),
+        }
+    }
+}
+
+/// [`read_bands`] collected: one plane per requested channel covering the whole display window
+/// at the request's level (also when [`Request::rows`] selects only some rows: the other rows
+/// keep the fill value), filled with [`Request::fill`] where nothing was read. The planes are
+/// reserved up front and count against [`Request::max_bytes`] (an allocation the system refuses
+/// is [`Error::LimitExceeded`], not an abort), so the cost is known before the first chunk is
+/// read.
+pub fn read_planes<R: Read + Seek + ?Sized>(source: &mut R, index: &Index, request: &Request, cancel: &dyn Fn() -> bool) -> Result<Planes> {
     let (w, h) = (index.display.width as usize, index.display.height as usize);
     let (ow, oh) = level_size((w, h), request.level.min(16));
     let n = ow.checked_mul(oh).ok_or_else(|| Error::LimitExceeded("display window".into()))?;
@@ -673,7 +808,8 @@ pub fn read_planes<R: Read + Seek + ?Sized>(source: &mut R, index: &Index, reque
     if need > request.max_bytes {
         return Err(Error::LimitExceeded(format!("{w}×{h} channels need {need} bytes, more than the {} the read may use", request.max_bytes)));
     }
-    let mut planes: Vec<Vec<f32>> = Vec::with_capacity(request.channels.len());
+    let mut planes: Vec<Vec<f32>> = Vec::new();
+    planes.try_reserve_exact(request.channels.len()).map_err(|_| Error::LimitExceeded("plane list allocation".into()))?;
     for slot in 0..request.channels.len() {
         let mut plane: Vec<f32> = Vec::new();
         plane.try_reserve_exact(n).map_err(|_| Error::LimitExceeded(format!("{need} bytes of planes: the system can't give that memory")))?;
@@ -700,11 +836,12 @@ fn plane_bytes((w, h): (usize, usize), count: usize) -> usize {
     w.saturating_mul(h).saturating_mul(count).saturating_mul(std::mem::size_of::<f32>())
 }
 
-/// One chunk to decode: its sequence number in file order, its part, and where its bytes lie in
-/// the piece it was read with (shared by all the chunks of that piece).
+/// One chunk to decode: its sequence number in file order, its part, where it belongs, and where
+/// its bytes lie in the piece it was read with (shared by all the chunks of that piece).
 struct Job {
     seq: usize,
     part: usize,
+    chunk: ChunkRef,
     data: Arc<Vec<u8>>,
     range: Range<usize>,
 }
@@ -723,17 +860,37 @@ fn decode_worker(index: &Index, g: &Geometry, queue: &Mutex<Receiver<Job>>, done
             Err(_) => return,
         };
         let Ok(job) = next else { return };
-        if done.send((job.seq, decode_job(index, g, &job))).is_err() {
+        let mut report = Report { seq: job.seq, done, sent: false };
+        let decoded = decode_job(index, g, &job);
+        report.sent = true;
+        if done.send((job.seq, decoded)).is_err() {
             return;
         }
     }
 }
 
+/// Reports a chunk as failed if the worker decoding it unwinds before sending its result, so the
+/// calling thread, which waits for every chunk in order, never waits for one that won't come.
+struct Report<'a> {
+    seq: usize,
+    done: &'a Sender<(usize, Decoded)>,
+    sent: bool,
+}
+
+impl Drop for Report<'_> {
+    fn drop(&mut self) {
+        if !self.sent {
+            let _ = self.done.send((self.seq, Err(malformed("a decoding thread stopped"))));
+        }
+    }
+}
+
 /// The bands of one chunk. A panic in the `exr` crate's decompressors is reported as a damaged
-/// chunk, never raised.
+/// chunk, never raised (where panics unwind).
 fn decode_job(index: &Index, g: &Geometry, job: &Job) -> Decoded {
     let buf = job.data.get(job.range.clone()).unwrap_or_default();
-    catch_unwind(AssertUnwindSafe(|| chunk_bands(index, job.part, buf, g))).unwrap_or_else(|_| Err(malformed("a chunk could not be decompressed")))
+    catch_unwind(AssertUnwindSafe(|| chunk_bands(index, job.part, &job.chunk, buf, g)))
+        .unwrap_or_else(|_| Err(malformed("a chunk could not be decompressed")))
 }
 
 /// Puts decoded chunks back into file order: the workers finish them in any order, the sink gets
@@ -766,37 +923,39 @@ impl InOrder {
     }
 }
 
-/// The bytes of a piece, and each of its chunks' part and range in them.
+/// The bytes of a piece, and each of its chunks' range in them (in the piece's order).
 struct Piece {
     data: Vec<u8>,
-    chunks: Vec<(usize, Range<usize>)>,
+    chunks: Vec<Range<usize>>,
 }
 
 /// How many of `jobs` (chunks in file order) the next piece takes: chunks that each start where
-/// the one before ends, up to [`PIECE_CHUNKS`] of them or `most` bytes, at least one.
-fn piece_len(jobs: &[(usize, u64, u64)], most: u64) -> usize {
+/// the one before ends, up to [`PIECE_CHUNKS`] of them, `most` bytes or `budget` decoded bytes,
+/// at least one.
+fn piece_len(jobs: &[Planned], most: u64, budget: u64) -> usize {
     let mut take = 0;
-    let mut bytes = 0u64;
+    let (mut bytes, mut cost) = (0u64, 0u64);
     let mut end = None;
-    while let Some((_, offset, len)) = jobs.get(take) {
-        if take > 0 && (take >= PIECE_CHUNKS || end != Some(*offset) || bytes.saturating_add(*len) > most) {
+    while let Some(job) = jobs.get(take) {
+        if take > 0
+            && (take >= PIECE_CHUNKS || end != Some(job.offset) || bytes.saturating_add(job.len) > most || cost.saturating_add(job.cost) > budget)
+        {
             break;
         }
-        bytes = bytes.saturating_add(*len);
-        end = Some(offset.saturating_add(*len));
+        bytes = bytes.saturating_add(job.len);
+        cost = cost.saturating_add(job.cost);
+        end = Some(job.offset.saturating_add(job.len));
         take += 1;
     }
     take
 }
 
-/// The raw bytes of the chunks `piece` (part, offset, length; in file order, each starting where
-/// the one before ends), read with one request after a seek when the source stands elsewhere
-/// (`pos`), and each chunk's part and range in them. A chunk the file ends in keeps the bytes
-/// there are.
-fn read_piece<R: Read + Seek + ?Sized>(source: &mut R, piece: &[(usize, u64, u64)], pos: &mut Option<u64>, stats: &mut Stats) -> Result<Piece> {
-    let Some((_, start, _)) = piece.first() else { return Ok(Piece { data: Vec::new(), chunks: Vec::new() }) };
-    let start = *start;
-    let total = piece.iter().map(|(_, _, len)| *len).fold(0u64, u64::saturating_add);
+/// The raw bytes of the chunks `piece` (in file order, each starting where the one before ends),
+/// read with one request after a seek when the source stands elsewhere (`pos`), and each chunk's
+/// range in them. A chunk the file ends in keeps the bytes there are.
+fn read_piece<R: Read + Seek + ?Sized>(source: &mut R, piece: &[Planned], pos: &mut Option<u64>, stats: &mut Stats) -> Result<Piece> {
+    let Some(start) = piece.first().map(|j| j.offset) else { return Ok(Piece { data: Vec::new(), chunks: Vec::new() }) };
+    let total = piece.iter().map(|j| j.len).fold(0u64, u64::saturating_add);
     let mut data = Vec::new();
     data.try_reserve_exact(usize::try_from(total).map_err(|_| malformed("chunk size"))?)
         .map_err(|_| Error::LimitExceeded("chunk allocation".into()))?;
@@ -806,30 +965,46 @@ fn read_piece<R: Read + Seek + ?Sized>(source: &mut R, piece: &[(usize, u64, u64
     (&mut *source).take(total).read_to_end(&mut data).map_err(io)?;
     *pos = Some(start.saturating_add(data.len() as u64));
     stats.bytes = stats.bytes.saturating_add(data.len() as u64);
-    let mut chunks = Vec::with_capacity(piece.len());
-    for (pi, offset, len) in piece {
-        let a = usize::try_from(offset.saturating_sub(start)).unwrap_or(usize::MAX).min(data.len());
-        let b = usize::try_from(*len).map_or(data.len(), |l| a.saturating_add(l)).min(data.len());
-        chunks.push((*pi, a..b));
-        if let Some(c) = stats.chunks.get_mut(*pi) {
+    let mut chunks = Vec::new();
+    chunks.try_reserve_exact(piece.len()).map_err(|_| Error::LimitExceeded("chunk allocation".into()))?;
+    for job in piece {
+        let a = usize::try_from(job.offset.saturating_sub(start)).unwrap_or(usize::MAX).min(data.len());
+        let b = usize::try_from(job.len).map_or(data.len(), |l| a.saturating_add(l)).min(data.len());
+        chunks.push(a..b);
+        if let Some(c) = stats.chunks.get_mut(job.part) {
             *c += 1;
         }
     }
     Ok(Piece { data, chunks })
 }
 
-/// Decompress the chunk `buf` of part `pi` and convert the lines of the requested channels to
-/// bands (`g.slots`: each channel's request slot): the bands, and the scan lines decompressed. A
-/// chunk that names another part than its offset-table slot's is not placed.
-fn chunk_bands(index: &Index, pi: usize, buf: &[u8], g: &Geometry) -> Result<(Vec<Band>, usize)> {
+/// Decompress the chunk `buf` of part `pi`, which its offset table says is `expected`, and convert
+/// the lines of the requested channels to bands (`g.slots`: each channel's request slots): the
+/// bands, and the scan lines decompressed. A chunk that names another part, level or position
+/// than its offset-table entry is refused before it is decompressed.
+fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Geometry) -> Result<(Vec<Band>, usize)> {
     let meta = &index.meta;
+    let (Some(header), Some(part)) = (meta.headers.get(pi), index.layout.get(pi)) else { return Err(malformed("no such part")) };
     let mut read = buf;
     let chunk = Chunk::read(&mut read, meta).map_err(exr_error)?;
     if chunk.layer_index != pi {
-        return Ok((Vec::new(), 0));
+        return Err(malformed("a chunk of another part where its offset table points"));
+    }
+    // (checked before the crate computes the block's position, which panics on some levels)
+    let in_place = match &chunk.compressed_block {
+        CompressedBlock::ScanLine(b) => {
+            i64::from(b.y_coordinate) == i64::from(header.own_attributes.layer_position.1).saturating_add(expected.y as i64)
+        }
+        CompressedBlock::Tile(b) => b.coordinates.level_index == Vec2(0, 0) && b.coordinates.tile_index == Vec2(expected.tile.0, expected.tile.1),
+        _ => false,
+    };
+    if !in_place {
+        return Err(malformed("a chunk is not the block its offset table entry stands for"));
     }
     let block = UncompressedBlock::decompress_chunk(chunk, meta, false).map_err(exr_error)?;
-    let (Some(header), Some(part)) = (meta.headers.get(pi), index.layout.get(pi)) else { return Ok((Vec::new(), 0)) };
+    if block.index.level != Vec2(0, 0) || block.index.pixel_position != Vec2(expected.x, expected.y) {
+        return Err(malformed("a chunk is not the block its offset table entry stands for"));
+    }
     let slots = g.slots.get(pi).map_or(&[][..], Vec::as_slice);
     let lines = block.index.pixel_size.1;
     let ((lw, lh), (w, h)) = (part.size, g.size);
@@ -840,7 +1015,7 @@ fn chunk_bands(index: &Index, pi: usize, buf: &[u8], g: &Geometry) -> Result<(Ve
     // integer buffer `i32`, turning ids from 2^31 up negative)
     let (mut f16s, mut f32s, mut u32s): (Vec<exr::prelude::f16>, Vec<f32>, Vec<u32>) = (Vec::new(), Vec::new(), Vec::new());
     for line in block.lines(&header.channels) {
-        let Some(Some(slot)) = slots.get(line.location.channel).copied() else { continue };
+        let Some(wanted) = slots.get(line.location.channel).filter(|s| !s.is_empty()) else { continue };
         let Some(kind) = header.channels.list.get(line.location.channel).map(|c| c.sample_type) else { continue };
         let (x0, y, count) = (line.location.position.0, line.location.position.1, line.location.sample_count);
         // The samples of data-window row `y`, columns `x0..x0 + count`, at display row `ty` from
@@ -892,7 +1067,10 @@ fn chunk_bands(index: &Index, pi: usize, buf: &[u8], g: &Geometry) -> Result<(Ve
         if values.is_empty() || col.saturating_add(values.len()) > ow {
             continue;
         }
-        rows.entry(slot).or_default().push((row, col, values));
+        // (a channel requested more than once gets its rows in each of its slots)
+        for slot in wanted {
+            rows.entry(*slot).or_default().push((row, col, values.clone()));
+        }
     }
     // One band per run of consecutive rows of a channel that start in the same column and are as
     // wide as each other (all the rows of a scan-line block or of a tile).
