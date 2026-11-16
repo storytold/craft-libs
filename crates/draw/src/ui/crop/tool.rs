@@ -16,6 +16,7 @@ use craft_ui::contract::{Bind, Show as _};
 use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::env::{Env, Units};
+use craft_ui::runtime::pointer;
 use egui::{Pos2, Rect, Ui};
 
 use super::options::{CropFill, CropRatio, CropSettings, CropTarget};
@@ -239,6 +240,12 @@ impl CropTool {
         self.step = Arc::from(words.frame.as_str());
         let (settings, document) = (input.settings, input.document);
         let units = Env::of(ui).units();
+        // Cmd (Ctrl) held is a temporary Straighten. It is read here, before the overlay declares its parts, so the
+        // Straighten surface is there for a press on the pass after the key came down; a line in progress keeps the
+        // state it started with, so letting go of the key mid-line does not turn it into a frame drag.
+        if !self.dragging {
+            self.session.straighten_mut().set_held(pointer::frame(ui.ctx()).mods.cmd);
+        }
         let (ratio, default, straighten, dismissed) =
             (settings.ratio_value(document, &units), self.session.is_default(), self.session.straighten().on(), self.session.dismissed());
         let Some(frame) = self.session.frame_mut() else { return CropShown::default() };
@@ -257,6 +264,9 @@ impl CropTool {
         }
         if settings.delete_pixels {
             overlay = overlay.bounds(document.canvas());
+        }
+        if settings.fill == CropFill::ContentAware {
+            overlay = overlay.fills_uncovered();
         }
         if settings.image_mode() {
             overlay = overlay.image_mode();
@@ -629,9 +639,8 @@ impl CropToolPass<'_> {
 }
 
 impl CanvasTool for CropToolPass<'_> {
-    /// Drops a frame of another document ([`CropEvent::Discard`]), makes the default frame, reads Cmd
-    /// for a temporary Straighten, hands the view a gesture moved to the host, and in image mode sets
-    /// the view for a frame changed outside a gesture.
+    /// Drops a frame of another document ([`CropEvent::Discard`]), makes the default frame, hands the
+    /// view a gesture moved to the host, and in image mode sets the view for a frame changed outside a gesture.
     fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
         if let Some(pointer) = self.scrolls_at.take() {
             cx.autoscroll_at(pointer);
@@ -646,7 +655,6 @@ impl CanvasTool for CropToolPass<'_> {
             self.tool.reset();
             self.push(CropEvent::Discard(dropped));
         }
-        self.tool.session.straighten_mut().set_held(cx.mods.cmd);
         let dragging = self.tool.dragging;
         let ratio = self.input.settings.ratio_value(document, &cx.units());
         if self.tool.session.ensure_frame(document, dragging, ratio) {

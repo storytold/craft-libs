@@ -1154,6 +1154,8 @@ impl<'a, 't: 'a> Run<'a, 't> {
             self.ending = Some(active.id);
             self.call_as(active.stand_in, Some(pointer), |tool, cx| tool.release(&pointer, cx));
             self.ending = None;
+            // The readout a drag asked for in this pass goes with the gesture it measured.
+            self.requests.readout = None;
             self.report(GesturePhase::Commit);
         }
     }
@@ -1163,6 +1165,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
             self.ending = Some(active.id);
             self.call_as(active.stand_in, Some(active.last), |tool, cx| tool.cancel(reason, cx));
             self.ending = None;
+            self.requests.readout = None;
             self.report(GesturePhase::Cancel);
             self.cancelled = true;
         }

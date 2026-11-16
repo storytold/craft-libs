@@ -32,6 +32,7 @@ struct Setup {
     default_frame: bool,
     image_mode: bool,
     auto_center: bool,
+    fills_uncovered: bool,
     hidden: bool,
     bounds: Option<Rect>,
     snap_x: Option<f64>,
@@ -49,6 +50,7 @@ impl Setup {
             default_frame: false,
             image_mode: false,
             auto_center: false,
+            fills_uncovered: false,
             hidden: false,
             bounds: None,
             snap_x: None,
@@ -147,6 +149,9 @@ impl Rig {
                 }
                 if s.straighten {
                     overlay = overlay.straighten();
+                }
+                if s.fills_uncovered {
+                    overlay = overlay.fills_uncovered();
                 }
                 if s.hidden {
                     overlay = overlay.hidden();
@@ -686,6 +691,18 @@ fn a_default_turn_keeps_the_frame_inside_the_turned_image() {
     let mut rig = rig_for(past, true);
     let (_, end) = turn_by(&mut rig, &[5.0, 10.0], 120.0, Modifiers::NONE);
     assert_eq!(rig.rect(), past.rect, "the frame was past the image at the press");
+    rig.release(end);
+
+    // A crop that fills what the turn uncovers keeps the press frame.
+    let mut s = Setup::new();
+    s.image_mode = true;
+    s.bounds = Some(image);
+    s.fills_uncovered = true;
+    s.view = crop_view(&edge, &s.view);
+    let mut rig = Rig::new(edge, s);
+    let (_, end) = turn_by(&mut rig, &[10.0, 20.0], 120.0, Modifiers::NONE);
+    assert!(rig.crop().angle.abs() > 1.0, "it turned: {:?}", rig.crop());
+    assert_eq!(rig.rect(), edge.rect, "the fill covers what the turn uncovers");
     rig.release(end);
 
     // A Classic Mode turn that would leave the image is refused: both steps leave it.

@@ -69,6 +69,7 @@ pub(super) struct Rules {
     pub turn_step: f64,
     pub image: bool,
     pub auto_center: bool,
+    pub fills_uncovered: bool,
     /// The canvas's snapping, with this pass's tolerance.
     pub snap: Option<Snap>,
     pub os: Platform,
@@ -122,9 +123,9 @@ impl Rules {
                 match self.bounds.filter(|_| self.image) {
                     // An image-mode turn keeps the frame inside the turned image (#10869), each step from the press
                     // frame so turning back gives it back. ⌘ keeps the press frame, and so does a press frame that
-                    // was already past the bounds.
+                    // was already past the bounds, and a crop that fills what the turn uncovers.
                     Some(bounds) => {
-                        let keeps_press = mods.cmd || at.kept_inside(bounds) != Some(at);
+                        let keeps_press = mods.cmd || self.fills_uncovered || at.kept_inside(bounds) != Some(at);
                         let kept = if keeps_press { Some(turned) } else { turned.kept_inside(bounds) };
                         return kept.filter(CropBox::is_finite).or(Some(drag.last));
                     }

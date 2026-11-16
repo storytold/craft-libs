@@ -1386,6 +1386,29 @@ fn readout_during_a_drag(hud: bool, shown: Option<bool>) -> (bool, bool) {
 }
 
 #[trial]
+fn a_drags_readout_is_not_reported_in_the_pass_its_release_ends_the_gesture() {
+    let reported = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reported);
+    let tool = RefCell::new(Measuring { hud: false });
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |_, _| {});
+        let reply = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
+        seen.set(reply.readout.is_some());
+    });
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.frame(vec![pointer::press(centre)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(centre + BY * (step as f32 / 4.0))]);
+    }
+    assert!(reported.get(), "the drag reports its readout");
+    fixture.frame(vec![pointer::release(centre + BY)]);
+    assert!(!reported.get(), "the release pass reports none");
+}
+
+#[trial]
 fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
     assert_eq!(readout_during_a_drag(false, None), (true, true), "by default a tool's readout paints and is reported");
     assert_eq!(

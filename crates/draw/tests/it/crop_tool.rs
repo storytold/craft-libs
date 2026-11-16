@@ -45,6 +45,17 @@ fn sized(key: u64, width: f64, height: f64) -> CropDocument {
 }
 
 #[trial]
+fn the_first_set_of_a_session_is_a_box_step() {
+    let mut session = CropSession::new();
+    session.ensure_frame(&sized(1, 200.0, 100.0), false, None);
+    let start = session.frame();
+    session.set(upright(10.0, 10.0, 90.0, 60.0), false, "Crop");
+    assert!(session.can_undo(), "the set is a step");
+    assert!(session.undo());
+    assert_eq!(session.frame(), start);
+}
+
+#[trial]
 fn box_undo_redo_steps_committed_gestures_only() {
     let mut session = CropSession::new();
     let ctx = egui::Context::default();
@@ -277,6 +288,41 @@ fn leaving_during_a_drag_ends_it_at_its_last_frame_and_applies() {
 }
 
 #[trial]
+fn typing_a_ratio_in_several_steps_fits_from_the_frame_the_edit_began_with() {
+    let mut rig = Rig::new(classic());
+    rig.run();
+    let mut host = rig.host.borrow_mut();
+    let Host { tool, settings, document, .. } = &mut *host;
+    let base = upright(20.0, 10.0, 180.0, 90.0);
+    tool.crop_to(base);
+    // 1 : 3 and then 16 : 3 on the way to 16 : 6: each step fits from the frame the edit started with, so the frame
+    // does not shrink for good on the way.
+    for (width, height) in [(1.0, 3.0), (16.0, 3.0), (16.0, 6.0)] {
+        let mut ratio = settings.clone();
+        ratio.ratio = CropRatio::sides(width, height);
+        tool.refit(&ratio, document, &units(), true);
+    }
+    let frame = tool.frame().expect("a frame");
+    assert!((frame.rect.width() / frame.rect.height() - 16.0 / 6.0).abs() < 1e-6, "{frame:?}");
+    assert!((frame.rect.width() - base.rect.width()).abs() < 1e-6, "fitted from the frame the edit began with: {frame:?}");
+    assert_eq!(frame.rect.center(), base.rect.center());
+}
+
+#[trial]
+fn the_pens_eraser_end_standing_in_for_the_tool_keeps_the_frame_pending_until_the_tip_returns() {
+    let mut rig = Rig::new(classic());
+    rig.drag((100.0, 80.0), (300.0, 220.0));
+    let drawn = rig.frame().expect("the drawn frame");
+    let mut host = rig.host.borrow_mut();
+    let Host { tool, settings, document, .. } = &mut *host;
+    assert!(tool.leave(settings, document, &units(), true).is_none(), "the eraser end applies nothing");
+    assert!(tool.session().pending());
+    assert_eq!(tool.frame(), Some(drawn));
+    // The pass after the tip comes back: leaving for another tool applies the frame.
+    assert!(matches!(tool.leave(settings, document, &units(), false), Some(CropEvent::Apply(_))));
+}
+
+#[trial]
 fn the_default_frame_fits_the_ratio_and_follows_the_selection() {
     // A new default frame fits the saved ratio about its centre.
     let mut square = classic();
@@ -304,6 +350,33 @@ fn the_default_frame_fits_the_ratio_and_follows_the_selection() {
         assert_eq!(tool.frame(), Some(upright(50.0, 0.0, 350.0, 300.0)), "the ratio fits the canvas, not the selection");
         assert!(!tool.session().from_selection() && !tool.shows_selection_entry(&ratio) && !tool.session().applies());
     }
+}
+
+#[trial]
+fn p_and_h_belong_to_the_crop_only_while_a_frame_is_pending() {
+    // The untouched default frame leaves P and H to the app.
+    let mut rig = Rig::new(classic());
+    rig.run();
+    rig.host.borrow_mut().events.clear();
+    rig.fixture.key(Key::P, Modifiers::NONE);
+    rig.fixture.key(Key::H, Modifiers::NONE);
+    rig.run();
+    assert!(!rig.host.borrow().events.iter().any(|event| matches!(event, CropEvent::Settings(_))), "neither key was the crop's");
+
+    // A pending frame takes P (Classic Mode) and H (Show Cropped Area, inert in Classic Mode).
+    rig.drag((100.0, 80.0), (300.0, 220.0));
+    rig.run();
+    assert!(rig.host.borrow().tool.session().pending());
+    rig.fixture.key(Key::P, Modifiers::NONE);
+    rig.run();
+    assert!(!rig.host.borrow().settings.shield.classic_mode, "P left Classic Mode");
+    let shown = rig.host.borrow().settings.shield.show_cropped_area;
+    rig.fixture.key(Key::H, Modifiers::NONE);
+    rig.run();
+    assert_eq!(rig.host.borrow().settings.shield.show_cropped_area, !shown, "H toggles Show Cropped Area in image mode");
+    rig.fixture.key(Key::P, Modifiers::NONE);
+    rig.run();
+    assert!(rig.host.borrow().settings.shield.classic_mode, "P again goes back");
 }
 
 #[trial]
@@ -506,6 +579,28 @@ fn a_straighten_line_inside_the_frame_snaps_its_ends_as_points_not_as_a_frame_mo
     let angle = angle_of((60.0, 100.0), (298.0, 130.0));
     let snapped = level((60.0, 100.0), (300.0, 130.0));
     assert!((angle - snapped).abs() < 1e-3, "{angle} vs {snapped}: an end within reach of the guide snaps onto it");
+}
+
+#[trial]
+fn a_line_started_with_cmd_keeps_turning_the_frame_in_place_after_cmd_is_let_go() {
+    let fall = 200.0 * 10f64.to_radians().tan();
+    let mut rig = Rig::new(classic());
+    rig.drag((100.0, 80.0), (300.0, 220.0));
+    let before = rig.frame().expect("a drawn frame");
+    rig.fixture.hold(Modifiers::COMMAND);
+    rig.run();
+    let (from, to) = (rig.at(100.0, 150.0), rig.at(300.0, 150.0 + fall));
+    rig.fixture.frame(vec![pointer::moved(from)]);
+    rig.fixture.frame(vec![pointer::press(from)]);
+    rig.fixture.frame(vec![pointer::moved(from + (to - from) * 0.5)]);
+    // Cmd comes up before the line ends: it is still the line it started as.
+    rig.fixture.hold(Modifiers::NONE);
+    rig.fixture.frame(vec![pointer::moved(to)]);
+    rig.fixture.frame(vec![pointer::release(to)]);
+    rig.fixture.frame(Vec::new());
+    let frame = rig.frame().expect("a frame");
+    assert!((frame.angle - 10.0).abs() < 0.1, "angle {}", frame.angle);
+    assert_eq!(frame.rect, before.rect, "size and centre stay");
 }
 
 #[trial]
