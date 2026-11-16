@@ -853,9 +853,18 @@ fn morph_targets_and_other_scenes_are_named_in_warnings() {
     );
     // The morphed primitives are still drawn, in their base shape.
     assert_eq!(s.meshes[0].parts.len(), 3);
-    // One scene, or an out-of-range choice, is not a warning about scenes.
-    let one = parse(&doc(json!(5), json!([{ "nodes": [0] }]))).unwrap();
-    assert_eq!((one.roots.as_slice(), one.warnings.len()), ([0].as_slice(), 1));
+    let morphs = "2 primitive(s) have morph targets, which were left out (drawn in the base shape)";
+    // An out-of-range choice falls back to the first scene.
+    let s = parse(&doc(json!(5), json!([{ "nodes": [1] }, { "nodes": [0] }]))).unwrap();
+    assert_eq!(s.roots, [1]);
+    assert_eq!(s.warnings, ["scene 0 of 2 was read; the others were left out", morphs]);
+    // One scene, or none, is not a warning about scenes.
+    let s = parse(&doc(json!(5), json!([{ "nodes": [0] }]))).unwrap();
+    assert_eq!(s.roots, [0]);
+    assert_eq!(s.warnings, [morphs]);
+    let s = parse(&doc(json!(null), json!(null))).unwrap();
+    assert_eq!(s.roots, [0, 1]);
+    assert_eq!(s.warnings, [morphs]);
     let s = parse(&one_mesh(&b, plain.clone())).unwrap();
     assert!(s.warnings.is_empty(), "{:?}", s.warnings);
 }
