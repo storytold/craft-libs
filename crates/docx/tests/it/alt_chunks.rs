@@ -77,6 +77,19 @@ fn a_chunk_comes_in_through_the_importer_where_it_stands() {
 }
 
 #[test]
+fn unreadable_nested_main_part_is_reported_with_its_chunk() {
+    let mut inner = package(&p("Chunk"), None);
+    let document = inner.windows(b"<w:document".len()).position(|w| w == b"<w:document").unwrap();
+    inner[document] ^= 1; // A bad ZIP checksum makes the required main part unreadable.
+    let outer = package(&format!("{}{}", p("Before"), CHUNK), Some(("docx", DOCX_MAIN, &inner)));
+
+    let d = read(&outer).unwrap();
+
+    assert_eq!(d.skipped_parts, vec!["word/afchunk.docx > word/document.xml".to_string()]);
+    assert_eq!(body_lines(&d), ["Before"]);
+}
+
+#[test]
 fn a_bookmark_opened_before_a_chunk_at_the_start_of_the_body_is_kept() {
     let body = format!(r#"<w:bookmarkStart w:id="0" w:name="Here"/>{CHUNK}<w:bookmarkEnd w:id="0"/>{}"#, p("After"));
     let bytes = package(&body, Some(("htm", "application/xhtml+xml", b"<p>Chunk</p>")));
