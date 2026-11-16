@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::Point;
-use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, IconId, Mixed, PaintedCursor};
+use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, IconId, Mixed, PaintedCursor, PointerGlyph};
 use craft_theme::variant::Tone;
 use craft_ui::canvas::{CanvasTool, CropShield, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Show as _};
@@ -292,7 +292,7 @@ impl CanvasTool for PerspectiveCropPass<'_> {
 
     fn cursor(&self, _: &ToolContext<'_>) -> Cursor {
         if self.tool.quad.is_none() {
-            PaintedCursor::crosshair_tool(IconId::new("perspective_crop")).into()
+            PaintedCursor::pointer_tool(PointerGlyph::Crosshair, IconId::new("perspective_crop")).into()
         } else {
             Cursor::System(CursorIcon::Default)
         }

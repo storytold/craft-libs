@@ -41,7 +41,7 @@ stroke_drawings = [
     "keyframe-bezier", "keyframe-ease-in", "keyframe-ease-out", "keyframe-easy-ease", "keyframe-hold",
     "keyframe-linear", "lasso", "lasso-magnetic", "lasso-select", "layer-mask", "lift-clip", "lollipop", "mark-in",
     "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "painting-symmetry", "pen-add-anchor",
-    "pen-curvature", "pen-delete-anchor", "pen-freeform", "quick-selection", "route-curved", "route-elbow",
+    "pen-curvature", "pen-delete-anchor", "pen-freeform", "protractor", "quick-selection", "route-curved", "route-elbow",
     "route-straight", "stroke-align-center", "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
     "stroke-cap-round", "stroke-cap-square", "stroke-join-bevel", "stroke-join-miter", "stroke-join-round",
     "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock",
@@ -1418,6 +1418,11 @@ phosphor = "gradient-radial"  # drawn in Phosphor's style: no match in any set
 name = "gradient_angle"
 directional = false
 phosphor = "gradient-angle"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "protractor"
+directional = false
+phosphor = "protractor"  # drawn in Phosphor's style: no match in any set
 
 [[icon]]
 name = "gradient_reflected"

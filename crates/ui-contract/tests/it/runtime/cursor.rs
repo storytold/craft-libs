@@ -1,7 +1,7 @@
 //! The cursor service's images (8.5): a painted pointer reaches the window as its cursor image where the window takes
 //! one at its size, and is painted at the pointer otherwise.
 
-use craft_behavior::{CountMark, Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor};
+use craft_behavior::{CountMark, Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor, PointerGlyph};
 use craft_host::target::{Backend, Os, Runtime, ShellInfo};
 use craft_ui::runtime::cursor;
 use craft_ui::testing::pointer::moved;
@@ -133,7 +133,8 @@ fn a_painted_pointer_is_the_window_cursor_image_where_the_window_takes_one() {
         PaintedCursor::arrow(false),
         PaintedCursor::arrow(true),
         PaintedCursor::path_text(true, false),
-        PaintedCursor::crosshair_tool(IconId::new("crop")),
+        PaintedCursor::pointer_tool(PointerGlyph::Crosshair, IconId::new("crop")),
+        PaintedCursor::pointer_tool(PointerGlyph::Arrow, IconId::new("paint_bucket")),
     ] {
         let seen = painted(&mut frames, cursor.clone());
         assert!(seen.image.is_some() && seen.shapes == 0, "{cursor:?}");
@@ -156,6 +157,36 @@ fn a_painted_pointer_is_the_window_cursor_image_where_the_window_takes_one() {
     }
     let hidden = painted(&mut frames, PaintedCursor::Hidden);
     assert!(hidden.image.is_none() && hidden.shapes == 0 && hidden.icon == egui::CursorIcon::None);
+}
+
+/// A tool icon rides below and right of its pointer: beside the plain pointer, the image's marks reach as far left and up
+/// from the hotspot (the arrow's tip, the crosshair's centre) and farther right and down; an icon the catalog lacks
+/// leaves the plain pointer.
+#[trial]
+fn a_tool_icon_rides_below_right_of_its_pointer() {
+    // How far the opaque pixels reach from the hotspot: left, up, right, down.
+    fn reach(image: &CustomCursorImage) -> [i32; 4] {
+        let (side, [hx, hy]) = (i32::from(image.size[0]), image.hotspot.map(i32::from));
+        let mut reach = [0; 4];
+        for (i, px) in image.rgba.chunks(4).enumerate() {
+            if px[3] > 0 {
+                let (dx, dy) = (i as i32 % side - hx, i as i32 / side - hy);
+                reach = [reach[0].max(-dx), reach[1].max(-dy), reach[2].max(dx), reach[3].max(dy)];
+            }
+        }
+        reach
+    }
+    let mut frames = frames(linux(), 1.0);
+    for (plain, pointer) in [(PaintedCursor::arrow(false), PointerGlyph::Arrow), (PaintedCursor::Crosshair, PointerGlyph::Crosshair)] {
+        let plain = reach(&painted(&mut frames, plain).image.unwrap());
+        for icon in ["paint_bucket", "ruler", "protractor"] {
+            let with = reach(&painted(&mut frames, PaintedCursor::pointer_tool(pointer, IconId::new(icon))).image.unwrap());
+            assert_eq!(with[..2], plain[..2], "{pointer:?} {icon}: nothing reaches farther left or up");
+            assert!(with[2] > plain[2] && with[3] > plain[3], "{pointer:?} {icon}: the icon lies below right");
+        }
+        let missing = reach(&painted(&mut frames, PaintedCursor::pointer_tool(pointer, IconId::new("no_such_icon"))).image.unwrap());
+        assert_eq!(missing, plain, "{pointer:?}: only the pointer");
+    }
 }
 
 /// An unchanged pointer hands the window the same image, so the integration uploads it to the OS once; a new size or

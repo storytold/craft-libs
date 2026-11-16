@@ -205,9 +205,12 @@ pub enum PaintedCursor {
         /// The end of the path can be grabbed.
         end: bool,
     },
-    /// A crosshair with the tool's icon below and right of it.
+    /// A pointer with the tool's icon below and right of it: a crosshair (Perspective Crop), or an arrow with its tip
+    /// on the hotspot (Paint Bucket, Ruler).
     #[non_exhaustive]
-    CrosshairTool {
+    PointerTool {
+        /// The pointer the icon rides beside.
+        pointer: PointerGlyph,
         /// The icon.
         icon: IconId,
     },
@@ -280,15 +283,25 @@ impl PaintedCursor {
         PaintedCursor::PathText { start, end }
     }
 
-    /// A crosshair with the tool's icon at (+10, +10).
-    pub const fn crosshair_tool(icon: IconId) -> Self {
-        PaintedCursor::CrosshairTool { icon }
+    /// `pointer` with the tool's icon below and right of it.
+    pub const fn pointer_tool(pointer: PointerGlyph, icon: IconId) -> Self {
+        PaintedCursor::PointerTool { pointer, icon }
     }
 
     /// A system cursor with a mark.
     pub const fn badged(base: CursorIcon, badge: CursorBadge) -> Self {
         PaintedCursor::Badged { base, badge }
     }
+}
+
+/// The pointer of a [`PaintedCursor::PointerTool`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PointerGlyph {
+    /// A crosshair centred on the hotspot.
+    Crosshair,
+    /// The solid arrow with its tip on the hotspot.
+    Arrow,
 }
 
 /// What a cursor request names.

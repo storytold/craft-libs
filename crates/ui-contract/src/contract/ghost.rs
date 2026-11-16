@@ -60,7 +60,7 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
 /// The art of `cursor`: the hand as a fist while `closed`; with `marks_only`, a brush tip's centre cross and badge
 /// without its ring.
 fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, marks_only: bool) -> Art {
-    use craft_behavior::PaintedCursor;
+    use craft_behavior::{PaintedCursor, PointerGlyph};
     let overlay = &env.tokens.color.overlay;
     let pen = pointers::Pen {
         art: RefCell::new(Art::default()),
@@ -100,10 +100,11 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
         PaintedCursor::Locator => pointers::locator(&pen),
         PaintedCursor::Arrow { hollow, .. } => pointers::arrow(&pen, *hollow),
         PaintedCursor::PathText { start, end, .. } => pointers::path_text(&pen, *start, *end),
-        PaintedCursor::CrosshairTool { icon, .. } => {
-            let side = env.tokens.size.icon.sm;
+        PaintedCursor::PointerTool { pointer, icon, .. } => {
+            // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
+            let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
             let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
-            pointers::crosshair_tool(&pen, icon, side, edge, ink);
+            pointers::pointer_tool(&pen, *pointer, icon, side, edge, ink);
         }
         // `Hidden` has no marks.
         _ => {}

@@ -9,7 +9,7 @@ use super::SvgIcon;
 use crate::style::UiTokens;
 pub(crate) use art::Art;
 use art::Mark;
-use craft_behavior::{CountMark, CursorBadge, PaintedCursor};
+use craft_behavior::{CountMark, CursorBadge, PaintedCursor, PointerGlyph};
 use craft_i18n::Direction;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use std::cell::RefCell;
@@ -61,6 +61,8 @@ const ARROW_TRIANGLES: [[usize; 3]; 5] = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3
 const GRAB_TRIANGLE: [[f32; 2]; 3] = [[3.0, -4.0], [8.0, 0.0], [3.0, 4.0]];
 /// The top-left corner of the tool icon beside a crosshair.
 const CROSSHAIR_ICON: [f32; 2] = [10.0, 10.0];
+/// The top-left corner of the tool icon beside an arrow: under the arrow's body, which is drawn over it.
+const ARROW_ICON: [f32; 2] = [6.0, 6.0];
 /// The rotate pointer: radius of its arc, half its sweep in radians, and its segment count.
 const TURN_RADIUS: f32 = 12.0;
 const HALF_SWEEP: f32 = 0.75;
@@ -356,13 +358,20 @@ pub(crate) fn path_text(pen: &Pen, start: bool, end: bool) {
     }
 }
 
-/// A crosshair with arms of `side` points in a line of `width` in `color`, as the plain crosshair pointer, with the tool's
-/// `icon` of `side` points below and right of it. An icon the catalog lacks leaves only the crosshair.
-// A missing icon still shows the crosshair.
-pub(crate) fn crosshair_tool(pen: &Pen, icon: Option<SvgIcon>, side: f32, width: f32, color: Color32) {
-    crosshair(pen, side, width, color);
+/// `pointer` with the tool's `icon` of `side` points below and right of it: a crosshair with arms of `side` points in a
+/// line of `width` in `color`, as the plain crosshair pointer, beside the icon; or the solid arrow, as the plain arrow
+/// pointer, over the icon's top-left corner. An icon the catalog lacks leaves only the pointer.
+pub(crate) fn pointer_tool(pen: &Pen, pointer: PointerGlyph, icon: Option<SvgIcon>, side: f32, width: f32, color: Color32) {
+    let corner = match pointer {
+        PointerGlyph::Arrow => ARROW_ICON,
+        _ => CROSSHAIR_ICON,
+    };
     if let Some(icon) = icon {
-        icon_on_halo(pen, Rect::from_min_size(v(CROSSHAIR_ICON).to_pos2(), Vec2::splat(side)), icon);
+        icon_on_halo(pen, Rect::from_min_size(v(corner).to_pos2(), Vec2::splat(side)), icon);
+    }
+    match pointer {
+        PointerGlyph::Arrow => arrow(pen, false),
+        _ => crosshair(pen, side, width, color),
     }
 }
 
