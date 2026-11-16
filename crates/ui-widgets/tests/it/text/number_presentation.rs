@@ -77,7 +77,7 @@ fn alignment_places_values_at_the_reading_edges_and_keeps_units_separate() {
             });
             fixture.direction(direction);
             fixture.settle();
-            let boxes = boxes.borrow();
+            let boxes = boxes.borrow().clone();
             let runs = painted_runs(&mut fixture);
             let mut unit_ends = Vec::new();
             for (at, align) in ALIGNS.into_iter().enumerate() {
@@ -139,7 +139,7 @@ fn alignment_places_values_at_the_reading_edges_and_keeps_units_separate() {
         });
         fixture.direction(direction);
         fixture.settle();
-        let boxes = boxes.borrow();
+        let boxes = boxes.borrow().clone();
         let runs = painted_runs(&mut fixture);
         for (at, align) in ALIGNS.into_iter().enumerate() {
             let mixed = runs.iter().find(|run| boxes[at * 2].expand(1.0).contains_rect(run.rect)).expect("a mixed dash");
@@ -174,7 +174,7 @@ fn a_number_field_measures_and_paints_its_chosen_type_role() {
         }
     });
     fixture.settle();
-    let boxes = boxes.borrow();
+    let boxes = boxes.borrow().clone();
     let runs = painted_runs(&mut fixture);
     let default = shown(&runs, boxes[0], "111");
     let mut rooms = Vec::new();
