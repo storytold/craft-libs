@@ -16,13 +16,14 @@ stl = []
 obj = []
 ply = []
 gltf = ["dep:serde_json"]
-fbx = ["dep:miniz_oxide"]
+fbx = ["dep:miniz_oxide", "dep:craft-zip"]
 threemf = ["dep:craft-opc", "dep:craft-xml"]
 
 [dependencies]
 serde_json = { workspace = true, optional = true }
 # zlib-compressed arrays in binary FBX.
 miniz_oxide = { version = "0.9", optional = true }
+craft-zip = { workspace = true, optional = true }
 # 3MF is an OPC package of XML parts.
 craft-opc = { workspace = true, optional = true }
 craft-xml = { workspace = true, optional = true }

@@ -11,6 +11,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-shx = { path = "crates/shx" }
+craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
 craft-ber = { path = "crates/ber" }
@@ -40,6 +42,7 @@ bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
 craft-gzip = { path = "crates/gzip" }
+craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
