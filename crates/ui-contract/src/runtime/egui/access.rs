@@ -10,9 +10,9 @@ mod text;
 mod tree;
 
 use crate::runtime::pass_state;
-use egui::{Context, Id, ViewportId};
 #[cfg(feature = "testing")]
-use egui::{FullOutput, IdMap, IdSet};
+use egui::FullOutput;
+use egui::{Context, Id, IdMap, IdSet, ViewportId};
 use std::collections::HashMap;
 
 use super::pass;

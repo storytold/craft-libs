@@ -19,7 +19,6 @@ use craft_behavior::layout_memory::{SizeTween, measure_tolerance, measured_chang
 use craft_behavior::{Axis, Proposal};
 use egui::{Context, Id, IdMap, IdSet, Vec2};
 use std::any::Any;
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 /// What an entry holds.
