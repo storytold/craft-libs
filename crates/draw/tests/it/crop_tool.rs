@@ -277,6 +277,20 @@ fn leaving_during_a_drag_ends_it_at_its_last_frame_and_applies() {
 }
 
 #[trial]
+fn the_pens_eraser_end_standing_in_for_the_tool_keeps_the_frame_pending_until_the_tip_returns() {
+    let mut rig = Rig::new(classic());
+    rig.drag((100.0, 80.0), (300.0, 220.0));
+    let drawn = rig.frame().expect("the drawn frame");
+    let mut host = rig.host.borrow_mut();
+    let Host { tool, settings, document, .. } = &mut *host;
+    assert!(tool.leave(settings, document, &units(), true).is_none(), "the eraser end applies nothing");
+    assert!(tool.session().pending());
+    assert_eq!(tool.frame(), Some(drawn));
+    // The pass after the tip comes back: leaving for another tool applies the frame.
+    assert!(matches!(tool.leave(settings, document, &units(), false), Some(CropEvent::Apply(_))));
+}
+
+#[trial]
 fn the_default_frame_fits_the_ratio_and_follows_the_selection() {
     // A new default frame fits the saved ratio about its centre.
     let mut square = classic();
