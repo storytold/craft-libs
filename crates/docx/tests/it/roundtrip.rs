@@ -644,6 +644,67 @@ fn picture_outline_comes_from_pic_style_and_sppr_wins() {
     assert_eq!(outlines[1], (Some(Rgb(0xFF, 0x00, 0x00)), 3.0, LineDash::Solid, CompoundLine::Single), "its own outline wins");
 }
 
+/// The theme line a picture's style references (`a:lnRef`) can itself carry a custom
+/// width, dash and compound type in the theme's `a:lnStyleLst`: those come through
+/// instead of the stock widths and the solid/single defaults, and a save writes them
+/// as the picture's own outline, which reads the same again.
+#[test]
+fn picture_outline_from_a_custom_theme_line_round_trips() {
+    use craft_wordmodel::line_dash::{CompoundLine, LineDash};
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let obj = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "themed".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = craft_docx::write(&d).unwrap();
+    // The picture's style references the theme's first line style, in blue.
+    let xml = document_xml(&bytes);
+    let (at, _) = xml.match_indices("</pic:pic>").next().unwrap();
+    let styled = r#"<pic:style><a:lnRef idx="1"><a:srgbClr val="0000FF"/></a:lnRef><a:fillRef idx="0"/></pic:style>"#;
+    let xml = format!("{}{styled}{}", &xml[..at], &xml[at..]);
+    // A theme whose first line style is a 3 pt dashed double line.
+    let solid = r#"<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>"#;
+    let theme = format!(
+        r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:clrScheme name="T"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:accent1><a:srgbClr val="4472C4"/></a:accent1></a:clrScheme><a:fmtScheme name="T"><a:fillStyleLst>{solid}{solid}{solid}</a:fillStyleLst><a:lnStyleLst><a:ln w="38100" cmpd="dbl">{solid}<a:prstDash val="dash"/></a:ln><a:ln w="12700" cmpd="sng"><a:prstDash val="solid"/></a:ln><a:ln w="19050" cmpd="sng"><a:prstDash val="solid"/></a:ln></a:lnStyleLst><a:bgFillStyleLst>{solid}{solid}{solid}</a:bgFillStyleLst></a:fmtScheme><a:fontScheme name="T"><a:majorFont><a:latin typeface="Major Face"/></a:majorFont><a:minorFont><a:latin typeface="Minor Face"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+    );
+    let bytes = replace_part(&bytes, "word/theme/theme1.xml", theme.as_bytes());
+    let bytes = replace_part(&bytes, "word/document.xml", xml.as_bytes());
+    let read = craft_docx::read(&bytes).unwrap();
+    let outline = |doc: &Document| -> (Option<Rgb>, f32, LineDash, CompoundLine) {
+        paras(doc)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Image { stroke, stroke_width, dash, compound, .. } => Some((*stroke, *stroke_width, dash.clone(), *compound)),
+                _ => None,
+            })
+            .next()
+            .unwrap()
+    };
+    let want = (Some(Rgb(0x00, 0x00, 0xFF)), 3.0, LineDash::Dash, CompoundLine::Double);
+    assert_eq!(outline(&read), want, "the theme line's own width, dash and compound type");
+    // Saved, the outline is the picture's own, and reads the same again.
+    let saved = craft_docx::write(&read).unwrap();
+    let xml = document_xml(&saved);
+    let own = r#"<a:ln w="38100" cmpd="dbl"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill><a:prstDash val="dash"/></a:ln>"#;
+    assert!(xml.contains(own), "{xml}");
+    assert_eq!(outline(&craft_docx::read(&saved).unwrap()), want);
+}
+
 #[test]
 fn a_picture_outline_with_its_fill_omitted_is_the_theme_dark_colour() {
     let mut d = Document::new();

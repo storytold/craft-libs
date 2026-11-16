@@ -315,14 +315,9 @@ impl Reader<'_> {
             Some(crate::read::drawing_color::slot(&self.doc.settings.theme_colors, 0))
         });
         let stroke_width = if stroke.is_some() { paint.stroke_width } else { 0.0 };
-        // A line taken from the style's `a:lnRef` alone has no `a:ln` here: solid, one line.
-        let (dash, compound) = match ln {
-            Some(ln) if stroke.is_some() => (
-                crate::read::shape_style::line_dash(Some(ln)),
-                ln.attr("cmpd").map(craft_wordmodel::line_dash::CompoundLine::from_ooxml).unwrap_or_default(),
-            ),
-            _ => Default::default(),
-        };
+        // Dash and compound type come with the paint: the picture's own `a:ln` states
+        // them, else the theme line its style references (shape_paint resolved both).
+        let (dash, compound) = if stroke.is_some() { (paint.dash.clone(), paint.compound) } else { Default::default() };
         Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None, stroke, stroke_width, dash, compound })
     }
 
@@ -546,7 +541,7 @@ impl Reader<'_> {
             part.body.auto_color = Some(rgb);
         }
         let mut extra = ShapeExtra {
-            dash: crate::read::shape_style::line_dash(ln),
+            dash: paint.dash.clone(),
             cap: craft_wordmodel::connector::LineCap::from_ooxml(ln.and_then(|e| e.attr("cap")).unwrap_or("flat")),
             outline_fill: paint.outline_fill,
             ..ShapeExtra::default()
