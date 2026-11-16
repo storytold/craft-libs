@@ -30,6 +30,8 @@ struct Seen {
     family: String,
     picks: Vec<(String, Option<String>)>,
     rested: Vec<String>,
+    /// The family the open list proposes as a live preview, as the last pass reported it.
+    preview: Option<String>,
 }
 
 fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>>) {
@@ -40,6 +42,7 @@ fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>
         let mut seen = shown.borrow_mut();
         let out =
             FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served).show(ui);
+        seen.preview = out.preview;
         if let Some(family) = out.picked {
             seen.picks.push((family, out.picked_style));
         }
@@ -115,4 +118,20 @@ fn similar_fonts_put_the_current_family_first_and_leave_the_list_alone_without_a
     // A current family the catalog lacks has no traits: the list stays as unfiltered.
     let unfiltered = family_rows(&catalog, "", None, &FontFilters::default(), "", "en");
     assert_eq!(family_rows(&catalog, "", None, &similar, "Missing", "en"), unfiltered);
+}
+
+#[trial]
+fn the_row_under_the_pointer_is_proposed_as_the_preview_and_closing_the_list_cancels_it() {
+    let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
+    assert_eq!(seen.borrow().preview, None, "a closed list previews nothing");
+    open(&mut fx);
+    let hack = fx.by_label("Hack").expect("the Hack row");
+    fx.frame(vec![Event::PointerMoved(hack.center())]);
+    fx.settle();
+    assert_eq!(seen.borrow().preview.as_deref(), Some("Hack"), "the hovered row proposes its family");
+    assert!(seen.borrow().picks.is_empty(), "a hover picks nothing");
+
+    fx.key(Key::Escape, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(seen.borrow().preview, None, "a list closed without a pick cancels the preview");
 }
