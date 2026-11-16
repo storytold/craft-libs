@@ -442,9 +442,11 @@ impl Writer<'_> {
             (false, false) => {}
         }
         if float.wrap != Wrap::Inline {
-            // The stacking order the choice was given; behind the text is below it.
-            let z = i64::from(z);
-            style.push(format!("z-index:{}", if float.wrap == Wrap::BehindText { -z } else { z }));
+            // The stacking order the choice was given, as a signed 32-bit `z-index`. Behind the text
+            // is negative, shifted down rather than negated, so a higher `z` still stacks higher.
+            let z = i64::from(z.min(i32::MAX as u32));
+            let z = if float.wrap == Wrap::BehindText { z - (i64::from(i32::MAX) + 1) } else { z };
+            style.push(format!("z-index:{z}"));
             // The same clearances from the text as the choice's `distL`/`distR`/`distT`/`distB`.
             let d = pt(float.dist.clamp(0.0, 1584.0));
             style.push(format!("mso-wrap-distance-left:{d}"));

@@ -111,6 +111,32 @@ fn the_fallback_keeps_order_visibility_and_direction() {
     assert!(rect.contains("visibility:hidden"), "{rect}");
 }
 
+/// Shapes behind the text keep their order in the fallback: a higher `z` stacks higher, below
+/// the text (a negative `z-index` in signed 32-bit range).
+#[test]
+fn behind_text_shapes_keep_their_order() {
+    let mut d = Document::from_text("a");
+    for z in [10, 20, u32::MAX] {
+        let mut o = shape(ShapeKind::Rectangle, None);
+        if let InlineObject::Shape { float, .. } = &mut o {
+            float.wrap = Wrap::BehindText;
+            float.z = z;
+        }
+        d.insert_object(&craft_wordmodel::Pos::body(0, 1), o, &Default::default()).unwrap();
+    }
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    let mut got: Vec<i64> = xml
+        .match_indices("z-index:")
+        .map(|(i, m)| {
+            let v = &xml[i + m.len()..];
+            v[..v.find([';', '"']).unwrap()].parse().unwrap()
+        })
+        .collect();
+    got.sort_unstable();
+    let low = -(1i64 << 31);
+    assert_eq!(got, vec![low + 10, low + 20, -1], "{xml}");
+}
+
 /// A shape VML has no simple form for stays a bare `wps:wsp`: guarded without a fallback, an old
 /// reader would open the file without it and drop it on its next save.
 #[test]
