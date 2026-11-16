@@ -873,3 +873,16 @@ fn strict_colors_validate_and_read_the_same_layer() {
     let only_bad = ASCII.replace("LayerElementNormal: 0 {", &format!("{} LayerElementNormal: 0 {{", bad.replace(": 1 {", ": 0 {")));
     assert!(document(only_bad.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
 }
+
+#[test]
+fn strict_geometry_validates_the_colors_index_alias() {
+    let layer = |index: &str| {
+        format!(
+            "LayerElementColor: 0 {{ MappingInformationType: \"AllSame\" ReferenceInformationType: \"IndexToDirect\" Colors: 0,1,0,1 ColorsIndex: {index} }}\n"
+        )
+    };
+    let with = |index: &str| ASCII.replace("LayerElementNormal: 0 {", &format!("{} LayerElementNormal: 0 {{", layer(index)));
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    assert!(document(with("0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_ok());
+    assert!(document(with("\"bad\",0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
+}

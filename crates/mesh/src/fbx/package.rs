@@ -87,6 +87,8 @@ pub fn write(
         return Ok((None, Vec::new()));
     }
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut by_name = std::collections::HashMap::<String, usize>::new();
+    let mut too_many = false;
     let mut missing = Vec::new();
     let mut total = bytes.len() as u64;
     let mut exceeded = total > package_limits.max_total_bytes || total > package_limits.max_model_bytes;
@@ -94,8 +96,13 @@ pub fn write(
         // candidates in order of preference: an earlier one that exists wins over a later cached one
         for path in paths {
             let Some(name) = below(path) else { continue };
-            if let Some((_, data)) = files.iter().find(|(n, _)| *n == name) {
-                return Some(data.clone());
+            if let Some(data) = by_name.get(&name).and_then(|&i| files.get(i)).map(|(_, d)| d.clone()) {
+                return Some(data);
+            }
+            // the model is an entry too; stop resolving once another texture could not fit
+            if too_many || files.len() as u64 + 1 >= package_limits.max_entries {
+                too_many = true;
+                return None;
             }
             if let Some(data) = found(path).filter(|d| d.len() as u64 <= package_limits.max_texture_bytes) {
                 total = total.saturating_add(data.len() as u64);
@@ -103,6 +110,7 @@ pub fn write(
                     exceeded = true;
                     return None;
                 }
+                by_name.insert(name.clone(), files.len());
                 files.push((name, data.clone()));
                 return Some(data);
             }
@@ -118,10 +126,13 @@ pub fn write(
     if files.is_empty() {
         return Ok((None, missing));
     }
-    if files.len() as u64 >= package_limits.max_entries {
+    if too_many {
         return Err(too_large(KIND, "too many package entries"));
     }
     let leaf = file_name.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("mesh.fbx");
+    // the package is found by its `.fbx` entry, so the model always carries that extension
+    let leaf = if leaf.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("fbx")) { leaf.to_string() } else { format!("{leaf}.fbx") };
+    let leaf = leaf.as_str();
     let mut writer = craft_zip::Writer::new();
     for (name, data) in std::iter::once((leaf, bytes)).chain(files.iter().map(|(n, b)| (n.as_str(), b.as_slice()))) {
         writer.add(name, data, craft_zip::Compression::Stored).map_err(|e| Error::Malformed(format!("FBX package: {e}")))?;
@@ -170,5 +181,39 @@ mod tests {
         let mut package = Package::open(&bytes, bounds()).unwrap();
         assert_eq!(package.texture(&["maps/base.png"]), Some(b"maps".to_vec()));
         assert_eq!(package.texture(&["base.png"]), Some(b"flat".to_vec()));
+    }
+
+    #[test]
+    fn the_model_entry_always_has_an_fbx_extension() {
+        let limits = Limits::default();
+        let doc = read_document(MODEL, &limits).unwrap();
+        let (bytes, _) = write(&doc, "dir/asset", MODEL, &limits, bounds(), &mut |_| Some(b"image".to_vec())).unwrap();
+        let bytes = bytes.unwrap();
+        let mut package = Package::open(&bytes, bounds()).unwrap();
+        assert_eq!(package.model().unwrap(), MODEL);
+    }
+
+    #[test]
+    fn texture_resolution_stops_at_the_entry_limit() {
+        let mut model = String::from("FBXHeaderExtension: { FBXVersion: 7400 } Objects: {");
+        let mut links = String::new();
+        for i in 0..20 {
+            model.push_str(&format!(
+                " Material: {m}, \"Material::M{i}\", \"\" {{ }} Texture: {t}, \"Texture::T{i}\", \"\" {{ RelativeFilename: \"t{i}.png\" }}",
+                m = 2 * i + 1,
+                t = 2 * i + 2
+            ));
+            links.push_str(&format!(" C: \"OP\",{t},{m},\"DiffuseColor\"", m = 2 * i + 1, t = 2 * i + 2));
+        }
+        model.push_str(&format!(" }} Connections: {{{links} }}"));
+        let limits = Limits::default();
+        let doc = read_document(model.as_bytes(), &limits).unwrap();
+        let mut calls = 0;
+        let result = write(&doc, "a.fbx", model.as_bytes(), &limits, bounds(), &mut |_| {
+            calls += 1;
+            Some(b"image".to_vec())
+        });
+        assert!(matches!(result, Err(Error::TooLarge(_))));
+        assert!(calls < bounds().max_entries as usize, "{calls} resolver calls past the entry limit");
     }
 }

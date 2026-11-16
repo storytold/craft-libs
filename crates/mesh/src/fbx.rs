@@ -1406,10 +1406,10 @@ impl<'a> Build<'a, '_> {
                 return Err(malformed(KIND, "mesh array contains a non-numeric, non-finite or fractional index value"));
             }
             for (element, names) in [
-                ("LayerElementNormal", &["Normals", "NormalsIndex"][..]),
+                ("LayerElementNormal", &["Normals", "NormalsIndex", "NormalIndex"][..]),
                 ("LayerElementUV", &["UV", "UVIndex"][..]),
                 ("LayerElementMaterial", &["Materials"][..]),
-                ("LayerElementColor", &["Colors", "ColorIndex"][..]),
+                ("LayerElementColor", &["Colors", "ColorIndex", "ColorsIndex"][..]),
             ] {
                 if let Some(layer) = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0))
                     && names.iter().filter_map(|n| layer.child(n)).any(|r| !valid(r, false))
