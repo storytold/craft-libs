@@ -25,7 +25,16 @@ network I/O and has no `unsafe` code.
   (<https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#textures-texel-filtering>).
   Repeat keeps its period at any finite coordinate. A NaN or infinite coordinate gives
   `[0, 0, 0, 1]`. Bilinear sums are taken in `f64` and clamped to the `f32` range, so finite
-  texels give a finite sample.
+  texels give a finite sample. `sample_axes`, `sample_nearest_axes` and `get_axes` take
+  `tiling: [bool; 2]`, the wrap mode of `u` and of `v` on their own, as glTF's `wrapS` and
+  `wrapT`; with equal entries they give the same results as the forms with one `tile`.
+- **Stored sampling.** `sample_stored` is the texture read of MaterialCraft's function graphs. It
+  rounds the bilinear weights to multiples of 1/256 and blends the texels by linear interpolation
+  in `f32`. When the image's integer-sampling flag is on (`with_integer_sampling(true)`, read with
+  `integer_sampling()`), it then clamps each channel to `0..=1` and rounds it to a multiple of
+  1/65535. A channel whose interpolation is not finite is taken from the `f64` weighted sum
+  instead, so finite texels give a finite sample. New images start with the flag off, clones keep
+  it, and two images are equal only when their flags are equal.
 - **Other operations.** `get` reads one texel, `map`, `to_gray`, `to_color` and `to_kind` convert,
   `resize` box-averages whole-factor shrinks and samples bilinearly otherwise, and
   `to_rgba8_display` encodes 8-bit sRGB RGBA. `linear_to_srgb`, `srgb_to_linear` and `luminance`
@@ -80,7 +89,8 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 | Part | Source |
 |---|---|
 | `Image`, `Kind`, sampling, resizing, conversions, sRGB helpers, resource keys and the six tests `sample_survives_huge_coordinates`, `resource_keys_round_trip`, `sample_wraps_and_clamps`, `resize_box_and_bilinear`, `hostile_sizes_are_clamped`, `conversions` | MaterialCraft `crates/image/src/lib.rs` at [3133062](https://github.com/storytold/materialcraft/commit/3133062968b8a1566eda12a357cb06062db16687) |
-| `Limits`, the `try_` constructors, `from_data`, private fields with getters, the `parallel` feature | written here |
+| `get_axes`, `sample_axes`, `sample_nearest_axes`, `sample_stored` and the integer-sampling flag | MaterialCraft `crates/image/src/lib.rs` at [6c3b35c](https://github.com/storytold/materialcraft/commit/6c3b35c39632feafcda3d7a90ff18242f3ad910f), on this crate's coordinate reduction and `f64` bilinear sum |
+| `Limits`, the `try_` constructors, `from_data`, private fields with getters, the `parallel` feature, `with_integer_sampling` and `integer_sampling` | written here |
 | The Sobel normal, its strength scale, UV-tile clamp and uncovered-neighbor rule, the ORM channels and defaults, and the tests `gltf_png_matches_the_composite`, `directx_flips_green`, `height_becomes_normal_detail`, `ao_mixes_baked_and_channel`, `converted_maps_invert_and_derive_normals` and `uv_tiles_export_one_file_per_tile_without_padding_across`, with assertions on the new functions | TextureCraft `crates/formats/src/export/mod.rs`, `presets.rs` and `tests.rs` and `crates/core/src/channel.rs` at [b89badc](https://github.com/storytold/texturecraft/commit/b89badcd6f883751f79960f93c554fb77f063885) |
 | `ScalarSource`, row-at-a-time reading, the limit and non-finite checks, and the tiled-input tests | written here |
 
@@ -98,5 +108,7 @@ For MaterialCraft:
 | --- | --- |
 | `image.w`, `image.h`, `image.kind`, `image.data` | `width()`, `height()`, `kind()`, `data()` and `shared_data()` |
 | `Image { w, h, kind, data }` built by hand | `Image::from_data(w, h, kind, data, &Limits::default())` |
+| `image.integer_sampling = on` and `Image { integer_sampling, .. }` | `image.with_integer_sampling(on)`; read it with `integer_sampling()` |
+| `sample_axes` blends with `a + (b − a)t` in `f32` | it sums the weighted texels in `f64`, as `sample` does; the results differ by rounding |
 | `rayon` always on | the `parallel` feature |
 | `linear_to_srgb(NaN)` returned −0.055 | it returns NaN |

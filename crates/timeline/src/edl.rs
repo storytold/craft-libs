@@ -156,6 +156,10 @@ pub struct Edl {
 
 /// Read a list. Never fails: lines that cannot be read are named in `report` and skipped.
 pub fn parse(text: &str, report: &mut Report) -> Edl {
+    parse_with_report_limit(text, report, None)
+}
+/// Parse an EDL with an optional limit on distinct warning messages.
+pub fn parse_with_report_limit(text: &str, report: &mut Report, report_limit: Option<usize>) -> Edl {
     let mut p = Edl { title: None, events: Vec::new(), any_df: false, max_ff: 0 };
     let mut df = false;
     let mut skip_metadata = false;
@@ -224,7 +228,7 @@ pub fn parse(text: &str, report: &mut Report) -> Edl {
                 if (1..=99).contains(&n) {
                     extra.push(Channel::A(n));
                 } else {
-                    report.warn(format!("EDL AUD channel {n} is outside 1..99; ignored"));
+                    report.warn_limited(report_limit, format!("EDL AUD channel {n} is outside 1..99; ignored"));
                 }
             }
             if let Some(line) = p.events.last_mut().and_then(|e| e.lines.last_mut()) {
@@ -233,7 +237,7 @@ pub fn parse(text: &str, report: &mut Report) -> Edl {
             continue;
         }
         if upper.starts_with("SPLIT:") {
-            report.warn("EDL split (L-cut/J-cut) lines are not supported; the split was ignored");
+            report.warn_limited(report_limit, "EDL split (L-cut/J-cut) lines are not supported; the split was ignored");
             continue;
         }
         if let Some(line) = parse_event_line(l) {
@@ -256,7 +260,7 @@ pub fn parse(text: &str, report: &mut Report) -> Edl {
             // Comments and auxiliary lines after a rejected event do not belong to the previous one.
             skip_metadata = true;
         }
-        report.warn(format!("unrecognised EDL line ignored: {}", l.chars().take(60).collect::<String>()));
+        report.warn_limited(report_limit, format!("unrecognised EDL line ignored: {}", l.chars().take(60).collect::<String>()));
     }
     p
 }
@@ -584,5 +588,22 @@ M2   A001           -012.0                00;00;00;00\n\
         assert_eq!(channel_code(&BTreeSet::from([Channel::V, Channel::A(1), Channel::A(2)])), Some("AA/V"));
         assert_eq!(channel_code(&BTreeSet::from([Channel::A(1), Channel::A(3)])), None);
         assert_eq!(channel_name(Channel::A(7)), "A7");
+    }
+}
+
+#[cfg(test)]
+mod report_limit_tests {
+    use super::*;
+
+    #[test]
+    fn caps_distinct_unrecognized_lines_without_changing_default() {
+        let text = (0..10).map(|i| format!("unrecognized-{i}\n")).collect::<String>();
+        let mut limited = Report::default();
+        let _ = parse_with_report_limit(&text, &mut limited, Some(2));
+        assert_eq!(limited.entries.len(), 3);
+        assert!(limited.mentions("further diagnostics omitted"));
+        let mut ordinary = Report::default();
+        let _ = parse(&text, &mut ordinary);
+        assert_eq!(ordinary.entries.len(), 10);
     }
 }

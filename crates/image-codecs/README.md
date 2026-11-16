@@ -43,7 +43,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | TIFF | yes | yes | U8, U16, F32 | all six (CMYK, CMYK+A included) | yes | yes (tag 34675) | no | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
 | WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | no | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
 | GIF | yes | yes | U8 | RGBA | 1-bit | no | no | no | no | no | yes (256-colour palette) | `image` |
-| BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
+| BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | yes (header pixels per metre) | no | no | `image` |
 | TGA | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | no | `image` (read) / built in (RLE write, one scanline per packet) |
 | ICO | yes | yes | U8 | RGBA (at most 256×256) | yes | no | no | no | no | no | no | `image` |
 | DDS | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | yes (BC1–BC3, when `EncodeOptions::dds` asks for one) | built in |
@@ -57,6 +57,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
+| Sun Raster (`.ras`) | with feature `sunraster` (incl. RLE and colour maps) | with feature `sunraster` (uncompressed) | U8 | Gray, RGB, RGBA | yes | no | no | no | no | no | no | `sunraster` (off by default) |
 | SGI (`.sgi`, `.rgb`, `.bw`) | with feature `sgi` | with feature `sgi` (RLE) | U8, U16 | Gray, Gray+A, RGB, RGBA | yes | no | no | no | no | no | no | `sgi` (off by default) |
 | JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
 | AVIF | with feature `avif-decode` (native only) | only with feature `avif` | U8, U16 (10/12-bit decodes to U16; PQ/HLG to linear F32) | RGB, RGBA | yes (auxiliary alpha) | read (`colr` prof/rICC) | read | read | no | no | yes | `craft-video` AV1 decoder; `image` + `ravif` to write |
@@ -78,7 +79,8 @@ the same.
 Palette BMP and PNG pixels decode as RGB(A) in `Image`; `bmp_palette` and `png_palette` expose the
 embedded table (and a PNG's transparent entry) so `photocraft-io` can open them in Indexed Color mode.
 `bmp_palette` returns the colours the header declares, not the decoder's 256-entry padding.
-`encode_bmp_indexed` writes the inverse: indices plus a table as an 8-bit palette BMP.
+`encode_bmp_indexed` writes the inverse: indices plus a table as an 8-bit palette BMP;
+`encode_bmp_indexed_with_dpi` also writes a resolution in the header.
 
 ## Documented asymmetries and limitations
 
@@ -235,6 +237,11 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   the EXIF and XMP resolution are rewritten to the image's (`export_exif`, `export_xmp`): the
   RATIONAL values in place, ResolutionUnit set to 2, an entry that can't be rewritten removed
   from IFD0 without moving any other data. IFD1 (the thumbnail's) is left as it is.
+* **Resolution without decoding** (module `resolution_probe`): `file_resolution(bytes)` reads
+  the pixels per inch a JPEG, PNG, WebP, BMP or classic TIFF records from its headers alone, for
+  placing a picture at its physical size before (or without) decoding it. JPEG, PNG, WebP and
+  TIFF answer as `decode` would; BMP reads the info header's pixels per metre. Values outside
+  1–100 000 ppi count as none.
 * **JPEG**
   * 8-bit only. Neither decoder backend supports 12-bit.
   * A file cut off inside its image data decodes leniently (a baseline JPEG's missing rows come

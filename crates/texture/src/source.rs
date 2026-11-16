@@ -120,7 +120,7 @@ where
     }
     #[cfg(not(feature = "parallel"))]
     fill(0, &mut data)?;
-    Ok(Image { w, h, kind: Kind::Color, data: Arc::new(data) })
+    Ok(Image { w, h, kind: Kind::Color, integer_sampling: false, data: Arc::new(data) })
 }
 
 #[cfg(test)]
