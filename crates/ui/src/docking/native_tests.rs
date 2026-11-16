@@ -606,6 +606,19 @@ fn palettes_are_x11_utility_windows_and_viewers_normal_ones() {
         let position = d.host().windows[&d.viewport(window(&d, 6).id)].position;
         assert_eq!(position, Some(pos2(moved[0], moved[1])));
     }
+    // The window system moves the window, and it becomes a palette again before the window
+    // reports its new place: the new window opens where the window system put it.
+    d.settle();
+    let viewport = d.viewport(window(&d, 6).id);
+    let os_moved = Rect::from_min_size(pos2(820.0, 160.0), vec2(240.0, 300.0));
+    d.host().windows.get_mut(&viewport).unwrap().rect = os_moved;
+    d.content.normal = vec![5];
+    d.step(vec![]);
+    assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(palette))]);
+    if cfg!(target_os = "linux") {
+        let position = d.host().windows[&d.viewport(window(&d, 6).id)].position;
+        assert_eq!(position, Some(os_moved.min));
+    }
 }
 
 #[test]

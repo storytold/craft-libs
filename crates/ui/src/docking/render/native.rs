@@ -593,9 +593,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 Place { spawn, known: spawn, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type }
             }
         };
-        // egui recreates a window whose type changes. The new window opens where the old one was.
+        // egui recreates a window whose type changes. The new window opens where the old one was:
+        // where the window system last put it, unless a move the application commanded has not
+        // landed yet. The collapsed height a minimized window reports is not the size to keep.
         if place.window_type != window_type {
-            place = Place { spawn: place.known, known: place.known, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type };
+            let waiting = place.pending.is_some_and(|until| now < until);
+            let latest = info.as_ref().and_then(placed).filter(|_| !waiting && !moving(ctx));
+            let at = latest.map_or(place.known, |[x, y, w, h]| [x, y, w, if place.collapsed.is_some() { place.known[3] } else { h }]);
+            place = Place { spawn: at, known: at, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type };
         }
         // Minimized or expanded: the window keeps its top-left corner and width, and its
         // height is fixed while it shows only its bar.
