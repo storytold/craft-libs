@@ -534,6 +534,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             if c == PAGE_BREAK {
                 if !hidden {
                     out.push_text(&std::mem::take(&mut buf), &f);
+                    let extra = out.extra.as_ref().and_then(|x| {
+                        let mut x = (**x).clone();
+                        x.drop_cap = None;
+                        x.drop_cap_distance = None;
+                        (x != craft_wordmodel::props::ParaProps::default()).then(|| Box::new(x))
+                    });
                     let next = Para {
                         kind,
                         list: None,
@@ -548,7 +554,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
-                        extra: out.extra.clone(),
+                        extra,
                         mark: None,
                         kept: None,
                         wrap: None,

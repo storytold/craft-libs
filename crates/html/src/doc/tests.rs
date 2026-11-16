@@ -1513,3 +1513,66 @@ fn pasted_body_background_not_inherited_by_inline_child() {
         "inline child in page import inherits body background via inherit"
     );
 }
+
+#[test]
+fn root_background_on_html_and_foreground_on_body() {
+    let html = r#"<html style="background:#111111"><body style="color:white"><p>text</p></body></html>"#;
+    let frag_doc = import(html);
+    let craft_wordmodel::Block::Para(p_frag) = &*frag_doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p_frag.props.shading, None, "fragment paste drops html background");
+    assert_eq!(p_frag.runs[0].props.color, None, "fragment paste drops body foreground when html supplied suppressed background");
+
+    let page_doc = import_page(html, &|_| None);
+    let craft_wordmodel::Block::Para(p_page) = &*page_doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p_page.props.shading, Some(craft_wordmodel::Rgb(0x11, 0x11, 0x11)));
+    assert_eq!(p_page.runs[0].props.color, Some(craft_wordmodel::TextColor::Rgb(craft_wordmodel::Rgb(0xff, 0xff, 0xff))));
+}
+
+#[test]
+fn background_unitless_zero_lengths() {
+    let html = r#"<div style="background:#123456 0.0 0"><p>text</p></div>"#;
+    let doc = import(html);
+    let craft_wordmodel::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, Some(craft_wordmodel::Rgb(0x12, 0x34, 0x56)));
+
+    let html2 = r#"<div style="background:#654321 -0 +0.0"><p>text</p></div>"#;
+    let doc2 = import(html2);
+    let craft_wordmodel::Block::Para(p2) = &*doc2.body[0] else { panic!("expected Para") };
+    assert_eq!(p2.props.shading, Some(craft_wordmodel::Rgb(0x65, 0x43, 0x21)));
+}
+
+#[test]
+fn background_comments_skipped_outside_strings() {
+    let html = r#"<div style="background:#111111 /* dark */;color:white"><p>text</p></div>"#;
+    let doc = import(html);
+    let craft_wordmodel::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, Some(craft_wordmodel::Rgb(0x11, 0x11, 0x11)));
+
+    let html2 = r#"<div style="background:#222222 /* comment / with / slashes */"><p>text</p></div>"#;
+    let doc2 = import(html2);
+    let craft_wordmodel::Block::Para(p2) = &*doc2.body[0] else { panic!("expected Para") };
+    assert_eq!(p2.props.shading, Some(craft_wordmodel::Rgb(0x22, 0x22, 0x22)));
+}
+
+#[test]
+fn invalid_color_does_not_clear_preceding_background() {
+    let html = r#"<div style="background-color:red;background-color:rgba(bogus / 0)"><p>text</p></div>"#;
+    let doc = import(html);
+    let craft_wordmodel::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, Some(craft_wordmodel::Rgb(255, 0, 0)));
+
+    let html2 = r#"<div style="background:red;background:rgba(bogus / 0)"><p>text</p></div>"#;
+    let doc2 = import(html2);
+    let craft_wordmodel::Block::Para(p2) = &*doc2.body[0] else { panic!("expected Para") };
+    assert_eq!(p2.props.shading, Some(craft_wordmodel::Rgb(255, 0, 0)));
+}
+
+#[test]
+fn code_block_export_preserves_foreground_color() {
+    let html = r#"<pre style="background:#000000;color:#ffffff"><code>const x = 1;</code></pre>"#;
+    let doc = import_page(html, &|_| None);
+    let exported = export(&doc);
+    assert!(exported.contains("style=\"background-color:#000000\""), "exported pre must keep background: {}", exported);
+    assert!(exported.contains("color:#FFFFFF"), "exported code inlines must keep foreground: {}", exported);
+    assert!(exported.contains("const x = 1;"), "exported code text preserved: {}", exported);
+}

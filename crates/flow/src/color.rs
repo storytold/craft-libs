@@ -128,11 +128,8 @@ pub fn parse_color(s: &str) -> Option<Rgb> {
         };
         let parse_pct = |x: &str| -> Option<f64> {
             let x = x.trim();
-            if let Some(p) = x.strip_suffix('%') {
-                Some((p.trim().parse::<f64>().ok()? / 100.0).clamp(0.0, 1.0))
-            } else {
-                Some(x.parse::<f64>().ok()?.clamp(0.0, 1.0))
-            }
+            let v = if let Some(p) = x.strip_suffix('%') { p.trim().parse::<f64>().ok()? } else { x.parse::<f64>().ok()? };
+            Some((v / 100.0).clamp(0.0, 1.0))
         };
         let s = parse_pct(parts[1])?;
         let l = parse_pct(parts[2])?;
@@ -192,5 +189,13 @@ mod tests {
         assert_eq!(parse_color("rgba(0, 0, 0, nan)"), Some(Rgb(0, 0, 0)));
         assert_eq!(parse_color("rgba(0, 0, 0, inf)"), Some(Rgb(0, 0, 0)));
         assert_eq!(parse_color("rgba(0, 0, 0, nan%)"), Some(Rgb(0, 0, 0)));
+    }
+
+    #[test]
+    fn hsl_unitless_saturation_and_lightness_scale_to_one_hundred() {
+        assert_eq!(parse_color("hsl(0 0 50)"), Some(Rgb(128, 128, 128)));
+        assert_eq!(parse_color("hsl(0 0 100)"), Some(Rgb(255, 255, 255)));
+        assert_eq!(parse_color("hsl(0 0 0)"), Some(Rgb(0, 0, 0)));
+        assert_eq!(parse_color("hsl(120 100 50)"), Some(Rgb(0, 255, 0)));
     }
 }

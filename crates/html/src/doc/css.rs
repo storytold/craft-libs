@@ -110,7 +110,7 @@ fn trim_css_whitespace(s: &str) -> &str {
 /// (`px`, `pt`, `em`, `rem`, `%`, `in`, `cm`, `mm`, `vw`, `vh`, `vmin`, `vmax`, `pc`, `ch`, `ex`).
 fn is_length_or_percentage(s: &str) -> bool {
     let s = trim_css_whitespace(s);
-    if s == "0" {
+    if s.parse::<f64>().is_ok_and(|x| x == 0.0) {
         return true;
     }
     let units = ["px", "pt", "em", "rem", "%", "in", "cm", "mm", "vw", "vh", "vmin", "vmax", "pc", "ch", "ex"];
@@ -164,8 +164,15 @@ fn parse_bg_layers(val: &str) -> Option<Vec<BgLayer<'_>>> {
     let mut paren_depth = 0usize;
     let mut in_quote = None;
     let mut escaped = false;
+    let mut in_raw_url = false;
 
-    for (i, c) in val.char_indices() {
+    let mut byte_idx = 0;
+    while byte_idx < val.len() {
+        let Some(c) = val[byte_idx..].chars().next() else { break };
+        let char_len = c.len_utf8();
+        let i = byte_idx;
+        byte_idx += char_len;
+
         if escaped {
             escaped = false;
             continue;
@@ -186,7 +193,22 @@ fn parse_bg_layers(val: &str) -> Option<Vec<BgLayer<'_>>> {
             if start.is_none() {
                 start = Some(i);
             }
+        } else if !in_raw_url && val[i..].starts_with("/*") {
+            // CSS comments outside strings and URLs are consumed before delimiter classification
+            push_shorthand_token(val, &mut start, i, &mut current_tokens, &mut total_tokens)?;
+            if let Some(end_offset) = val[i + 2..].find("*/") {
+                byte_idx = i + 2 + end_offset + 2;
+            } else {
+                byte_idx = val.len();
+            }
+            continue;
         } else if c == '(' {
+            if in_quote.is_none()
+                && let Some(s) = start
+                && val.get(s..i).is_some_and(|prefix| trim_css_whitespace(prefix).eq_ignore_ascii_case("url"))
+            {
+                in_raw_url = true;
+            }
             paren_depth = paren_depth.saturating_add(1);
             if start.is_none() {
                 start = Some(i);
@@ -196,6 +218,9 @@ fn parse_bg_layers(val: &str) -> Option<Vec<BgLayer<'_>>> {
                 return None;
             }
             paren_depth -= 1;
+            if paren_depth == 0 {
+                in_raw_url = false;
+            }
         } else if paren_depth == 0 {
             if c == '/' {
                 current_slashes = current_slashes.saturating_add(1);
@@ -254,14 +279,24 @@ fn is_zero_alpha_color(s: &str) -> bool {
         }
         return false;
     }
+    // Must be a valid parseable color in craft_flow to ensure all required components are valid.
+    if parse_color(&s).is_none() {
+        return false;
+    }
     if let Some(inner) = s.strip_prefix("rgb(").or_else(|| s.strip_prefix("rgba(")) {
-        let inner = inner.trim_end_matches(')');
-        let (_, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
+        let Some(inner) = inner.strip_suffix(')') else { return false };
+        let (rgb_part, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
         let alpha_str = match alpha_part {
-            Some(a) => Some(a.trim()),
+            Some(a) => {
+                let parts: Vec<&str> = if rgb_part.contains(',') { rgb_part.split(',').collect() } else { rgb_part.split_whitespace().collect() };
+                if parts.len() != 3 {
+                    return false;
+                }
+                Some(a.trim())
+            }
             None => {
                 let parts: Vec<&str> = if inner.contains(',') { inner.split(',').collect() } else { inner.split_whitespace().collect() };
-                if parts.len() >= 4 { Some(parts[3].trim()) } else { None }
+                if parts.len() == 4 { Some(parts[3].trim()) } else { None }
             }
         };
         if let Some(a) = alpha_str {
@@ -275,13 +310,19 @@ fn is_zero_alpha_color(s: &str) -> bool {
         return false;
     }
     if let Some(inner) = s.strip_prefix("hsl(").or_else(|| s.strip_prefix("hsla(")) {
-        let inner = inner.trim_end_matches(')');
-        let (_, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
+        let Some(inner) = inner.strip_suffix(')') else { return false };
+        let (hsl_part, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
         let alpha_str = match alpha_part {
-            Some(a) => Some(a.trim()),
+            Some(a) => {
+                let parts: Vec<&str> = if hsl_part.contains(',') { hsl_part.split(',').collect() } else { hsl_part.split_whitespace().collect() };
+                if parts.len() != 3 {
+                    return false;
+                }
+                Some(a.trim())
+            }
             None => {
                 let parts: Vec<&str> = if inner.contains(',') { inner.split(',').collect() } else { inner.split_whitespace().collect() };
-                if parts.len() >= 4 { Some(parts[3].trim()) } else { None }
+                if parts.len() == 4 { Some(parts[3].trim()) } else { None }
             }
         };
         if let Some(a) = alpha_str {
