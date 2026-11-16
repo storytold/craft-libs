@@ -135,10 +135,11 @@ impl Metadata<'_, '_> {
         };
         let linearization = match self.raw_tag(tags::LINEARIZATION_TABLE) {
             Some(e) => {
-                let v = self.tiff.uints(e)?;
-                if v.len() > 65_536 {
+                // checked before `uints` allocates a u64 per entry
+                if e.count > 65_536 {
                     return Err(Error::Malformed("LinearizationTable longer than 65536"));
                 }
+                let v = self.tiff.uints(e)?;
                 Some(v.into_iter().map(|x| x.min(65_535) as u16).collect())
             }
             None => None,

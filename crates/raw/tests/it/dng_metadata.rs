@@ -48,6 +48,11 @@ fn processing_tags_are_read_from_the_raw_ifd() {
         // base_ifd writes CFAPattern 1 0 2 1 (GRBG)
         assert_eq!(p.cfa, Some(Pattern { rows: 2, cols: 2, colors: vec![1, 0, 2, 1] }));
     }
+    // a LinearizationTable longer than 65536 entries is refused
+    let long = cfa_raw(|r| {
+        r.set(ct::LINEARIZATION_TABLE, Value::Short(vec![1; 65_537]));
+    });
+    assert!(matches!(with_metadata(&dng(long, ByteOrder::Little), |m| m.params()), Err(Error::Malformed(_))));
     // absent tags take the DNG defaults
     let p = with_metadata(&dng(cfa_raw(|_| {}), ByteOrder::Little), |m| m.params().unwrap());
     assert_eq!((p.active_area, p.linearization, p.black_repeat), (None, None, (1, 1)));
