@@ -100,11 +100,7 @@ fn check(d: &TrDict, word: &str, opts: &crate::Options) -> bool {
     }
 
     // Compound words separated by hyphens (e.g., `afyon-karahisar`)
-    if w.contains('-') && w.split('-').all(|part| part.is_empty() || check(d, part, opts)) {
-        return true;
-    }
-
-    false
+    w.contains('-') && w.split('-').all(|part| part.is_empty() || check(d, part, opts))
 }
 
 #[cfg(test)]

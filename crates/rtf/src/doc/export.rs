@@ -8,32 +8,27 @@ use crate::date::{date_words as rtf_date, iso_to_dttm};
 // ---------------------------------------------------------------------------------------------
 // Export
 
+use crate::write::{Interned, font_key};
 pub use crate::{esc, esc_font};
 
 pub(super) struct Tables {
-    pub(super) fonts: Vec<String>,
-    pub(super) colors: Vec<Rgb>,
+    pub(super) fonts: Interned<String, String>,
+    pub(super) colors: Interned<Rgb, Rgb>,
 }
 
 impl Tables {
+    /// Tables whose font 0 is `base_font`, with no colours yet.
+    pub(super) fn new(base_font: String) -> Tables {
+        let mut t = Tables { fonts: Interned::new(), colors: Interned::new() };
+        t.fonts.insert(font_key(&base_font), || base_font);
+        t
+    }
     pub(super) fn font(&mut self, name: &str) -> usize {
-        match self.fonts.iter().position(|f| f.eq_ignore_ascii_case(name)) {
-            Some(i) => i,
-            None => {
-                self.fonts.push(name.to_string());
-                self.fonts.len() - 1
-            }
-        }
+        self.fonts.insert(font_key(name), || name.to_string())
     }
     /// Colour table index (1-based; 0 is "auto").
     fn color(&mut self, c: Rgb) -> usize {
-        match self.colors.iter().position(|x| *x == c) {
-            Some(i) => i + 1,
-            None => {
-                self.colors.push(c);
-                self.colors.len()
-            }
-        }
+        self.colors.insert(c, || c) + 1
     }
 }
 
@@ -65,7 +60,7 @@ pub(super) struct Writer {
     /// List definitions: per list, the ordered flag per level.
     pub(super) lists: Vec<[bool; 9]>,
     /// Authors of tracked changes (`\revtbl` entries after "Unknown"), when the text has any.
-    pub(super) authors: Option<Vec<String>>,
+    pub(super) authors: Option<Interned<String, String>>,
     /// The character formatting the current paragraph's style gives its runs (heading bold and
     /// size, code font…): what a run's formatting without a direct value resolves to.
     pub(super) base: Fmt,
@@ -306,18 +301,18 @@ impl Writer {
 
     /// `\revtbl` index of a tracked change's author (0 = "Unknown").
     fn author(&mut self, a: &str) -> usize {
-        let authors = self.authors.get_or_insert_with(Vec::new);
+        let authors = self.authors.get_or_insert_with(Interned::new);
         let a = a.trim();
         if a.is_empty() {
             return 0;
         }
-        match authors.iter().position(|x| x == a) {
-            Some(i) => i + 1,
-            None => {
-                authors.push(a.to_string());
-                authors.len()
-            }
-        }
+        // A borrowed lookup first: most calls name an author already in the table, and need no
+        // `String` for the key.
+        let i = match authors.get(a) {
+            Some(i) => i,
+            None => authors.insert(a.to_string(), || a.to_string()),
+        };
+        i + 1
     }
 
     /// Control words of a tracked insertion and deletion (`\revised`, `\deleted`).
@@ -664,6 +659,10 @@ impl Writer {
             Some(Align::Distribute) => out.push_str("\\qd"),
             _ => out.push_str("\\ql"),
         }
+        // The paragraph's text direction, as Word writes it (`\rtlpar`; `\ltrpar` is the default).
+        if p.rtl {
+            out.push_str("\\rtlpar");
+        }
         if p.page_break {
             out.push_str("\\pagebb");
         }
@@ -858,15 +857,7 @@ pub fn export(doc: &Document) -> String {
     let doc = marked.as_ref().unwrap_or(doc);
     let flow = model::from_doc_tracked(doc);
     let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
-    let mut w = Writer {
-        marks,
-        t: Tables { fonts: vec![base_font], colors: Vec::new() },
-        lists: Vec::new(),
-        authors: None,
-        base: Fmt::default(),
-        sections: Vec::new(),
-        sect_i: 0,
-    };
+    let mut w = Writer { marks, t: Tables::new(base_font), lists: Vec::new(), authors: None, base: Fmt::default(), sections: Vec::new(), sect_i: 0 };
     let mut body = String::new();
     // Every section starts with its own `\sectd`; `\sect` breaks only where there are several.
     let secs: Vec<craft_wordmodel::SectionProps> = doc.sections().into_iter().map(|(_, s)| s.clone()).collect();
@@ -882,12 +873,12 @@ pub fn export(doc: &Document) -> String {
 
 fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionProps) -> String {
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
-    for (i, f) in w.t.fonts.iter().enumerate() {
+    for (i, f) in w.t.fonts.items.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
         out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc_font(f)));
     }
     out.push_str("}\n{\\colortbl;");
-    for c in &w.t.colors {
+    for c in &w.t.colors.items {
         out.push_str(&format!("\\red{}\\green{}\\blue{};", c.0, c.1, c.2));
     }
     out.push_str("}\n{\\*\\generator WordCraft;}\n{\\stylesheet{\\s0\\snext0 Normal;}");
@@ -916,7 +907,7 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionP
     }
     if let Some(authors) = &w.authors {
         out.push_str("{\\*\\revtbl {Unknown;}");
-        for a in authors {
+        for a in &authors.items {
             out.push_str(&format!("{{{};}}", esc(&a.replace(';', ","))));
         }
         out.push_str("}\n");

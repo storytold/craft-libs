@@ -1,6 +1,7 @@
-//! The worksheet's typed features, each mirroring its SpreadsheetML element: sheet views, print
-//! setup, data validation, conditional formatting, hyperlinks (ECMA-376 Part 1, 18.3), and the
-//! comments part (18.7) with the legacy note shapes Excel draws comments with.
+//! The worksheet's typed features, each mirroring its SpreadsheetML element: sheet views, the
+//! sheet's default sizes, print setup, data validation, conditional formatting, hyperlinks
+//! (ECMA-376 Part 1, 18.3), and the comments part (18.7) with the legacy note shapes Excel draws
+//! comments with.
 //!
 //! An attribute the file may leave out is an `Option` (`None`: not written, the schema's
 //! default applies), so a feature reads and writes back as it was. Attributes a type does not
@@ -210,6 +211,27 @@ impl SheetView {
         }
         e.children.extend(self.other.iter().cloned().map(Node::El));
         e
+    }
+}
+
+// ------------------------------------------------------------------------------- sheet format
+
+element! {
+    /// `<sheetFormatPr>`: the sheet's default column width and row height, and its outline depth.
+    pub struct SheetFormat {
+        /// Characters of the default font's maximum digit width, padding excluded (8 when absent).
+        base_col_width: u32 = "baseColWidth",
+        /// Characters, padding included, like [`crate::Column::width`].
+        default_col_width: f64 = "defaultColWidth",
+        /// Points.
+        default_row_height: f64 = "defaultRowHeight",
+        custom_height: bool = "customHeight",
+        /// Rows are hidden unless they say otherwise.
+        zero_height: bool = "zeroHeight",
+        thick_top: bool = "thickTop",
+        thick_bottom: bool = "thickBottom",
+        outline_level_row: u32 = "outlineLevelRow",
+        outline_level_col: u32 = "outlineLevelCol",
     }
 }
 
@@ -643,6 +665,8 @@ impl Hyperlink {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Features {
     pub views: Vec<SheetView>,
+    /// `sheetFormatPr`.
+    pub format: Option<SheetFormat>,
     pub print: Print,
     pub validations: Option<DataValidations>,
     pub conditional_formats: Vec<ConditionalFormatting>,
@@ -660,6 +684,7 @@ impl Features {
         let attrs_of = |n: &str| root.child(n);
         Features {
             views: root.child("sheetViews").map(|v| v.children("sheetView").map(SheetView::read).collect()).unwrap_or_default(),
+            format: attrs_of("sheetFormatPr").map(SheetFormat::read_attrs),
             print: Print {
                 options: attrs_of("printOptions").map(PrintOptions::read_attrs),
                 margins: attrs_of("pageMargins").map(PageMargins::read_attrs),
@@ -708,6 +733,7 @@ impl Features {
         let p = &self.print;
         vec![
             ("sheetViews", Vec::from_iter((!self.views.is_empty()).then_some(views))),
+            ("sheetFormatPr", Vec::from_iter(self.format.as_ref().map(|f| el("sheetFormatPr", &|e| f.write_attrs(e))))),
             ("conditionalFormatting", self.conditional_formats.iter().map(ConditionalFormatting::to_el).collect()),
             ("dataValidations", Vec::from_iter(validations)),
             ("hyperlinks", Vec::from_iter((!self.hyperlinks.is_empty()).then_some(links))),

@@ -444,3 +444,18 @@ a decoder's limit from damage). Not ported from those commits: the page-wide all
 refused-mask handling in `hayro-syntax` and `hayro-interpret` (0ed33990, 4aa732ea, e2464e14), which rest on
 the decoded-image cache of 558ffd7f (a performance change). Tests: those that came with the patches in
 `hayro-jbig2`, and PdfCraft's raster tests adapted in `hayro-jbig2/src/pdfcraft_tests.rs`.
+
+## Craft review note: the one direct `unsafe`
+
+`hayro-syntax/src/page.rs` holds the snapshot's only direct `unsafe` block: a
+`core::mem::transmute` of `&XRef` to `&'static XRef` in the page cache. The vendored crates are
+outside the workspace's `forbid(unsafe_code)`, so it compiles. Its safety argument is the field
+order of the owning struct together with the `Arc<XRef>` outliving the borrow. Treat it as an
+audited exception, not a pattern to copy: if the caching code is re-synced, re-read that
+invariant and re-run the PDF tests that drop pages while a cache entry is live.
+
+`hayro-syntax` also has an `unsafe` cargo feature that pulls in `flate2`, `memchr` and
+SIMD-capable decoders. `craft-pdf/read` depends on it with `default-features = false,
+features = ["std"]`, so the feature stays off; a review of the resolved graph should keep it
+that way. The CI check for that resolved feature set is a CI change under AGENTS.md rule 11 and
+is proposed separately rather than in a fix pull request.

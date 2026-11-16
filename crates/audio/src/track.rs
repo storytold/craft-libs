@@ -24,8 +24,10 @@ pub const LOOKAHEAD_PACKETS: usize = 8;
 enum Inner {
     #[cfg(feature = "aac-decode")]
     Aac {
+        /// The decoder, with SBR on for HE-AAC.
         dec: Box<aac::Decoder>,
-        up: Option<aac::Upsample2x>,
+        /// HE-AAC: 2048 samples per access unit, at twice the core rate.
+        sbr: bool,
         order: Option<&'static [usize]>,
         /// The format ADTS packets must keep, when their headers gave the configuration.
         adts_format: Option<AdtsFormat>,
@@ -74,7 +76,7 @@ pub(crate) type PacketFrames = fn(&[u8], u64) -> Option<u64>;
 ///
 /// It takes the track's [`CodecParams`] (from `isobmff::Track::codec_params`,
 /// `matroska::Track::codec_params`, `ogg::Stream::codec_params`, or built by hand for another
-/// container) and decodes AAC (LC; HE-AAC as its upsampled LC core), ALAC, Opus, AC-3/E-AC-3,
+/// container) and decodes AAC (LC, and HE-AAC with its SBR high band), ALAC, Opus, AC-3/E-AC-3,
 /// MP1/MP2, MP3 and PCM. Container timing (AAC priming, Opus pre-skip, end trimming) is the caller's:
 /// every decoded sample is returned.
 ///
@@ -168,17 +170,18 @@ impl TrackDecoder {
                     params.extradata.clone()
                 };
                 let asc = asc.as_slice();
-                let dec = aac::Decoder::new(asc)?;
+                let mut dec = aac::Decoder::new(asc)?;
                 let out = aac::output_rate(asc, payloads.iter().copied()).unwrap_or(dec.sample_rate());
-                let up = (dec.sample_rate().checked_mul(2) == Some(out)).then(|| aac::Upsample2x::new(dec.channels()));
-                let codec = if up.is_some() { CodecId::HeAac } else { CodecId::Aac };
-                // Only twice the core rate is upsampled to; any other signalled rate plays the core.
-                let out = if up.is_some() { out } else { dec.sample_rate() };
+                let sbr = dec.sample_rate().checked_mul(2) == Some(out);
+                let codec = if sbr { CodecId::HeAac } else { CodecId::Aac };
+                // Only SBR at twice the core rate is decoded; any other signalled rate plays the core.
+                dec.set_sbr(sbr);
+                let out = dec.sample_rate();
                 // a program config element that spells out a configuration has its speakers
                 let cfg = aac::speaker_config(dec.config());
                 let layout = aac_layout(cfg, dec.channels());
                 let order = layout.is_ordered().then(|| aac::wav_order(cfg)).flatten();
-                (Inner::Aac { dec: Box::new(dec), up, order, adts_format }, codec, out, layout, SampleFormat::Compressed)
+                (Inner::Aac { dec: Box::new(dec), sbr, order, adts_format }, codec, out, layout, SampleFormat::Compressed)
             }
             #[cfg(feature = "alac-decode")]
             CodecId::Alac => {
@@ -320,7 +323,7 @@ impl TrackDecoder {
         let mut partial = false;
         let channels = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
-            Inner::Aac { dec, up, order, adts_format } => {
+            Inner::Aac { dec, order, adts_format, .. } => {
                 let mut out: Vec<Vec<f32>> = Vec::new();
                 let units = match adts_frames(packet) {
                     Some(frames) => adts_units(frames, *adts_format)?,
@@ -328,17 +331,11 @@ impl TrackDecoder {
                 };
                 // A failed frame leaves the decoder as it was, so the frames before it in the
                 // packet must too: their audio is replaced by the packet's concealment.
-                let before = (units.len() > 1).then(|| (dec.clone(), up.clone()));
-                let decoded = units.into_iter().try_for_each(|unit| {
-                    let mut block = dec.decode(unit)?;
-                    if let Some(up) = up.as_mut() {
-                        block = up.process(block);
-                    }
-                    append(&mut out, block)
-                });
+                let before = (units.len() > 1).then(|| dec.clone());
+                let decoded = units.into_iter().try_for_each(|unit| append(&mut out, dec.decode(unit)?));
                 if let Err(e) = decoded {
                     if let Some(before) = before {
-                        (*dec, *up) = before;
+                        *dec = before;
                     }
                     return Err(e);
                 }
@@ -440,8 +437,8 @@ impl TrackDecoder {
                 None
             }
             #[cfg(feature = "aac-decode")]
-            Inner::Aac { up, .. } => {
-                let per_unit = aac::FRAME_LEN * if up.is_some() { 2 } else { 1 };
+            Inner::Aac { sbr, .. } => {
+                let per_unit = aac::FRAME_LEN * if *sbr { 2 } else { 1 };
                 match adts_frames(data) {
                     Some(f) => Some(f.iter().map(|(h, _)| usize::from(h.raw_data_blocks)).sum::<usize>().min(MAX_ADTS_FRAMES_PER_PACKET) * per_unit),
                     // A packet lost whole: as long as the last one, in a stream of multi-frame
@@ -488,7 +485,7 @@ impl TrackDecoder {
     pub fn frames_per_packet(&self) -> Option<usize> {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
-            Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
+            Inner::Aac { sbr, .. } => Some(aac::FRAME_LEN * if *sbr { 2 } else { 1 }),
             #[cfg(feature = "alac-decode")]
             Inner::Alac { .. } => None,
             #[cfg(feature = "ac3-decode")]
@@ -544,7 +541,7 @@ impl TrackDecoder {
     pub fn preroll(&self) -> usize {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
-            Inner::Aac { up, .. } => 2 * aac::FRAME_LEN * if up.is_some() { 2 } else { 1 },
+            Inner::Aac { sbr, .. } => 2 * aac::FRAME_LEN * if *sbr { 2 } else { 1 },
             #[cfg(feature = "alac-decode")]
             Inner::Alac { .. } => 0,
             #[cfg(feature = "ac3-decode")]
@@ -570,12 +567,7 @@ impl TrackDecoder {
         self.last_frames = 0;
         match &mut self.inner {
             #[cfg(feature = "aac-decode")]
-            Inner::Aac { dec, up, .. } => {
-                dec.reset();
-                if let Some(up) = up {
-                    up.reset();
-                }
-            }
+            Inner::Aac { dec, .. } => dec.reset(),
             #[cfg(feature = "alac-decode")]
             Inner::Alac { .. } => {}
             #[cfg(feature = "ac3-decode")]

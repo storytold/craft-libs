@@ -2237,10 +2237,35 @@ fn emfplus_linear_gradient_fills_with_a_shaded_tile() {
 
 #[test]
 fn emfplus_hatch_brush_fills_with_an_8x8_tile() {
-    let brush = cat(vec![h32(0xDBC0_1002), h32(1), h32(4), h32(0xFF00_0000), h32(0xFFFF_FFFF)]);
+    // GDI+ HatchStyle.Percent50 (12), as used by System.Drawing's HatchBrush.
+    let brush = cat(vec![h32(0xDBC0_1002), h32(1), h32(12), h32(0xFF00_0000), h32(0xFFFF_FFFF)]);
     let fill = prec(0x400A, 0, &cat(vec![h32(0), h32(1), f32s(&[0.0, 0.0, 16.0, 16.0])]));
     let p = plus_pic(vec![prec(0x4008, 0x0100, &brush), fill]);
-    assert!(matches!(&p.items[0], Item::Pattern { tile, .. } if tile.width == 8 && tile.height == 8));
+    let tile = pattern_of(&p.items[0]);
+    assert_eq!((tile.width, tile.height), (8, 8));
+    let foreground = tile.rgba.as_chunks::<4>().0.iter().filter(|px| **px == [0, 0, 0, 255]).count();
+    assert_eq!(foreground, 32, "Percent50 uses equal foreground and background coverage");
+}
+
+#[test]
+fn gdi_plus_percentage_hatch_styles_keep_the_documented_coverage() {
+    const PERCENT: [usize; 12] = [5, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90];
+    let fg = [0, 0, 0, 255];
+    let bg = [255, 255, 255, 255];
+    for style in 0..=17 {
+        let tile = crate::canvas::emfplus_hatch_tile(style, fg, Some(bg)).expect("supported GDI+ hatch style");
+        let foreground = tile.as_chunks::<4>().0.iter().filter(|px| **px == fg).count();
+        assert!((1..64).contains(&foreground), "style {style} should mix both colours");
+        if (6..=17).contains(&style) {
+            let percent = PERCENT[(style - 6) as usize];
+            assert_eq!(foreground, (percent * 64 + 50) / 100, "percentage style {style}");
+        }
+    }
+    for style in 18..=52 {
+        assert!(crate::canvas::emfplus_hatch_tile(style, fg, Some(bg)).is_none(), "style {style} has no confirmed tile mapping");
+    }
+    assert!(crate::canvas::emfplus_hatch_tile(53, fg, Some(bg)).is_none(), "out-of-range values stay unsupported");
+    assert!(crate::canvas::hatch_tile(9, fg, Some(bg)).is_none(), "GDI's six-style range is unchanged");
 }
 
 #[test]
@@ -2628,4 +2653,108 @@ fn canvas_budget_counts_bytes_held_elsewhere() {
     cv.bitmap([0.0, 0.0, 1.0, 1.0], Rgba { w: 1, h: 1, px: vec![0u8; 200] });
     assert!(cv.full());
     assert!(cv.items.is_empty());
+}
+
+/// The box through a path's segment ends (an ellipse's four cubics end on its box).
+fn end_extent(item: &Item) -> (f32, f32, f32, f32) {
+    let (segs, ..) = path_segs(item);
+    let (xs, ys): (Vec<f32>, Vec<f32>) = segs
+        .iter()
+        .filter_map(|s| match s {
+            Seg::Move(x, y) | Seg::Line(x, y) | Seg::Cubic(.., x, y) => Some((*x, *y)),
+            Seg::Close => None,
+        })
+        .unzip();
+    let lo = |v: &[f32]| v.iter().copied().fold(f32::MAX, f32::min);
+    let hi = |v: &[f32]| v.iter().copied().fold(f32::MIN, f32::max);
+    (lo(&xs), lo(&ys), hi(&xs), hi(&ys))
+}
+
+/// Two sub-pictures drawn into halves of the frame, as charts pasted from older Office versions
+/// are stored (deckcraft#2069): each saves the DC, halves the viewport with SCALEVIEWPORTEXT, sets
+/// its own 400 x 400 window (the second shifted 400 to the left, so it lands in the right half),
+/// draws a circle and restores the DC. The left circle stays in the left half and the right one
+/// lands in the right half of the 800 x 400 frame.
+#[test]
+fn wmf_scale_viewport_ext_draws_sub_pictures_into_parts_of_the_frame() {
+    let sub = |org_x: i32| {
+        vec![
+            wrec(0x001E, &[]),
+            wrec(0x0103, &h16(8)),
+            // yDenom, yNum, xDenom, xNum: x * 1/2, y * 1/1.
+            wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(1)])),
+            wrec(0x020B, &cat(vec![h16(0), h16(org_x)])),
+            wrec(0x020C, &cat(vec![h16(400), h16(400)])),
+            wrec(0x0418, &cat(vec![h16(380), h16(380), h16(20), h16(20)])),
+            wrec(0x0127, &h16(-1)),
+        ]
+    };
+    let mut recs = vec![wrec(0x020B, &cat(vec![h16(0), h16(0)])), wrec(0x020C, &cat(vec![h16(400), h16(800)]))];
+    recs.extend(sub(0));
+    recs.extend(sub(-400));
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (800.0, 400.0));
+    assert_eq!((p.items.len(), p.skipped_records), (2, 0), "both circles, and every record played");
+    for (item, want) in p.items.iter().zip([(20.0, 20.0, 380.0, 380.0), (420.0, 20.0, 780.0, 380.0)]) {
+        let got = end_extent(item);
+        assert!(close(got.0, want.0) && close(got.1, want.1) && close(got.2, want.2) && close(got.3, want.3), "{got:?}, want {want:?}");
+    }
+}
+
+/// SCALEWINDOWEXT scales the window extent, and OFFSETWINDOWORG and OFFSETVIEWPORTORG move the
+/// window and viewport origins by their offsets, on top of what the SET records gave them. The
+/// 100 x 100 window of a plain WMF is the frame, and the records after it place a rectangle in it.
+#[test]
+fn wmf_scale_window_ext_and_offset_origins_change_the_mapping() {
+    let rect = || wrec(0x041B, &cat(vec![h16(20), h16(20), h16(10), h16(10)]));
+    let base = || vec![wrec(0x0103, &h16(8)), wrec(0x020B, &cat(vec![h16(0), h16(0)])), wrec(0x020C, &cat(vec![h16(100), h16(100)]))];
+    let extent = |extra: Vec<Vec<u8>>| {
+        let mut recs = base();
+        recs.extend(extra);
+        recs.push(rect());
+        rect_extent(&parse(&wmf(&recs, None)).unwrap().items[0])
+    };
+    // The window doubled (x * 2/1, y * 4/2): the rectangle shows at half size.
+    let got = extent(vec![wrec(0x0410, &cat(vec![h16(2), h16(4), h16(1), h16(2)]))]);
+    assert!(close(got.0, 5.0) && close(got.1, 5.0) && close(got.2, 10.0) && close(got.3, 10.0), "scaled window: {got:?}");
+    // The window origin moved by (5, 10): the rectangle moves the other way.
+    let got = extent(vec![wrec(0x020F, &cat(vec![h16(10), h16(5)]))]);
+    assert!(close(got.0, 5.0) && close(got.1, 0.0) && close(got.2, 15.0) && close(got.3, 10.0), "window origin: {got:?}");
+    // The viewport origin moved by (30, -5): the rectangle moves with it.
+    let got = extent(vec![wrec(0x0211, &cat(vec![h16(-5), h16(30)]))]);
+    assert!(close(got.0, 40.0) && close(got.1, 5.0) && close(got.2, 50.0) && close(got.3, 15.0), "viewport origin: {got:?}");
+    // A zero denominator leaves the extent alone.
+    let got = extent(vec![wrec(0x0412, &cat(vec![h16(0), h16(1), h16(0), h16(1)]))]);
+    assert!(close(got.0, 10.0) && close(got.1, 10.0) && close(got.2, 20.0) && close(got.3, 20.0), "zero denominator: {got:?}");
+}
+
+#[test]
+fn wmf_viewport_scaling_does_not_resize_the_player_frame() {
+    for numerator in [1, 4] {
+        let recs = [
+            wrec(0x0103, &h16(8)),
+            wrec(0x020C, &cat(vec![h16(100), h16(100)])),
+            wrec(0x041B, &cat(vec![h16(100), h16(100), h16(0), h16(0)])),
+            // Change the mapping after drawing, without a matching RESTOREDC.
+            wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(numerator)])),
+        ];
+        let p = parse(&wmf(&recs, None)).unwrap();
+        assert_eq!((p.width, p.height), (100.0, 100.0));
+        assert_eq!(p.skipped_records, 0);
+        assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 100.0, 100.0));
+    }
+}
+
+#[test]
+fn wmf_viewport_scaling_before_first_window_is_retained() {
+    let recs = [
+        wrec(0x0103, &h16(8)),
+        wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(1)])),
+        wrec(0x020C, &cat(vec![h16(100), h16(100)])),
+        wrec(0x041B, &cat(vec![h16(100), h16(100), h16(0), h16(0)])),
+    ];
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (100.0, 100.0));
+    assert_eq!(p.skipped_records, 0);
+    assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 50.0, 100.0));
 }

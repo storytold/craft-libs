@@ -571,8 +571,32 @@ fn descriptor_kind(s: &Set) -> Option<TrackKind> {
     }
 }
 
+// PictureInfo has one depth for all color components. Do not invent one for a
+// malformed layout or unequal RGB precisions. PixelLayout is eight code/size pairs.
+fn rgba_component_depth(layout: &[u8]) -> u32 {
+    if layout.len() != 16 {
+        return 0;
+    }
+    let mut depths = [0u8; 3];
+    for pair in layout.as_chunks::<2>().0 {
+        let index = match pair[0] {
+            b'R' => 0,
+            b'G' => 1,
+            b'B' => 2,
+            0 => break,
+            _ => continue,
+        };
+        if depths[index] != 0 || pair[1] == 0 {
+            return 0;
+        }
+        depths[index] = pair[1];
+    }
+    if depths[0] != 0 && depths.iter().all(|&depth| depth == depths[0]) { u32::from(depths[0]) } else { 0 }
+}
+
 fn picture_info(d: &Set) -> PictureInfo {
     let u = |t| d.u(t).unwrap_or(0) as u32;
+    let rgba = d.kind() == Some(st::RGBA_DESCRIPTOR);
     PictureInfo {
         stored_width: u(tag::STORED_WIDTH),
         stored_height: u(tag::STORED_HEIGHT),
@@ -581,13 +605,13 @@ fn picture_info(d: &Set) -> PictureInfo {
         frame_layout: u(tag::FRAME_LAYOUT) as u8,
         field_dominance: u(tag::FIELD_DOMINANCE) as u8,
         aspect_ratio: d.rational(tag::ASPECT_RATIO).unwrap_or_default(),
-        component_depth: u(tag::COMPONENT_DEPTH),
+        component_depth: if rgba { d.get(tag::PIXEL_LAYOUT).map_or(0, rgba_component_depth) } else { u(tag::COMPONENT_DEPTH) },
         horizontal_subsampling: u(tag::HORIZONTAL_SUBSAMPLING),
         vertical_subsampling: u(tag::VERTICAL_SUBSAMPLING),
-        black_ref_level: d.u(tag::BLACK_REF_LEVEL).map(|v| v as u32),
-        white_ref_level: d.u(tag::WHITE_REF_LEVEL).map(|v| v as u32),
+        black_ref_level: d.u(if rgba { tag::COMPONENT_MIN_REF } else { tag::BLACK_REF_LEVEL }).map(|v| v as u32),
+        white_ref_level: d.u(if rgba { tag::COMPONENT_MAX_REF } else { tag::WHITE_REF_LEVEL }).map(|v| v as u32),
         alpha_depth: u(tag::ALPHA_SAMPLE_DEPTH),
-        rgba: d.kind() == Some(st::RGBA_DESCRIPTOR),
+        rgba,
         picture_coding: d.ul(tag::PICTURE_ESSENCE_CODING),
         transfer_characteristic: d.ul(tag::TRANSFER_CHARACTERISTIC),
         coding_equations: d.ul(tag::CODING_EQUATIONS),
@@ -910,13 +934,19 @@ fn build_track(
             }
             // A wrong or missing label: trust the essence bytes.
             if let Some(first) = elements.first() {
-                let head = read_upto(src, first.value_offset, 64)?;
+                let head = read_upto(src, first.value_offset, 4096)?;
                 if let Some(sniffed) = sniff_picture(&head) {
                     let agree = std::mem::discriminant(&sniffed) == std::mem::discriminant(&codec);
                     if !agree && !matches!(codec, Codec::Avc { intra: true }) {
                         codec = sniffed;
                     }
                 }
+            }
+            // CinemaDNG §7.1.1.2: a "TIFF" picture element type names DNG pictures
+            if codec == Codec::Unknown
+                && elements.first().is_some_and(|e| e.key.0[12] == 0x15 && e.key.0[14] == super::essence::CINEMADNG_ELEMENT_TYPE)
+            {
+                codec = Codec::CinemaDng;
             }
             t.codec = codec;
             t.picture = Some(pi);
@@ -1335,5 +1365,26 @@ mod fallback_tracks_tests {
         md.push(set(st::SEQUENCE, 4, &[(tag::DATA_DEFINITION, picture.0.to_vec())]));
         let (tracks, _, _) = resolve_tracks(&md, &mut Vec::new());
         assert_eq!(tracks.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod rgba_layout_tests {
+    use super::rgba_component_depth;
+
+    #[test]
+    fn only_complete_uniform_rgb_layouts_have_one_depth() {
+        let mut layout = [0; 16];
+        layout[..8].copy_from_slice(&[b'B', 16, b'G', 16, b'R', 16, b'A', 8]);
+        assert_eq!(rgba_component_depth(&layout), 16);
+        assert_eq!(rgba_component_depth(&layout[..15]), 0);
+        layout[3] = 8;
+        assert_eq!(rgba_component_depth(&layout), 0);
+        layout[3] = 16;
+        layout[4] = b'G';
+        assert_eq!(rgba_component_depth(&layout), 0);
+        layout[4] = 0;
+        assert_eq!(rgba_component_depth(&layout), 0);
+        assert_eq!(rgba_component_depth(&[0; 16]), 0);
     }
 }

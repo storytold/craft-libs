@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn incremental_zlib_encoder_roundtrips_across_drains() {
+    let expected = (0usize..32_768).map(|n| (n.wrapping_mul(37) % 251) as u8).collect::<Vec<_>>();
+    let mut encoder = ZlibEncoder::new();
+    let mut encoded = Vec::new();
+    for chunk in expected.chunks(997) {
+        encoder.write_all(chunk).unwrap();
+        encoded.extend(encoder.take_output());
+    }
+    encoded.extend(encoder.finish().unwrap());
+
+    let mut decoded = Vec::new();
+    flate2::read::ZlibDecoder::new(encoded.as_slice()).read_to_end(&mut decoded).unwrap();
+    assert_eq!(decoded, expected);
+}
+
 /// The straightforward index-based versions, kept as the oracle for the
 /// register-carried rewrites in [`predict`] and [`unpredict`].
 mod reference {
@@ -754,4 +770,62 @@ fn rle_chunks_use_the_callers_pool_and_report_panics() {
         map_chunks(8, (0..64).collect(), |_| assert!(matches!(rayon::current_thread_index(), Some(0 | 1)))).unwrap();
         assert!(map_chunks(2, vec![0, 1], |_| panic!("worker")).is_err());
     });
+}
+
+#[test]
+fn padded_packbits_preserves_recovery_without_weakening_strict_decode() {
+    for (input, expected) in
+        [(&[0, 7][..], vec![7, 0, 0]), (&[3, 1, 2, 3, 4][..], vec![1, 2, 3]), (&[253, 9][..], vec![9, 9, 9]), (&[128][..], vec![0, 0, 0])]
+    {
+        let mut out = vec![42];
+        super::packbits::decode_padded_into(input, 3, 3, &mut out).unwrap();
+        assert_eq!(&out[1..], expected);
+        assert_eq!(out[0], 42);
+        assert!(super::packbits::decode(input, 3).is_err());
+    }
+    for input in [&[3, 1][..], &[255][..]] {
+        assert!(super::packbits::decode_padded_into(input, 1, 1, &mut vec![]).is_err());
+    }
+    let mut out = vec![42];
+    assert!(super::packbits::decode_padded_into(&[], 4, 3, &mut out).is_err());
+    assert_eq!(out, [42]);
+    super::packbits::decode_padded_into(&[255], 0, 0, &mut out).unwrap();
+    super::packbits::decode_padded_into(&[0, 7, 255], 1, 1, &mut out).unwrap();
+    assert_eq!(out, [42, 7]);
+}
+
+#[test]
+fn caller_scratch_prediction_matches_existing_decoder_across_planes() {
+    for depth in [1u16, 8, 16, 32] {
+        let layout = PlaneLayout { planes: 3, width: 13, height: 7, depth, version: Version::Psb };
+        let mut actual: Vec<u8> = (0..layout.decoded_len().unwrap()).map(|i| (i.wrapping_mul(31) % 251) as u8).collect();
+        let mut expected = actual.clone();
+        unpredict(&mut expected, &layout).unwrap();
+        let needed = if depth == 32 { layout.row_bytes() } else { 0 };
+        let mut scratch = vec![0xa5; needed + 11];
+        unpredict_with_scratch(&mut actual, &layout, &mut scratch).unwrap();
+        assert_eq!(actual, expected, "depth {depth}");
+        assert_eq!(&scratch[needed..], &[0xa5; 11]);
+    }
+}
+
+#[test]
+fn caller_scratch_prediction_rejects_invalid_inputs_before_mutation() {
+    let layout = PlaneLayout { planes: 1, width: 3, height: 2, depth: 32, version: Version::Psd };
+    let original = vec![0x73; 24];
+    for (len, scratch_len) in [(23, 12), (25, 12), (24, 11)] {
+        let mut bytes = vec![0x73; len];
+        let mut scratch = vec![0xa5; scratch_len];
+        assert!(unpredict_with_scratch(&mut bytes, &layout, &mut scratch).is_err());
+        assert_eq!(bytes, vec![0x73; len]);
+        assert_eq!(scratch, vec![0xa5; scratch_len]);
+    }
+    for invalid in [PlaneLayout { width: usize::MAX, ..layout }, PlaneLayout { planes: usize::MAX, ..layout }, PlaneLayout { depth: 12, ..layout }] {
+        let mut bytes = original.clone();
+        assert!(unpredict_with_scratch(&mut bytes, &invalid, &mut []).is_err());
+        assert_eq!(bytes, original);
+    }
+    for empty in [PlaneLayout { width: 0, ..layout }, PlaneLayout { height: 0, ..layout }] {
+        unpredict_with_scratch(&mut [], &empty, &mut []).unwrap();
+    }
 }
