@@ -857,6 +857,7 @@ fn cancel_reason(reason: PressCancel) -> CancelReason {
         PressCancel::Escape => CancelReason::Escape,
         PressCancel::FocusLost => CancelReason::Blur,
         PressCancel::Disabled => CancelReason::Dismissed,
+        PressCancel::Host => CancelReason::HostChanged,
         _ => CancelReason::Removed,
     }
 }

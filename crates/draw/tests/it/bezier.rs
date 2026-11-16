@@ -9,6 +9,7 @@ use craft_draw::ui::{
 use craft_ui::canvas::{Canvas, Guide, ToolHost};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::primitives::cancel_press_of;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Id, Pos2, Vec2 as ScreenVec, vec2};
 use std::cell::RefCell;
@@ -796,4 +797,129 @@ fn the_anchor_tools_take_no_press_off_the_paths_and_show_their_own_cursor() {
         st.precise = true;
     });
     assert_eq!(cursor_at(&mut h, egui::Modifiers::NONE), Some(Cursor::Painted(PaintedCursor::Crosshair)));
+}
+
+// A Direct Selection marquee is a gesture like the other drags: it begins with its drag, a release commits it with the
+// anchors inside selected, and Escape cancels it and selects nothing.
+#[trial]
+fn a_marquee_is_one_gesture_that_escape_cancels() {
+    let from = |h: &Harness| h.screen(p(30.0, 30.0));
+    let to = |h: &Harness| h.screen(p(180.0, 80.0));
+
+    let mut h = two_paths();
+    let (start, end) = (from(&h), to(&h));
+    h.drag(start, end - start);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1)]));
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+    }
+
+    let mut h = two_paths();
+    h.update(|st| st.selection = sel(2, &[(0, 0)]));
+    let (start, end) = (from(&h), to(&h));
+    h.press_at(start);
+    h.move_to(start + (end - start) * 0.5);
+    h.move_to(end);
+    h.fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    h.release_at(end);
+    let st = h.state.borrow();
+    assert!(st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Commit), "{:?}", st.seen);
+    assert_eq!(st.selection, sel(2, &[(0, 0)]), "the cancelled marquee selects nothing");
+}
+
+// A click on empty canvas deselects the anchors and keeps the path they belong to as the one being edited.
+#[trial]
+fn a_click_on_empty_canvas_deselects_the_anchors_and_keeps_the_path() {
+    let mut h = two_paths();
+    h.update(|st| st.selection = sel(1, &[(0, 1)]));
+    let empty = h.screen(p(30.0, 30.0));
+    h.press_at(empty);
+    h.release_at(empty);
+    assert_eq!(h.state.borrow().selection, sel(1, &[]));
+}
+
+// Convert Point on an anchor that already is a corner still reports the click's edit: the host decides what it makes
+// of it.
+#[trial]
+fn a_convert_click_on_a_corner_reports_its_edit() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    let corner = h.screen(p(60.0, 60.0));
+    h.press_at(corner);
+    h.release_at(corner);
+    let st = h.state.borrow();
+    assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 1, out: None, .. })), "{:?}", st.changes);
+    assert!(st.seen.contains(&Seen::Set), "{:?}", st.seen);
+}
+
+// The arrow keys nudge the selected anchors, ⇧ by a larger step; each press is one edit, and with no anchor selected
+// they move nothing.
+#[trial]
+fn arrow_keys_nudge_the_selected_anchors_and_shift_nudges_farther() {
+    let mut h = two_paths();
+    // The canvas, then the overlay.
+    h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE).settle();
+    assert!(h.state.borrow().changes.is_empty(), "nothing selected, nothing moves: {:?}", h.state.borrow().changes);
+    h.update(|st| st.selection = sel(1, &[(0, 1), (0, 2)]));
+    h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE).settle();
+    let Some(PathEdit::MoveAnchors { anchors, by: small, .. }) = h.last_change() else { panic!("{:?}", h.last_change()) };
+    assert_eq!(anchors, vec![kr(1), kr(2)]);
+    assert!(small.x > 0.0 && small.y == 0.0, "{small:?}");
+    h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::SHIFT).settle();
+    let Some(PathEdit::MoveAnchors { by: far, .. }) = h.last_change() else { panic!("{:?}", h.last_change()) };
+    assert!(far.x > small.x, "{small:?} {far:?}");
+    assert_eq!(h.state.borrow().changes.len(), 2, "one edit per press");
+}
+
+// A press belongs to the tool it began under: switching the host's tool in the middle of a drag leaves the drag its
+// own, and it commits as that tool's edit.
+#[trial]
+fn a_press_keeps_the_tool_it_began_under_across_a_tool_switch() {
+    let mut h = two_paths();
+    let anchor = h.screen(p(160.0, 60.0));
+    h.press_at(anchor);
+    h.move_to(anchor + vec2(FAR * 0.5, FAR * 0.5));
+    h.update(|st| st.tool = BezierTool::Anchors);
+    h.move_to(anchor + vec2(FAR, FAR));
+    h.release_at(anchor + vec2(FAR, FAR));
+    let st = h.state.borrow();
+    assert_eq!(st.seen.last(), Some(&Seen::Commit), "{:?}", st.seen);
+    assert!(matches!(st.changes.last(), Some(PathEdit::MoveAnchors { path: 1, .. })), "{:?}", st.changes);
+}
+
+// The parts follow the press's tool too: a marquee begun under Direct Selection keeps its part when the host switches
+// to a tool that declares none, and its release selects the anchors it encloses.
+#[trial]
+fn a_tool_switch_mid_press_keeps_the_parts_the_press_began_with() {
+    let mut h = two_paths();
+    let (start, end) = (h.screen(p(30.0, 30.0)), h.screen(p(180.0, 80.0)));
+    h.press_at(start);
+    h.move_to(start + (end - start) * 0.5);
+    h.update(|st| st.tool = BezierTool::Anchors);
+    h.move_to(end);
+    h.release_at(end);
+    let st = h.state.borrow();
+    assert_eq!(st.seen.last(), Some(&Seen::Commit), "{:?}", st.seen);
+    assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1)]));
+}
+
+// A press the host cancels (its target went away) ends as Escape ends one: the gesture is cancelled, its release
+// reports nothing, and the paths stay.
+#[trial]
+fn a_cancelled_press_reports_nothing_on_release() {
+    let mut h = two_paths();
+    let before = h.state.borrow().paths.clone();
+    let anchor = h.screen(p(160.0, 60.0));
+    h.press_at(anchor);
+    h.move_to(anchor + vec2(FAR * 0.5, FAR * 0.5));
+    let overlay = h.state.borrow().id;
+    cancel_press_of(h.fixture.ctx(), overlay);
+    h.move_to(anchor + vec2(FAR, FAR));
+    h.release_at(anchor + vec2(FAR, FAR));
+    let st = h.state.borrow();
+    assert!(st.seen.contains(&Seen::Cancel), "{:?}", st.seen);
+    assert!(!st.seen.contains(&Seen::Commit) && !st.seen.contains(&Seen::Set), "{:?}", st.seen);
+    assert_eq!(st.paths, before);
 }

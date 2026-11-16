@@ -240,6 +240,11 @@ impl<T: Stored> PerViewport<T> {
         out
     }
 
+    /// Runs `f` on the record of every viewport that has one.
+    pub(crate) fn each(ctx: &Context, mut f: impl FnMut(&mut T)) {
+        T::records(ctx, |records| records.records.iter_mut().for_each(|(_, record)| f(record)));
+    }
+
     fn register_prune(ctx: &Context) {
         fn prune<T: Stored>(ctx: &Context, live: &[ViewportId]) {
             T::records(ctx, |records| records.records.retain(|(viewport, _)| live.contains(viewport)));

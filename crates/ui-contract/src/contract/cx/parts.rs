@@ -4,6 +4,7 @@ use super::measure::MeasureCx;
 use super::scroll::{ScrollDecl, THUMB, thumb_covers_centre};
 use crate::contract::{Component, Tooltip};
 use crate::primitives::sensing::PartDecl;
+use crate::runtime::memory::{MemoryStage, Slot};
 use crate::runtime::focus::FocusShape;
 use craft_behavior::{Axis, Cursor, CursorIcon, Flow, HitLevel, HitPriority, HitShape, PartKey, PartRef, Roving, ScrollSpan, Sense};
 use craft_theme::Flags;
@@ -277,6 +278,8 @@ pub struct PartsCx<'a, C: Component> {
     /// What the shape laid out before `parts`: a collection's rows as the item step places them this pass, a
     /// container's header slots.
     pub(crate) items: Option<std::rc::Rc<dyn std::any::Any>>,
+    /// The component's memory and id, for `press_slot`; none for a collection's member.
+    pub(crate) stage: Option<(&'a MemoryStage, Id)>,
 }
 
 impl<C: crate::contract::Container> PartsCx<'_, C> {
@@ -346,6 +349,12 @@ impl<C: Component> PartsCx<'_, C> {
     /// only a gesture keeps declared reads it.
     pub fn gesture_running(&self) -> bool {
         self.gesture_running
+    }
+
+    /// A copy of the component's press slot as `update` left it (`Remember::press_slot`), so the parts can follow
+    /// the open press as its handling does. `None` with nothing held, and for a collection's member.
+    pub fn press_slot<T: Slot>(&self) -> Option<T> {
+        self.stage.and_then(|(stage, id)| stage.recall_press::<T>(id))
     }
 
     /// Declares a part; a repeated part is named with its index: `cx.part(POINT.at(id), shape)`.

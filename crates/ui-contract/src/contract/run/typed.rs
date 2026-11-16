@@ -286,6 +286,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
             gesture_running: self.cx.core.memory.recall::<Gesture<ValueOf<C>>>(gesture_key(id)).is_running(),
             measure,
             items: geometry,
+            stage: Some((&*self.cx.core.memory, id)),
         };
         self.comp.parts(rect, &mut pcx);
         self.hooks.parts(self.comp, rect, &mut pcx);
@@ -754,6 +755,7 @@ pub(crate) fn member_prepare<C: Show>(ui: &Ui, env: &Env, id: Id, row: Rect, hov
             gesture_running: false,
             measure: steps::measure_cx::<C>(&input, &style, &resolved, shown.as_deref()),
             items: None,
+            stage: None,
         };
         item.parts(row, &mut pcx);
     }

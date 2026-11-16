@@ -239,6 +239,8 @@ struct ArenaState {
     /// egui widgets lie over the members shown before them; a member shown after one of them over its rect gets an
     /// egui widget of its own, so egui's press target there is the member's (8.3).
     nested: Vec<Rect>,
+    /// The host asked to end the open press (`cancel_press_of`): the arena's next lifecycle run ends it.
+    host_cancel: bool,
 }
 
 #[derive(Default)]
@@ -379,6 +381,20 @@ pub fn member_gesture_running(ctx: &Context, viewport: ViewportId, arena: Id) ->
     members(ctx, viewport, ArenaId::new(arena))
         .into_iter()
         .any(|member| MemoryStage::peek_with::<RemovalWatch, _>(ctx, gesture_key(member), RemovalWatch::armed))
+}
+
+/// Ends the press `owner` holds open the way Escape ends a captured press: the next lifecycle run of the arena it is
+/// open in reports `PressPhase::Cancel` with `PressCancel::Host`, and step 9 cancels the gesture the press carries
+/// (`CancelReason::HostChanged`). For a host whose own state no longer matches what the press acts on; it may ask
+/// inside or outside a pass. Nothing happens when `owner` holds no open press.
+pub fn cancel_press_of(ctx: &Context, owner: Id) {
+    PerViewport::<Arenas>::each(ctx, |arenas| {
+        for state in arenas.by_root.values_mut() {
+            if state.machine.target().is_some_and(|target| target.owner == owner) {
+                state.host_cancel = true;
+            }
+        }
+    });
 }
 
 /// Notes a root shown in the body of `arena` that is not one of its members and takes a press, over `rect`: the
@@ -751,8 +767,12 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         pass_pointer.frame.as_ref().map_or((0.0, egui::Vec2::ZERO, None, craft_behavior::Buttons::empty(), 0.0), |frame| {
             (frame.slop, frame.delta, frame.pos, frame.buttons, frame.target)
         });
-    let cancel = if enabled { pointer::cancel_of_pass(ctx) } else { Some(craft_behavior::PressCancel::Disabled) };
-    let body_layer = with_arena(ctx, arena, pass_nr, |state| state.layer);
+    let (body_layer, host_cancel) = with_arena(ctx, arena, pass_nr, |state| (state.layer, std::mem::take(&mut state.host_cancel)));
+    let cancel = if enabled {
+        pointer::cancel_of_pass(ctx).or(host_cancel.then_some(craft_behavior::PressCancel::Host))
+    } else {
+        Some(craft_behavior::PressCancel::Disabled)
+    };
     let xf = body_layer.and_then(|layer| areas::layer_map(ctx, layer));
     // Hover needs the root's layer on top under the pointer, or egui's layer cover (a popup) would be ignored.
     let top = pass_pointer.hover.and_then(|at| areas::layer_at(ctx, at));
@@ -844,6 +864,7 @@ fn sweep_undrawn(ctx: &Context) {
             };
             if orphaned(state) {
                 state.machine = PressMachine::default();
+                state.host_cancel = false;
                 gone = true;
             }
         }
