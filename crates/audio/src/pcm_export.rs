@@ -86,6 +86,12 @@ const FL32_NAME: &[u8] = b"\x1532-bit floating point";
 /// an error naming WAV instead.
 pub fn header(container: PcmContainer, channels: u16, sample_rate: u32, format: SampleFormat, frames: u64) -> Result<Vec<u8>, String> {
     let too_long = || "the audio is too long to write".to_string();
+    if channels == 0 {
+        return Err("audio needs at least one channel".into());
+    }
+    if sample_rate == 0 {
+        return Err("audio needs a sample rate".into());
+    }
     let bits = format.bits();
     let bps = bits / 8;
     let float = format.is_float();
@@ -212,7 +218,11 @@ pub fn encode(container: PcmContainer, interleaved: &[f32], format: SampleFormat
 
 /// A whole file in memory (short audio; exports stream with [`header`] and [`encode`]).
 fn write_whole(container: PcmContainer, interleaved: &[f32], channels: u16, sample_rate: u32, format: SampleFormat) -> Result<Vec<u8>, String> {
-    let frames = (interleaved.len() / usize::from(channels.max(1))) as u64;
+    let per_frame = usize::from(channels.max(1));
+    if interleaved.len() % per_frame != 0 {
+        return Err("the samples do not make whole frames".into());
+    }
+    let frames = (interleaved.len() / per_frame) as u64;
     let mut v = header(container, channels, sample_rate, format, frames)?;
     encode(container, interleaved, format, &mut v);
     v.extend_from_slice(pad(frames, channels, format));
@@ -260,5 +270,18 @@ mod tests {
         let aiff = write_aiff(&[0.25, -3.0], 1, 44_100, SampleFormat::Float32).unwrap();
         assert_eq!(&aiff[8..12], b"AIFC");
         assert_eq!(&aiff[aiff.len() - 8..], [0.25f32.to_be_bytes(), (-3.0f32).to_be_bytes()].concat());
+    }
+
+    #[test]
+    fn zero_channels_rates_and_partial_frames_are_refused() {
+        for container in [PcmContainer::Wav, PcmContainer::Aiff] {
+            assert!(header(container, 0, 48_000, SampleFormat::Int16, 1).is_err());
+            assert!(header(container, 1, 0, SampleFormat::Int16, 1).is_err());
+            assert!(header(container, 2, 48_000, SampleFormat::Int16, 0).is_ok(), "zero frames stay valid");
+        }
+        assert!(write_wav(&[0.5], 0, 48_000, SampleFormat::Int16).is_err());
+        assert!(write_wav(&[0.1, 0.2, 0.3], 2, 48_000, SampleFormat::Int16).is_err());
+        assert!(write_aiff(&[0.1, 0.2, 0.3], 2, 48_000, SampleFormat::Int16).is_err());
+        assert!(write_aiff(&[0.1, 0.2], 2, 48_000, SampleFormat::Int16).is_ok());
     }
 }
