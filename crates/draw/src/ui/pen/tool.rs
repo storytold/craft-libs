@@ -18,7 +18,7 @@ use craft_ui::style::{HandleLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 /// The side of the box a tool icon is drawn on; an icon's hotspot is in these units.
-const ICON_BOX: f32 = 24.0;
+pub(super) const ICON_BOX: f32 = 24.0;
 
 /// Why a draft ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

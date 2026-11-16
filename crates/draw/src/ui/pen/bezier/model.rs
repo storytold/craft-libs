@@ -114,8 +114,8 @@ impl EditSubpath {
     }
 }
 
-/// A path the overlays show: the host's key for it, its subpaths and its colour.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A path the overlays show: the host's key for it, its subpaths, its colour and what it allows.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct EditPath {
     /// The host's key, stable across frames.
@@ -125,12 +125,30 @@ pub struct EditPath {
     /// The layer colour its outline, anchors and handles are drawn in (DesignCraft, VectorCraft);
     /// the overlay's line colour without one.
     pub color: Option<Srgba>,
+    /// Whether the path takes copies of its subpaths: Direct Selection's ⌥ drag on a segment drags a copy of the
+    /// subpath ([`PathEdit::DuplicateSubpath`]) instead of the subpath itself. The host turns it off for a path
+    /// whose subpaths are not copied that way (PhotoCraft: the pen draft and Type Paths, where the drag moves the
+    /// subpath).
+    pub copies: bool,
+}
+
+impl Default for EditPath {
+    fn default() -> Self {
+        Self::new(0, Vec::new())
+    }
 }
 
 impl EditPath {
-    /// The path the host keys `key`, made of `subpaths`, in the overlay's colour.
+    /// The path the host keys `key`, made of `subpaths`, in the overlay's colour, taking copies of its subpaths.
     pub fn new(key: u64, subpaths: Vec<EditSubpath>) -> Self {
-        Self { key, subpaths, color: None }
+        Self { key, subpaths, color: None, copies: true }
+    }
+
+    /// The path taking copies of its subpaths ([`copies`](Self::copies)) or not.
+    #[must_use]
+    pub fn copies(mut self, copies: bool) -> Self {
+        self.copies = copies;
+        self
     }
 
     /// The path in its own colour (a layer's), else the overlay's.
@@ -173,8 +191,8 @@ impl KnotRef {
     }
 }
 
-/// The host's path selection: the path the overlay edits, its selected anchors and a selected
-/// segment (whose two handles show).
+/// The host's path selection: the path the overlay edits, its selected anchors, a selected
+/// segment (whose two handles show) and the subpaths whose anchors show.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct PathSelection {
@@ -184,17 +202,46 @@ pub struct PathSelection {
     pub anchors: Vec<KnotRef>,
     /// The segment leaving this knot.
     pub segment: Option<KnotRef>,
+    /// The subpaths of that path whose anchors and handles show; `None` shows every subpath's. A Delete Anchor
+    /// click narrows it to the subpath it acts on (Photoshop's Delete Anchor Point, #12769); the outlines always show.
+    pub shown: Option<Vec<usize>>,
 }
 
 impl PathSelection {
-    /// The selection of `anchors` of the path keyed `path`, and of a segment.
+    /// The selection of `anchors` of the path keyed `path`, and of a segment, with every subpath's anchors shown.
     pub fn new(path: Option<u64>, anchors: Vec<KnotRef>, segment: Option<KnotRef>) -> Self {
-        Self { path, anchors, segment }
+        Self { path, anchors, segment, shown: None }
+    }
+
+    /// The selection with the anchors of only the `shown` subpaths drawn (`None`: every subpath's).
+    #[must_use]
+    pub fn shown(mut self, shown: Option<Vec<usize>>) -> Self {
+        self.shown = shown;
+        self
     }
 
     /// Whether `knot` of `path` is a selected anchor.
     pub fn has_anchor(&self, path: u64, knot: KnotRef) -> bool {
         self.path == Some(path) && self.anchors.contains(&knot)
+    }
+
+    /// Whether the anchors of `subpath` of `path` show: always for a path other than the selection's.
+    pub fn shows(&self, path: u64, subpath: usize) -> bool {
+        self.path != Some(path) || self.shown.as_ref().is_none_or(|shown| shown.contains(&subpath))
+    }
+
+    /// The selection after the host deleted the anchor `deleted` of a Delete Anchor click, from `path` as the delete
+    /// left it, which had `subpaths_before` subpaths: the anchor that followed the deleted one (the first of a
+    /// closed subpath after its last), with only that subpath's anchors shown. When the delete removed a subpath,
+    /// the indices moved: nothing is selected and every subpath shows.
+    pub fn after_delete(path: &EditPath, deleted: KnotRef, subpaths_before: usize) -> PathSelection {
+        // pc: crates/ui-egui/src/tools/anchor_tools.rs `select_follower` (#12769).
+        let Some(sub) = path.subpaths.get(deleted.subpath).filter(|_| path.subpaths.len() == subpaths_before) else {
+            return PathSelection::new(Some(path.key), Vec::new(), None);
+        };
+        let next = if deleted.knot < sub.knots.len() { Some(deleted.knot) } else { (sub.closed && !sub.knots.is_empty()).then_some(0) };
+        let anchors = next.map(|knot| KnotRef::new(deleted.subpath, knot)).into_iter().collect();
+        PathSelection::new(Some(path.key), anchors, None).shown(Some(vec![deleted.subpath]))
     }
 }
 
@@ -310,6 +357,17 @@ pub enum PathEdit {
         /// The toggled anchor.
         knot: KnotRef,
     },
+    /// Direct Selection's ⌥ drag on a segment: a copy of subpath `subpath` goes last in the path and moves, with
+    /// its handles, by `by`; the source stays. Photoshop names the step "Drag Path".
+    #[non_exhaustive]
+    DuplicateSubpath {
+        /// The path's host key.
+        path: u64,
+        /// The copied subpath.
+        subpath: usize,
+        /// The copy's move, in document units.
+        by: Vec2,
+    },
 }
 
 /// A request to delete anchors of a path.
@@ -372,6 +430,11 @@ impl PathEdit {
         PathEdit::ToggleCurvature { path, knot }
     }
 
+    /// A copy of `subpath` of the path keyed `path`, appended and moved by `by`.
+    pub fn duplicate_subpath(path: u64, subpath: usize, by: Vec2) -> Self {
+        PathEdit::DuplicateSubpath { path, subpath, by }
+    }
+
     /// The edit's path.
     pub fn path(&self) -> u64 {
         match *self {
@@ -382,7 +445,8 @@ impl PathEdit {
             | PathEdit::MoveCurvature { path, .. }
             | PathEdit::InsertCurvature { path, .. }
             | PathEdit::InsertAnchor { path, .. }
-            | PathEdit::ToggleCurvature { path, .. } => path,
+            | PathEdit::ToggleCurvature { path, .. }
+            | PathEdit::DuplicateSubpath { path, .. } => path,
         }
     }
 }

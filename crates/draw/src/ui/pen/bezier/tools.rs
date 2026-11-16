@@ -1,9 +1,13 @@
 //! The Add Anchor Point, Delete Anchor Point, Auto Add/Delete and Curvature tools of [`BezierOverlay`](super::BezierOverlay):
 //! which parts each tool takes a press on, what a click reports and what the hover mark shows.
 
+use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
 use craft_keymap::Mods;
+use craft_ui::primitives::ToolIcon;
+use egui::Vec2;
 
-use super::{AnchorDelete, BezierHit, BezierTool, Report};
+use super::{AnchorDelete, BezierHit, BezierTool, PathSelection, Report};
+use crate::ui::pen::tool::ICON_BOX;
 
 impl BezierTool {
     /// The tool a press acts as: [`BezierTool::AddAnchor`] and [`BezierTool::DeleteAnchor`] swap while ⌥ is held;
@@ -86,16 +90,26 @@ impl BezierTool {
 /// place). The pen draft, when the host passes it as one more path
 /// ([`PathMode::resolve`](crate::ui::pen::PathMode::resolve)), is hit and reported like any path, under the key the
 /// host gave it.
-pub(super) fn anchor_click(tool: BezierTool, hit: BezierHit, mods: Mods, report: &mut Report) {
-    // pc: crates/ui-egui/src/tools/anchor_tools.rs:88-114 `pointer`, `click`; :130-150 `apply`.
-    if let (BezierHit::Anchor { path, knot }, BezierTool::DeleteAnchor | BezierTool::AutoAddDelete) = (hit, tool.acting(mods)) {
-        report.delete = Some(AnchorDelete::new(path, vec![knot], false));
+///
+/// Delete Anchor on an anchor whose subpath `selection` does not show deletes nothing: it selects the anchor and
+/// shows only its subpath (Photoshop, #12769). The host selects the anchor after a delete with
+/// [`PathSelection::after_delete`].
+pub(super) fn anchor_click(tool: BezierTool, hit: BezierHit, mods: Mods, selection: &PathSelection, report: &mut Report) {
+    // pc: crates/ui-egui/src/tools/anchor_tools.rs:88-114 `pointer`, `click`; :130-150 `apply`; `click` (#12769).
+    let BezierHit::Anchor { path, knot } = hit else { return };
+    match tool.acting(mods) {
+        BezierTool::DeleteAnchor if !selection.shows(path, knot.subpath) => {
+            report.select = Some(PathSelection::new(Some(path), vec![knot], None).shown(Some(vec![knot.subpath])));
+        }
+        BezierTool::DeleteAnchor | BezierTool::AutoAddDelete => report.delete = Some(AnchorDelete::new(path, vec![knot], false)),
+        _ => {}
     }
 }
 
 /// The part the hover mark shows for `hit` with `mods` held: what a press would edit. Under Add an anchor and under
-/// Delete a segment are taken and do nothing (PhotoCraft draws no mark there). Curvature marks every part it takes.
-pub(super) fn hover_mark(tool: BezierTool, hit: BezierHit, mods: Mods) -> Option<BezierHit> {
+/// Delete a segment are taken and do nothing (PhotoCraft draws no mark there), nor is a hidden anchor under Delete,
+/// which a click only shows. Curvature marks every part it takes.
+pub(super) fn hover_mark(tool: BezierTool, hit: BezierHit, mods: Mods, selection: &PathSelection) -> Option<BezierHit> {
     // pc: crates/ui-egui/src/tools/anchor_tools.rs:152-169 `draw_hover`, `draw_pen_hover`;
     // crates/ui-egui/src/tools/direct_select.rs:378-389 `curvature_hover`.
     if !tool.marks() || mods.cmd {
@@ -111,11 +125,29 @@ pub(super) fn hover_mark(tool: BezierTool, hit: BezierHit, mods: Mods) -> Option
         BezierHit::Segment { .. } => tool.adds(mods),
         _ => {
             let mut would = Report::default();
-            anchor_click(tool, hit, mods, &mut would);
+            anchor_click(tool, hit, mods, selection, &mut would);
             would.delete.is_some()
         }
     };
     marked.then_some(hit)
+}
+
+/// The cursor over `hit`, a part the tool takes, with `mods` held; `precise` is the canvas's precise cursor
+/// ([`CanvasSpace::precise`](craft_ui::canvas::CanvasSpace::precise)). Add Anchor shows the pen with "+" over a
+/// segment a click splits and the arrow over an anchor, the crosshair when precise. Under ⌥ (Delete Anchor) and ⌘ the
+/// cursor stays the host tool's, as it does off the parts.
+pub(super) fn hover_cursor(tool: BezierTool, hit: BezierHit, mods: Mods, precise: bool) -> Option<Cursor> {
+    // pc: crates/ui-egui/src/canvas/tool_cursor.rs, crates/ui-egui/src/tools/anchor_tools.rs (#12729).
+    if tool.acting(mods) != BezierTool::AddAnchor || mods.cmd {
+        return None;
+    }
+    let cursor = match hit {
+        _ if precise => PaintedCursor::Crosshair,
+        // The pen's tip is the bottom left corner of the icon's box.
+        BezierHit::Segment { .. } => PaintedCursor::tool(ToolIcon::Pen.icon(), Vec2::Y * ICON_BOX, Some(CursorBadge::Add)),
+        BezierHit::Anchor { .. } | BezierHit::Handle { .. } => PaintedCursor::arrow(false),
+    };
+    Some(Cursor::Painted(cursor))
 }
 
 /// `t` clamped to the range the Curvature tool inserts at.

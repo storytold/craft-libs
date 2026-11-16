@@ -52,7 +52,8 @@ impl BezierOverlay<'_> {
     }
 }
 
-/// The handles to show, in path order, in then out, leaving out retracted ones.
+/// The handles to show, in path order, in then out, leaving out retracted ones and those of subpaths the selection
+/// does not show.
 pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: HandlesShown, view: &CanvasView) -> Vec<Shown> {
     let mut shown = Vec::new();
     for (index, path) in paths.iter().enumerate() {
@@ -60,7 +61,7 @@ pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: Ha
             let (a, b) = path.subpaths.get(s.subpath)?.segment_ends(s.knot)?;
             Some((KnotRef::new(s.subpath, a), KnotRef::new(s.subpath, b)))
         });
-        for knot_ref in path.knot_refs() {
+        for knot_ref in path.knot_refs().filter(|k| sel.shows(path.key, k.subpath)) {
             let Some(knot) = path.knot(knot_ref) else { continue };
             for side in [HandleSide::In, HandleSide::Out] {
                 let wanted = match handles {
