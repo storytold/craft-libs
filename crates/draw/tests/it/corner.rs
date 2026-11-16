@@ -75,7 +75,9 @@ fn apex_radius_after_drag(down: f32) -> f64 {
         let mut targets = shown.borrow_mut();
         let room = ui.available_rect_before_wrap();
         let view = CanvasView::new(room, Point::new(210.0, 200.0), 1.0);
-        Canvas::new("Document").view(view).show(ui, |ui, body| CornerWidgets::new("Corner radius", Bind::bound(&mut *targets)).show_at(ui, body.rect));
+        Canvas::new("Document")
+            .view(view)
+            .show(ui, |ui, body| CornerWidgets::new("Corner radius", Bind::bound(&mut *targets)).show_at(ui, body.rect));
     });
     fixture.settle();
     let widget = fixture.by_label("Corner 1 of 3").expect("the apex has a widget");

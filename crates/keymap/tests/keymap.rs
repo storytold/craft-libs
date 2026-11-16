@@ -1,8 +1,8 @@
 //! Integration tests of craft-keymap: keymap.
 
 use craft_keymap::{
-    Active, Binding, Chord, CommandDef, CommandRef, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods, Overrides, Platform,
-    Press, Problem, Scope, Scopes,
+    Active, Binding, Chord, CommandDef, CommandRef, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods, Overrides,
+    Platform, Press, Problem, Scope, Scopes,
 };
 use serde_json::json;
 

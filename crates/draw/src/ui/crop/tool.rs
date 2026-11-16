@@ -303,7 +303,8 @@ impl CropTool {
     /// second pass of the frame reads its own overlay output and never repeats an edit, a Straighten line or a
     /// scroll request.
     fn take(&mut self, shown: CropOverlayOutput, input: &CropInput<'_>, units: &Units, time: f64) -> CropShown {
-        let CropOverlayOutput { edit, apply, discard, straightened, straighten_ended, view, snapped, dragging, nudged, scrolls_at, context, .. } = shown;
+        let CropOverlayOutput { edit, apply, discard, straightened, straighten_ended, view, snapped, dragging, nudged, scrolls_at, context, .. } =
+            shown;
         let mut out = CropShown { events: Vec::new(), snapped, scrolls_at, context };
         self.dragging = dragging;
         if let Some(view) = view {

@@ -813,11 +813,7 @@ fn outward_normals(quad: &[Pos2; 4]) -> [Vec2; 4] {
     std::array::from_fn(|side| {
         let (a, b) = (quad[side], quad[(side + 1) % 4]);
         let along = b - a;
-        if along.length() > 1e-3 {
-            Vec2::new(along.y, -along.x).normalized() * turn
-        } else {
-            (a.to_vec2() - centre).normalized()
-        }
+        if along.length() > 1e-3 { Vec2::new(along.y, -along.x).normalized() * turn } else { (a.to_vec2() - centre).normalized() }
     })
 }
 
@@ -1163,7 +1159,11 @@ fn outside_regions(quad: &[Pos2; 4], within: Rect) -> [Vec<Pos2>; 4] {
     let mid = |k: usize| quad[k % 4].lerp(quad[(k + 1) % 4], 0.5);
     let ray = |k: usize| {
         let along = mid(k) - centre;
-        if along.length() > 1e-3 { along.normalized() } else { [Vec2::new(0.0, -1.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(-1.0, 0.0)][k % 4] }
+        if along.length() > 1e-3 {
+            along.normalized()
+        } else {
+            [Vec2::new(0.0, -1.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(-1.0, 0.0)][k % 4]
+        }
     };
     std::array::from_fn(|i| {
         let (previous, next) = (i + 3, i);

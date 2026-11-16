@@ -695,21 +695,8 @@ impl Component for CropOverlay<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CropOverlayOutput {
         let picked = cx.active_part().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
-        let Report {
-            apply,
-            discard,
-            straightened,
-            view,
-            snapped,
-            hovered,
-            dragging,
-            nudged,
-            turning,
-            sizing,
-            scrolls_at,
-            straighten_ended,
-            context,
-        } = self.report;
+        let Report { apply, discard, straightened, view, snapped, hovered, dragging, nudged, turning, sizing, scrolls_at, straighten_ended, context } =
+            self.report;
         CropOverlayOutput {
             edit: cx.edit_response(),
             apply,

@@ -136,7 +136,12 @@ impl PartialEq for Snap {
 impl std::fmt::Debug for Snap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The targets can number thousands of grid lines, so they are left out.
-        f.debug_struct("Snap").field("options", &self.options).field("tolerance", &self.tolerance).field("os", &self.os).field("whole_pixels", &self.whole_pixels).finish_non_exhaustive()
+        f.debug_struct("Snap")
+            .field("options", &self.options)
+            .field("tolerance", &self.tolerance)
+            .field("os", &self.os)
+            .field("whole_pixels", &self.whole_pixels)
+            .finish_non_exhaustive()
     }
 }
 
