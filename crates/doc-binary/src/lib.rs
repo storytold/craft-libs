@@ -473,7 +473,9 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
         let mark = |p: &ParaOut| p.end_cp.saturating_sub(1);
         let own_of = |p: &ParaOut| {
             let fc = content.pieces.fc_of_cp(mark(p)).unwrap_or(0);
-            content.lists.at(fc, content.papx.papx(word, fc).0)
+            // A Prm1 on the mark's piece names the Prc a fast save recorded its change in.
+            let prc = content.pieces.span(mark(p)).map(|s| s.prm()).filter(|prm| prm & 1 == 1).map(|prm| usize::from(prm >> 1));
+            content.lists.at(fc, content.papx.papx(word, fc).0, prc)
         };
         let olst_of = |p: &ParaOut| olsts.get(olsts.partition_point(|o| o.0 <= mark(p))).and_then(|o| o.1.as_ref());
         let section_mark = |p: &ParaOut| p.para.text.is_empty() && sect_ends.binary_search(&p.end_cp).is_ok();

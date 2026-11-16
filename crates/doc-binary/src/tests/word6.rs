@@ -1441,7 +1441,9 @@ fn numbered_and_bulleted_paragraphs_count_as_word_95_does() {
     // bullet and a skipped paragraph don't break the count, nor does another start; a plain
     // paragraph and other text after the number do. Word 95 shows 1. 2. • 3. - 4. - 1. 1).
     let dec = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 1)].concat();
-    let bullet = [&[0x0D, 11][..], &anld(0xFF, &[0xB7], b"", 0x08, 0)].concat();
+    // The bullet in Symbol (font 1), as Word 95 wrote `\pnf1`: its 0xB7 is that font's bullet.
+    let mut bullet = [&[0x0D, 11][..], &anld(0xFF, &[0xB7], b"", 0x08, 0)].concat();
+    bullet[10..12].copy_from_slice(&1u16.to_le_bytes());
     let start7 = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 7)].concat();
     let paren = [&[0x0D, 10][..], &anld(0, b"", b")", 0x08, 1)].concat();
     let style = |name, papx| Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name, papx, chpx: &[] });
@@ -1455,8 +1457,33 @@ fn numbered_and_bulleted_paragraphs_count_as_word_95_does() {
     let paras: &[(u32, u32, &[u8])] =
         &[(0, 2, &[]), (2, 4, &[]), (4, 6, &[]), (6, 8, &[]), (8, 10, &[0x0D, 12]), (10, 12, &[]), (12, 14, &[]), (14, 16, &[]), (16, 18, &[])];
     let para_styles = &[1, 1, 2, 1, 1, 3, 0, 1, 4];
-    let doc = read(&word6_file(&Doc6 { text: b"a\rb\rx\rc\rs\rd\rp\re\rf\r", paras, para_styles, styles, ..Default::default() })).expect("opens");
+    let fonts: &[(u8, &str)] = &[(0, "Times New Roman"), (2, "Symbol")];
+    let doc =
+        read(&word6_file(&Doc6 { text: b"a\rb\rx\rc\rs\rd\rp\re\rf\r", paras, para_styles, styles, fonts, ..Default::default() })).expect("opens");
     assert_eq!(labels(&doc), ["1. a", "2. b", "\u{2022} x", "3. c", " s", "4. d", " p", "1. e", "1) f"]);
+}
+
+#[test]
+fn headings_without_an_olst_show_the_levels_above_in_their_own_formats() {
+    // No OLST: each heading's own ANLD sets its level, upper roman at level 1, decimal with
+    // fPrev at level 2. The level-2 heading shows the level above in its own format, I.1., not
+    // the default decimal's 1.1.
+    let h1 = [&[0x0D, 1][..], &anld(1, b"", b".", 0x08, 1)].concat();
+    let h2 = [&[0x0D, 2][..], &anld(0, b"", b".", 0x0C, 1)].concat();
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, &h1), (2, 4, &h2)];
+    let doc = read(&word6_file(&Doc6 { text: b"a\rb\r", paras, ..Default::default() })).expect("opens");
+    assert_eq!(labels(&doc), ["I. a", "I.1. b"]);
+}
+
+#[test]
+fn numbering_a_fast_save_records_in_a_prc_counts() {
+    // A fast save numbered the second paragraph: the change is only in the Prc (a Prm1) of the
+    // piece holding its mark, applied after its PAPX.
+    let dec = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 1)].concat();
+    let prcs: &[&[u8]] = &[&dec];
+    let d = Doc6 { text: b"a\rb\r", pieces: Some(&[(2, 0), (2, 2)]), prms: &[0, 0x0001], prcs, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert_eq!(labels(&doc), [" a", "1. b"]);
 }
 
 #[test]
