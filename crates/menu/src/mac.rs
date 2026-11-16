@@ -326,6 +326,18 @@ struct Target {
 /// How many failed builds in a row are tried again without a new sync ([`MacMenu::rebuild`]).
 const RETRIES: u8 = 3;
 
+/// After a build from an update: the failed builds in a row, and whether to try again later
+/// without a new sync ([`MacMenu::rebuild`]).
+fn after_build(retries: u8, built: bool) -> (u8, bool) {
+    if built {
+        (0, false)
+    } else if retries < RETRIES {
+        (retries.saturating_add(1), true)
+    } else {
+        (retries, false)
+    }
+}
+
 /// The native items by muda id.
 type Entries = HashMap<String, Entry>;
 
@@ -475,10 +487,10 @@ impl MacMenu {
     /// sync them again (the driver skips a layout equal to the last one), so a failed build is
     /// tried again later, up to [`RETRIES`] times in a row; after that the next sync tries again.
     fn rebuild(&mut self, bar: &MenuBar) {
-        if self.build(bar) {
-            self.retries = 0;
-        } else if self.retries < RETRIES {
-            self.retries = self.retries.saturating_add(1);
+        let built = self.build(bar);
+        let (retries, again) = after_build(self.retries, built);
+        self.retries = retries;
+        if again {
             self.retry_later(bar.clone());
         }
     }
@@ -805,6 +817,22 @@ mod tests {
         assert_eq!(code("Cmd+Delete"), Accelerator::new(Modifiers::META, Code::Delete), "forward delete, as egui's Key::Delete");
         assert_eq!(code("Cmd+Backspace"), Accelerator::new(Modifiers::META, Code::Backspace));
         assert_eq!(code("Cmd++"), code("Cmd+="), "⌘+ is the ⌘= key");
+    }
+
+    /// A failed build is tried again later, up to `RETRIES` times in a row, without a new sync;
+    /// a build that works ends the run.
+    #[test]
+    fn a_failed_build_is_tried_again_up_to_retries_times() {
+        let mut retries = 0;
+        let mut again = 0;
+        for _ in 0..10 {
+            let (r, a) = after_build(retries, false);
+            retries = r;
+            again += usize::from(a);
+        }
+        assert_eq!(again, usize::from(RETRIES), "a failing build is retried RETRIES times, then waits for a sync");
+        assert_eq!(after_build(retries, true), (0, false), "a build that works resets the count");
+        assert_eq!(after_build(0, false), (1, true), "the first failure schedules a retry");
     }
 
     #[test]
