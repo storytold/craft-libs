@@ -26,7 +26,8 @@ pub enum Format {
     OpenExr,
     /// Radiance RGBE.
     Hdr,
-    /// Encode-only behind the `avif` feature; see [`ASYMMETRIC_EXCEPTIONS`].
+    /// Encoded behind the `avif` feature and decoded behind `avif-decode` (native targets); see
+    /// [`ASYMMETRIC_EXCEPTIONS`] for a build with only one of them.
     Avif,
     /// HEIF/HEIC (HEVC-coded): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Heif,
@@ -95,8 +96,10 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     ),
     (
         Format::Avif,
-        "AVIF encode uses ravif (pure Rust) but decoding requires dav1d (C); read stays unsupported \
-         until a pure-Rust AV1 decoder is viable. Only enabled with the non-default `avif` feature.",
+        "AVIF encode (ravif and rav1e, pure Rust) is behind the non-default `avif` feature and AVIF \
+         decode (craft-video's clean-room pure-Rust AV1 decoder) behind the non-default \
+         `avif-decode` feature, native targets only (on wasm32 a decoder panic would abort). A build \
+         with only one of them reads or writes AVIF, not both.",
     ),
     (Format::Jxl, "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder; JPEG XL reading is tracked separately and is not yet available."),
     (
@@ -316,7 +319,9 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Qoi => base,
         Format::OpenExr => FormatCaps { depths: &[S::F16, S::F32], layouts: RGB_GRAY, ..base },
         Format::Hdr => FormatCaps { depths: &[S::F32], layouts: &[L::Rgb], alpha: false, lossy: true, ..base },
-        Format::Avif => FormatCaps { read: false, write: cfg!(feature = "avif"), lossy: true, ..base },
+        Format::Avif => {
+            FormatCaps { read: cfg!(all(feature = "avif-decode", not(target_arch = "wasm32"))), write: cfg!(feature = "avif"), lossy: true, ..base }
+        }
         Format::Heif => {
             FormatCaps { read: cfg!(feature = "heif"), write: false, depths: &[S::U8, S::U16], icc: true, exif: true, xmp: true, lossy: true, ..base }
         }

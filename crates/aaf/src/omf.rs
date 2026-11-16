@@ -21,7 +21,7 @@
 //! transition's name) are not in the specification; they were first written by FilmCraft and keep
 //! their names so that existing files read back.
 
-pub(crate) mod bento;
+pub mod bento;
 mod read;
 mod write;
 
