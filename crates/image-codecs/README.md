@@ -43,7 +43,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | TIFF | yes | yes | U8, U16, F32 | all six (CMYK, CMYK+A included) | yes | yes (tag 34675) | no | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
 | WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | no | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
 | GIF | yes | yes | U8 | RGBA | 1-bit | no | no | no | no | no | yes (256-colour palette) | `image` |
-| BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
+| BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | yes (header pixels per metre) | no | no | `image` |
 | TGA | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | no | `image` (read) / built in (RLE write, one scanline per packet) |
 | ICO | yes | yes | U8 | RGBA (at most 256×256) | yes | no | no | no | no | no | no | `image` |
 | DDS | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | yes (BC1–BC3, when `EncodeOptions::dds` asks for one) | built in |
@@ -79,7 +79,8 @@ the same.
 Palette BMP and PNG pixels decode as RGB(A) in `Image`; `bmp_palette` and `png_palette` expose the
 embedded table (and a PNG's transparent entry) so `photocraft-io` can open them in Indexed Color mode.
 `bmp_palette` returns the colours the header declares, not the decoder's 256-entry padding.
-`encode_bmp_indexed` writes the inverse: indices plus a table as an 8-bit palette BMP.
+`encode_bmp_indexed` writes the inverse: indices plus a table as an 8-bit palette BMP;
+`encode_bmp_indexed_with_dpi` also writes a resolution in the header.
 
 ## Documented asymmetries and limitations
 
