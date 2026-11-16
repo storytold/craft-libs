@@ -520,6 +520,16 @@ impl FullWindowWorkspace for WideAngleWorkspace {
                 let on = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
                 self.preview(on);
             }
+            "undo" | "redo" => {
+                if value != Value::Bool(true) {
+                    return Err(FieldRefusal::Rejects(&value).message(field));
+                }
+                if field == "undo" {
+                    self.undo();
+                } else {
+                    self.redo();
+                }
+            }
             "add" | "orient" | "remove" => {
                 let edit = json_edit(field, &value).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
                 let event = self.edit_constraints(&words, edit).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
