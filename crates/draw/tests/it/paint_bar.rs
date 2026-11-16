@@ -61,11 +61,11 @@ fn disabled(fixture: &Fixture, label: &str) -> bool {
 #[trial]
 fn paint_bar_rules() {
     let cases: [(PaintTool, EraserMode, &[&str], &[&str]); 5] = [
-        (PaintTool::Brush, EraserMode::Brush, &[], &["Size", "Hardness", "Opacity", "Flow", "Mode"]),
-        (PaintTool::Pencil, EraserMode::Brush, &[], &["Size", "Opacity", "Mode"]),
-        (PaintTool::Eraser, EraserMode::Brush, &[], &["Size", "Hardness", "Opacity", "Flow", "Mode"]),
-        (PaintTool::Eraser, EraserMode::Pencil, &["Hardness", "Flow"], &["Size", "Opacity", "Mode"]),
-        (PaintTool::Eraser, EraserMode::Block, &["Size", "Hardness", "Opacity", "Flow"], &["Mode"]),
+        (PaintTool::Brush, EraserMode::Brush, &[], &["Opacity", "Flow", "Mode", "Build-up"]),
+        (PaintTool::Pencil, EraserMode::Brush, &[], &["Opacity", "Mode", "Pressure controls size"]),
+        (PaintTool::Eraser, EraserMode::Brush, &[], &["Opacity", "Flow", "Mode"]),
+        (PaintTool::Eraser, EraserMode::Pencil, &["Flow", "Build-up"], &["Opacity", "Mode"]),
+        (PaintTool::Eraser, EraserMode::Block, &["Opacity", "Flow", "Pressure controls opacity"], &["Mode"]),
     ];
     for (tool, eraser, off, on) in cases {
         let (fixture, _) = harness(tool, eraser, |_| {});
