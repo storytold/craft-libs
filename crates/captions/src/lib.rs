@@ -35,6 +35,8 @@ struct ReadmeExamples;
 pub mod ass;
 pub mod cea608;
 pub mod mcc;
+#[cfg(feature = "mov-text")]
+pub mod mov_text;
 pub mod scc;
 pub mod srt;
 pub mod stl;

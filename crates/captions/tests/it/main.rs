@@ -2,6 +2,8 @@ mod ass;
 mod limits;
 mod literal_roundtrips;
 mod mcc_708_timing;
+#[cfg(feature = "mov-text")]
+mod mov_text;
 mod roundtrip;
 mod ttml_body_styles;
 mod ttml_body_timing;
