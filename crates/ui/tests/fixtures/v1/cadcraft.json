@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "workspace": {
+    "docking": {
+      "layout": {
+        "root": {
+          "Split": {
+            "axis": "Horizontal",
+            "size": {
+              "FixedFirst": 220.0
+            },
+            "first": {
+              "Tabs": {
+                "panels": [
+                  "toolSets"
+                ],
+                "active": 0
+              }
+            },
+            "second": {
+              "Split": {
+                "axis": "Horizontal",
+                "size": {
+                  "FixedSecond": 300.0
+                },
+                "first": {
+                  "Tabs": {
+                    "panels": [
+                      "canvas"
+                    ],
+                    "active": 0
+                  }
+                },
+                "second": {
+                  "Stack": {
+                    "entries": [
+                      {
+                        "panel": "layers",
+                        "open": true,
+                        "height": 280.0
+                      },
+                      {
+                        "panel": "properties",
+                        "open": false,
+                        "height": null
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "floating": [
+          {
+            "panels": [
+              "quickCalc"
+            ],
+            "active": 0,
+            "rect": [
+              320.0,
+              200.0,
+              240.0,
+              300.0
+            ]
+          }
+        ]
+      },
+      "hidden": [
+        [
+          "externalReferences",
+          {
+            "floating": null,
+            "anchor": "layers",
+            "placement": {
+              "Tab": {
+                "before": "properties"
+              }
+            },
+            "size": null,
+            "stack": [
+              true,
+              null
+            ],
+            "sibling": []
+          }
+        ]
+      ]
+    }
+  }
+}

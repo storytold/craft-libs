@@ -1,0 +1,462 @@
+//! The main flows against a small index, a font folder made per test and a fake font store.
+//! `CRAFT_FONT_MANAGER_SNAPSHOTS=<dir>` also saves screenshots; run that with
+//! `-- --test-threads=1`, as rendering on several threads at once can crash older Vulkan loaders.
+//! With `CRAFT_FONT_MANAGER_GOOGLE_FONTS=<google/fonts checkout>` the fake store also "downloads"
+//! the index's files from it.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use craft_font_manager::craft_font_catalog::Os;
+use craft_font_manager::index::Index;
+use craft_font_manager::store::{Call, FakeStore, Installer};
+use craft_font_manager::{Catalog, FontEnv, Source};
+use craft_font_manager::{FontsPanel, Look, Options, Palette, Runner, Settings, Tab, install_interface_fonts};
+use egui::accesskit::Role;
+use egui_kittest::Harness;
+use egui_kittest::kittest::{By, NodeT, Queryable};
+
+const HACK: &str = "ofl/hack/Hack-Regular.ttf";
+const UBUNTU: &str = "ufl/ubuntu/Ubuntu-Light.ttf";
+
+fn index() -> Index {
+    let file = |path: &str, size: usize| {
+        format!(r#"{{"path":"{path}","size":{size},"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}"#, "0a".repeat(32))
+    };
+    let family = |name: &str, category: &str, languages: &str, scripts: &str, files: String| {
+        format!(
+            r#"{{"family":"{name}","designer":"","categories":["{category}"],"languages":[{languages}],"scripts":[{scripts}],"license":"OFL","license_path":null,"files":[{files}]}}"#
+        )
+    };
+    let json = format!(
+        r#"{{"schema":1,"version":"1.0","source":"google/fonts","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","base_url":"https://cdn.jsdelivr.net/gh/google/fonts@45e3d5269e4a17d823f6d84470bc084dc5ae46f6/","fallback_base_url":"https://raw.githubusercontent.com/google/fonts/45e3d5269e4a17d823f6d84470bc084dc5ae46f6/",
+        "languages":[
+          {{"id":"ar_Arab","name":"Arabic","autonym":"العربية","script":"Arab","population":1,"historical":false}},
+          {{"id":"en_Latn","name":"English","autonym":"English","script":"Latn","population":1,"historical":false}},
+          {{"id":"ja_Jpan","name":"Japanese","autonym":"日本語","script":"Jpan","population":1,"historical":false}}],
+        "scripts":[{{"id":"Arab","name":"Arabic"}},{{"id":"Jpan","name":"Japanese"}},{{"id":"Latn","name":"Latin"}}],
+        "families":[{},{},{},{}]}}"#,
+        family("Amiri", "SERIF", "0,1", r#""Arab","Latn""#, file("ofl/amiri/Amiri-Regular.ttf", 1000)),
+        family("Hack", "MONOSPACE", "1", r#""Latn""#, file(HACK, epaint_default_fonts::HACK_REGULAR.len())),
+        family("Noto Sans JP", "SANS_SERIF", "1,2", r#""Jpan","Latn""#, file("ofl/notosansjp/NotoSansJP[wght].ttf", 1000)),
+        family("Ubuntu", "SANS_SERIF", "1", r#""Latn""#, file(UBUNTU, epaint_default_fonts::UBUNTU_LIGHT.len())),
+    );
+    Index::from_json(json.as_bytes()).unwrap()
+}
+
+/// A system with Ubuntu Light installed, an empty font store, and a fake store that can "download"
+/// Hack and Ubuntu Light.
+fn setup(name: &str, settings: Settings) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    setup_with(name, settings, Runner::Inline, |_| {})
+}
+
+/// [`setup`] with a job runner and the context set up by `fonts` (the interface fonts and
+/// direction), at the launcher's window size less its header and footer.
+fn setup_with(
+    name: &str,
+    settings: Settings,
+    runner: Runner,
+    fonts: impl Fn(&egui::Context) + 'static,
+) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("flows").join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let system = root.join("usr/share/fonts");
+    std::fs::create_dir_all(&system).unwrap();
+    std::fs::write(system.join("Ubuntu-Light.ttf"), epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+    let store_dir = root.join("store");
+    std::fs::create_dir_all(&store_dir).unwrap();
+    let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(store_dir.clone()), ..FontEnv::default() };
+    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
+    catalog.rescan();
+    let files = HashMap::from([
+        (HACK.to_owned(), epaint_default_fonts::HACK_REGULAR.to_vec()),
+        (UBUNTU.to_owned(), epaint_default_fonts::UBUNTU_LIGHT.to_vec()),
+    ]);
+    let store = FakeStore::new(store_dir, files);
+    let store = Arc::new(match std::env::var_os("CRAFT_FONT_MANAGER_GOOGLE_FONTS") {
+        Some(checkout) => store.serving(checkout),
+        None => store,
+    });
+    let options = Options { catalog, installer: store.clone(), index: Ok(index()), runner };
+    let app = FontsPanel::new(options, settings);
+    let mut harness = Harness::builder()
+        .with_size([1120.0, 678.0])
+        // Autonyms such as العربية need fonts beyond egui's; the tests don't depend on the host's.
+        .allow_missing_glyphs()
+        .with_context_setup(move |ctx| {
+            install_interface_fonts(ctx, &[]);
+            fonts(ctx);
+        })
+        .build_ui_state(|ui, app: &mut FontsPanel| app.ui(ui), app);
+    harness.run_steps(4);
+    (harness, store)
+}
+
+fn settle(h: &mut Harness<'_, FontsPanel>) {
+    h.run_steps(4);
+}
+
+fn click(h: &mut Harness<'_, FontsPanel>, label: &str) {
+    h.get_all_by_label(label).next().unwrap_or_else(|| panic!("no {label:?}")).click();
+    settle(h);
+}
+
+/// Clicks the first node whose name has every one of `parts` (names with a placeholder are
+/// isolated for right-to-left text).
+fn click_parts(h: &mut Harness<'_, FontsPanel>, parts: &[&str]) {
+    let wanted: Vec<String> = parts.iter().map(|p| (*p).to_owned()).collect();
+    let by = By::new().predicate(move |n| n.label().is_some_and(|l| wanted.iter().all(|p| l.contains(p.as_str()))));
+    h.get_all(by).next().unwrap_or_else(|| panic!("no {parts:?}")).click();
+    settle(h);
+}
+
+fn click_role(h: &mut Harness<'_, FontsPanel>, role: Role, label: &str) {
+    h.get_by_role_and_label(role, label).click();
+    settle(h);
+}
+
+fn type_into(h: &mut Harness<'_, FontsPanel>, label: &str, text: &str) {
+    h.get_by_role_and_label(Role::TextInput, label).focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, label).type_text(text);
+    settle(h);
+}
+
+fn allow(h: &mut Harness<'_, FontsPanel>) {
+    h.state_mut().set_downloads_allowed(true).unwrap();
+    settle(h);
+}
+
+fn installed_tab(h: &mut Harness<'_, FontsPanel>) {
+    click_role(h, Role::Tab, "Installed");
+    assert_eq!(h.state().tab(), Tab::Installed);
+}
+
+fn has_installed(h: &Harness<'_, FontsPanel>, family: &str) -> bool {
+    h.state().installed().iter().any(|f| f.name == family)
+}
+
+#[test]
+fn search_and_filters_narrow_the_catalogue() {
+    let (mut h, _) = setup("search", Settings::default());
+    assert_eq!(h.state().tab(), Tab::Catalogue);
+    assert_eq!(h.state().results(), ["Amiri", "Hack", "Noto Sans JP", "Ubuntu"]);
+
+    type_into(&mut h, "Search", "noto");
+    assert_eq!(h.state().results(), ["Noto Sans JP"]);
+
+    type_into(&mut h, "Search", "XYZ");
+    assert!(h.state().results().is_empty());
+    assert!(h.query_by_label("No fonts match").is_some());
+    click(&mut h, "Clear search and filters");
+    assert_eq!(h.state().results().len(), 4);
+
+    click_role(&mut h, Role::RadioButton, "Serif");
+    assert_eq!(h.state().results(), ["Amiri"]);
+    click_role(&mut h, Role::RadioButton, "All categories");
+
+    // Ubuntu Light is installed on the system.
+    click_role(&mut h, Role::RadioButton, "Installed");
+    assert_eq!(h.state().results(), ["Ubuntu"]);
+    click_role(&mut h, Role::RadioButton, "Not installed");
+    assert_eq!(h.state().results(), ["Amiri", "Hack", "Noto Sans JP"]);
+    click(&mut h, "Clear filters");
+    assert_eq!(h.state().results().len(), 4);
+}
+
+#[test]
+fn language_filter_finds_languages_by_their_own_name() {
+    let (mut h, _) = setup("language", Settings::default());
+    click_role(&mut h, Role::ComboBox, "Language");
+    type_into(&mut h, "Find a language", "日本");
+    assert!(h.query_by_label("Arabic · العربية").is_none());
+    click(&mut h, "Japanese · 日本語");
+    assert_eq!(h.state().results(), ["Noto Sans JP"]);
+}
+
+#[test]
+fn install_a_family_then_remove_it_from_its_card() {
+    let (mut h, store) = setup("install", Settings::default());
+    assert!(!has_installed(&h, "Hack"));
+
+    click(&mut h, "Hack");
+    assert_eq!(h.state().details_family().as_deref(), Some("Hack"));
+    click(&mut h, "Install all");
+    click(&mut h, "Download");
+    assert_eq!(store.calls(), [Call::Install("Hack".into())]);
+    assert!(h.state().downloads_allowed());
+    let hack = h.state().installed().iter().find(|f| f.name == "Hack").cloned().expect("Hack is listed");
+    assert_eq!(hack.source, Source::Store);
+    assert!(h.query_by_label("Remove all").is_some());
+
+    h.key_press(egui::Key::Escape);
+    settle(&mut h);
+    assert!(h.state().details_family().is_none());
+    installed_tab(&mut h);
+    click(&mut h, "Remove Hack");
+    assert_eq!(store.calls().last(), Some(&Call::Remove("Hack".into())));
+    assert!(!has_installed(&h, "Hack"));
+}
+
+#[test]
+fn install_and_remove_one_style() {
+    let (mut h, store) = setup("style", Settings::default());
+    allow(&mut h);
+    click(&mut h, "Hack");
+    click(&mut h, "Install Regular");
+    assert_eq!(store.calls(), [Call::InstallFile("Hack".into(), HACK.into())]);
+    assert!(has_installed(&h, "Hack"));
+
+    click(&mut h, "Remove Regular");
+    assert_eq!(store.calls().last(), Some(&Call::Remove("Hack".into())));
+    assert!(!has_installed(&h, "Hack"));
+}
+
+#[test]
+fn system_fonts_cannot_be_removed() {
+    let (mut h, store) = setup("system", Settings::default());
+    installed_tab(&mut h);
+    let system = h.state().installed().first().cloned().expect("the system font is listed");
+    assert_eq!(system.source, Source::System);
+    assert!(h.query_by_label(&format!("Remove {}", system.name)).is_none());
+    click(&mut h, &system.name);
+    let remove = h.get_by_label("Remove all");
+    assert!(remove.accesskit_node().is_disabled());
+    remove.click();
+    settle(&mut h);
+    assert!(store.calls().is_empty());
+}
+
+#[test]
+fn nothing_downloads_without_consent() {
+    let (mut h, store) = setup("consent", Settings::default());
+    assert!(h.query_by_label("Downloads are off").is_some());
+    click(&mut h, "Hack");
+
+    click(&mut h, "Preview");
+    assert!(h.query_by_label("Download from Google Fonts?").is_some());
+    click(&mut h, "Cancel");
+    click(&mut h, "Install all");
+    click(&mut h, "Cancel");
+    assert!(store.calls().is_empty());
+    assert!(!h.state().downloads_allowed());
+    assert!(h.query_by_label("Download from Google Fonts?").is_none());
+    h.key_press(egui::Key::Escape);
+    settle(&mut h);
+
+    // Allowed from the note, a preview downloads without asking and installs nothing.
+    click_role(&mut h, Role::Button, "Allow downloads");
+    assert!(h.state().downloads_allowed());
+    assert!(h.query_by_label("Downloads are off").is_none());
+    click(&mut h, "Preview Hack");
+    assert_eq!(store.calls(), [Call::Download("Hack".into())]);
+    assert!(!has_installed(&h, "Hack"));
+}
+
+#[test]
+fn a_failed_install_offers_retry() {
+    let (mut h, store) = setup("retry", Settings::default());
+    allow(&mut h);
+    store.fail_next("network unreachable");
+    click(&mut h, "Install Hack");
+    assert!(h.query_by_label("Couldn't install").is_some());
+    assert!(!has_installed(&h, "Hack"));
+    click(&mut h, "Retry");
+    assert!(has_installed(&h, "Hack"));
+    assert!(h.query_by_label("Couldn't install").is_none());
+}
+
+#[test]
+fn arrow_keys_move_between_cards_and_enter_opens_one() {
+    let (mut h, _) = setup("keys", Settings::default());
+    h.get_by_role_and_label(Role::Button, "Amiri").focus();
+    settle(&mut h);
+    h.key_press(egui::Key::ArrowDown);
+    settle(&mut h);
+    h.key_press(egui::Key::Enter);
+    settle(&mut h);
+    assert_eq!(h.state().details_family().as_deref(), Some("Hack"));
+}
+
+const USER_INDEX: &str = "https://fonts.example.org/index.json";
+
+/// A source a user could add: another "Hack", from an index of its own.
+fn user_index() -> Vec<u8> {
+    format!(
+        r#"{{"schema":1,"version":"1.1","source":"examplefonts","commit":"{commit}",
+        "source_info":{{"id":"examplefonts","name":"Example Fonts","curated":true,"file_urls":["https://fonts.example.org/files/{{path}}"]}},
+        "languages":[{{"id":"en_Latn","name":"English","script":"Latn","population":1}}],
+        "scripts":[{{"id":"Latn","name":"Latin"}}],
+        "families":[{{"family":"Hack","source":"examplefonts","categories":["MONOSPACE"],"license":"OFL","license_path":null,"languages":[0],"scripts":["Latn"],
+          "files":[{{"path":"{HACK}","size":{size},"sha256":"{sha}","style":"normal","weight":400,"axes":[],"postscript":[]}}]}}]}}"#,
+        commit = "1".repeat(40),
+        size = epaint_default_fonts::HACK_REGULAR.len(),
+        sha = "0a".repeat(32),
+    )
+    .into_bytes()
+}
+
+/// The panel with its sources beside it, as a host's settings show them.
+fn sources_setup(name: &str) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("flows").join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let store_dir = root.join("store");
+    std::fs::create_dir_all(&store_dir).unwrap();
+    let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(store_dir.clone()), ..FontEnv::default() };
+    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
+    catalog.rescan();
+    let store = Arc::new(FakeStore::new(store_dir, HashMap::new()).with_index(index()).serving_index(USER_INDEX, user_index()));
+    store.allow_downloads(true).unwrap();
+    let options = Options { catalog, installer: store.clone(), index: store.indexes().map_err(|e| e.0), runner: Runner::Inline };
+    let mut harness = Harness::builder()
+        .with_size([1400.0, 760.0])
+        .allow_missing_glyphs()
+        .with_context_setup(|ctx| install_interface_fonts(ctx, &[]))
+        .build_ui_state(
+            |ui, app: &mut FontsPanel| {
+                egui::Panel::left("sources").exact_size(420.0).show(ui, |ui| app.sources_ui(ui));
+                egui::CentralPanel::default().show(ui, |ui| app.ui(ui));
+            },
+            FontsPanel::new(options, Settings::default()),
+        );
+    harness.run_steps(4);
+    (harness, store)
+}
+
+/// Steps until `done`, for work on the panel's own threads.
+fn wait(h: &mut Harness<'_, FontsPanel>, done: impl Fn(&FontsPanel) -> bool) {
+    for _ in 0..200 {
+        if done(h.state()) {
+            settle(h);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.step();
+    }
+    panic!("timed out");
+}
+
+#[test]
+fn an_added_source_is_not_curated_and_can_be_removed() {
+    let (mut h, store) = sources_setup("sources");
+    assert_eq!(h.state().results().len(), 4);
+    type_into(&mut h, "Index address", USER_INDEX);
+    click_role(&mut h, Role::Button, "Add");
+    wait(&mut h, |p| p.results().len() == 5);
+    // Two families named Hack, one from each source, each with its own card.
+    assert_eq!(h.state().results().iter().filter(|f| *f == "Hack").count(), 2);
+    assert!(h.query_all_by_label("Not curated").count() >= 2, "a badge on the card and one in the sources");
+    assert!(h.query_by_label("Changed since added").is_none());
+
+    store.change_index(USER_INDEX);
+    click(&mut h, "Update sources");
+    wait(&mut h, |p| !p.fetching_sources());
+    assert!(h.query_by_label("Changed since added").is_some());
+
+    click_parts(&mut h, &["Remove", USER_INDEX]);
+    assert_eq!(h.state().results().len(), 4);
+    assert!(store.user_sources().is_empty());
+}
+
+/// The launcher's colours, for screenshots that look as the panel does there.
+fn launcher_look() -> Look {
+    let hex = |rgb: u32| egui::Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+    let ink = |rgb: u32, a: u8| egui::Color32::from_rgba_unmultiplied((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, a);
+    let dark = Palette {
+        bg: hex(0x121316),
+        sunken: hex(0x060607),
+        ink: hex(0xf2f1ee),
+        ink_strong: hex(0xffffff),
+        muted: ink(0xf2f1ee, 153),
+        faint: ink(0xf2f1ee, 97),
+        line: ink(0xf2f1ee, 38),
+        line_strong: ink(0xf2f1ee, 102),
+        accent: hex(0x2d81ff),
+        accent_ink: hex(0x74aaff),
+        invert_bg: hex(0xffffff),
+        invert_fg: hex(0x0b0b0c),
+        good: hex(0x3fd6b8),
+        warn: hex(0xffc14d),
+        bad: hex(0xff6259),
+    };
+    Look { dark: Some(dark), caps: true, corner: egui::CornerRadius::ZERO, control_height: 34.0, ..Look::default() }
+}
+
+fn save(h: &mut Harness<'_, FontsPanel>, dir: &std::ffi::OsStr, name: &str) {
+    h.run_steps(8);
+    let image = h.render().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    image.save(PathBuf::from(dir).join(format!("{name}.png"))).unwrap();
+}
+
+/// The interface fonts with the system's for the scripts egui's own faces lack.
+fn system_fonts(language: &'static str) -> impl Fn(&egui::Context) + 'static {
+    move |ctx| {
+        use craft_ui::fonts::{I18nScripts, UiFonts};
+        let provider = Arc::new(egui_system_font_provider::SystemFontProvider::new().with_locale(Some(language)));
+        UiFonts::new(&I18nScripts).languages(&["en", language]).ui_language(language).system_provider(provider).install(ctx);
+        craft_ui::direction::apply(ctx, craft_ui::direction::resolve(language, craft_ui::direction::Setting::Language));
+    }
+}
+
+/// `CRAFT_FONT_MANAGER_SNAPSHOTS=<dir>`: the panel's main states.
+#[test]
+fn screenshots() {
+    let Some(dir) = std::env::var_os("CRAFT_FONT_MANAGER_SNAPSHOTS") else { return };
+    let shot = |name: &str, language: &'static str, f: &dyn Fn(&mut Harness<'_, FontsPanel>, &FakeStore)| {
+        let (mut h, store) = setup_with(&format!("shot-{name}"), Settings::default(), Runner::Thread, system_fonts(language));
+        h.state_mut().set_look(launcher_look());
+        h.state_mut().set_language(language);
+        settle(&mut h);
+        f(&mut h, &store);
+        save(&mut h, &dir, name);
+        store.release();
+    };
+    shot("catalogue-downloads-off", "en", &|_, _| {});
+    shot("catalogue", "en", &|h, _| {
+        allow(h);
+        click(h, "Preview Hack");
+        h.run_steps(20);
+    });
+    shot("downloading", "en", &|h, store| {
+        allow(h);
+        store.hold();
+        click(h, "Install Hack");
+        h.run_steps(10);
+    });
+    shot("failed", "en", &|h, store| {
+        allow(h);
+        store.fail_next("couldn't reach cdn.jsdelivr.net or raw.githubusercontent.com");
+        click(h, "Install Hack");
+        h.run_steps(20);
+    });
+    shot("empty-search", "en", &|h, _| type_into(h, "Search", "Garamondish"));
+    shot("installed", "en", &|h, _| {
+        allow(h);
+        click(h, "Install Hack");
+        h.run_steps(20);
+        installed_tab(h);
+    });
+    shot("details", "en", &|h, _| {
+        allow(h);
+        click(h, "Preview Hack");
+        h.run_steps(20);
+        click(h, "Hack");
+    });
+    shot("details-not-installed", "en", &|h, _| click(h, "Noto Sans JP"));
+    shot("arabic", "ar", &|h, _| {
+        allow(h);
+        click_parts(h, &["معاينة", "Amiri"]);
+        h.run_steps(20);
+        click_role(h, Role::ComboBox, "اللغة");
+        type_into(h, "ابحث عن لغة", "Arabic");
+        click(h, "Arabic · العربية");
+    });
+    shot("arabic-details", "ar", &|h, _| {
+        allow(h);
+        click_parts(h, &["معاينة", "Amiri"]);
+        h.run_steps(20);
+        click(h, "Amiri");
+    });
+}

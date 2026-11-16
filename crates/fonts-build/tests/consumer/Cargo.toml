@@ -1,0 +1,18 @@
+[package]
+name = "craft-fonts-build-consumer"
+description = "Test crate: a build.rs that embeds the craft-fonts-build fixture the way an app does."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+craft-fonts-build = { path = "../.." }
+
+[build-dependencies]
+craft-fonts-build = { path = "../.." }
+
+[lints]
+workspace = true

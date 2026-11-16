@@ -1,0 +1,10 @@
+# Test fixture in the craft-fonts manifest format. The "font files" are short text files:
+# embedding copies bytes and never parses them.
+#   family | style | file | scripts | licence | licence file | sha256 | source
+
+Sans JP | Regular | fonts/sans-jp/SansJP-Regular.ttf | Jpan,Latn | OFL-1.1 | fonts/sans-jp/OFL.txt | c9d08ef1fc69f15e87ce52bda8a9c24714e4125daf7e50a40edb1aa2be10dff1 | https://example.invalid/sans-jp
+Sans JP | Bold | fonts/sans-jp/SansJP-Bold.ttf | Jpan,Latn | OFL-1.1 | fonts/sans-jp/OFL.txt | a135adabc1facd7a49fa4ef04771f74ffe69e67418e0e0f0b81a4cebba776e48 | https://example.invalid/sans-jp
+Sans Arabic | Regular | fonts/sans-arabic/SansArabic.ttf | Arab | OFL-1.1 | fonts/sans-arabic/OFL.txt | 318d7469dd372ff3ad458d46ea714c0ea969696675794d6100396f8a11103514 | https://example.invalid/sans-arabic
+Sans CJK TC | Regular | fonts/sans-cjk/SansCJK.ttc#2 | Hant,Latn | OFL-1.1 | fonts/sans-cjk/OFL.txt | 2fecde232d5dcda26a2299664dae1a2c50ad92b694575c5cfa70207010b339be | https://example.invalid/sans-cjk
+Sans CJK HK | Regular | fonts/sans-cjk/SansCJK.ttc#3 | Hant-HK,Latn | OFL-1.1 | fonts/sans-cjk/OFL.txt | 2fecde232d5dcda26a2299664dae1a2c50ad92b694575c5cfa70207010b339be | https://example.invalid/sans-cjk
+Sans Thai | Regular | fonts/sans-thai/SansThai.ttf | Thai | OFL-1.1 | fonts/sans-thai/OFL.txt | 5960276bcbad8e7949804d35651ebf42e17648f4d128c71ccdb76167a5337944 | https://example.invalid/sans-thai

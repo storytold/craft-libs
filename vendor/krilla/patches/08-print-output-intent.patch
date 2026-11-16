@@ -1,0 +1,455 @@
+diff --git a/src/chunk_container.rs b/src/chunk_container.rs
+index 0530dd2..593302b 100644
+--- a/src/chunk_container.rs
++++ b/src/chunk_container.rs
+@@ -147,14 +147,12 @@ impl ChunkContainer {
+             sc.register_validation_error(ValidationError::NoDocumentTitle);
+         }
+ 
+-        // Write the PDF document info metadata.
+-        if let Some(metadata) = &self.metadata {
+-            metadata.serialize_document_info(
+-                &mut remapped_ref,
+-                &mut pdf,
+-                sc.serialize_settings().configuration,
+-            );
+-        }
++        // Write the PDF document info metadata, also without metadata when print markers need it.
++        let no_metadata = Metadata::default();
++        self.metadata
++            .as_ref()
++            .unwrap_or(&no_metadata)
++            .serialize_document_info(&mut remapped_ref, &mut pdf, &sc.serialize_settings());
+ 
+         let instance_id = stable_hash_base64(pdf.as_bytes());
+ 
+@@ -182,6 +180,7 @@ impl ChunkContainer {
+         let settings = sc.serialize_settings();
+         let validators = settings.validators();
+         validators.write_xmp(&mut xmp);
++        settings.write_print_xmp(&mut xmp);
+ 
+         xmp.num_pages(sc.page_infos().len() as u32);
+         xmp.format("application/pdf");
+diff --git a/src/configure/PDF_A1.md b/src/configure/PDF_A1.md
+index c525953..06b5243 100644
+--- a/src/configure/PDF_A1.md
++++ b/src/configure/PDF_A1.md
+@@ -64,7 +64,10 @@ with an even number of characters and without whitespaces. 🟢
+ 
+ 6.2.2:
+ - krilla always writes a valid output intent. 🟢
+-- krilla always only writes one output intent. 🟢
++- krilla writes one output intent, or with `SerializeSettings::output_intent` two
++  (`GTS_PDFA1` and `GTS_PDFX`) that name the same destination profile object. 🟢
++- krilla checks only that a profile given in `SerializeSettings::output_intent` has four
++  components; that it is an output (`prtr`) profile is up to the caller. 🟣
+ 
+ 6.2.3.1: krilla overrides the `no_device_cs` property if PDF/A is selected, and
+ in case CMYK is used but no profile was provided, export fails. 🟢
+@@ -73,7 +76,8 @@ in case CMYK is used but no profile was provided, export fails. 🟢
+ - sRGB/sGrey ICC profiles conform to ICC v2 specification. 🟢
+ 
+ 6.2.4.3: 
+-- krilla always uses sRGB for RGB, and in addition also embeds an sRGB output intent. 🟢
++- krilla always uses sRGB for RGB, with an sRGB output intent unless
++  `SerializeSettings::output_intent` gives a CMYK one. 🟢
+ - krilla always uses sGrey (except for encoding the alpha channel in images, where DeviceGray
+   is required), and in addition always embeds an output intent. 🟢
+ - krilla always uses an CMYK ICC profile, and always sets CMYK as the output intent. 🟢
+@@ -181,7 +185,9 @@ when a PostScript function is used. 🟢
+ 6.7.7: krilla writes a minimal `xmpMM:History` entry when a creation date is
+ provided. 🟢
+ 
+-6.7.8: krilla writes the extension schemas. 🟢
++6.7.8: krilla writes the extension schemas. `SerializeSettings::pdfx_version` would need one
++for `pdfxid:GTS_PDFXVersion`, which krilla does not write, so it is a validation error
++(`ValidationError::PdfxVersionWithoutExtensionSchema`). 🟢
+ 
+ 6.7.9: `xmp-writer` always produces valid XMP packets. 🟢
+ 
+diff --git a/src/configure/PDF_A2.md b/src/configure/PDF_A2.md
+index 9ff3593..7e3fd8f 100644
+--- a/src/configure/PDF_A2.md
++++ b/src/configure/PDF_A2.md
+@@ -60,7 +60,13 @@ user enables `ascii_compatible`, we still write a binary header marker. 🟢
+ - krilla doesn't use the `ri` or `i` operator. 🟢
+ - krilla ensure that content stream has their own associated resource dictionary. 🟢
+ 
+-6.2.3: krilla always write an `sRGB` output intent for PDF/A. 🟢
++6.2.3:
++- krilla writes an `sRGB` output intent for PDF/A, or the CMYK profile given in
++  `SerializeSettings::output_intent`. 🟢
++- krilla writes one output intent, or with `SerializeSettings::output_intent` two
++  (`GTS_PDFA1` and `GTS_PDFX`) that name the same destination profile object. 🟢
++- krilla checks only that a profile given in `SerializeSettings::output_intent` has four
++  components; that it is an output (`prtr`) profile is up to the caller. 🟣
+ 
+ 6.2.4.1: krilla overrides the `no_device_cs` property if PDF/A is selected, and
+ in case CMYK is used but no profile was provided, export fails.
+@@ -71,7 +77,8 @@ in case CMYK is used but no profile was provided, export fails.
+   all CMYK is ICCBased in this mode. 🟢
+ 
+ 6.2.4.3: 
+-- krilla always uses sRGB for RGB, and in addition also embeds an sRGB output intent. 🟢
++- krilla always uses sRGB for RGB, with an sRGB output intent unless
++  `SerializeSettings::output_intent` gives a CMYK one. 🟢
+ - krilla always uses sGrey (except for encoding the alpha channel in images, where DeviceGray
+   is required), and in addition always embeds an output intent. 🟢
+ - krilla always uses an CMYK ICC profile, and always sets CMYK as the output intent. 🟢
+@@ -190,7 +197,9 @@ always required. 🟢
+ 
+ 6.6.2.2: -
+ 
+-6.6.2.3.1: krilla doesn't use any non-standard properties. 🟢
++6.6.2.3.1: krilla doesn't use any non-standard properties. `SerializeSettings::pdfx_version`
++would write `pdfxid:GTS_PDFXVersion`, which needs an extension schema that krilla does not
++write, so it is a validation error (`ValidationError::PdfxVersionWithoutExtensionSchema`). 🟢
+ 
+ 6.6.2.3.2: krilla writes the extension schemas. 🟢
+ 
+diff --git a/src/configure/PDF_A4.md b/src/configure/PDF_A4.md
+index 7cd5df3..aac8008 100644
+--- a/src/configure/PDF_A4.md
++++ b/src/configure/PDF_A4.md
+@@ -59,16 +59,20 @@ See `README.md` for the meaning of each color.
+ ### 6.2.3 Output intent
+ - krilla always writes the output intent for this export mode. 🟢
+ - krilla does not use the `DestOutputProfileRef` attribute. 🟢
+-- krilla does not write multiple output intents (since PDF/X and PDF/E are not supported). 🟢
+-- krilla only uses a Display ICC profile for output intent. 🟢
+-- krilla only uses RGB for output intents. 🟢
++- krilla writes one output intent, or with `SerializeSettings::output_intent` two
++  (`GTS_PDFA1` and `GTS_PDFX`) that name the same destination profile object. 🟢
++- krilla uses the sRGB display profile for the output intent, or the CMYK profile given in
++  `SerializeSettings::output_intent`. 🟢
++- krilla checks only that a profile given in `SerializeSettings::output_intent` has four
++  components; that it is an output (`prtr`) profile is up to the caller. 🟣
+ 
+ ### 6.2.4 Colour spaces
+ - krilla only uses device-independent colors in this export mode. 🟢 
+ - krilla uses compatible ICC profiles. 🟢
+ - krilla fails export if overprint mode 1 is combined with fill or stroke overprint, since
+   all CMYK is ICCBased in this mode. 🟢
+-- krilla never uses CMYK profiles as the destination profile. 🟢
++- krilla uses a CMYK profile as the destination profile only when
++  `SerializeSettings::output_intent` gives one. 🟢
+ - krilla does not use device color spaces in this mode. 🟢
+ - krilla ensures the Alternate space in Separation color spaces obeys the restrictions
+   in the applicable clauses 🟢
+diff --git a/src/configure/validate.rs b/src/configure/validate.rs
+index 273f292..b0a8f03 100644
+--- a/src/configure/validate.rs
++++ b/src/configure/validate.rs
+@@ -142,6 +142,12 @@ pub enum ValidationError {
+     ///
+     /// [`Overprint`]: crate::blend::Overprint
+     OverprintModeIccCmyk(Option<Location>),
++    /// [`SerializeSettings::pdfx_version`] is set. Its XMP property
++    /// `pdfxid:GTS_PDFXVersion` needs a PDF/A extension schema, which krilla does not write;
++    /// PDF/A-1, -2 and -3 require one for every property outside the predefined schemas.
++    ///
++    /// [`SerializeSettings::pdfx_version`]: crate::SerializeSettings::pdfx_version
++    PdfxVersionWithoutExtensionSchema,
+     /// The PDF contains an embedded file.
+     EmbeddedFile(EmbedError, Option<Location>),
+     /// The PDF contains no tagging.
+@@ -558,6 +564,7 @@ impl Archival {
+                 | ValidationError::MissingDocumentDate
+                 | ValidationError::Transparency(_)
+                 | ValidationError::ImageInterpolation(_)
++                | ValidationError::PdfxVersionWithoutExtensionSchema
+                 | ValidationError::EmbeddedFile(EmbedError::Existence, _)
+                 | ValidationError::EmbeddedPDF(_),
+             ) => true,
+@@ -605,6 +612,7 @@ impl Archival {
+                 | ValidationError::MissingDocumentDate
+                 | ValidationError::ImageInterpolation(_)
+                 | ValidationError::OverprintModeIccCmyk(_)
++                | ValidationError::PdfxVersionWithoutExtensionSchema
+                 | ValidationError::EmbeddedPDF(_),
+             ) => true,
+             // Allowed under all PDF/A-2 and PDF/A-3 profiles.
+@@ -683,6 +691,7 @@ impl Archival {
+                 | ValidationError::TooManyIndirectObjects
+                 | ValidationError::TooHighQNestingLevel
+                 | ValidationError::ContainsPostScript(_)
++                | ValidationError::PdfxVersionWithoutExtensionSchema
+                 | ValidationError::NoDocumentLanguage
+                 | ValidationError::NoDocumentTitle
+                 | ValidationError::MissingAltText(_)
+@@ -1145,6 +1154,7 @@ impl Accessibility {
+                 | ValidationError::Transparency(_)
+                 | ValidationError::ImageInterpolation(_)
+                 | ValidationError::OverprintModeIccCmyk(_)
++                | ValidationError::PdfxVersionWithoutExtensionSchema
+                 | ValidationError::EmbeddedFile(
+                     EmbedError::Existence | EmbedError::MissingDate | EmbedError::MissingMimeType,
+                     _,
+diff --git a/src/interchange/metadata.rs b/src/interchange/metadata.rs
+index 18dde72..4cfc8e5 100644
+--- a/src/interchange/metadata.rs
++++ b/src/interchange/metadata.rs
+@@ -9,8 +9,8 @@ use pdf_writer::{Finish, Pdf, Ref, TextStr};
+ use std::cell::LazyCell;
+ use xmp_writer::{LangId, Timezone, XmpWriter};
+ 
+-use crate::configure::{Configuration, PdfVersion, ValidationError};
+-use crate::serialize::SerializeContext;
++use crate::configure::{PdfVersion, ValidationError};
++use crate::serialize::{SerializeContext, SerializeSettings};
+ 
+ /// Metadata for a PDF document.
+ #[derive(Default, Clone, Debug)]
+@@ -248,13 +248,14 @@ impl Metadata {
+         &self,
+         ref_: &mut Ref,
+         pdf: &mut Pdf,
+-        config: Configuration,
++        settings: &SerializeSettings,
+     ) {
++        let config = settings.configuration;
+         if config.validators().prohibits_info_dict() {
+             return;
+         }
+ 
+-        if self.has_document_info() {
++        if self.has_document_info() || settings.has_print_info(config.version()) {
+             let ref_ = ref_.bump();
+             let mut document_info = LazyCell::new(|| pdf.document_info(ref_));
+ 
+@@ -292,6 +293,10 @@ impl Metadata {
+                 document_info.modified_date(pdf_date(date_time));
+                 document_info.creation_date(pdf_date(date_time));
+             }
++
++            if settings.has_print_info(config.version()) {
++                settings.write_print_info(&mut document_info);
++            }
+         }
+     }
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index b331053..099a9d4 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -176,10 +176,14 @@ pub use document::*;
+ pub use graphics::*;
+ pub use interactive::*;
+ pub use interchange::*;
+-pub use serialize::{GroupColorSpace, SerializeSettings};
++pub use serialize::{GroupColorSpace, OutputIntent, SerializeSettings, Trapped};
+ 
+ /// Identifies the local patch that discards unfinished page/surface state during unwind.
+ pub const CRAFT_UNWIND_SAFE_DROP: bool = true;
+ 
+ /// Identifies the patch that rejects serialization after failed page/surface cleanup.
+ pub const CRAFT_UNWIND_POISONING: bool = true;
++
++/// Identifies the print color patches: CMYK blending groups, print output intent and
++/// PDF/X markers.
++pub const CRAFT_PRINT_COLOR: bool = true;
+diff --git a/src/serialize.rs b/src/serialize.rs
+index d16261c..9b22240 100644
+--- a/src/serialize.rs
++++ b/src/serialize.rs
+@@ -6,9 +6,10 @@ use std::rc::Rc;
+ use std::sync::Arc;
+ 
+ use indexmap::IndexMap;
+-use pdf_writer::types::{StructRole, StructRole2};
+-use pdf_writer::writers::{OutputIntent, StructTreeRoot};
++use pdf_writer::types::{OutputIntentSubtype, StructRole, StructRole2, TrappingStatus};
++use pdf_writer::writers::{DocumentInfo, OutputIntent as OutputIntentWriter, StructTreeRoot};
+ use pdf_writer::{Chunk, Content, Finish, Limits, Name, Pdf, Ref, Settings, Str, TextStr};
++use xmp_writer::{Namespace, XmpWriter};
+ 
+ use crate::chunk_container::ChunkContainer;
+ use crate::color::{CieBasedColorSpace, DeviceColorSpace, SpecialColorSpace};
+@@ -121,6 +122,48 @@ pub struct SerializeSettings {
+     ///
+     /// See [`GroupColorSpace`].
+     pub group_color_space: GroupColorSpace,
++    /// The printing condition the document is prepared for, written as a `GTS_PDFX`
++    /// output intent. See [`OutputIntent`].
++    pub output_intent: Option<OutputIntent>,
++    /// Whether the document has been trapped: `/Trapped` in the document information
++    /// dictionary and `pdf:Trapped` in the XMP metadata.
++    pub trapped: Option<Trapped>,
++    /// The PDF/X version the caller claims, such as `PDF/X-4`: `/GTS_PDFXVersion` in the
++    /// document information dictionary and `pdfxid:GTS_PDFXVersion` in the XMP metadata.
++    ///
++    /// krilla does not check PDF/X conformance; the caller does. PDF/A-1, -2 and -3 need an
++    /// extension schema for the XMP property, which krilla does not write, so export under
++    /// them fails with [`ValidationError::PdfxVersionWithoutExtensionSchema`].
++    pub pdfx_version: Option<String>,
++}
++
++/// A CMYK printing condition, written as an `/OutputIntents` entry with `/S /GTS_PDFX`.
++///
++/// When a PDF/A validator is active, its `GTS_PDFA1` entry names the same profile and
++/// condition, because PDF/A requires all output intents to share one destination profile.
++#[derive(Clone, Debug, Hash, PartialEq, Eq)]
++pub struct OutputIntent {
++    /// The destination profile (`/DestOutputProfile`).
++    pub profile: ICCProfile<4>,
++    /// `/OutputConditionIdentifier`, such as `FOGRA39`, or `Custom`.
++    pub condition_identifier: String,
++    /// `/OutputCondition`: a human-readable description of the condition.
++    pub condition: Option<String>,
++    /// `/RegistryName`, such as `http://www.color.org`.
++    pub registry_name: Option<String>,
++    /// `/Info`: required by PDF/X when the identifier is not in the registry.
++    pub info: Option<String>,
++}
++
++/// The trapping state of a document.
++#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
++pub enum Trapped {
++    /// The document is fully trapped.
++    True,
++    /// The document has not been trapped.
++    False,
++    /// The document is partly trapped or the state is unknown.
++    Unknown,
+ }
+ 
+ /// The color space in which transparency groups blend.
+@@ -154,6 +197,45 @@ impl SerializeSettings {
+         self.configuration.validators()
+     }
+ 
++    /// Whether the document information dictionary carries print markers. Like the rest of
++    /// the dictionary, they are deprecated in PDF 2.0 and only written to XMP there.
++    pub(crate) fn has_print_info(&self, version: PdfVersion) -> bool {
++        version < PdfVersion::Pdf20 && (self.trapped.is_some() || self.pdfx_version.is_some())
++    }
++
++    pub(crate) fn write_print_info(&self, info: &mut DocumentInfo<'_>) {
++        if let Some(trapped) = self.trapped {
++            info.trapped(match trapped {
++                Trapped::True => TrappingStatus::Trapped,
++                Trapped::False => TrappingStatus::NotTrapped,
++                Trapped::Unknown => TrappingStatus::Unknown,
++            });
++        }
++        if let Some(version) = &self.pdfx_version {
++            info.pair(Name(b"GTS_PDFXVersion"), TextStr(version));
++        }
++    }
++
++    pub(crate) fn write_print_xmp(&self, xmp: &mut XmpWriter) {
++        match self.trapped {
++            Some(Trapped::True) => {
++                xmp.trapped(true);
++            }
++            Some(Trapped::False) => {
++                xmp.trapped(false);
++            }
++            // The Adobe PDF schema allows `Unknown`, which `XmpWriter::trapped` can't write.
++            // PDF/A-1 requires it to match the information dictionary.
++            Some(Trapped::Unknown) => {
++                xmp.element("Trapped", Namespace::AdobePdf).value("Unknown");
++            }
++            None => {}
++        }
++        if let Some(version) = &self.pdfx_version {
++            xmp.pdfx_version(version);
++        }
++    }
++
+     /// Whether the `/AF` key is supported, accounting for the PDF version and active standards.
+     pub(crate) fn supports_associated_files(&self) -> bool {
+         self.configuration.version().specifies_associated_files()
+@@ -174,6 +256,9 @@ impl Default for SerializeSettings {
+             enable_tagging: true,
+             render_svg_glyph_fn: |_, _, _, _, _| None,
+             group_color_space: GroupColorSpace::Rgb,
++            output_intent: None,
++            trapped: None,
++            pdfx_version: None,
+         }
+     }
+ }
+@@ -536,6 +621,9 @@ impl SerializeContext {
+         {
+             return Err(KrillaError::MissingGroupCmykProfile);
+         }
++        if self.serialize_settings.pdfx_version.is_some() {
++            self.register_validation_error(ValidationError::PdfxVersionWithoutExtensionSchema);
++        }
+ 
+         // We need to be careful here that we serialize the objects in the right order,
+         // as in some cases we use MaybeTake::take to remove an object, which means that
+@@ -781,18 +869,42 @@ impl SerializeContext {
+ impl SerializeContext {
+     fn serialize_destination_profiles(&mut self, chunk_container: &mut ChunkContainer) {
+         let validators = self.serialize_settings.validators();
+-        chunk_container.non_stream.destination_profiles =
+-            validators.output_intent().map(|subtype| {
+-                let root_ref = self.new_ref();
+-                let mut chunk = self.new_chunk();
++        let pdfa = validators.output_intent();
++        let print = self.serialize_settings.output_intent.clone();
++        if pdfa.is_none() && print.is_none() {
++            return;
++        }
++
++        let root_ref = self.new_ref();
++        let mut chunk = self.new_chunk();
++        let mut intents = Vec::new();
+ 
++        if let Some(print) = print {
++            let profile_ref = self.register_cacheable(chunk_container, print.profile.clone());
++            for subtype in pdfa.into_iter().chain([OutputIntentSubtype::PDFX]) {
+                 let oi_ref = self.new_ref();
+-                let mut oi = chunk.indirect(oi_ref).start::<OutputIntent>();
+-                let icc_profile = self.serialize_settings.pdf_version().rgb_icc();
++                let mut oi = chunk.indirect(oi_ref).start::<OutputIntentWriter>();
++                oi.dest_output_profile(profile_ref)
++                    .subtype(subtype)
++                    .output_condition_identifier(TextStr(&print.condition_identifier));
++                if let Some(condition) = &print.condition {
++                    oi.output_condition(TextStr(condition));
++                }
++                if let Some(registry_name) = &print.registry_name {
++                    oi.registry_name(TextStr(registry_name));
++                }
++                if let Some(info) = &print.info {
++                    oi.info(TextStr(info));
++                }
++                oi.finish();
++                intents.push(oi_ref);
++            }
++        } else if let Some(subtype) = pdfa {
++            let oi_ref = self.new_ref();
++            let mut oi = chunk.indirect(oi_ref).start::<OutputIntentWriter>();
++            let icc_profile = self.serialize_settings.pdf_version().rgb_icc();
+ 
+-                oi.dest_output_profile(
+-                    self.register_cacheable(chunk_container, icc_profile.clone()),
+-                )
++            oi.dest_output_profile(self.register_cacheable(chunk_container, icc_profile.clone()))
+                 .subtype(subtype)
+                 .output_condition_identifier(TextStr("Custom"))
+                 .output_condition(TextStr("sRGB"))
+@@ -805,14 +917,12 @@ impl SerializeContext {
+                     )
+                     .as_str(),
+                 ));
+-                oi.finish();
+-
+-                let mut array = chunk.indirect(root_ref).array();
+-                array.item(oi_ref);
+-                array.finish();
++            oi.finish();
++            intents.push(oi_ref);
++        }
+ 
+-                (root_ref, chunk)
+-            });
++        chunk.indirect(root_ref).array().items(intents);
++        chunk_container.non_stream.destination_profiles = Some((root_ref, chunk));
+     }
+ 
+     fn serialize_page_label_tree(&mut self, chunk_container: &mut ChunkContainer) {

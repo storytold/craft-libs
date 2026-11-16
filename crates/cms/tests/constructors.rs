@@ -133,3 +133,51 @@ fn test_matrix_constructors_against_independent_moxcms_oracle() {
     let max_p3_diff = ours_p3_out.iter().zip(&mox_p3_out).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
     assert!(max_p3_diff <= 1, "craft_cms vs moxcms custom source profile -> P3 max diff was {max_p3_diff}");
 }
+
+#[test]
+fn constructor_never_returns_a_nonfinite_adaptation() {
+    let matrix = [[0.4360747, 0.3850649, 0.1430804], [0.2225045, 0.7168786, 0.0606169], [0.0139322, 0.0971045, 0.7141733]];
+    for white in [[f64::MAX; 3], [f64::MIN_POSITIVE; 3], [1.0, 1.0, (0.8951 + 0.2664) / 0.1614]] {
+        if let Ok(profile) = Profile::matrix_shaper(white, matrix, [Curve::Identity, Curve::Identity, Curve::Identity]) {
+            assert!(profile.chad.unwrap().iter().flatten().all(|v| v.is_finite()), "nonfinite adaptation for {white:?}");
+        }
+    }
+}
+
+#[test]
+fn constructors_reject_values_that_saturate_icc_fixed_point() {
+    assert!(Profile::gray([f64::MAX; 3], Curve::Identity).is_err());
+    assert!(Profile::gray([f64::MIN_POSITIVE; 3], Curve::Identity).is_err());
+    assert!(Curve::gamma(32768.0).is_err());
+    assert!(Curve::gamma(f64::MIN_POSITIVE).is_err());
+    assert!(Curve::parametric(0, [32768.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).is_err());
+    let matrix = [[40000.0, -39999.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    assert!(Profile::matrix_shaper([0.9642, 1.0, 0.8249], matrix, [Curve::Identity, Curve::Identity, Curve::Identity]).is_err());
+}
+
+#[test]
+fn profile_constructors_validate_direct_curve_variants() {
+    let white = [0.9642, 1.0, 0.8249];
+    let matrix = [[0.4360747, 0.3850649, 0.1430804], [0.2225045, 0.7168786, 0.0606169], [0.0139322, 0.0971045, 0.7141733]];
+    for curve in [
+        Curve::Gamma(f64::NAN),
+        Curve::Gamma(32768.0),
+        Curve::Parametric { kind: 5, p: [0.0; 7] },
+        Curve::Table(vec![0.0, f32::NAN]),
+        Curve::Table(vec![]),
+    ] {
+        assert!(Profile::gray(white, curve.clone()).is_err());
+        assert!(Profile::matrix_shaper(white, matrix, [curve.clone(), Curve::Identity, Curve::Identity]).is_err());
+        assert!(Profile::from_source_matrix(white, matrix, [Curve::Identity, Curve::Identity, curve]).is_err());
+    }
+}
+
+#[test]
+fn icc_fixed_point_boundaries_remain_accepted() {
+    let max = f64::from(i32::MAX) / 65536.0;
+    let min = f64::from(i32::MIN) / 65536.0;
+    assert!(Curve::gamma(max).is_ok());
+    assert!(Curve::gamma(1.0 / 65536.0).is_ok());
+    assert!(Curve::parametric(4, [1.0, 1.0, min, max, 0.0, 0.0, 0.0]).is_ok());
+    assert!(Profile::gray([max; 3], Curve::Identity).is_ok());
+}

@@ -1,0 +1,62 @@
+{
+  "id": "D10",
+  "title": "K100 text (overprint) on a page with transparency, over 50% cyan and over paper",
+  "source": "DesignCraft DC10",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {
+      "type": "rect",
+      "rect": [20, 20, 180, 176],
+      "fill": {"cmyk": [100, 0, 0, 0]},
+      "opacity": 0.5
+    },
+    {
+      "type": "text",
+      "at": [30, 100],
+      "size": 60,
+      "text": "HHH",
+      "fill": {"cmyk": [0, 0, 0, 100]},
+      "overprint": {"fill": true}
+    },
+    {
+      "type": "text",
+      "at": [210, 100],
+      "size": 60,
+      "text": "HHH",
+      "fill": {"cmyk": [0, 0, 0, 100]},
+      "overprint": {"fill": true}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {
+        "at": [100, 80],
+        "kind": "text",
+        "region": [30, 56.2, 133.2, 43.8],
+        "inks": {"Black": 100, "Cyan": 50},
+        "tol": 2,
+        "note": "K text over 50% cyan: overprint keeps the cyan"
+      },
+      {
+        "at": [280, 80],
+        "kind": "text",
+        "region": [210, 56.2, 133.2, 43.8],
+        "inks": {"Black": 100},
+        "tol": 2,
+        "note": "K text over paper: K only, no rich black"
+      },
+      {"at": [100, 160], "inks": {"Cyan": 50}, "tol": 6, "note": "cyan at 50% opacity"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "overprint": true,
+    "ext_g_states": [{"op": true}],
+    "group_cs": ["none"],
+    "color_spaces": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

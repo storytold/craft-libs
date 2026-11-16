@@ -1,0 +1,38 @@
+{
+  "id": "N1",
+  "title": "DeviceN [Cyan Black] 60/40 fill overprinting Y100",
+  "source": "GWG 19 idea",
+  "page": [360, 216],
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 320, 176], "fill": {"cmyk": [0, 0, 100, 0]}},
+    {
+      "type": "rect",
+      "rect": [60, 60, 240, 96],
+      "fill": {"inks": {"Cyan": 60, "Black": 40}},
+      "overprint": {"fill": true}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {
+        "at": [180, 108],
+        "inks": {"Yellow": 100, "Cyan": 60, "Black": 40},
+        "tol": 2,
+        "note": "DeviceN overprint leaves unnamed colorants alone"
+      },
+      {"at": [30, 30], "inks": {"Yellow": 100}, "tol": 2, "note": "yellow only"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": true,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["DeviceCMYK", "DeviceN(Cyan,Black, alt DeviceCMYK)"],
+    "ext_g_states": [{"op": true}],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

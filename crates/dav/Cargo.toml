@@ -1,0 +1,17 @@
+[package]
+name = "craft-dav"
+description = "WebDAV multistatus (RFC 4918) documents, with the CalDAV and CardDAV namespaces, read from hostile bytes into a bounded tree."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

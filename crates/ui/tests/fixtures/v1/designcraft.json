@@ -1,0 +1,123 @@
+{
+  "uiScale": 1.0,
+  "theme": "dark",
+  "docking": {
+    "root": {
+      "Tabs": {
+        "panels": [
+          "properties",
+          "pages",
+          "layers",
+          "stroke"
+        ],
+        "active": 2
+      }
+    },
+    "floating": [
+      {
+        "panels": [
+          "swatches",
+          "color"
+        ],
+        "active": 1,
+        "rect": [
+          640.0,
+          120.0,
+          280.0,
+          360.0
+        ]
+      }
+    ]
+  },
+  "dockingHidden": {
+    "gradient": {
+      "floating": [
+        640.0,
+        120.0,
+        280.0,
+        360.0
+      ],
+      "anchor": "swatches",
+      "placement": {
+        "Tab": {
+          "before": null
+        }
+      },
+      "size": null,
+      "stack": null,
+      "sibling": []
+    },
+    "effects": {
+      "floating": null,
+      "anchor": "layers",
+      "placement": {
+        "Tab": {
+          "before": "stroke"
+        }
+      },
+      "size": null,
+      "stack": null,
+      "sibling": []
+    }
+  },
+  "customWorkspaces": [
+    {
+      "name": "Print",
+      "docking": {
+        "root": {
+          "Split": {
+            "axis": "Horizontal",
+            "size": {
+              "FixedFirst": 268.0
+            },
+            "first": {
+              "Tabs": {
+                "panels": [
+                  "layers"
+                ],
+                "active": 0
+              }
+            },
+            "second": {
+              "Tabs": {
+                "panels": [
+                  "properties",
+                  "pages"
+                ],
+                "active": 0
+              }
+            }
+          }
+        },
+        "floating": [
+          {
+            "panels": [
+              "swatches"
+            ],
+            "active": 0,
+            "rect": [
+              120.0,
+              160.0,
+              280.0,
+              360.0
+            ]
+          }
+        ]
+      },
+      "dockingHidden": {
+        "stroke": {
+          "floating": null,
+          "anchor": "layers",
+          "placement": {
+            "Tab": {
+              "before": null
+            }
+          },
+          "size": null,
+          "stack": null,
+          "sibling": []
+        }
+      }
+    }
+  ]
+}
