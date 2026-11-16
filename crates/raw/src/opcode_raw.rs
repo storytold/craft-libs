@@ -27,31 +27,54 @@ impl Opcode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Malformed;
 
+/// The records of a big-endian opcode list in order, as `(id, version, flags, params)`, ending at
+/// the declared count or at the first truncated record. The envelope walk shared by [`parse`] and
+/// the typed [`crate::opcodes::parse_list`].
+pub(crate) struct Records<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    /// Records the list header still promises.
+    pub(crate) left: u32,
+}
+
+impl<'a> Records<'a> {
+    /// The record walker of a list; `None` when even the count is missing.
+    pub(crate) fn new(bytes: &'a [u8]) -> Option<Self> {
+        let left = u32::from_be_bytes(bytes.get(..4)?.try_into().ok()?);
+        Some(Self { bytes, at: 4, left })
+    }
+    fn u32(&mut self) -> Option<u32> {
+        let end = self.at.checked_add(4)?;
+        let value = u32::from_be_bytes(self.bytes.get(self.at..end)?.try_into().ok()?);
+        self.at = end;
+        Some(value)
+    }
+}
+
+impl<'a> Iterator for Records<'a> {
+    type Item = (u32, u32, u32, &'a [u8]);
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.left == 0 {
+            return None;
+        }
+        let (id, version, flags, len) = (self.u32()?, self.u32()?, self.u32()?, self.u32()? as usize);
+        let end = self.at.checked_add(len)?;
+        let params = self.bytes.get(self.at..end)?;
+        self.at = end;
+        self.left -= 1;
+        Some((id, version, flags, params))
+    }
+}
+
 /// Parse a big-endian opcode list with an explicit maximum record count.
 pub fn parse(bytes: &[u8], max_opcodes: usize) -> Result<Vec<Opcode>, Malformed> {
-    let mut at = 0usize;
-    let read = |at: &mut usize| -> Result<u32, Malformed> {
-        let end = at.checked_add(4).ok_or(Malformed)?;
-        let value = bytes.get(*at..end).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes).ok_or(Malformed)?;
-        *at = end;
-        Ok(value)
-    };
-    let count = read(&mut at)? as usize;
+    let records = Records::new(bytes).ok_or(Malformed)?;
+    let count = records.left as usize;
     if count > bytes.len() / 16 || count > max_opcodes {
         return Err(Malformed);
     }
-    let mut out = Vec::with_capacity(count);
-    for _ in 0..count {
-        let id = read(&mut at)?;
-        let version = read(&mut at)?;
-        let flags = read(&mut at)?;
-        let len = read(&mut at)? as usize;
-        let end = at.checked_add(len).ok_or(Malformed)?;
-        let params = bytes.get(at..end).ok_or(Malformed)?.to_vec();
-        at = end;
-        out.push(Opcode { id, version, flags, params });
-    }
-    Ok(out)
+    let out: Vec<Opcode> = records.map(|(id, version, flags, params)| Opcode { id, version, flags, params: params.to_vec() }).collect();
+    if out.len() == count { Ok(out) } else { Err(Malformed) }
 }
 
 /// An opcode list cannot be represented in the DNG wire format or allocated.
@@ -103,5 +126,21 @@ mod tests {
         assert!(parse(&bytes, 0).is_err());
         assert!(parse(&bytes[..bytes.len() - 1], 1).is_err());
         assert!(records[0].optional() && records[0].preview_skippable());
+    }
+
+    #[test]
+    fn typed_lists_share_the_envelope() {
+        use crate::opcodes::{self, Opcode as Typed};
+        let typed = vec![Typed::TrimBounds { top: 1, left: 2, bottom: 3, right: 4 }, Typed::Unknown { id: 900, flags: 1, params: vec![5, 6] }];
+        let bytes = opcodes::write_list(&typed);
+        let raw = parse(&bytes, 8).unwrap();
+        assert_eq!(raw.iter().map(|o| (o.id, o.version)).collect::<Vec<_>>(), [(6, 0x0103_0000), (900, 0x0103_0000)]);
+        assert_eq!(encode(&raw).unwrap(), bytes);
+        assert_eq!(opcodes::parse_list(&bytes), typed);
+        // a truncated last record: the typed reader keeps what came before, the raw one refuses
+        assert_eq!(opcodes::parse_list(&bytes[..bytes.len() - 1]), typed[..1]);
+        assert!(parse(&bytes[..bytes.len() - 1], 8).is_err());
+        assert!(opcodes::parse_list(&[0, 0]).is_empty());
+        assert!(parse(&[0, 0], 8).is_err());
     }
 }

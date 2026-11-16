@@ -1,4 +1,11 @@
 //! Bounded DNG processing and camera metadata, before application rendering.
+//!
+//! This is the [`crate::dng_lines`] companion on the same `craft_tiff::classic` IFDs. The full
+//! reader's `dng::color_data` works on `craft_tiff::Tiff` and returns the values it will render
+//! with (raw IFD first, implausible or singular values dropped, `BaselineExposureOffset` added).
+//! This reader returns the tags as written, IFD 0 first, and fails on a value outside the file,
+//! so a damaged file does not silently lose its white balance. For a well-formed file both read the
+//! same matrices and neutral (see `tests/it/dng_metadata.rs`).
 use crate::dng_lines::{self, Error, PHOTOMETRIC_CFA, Result};
 use craft_tiff::classic::{Entry, Ifd, Tiff, tags};
 type M3 = [[f64; 3]; 3];
@@ -36,29 +43,9 @@ pub struct Calibration {
     pub as_shot_white_xy: Option<(f64, f64)>,
     pub baseline_exposure: f64,
 }
-/// SMPTE ST 12-1 time code of a CinemaDNG frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Timecode {
-    pub hours: u8,
-    pub minutes: u8,
-    pub seconds: u8,
-    pub frames: u8,
-    pub drop_frame: bool,
-}
-
-impl Timecode {
-    /// The first time code of a CinemaDNG TimeCodes tag (SMPTE ST 331 / 12-1 packing: BCD frames,
-    /// seconds, minutes, hours in bytes 0–3, the drop-frame flag in bit 6 of byte 0).
-    pub fn from_bytes(b: &[u8]) -> Option<Timecode> {
-        let bcd = |v: u8, tens_mask: u8| {
-            let (u, t) = (v & 0x0F, (v >> 4) & tens_mask);
-            (u <= 9).then_some(t * 10 + u)
-        };
-        let [f, s, m, h, ..] = *b else { return None };
-        let tc = Timecode { frames: bcd(f, 0x3)?, seconds: bcd(s, 0x7)?, minutes: bcd(m, 0x7)?, hours: bcd(h, 0x3)?, drop_frame: f & 0x40 != 0 };
-        (tc.seconds < 60 && tc.minutes < 60 && tc.hours < 24).then_some(tc)
-    }
-}
+/// SMPTE ST 12-1 time code of a CinemaDNG frame: the crate's [`crate::Timecode`], which the full
+/// reader's `CinemaTags` uses too.
+pub use crate::Timecode;
 
 /// File-level capture fields, without image geometry or rendering policy.
 #[derive(Clone, Debug, PartialEq)]
@@ -210,7 +197,7 @@ impl Metadata<'_, '_> {
             }
             let n = i64::from(self.tiff.u32_of(b.get(0..4)?.try_into().ok()?) as i32);
             let d = i64::from(self.tiff.u32_of(b.get(4..8)?.try_into().ok()?) as i32);
-            (n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d).then_some((n, d))
+            crate::dng::plausible_frame_rate(n, d).then_some((n, d))
         });
         let timecode = self.main_tag(tags::TIME_CODES).and_then(|e| self.tiff.value_bytes(e).ok()).and_then(Timecode::from_bytes);
         let camera = self.text(tags::UNIQUE_CAMERA_MODEL).or_else(|| {
@@ -245,14 +232,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn timecode_bcd_and_limits() {
-        assert_eq!(
-            Timecode::from_bytes(&[0x52, 0x34, 0x12, 0x09]),
-            Some(Timecode { frames: 12, seconds: 34, minutes: 12, hours: 9, drop_frame: true })
-        );
-        assert_eq!(Timecode::from_bytes(&[0, 0x60, 0, 0]), None);
-        assert_eq!(Timecode::from_bytes(&[0x0a, 0, 0, 0]), None);
-        assert_eq!(Timecode::from_bytes(&[0, 0, 0]), None);
+    fn timecode_is_the_crate_timecode() {
+        let tc = Timecode { frames: 12, seconds: 34, minutes: 12, hours: 9, drop_frame: true };
+        assert_eq!(Timecode::from_bytes(&[0x52, 0x34, 0x12, 0x09]), Some(tc));
+        let shared: crate::Timecode = tc;
+        assert_eq!(Timecode::from_bytes(&shared.to_bytes()), Some(tc));
     }
 
     #[test]
