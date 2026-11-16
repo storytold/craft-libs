@@ -1292,6 +1292,36 @@ fn huge_papx_reads_the_paragraph_properties_from_the_data_stream() {
     assert_eq!(p.props.indent_left, Some(36.0), "720 twips from the Data stream");
 }
 
+/// The offset and byte count of a `sprmPHugePapx` are untrusted: one that points past the Data
+/// stream's end leaves the PAPX as it was, and one that points at its own PAPX is read once, not
+/// followed again.
+#[test]
+fn a_huge_papx_that_points_outside_or_at_itself_is_read_safely() {
+    let indent = |data: Vec<u8>, at: u32| {
+        let text = "para\r";
+        let spec = StructSpec {
+            text,
+            papx_entries: vec![(0, 0, grpprl(&[(0x6646, &at.to_le_bytes())]))],
+            data_stream: data,
+            ..structured_spec(text, text.chars().count() as u32)
+        };
+        let doc = read(&struct_doc(&spec)).expect("opens");
+        doc.body.first().and_then(|b| b.as_para()).expect("paragraph").props.indent_left
+    };
+    let with_count = |cb: u16, body: &[u8]| [cb.to_le_bytes().as_slice(), body].concat();
+    let real = grpprl(&[(0x845E, &720u16.to_le_bytes())]);
+    // The offset is past the end of the stream, or its two count bytes are.
+    assert_eq!(indent(with_count(real.len() as u16, &real), 100), None);
+    assert_eq!(indent(with_count(real.len() as u16, &real), u32::MAX), None);
+    assert_eq!(indent(vec![0u8], 0), None, "a single byte can't hold the count");
+    // The count runs past the end of the stream.
+    assert_eq!(indent(with_count(real.len() as u16 + 50, &real), 0), None);
+    // The properties it names are a huge PAPX that points back at itself, next to a real sprm: the
+    // real sprm is applied, and the self-reference is not followed.
+    let looping = grpprl(&[(0x6646, &0u32.to_le_bytes()), (0x845E, &720u16.to_le_bytes())]);
+    assert_eq!(indent(with_count(looping.len() as u16, &looping), 0), Some(36.0));
+}
+
 /// A table row whose end mark is a huge PAPX (its `sprmTDefTable` is in the Data stream) still ends
 /// the row, with the cell widths its edges give, rather than leaving its cells to the next row.
 #[test]
