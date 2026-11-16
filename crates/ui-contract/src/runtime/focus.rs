@@ -72,6 +72,9 @@ pub(crate) struct FocusedRecord {
     pub(crate) claims: Vec<craft_keymap::Chord>,
     /// The component of the focused stop: only its state-dependent claims hold.
     pub(crate) focused: Option<Id>,
+    /// The arena root of the focused stop when the stop is a non-text member of an arena (a part of a canvas's frame
+    /// overlay): the root's state-dependent claims hold too, so a canvas tool's keys work with a part focused.
+    pub(crate) root: Option<Id>,
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
     pub(crate) menu_bar: bool,
@@ -215,6 +218,17 @@ pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
 /// app's own. Read before the begin hook rotates the registrations, by the input hook and the begin hook's Tab moves.
 pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse> {
     with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.keys))
+}
+
+/// Whether `rec`, the focused stop, is a canvas control's: a non-text member of the document canvas's arena, as the
+/// end hook recorded the focus (`FocusedRecord::root`). Its leftover Escape is the window's, as the canvas's own is.
+pub(crate) fn is_canvas_member(ctx: &Context, rec: &StopRec) -> bool {
+    with(ctx, |state| {
+        state.record.focused == Some(rec.stop.id)
+            && state.record.root.is_some_and(|root| {
+                state.stops.iter().chain(&state.last_stops).any(|canvas| canvas.stop.keys.chrome_key && canvas.stop.root == root)
+            })
+    })
 }
 
 /// Whether a Tab in `viewport` has nothing to leave and nowhere to go: egui held no focus at the end of its last pass

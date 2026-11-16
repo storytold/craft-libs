@@ -264,23 +264,26 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
 }
 
 /// Offers the window's intents to `take` while nothing in the window has framework focus or the focused stop is the
-/// window's document canvas (`KeyUse::chrome_key`), and writes back what it left untaken. `take` returns whether it
-/// took any. `false` when another stop is focused or nothing was taken.
+/// window's document canvas (`KeyUse::chrome_key`) or one of its canvas controls (`focus::is_canvas_member`), and
+/// writes back what it left untaken. `take` returns whether it took any. `false` when another stop is focused or
+/// nothing was taken.
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
 /// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with the document
-/// canvas focused, the Escape the canvas, its sessions, its tool and every scope around it left. A component or a
+/// canvas or a canvas control focused, the Escape that stop, the canvas's sessions, its tool and every scope around
+/// it left. A component or a
 /// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas
 /// session the one that ends it), so an app that hosts the runtime reads them last in its UI to see what no
 /// component took. `rtl` reads horizontal moves in the window's direction.
 pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
     let canvas = match focus::focused_rec(ctx) {
-        Some(rec) if !rec.stop.keys.chrome_key => return false,
-        Some(rec) => Some(rec.stop.id),
+        Some(rec) if rec.stop.keys.chrome_key || focus::is_canvas_member(ctx, &rec) => Some(rec.stop.id),
+        Some(_) => return false,
         None => None,
     };
     let mut window = intents_of(ctx, None, rtl);
-    // The focused canvas's leftover Escape is offered as the window's; it stays in the canvas's slot until taken.
+    // The focused canvas's or canvas control's leftover Escape is offered as the window's; it stays in that stop's
+    // slot until taken.
     let lent_cancel = canvas
         .filter(|canvas| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*canvas), &Intent::Cancel))
         .map(|canvas| {
