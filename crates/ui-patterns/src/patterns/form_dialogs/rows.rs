@@ -476,6 +476,7 @@ impl<'p> Pass<'p> {
                 field = field.range(range);
             }
             let shown = field.show(ui);
+            self.alert(shown.out_of_range);
             if let Some(v) = shown.edit.value().cloned().flatten() {
                 self.work.set(line.key, FieldValue::Number(v * factor));
             }
