@@ -121,11 +121,12 @@ const MAX_ATTRIBUTES: usize = 4096;
 /// can't hold anyway) is refused before anything is sized by it. 16 million chunks is a 64K ×
 /// 64K picture in 16 × 16 tiles.
 const MAX_CHUNKS: usize = 1 << 24;
-/// The most bytes one decompressed block may take in a read whose [`Request::max_bytes`] is
-/// smaller: the decompressor allocates a block's bytes before it looks at the data, so a hostile
-/// header (a data window a billion pixels wide over one tiny chunk) would otherwise ask for
-/// gigabytes. A read allows blocks up to `max(this, max_bytes)`: a caller that budgets more memory
-/// can read files with larger blocks (wide DWAB parts with many channels hold 512 MiB a block).
+/// The most bytes one decompressed block may take in a read that sets no
+/// [`Request::max_block_bytes`] and whose [`Request::max_bytes`] is smaller: the decompressor
+/// allocates a block's bytes before it looks at the data, so a hostile header (a data window a
+/// billion pixels wide over one tiny chunk) would otherwise ask for gigabytes. Such a read allows
+/// blocks up to `max(this, max_bytes)`: a caller that budgets more memory can read files with
+/// larger blocks (wide DWAB parts with many channels hold 512 MiB a block).
 const MAX_BLOCK_BYTES: usize = 256 << 20;
 /// Chunks are read in pieces: a run of chunks that follow each other in the file, read with one
 /// request (one round trip to a network share, not one per chunk). The first piece is small so
@@ -607,20 +608,30 @@ pub struct Request<'a> {
     /// Every `2^level`-th row and column of the display window (0: full resolution, at most 16).
     pub level: u32,
     /// The most bytes of samples the read may produce: [`read_bands`] checks the requested rows
-    /// at the level, [`read_planes`] the whole display-window planes it allocates. It also raises
-    /// the most one decompressed block may take above the 256 MiB default (a block over both is
-    /// refused before anything is read).
+    /// at the level, [`read_planes`] the whole display-window planes it allocates. Without
+    /// [`Request::max_block_bytes`], it also raises the most one decompressed block may take
+    /// above the 256 MiB default.
     pub max_bytes: usize,
     /// The most threads that decompress (`None`: as many as the machine runs at once; `Some(0)`:
     /// none, everything is decoded on the calling thread). Never more than the chunks need.
     pub workers: Option<usize>,
+    /// The most bytes one decompressed block may take (`None`: `max(256 MiB, max_bytes)`). A
+    /// needed chunk whose block is larger is refused before anything is read.
+    ///
+    /// It is a limit of its own because the `exr` crate's decompressors allocate a whole block at
+    /// once and can't report that the memory isn't there: the process aborts. A block must stay
+    /// below what the caller is sure the system can give, even when the read's total budget
+    /// (`max_bytes`, which allocations this module makes fallibly count against) is far larger. A
+    /// block is one strip of the file (at most 256 scan lines, for DWAB): 8 GiB is a 16K-wide
+    /// strip of 256 lines of 512 f32 channels.
+    pub max_block_bytes: Option<usize>,
 }
 
 impl<'a> Request<'a> {
     /// Every row of `channels` at full resolution, fill 0, up to `max_bytes` of samples, with as
     /// many decoding threads as the machine runs at once.
     pub fn new(channels: &'a [(usize, usize)], max_bytes: usize) -> Request<'a> {
-        Request { channels, fill: &[], rows: None, level: 0, max_bytes, workers: None }
+        Request { channels, fill: &[], rows: None, level: 0, max_bytes, workers: None, max_block_bytes: None }
     }
 }
 
@@ -730,8 +741,9 @@ struct Planned {
 /// requested slot of its part (see [`Stats::in_flight`]); the chunks in flight stay within
 /// 64 MiB of that, and a chunk whose estimate alone is over 64 MiB is decoded alone, once
 /// everything before it has been delivered, so however many workers run, at most one such chunk
-/// is held at a time. A block may take no more than 256 MiB, or [`Request::max_bytes`] if that is
-/// more; a needed chunk over it is refused ([`Error::LimitExceeded`]) before anything is read.
+/// is held at a time. A block may take no more than [`Request::max_block_bytes`] (by default
+/// 256 MiB, or [`Request::max_bytes`] if that is more); a needed chunk over it is refused
+/// ([`Error::LimitExceeded`]) before anything is read.
 /// For one big chunk the real peak is several times its block: its compressed bytes in the
 /// piece, the `exr` crate's copy of its payload (a chunk's declared size is checked against the
 /// bytes it holds first, so that copy is no larger than the chunk), the decompressed block, the
@@ -821,8 +833,8 @@ fn read_into<R: Read + Seek + ?Sized>(
         return Err(Error::LimitExceeded(format!("the requested rows need {need} bytes, more than the {} the read may use", request.max_bytes)));
     }
     // The chunks to read, in file order. The decompressor allocates each one's whole block, so a
-    // block may take no more than the read allows (see `MAX_BLOCK_BYTES`).
-    let most_block = (MAX_BLOCK_BYTES.max(request.max_bytes)) as u64;
+    // block may take no more than the read allows (see `Request::max_block_bytes`).
+    let most_block = request.max_block_bytes.unwrap_or(MAX_BLOCK_BYTES.max(request.max_bytes)) as u64;
     let mut jobs: Vec<Planned> = Vec::new();
     for (pi, part) in index.layout.iter().enumerate() {
         let requested = slots.get(pi).map_or(0, |s| s.iter().map(Vec::len).sum::<usize>());
@@ -844,8 +856,7 @@ fn read_into<R: Read + Seek + ?Sized>(
             let block = pixels.saturating_mul(part.pixel_bytes as u64);
             if block > most_block {
                 return Err(Error::LimitExceeded(format!(
-                    "a block of part {pi} decompresses to {block} bytes, more than the {most_block} a read with max_bytes {} may use",
-                    request.max_bytes
+                    "a block of part {pi} decompresses to {block} bytes, more than the {most_block} one block of this read may use"
                 )));
             }
             let cost = block.saturating_add(pixels.saturating_mul(requested as u64).saturating_mul(4));

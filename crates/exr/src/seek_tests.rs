@@ -592,6 +592,27 @@ fn a_wide_dwab_part_with_half_a_gigabyte_blocks_reads_only_with_a_budget_that_al
 }
 
 #[test]
+fn a_block_is_held_to_max_block_bytes_whatever_the_total_budget() {
+    // The same 512 MiB DWAB block, read with a 64 GiB budget: `max_block_bytes` decides. The
+    // source panics if a chunk is fetched, so a missing check fails at once.
+    let mut bytes = many_channels(1, 1, 64, true, Compression::DWAB(None));
+    patch_box(&mut bytes, "dataWindow", [0, 0, 16383, 255]);
+    patch_box(&mut bytes, "displayWindow", [0, 0, 16383, 255]);
+    let index = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never).unwrap();
+    let chunks = index.chunks(0).next().unwrap().offset;
+    let read = |max_block_bytes, cancel: &dyn Fn() -> bool| {
+        let request = Request { max_block_bytes, ..Request::new(&[(0, 0)], 64 << 30) };
+        read_bands(&mut NoChunks { inner: Cursor::new(&bytes[..]), chunks }, &index, &request, cancel, &mut |_| {})
+    };
+    let got = read(Some(256 << 20), &never);
+    assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("one block")), "{got:?}");
+    // (cancelled right after the check, before a chunk is fetched)
+    assert_eq!(read(Some(1 << 30), &|| true).err(), Some(Error::Cancelled), "a 1 GiB block limit passes the check");
+    // `None`: max(256 MiB, max_bytes), here 64 GiB.
+    assert_eq!(read(None, &|| true).err(), Some(Error::Cancelled));
+}
+
+#[test]
 fn a_chunk_over_the_in_flight_budget_is_decoded_alone() {
     // 64 rows of one f32 channel, 16 wide, one row a chunk: each chunk holds a 64-byte block and
     // 64 bytes of bands, 128 bytes in flight; with a budget of 100 no two may be in flight at
