@@ -277,6 +277,27 @@ fn leaving_during_a_drag_ends_it_at_its_last_frame_and_applies() {
 }
 
 #[trial]
+fn typing_a_ratio_in_several_steps_fits_from_the_frame_the_edit_began_with() {
+    let mut rig = Rig::new(classic());
+    rig.run();
+    let mut host = rig.host.borrow_mut();
+    let Host { tool, settings, document, .. } = &mut *host;
+    let base = upright(20.0, 10.0, 180.0, 90.0);
+    tool.crop_to(base);
+    // 1 : 3 and then 16 : 3 on the way to 16 : 6: each step fits from the frame the edit started with, so the frame
+    // does not shrink for good on the way.
+    for (width, height) in [(1.0, 3.0), (16.0, 3.0), (16.0, 6.0)] {
+        let mut ratio = settings.clone();
+        ratio.ratio = CropRatio::sides(width, height);
+        tool.refit(&ratio, document, &units(), true);
+    }
+    let frame = tool.frame().expect("a frame");
+    assert!((frame.rect.width() / frame.rect.height() - 16.0 / 6.0).abs() < 1e-6, "{frame:?}");
+    assert!((frame.rect.width() - base.rect.width()).abs() < 1e-6, "fitted from the frame the edit began with: {frame:?}");
+    assert_eq!(frame.rect.center(), base.rect.center());
+}
+
+#[trial]
 fn the_pens_eraser_end_standing_in_for_the_tool_keeps_the_frame_pending_until_the_tip_returns() {
     let mut rig = Rig::new(classic());
     rig.drag((100.0, 80.0), (300.0, 220.0));
