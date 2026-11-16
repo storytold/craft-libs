@@ -100,7 +100,7 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   map's Z is not reconstructed). ATI2 is read as Microsoft reads it, red in the first block.
   Uncompressed row padding follows the header's `DDSD_PITCH` stride; without that flag, rows are
   tightly packed. Everything opens as U8; the other mip levels are ignored. Cubemaps, texture
-  arrays, volume textures, premultiplied DXT2/DXT4, signed (SNORM) BC4/BC5 and other formats
+  arrays, volume textures, premultiplied-alpha textures (DXT2/DXT4, or DX10 alpha mode 2), signed (SNORM) BC4/BC5 and other formats
   (BC6H, BC7, float) are refused with `CodecError::Unsupported`. Writing (`EncodeOptions::dds`)
   makes a 2D texture: uncompressed by default (BGRA, BGRX, or luminance with or without alpha, so
   it reads back exactly), BC1/BC2/BC3 (from RGBA) with the legacy header, or BC4 (from gray, for

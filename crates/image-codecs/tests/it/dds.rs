@@ -327,6 +327,35 @@ const BC4_200: [u8; 8] = [0xc8, 0x32, 0, 0, 0, 0, 0, 0];
 /// A value block of 250 everywhere (six-value mode, a0 = 10 <= a1 = 250, every index 1).
 const VALUES_250: [u8; 8] = [0x0a, 0xfa, 0x49, 0x92, 0x24, 0x49, 0x92, 0x24];
 
+/// A DX10 file of one 1x1 level of `dxgi` with DDS_ALPHA_MODE `alpha_mode` (miscFlags2) and zeroed pixel data.
+fn dx10_alpha_mode(dxgi: u32, alpha_mode: u32) -> Vec<u8> {
+    let mut b = dx10(1, 1, dxgi, 3, 0, 1);
+    let n = b.len();
+    b[n - 4..].copy_from_slice(&alpha_mode.to_le_bytes());
+    b.extend([0u8; 16]);
+    b
+}
+
+#[test]
+fn refuses_premultiplied_alpha_dx10_textures() {
+    // RGBA, BGRA (typeless, UNORM, sRGB) and BC2/BC3: alpha mode 2 is premultiplied, like DXT2/DXT4.
+    for dxgi in [27, 28, 29, 87, 90, 91, 73, 74, 75, 76, 77, 78] {
+        match decode_as(Format::Dds, &dx10_alpha_mode(dxgi, 2)) {
+            Err(CodecError::Unsupported { reason, .. }) => assert!(reason.contains("premultiplied"), "{dxgi}: {reason}"),
+            other => panic!("DXGI {dxgi}: {:?}", other.map(|_| ())),
+        }
+    }
+    // Straight, unknown, opaque and custom alpha modes, and formats without alpha, still decode.
+    for dxgi in [28, 87, 74, 77] {
+        for mode in [0, 1, 3, 4] {
+            assert!(decode_as(Format::Dds, &dx10_alpha_mode(dxgi, mode)).is_ok(), "{dxgi} mode {mode}");
+        }
+    }
+    for dxgi in [88, 71, 80, 83] {
+        assert!(decode_as(Format::Dds, &dx10_alpha_mode(dxgi, 2)).is_ok(), "{dxgi}");
+    }
+}
+
 #[test]
 fn decodes_bc4_as_gray_from_every_name() {
     // 5×3: two blocks across, one down; the second block's texels outside the image are dropped.

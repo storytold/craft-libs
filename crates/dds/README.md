@@ -16,7 +16,7 @@ craft-dds = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" 
 | Headers | legacy and DX10 | legacy; DX10 for BC4 and BC5 |
 | Mip levels | the top level only | optional full chain, box-filtered |
 
-Cubemaps, texture arrays, volume textures, premultiplied DXT2/DXT4, signed (SNORM) BC4/BC5 and
+Cubemaps, texture arrays, volume textures, premultiplied-alpha textures (DXT2/DXT4, or DX10 alpha mode 2), signed (SNORM) BC4/BC5 and
 the other DXGI formats (BC6H, BC7, float) are refused with `DdsError::Unsupported` rather than read
 in part.
 

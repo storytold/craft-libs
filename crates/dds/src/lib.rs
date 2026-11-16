@@ -359,6 +359,11 @@ fn dx10_encoding(b: &[u8]) -> Result<Encoding, DdsError> {
     if array > 1 {
         return Err(unsupported(format!("texture arrays are not supported ({array} textures)")));
     }
+    // miscFlags2 bits 0-2 are the alpha mode; 2 is premultiplied. Only the formats with a real
+    // alpha channel are affected, and the legacy path refuses their DXT2/DXT4 equivalents too.
+    if le32(b, HEADER + 16)? & 0x7 == 2 && matches!(dxgi, 27..=29 | 73..=78 | 87 | 90 | 91) {
+        return Err(unsupported(format!("premultiplied-alpha DX10 textures are not supported (DXGI format {dxgi})")));
+    }
     const RGBA: [u32; 4] = [0xff, 0xff00, 0xff_0000, 0xff00_0000];
     const BGRA: [u32; 4] = [0xff_0000, 0xff00, 0xff, 0xff00_0000];
     const BGRX: [u32; 4] = [0xff_0000, 0xff00, 0xff, 0];
