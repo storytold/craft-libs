@@ -89,6 +89,14 @@ pub struct Path {
     pub source_path: NodePath,
 }
 
+impl Path {
+    /// The basic shape (rectangle, rounded rectangle or ellipse) this path draws, if any
+    /// ([`super::primitive::recognize`]).
+    pub fn primitive(&self) -> Option<super::primitive::Primitive> {
+        super::primitive::recognize(&self.segments)
+    }
+}
+
 /// A path segment in CSS pixels after its absolute transform.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Segment {
