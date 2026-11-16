@@ -12,5 +12,5 @@ workspace = true
 
 [dependencies]
 craft-xml = { workspace = true }
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 thiserror = { workspace = true }
