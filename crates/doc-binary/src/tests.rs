@@ -1894,6 +1894,28 @@ fn inline_png_picture() {
     assert_eq!(bytes.as_slice(), png.as_slice());
 }
 
+#[test]
+fn a_raw_picfs_crop_takes_its_share_off_the_size() {
+    // As `inline_png_picture`, cropped 144 twips on the left and 72 at the bottom: a tenth of the
+    // goal each, as Word reads the `PICF` crops of a Word 95 file.
+    let text = "Pic\u{1}!\r";
+    let ccp = text.chars().count() as u32;
+    let png: Vec<u8> = [b"\x89PNG\r\n\x1a\n".as_slice(), &[0u8; 16]].concat();
+    let mut picf = vec![0u8; 0x44];
+    picf[0..4].copy_from_slice(&((0x44 + png.len()) as u32).to_le_bytes());
+    picf[4..6].copy_from_slice(&0x44u16.to_le_bytes());
+    for (at, v) in [(28, 1440i16), (30, 720), (32, 1000), (34, 1000), (36, 144), (42, 72)] {
+        picf[at..at + 2].copy_from_slice(&v.to_le_bytes());
+    }
+    let data: Vec<u8> = [picf, png].concat();
+    let spec = StructSpec { text, data_stream: data, chpx_runs: vec![(0, grpprl(&[(0x6A03, &0u32.to_le_bytes())]))], ..structured_spec(text, ccp) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let Some(craft_wordmodel::para::InlineObject::Image { w, h, crop, .. }) = p0.objects.first() else { panic!("no image: {:?}", p0.objects) };
+    assert!((*w - 64.8).abs() < 1e-3 && (*h - 32.4).abs() < 1e-3, "{w} x {h}");
+    assert_eq!(*crop, [0.1, 0.0, 0.0, 0.1]);
+}
+
 /// The D4 hostile-input fixture: notes, a field, a bookmark and a picture in one file.
 fn extras_doc() -> Vec<u8> {
     let png: Vec<u8> = [b"\x89PNG\r\n\x1a\n".as_slice(), &[0u8; 8]].concat();

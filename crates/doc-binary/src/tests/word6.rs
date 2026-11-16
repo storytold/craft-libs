@@ -1278,3 +1278,43 @@ fn note_options_and_facing_pages_come_from_the_dop() {
     assert_eq!(ftn, (Some(NotePos::BeneathText), Some(3), Some(NoteRestart::EachPage), NumFormat::LowerRoman));
     assert_eq!((st.endnote_pr.pos, st.endnote_pr.num_start, st.endnote_format), (Some(NotePos::SectEnd), Some(2), NumFormat::UpperLetter));
 }
+
+/// A Word 6.0/95 `PICF` as Word 95 writes it: 58 bytes, `mm` 8 (a metafile follows), the goal
+/// size and scale, and the crops (twips: left, top, right, bottom); then `body`.
+fn picf6(goal: (i16, i16), scale: (u16, u16), crop: [i16; 4], body: &[u8]) -> Vec<u8> {
+    let mut p = vec![0u8; 58];
+    put32(&mut p, 0, (58 + body.len()) as u32);
+    put16(&mut p, 4, 58);
+    put16(&mut p, 6, 8);
+    for (k, v) in [goal.0 as u16, goal.1 as u16, scale.0, scale.1].into_iter().chain(crop.map(|c| c as u16)).enumerate() {
+        put16(&mut p, 28 + 2 * k, v);
+    }
+    p.extend_from_slice(body);
+    p
+}
+
+#[test]
+fn inline_pictures_are_read() {
+    // A WMF: the 9-word header (size 17 words), a SetWindowExt record and the EOF record.
+    let wmf: &[u8] = &[1, 0, 9, 0, 0, 3, 17, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0x0C, 0x02, 0x58, 0x02, 0xE8, 0x03, 3, 0, 0, 0, 0, 0];
+    // The case Word 95 wrote from RTF: goal 1000 x 600 twips, cropped 100/50/200/150, scaled
+    // 50 % x 200 %. Word 2016 shows it 17.5 x 40 pt, cropped 0.1/0.083/0.2/0.25. The bytes after
+    // the metafile are not part of it.
+    let mut text = b"A\x01B\x01C\x01D\r\0".to_vec();
+    let first = TEXT_AT + text.len() as u32;
+    text.extend(picf6((1000, 600), (500, 2000), [100, 50, 200, 150], &[wmf, &[0xAB; 6]].concat()));
+    // Not a metafile: no picture.
+    let second = TEXT_AT + text.len() as u32;
+    text.extend(picf6((1000, 600), (1000, 1000), [0; 4], &[0x42; 40]));
+    let at = |fc: u32| [&[0x75, 1, 0x44, 4][..], &fc.to_le_bytes()].concat();
+    let (a, b, c) = (at(first), at(second), at(0));
+    let runs: &[(u32, u32, &[u8])] = &[(0, 1, &[]), (1, 2, &a), (2, 3, &[]), (3, 4, &b), (4, 5, &[]), (5, 6, &c), (6, 8, &[])];
+    let doc = read(&word6_file(&Doc6 { text: &text, ccp: Some(8), runs, ..Default::default() })).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.text, "A\u{FFFC}BCD");
+    let [craft_wordmodel::para::InlineObject::Image { media, w, h, crop, .. }] = p.objects.as_slice() else { panic!("one image: {:?}", p.objects) };
+    assert_eq!((*w, *h), (17.5, 40.0));
+    assert_eq!(*crop, [0.1, 50.0 / 600.0, 0.2, 0.25]);
+    assert_eq!(media.as_str(), "image1.wmf");
+    assert_eq!(doc.media.get("image1.wmf").map(|m| m.as_slice()), Some(wmf));
+}

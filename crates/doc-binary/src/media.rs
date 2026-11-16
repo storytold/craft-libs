@@ -10,7 +10,8 @@ use crate::officeart;
 
 /// `PICF.cbHeader` — the fixed size of the PICF structure.
 const CB_HEADER: usize = 0x44;
-/// Offsets inside PICF: `PICMID.dxaGoal/dyaGoal/mx/my` start at 28.
+/// Offsets inside PICF: `PICMID.dxaGoal/dyaGoal/mx/my`, then `dxaCropLeft/dyaCropTop/
+/// dxaCropRight/dyaCropBottom`, start at 28 (in Word 6.0/95's 58-byte PICF too).
 const OFF_PICMID: usize = 28;
 
 /// Most distinct pictures one document materialises from the Data stream.
@@ -121,7 +122,7 @@ impl Pictures {
             Found::Range(pic) => {
                 let bytes = data.get(pic.range.clone()).filter(|b| b.len() <= room)?.to_vec();
                 let key = self.insert(bytes, pic.ext, false)?;
-                Some(Inline { key, w: pic.w, h: pic.h, crop: [0.0; 4], alt: String::new() })
+                Some(Inline { key, w: pic.w, h: pic.h, crop: pic.crop, alt: String::new() })
             }
             Found::Shape { w, h, key, props } => Some(Inline { key: key?, w, h, crop: props.crop, alt: props.alt }),
         }
@@ -181,10 +182,12 @@ impl Pictures {
     }
 }
 
-/// Where a picture's image bytes sit in the Data stream, and its display size in points.
+/// Where a picture's image bytes sit in the Data stream, its display size in points and its
+/// crop fractions (left, top, right, bottom).
 struct Located {
     w: f32,
     h: f32,
+    crop: [f32; 4],
     range: Range<usize>,
     ext: &'static str,
 }
@@ -210,9 +213,10 @@ fn locate(data: &[u8], fc_pic: u32, pics: &mut Pictures) -> Option<Found> {
     let cb_header = u16::from_le_bytes(pic.get(4..6)?.try_into().ok()?) as usize;
     let cb_header = if (0x20..=0x100).contains(&cb_header) { cb_header } else { CB_HEADER };
     let mm = u16::from_le_bytes(pic.get(6..8)?.try_into().ok()?);
-    let m = pic.get(OFF_PICMID..OFF_PICMID + 8)?;
-    let dxa_goal = i16::from_le_bytes([m[0], m[1]]) as f32;
-    let dya_goal = i16::from_le_bytes([m[2], m[3]]) as f32;
+    let m = pic.get(OFF_PICMID..OFF_PICMID + 16)?;
+    let i16_at = |at: usize| i16::from_le_bytes([m[at], m[at + 1]]) as f32;
+    let dxa_goal = i16_at(0);
+    let dya_goal = i16_at(2);
     let mx = u16::from_le_bytes([m[4], m[5]]) as f32;
     let my = u16::from_le_bytes([m[6], m[7]]) as f32;
     let scale = |r: f32| if r > 0.0 { (r / 1000.0).clamp(0.01, 100.0) } else { 1.0 };
@@ -229,13 +233,37 @@ fn locate(data: &[u8], fc_pic: u32, pics: &mut Pictures) -> Option<Found> {
         let h = (dya_goal / 20.0 * (1.0 - ct - cb).max(0.01) * scale(my)).clamp(1.0, 1584.0);
         return Some(Found::Shape { w, h, key, props });
     }
-    let w = (dxa_goal / 20.0 * scale(mx)).clamp(1.0, 1584.0);
-    let h = (dya_goal / 20.0 * scale(my)).clamp(1.0, 1584.0);
+    // The crops are twips off the goal size, before scaling (Word 2016's reading of Word 95
+    // files): as fractions of it, they take their share off the size.
+    let share = |crop: f32, goal: f32| if goal > 0.0 { (crop / goal).clamp(0.0, 0.99) } else { 0.0 };
+    let crop = [share(i16_at(8), dxa_goal), share(i16_at(10), dya_goal), share(i16_at(12), dxa_goal), share(i16_at(14), dya_goal)];
+    let [cl, ct, cr, cb] = crop;
+    let w = (dxa_goal / 20.0 * (1.0 - cl - cr).max(0.01) * scale(mx)).clamp(1.0, 1584.0);
+    let h = (dya_goal / 20.0 * (1.0 - ct - cb).max(0.01) * scale(my)).clamp(1.0, 1584.0);
     let body = pic.get(cb_header..end)?;
-    let at = sniff(body)?;
-    let image = body.get(at..)?;
+    let (at, len, ext) = match sniff(body) {
+        Some(at) => {
+            let image = body.get(at..)?;
+            (at, image.len(), ext_of(image))
+        }
+        // Word 6.0/95 files store every picture as a Windows metafile (`mm` 8; a bitmap is
+        // drawn by one StretchDIBits record).
+        None => (0, wmf_len(body)?, "wmf"),
+    };
     let start = base.checked_add(cb_header)?.checked_add(at)?;
-    Some(Found::Range(Located { w, h, range: start..start.checked_add(image.len())?, ext: ext_of(image) }))
+    Some(Found::Range(Located { w, h, crop, range: start..start.checked_add(len)?, ext }))
+}
+
+/// The length of the Windows metafile `body` starts with: its `META_HEADER` (type 1 or 2,
+/// header size 9 words, version 0x0100 or 0x0300) gives its size in words; a file cut short
+/// keeps what is there.
+fn wmf_len(body: &[u8]) -> Option<usize> {
+    let u16_at = |at: usize| Some(u16::from_le_bytes(body.get(at..at + 2)?.try_into().ok()?));
+    if !matches!(u16_at(0)?, 1 | 2) || u16_at(2)? != 9 || !matches!(u16_at(4)?, 0x0100 | 0x0300) {
+        return None;
+    }
+    let words = u32::from_le_bytes(body.get(6..10)?.try_into().ok()?) as usize;
+    Some(words.saturating_mul(2).min(body.len())).filter(|&n| n >= 18)
 }
 
 /// An `OfficeArtInlineSpContainer`: the picture shape, then the `OfficeArtFBSE` records its

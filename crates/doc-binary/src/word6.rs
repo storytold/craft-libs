@@ -9,7 +9,7 @@
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
 //! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
 //! their separators and options), the comments, the character styles of runs, and paragraph and
-//! cell borders and shading. Pictures are not read yet.
+//! cell borders and shading, and inline pictures.
 //!
 //! The layout as observed:
 //!
@@ -155,6 +155,10 @@ mod chp {
     pub(super) const ISS: u8 = 0x68;
     /// Kerning from this size up, in half-points (2 bytes).
     pub(super) const KERN: u8 = 0x6B;
+    /// An inline picture's location: a count byte (4), then the fc of its `PICF` in the
+    /// WordDocument stream, as Word 97's `sprmCPicLocation` (set on the picture's 0x01 character,
+    /// along with 0x75, fSpec, = 1). Field characters carry it too, with an fc of 0.
+    pub(super) const PIC_LOCATION: u8 = 0x44;
 }
 
 /// Paragraph and table sprms read, by Word 6.0/95 opcode, matched like [`chp`]'s.
@@ -233,6 +237,7 @@ mod w97 {
     pub(super) const C_ISS: u16 = 0x2A48;
     pub(super) const C_DXA_SPACE: u16 = 0x8840;
     pub(super) const C_HPS_KERN: u16 = 0x484B;
+    pub(super) const C_PIC_LOCATION: u16 = 0x6A03;
     pub(super) const P_JC80: u16 = 0x2403;
     pub(super) const P_KEEP: u16 = 0x2405;
     pub(super) const P_KEEP_FOLLOW: u16 = 0x2406;
@@ -840,6 +845,11 @@ fn translate_chp(grpprl: &[u8]) -> Vec<u8> {
             chp::COLOR => prl(&mut out, w97::C_ICO, v),
             chp::SIZE => prl(&mut out, w97::C_HPS, v),
             chp::FONT => prl(&mut out, w97::C_FTC0, v),
+            chp::PIC_LOCATION => {
+                if let [4, fc @ ..] = v {
+                    prl(&mut out, w97::C_PIC_LOCATION, fc);
+                }
+            }
             _ => {}
         }
     }

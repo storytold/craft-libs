@@ -413,7 +413,8 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     let mut pics = media::Pictures::for_input(word.len());
     let ctx = WalkCtx {
         word,
-        data: &[],
+        // No Data stream: the pictures' PICFs are in the WordDocument stream.
+        data: word,
         pieces: &content.pieces,
         chpx_bins: &content.chpx,
         papx_bins: &content.papx,
@@ -461,6 +462,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     if paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
     }
+    doc.media.extend(pics.media);
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();
