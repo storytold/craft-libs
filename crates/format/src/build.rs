@@ -91,33 +91,101 @@ fn declares_step(text: &str) -> bool {
     })
 }
 
-/// `text` with its `//` and (nested) `/* */` comments taken out; a comment's line breaks stay, so
-/// what follows a block comment is still on its own line.
+/// `text` as code only: its `//` and (nested) `/* */` comments become a space, and the contents
+/// of its string literals (plain, byte and raw) are dropped, line breaks kept throughout. A comment
+/// marker inside a string is not a comment, and `fn/* note */step` still reads as `fn step`.
 fn without_comments(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let at = |i: usize| chars.get(i).copied();
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut depth = 0usize;
-    while let Some(c) = chars.next() {
-        match (c, chars.peek().copied()) {
-            ('/', Some('*')) => {
-                chars.next();
-                depth += 1;
-            }
-            ('*', Some('/')) if depth > 0 => {
-                chars.next();
-                depth -= 1;
-            }
-            ('/', Some('/')) if depth == 0 => {
-                for c in chars.by_ref() {
+    let (mut i, mut depth) = (0usize, 0usize);
+    while let Some(c) = at(i) {
+        let next = at(i + 1);
+        if depth > 0 {
+            match (c, next) {
+                ('/', Some('*')) => (depth, i) = (depth + 1, i + 2),
+                ('*', Some('/')) => (depth, i) = (depth - 1, i + 2),
+                _ => {
                     if c == '\n' {
                         out.push('\n');
-                        break;
                     }
+                    i += 1;
                 }
             }
-            ('\n', _) => out.push('\n'),
-            (c, _) if depth == 0 => out.push(c),
-            _ => {}
+            if depth == 0 {
+                out.push(' ');
+            }
+            continue;
+        }
+        let ident_before = i > 0 && at(i - 1).is_some_and(|p| p.is_alphanumeric() || p == '_');
+        match (c, next) {
+            ('/', Some('/')) => {
+                while at(i).is_some_and(|c| c != '\n') {
+                    i += 1;
+                }
+                out.push(' ');
+            }
+            ('/', Some('*')) => (depth, i) = (1, i + 2),
+            ('"', _) => {
+                out.push('"');
+                i += 1;
+                while let Some(c) = at(i) {
+                    i += 1;
+                    match c {
+                        '\\' => i += 1,
+                        '"' => break,
+                        '\n' => out.push('\n'),
+                        _ => {}
+                    }
+                }
+                out.push('"');
+            }
+            // a raw string, `r"…"` or `r#"…"#`, after a byte prefix or on its own
+            ('r', Some('"' | '#'))
+                if !ident_before || (i > 0 && at(i - 1) == Some('b') && !(i > 1 && at(i - 2).is_some_and(|p| p.is_alphanumeric() || p == '_'))) =>
+            {
+                let mut j = i + 1;
+                let mut hashes = 0;
+                while at(j) == Some('#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if at(j) != Some('"') {
+                    out.push(c);
+                    i += 1;
+                    continue;
+                }
+                out.push('"');
+                i = j + 1;
+                while let Some(c) = at(i) {
+                    if c == '"' && (1..=hashes).all(|k| at(i + k) == Some('#')) {
+                        i += 1 + hashes;
+                        break;
+                    }
+                    if c == '\n' {
+                        out.push('\n');
+                    }
+                    i += 1;
+                }
+                out.push('"');
+            }
+            // a character literal (`'"'`, `'\''`), not a lifetime
+            ('\'', Some('\\')) => {
+                i += 2;
+                while at(i).is_some_and(|c| c != '\'') {
+                    i += 1;
+                }
+                i += 1;
+                out.push_str("' '");
+            }
+            ('\'', Some(_)) if at(i + 2) == Some('\'') => {
+                i += 3;
+                out.push_str("' '");
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
         }
     }
     out

@@ -83,6 +83,14 @@ fn a_step_is_a_declaration_not_a_mention() {
     assert!(!declares_step("//! Documentation only.\n/*\nfn step() {}\n*/\n"));
     assert!(!declares_step("/* outer /* inner */\nfn step() {}\n*/\nconst X: u8 = 1;\n"));
     assert!(declares_step("/* a note */\nfn step(v: &mut Value) {}\n"));
+    // comment markers inside strings and character literals are not comments
+    assert!(declares_step("//! A change with a step.\nconst MARKER: &str = \"/*\";\npub fn step(_v: &mut Value) -> Result { Ok(()) }\n"));
+    assert!(declares_step("const A: &str = r#\"/* \"quoted\" \"#;\nconst B: &[u8] = br\"/*\";\nfn step(v: &mut Value) {}\n"));
+    assert!(declares_step("const Q: char = '\"';\nconst E: char = '\\'';\nfn step(v: &mut Value) { let _: &'static str = \"\"; }\n"));
+    assert!(declares_step("const S: &str = \"a \\\" /* b\";\nfn step(v: &mut Value) {}\n"));
+    assert!(!declares_step("const S: &str = \"\nfn step(v) \";\n"), "inside a string");
+    // a comment between the words is whitespace
+    assert!(declares_step("pub fn/* migration */step(v: &mut Value) {}\n"));
     assert!(declares_step("const X: u8 = 1; // fn step() is below\nfn step(v: &mut Value) {}\n"));
     assert!(declares_step("//! a note\npub(crate) fn  step(v: &mut Value) -> Result<(), E> { Ok(()) }\n"));
     assert!(declares_step("//! a note\n    fn step(v: &mut Value) {}\n"));

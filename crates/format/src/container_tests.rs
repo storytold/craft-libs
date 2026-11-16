@@ -220,3 +220,22 @@ fn cached_parts_keep_the_current_part_limits() {
     assert!(reader.document(4096).is_err());
     assert!(reader.limited_blob(&reference, "blob", "bin", 4096).is_err());
 }
+
+/// A raised expanded budget applies to the open reader, and what was read still counts.
+#[test]
+fn a_raised_expanded_budget_applies_at_once() {
+    static BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(600);
+    let limits = Limits { max_expanded: || BUDGET.load(std::sync::atomic::Ordering::Relaxed), part_limit: |_| 1 << 20, ..LIMITS };
+    let wide = Limits { max_expanded: || 1 << 20, ..limits };
+    let mut writer = Writer::new(wide);
+    writer.part("document.json", &[b' '; 256], false).unwrap();
+    writer.part("other.big", &[1; 512], false).unwrap();
+    let bytes = writer.finish().unwrap();
+    BUDGET.store(1 << 20, std::sync::atomic::Ordering::Relaxed);
+    let mut reader = Reader::new(Cursor::new(bytes), limits).unwrap();
+    BUDGET.store(600, std::sync::atomic::Ordering::Relaxed);
+    assert!(reader.limited_part("document.json", 4096).is_ok());
+    assert!(reader.limited_part("other.big", 4096).is_err(), "256 read + 512 is past 600");
+    BUDGET.store(1024, std::sync::atomic::Ordering::Relaxed);
+    assert!(reader.limited_part("other.big", 4096).is_ok(), "768 fits the raised 1024");
+}

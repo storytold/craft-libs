@@ -164,3 +164,44 @@ fn container_only_fields_are_top_level() {
     assert!(said.restore_into(&mut saved).is_empty());
     assert_eq!(saved, json!({"layer": {"thumbnail": "nested"}}));
 }
+
+/// An element kept on its own is not kept again with its list when typed writing leaves the list out.
+#[test]
+fn a_kept_element_is_not_restored_twice() {
+    let mut said = NewerFile::new("App", &newer());
+    said.keep_element("items", json!({"kind": "future"}), "unnamed".into());
+    said.compare(&json!({"items": [{"kind": "future"}]}), &json!({}), "placeholder", &[]);
+    let mut saved = json!({});
+    assert!(said.restore_into(&mut saved).is_empty());
+    assert_eq!(saved, json!({"items": [{"kind": "future"}]}));
+}
+
+/// A record whose id typed reading drops is matched by its name, and its fields go back.
+#[test]
+fn a_dropped_id_falls_back_to_the_name() {
+    let mut said = NewerFile::new("App", &newer());
+    said.compare(&json!({"items": [{"id": 7, "name": "a", "extra": 1}]}), &json!({"items": [{"name": "a"}]}), "placeholder", &[]);
+    let mut saved = json!({"items": [{"name": "a"}]});
+    assert!(said.restore_into(&mut saved).is_empty());
+    assert_eq!(saved, json!({"items": [{"name": "a", "id": 7, "extra": 1}]}));
+}
+
+/// Kept elements sharing a list are checked against one index, the ones put back included.
+#[test]
+fn kept_elements_check_each_other() {
+    let mut said = NewerFile::new("App", &newer());
+    said.keep_element("items", json!({"id": 1, "v": "first"}), "1".into());
+    said.keep_element("items", json!({"id": 1, "v": "again"}), "1 again".into());
+    let mut saved = json!({"items": []});
+    assert_eq!(said.restore_into(&mut saved).len(), 1);
+    assert_eq!(saved, json!({"items": [{"id": 1, "v": "first"}]}));
+    // deep nesting is searched without recursion
+    let mut deep = json!("needle");
+    for _ in 0..20_000 {
+        deep = Value::Array(vec![deep]);
+    }
+    said.keep_section("deep", deep, None, "test");
+    assert!(said.mentions("needle"));
+    // serde_json drops deep values recursively; leak it rather than overflow the test thread
+    std::mem::forget(said);
+}

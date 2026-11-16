@@ -262,7 +262,11 @@ impl Reader {
         // size within its configured limit.
         let mut name_set = BTreeSet::new();
         for entry_idx in 0..archive.len() {
-            if let Ok(Some(name)) = archive.entry_name(entry_idx) {
+            // an entry whose name can't be read would be left out of the package unnoticed
+            let Ok(Some(name)) = archive.entry_name(entry_idx) else {
+                return Err(invalid("duplicate or invalid archive entry"));
+            };
+            {
                 if name.is_empty()
                     || name.contains('\\')
                     || name.split('/').any(|c| c.is_empty() || c == "." || c == "..")
@@ -309,6 +313,12 @@ impl Reader {
         if expected > limit as u64 {
             return Err(invalid("part too large"));
         }
+        // the expanded budget is read each time: a raised (or lowered) one applies at once, the
+        // bytes already read still counting against it
+        let used = self.archive.budget().used();
+        let budget = self.archive.budget_mut();
+        *budget = craft_zip::Budget::new(budget.what(), (self.limits.max_expanded)() as u64);
+        let _ = budget.charge(used.min(budget.limit()));
         // Read within budget. craft-zip's read() handles decompression bombs via the limit.
         let bytes = self.archive.read(name, limit as u64).map_err(invalid)?.ok_or_else(|| invalid("part not found"))?;
         if bytes.len() as u64 != expected {

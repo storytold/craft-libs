@@ -162,6 +162,8 @@ impl NewerFile {
         let mut top_only: Vec<&str> = container_only.to_vec();
         top_only.extend(["format", "format_pending"]);
         top_only.extend(self.sections.iter().map(|s| s.key.as_str()));
+        // a list typed writing leaves out holds only elements kept on their own: not kept twice
+        top_only.extend(self.elements.iter().map(|(key, _)| key.as_str()).filter(|key| known.get(*key).is_none()));
         let kept = vanished(file, known, "", &mut paths, placeholder_tag, &top_only);
         self.kept = kept;
         self.not_understood.extend(paths);
@@ -185,13 +187,24 @@ impl NewerFile {
                     lost.push(format!("section `{}`, replaced by what was edited here", section.key));
                 }
             }
+            // each list's records indexed once, by the identity records are matched by
+            let mut indexes: HashMap<&str, Positions> = HashMap::new();
             for (key, element) in &self.elements {
                 let name = element.get("name");
-                // the identity records are matched by: an id first, else a name
                 let anchor = anchor_of(element);
-                let taken = |list: &[Value]| anchor.as_ref().is_some_and(|a| Positions::of(list).find(list.len(), a).is_some());
                 match top.entry(key.clone()).or_insert_with(|| json!([])) {
-                    Value::Array(list) if !taken(list) => list.push(element.clone()),
+                    Value::Array(list) => {
+                        let index = indexes.entry(key.as_str()).or_insert_with(|| Positions::of(list));
+                        if anchor.as_ref().is_some_and(|a| index.find(list.len(), a).is_some()) {
+                            lost.push(format!(
+                                "`{key}` element {}, replaced by what was made here",
+                                name.and_then(Value::as_str).unwrap_or("unnamed")
+                            ));
+                        } else {
+                            index.add(element, list.len());
+                            list.push(element.clone());
+                        }
+                    }
                     _ => lost.push(format!("`{key}` element {}, replaced by what was made here", name.and_then(Value::as_str).unwrap_or("unnamed"))),
                 }
             }
@@ -200,13 +213,18 @@ impl NewerFile {
     }
 }
 
+/// Whether a string anywhere in `v` is `text`; iterative, so no nesting depth overflows the stack.
 fn value_mentions(v: &Value, text: &str) -> bool {
-    match v {
-        Value::String(s) => s == text,
-        Value::Array(a) => a.iter().any(|x| value_mentions(x, text)),
-        Value::Object(o) => o.values().any(|x| value_mentions(x, text)),
-        _ => false,
+    let mut todo = vec![v];
+    while let Some(v) = todo.pop() {
+        match v {
+            Value::String(s) if s == text => return true,
+            Value::Array(a) => todo.extend(a),
+            Value::Object(o) => todo.extend(o.values()),
+            _ => {}
+        }
     }
+    false
 }
 
 /// The first line of a reader's error, without the list of every kind it knows, and without the
@@ -326,7 +344,8 @@ fn vanished(raw: &Value, known: &Value, path: &str, paths: &mut Vec<String>, pla
             let mut items = Vec::new();
             let positions = Positions::of(known);
             for (at, element) in raw.iter().enumerate() {
-                let anchor = anchor_of(element).unwrap_or(Anchor::Index { at, of: raw.len() });
+                // an identity typed reading kept: an id it dropped falls back to the name
+                let anchor = surviving_anchor(element, &positions).unwrap_or(Anchor::Index { at, of: raw.len() });
                 let Some(partner) = positions.find(known.len(), &anchor).and_then(|i| known.get(i)) else { continue };
                 let label = match (element.get("name").and_then(Value::as_str), &anchor) {
                     (Some(name), _) => format!("{path}[{name}]"),
@@ -350,6 +369,17 @@ fn anchor_of(element: &Value) -> Option<Anchor> {
     element.get("name").and_then(Value::as_str).map(|name| Anchor::Name(name.to_string()))
 }
 
+/// The identity of `element` that `known`'s records still carry: its id, or else its name. An
+/// element with an identity neither of which survived has none.
+fn surviving_anchor(element: &Value, known: &Positions) -> Option<Anchor> {
+    let id = element.get("id").and_then(Value::as_u64).map(Anchor::Id);
+    let name = element.get("name").and_then(Value::as_str).map(|n| Anchor::Name(n.to_string()));
+    match (id, name) {
+        (Some(id), Some(name)) => Some(if known.find(usize::MAX, &id).is_some() { id } else { name }),
+        (id, name) => id.or(name),
+    }
+}
+
 /// Where each id and name first appears in a list, so matching records is not a scan per record.
 struct Positions {
     ids: HashMap<u64, usize>,
@@ -368,6 +398,16 @@ impl Positions {
             }
         }
         Positions { ids, names }
+    }
+
+    /// Count `x`, now at `i`, in.
+    fn add(&mut self, x: &Value, i: usize) {
+        if let Some(id) = x.get("id").and_then(Value::as_u64) {
+            self.ids.entry(id).or_insert(i);
+        }
+        if let Some(name) = x.get("name").and_then(Value::as_str) {
+            self.names.entry(name.to_string()).or_insert(i);
+        }
     }
 
     /// The position of the record `anchor` names in a list of `len` records (an index anchor
