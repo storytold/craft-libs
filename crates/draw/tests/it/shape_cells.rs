@@ -4,9 +4,11 @@
 use craft_behavior::EditEvent;
 use craft_color::ui::Paint;
 use craft_draw::ui::{
-    Arrowheads, ArrowheadsPopover, BoxConstraint, BoxConstraints, BoxConstraintsPopover, LiveShape, ShapeAppearance, ShapeChange, ShapePanel,
+    Arrowheads, ArrowheadsPopover, BoxConstraint, BoxConstraints, BoxConstraintsPopover, LiveShape, ShapeAppearance, ShapeBar, ShapeChange,
+    ShapeKind, ShapePanel, ShapeToolSettings,
 };
-use craft_ui::contract::Bind;
+use craft_ui::bars::{Bar, BarKind};
+use craft_ui::contract::{Bind, ShowContainer as _};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::RangeAlert;
 use egui::{Key, Modifiers, vec2};
@@ -129,7 +131,7 @@ struct AlertingPanel {
 }
 
 #[trial]
-fn a_concavity_typed_past_its_range_keeps_the_end_and_reports_it_once_from_the_popover_and_the_panel() {
+fn a_concavity_or_stroke_width_typed_past_its_range_keeps_the_end_and_reports_it_once() {
     let host = Rc::new(RefCell::new(AlertingPopover { value: start_value(), open: false, alerts: Vec::new() }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
@@ -172,6 +174,33 @@ fn a_concavity_typed_past_its_range_keeps_the_end_and_reports_it_once_from_the_p
     kept.concavity = 50.0;
     assert_eq!(host.borrow().shape, LiveShape::arrow_line(3.0, kept), "panel: 80 keeps 50");
     assert_eq!(host.borrow().alerts.len(), 1, "panel: the clamp is reported once");
+
+    // The Shape bar's stroke width (StrokeCells, which the Pen tools' bar shares) reports its clamp the same way.
+    let host = Rc::new(RefCell::new(AlertingPanel {
+        shape: LiveShape::arrow_line(3.0, start_value()),
+        look: ShapeAppearance::new(Paint::None, Paint::None, 2.0),
+        alerts: Vec::new(),
+    }));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let AlertingPanel { look, alerts, .. } = &mut *held;
+        let settings = ShapeToolSettings::default();
+        let out =
+            Bar::new("Shape options", BarKind::Options).show(ui, |ui, _| ShapeBar::new(ShapeKind::Rectangle, &settings, look, 72.0).show(ui)).inner;
+        let Some(out) = out else { return };
+        if let Some(ShapeChange::StrokeWidth(width)) = out.events.iter().rev().find_map(|event| event.value()) {
+            look.stroke_width = *width;
+        }
+        alerts.extend(out.out_of_range);
+    });
+    fixture.settle();
+    type_into(&mut fixture, "Stroke width", "400");
+    assert_eq!(host.borrow().look.stroke_width, 288.0, "bar: a stroke width past 288 px keeps 288");
+    assert_eq!(host.borrow().alerts.len(), 1, "bar: the clamp is reported once");
+    type_into(&mut fixture, "Stroke width", "12");
+    assert_eq!(host.borrow().look.stroke_width, 12.0, "bar: a stroke width in range");
+    assert_eq!(host.borrow().alerts.len(), 1, "bar: a value in range reports nothing");
 }
 
 #[trial]

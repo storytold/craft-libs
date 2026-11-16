@@ -97,7 +97,9 @@ pub use pen::{
     PathSelection, PenStyle,
 };
 pub use picture_fill::{PictureFill, PictureFillEditor, PictureFillOutput, PictureMode};
-pub use shape::{Arrowheads, ArrowheadsOutput, ArrowheadsPopover, LINE_WEIGHT_RANGE, RADIUS_RANGE, StrokeCells, VectorMode, VectorModeSelect};
+pub use shape::{
+    Arrowheads, ArrowheadsOutput, ArrowheadsPopover, LINE_WEIGHT_RANGE, RADIUS_RANGE, StrokeCells, StrokeCellsOutput, VectorMode, VectorModeSelect,
+};
 pub use shape::{BoxConstraintsOutput, BoxConstraintsPopover};
 pub use shape::{
     ChipSetup, LiveShape, ShapeAppearance, ShapeBar, ShapeBarOutput, ShapeChange, ShapePaint, ShapePanel, ShapePanelOutput, ShapeToolSettings,

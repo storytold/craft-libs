@@ -28,7 +28,8 @@ pub struct ShapeBarOutput {
     pub screen_pick: Option<(ShapePaint, ScreenPickGesture)>,
     /// A chip asked for the app's full colour picker, with the chip it is for.
     pub pick_color: Option<(ShapePaint, ColorRequest)>,
-    /// The kind cell's (Radius, Sides, Weight) value was typed out of range.
+    /// A value typed past its cell's range this pass (the stroke width, or the kind's Radius, Sides or Weight), which
+    /// the field clamped: the app answers with its range alert.
     pub out_of_range: Option<RangeAlert>,
 }
 
@@ -138,8 +139,9 @@ impl<'a> ShapeBar<'a> {
                 if let Some(open) = stroke_open.as_mut() {
                     cells = cells.stroke_open(open.reborrowed());
                 }
-                let events = cells.show(ui);
-                pass.events.extend(events);
+                let out = cells.show(ui);
+                pass.events.extend(out.events);
+                pass.alert(out.out_of_range);
             }
             let cell = match kind {
                 ShapeKind::Rectangle | ShapeKind::RoundedRectangle => Some((

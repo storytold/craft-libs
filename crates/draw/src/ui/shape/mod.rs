@@ -25,7 +25,7 @@ pub use bar::{ShapeBar, ShapeBarOutput};
 pub use gear::{BoxConstraintsOutput, BoxConstraintsPopover};
 pub use mode_select::VectorModeSelect;
 pub use panel::{ChipSetup, ShapePaint, ShapePanel, ShapePanelOutput};
-pub use stroke_cells::StrokeCells;
+pub use stroke_cells::{StrokeCells, StrokeCellsOutput};
 pub use words::ShapeWords;
 
 /// The drawing mode of the vector tools.

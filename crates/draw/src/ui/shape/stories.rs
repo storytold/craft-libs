@@ -173,7 +173,9 @@ fn stroke_cells_with(ui: &mut Ui, data: &mut StoryData, corners: bool) -> StoryO
     let appearance = data.value("look", look()).clone();
     let mut open = *data.value("open", false);
     let events = Bar::new("Stroke options", BarKind::Options)
-        .show(ui, |ui, _| StrokeCells::new(&appearance, DOCUMENT_PIXELS_PER_INCH).corners(corners).stroke_open(Bind::bound(&mut open)).show(ui))
+        .show(ui, |ui, _| {
+            StrokeCells::new(&appearance, DOCUMENT_PIXELS_PER_INCH).corners(corners).stroke_open(Bind::bound(&mut open)).show(ui).events
+        })
         .inner
         .unwrap_or_default();
     *data.value("open", false) = open;
