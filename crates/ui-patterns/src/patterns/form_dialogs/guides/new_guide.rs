@@ -190,7 +190,10 @@ impl<'a> NewGuideDialog<'a> {
                 parsed = position_row(ui, &words, &number_units, &units, values, first);
                 color_row(ui, &words, &mut values.color, NEW_GUIDE_COLOR_KEY, form.requests());
             });
-            ok_enabled = parsed;
+            // A measuring run lays the field out without its typing run, so it never says whether the text parses.
+            if !crate::runtime::measure::active(ui.ctx()) {
+                ok_enabled = parsed;
+            }
             parsed
         });
         let result = shown.accepted.map(|values| {

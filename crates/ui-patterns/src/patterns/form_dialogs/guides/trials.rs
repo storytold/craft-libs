@@ -151,8 +151,7 @@ fn position_text_that_does_not_parse_keeps_ok_from_making_a_guide() {
     let position = fixture.by_label("Position").expect("the Position field");
     fixture.click(&position).settle();
     fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
-    fixture.type_text("far");
-    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    fixture.type_text("far").settle();
     assert!(!enabled.get(), "OK is disabled while the text does not parse");
     let ok = fixture.by_label("OK").expect("the footer has OK");
     fixture.click(&ok).settle();
@@ -162,8 +161,7 @@ fn position_text_that_does_not_parse_keeps_ok_from_making_a_guide() {
     let position = fixture.by_label("Position").expect("the Position field");
     fixture.click(&position).settle();
     fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
-    fixture.type_text("40");
-    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    fixture.type_text("40").settle();
     assert!(enabled.get(), "a number enables OK again");
     let ok = fixture.by_label("OK").expect("the footer has OK");
     fixture.click(&ok).settle();
