@@ -25,6 +25,51 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Aesthetic rendering style for generation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AestheticStyle {
+    /// True-to-life photographic realism (subsurface scattering, realistic skin pores, natural eye refractions).
+    Photorealistic,
+    /// Hand-drawn 2D vector animation style (clean line art, cel shading).
+    AnimatedVector,
+    /// Cinematic 3D animation (Pixar/Dreamworks style, expressive features, PBR materials).
+    Cinematic3D,
+    /// Painterly / Oil on canvas (textured brush strokes, visible impasto, blended gradients).
+    PainterlyOil,
+    /// Graphic Novel / Noir (heavy shadows, cross-hatching, high contrast).
+    GraphicNovelNoir,
+}
+
+/// Human biological proportions based on classical anatomical canon (e.g. 7.5 to 8 heads tall).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HumanAnatomySpec {
+    pub head_to_body_ratio: f32,                  // typically 7.5 (average) to 8.0 (heroic/classical)
+    pub shoulder_width_heads: f32,                // typically 2.0 to 2.3 heads
+    pub arm_span_ratio: f32,                      // ~1.0 of total height
+    pub eye_line_relative_y: f32,                 // exactly 0.5 of head height (golden rule of facial anatomy)
+    pub nose_base_relative_y: f32,                // ~0.70 of head height
+    pub mouth_line_relative_y: f32,               // ~0.82 of head height
+    pub ear_span_head_fraction: [f32; 2],         // top at brow line, bottom at nose base
+    pub skin_subsurface_scattering_depth_mm: f32, // 1.2mm for realistic human skin translucency
+    pub skin_melanin_fraction: f32,               // 0.0 (fair) to 1.0 (deep)
+}
+
+impl Default for HumanAnatomySpec {
+    fn default() -> Self {
+        Self {
+            head_to_body_ratio: 7.75,
+            shoulder_width_heads: 2.1,
+            arm_span_ratio: 1.0,
+            eye_line_relative_y: 0.50,
+            nose_base_relative_y: 0.70,
+            mouth_line_relative_y: 0.82,
+            ear_span_head_fraction: [0.35, 0.70],
+            skin_subsurface_scattering_depth_mm: 1.2,
+            skin_melanin_fraction: 0.35,
+        }
+    }
+}
+
 /// Physical and visual lighting model for scene consistency.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LightingEnvironment {
@@ -191,6 +236,68 @@ impl StudioDirector {
     /// 1. Background geometry & horizon line (CADCraft)
     /// 2. Foreground vector shapes & subjects (VectorCraft)
     /// 3. Shading, lighting pass, texture layers, and atmosphere (PhotoCraft)
+
+    /// Generates a realistic or stylized human character subject conforming to anatomical canon.
+    pub fn synthesize_human_subject(
+        &mut self,
+        anatomy: &HumanAnatomySpec,
+        style: AestheticStyle,
+        expression: &str,
+        lighting: &LightingEnvironment,
+    ) -> Vec<AppCommandDispatch> {
+        let (sss_passes, vector_lines, texture_profile) = match style {
+            AestheticStyle::Photorealistic => (
+                serde_json::json!({
+                    "subsurface_scattering_enabled": true,
+                    "sss_depth_mm": anatomy.skin_subsurface_scattering_depth_mm,
+                    "melanin": anatomy.skin_melanin_fraction,
+                    "micro_skin_pores": true,
+                    "iris_caustics": true
+                }),
+                false,
+                "photocraft.photoreal_skin_shader",
+            ),
+            AestheticStyle::AnimatedVector => (serde_json::json!({ "cel_shading_bands": 3 }), true, "vectorcraft.line_art_shader"),
+            AestheticStyle::Cinematic3D => {
+                (serde_json::json!({ "pbr_smooth_shading": true, "specular_bloom": true }), false, "cadcraft.stylized_pbr_shader")
+            }
+            AestheticStyle::PainterlyOil => {
+                (serde_json::json!({ "brush_stroke_impasto": true, "canvas_linen_weave": true }), false, "photocraft.oil_paint_shader")
+            }
+            AestheticStyle::GraphicNovelNoir => {
+                (serde_json::json!({ "halftone_dots": true, "deep_black_cutoff": 0.15 }), true, "photocraft.noir_ink_shader")
+            }
+        };
+
+        vec![
+            AppCommandDispatch {
+                target_app: "cadcraft".into(),
+                tool_name: "rig_anatomical_skeleton".into(),
+                parameters: serde_json::json!({
+                    "head_ratio": anatomy.head_to_body_ratio,
+                    "shoulder_width": anatomy.shoulder_width_heads,
+                    "eye_line": anatomy.eye_line_relative_y,
+                    "nose_line": anatomy.nose_base_relative_y,
+                    "mouth_line": anatomy.mouth_line_relative_y,
+                    "facial_expression": expression
+                }),
+                order: 1,
+            },
+            AppCommandDispatch {
+                target_app: if vector_lines { "vectorcraft" } else { "photocraft" }.into(),
+                tool_name: "render_character_surface".into(),
+                parameters: serde_json::json!({
+                    "style": format!("{style:?}"),
+                    "shader_profile": texture_profile,
+                    "shading_parameters": sss_passes,
+                    "key_light": lighting.key_light_direction,
+                    "ambient": lighting.ambient_intensity
+                }),
+                order: 2,
+            },
+        ]
+    }
+
     pub fn generate_image_from_scratch(&mut self, prompt: &str, width: u32, height: u32, aspect_ratio: &str) -> Vec<AppCommandDispatch> {
         vec![
             AppCommandDispatch {
@@ -436,6 +543,25 @@ mod tests {
         assert_eq!(image_pipeline[1].target_app, "vectorcraft");
         assert_eq!(image_pipeline[2].target_app, "photocraft");
         assert_eq!(image_pipeline[3].target_app, "photocraft");
+
+        // Test Human Subject Synthesis with Realistic Anatomy Canon
+        let anatomy = HumanAnatomySpec::default();
+        let env = LightingEnvironment {
+            key_light_direction: [0.3, 0.8, 0.5],
+            key_light_color: [1.0, 0.9, 0.8],
+            ambient_intensity: 0.2,
+            shadow_softness: 0.1,
+            environment_map: None,
+        };
+        let human_pipeline = director.synthesize_human_subject(&anatomy, AestheticStyle::Photorealistic, "warm thoughtful smile", &env);
+        assert_eq!(human_pipeline.len(), 2);
+        assert_eq!(human_pipeline[0].target_app, "cadcraft");
+        assert_eq!(human_pipeline[0].tool_name, "rig_anatomical_skeleton");
+        assert_eq!(human_pipeline[1].target_app, "photocraft");
+        assert_eq!(human_pipeline[1].tool_name, "render_character_surface");
+
+        let vector_human = director.synthesize_human_subject(&anatomy, AestheticStyle::AnimatedVector, "curious", &env);
+        assert_eq!(vector_human[1].target_app, "vectorcraft");
 
         // Test Autonomous Video Editing
         let video_pipeline = director.edit_video_sequence(vec!["take_1.mp4".into(), "take_2.mp4".into()], 12.0, 120.0, "dynamic_action");
