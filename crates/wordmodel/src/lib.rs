@@ -143,6 +143,9 @@ pub struct Document {
     /// export reports them); never saved, never drawn, ignored by `==`.
     #[serde(skip)]
     pub missing_pictures: MissingPictures,
+    /// Package parts a reader could not read and left out, by name; never saved.
+    #[serde(skip)]
+    pub skipped_parts: Vec<String>,
 }
 
 #[cfg(test)]
