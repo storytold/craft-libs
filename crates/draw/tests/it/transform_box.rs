@@ -736,3 +736,35 @@ fn a_click_on_the_box_moves_nothing_and_a_jittery_click_outside_applies_the_box_
     assert_eq!(h.state(), BoxState::from_rect(RECT), "the box stays as it was");
     assert_eq!(h.host.borrow().applied, 1, "the click outside applies");
 }
+
+/// A secondary click on the session's box opens the mode menu (its rows are on the page); with the menu closed again, a
+/// secondary click away from the box opens none.
+#[trial]
+fn a_secondary_click_on_the_box_opens_the_mode_menu() {
+    let session = TransformSession::<()>::new(RECT);
+    let settings = TransformSettings::default();
+    let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
+    let shown_view = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+        *shown_view.borrow_mut() = at;
+        Canvas::new("Document").view(at).show(ui, |ui, body| {
+            TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+        });
+    });
+    fixture.settle();
+    let mut right_click = |fixture: &mut Fixture, at: Pos2| {
+        fixture.frame(vec![pointer::moved(at)]);
+        fixture.frame(vec![pointer::secondary(at, true)]);
+        fixture.frame(vec![pointer::secondary(at, false)]);
+        fixture.settle();
+    };
+    let screen = |p: Point| view.borrow().to_screen(p);
+
+    right_click(&mut fixture, screen(Point::new(1000.0, 1000.0)));
+    assert!(fixture.by_label("Distort").is_none(), "a secondary click away from the box opens no mode menu");
+
+    right_click(&mut fixture, screen(Point::new(200.0, 150.0)));
+    assert!(fixture.by_label("Distort").is_some(), "a secondary click on the box opens the mode menu");
+}
