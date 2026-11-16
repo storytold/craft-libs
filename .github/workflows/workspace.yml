@@ -30,11 +30,7 @@ jobs:
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
-      # rust-lld (shipped with the toolchain) links the Windows leg's ~370 test executables per
-      # feature set much faster than link.exe. It changes no compiled code.
-      windows-env: |
-        CRAFT_PRINT_REQUIRE_QUEUE=1
-        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
+      windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
       env: CRAFT_PRINT_REQUIRE_QUEUE=0
       setup-command: |
         set -euo pipefail
