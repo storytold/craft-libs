@@ -772,3 +772,6 @@ mod tests {
         assert!(matches!(e, AudioError::Encode(_)), "{e}");
     }
 }
+
+/// DVD and Blu-ray LPCM packet decoding.
+pub mod lpcm;
