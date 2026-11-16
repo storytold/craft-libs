@@ -302,3 +302,38 @@ fn supplied_normals_are_stored_not_replaced() {
     s.meshes[0].primitives[0].normals = vec![[0.0, 0.0, 1.0]];
     assert!(matches!(write_prc(&s), Err(PrcWriteError::BadIndex { .. })), "one normal for three vertices");
 }
+
+/// A wholly transparent textured material stays transparent: its style says so, not only its
+/// material, whose alpha of 0 a reader may take as unset.
+#[test]
+fn a_transparent_textured_material_reads_back_transparent() {
+    let mut s = scene();
+    let image = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x01\0\0\0\x02".to_vec();
+    s.textures = vec![SceneTexture { image, wrap: [TextureWrap::Clamp, TextureWrap::Clamp], alpha: false }];
+    s.materials[1].texture = Some(0);
+    s.materials[1].rgba[3] = 0.0;
+    s.meshes[1].primitives[0].uvs = vec![[0.5, 0.1], [0.5, 0.1], [0.5, 0.9]];
+    let prc = write_prc(&s).unwrap().prc;
+    let colours: Vec<_> = assemble(&prc).colours.into_iter().flatten().collect();
+    assert!(colours.iter().filter(|c| c[..3] == [255, 0, 0]).all(|c| c[3] == 0), "{colours:?}");
+    assert!(colours.iter().any(|c| c[..3] == [255, 0, 0]), "{colours:?}");
+}
+
+/// What the roots do not reach is checked too.
+#[test]
+fn unreached_nodes_and_meshes_are_checked() {
+    let mut s = scene();
+    s.nodes.push(node("stray", Some(999), vec![]));
+    assert_eq!(write_prc(&s), Err(PrcWriteError::BadIndex { what: "mesh", index: 999 }));
+    let mut s = scene();
+    s.meshes.push(SceneMesh { name: None, primitives: vec![tri(Some(999), 0.0)] });
+    assert_eq!(write_prc(&s), Err(PrcWriteError::BadIndex { what: "material", index: 999 }));
+    let mut s = scene();
+    s.nodes.push(node("a", None, vec![5]));
+    s.nodes.push(node("b", None, vec![4]));
+    assert_eq!(write_prc(&s), Err(PrcWriteError::NotATree("a cycle")));
+    // An unreached tree is fine.
+    let mut s = scene();
+    s.nodes.push(node("spare", Some(0), vec![]));
+    assert!(write_prc(&s).is_ok());
+}

@@ -88,6 +88,15 @@ pub(super) fn plan(scene: &MeshScene) -> Result<Plan, PrcWriteError> {
     // Every global id sum (`global_ids`, the first texture id) is under
     // four per material, three per texture and a constant.
     count(scene.materials.len().saturating_mul(4).saturating_add(scene.textures.len().saturating_mul(3)).saturating_add(8))?;
+    // The whole scene, what the roots do not reach included.
+    for node in &scene.nodes {
+        if let Some(m) = node.mesh.filter(|&m| m >= scene.meshes.len()) {
+            return Err(bad("mesh", m));
+        }
+    }
+    for prim in scene.meshes.iter().flat_map(|m| &m.primitives) {
+        check_primitive(scene, prim)?;
+    }
     let occurrences = occurrences(scene)?;
     let mut plan = Plan {
         occurrences,
@@ -113,7 +122,6 @@ pub(super) fn plan(scene: &MeshScene) -> Result<Plan, PrcWriteError> {
     }
     for &m in &plan.parts {
         for (p, prim) in scene.meshes.get(m).into_iter().flat_map(|m| m.primitives.iter().enumerate()) {
-            check_primitive(scene, prim)?;
             if prim.triangles.is_empty() {
                 plan.empty_primitives += 1;
             } else {
@@ -197,7 +205,8 @@ fn check_numbers(scene: &MeshScene) -> Result<(), PrcWriteError> {
 }
 
 /// Every child and root names a node, no node has two parents, no root
-/// has one or is listed twice, and no chain is deeper than [`MAX_NODE_DEPTH`].
+/// has one or is listed twice, no chain from a root is deeper than
+/// [`MAX_NODE_DEPTH`], and no node, reached or not, is on a cycle.
 /// With one parent at most each and distinct parentless roots, what the
 /// roots reach has no cycle and holds each node once, so the occurrences
 /// number no more than the nodes.
@@ -234,6 +243,19 @@ fn check_forest(scene: &MeshScene) -> Result<(), PrcWriteError> {
             }
             stack.push(c);
         }
+    }
+    // Nodes the roots do not reach: with one parent each, a node no parentless node reaches
+    // is on a cycle.
+    let mut seen = vec![false; n];
+    let mut stack: Vec<usize> = (0..n).filter(|&i| parent.get(i).is_some_and(Option::is_none)).collect();
+    while let Some(i) = stack.pop() {
+        if let Some(s) = seen.get_mut(i).filter(|s| !**s) {
+            *s = true;
+            stack.extend(scene.nodes.get(i).map(|n| n.children.as_slice()).unwrap_or(&[]));
+        }
+    }
+    if seen.contains(&false) {
+        return Err(PrcWriteError::NotATree("a cycle"));
     }
     Ok(())
 }

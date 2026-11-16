@@ -3,7 +3,7 @@
 
 use super::validate::Plan;
 use super::vec3::{cross, dot};
-use super::{BitWriter, MeshScene};
+use super::{BitWriter, MeshScene, SceneMaterial};
 use crate::UniqueId;
 
 const MODEL_FILE: u32 = 301;
@@ -96,21 +96,24 @@ pub(super) fn globals(scene: &MeshScene, plan: &Plan) -> BitWriter {
         // (double-scaled biased index, WD 7.5.3).
         w.double(1.0).bit(false).uint(1).bit(false);
         w.uint(3 * k as u32 + 1);
-        let alpha = m.rgba[3].clamp(0.0, 1.0);
-        w.bit(alpha < 1.0);
-        if alpha < 1.0 {
-            w.put((alpha * 255.0).round() as u64, 8);
-        }
+        transparency(&mut w, m);
         w.bit(false).bit(false).bit(false);
     }
     for j in 0..plan.textured.len() as u32 {
         w.uint(STYLE);
         ref_base(&mut w, None, 2 + scene.materials.len() as u32 + j);
-        // As above, but a material: the TextureApplication entry (biased),
-        // which carries its own alpha.
+        // As above, but a material: the TextureApplication entry (biased).
+        // The material carries the alpha too, but a reader may take a
+        // material alpha of 0 under a style without one as unset.
         w.double(1.0).bit(false).uint(1).bit(true);
         w.uint(2 * j + 2);
-        w.bit(false).bit(false).bit(false).bit(false);
+        match plan.textured.get(j as usize).and_then(|&m| scene.materials.get(m)) {
+            Some(m) => transparency(&mut w, m),
+            None => {
+                w.bit(false);
+            }
+        }
+        w.bit(false).bit(false).bit(false);
     }
     let pairs = 2 * plan.textured.len() as u32;
     let first_glow = 2 + (scene.materials.len() + plan.textured.len()) as u32;
@@ -284,4 +287,14 @@ pub(super) fn model_file(scene: &MeshScene, plan: &Plan, structure: UniqueId) ->
     // in the model file; no user data.
     w.uint(plan.occurrences.len() as u32).bit(true).uint(0).uint(0);
     w
+}
+
+/// A style's transparency: a flag, and when the material is not opaque its
+/// alpha as a byte.
+fn transparency(w: &mut BitWriter, m: &SceneMaterial) {
+    let alpha = m.rgba[3].clamp(0.0, 1.0);
+    w.bit(alpha < 1.0);
+    if alpha < 1.0 {
+        w.put((alpha * 255.0).round() as u64, 8);
+    }
 }

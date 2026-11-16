@@ -47,6 +47,11 @@ pub(super) fn section(scene: &MeshScene, plan: &Plan) -> Result<Section, PrcWrit
 fn face_normal(p: &ScenePrimitive, t: [u32; 3]) -> [f64; 3] {
     let at = |i: u32| p.positions.get(i as usize).copied().unwrap_or([0.0; 3]);
     let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));
+    // Scaled by a power of two (exactly) to at most 1 first, so finite corners far apart give
+    // no infinite edge or product.
+    let big = a.iter().chain(&b).chain(&c).fold(0.0f64, |m, x| m.max(x.abs()));
+    let scale = if big > 1.0 { 2.0f64.powi(-(big.log2().ceil() as i32)) } else { 1.0 };
+    let (a, b, c) = (a.map(|x| x * scale), b.map(|x| x * scale), c.map(|x| x * scale));
     let n = vec3::cross(vec3::sub(b, a), vec3::sub(c, a));
     vec3::normalize(n).unwrap_or([0.0, 0.0, 1.0])
 }
@@ -94,5 +99,20 @@ fn tess_3d(w: &mut BitWriter, p: &ScenePrimitive, uvs: bool) {
         w.doubles(p.uvs.iter().flatten().copied());
     } else {
         w.uint(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_huge_triangle_keeps_its_normal() {
+        let p = ScenePrimitive { positions: vec![[0.0; 3], [0.0, 1e200, 0.0], [0.0, 0.0, 1e200]], ..ScenePrimitive::default() };
+        assert_eq!(face_normal(&p, [0, 1, 2]), [1.0, 0.0, 0.0]);
+        let p = ScenePrimitive { positions: vec![[-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], [1e308, 1e308, 0.0]], ..ScenePrimitive::default() };
+        assert_eq!(face_normal(&p, [0, 1, 2]), [0.0, 0.0, 1.0]);
+        let p = ScenePrimitive { positions: vec![[0.0; 3], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], ..ScenePrimitive::default() };
+        assert_eq!(face_normal(&p, [0, 1, 2]), [1.0, 0.0, 0.0]);
     }
 }
