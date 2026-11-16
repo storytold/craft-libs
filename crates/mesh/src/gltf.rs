@@ -115,6 +115,11 @@ pub use crate::base64_decode;
 
 /// Percent-decode a URI. A `%` that two hex digits do not follow stays as it is.
 pub fn uri_decode(s: &str) -> String {
+    String::from_utf8_lossy(&percent_decode(s)).into_owned()
+}
+
+/// [`uri_decode`] as bytes, so escaped bytes that are not UTF-8 survive.
+fn percent_decode(s: &str) -> Vec<u8> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -128,7 +133,7 @@ pub fn uri_decode(s: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 /// The media type and bytes of a `data:` URI.
@@ -137,10 +142,12 @@ fn data_uri(uri: &str) -> Option<Result<(String, Vec<u8>)>> {
     Some((|| {
         let (meta, data) = rest.split_once(',').ok_or_else(|| malformed(KIND, "a data URI without a comma"))?;
         let mime = meta.split(';').next().unwrap_or("").to_string();
+        // Any character may be escaped (RFC 3986 2.1), base64's `+`, `/` and `=` included.
+        let bytes = percent_decode(data);
         let bytes = if meta.ends_with(";base64") {
-            base64_decode(data).ok_or_else(|| malformed(KIND, "bad base64 in a data URI"))?
+            std::str::from_utf8(&bytes).ok().and_then(base64_decode).ok_or_else(|| malformed(KIND, "bad base64 in a data URI"))?
         } else {
-            uri_decode(data).into_bytes()
+            bytes
         };
         Ok((mime, bytes))
     })())
