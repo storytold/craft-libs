@@ -341,7 +341,7 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
             v.iter().copied().find(|&e| {
                 let Some(edge) = edges.get(e) else { return false };
                 let (Some(a), Some(b)) = (here, mid(&edge.segs)) else { return false };
-                let middles_meet = a.distance(b) < precision;
+                let middles_meet = a.distance(b) < near;
                 if !middles_meet {
                     return false;
                 }
