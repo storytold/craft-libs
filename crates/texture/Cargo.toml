@@ -9,6 +9,7 @@ repository.workspace = true
 
 [features]
 default = []
+dds = ["dep:dds", "dep:bytemuck"]
 parallel = ["dep:rayon"]
 png = ["dep:craft-image-codecs"]
 tiff = ["dep:craft-image-codecs"]
@@ -26,5 +27,11 @@ craft-image-codecs = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
+# Same decoder used by MaterialCraft; no parallel backend enabled.
+dds = { version = "0.2.0", default-features = false, optional = true }
+bytemuck = { workspace = true, optional = true }
+
 [dev-dependencies]
 png-encoder = { package = "png", version = "0.18" }
+dds = { version = "0.2.0", default-features = false }
+bytemuck = { workspace = true }

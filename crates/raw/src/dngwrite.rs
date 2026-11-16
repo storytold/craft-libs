@@ -13,6 +13,7 @@ pub enum DngCompression {
     Uncompressed,
     /// Lossless JPEG tiles of `tile × tile` pixels (`tile` even). CFA tiles are encoded as two interleaved
     /// components of half the tile width (the common DNG layout), linear data with one component per sample.
+    /// Edges above 2048 (after even alignment) are rejected before padding the tile.
     Lj92 {
         tile: u32,
     },
@@ -34,6 +35,11 @@ const DEFLATE_LEVEL: u8 = 1;
 /// a multi-gigabyte buffer and billions of edge-replicate iterations. 2048² samples (≤ 24 MB of f32) is far
 /// above the 256 default and every real tile this writer makes.
 const MAX_DEFLATE_TILE: u32 = 2048;
+
+// Match the existing padded Deflate edge budget. JPEG's 16-bit dimension limit alone would permit
+// a 65534²-sample allocation even for a tiny source image. At most four validated channels make
+// this bound at most 32 MiB of u16 padding per tile, before encoder scratch/output.
+const MAX_LJ92_TILE: usize = MAX_DEFLATE_TILE as usize;
 
 /// `tile` aligned down to a multiple of 16 and clamped to [`MAX_DEFLATE_TILE`].
 fn deflate_tile(tile: u32) -> usize {
@@ -159,6 +165,14 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     } else {
         ifd.set(t::WHITE_LEVEL, Value::Long(white));
     }
+    // A table still to be applied (OpcodeList1 has to run on the stored codes first) is written
+    // with the samples. Once the samples have been mapped, writing the tag would apply it twice
+    // on the next read of a file without list 1.
+    if !raw.linearized
+        && let Some(table) = raw.linearization_table.as_deref().filter(|t| !t.is_empty())
+    {
+        ifd.set(t::LINEARIZATION_TABLE, Value::Short(table.to_vec()));
+    }
     let a = raw.active_area;
     ifd.set(t::ACTIVE_AREA, Value::Long(vec![a.y as u32, a.x as u32, (a.y + a.height) as u32, (a.x + a.width) as u32]));
     ifd.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![raw.crop.x as u32, raw.crop.y as u32]));
@@ -270,7 +284,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                 }
                 DngCompression::Lj92 { tile } => {
                     let tile = (tile.max(2) & !1) as usize;
-                    if tile > 65534 {
+                    if tile > MAX_LJ92_TILE {
                         return Err(RawError::Limit("tile too large"));
                     }
                     ifd.set(t::COMPRESSION, Value::Short(vec![compression::JPEG]));
@@ -432,6 +446,59 @@ mod tests {
     use super::*;
     use crate::{BlackLevel, OpcodeLists, RawData, RawFormat, RawImage, Rect};
 
+    fn tiny_raw() -> RawImage {
+        let (w, h) = (8usize, 8usize);
+        let full = Rect::new(0, 0, w, h);
+        RawImage {
+            format: RawFormat::Dng,
+            width: w,
+            height: h,
+            cpp: 1,
+            data: RawData::U16((0..64).map(|i| i as u16 * 129).collect()),
+            cfa: None,
+            bits: 14,
+            black: BlackLevel::uniform(0.0),
+            white: vec![16383.0],
+            active_area: full,
+            crop: full,
+            orientation: crate::Orientation::Normal,
+            color: crate::ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            linearization_table: None,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists::default(),
+            camera: Default::default(),
+            cinema: Default::default(),
+            lens_metadata: Default::default(),
+            level_sources: Default::default(),
+            notices: crate::RawNotices::default(),
+        }
+    }
+
+    #[test]
+    fn oversized_lj92_padding_is_rejected() {
+        let raw = tiny_raw();
+        // The near-boundary case previously completed with an oversized padded tile; keep it first
+        // so reverting the guard fails without trying the multi-gigabyte cases.
+        for tile in [2050, 65534, u32::MAX] {
+            let opts = DngWriteOptions { compression: DngCompression::Lj92 { tile }, ..Default::default() };
+            assert!(matches!(write_dng(&raw, &opts), Err(RawError::Limit("tile too large"))));
+        }
+    }
+
+    #[test]
+    fn default_lj92_tiles_preserve_samples() {
+        let raw = tiny_raw();
+        let bytes = write_dng(&raw, &DngWriteOptions::default()).expect("normal tiles write");
+        let back = crate::decode(&bytes).expect("normal tiles decode");
+        assert_eq!((back.width, back.height), (raw.width, raw.height));
+        match (&back.data, &raw.data) {
+            (RawData::U16(actual), RawData::U16(expected)) => assert_eq!(actual, expected),
+            _ => panic!("integer DNG changed sample type"),
+        }
+    }
+
     /// Deflate tiles of `tile × tile` pad into a square buffer that grows with the square: a
     /// caller-supplied edge of `u32::MAX` would make the writer pad an 8 × 8 image into billions of
     /// edge-replicate iterations and a multi-gigabyte buffer. The clamp keeps the bounded shape — same
@@ -456,12 +523,14 @@ mod tests {
             color: crate::ColorData::default(),
             wb_multipliers: None,
             linearized: false,
+            linearization_table: None,
             pixel_aspect: 1.0,
             opcodes: OpcodeLists::default(),
             camera: Default::default(),
             cinema: Default::default(),
             lens_metadata: Default::default(),
             level_sources: Default::default(),
+            notices: crate::RawNotices::default(),
         };
         let opts = |tile: u32| DngWriteOptions { compression: DngCompression::Deflate { tile, half: false }, ..DngWriteOptions::default() };
         let hostile = write_dng(&raw, &opts(u32::MAX)).expect("the clamped tile writes");

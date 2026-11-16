@@ -497,6 +497,7 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
     let mut warnings: Vec<String> = Vec::new();
     let mut pat = Psi::default();
     let mut pmt = PmtState::default();
+    let mut psi_dup: HashMap<u16, DupGuard> = HashMap::new();
     let mut es: HashMap<u16, EsState> = HashMap::new();
     let mut order: Vec<u16> = Vec::new();
     // one timestamp unwrapper for the program: its streams share one clock, so a stream whose
@@ -559,6 +560,13 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
                     e.cc = Some(pk.cc);
                 }
                 continue;
+            }
+            if pk.pid == 0 || Some(pk.pid) == pmt.pmt_pid {
+                // a repeated packet would append its payload to the section in progress
+                if psi_dup.entry(pk.pid).or_default().is_dup(&pk) {
+                    duplicates += 1;
+                    continue;
+                }
             }
             if pk.pid == 0 {
                 feed_pat(&pk, &mut pat, &mut pmt, &mut crc_errors);
