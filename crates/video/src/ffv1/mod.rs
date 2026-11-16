@@ -907,7 +907,8 @@ impl Encoder {
         }
         let swapped = rct_swapped(p);
         let off = 1i32 << p.bits;
-        let mut planes = vec![Vec::with_capacity(rect.w * rect.h); p.plane_count()];
+        // Cloning an empty Vec drops its capacity, causing geometric growth beyond the budget.
+        let mut planes: Vec<Vec<i32>> = (0..p.plane_count()).map(|_| Vec::with_capacity(rect.w * rect.h)).collect();
         for y in 0..rect.h {
             for x in 0..rect.w {
                 let at = (rect.y + y) * fw + rect.x + x;
@@ -963,6 +964,29 @@ mod memory_tests {
         assert!(Encoder::new(&frame, EncoderConfig::default()).is_ok());
         let with_alpha = Frame { planes: vec![vec![]; 4], ..frame };
         assert!(Encoder::new(&with_alpha, EncoderConfig::default()).is_err());
+    }
+
+    #[test]
+    fn rgb_slice_planes_keep_the_budgeted_capacity() {
+        // Non-power-of-two lengths expose geometric growth of cloned empty Vecs.
+        for plane_count in [3, 4] {
+            let frame = Frame {
+                width: 3,
+                height: 5,
+                colorspace: Colorspace::Rgb,
+                bit_depth: 8,
+                chroma_shift: (0, 0),
+                planes: vec![vec![0; 15]; plane_count],
+            };
+            let encoder = Encoder::new(&frame, EncoderConfig::default()).unwrap();
+            let rect = slice_rect(&encoder.params, 3, 5, 0, 0, 1, 1).unwrap();
+            let planes = encoder.slice_values(&frame, rect);
+            assert_eq!(planes.len(), plane_count);
+            for plane in planes {
+                assert_eq!(plane.len(), 15);
+                assert_eq!(plane.capacity(), 15);
+            }
+        }
     }
 
     #[test]
