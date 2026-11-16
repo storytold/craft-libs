@@ -331,9 +331,7 @@ fn the_added_drawings_paint_their_own_pictures() {
             let ink = shapes(tree.root());
             assert!(!ink.is_empty(), "`{name}` in `{set}` paints nothing: {}", path.display());
             if let Some(other) = seen.insert(ink, format!("`{name}`")) {
-                panic!(
-                    "{other} and `{name}` in `{set}` repeat one another's ink boxes, fills and order: one file is a copy of the other's art, or was redrawn from it"
-                );
+                panic!("{other} and `{name}` in `{set}` have identical parsed-geometry fingerprints; check for a copied drawing");
             }
         }
     }

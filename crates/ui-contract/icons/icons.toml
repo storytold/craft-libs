@@ -597,8 +597,8 @@ tabler = "arrows-down-up"
 # The `symmetry_*` names read the other way round, naming the line the drawing shows. Phosphor 2.0.8 draws no
 # flip and no skew, so the base set draws those (ATTRIBUTION.md); its `arrows-out-line-horizontal` and
 # `-vertical` are the axis-of-scale marks, and Lucide and Tabler draw the same flips, Tabler the same skew.
-# Shear is the skew along the x axis only: the transform panel has one shear value (its "Shear X Angle"), so
-# there is no `shear_vertical` until a surface shows a y-shear.
+# `shear_horizontal` is horizontal skew. These entries add drawings to the catalogue; they do not change the
+# existing transform controls, which expose horizontal and vertical skew separately.
 
 [[icon]]
 name = "flip_horizontal"

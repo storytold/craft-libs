@@ -13,7 +13,9 @@ Carbon's licence file is the repository's root `LICENSE` (the icons package has 
 
 Every set folder's files come from the npm package of the version in the table (`@phosphor-icons/core` 2.0.8, `lucide-static` 1.63.0, `@carbon/icons` 11.91.0, `@tabler/icons` 3.50.0), the same releases as the tags above. Phosphor files are `regular` weight, except `star-filled.svg` and `circle-filled.svg`, which are Phosphor's `fill` weight (`star-fill.svg`, `circle-fill.svg`). `panel-left.svg` is Phosphor's `sidebar-simple` unchanged, and `panel-right.svg` is the same glyph mirrored.
 
-A folder's files may be copies taken from the npm package or from the tag at the same version, and the two can differ in a file's bytes (a `class` attribute, a header comment), so not every file here is byte-identical to the package's. The files the transform and layout glyphs add are the package's own bytes, their comments and classes included: Lucide's flips and gaps, Tabler's flips, `skew-x` and its spacing pair, and Phosphor's `arrows-out-line-horizontal` and `-vertical`.
+Files may come from either the npm package or the matching git tag. Their SVG metadata can differ, including class attributes and header comments.
+
+The added transform and layout files use the npm copies without modification, including their comments and classes: Lucide's flips and gaps; Tabler's flips, `skew-x` and spacing pair; and Phosphor's `arrows-out-line-horizontal` and `-vertical`. Use those pinned npm packages when updating these files.
 
 `phosphor/` also holds drawings made for the suite, for glyphs the pinned Phosphor release lacks. They follow Phosphor's regular style (256 view box, 16-unit round-capped strokes, some converted to filled outlines), take their shapes from PhotoCraft's glyphs, and carry the suite's own licence:
 
