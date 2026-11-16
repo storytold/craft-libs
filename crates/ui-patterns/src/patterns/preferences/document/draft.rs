@@ -19,6 +19,23 @@ impl SettingsDraft {
         lookup(&self.table, key)?.clone().try_into().ok()
     }
 
+    /// The whole draft as `V`: the struct the document edits, or its JSON.
+    pub fn to<V: DeserializeOwned>(&self) -> Option<V> {
+        toml::Value::Table(self.table.clone()).try_into().ok()
+    }
+
+    /// Replaces the whole draft with `value`'s table; `Err` with the reason when `value` has no table form.
+    pub fn replace<V: Serialize>(&mut self, value: &V) -> Result<(), String> {
+        match toml::Value::try_from(value) {
+            Ok(toml::Value::Table(table)) => {
+                self.table = table;
+                Ok(())
+            }
+            Ok(_) => Err("the values are not a table".to_owned()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
     /// Writes `value` at `key`; a value that doesn't serialize, or a list entry that is not there, is ignored.
     pub fn set<V: Serialize>(&mut self, key: &str, value: &V) {
         if let Ok(value) = toml::Value::try_from(value) {

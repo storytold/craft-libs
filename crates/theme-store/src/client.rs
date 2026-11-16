@@ -251,6 +251,11 @@ impl SuiteClient {
         &self.snapshot.problems
     }
 
+    /// What a page that only reads the suite needs, owned so it can outlive the borrow of the client.
+    pub fn view(&self) -> SuiteView {
+        SuiteView { shown: self.shown(), snapshot: Arc::clone(&self.snapshot) }
+    }
+
     /// The latest snapshot of the suite folder.
     pub fn snapshot(&self) -> &Arc<Snapshot> {
         &self.snapshot
@@ -264,3 +269,12 @@ impl SuiteClient {
 
 #[cfg(test)]
 mod tests;
+
+/// The suite as a reading page sees it: [`SuiteClient::shown`] and the latest snapshot, as of [`SuiteClient::view`].
+#[derive(Clone)]
+pub struct SuiteView {
+    /// The suite choice to show.
+    pub shown: SuiteChoice,
+    /// The suite folder's library of themes.
+    pub snapshot: Arc<Snapshot>,
+}
