@@ -473,9 +473,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         if input.options.multiline() {
             input.intents.take(Intent::SubmitForce);
         }
-    } else if separated {
-        state.end = Some(End::Separator);
-    } else if stepped && state.end.is_none() {
+    } else if separated || (stepped && state.end.is_none()) {
         state.end = Some(End::Separator);
     } else if shown.lost_focus && !input.held && state.draft.is_some() && state.end.is_none() {
         state.end = Some(End::Blur);

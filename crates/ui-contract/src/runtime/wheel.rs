@@ -132,7 +132,7 @@ pub(crate) fn begin(ctx: &Context) {
         }
         // A value control that owns the running gesture hears its end without a timer of its own: a pass at the gap.
         let value_owner = state.gesture.owner.is_some_and(|owner| state.last.iter().any(|taker| taker.owner == owner && taker.value));
-        (value_owner && state.gesture.runs(now)).then(|| state.gesture.last + GESTURE_GAP - now)
+        (value_owner && state.gesture.runs(now)).then_some(state.gesture.last + GESTURE_GAP - now)
     });
     if let Some(seconds) = wake {
         repaint::request_after(ctx, viewport, seconds.max(0.0));
