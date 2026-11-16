@@ -87,8 +87,8 @@ type Editor<V, E> = dyn for<'b> Fn(&mut Ui, &mut V, &mut AdjustDialogCx<'b>) -> 
 type JsonForm<V> = dyn Fn(&V, bool) -> serde_json::Map<String, serde_json::Value> + Send;
 
 /// An Image › Adjustments dialog the [`DialogHost`](craft_ui::dialog::DialogHost) owns: an adjustment editor over a
-/// value `V` the host keeps, in a form dialog with OK and Cancel beside the editor (Alt turns Cancel into Reset, which
-/// restores the value the dialog opened with) and the Preview box under them. The editor runs in its dialog form
+/// value `V` the host keeps, in a form dialog with the Preview box at the start of the footer and OK and Cancel at its
+/// end (Alt turns Cancel into Reset, which restores the value the dialog opened with). The editor runs in its dialog form
 /// ([`AdjustContext::dialog`]). What the editor asks of the app (Levels' Auto, Black & White's Auto) is an `E` that
 /// waits in [`take_asks`](Self::take_asks). It answers with the value at OK.
 ///

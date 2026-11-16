@@ -17,6 +17,7 @@ use crate::contract::{Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as
 use crate::dialog::{Alert, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id};
 
 use crate::display::{Shade, Text};
+use crate::form::SliderFieldLayout;
 use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
 
@@ -47,15 +48,37 @@ craft_ui::words! {
     }
 }
 
-/// Where the preview pane sits.
+/// How a parameter dialog arranges its rows, its preview pane and its buttons.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ParamLayout {
-    /// The preview pane to the right of the rows, under the zoom row.
+    /// The preview pane to the right of the rows, under the zoom row. A dialog that previews has its buttons in a
+    /// column beside the body, with the Preview check box under them.
     #[default]
     Beside,
-    /// The preview pane under the rows.
+    /// The preview pane under the rows, under the zoom row. A dialog that previews has its buttons in a column beside
+    /// the body, with the Preview check box under them: Photoshop's filter dialogs.
     Below,
+    /// One column: each slider row stacked (the label and the number field with its unit on one line, a full-width
+    /// slider under them), then the preview pane with the zoom row under it, and the buttons across the foot with the
+    /// Preview check box at their start: PhotoCraft's filter dialogs. The other rows keep the form's label and control
+    /// columns.
+    Stacked,
+}
+
+impl ParamLayout {
+    /// Whether a dialog that previews stands its buttons in a column beside the body.
+    fn side_buttons(self) -> bool {
+        !matches!(self, ParamLayout::Stacked)
+    }
+
+    /// How the range rows arrange their slider and number field.
+    fn sliders(self) -> SliderFieldLayout {
+        match self {
+            ParamLayout::Stacked => SliderFieldLayout::Stacked,
+            ParamLayout::Beside | ParamLayout::Below => SliderFieldLayout::Inline,
+        }
+    }
 }
 
 /// What a parameter dialog answers with at OK.
@@ -139,8 +162,8 @@ impl Outcome for ParamDialogOutput {
 ///   fills the parameters' defaults and, with `remember`, the values saved by [`ParamResult::remember`].
 /// - Preview: a dialog that `previews` has the Preview check box; the host renders from the reported values while
 ///   `preview_on` (on the canvas, or as the picture it hands to `preview`), the unfiltered picture while `comparing`
-///   (the Preview check box held down). Drag pans the picture, the zoom buttons scale it. A dialog that previews has
-///   its buttons in a column beside the body, with the Preview check box and the footer note under them.
+///   (the Preview check box held down). Drag pans the picture, the zoom buttons scale it. The
+///   [`layout`](ParamDialog::layout) places the pane and the buttons.
 /// - Footer: [`extra_buttons`](ParamDialog::extra_buttons) keep the dialog open and come back as
 ///   `ParamDialogOutput::footer_action`; [`footer_note`](ParamDialog::footer_note) is a muted line at the start edge.
 /// - A command form is a dialog with no preview and no remember key.
@@ -191,7 +214,7 @@ pub struct ParamDialog<'a> {
     /// keys added since the open go.
     #[prop]
     reset_to: Option<DialogFields>,
-    /// Where the preview pane sits.
+    /// How the rows, the preview pane and the buttons are arranged.
     #[prop]
     layout: ParamLayout,
     /// Whether the title row has a close action.
@@ -459,7 +482,7 @@ impl<'a> ParamDialog<'a> {
             form = form.opened(open);
         }
         if previews {
-            form = form.preview(preview_on);
+            form = form.preview(preview_on).side_buttons(layout.side_buttons());
         }
         // The pane shows only in a dialog that previews.
         let preview = preview.filter(|_| previews);
@@ -523,7 +546,10 @@ impl<'a> ParamDialog<'a> {
                 live.view = live.view.centred_on(point, texture.size);
             }
             let mut show_rows = |ui: &mut Ui, values: &mut DialogFields| {
-                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values)).patterns(&patterns).preview_colors(&preview_colors);
+                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values))
+                    .patterns(&patterns)
+                    .preview_colors(&preview_colors)
+                    .sliders(layout.sliders());
                 if let Some(canvas) = canvas {
                     shown = shown.canvas(canvas);
                 }
@@ -533,13 +559,15 @@ impl<'a> ParamDialog<'a> {
                 (Some(texture), ParamLayout::Beside) => {
                     Row::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        Stack::new().show(ui, |ui, _| shown_preview = show_preview(ui, &preview_label, texture, click_centres, &mut live));
+                        Stack::new()
+                            .show(ui, |ui, _| shown_preview = show_preview(ui, &preview_label, texture, click_centres, ZoomRow::Above, &mut live));
                     });
                 }
-                (Some(texture), ParamLayout::Below) => {
+                (Some(texture), layout) => {
+                    let zoom = if layout == ParamLayout::Stacked { ZoomRow::Below } else { ZoomRow::Above };
                     Stack::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        shown_preview = show_preview(ui, &preview_label, texture, click_centres, &mut live);
+                        shown_preview = show_preview(ui, &preview_label, texture, click_centres, zoom, &mut live);
                     });
                 }
                 (None, _) => show_rows(ui, values),
@@ -722,12 +750,20 @@ struct ShownPreview {
     centre: Option<Pos2>,
 }
 
+/// Where the zoom row stands: over the preview pane or under it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ZoomRow {
+    Above,
+    Below,
+}
+
 /// The zoom row and the pane.
-fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, click_centres: bool, live: &mut Live) -> ShownPreview {
-    let zoom = PreviewZoom::new(&live.view).show(ui);
+fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, click_centres: bool, zoom_row: ZoomRow, live: &mut Live) -> ShownPreview {
+    let above = (zoom_row == ZoomRow::Above).then(|| PreviewZoom::new(&live.view).show(ui));
     let pane = PreviewPane::new(label.clone(), *texture, &live.view).click_centres(click_centres).show(ui);
+    let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
     let centre = pane.shown.centre(texture.size);
-    live.view = zoom.view.or(pane.view).unwrap_or(pane.shown);
+    live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown);
     ShownPreview { clicked: pane.clicked, centre: Some(centre) }
 }
 

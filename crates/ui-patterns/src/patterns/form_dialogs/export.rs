@@ -32,6 +32,7 @@ craft_ui::words! {
     pub struct ExportWords {
         title: "export.title" = "Export As";
         export: "export.export" = "Export…";
+        file_settings: "export.fileSettings" = "File Settings";
         format: "export.format" = "Format";
         quality: "export.quality" = "Quality";
         lossless: "export.lossless" = "Lossless";

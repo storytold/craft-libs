@@ -410,7 +410,7 @@ fn body(
     typed: &mut Option<RangeAlert>,
 ) -> bool {
     let document = values.units.unwrap_or_else(pixels_only);
-    let entries: Vec<Entry<UnitKind>> = length_units(values).map(|kind| Entry::new(kind, Label::from(numbers.symbol(kind)))).collect();
+    let entries: Vec<Entry<UnitKind>> = length_units(values).map(|kind| Entry::new(kind, numbers.name(kind))).collect();
     let kind = values.kind;
     FieldGroup::new(title_of(kind, words)).show(ui, |ui, _| {
         let (width, height) = (Label::from(words.width.as_str().to_owned()), Label::from(words.height.as_str().to_owned()));

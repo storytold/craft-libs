@@ -1,5 +1,5 @@
-//! [`CurvesPanel`]: the Curves adjustment around the [`CurveEditor`]: the Channel select, the mode
-//! icons (points, pencil), Smooth, the point pickers, the other channels overlaid on the composite
+//! [`CurvesPanel`]: the Curves adjustment around the [`CurveEditor`]: the point pickers, the Channel
+//! select, the mode icons (points, pencil), Smooth, the other channels overlaid on the composite
 //! and the hint line; and the ⌘/Ctrl-click-on-the-image helper
 //! ([`CurvesPanel::add_point_from_sample`]).
 
@@ -139,15 +139,15 @@ type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
 
 /// The Curves adjustment: Image › Adjustments › Curves and a Curves layer's Properties panel.
 ///
-/// Top to bottom:
-/// 1. The Channel select ([`ToneChannels`]); an isolated channel is the only entry, its name shown exactly as the
+/// Top to bottom (PhotoCraft's order):
+/// 1. With [`pickers`](Self::pickers), the point picker row.
+/// 2. The Channel select ([`ToneChannels`]); an isolated channel is the only entry, its name shown exactly as the
 ///    host gave it.
-/// 2. The mode row: two icon-only toggle buttons ("Edit points to modify the curve", "Draw to modify the curve", the
+/// 3. The mode row: two icon-only toggle buttons ("Edit points to modify the curve", "Draw to modify the curve", the
 ///    current one pressed) and Smooth (enabled in pencil mode only).
-/// 3. The [`CurveEditor`] for the shown channel: in its colour, over its histogram, in pencil mode for a drawn curve,
+/// 4. The [`CurveEditor`] for the shown channel: in its colour, over its histogram, in pencil mode for a drawn curve,
 ///    and, on a composite only, the other channels' curves as overlays (Photoshop; none for an isolated channel).
-/// 4. The hint line, with the key names from the platform's shortcut words.
-/// 5. With [`pickers`](Self::pickers), the point picker row.
+/// 5. The hint line, with the key names from the platform's shortcut words.
 ///
 /// - **Smooth** replaces the shown map with its moving average over 7 levels (radius 3, shrunk at the ends so the
 ///   first and last levels keep their values: PhotoCraft's `smooth_curve_map`), as one `Set`.
@@ -168,7 +168,7 @@ pub struct CurvesPanel<'a> {
     /// The host's interpolation of point curves ([`CurveEditor::sampler`]).
     #[prop(boxed = "Fn(&[[f32; 2]]) -> Vec<f32> + 'a")]
     sampler: Option<SamplerFn<'a>>,
-    /// The armed point picker; the picker row shows when it is given.
+    /// The armed point picker; the picker row shows, first, when it is given.
     #[prop]
     pickers: Option<Bind<'a, Option<TonePicker>>>,
     /// The document canvas the ⌘/Ctrl-click and the eyedroppers reach under the dialog.
@@ -313,6 +313,21 @@ impl<'a> CurvesPanel<'a> {
         // Alt+2…Alt+6 pick the Channel select's entry in a dialog; Properties has no such keys.
         let stack = if context.is_dialog() { stack.command_scope(ToneChannelCommands::SCOPE) } else { stack };
         let group = stack.show(ui, |ui, cx| {
+            if let Some(armed) = pickers.as_mut() {
+                let mut row = TonePickerRow::new(armed.reborrowed());
+                if pickers_unavailable {
+                    row = row.unavailable();
+                }
+                if let Some(canvas) = canvas {
+                    row = row.canvas(canvas);
+                }
+                for each in TonePicker::ALL {
+                    let usable = picker_enabled[each as usize] && !(each == TonePicker::Gray && (channels.is_gray() || context.is_gray()));
+                    row = row.enabled_picker(each, usable);
+                }
+                picker = row.show(ui).change;
+            }
+
             let value = match curves.reborrow().read(cx) {
                 Some(Mixed::Same(value)) => value,
                 _ => ToneCurves::identity(&channels),
@@ -406,20 +421,6 @@ impl<'a> CurvesPanel<'a> {
             }
             edit = events;
 
-            if let Some(armed) = pickers.as_mut() {
-                let mut row = TonePickerRow::new(armed.reborrowed());
-                if pickers_unavailable {
-                    row = row.unavailable();
-                }
-                if let Some(canvas) = canvas {
-                    row = row.canvas(canvas);
-                }
-                for each in TonePicker::ALL {
-                    let usable = picker_enabled[each as usize] && !(each == TonePicker::Gray && (channels.is_gray() || context.is_gray()));
-                    row = row.enabled_picker(each, usable);
-                }
-                picker = row.show(ui).change;
-            }
             // An edit belongs to the channel it was drawn for; a switch shows from the next pass, with no selection.
             shown_channel = if picked == channel || !edit.is_empty() { channel } else { picked };
             write_shown(&mut channel_bind, cx, stored, shown_channel);

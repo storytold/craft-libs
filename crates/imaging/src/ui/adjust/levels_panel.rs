@@ -1,5 +1,5 @@
-//! [`LevelsPanel`]: the Levels adjustment around the [`LevelsEditor`]: the Channel select, Auto,
-//! the editor over the shown channel's histogram and the point pickers.
+//! [`LevelsPanel`]: the Levels adjustment around the [`LevelsEditor`]: the point pickers, the
+//! Channel select, Auto and the editor over the shown channel's histogram.
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -78,20 +78,19 @@ impl Outcome for LevelsPanelOutput {
 /// The Levels adjustment: Image › Adjustments › Levels and a Levels layer's Properties panel
 /// (the same call with [`AdjustContext::properties`]).
 ///
-/// Top to bottom (PhotoCraft's and Photoshop's order):
-/// 1. The Channel select ([`ToneChannels`]; an isolated channel is the only entry, named as given)
+/// Top to bottom (PhotoCraft's order):
+/// 1. With [`pickers`](Self::pickers), the [`TonePickerRow`]: Set Black, Neutral Gray, White Point.
+/// 2. The Channel select ([`ToneChannels`]; an isolated channel is the only entry, named as given)
 ///    and Auto. Picking a channel shows that channel's levels and histogram; the choice is the
 ///    panel's own state, reported as [`LevelsPanelOutput::channel`].
-/// 2. The [`LevelsEditor`] for the shown channel, over its histogram drawn in the channel's colour;
+/// 3. The [`LevelsEditor`] for the shown channel, over its histogram drawn in the channel's colour;
 ///    a [`stale`](Self::stale) histogram shows the stale mark.
-/// 3. With [`pickers`](Self::pickers), the [`TonePickerRow`] below: Set Black, Neutral Gray, White
-///    Point.
 ///
 /// - **Auto** sets the shown channel to [`Levels::auto`] of its histogram as one `Set`; without a
 ///   histogram it is disabled.
 /// - **Edits**: the editor's events pass through for the shown channel, mapped onto the per-channel
 ///   values.
-/// - **Keyboard**: Tab visits the Channel select, Auto, the editor, then the pickers.
+/// - **Keyboard**: Tab visits the pickers, the Channel select, Auto, then the editor.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern, Props)]
 pub struct LevelsPanel<'a> {
@@ -105,7 +104,7 @@ pub struct LevelsPanel<'a> {
     /// The histograms are being recounted.
     #[prop]
     stale: bool,
-    /// The armed point picker; the picker row shows when it is given.
+    /// The armed point picker; the picker row shows, first, when it is given.
     #[prop]
     pickers: Option<Bind<'a, Option<TonePicker>>>,
     /// The document canvas the armed picker samples.
@@ -178,6 +177,22 @@ impl<'a> LevelsPanel<'a> {
         // Alt+2…Alt+6 pick the Channel select's entry in a dialog; Properties has no such keys.
         let stack = if context.is_dialog() { stack.command_scope(ToneChannelCommands::SCOPE) } else { stack };
         let group = stack.show(ui, |ui, cx| {
+            if let Some(armed) = pickers.as_mut() {
+                let mut row = TonePickerRow::new(armed.reborrowed());
+                if pickers_unavailable {
+                    row = row.unavailable();
+                }
+                if let Some(canvas) = canvas {
+                    row = row.canvas(canvas);
+                }
+                for each in TonePicker::ALL {
+                    // A grey document has no Neutral Gray point.
+                    let usable = picker_enabled[each as usize] && !(each == TonePicker::Gray && (channels.is_gray() || context.is_gray()));
+                    row = row.enabled_picker(each, usable);
+                }
+                picker = row.show(ui).change;
+            }
+
             let all: Vec<Levels> = match levels.reborrow().read(cx) {
                 Some(Mixed::Same(all)) => all,
                 _ => Vec::new(),
@@ -232,21 +247,6 @@ impl<'a> LevelsPanel<'a> {
             }
             edit = events;
 
-            if let Some(armed) = pickers.as_mut() {
-                let mut row = TonePickerRow::new(armed.reborrowed());
-                if pickers_unavailable {
-                    row = row.unavailable();
-                }
-                if let Some(canvas) = canvas {
-                    row = row.canvas(canvas);
-                }
-                for each in TonePicker::ALL {
-                    // A grey document has no Neutral Gray point.
-                    let usable = picker_enabled[each as usize] && !(each == TonePicker::Gray && (channels.is_gray() || context.is_gray()));
-                    row = row.enabled_picker(each, usable);
-                }
-                picker = row.show(ui).change;
-            }
             // An edit belongs to the channel it was drawn for; a switch shows from the next pass.
             shown = if picked == channel || !edit.is_empty() { channel } else { picked };
             write_shown(&mut channel_bind, cx, stored, shown);

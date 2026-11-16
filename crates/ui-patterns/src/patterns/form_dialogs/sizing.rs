@@ -39,8 +39,6 @@ craft_ui::words! {
         /// `{width}` and `{height}` are the sides with their unit.
         dimensions_value: template "sizing.dimensionsValue" = "{width} × {height}";
         current_size: "sizing.currentSize" = "Current Size";
-        current_width: "sizing.currentWidth" = "Current width";
-        current_height: "sizing.currentHeight" = "Current height";
         new_size: "sizing.newSize" = "New Size";
         width: "sizing.width" = "Width";
         height: "sizing.height" = "Height";
@@ -336,7 +334,7 @@ impl Kit {
         let env = Env::of(ui);
         let units = env.units();
         let entries =
-            |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, Label::from(units.symbol(*kind)))).collect() };
+            |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, units.name(*kind))).collect() };
         let lengths = entries(&LENGTH_UNITS);
         let mut widths = lengths.clone();
         widths.extend(entries(&[UnitKind::Columns]));

@@ -331,7 +331,7 @@ impl<'a> GuideLayoutDialog<'a> {
         let env = Env::of(ui);
         let words = env.words::<GuideDialogWords>();
         let number_units = env.units();
-        let mut dialog = FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).preview(preview);
+        let mut dialog = FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).preview(preview).side_buttons(true);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }

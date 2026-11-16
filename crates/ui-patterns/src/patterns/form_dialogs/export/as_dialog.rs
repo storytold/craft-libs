@@ -32,7 +32,7 @@ use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, UnitKind, Units};
 
 use crate::runtime::overlay::CloseReason;
-use crate::sections::{HeaderStrength, Section};
+use crate::sections::Section;
 use crate::style::TypeRole;
 use crate::text::NumberField;
 
@@ -651,6 +651,26 @@ struct Pass<'p> {
 impl Pass<'_> {
     fn settings(&self, ui: &mut Ui, options: &mut ExportOptions, held: &mut Held) {
         let words = self.words;
+        let mut format = None;
+        Section::fixed(words.file_settings.clone()).id_salt("file").show(ui, |ui, _| format = self.file_settings(ui, options));
+        let Some(format) = format else { return };
+        Section::fixed(words.color_space.clone()).id_salt("color-space").show(ui, |ui, _| {
+            let mut srgb = options.profile == ExportProfile::Srgb;
+            check(ui, &words.convert_srgb, "profile", &mut srgb);
+            options.profile = if srgb { ExportProfile::Srgb } else { ExportProfile::Document };
+            check(ui, &words.embed_profile, "embed", &mut options.embed_profile);
+        });
+
+        Section::fixed(words.image_size.clone()).id_salt("size").show(ui, |ui, _| self.size(ui, options, held, format));
+        Section::fixed(words.scale_all.clone()).id_salt("scale-all").show(ui, |ui, _| self.scale_all(ui, options));
+        if let Some(library) = self.library {
+            self.preset_row(ui, options, held, library);
+        }
+    }
+
+    /// File Settings: the format, its options and the metadata; the format shown, `None` when the list has none.
+    fn file_settings(&self, ui: &mut Ui, options: &mut ExportOptions) -> Option<&ExportFormat> {
+        let words = self.words;
         let chosen = self.formats.iter().position(|format| format.id == options.format).unwrap_or(0);
         let entries: Vec<Entry<usize>> = self.formats.iter().enumerate().map(|(at, format)| Entry::new(at, format.name)).collect();
         let mut now = chosen;
@@ -658,7 +678,7 @@ impl Pass<'_> {
         if now != chosen {
             self.switch(options, now);
         }
-        let Some(format) = self.formats.get(now) else { return };
+        let format = self.formats.get(now)?;
 
         if format.lossless {
             check(ui, &words.lossless, "lossless", &mut options.lossless);
@@ -689,21 +709,7 @@ impl Pass<'_> {
             Entry::new(ExportMetadata::All, words.metadata_all.clone()),
         ];
         choose(ui, &words.metadata, "metadata", &metadata, &mut options.metadata);
-        Section::fixed(words.color_space.clone()).strength(HeaderStrength::Caption).id_salt("color-space").show(ui, |ui, _| {
-            let mut srgb = options.profile == ExportProfile::Srgb;
-            check(ui, &words.convert_srgb, "profile", &mut srgb);
-            options.profile = if srgb { ExportProfile::Srgb } else { ExportProfile::Document };
-            check(ui, &words.embed_profile, "embed", &mut options.embed_profile);
-        });
-
-        Section::fixed(words.image_size.clone())
-            .strength(HeaderStrength::Caption)
-            .id_salt("size")
-            .show(ui, |ui, _| self.size(ui, options, held, format));
-        Section::fixed(words.scale_all.clone()).strength(HeaderStrength::Caption).id_salt("scale-all").show(ui, |ui, _| self.scale_all(ui, options));
-        if let Some(library) = self.library {
-            self.preset_row(ui, options, held, library);
-        }
+        Some(format)
     }
 
     /// The preset row under Image Size: a pick applies the preset's options, and each new, renamed or deleted preset

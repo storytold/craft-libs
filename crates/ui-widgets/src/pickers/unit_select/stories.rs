@@ -8,7 +8,7 @@ use craft_behavior::Mixed;
 use egui::Ui;
 
 fn units() -> [Entry<UnitKind>; 3] {
-    [Entry::new(UnitKind::Millimetres, "mm"), Entry::new(UnitKind::Inches, "in"), Entry::new(UnitKind::Points, "pt")]
+    [Entry::new(UnitKind::Millimetres, "Millimetres"), Entry::new(UnitKind::Inches, "Inches"), Entry::new(UnitKind::Points, "Points")]
 }
 
 #[story(UnitSelect<'static>, covers = [Default], drive = Drive::Type("42"))]

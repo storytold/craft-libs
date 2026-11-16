@@ -27,15 +27,15 @@ fn picture(ui: &Ui, unfiltered: bool) -> SizedTexture {
     SizedTexture::new(id, Vec2::new(PICTURE[0] as f32, PICTURE[1] as f32))
 }
 
-const LAYOUTS: [(&str, ParamLayout); 2] = [("Beside", ParamLayout::Beside), ("Below", ParamLayout::Below)];
+const LAYOUTS: [(&str, ParamLayout); 3] = [("Beside", ParamLayout::Beside), ("Below", ParamLayout::Below), ("Stacked", ParamLayout::Stacked)];
 
 /// A blur dialog with the `preview` and `layout` values of the story.
 fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLayout) -> StoryOutput {
     let preview = *data.value("preview", preview);
     let layout = *data.choice("layout", layout, &LAYOUTS);
     let comparing = *data.value("comparing", false);
-    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true);
-    let dialog = if preview { dialog.previews(true).preview(picture(ui, comparing)).layout(layout) } else { dialog };
+    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true).layout(layout);
+    let dialog = if preview { dialog.previews(true).preview(picture(ui, comparing)) } else { dialog };
     let shown = dialog.show(ui);
     *data.value("comparing", false) = shown.comparing;
     shown.into()
@@ -54,6 +54,12 @@ fn param_dialog_with_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_with_preview_below(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     blur_story(ui, data, true, ParamLayout::Below)
+}
+
+/// PhotoCraft's filter dialogs: stacked slider rows, the pane with the zoom row under it, the buttons across the foot.
+#[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
+fn param_dialog_stacked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    blur_story(ui, data, true, ParamLayout::Stacked)
 }
 
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]

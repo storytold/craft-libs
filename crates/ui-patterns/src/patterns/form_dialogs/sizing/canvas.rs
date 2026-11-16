@@ -6,7 +6,10 @@ use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use crate::form::Field;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
-use crate::runtime::env::{ColumnSize, UnitKind};
+use crate::display::Text;
+use crate::runtime::env::{ColumnSize, Label, UnitKind};
+use crate::sections::Section;
+use craft_theme::variant::Tone;
 use craft_behavior::PixelSize;
 use egui::Ui;
 use serde_json::json;
@@ -184,24 +187,26 @@ impl<'a> CanvasSize<'a> {
                 let size = state.size.original();
                 let has_background = state.has_background;
                 state.extension = state.fill();
-                kit.readout(ui, &words.current_size, kit.file_size(size, bytes_per_pixel), None);
-                kit.readout(ui, &words.current_width, kit.pixels(size.width), None);
-                kit.readout(ui, &words.current_height, kit.pixels(size.height), None);
+                sized_section(ui, "current", &words.current_size, kit.file_size(size, bytes_per_pixel), None, |ui| {
+                    kit.readout(ui, &words.width, kit.pixels(size.width), None);
+                    kit.readout(ui, &words.height, kit.pixels(size.height), None);
+                });
                 let now = state.size.pixels();
-                kit.readout(ui, &words.new_size, kit.file_size(now, bytes_per_pixel), kit.tone_of(now));
-                kit.refusal(ui, now);
-                kit.sides(ui, &mut state.size);
-
-                let check = Checkbox::new(Bind::given(state.size.is_relative())).label(words.relative.clone()).id_salt("relative").show(ui);
-                if let Some(on) = check.value().copied() {
-                    state.size.relative(on);
-                }
-                let growth = (f64::from(now.width) - f64::from(size.width), f64::from(now.height) - f64::from(size.height));
-                Field::new(words.anchor.clone()).id_salt("anchor").show(ui, |ui, _| {
-                    let picked = ReferencePoint::new(words.anchor.clone(), Bind::given(state.anchor)).growth(growth).show(ui);
-                    if let Some(anchor) = picked.value().copied() {
-                        state.anchor = anchor;
+                sized_section(ui, "new", &words.new_size, kit.file_size(now, bytes_per_pixel), kit.tone_of(now), |ui| {
+                    kit.refusal(ui, now);
+                    kit.sides(ui, &mut state.size);
+                    let check =
+                        Checkbox::new(Bind::given(state.size.is_relative())).label(words.relative.clone()).id_salt("relative").show(ui);
+                    if let Some(on) = check.value().copied() {
+                        state.size.relative(on);
                     }
+                    let growth = (f64::from(now.width) - f64::from(size.width), f64::from(now.height) - f64::from(size.height));
+                    Field::new(words.anchor.clone()).id_salt("anchor").show(ui, |ui, _| {
+                        let picked = ReferencePoint::new(words.anchor.clone(), Bind::given(state.anchor)).growth(growth).show(ui);
+                        if let Some(anchor) = picked.value().copied() {
+                            state.anchor = anchor;
+                        }
+                    });
                 });
                 Field::new(words.extension.clone()).id_salt("extension").enabled(has_background).show(ui, |ui, _| {
                     let entries = CanvasExtension::entries(words, &state.extension, has_background);
@@ -214,6 +219,20 @@ impl<'a> CanvasSize<'a> {
             CanvasSizeValues::result,
         )
     }
+}
+
+/// A section titled `title` with the file size `size` at the end of its header, in `tone` when given.
+fn sized_section(ui: &mut Ui, salt: &str, title: &Label, size: String, tone: Option<Tone>, mut body: impl FnMut(&mut Ui)) {
+    Section::fixed(title.clone())
+        .id_salt(salt)
+        .controls(move |ui, _| {
+            let text = Text::new(size.clone());
+            match tone {
+                Some(tone) => text.tone(tone).show(ui),
+                None => text.show(ui),
+            };
+        })
+        .show(ui, |ui, _| body(ui));
 }
 
 /// Builds the dialog over the host-owned values of a [`HostedCanvasSize`] for one pass.
