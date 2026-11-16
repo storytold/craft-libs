@@ -14,7 +14,7 @@ use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Env;
 use craft_ui::style::DataColor;
 use craft_ui::testing::canvas_story::StoryPicture;
-use craft_ui::testing::{Drive, EditKind, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::{Color32, Ui};
 
 craft_ui::words! {
@@ -282,7 +282,7 @@ fn artboard_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let bounds = first.items.iter().map(|item| item.rect).reduce(|a, b| a.union(b)).unwrap_or_default();
     // The pasteboard covers all but the boards: the picture is only the document's extent.
     let picture = StoryPicture::new(bounds.width() as u32, bounds.height() as u32, |_: Point| Color32::TRANSPARENT);
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut ArtboardKept, boards: &Boards| {
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut ArtboardKept, boards: &mut Boards, host: &StoryHost| {
         let pages = boards.pages();
         let named = Pasteboard::new("Pasteboard", &pages).show_at(ui, at).name_clicked;
         let overlay = ArtboardOverlay::new("Artboards", &boards.items, &boards.selected).rules(rules).show_at(ui, at);
@@ -291,17 +291,17 @@ fn artboard_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             let shown = AddBesideHandles::new("Add artboard", board).show_at(ui, at);
             shown.added.map(|side| (side, shown.copy))
         });
+        kept.tool.items(&boards.items).selected(&boards.selected).rules(rules).placing(placing.then_some(BOARD));
+        if let Some((side, copy)) = added {
+            kept.tool.add_beside(side, copy);
+        }
+        let _ = host.run(ui, &mut kept.tool);
         (named, overlay.events, added)
     };
     let story = ToolStory::new("Document", &picture).view(bounds.center(), 75.0);
     tool_story(ui, data, story, ArtboardKept::default, first, body, |run| {
         let (boards, kept) = (run.document, run.tool);
         let (named, mut events, added) = run.shown.unwrap_or_default();
-        kept.tool.items(&boards.items).selected(&boards.selected).rules(rules).placing(placing.then_some(BOARD));
-        if let Some((side, copy)) = added {
-            kept.tool.add_beside(side, copy);
-        }
-        let _ = run.host.run(&mut kept.tool);
         events.extend(kept.tool.take_events());
         let edits: Vec<EditKind> = events.iter().filter_map(edit_kind).collect();
         for event in events {

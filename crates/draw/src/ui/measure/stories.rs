@@ -9,7 +9,7 @@ use craft_ui::bars::{Bar, BarKind};
 use craft_ui::canvas::RasterSource as _;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
-use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, Grip, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::{Color32, Ui};
 
 fn line() -> RulerLine {
@@ -38,9 +38,11 @@ fn on_canvas(ui: &mut Ui, line: &mut Option<RulerLine>) -> StoryOutput {
 #[story(RulerOverlay<'static>, covers = [], drive = Drive::Never)]
 fn ruler_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let picture = object(ui);
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut RulerTool, line: &Option<RulerLine>| tool.pass(*line).show_line(ui, at);
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut RulerTool, line: &mut Option<RulerLine>, host: &StoryHost| {
+        tool.pass(*line).show_line(ui, at);
+        let _ = host.run(ui, &mut tool.pass(*line));
+    };
     tool_story(ui, data, ToolStory::new("Document", &picture), RulerTool::new, Some(line()), body, |run| {
-        let _ = run.host.run(&mut run.tool.pass(*run.document));
         for event in run.tool.take_events() {
             let _ = event.apply(run.document);
         }

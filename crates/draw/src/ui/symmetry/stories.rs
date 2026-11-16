@@ -11,7 +11,7 @@ use craft_ui::bars::{Bar, BarKind};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
 
 craft_ui::words! {
@@ -163,14 +163,21 @@ fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         *set = described;
         *data.value("document", described) = described;
     }
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut SymmetryKept, stored: &Symmetry| {
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut SymmetryKept, stored: &mut Symmetry, host: &StoryHost| {
         if kept.session.original() != *stored {
             kept.session = SymmetryTransform::begin(*stored);
         }
         let mut preview = kept.session.preview();
         SymmetryOverlay::new("Symmetry", &preview, PAGE).editing(true).show_at(ui, at);
         let shown = SymmetryHandles::new("Symmetry", Bind::bound(&mut preview), PAGE).session().show_at(ui, at);
-        (shown.edit.events.iter().cloned().collect::<Vec<_>>(), shown.apply, shown.discard)
+        let edits: Vec<EditEvent<Symmetry>> = shown.edit.events.iter().cloned().collect();
+        // The handles' edits reach the session before the tool runs on it.
+        for edit in &edits {
+            kept.session.apply(edit);
+        }
+        let mut tool = SymmetryTool::new(&kept.session, true);
+        let _ = host.run(ui, &mut tool);
+        (edits, shown.apply, shown.discard, tool.take_events())
     };
     let start = || SymmetryKept { session: SymmetryTransform::begin(described), ended: None };
     let picture = SHOWN;
@@ -182,14 +189,8 @@ fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     tool_story(ui, data, story, start, described, body, |run| {
         let (stored, kept) = (run.document, run.tool);
         let mut output = StoryOutput::default();
-        let (edits, apply, discard): (Vec<EditEvent<Symmetry>>, bool, bool) = run.shown.unwrap_or_default();
+        let (edits, apply, discard, mut events): (Vec<EditEvent<Symmetry>>, bool, bool, Vec<SymmetryEvent>) = run.shown.unwrap_or_default();
         output.edits = edits.iter().filter_map(EditKind::of).collect();
-        for edit in &edits {
-            kept.session.apply(edit);
-        }
-        let mut tool = SymmetryTool::new(&kept.session, true);
-        let _ = run.host.run(&mut tool);
-        let mut events = tool.take_events();
         if apply || committed {
             events.push(kept.session.commit());
         }

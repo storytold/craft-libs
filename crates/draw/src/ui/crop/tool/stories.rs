@@ -3,7 +3,7 @@
 //! The story plays the app: it stores the tool's settings, routes the bar to the tool and accepts every crop without
 //! cropping the picture.
 
-use super::super::{CropBar, CropDocKey, CropDocument, CropEvent, CropInput, CropSettings, CropShown, CropTool};
+use super::super::{CropBar, CropDocKey, CropDocument, CropEvent, CropInput, CropSettings, CropTool};
 use craft_behavior::CanvasView;
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{BezPath, Circle, Point, Rect, Size};
@@ -13,7 +13,7 @@ use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::env::{Env, Units};
 use craft_ui::runtime::frame;
 use craft_ui::testing::canvas_story::{StoryDocument, StoryPicture, StoryShape, paint_shapes};
-use craft_ui::testing::{Drive, StoryButton, StoryData, StoryOutput, ToolStory, story, story_tool, tool_story};
+use craft_ui::testing::{Drive, StoryButton, StoryData, StoryHost, StoryOutput, ToolStory, story, story_tool, tool_story};
 use egui::{Color32, Ui};
 
 craft_ui::words! {
@@ -97,23 +97,20 @@ fn document(key: u64, resolution: f64) -> CropDocument {
     CropDocument::new(CropDocKey::new(key), Size::new(f64::from(size.width), f64::from(size.height)), resolution)
 }
 
-/// What the tool reported in a pass of the canvas body: it shows the frame.
-fn show_frame(ui: &mut Ui, at: egui::Rect, tool: &mut CropTool, settings: &CropSettings, document: &CropDocument) -> CropShown {
-    let ctx = ui.ctx().clone();
-    tool.show_frame(ui, at, &CropInput::new(&ctx, settings, document))
-}
-
-/// Runs the tool on the canvas and returns what it reported.
-fn run_tool(
-    ctx: &egui::Context,
-    host: &craft_ui::testing::StoryHost<'_>,
+/// One pass of the canvas body: shows the frame, then runs the tool with what the frame reported, and returns the
+/// tool's events.
+fn frame_and_tool(
+    ui: &mut Ui,
+    at: egui::Rect,
+    host: &StoryHost,
     tool: &mut CropTool,
     settings: &CropSettings,
     document: &CropDocument,
-    shown: Option<CropShown>,
 ) -> Vec<CropEvent> {
-    let mut pass = tool.pass(CropInput::new(ctx, settings, document), shown);
-    let _ = host.run(&mut pass);
+    let ctx = ui.ctx().clone();
+    let shown = tool.show_frame(ui, at, &CropInput::new(&ctx, settings, document));
+    let mut pass = tool.pass(CropInput::new(&ctx, settings, document), Some(shown));
+    let _ = host.run(ui, &mut pass);
     pass.finish().events
 }
 
@@ -186,15 +183,12 @@ fn default_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         buttons.push(StoryButton::new(RESET).enabled(modified));
     }
     let showing = picked;
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| {
-        showing.then(|| show_frame(ui, at, tool, settings, &document))
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &mut CropSettings, host: &StoryHost| {
+        showing.then(|| frame_and_tool(ui, at, host, tool, settings, &document))
     };
     let ctx = ui.ctx().clone();
     let output = tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), CropTool::new, CropSettings::default(), body, |run| {
-        let mut events = Vec::new();
-        if showing {
-            events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document, run.shown.flatten()));
-        }
+        let mut events = run.shown.flatten().unwrap_or_default();
         match run.pressed {
             Some(PICK_OTHER) => {
                 events.extend(run.tool.leave(run.document, &document, &units, false));
@@ -250,11 +244,12 @@ fn ratio_and_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (committed, cancelled) = (shown.committed, shown.cancelled);
     let (ratio, straighten) = bar.map_or((None, false), |bar| (bar.ratio, bar.straighten));
     let picture = landscape();
-    let body =
-        |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| show_frame(ui, at, tool, settings, &document);
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &mut CropSettings, host: &StoryHost| {
+        frame_and_tool(ui, at, host, tool, settings, &document)
+    };
     let ctx = ui.ctx().clone();
     let output = tool_story(ui, data, ToolStory::new("Document", &picture), CropTool::new, settings, body, |run| {
-        let mut events = Vec::new();
+        let mut events = run.shown.unwrap_or_default();
         if let Some(change) = ratio {
             events.extend(run.tool.refit(run.document, &document, &units, change.editing));
         }
@@ -271,7 +266,6 @@ fn ratio_and_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             // The bar showed before the frame: the frame shows its answer on the next pass.
             frame::request_repaint(&ctx);
         }
-        events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document, run.shown));
         for event in events {
             if let Some(text) = handle(&words, &units, run.tool, run.document, event) {
                 last = Some(text);
@@ -310,11 +304,12 @@ fn box_undo(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let declared = steps(&story_tool(data, CropTool::new).borrow());
     let buttons = [StoryButton::new(UNDO).enabled(declared.0), StoryButton::new(REDO).enabled(declared.1)];
     let picture = landscape();
-    let body =
-        |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| show_frame(ui, at, tool, settings, &document);
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &mut CropSettings, host: &StoryHost| {
+        frame_and_tool(ui, at, host, tool, settings, &document)
+    };
     let ctx = ui.ctx().clone();
     tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), CropTool::new, CropSettings::default(), body, |run| {
-        let mut events = Vec::new();
+        let events = run.shown.unwrap_or_default();
         match run.pressed {
             Some(UNDO) => {
                 let _ = run.tool.undo();
@@ -324,7 +319,6 @@ fn box_undo(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             }
             _ => {}
         }
-        events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document, run.shown));
         for event in events {
             let _ = handle(&words, &units, run.tool, run.document, event);
         }

@@ -7,7 +7,7 @@ use super::{
     PaintingCursor, SourceMarker, StrokeTrail, TipCell, TipFalloff, TipPose, TipRings, TrailTone,
 };
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, story_view};
-use crate::canvas::testing::tool_story::{ToolScript, ToolStory, tool_story};
+use crate::canvas::testing::tool_story::{StoryHost, ToolScript, ToolStory, tool_story};
 use crate::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use crate::canvas_controls::CanvasControlWords;
 use crate::contract::Show as _;
@@ -277,7 +277,10 @@ fn brush(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let to = from + Vec2::new(rect.width() * 0.15, rect.height() * 0.15);
     let script = ToolScript::new(seconds).stroke(button, &[from, to], held, held);
     let story = ToolStory::new("Document", &document).turned(rotation, flip, aspect).play(script);
-    let body = |ui: &mut Ui, at: Rect, _: &CanvasView, brush: &mut StoryBrush, dimensions: &BrushDimensions| {
+    // The resize preview and the tip cell show the tool's state, so the tool runs first.
+    let body = |ui: &mut Ui, at: Rect, _: &CanvasView, brush: &mut StoryBrush, dimensions: &mut BrushDimensions, host: &StoryHost| {
+        let (tip, pose) = tip_of(look.tip, *dimensions, brush.pointer);
+        let _ = host.run(ui, &mut BrushPass { brush: &mut *brush, dimensions: &mut *dimensions, look, tip, pose });
         let edge = falloff(*dimensions);
         if let Some(preview) = brush.resize.preview(&edge) {
             let _ = preview.show_at(ui, at);
@@ -286,8 +289,6 @@ fn brush(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
     };
     tool_story(ui, data, story, StoryBrush::default, START, body, |run| {
-        let (tip, pose) = tip_of(look.tip, *run.document, run.tool.pointer);
-        let _ = run.host.run(&mut BrushPass { brush: &mut *run.tool, dimensions: &mut *run.document, look, tip, pose });
         let (diameter, level) = (format!("{:.0}", run.document.diameter), format!("{:.0}", run.document.level * 100.0));
         StoryOutput::default().readout(craft_i18n::fmt(words.values.as_str(), &[("diameter", &diameter), ("level", &level)]))
     })

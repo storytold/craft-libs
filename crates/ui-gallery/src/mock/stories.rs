@@ -4,12 +4,13 @@ use super::model::Document;
 use super::panels::show_layers;
 use super::tools::MoveTool;
 use super::{EditorMock, MockState};
+use craft_behavior::CanvasView;
 use craft_behavior::geometry::Directions;
 use craft_ui::contract::Bind;
 use craft_ui::runtime::env::Env;
 use craft_ui::shell::ScreenMode;
 use craft_ui::testing::canvas_story::StoryDocument;
-use craft_ui::testing::{Drive, StoryData, StoryOutput, ToolStory, room_height, stage_fitting, story, tool_story};
+use craft_ui::testing::{Drive, StoryData, StoryHost, StoryOutput, ToolStory, room_height, stage_fitting, story, tool_story};
 use egui::Ui;
 
 craft_ui::words! {
@@ -70,11 +71,12 @@ fn move_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         story,
         || (),
         document,
-        |ui, at, _, _, document| show_layers(ui, at, &document.layers, size),
-        |run| {
-            let _ = run.host.run(&mut MoveTool::new(run.document, directions));
-            StoryOutput::default().readout(readout(&words, run.document))
+        // The layers show what the tool moved, so the tool runs first.
+        |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut (), document: &mut Document, host: &StoryHost| {
+            let _ = host.run(ui, &mut MoveTool::new(document, directions));
+            show_layers(ui, at, &document.layers, size);
         },
+        |run| StoryOutput::default().readout(readout(&words, run.document)),
     )
 }
 

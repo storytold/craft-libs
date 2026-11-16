@@ -52,7 +52,7 @@ craft_ui::words! {
 
 /// A selection tool a story runs: its pass for the host, its events and its phase.
 trait Shown: 'static {
-    fn run(&mut self, host: &StoryHost<'_>, probe: &dyn SelectionProbe);
+    fn run(&mut self, ui: &Ui, host: &StoryHost, probe: &dyn SelectionProbe);
     fn take(&mut self) -> Vec<SelectEvent>;
     fn phase(&self) -> SelectPhase;
 }
@@ -60,8 +60,8 @@ trait Shown: 'static {
 macro_rules! shown {
     ($tool:ty $(, $param:ident: $bound:path)?) => {
         impl$(<$param: $bound + 'static>)? Shown for $tool {
-            fn run(&mut self, host: &StoryHost<'_>, probe: &dyn SelectionProbe) {
-                let _ = host.run(&mut SelectToolPass::new(self, probe));
+            fn run(&mut self, ui: &Ui, host: &StoryHost, probe: &dyn SelectionProbe) {
+                let _ = host.run(ui, &mut SelectToolPass::new(self, probe));
             }
 
             fn take(&mut self) -> Vec<SelectEvent> {
@@ -359,19 +359,21 @@ fn seconds(data: &mut StoryData) -> f64 {
 }
 
 /// Runs the tool `init` makes, set up each pass by `options`, live over the mock picture, with the story selection
-/// drawn by the overlay; Play sends the gesture `play` makes from the picture.
+/// drawn by the overlay under it; Play sends the gesture `play` makes from the picture.
 fn on_canvas<T: Shown>(
     ui: &mut Ui,
     data: &mut StoryData,
     init: impl FnOnce() -> T,
-    options: impl FnOnce(&mut T),
+    options: impl Fn(&mut T),
     play: impl FnOnce(&MockImage) -> ToolScript,
 ) -> StoryOutput {
     let image = MockImage::default();
     let script = play(&image);
     let words = Env::of(ui).words::<SelectToolStoryWords>();
-    let overlay = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut Kept<T>, selection: &Selection| {
-        let _ = SelectionOverlay::new(words.selection.clone(), selection).show_at(ui, at);
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut Kept<T>, selection: &mut Selection, host: &StoryHost| {
+        let _ = SelectionOverlay::new(words.selection.clone(), &*selection).show_at(ui, at);
+        options(&mut kept.tool);
+        kept.tool.run(ui, host, &*selection);
     };
     let story = ToolStory::new("Document", &image).fit().play(script);
     tool_story(
@@ -380,10 +382,8 @@ fn on_canvas<T: Shown>(
         story,
         || Kept { tool: init(), last: None },
         Selection::house(&image),
-        overlay,
+        body,
         |run| {
-            options(&mut run.tool.tool);
-            run.tool.tool.run(&run.host, &*run.document);
             if let Some(last) = run.document.apply(run.tool.tool.take()) {
                 run.tool.last = Some(last);
             }
