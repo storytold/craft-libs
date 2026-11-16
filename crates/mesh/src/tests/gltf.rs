@@ -829,3 +829,33 @@ fn specular_glossiness_and_webp_textures() {
     let plain = &s.materials[1];
     assert_eq!((plain.base_color, plain.metallic, plain.roughness, plain.base_color_texture), ([1.0; 4], 0.0, 0.0, None));
 }
+
+#[test]
+fn morph_targets_and_other_scenes_are_named_in_warnings() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let d = b.f32s(&[0.0; 9], "VEC3", 3);
+    let plain = json!({ "attributes": { "POSITION": p } });
+    let morphed = json!({ "attributes": { "POSITION": p }, "targets": [{ "POSITION": d }] });
+    let doc = |scene: Value, scenes: Value| {
+        b.glb(json!({
+            "scene": scene,
+            "scenes": scenes,
+            "nodes": [{ "mesh": 0 }, { "mesh": 0 }],
+            "meshes": [{ "primitives": [plain, morphed, morphed] }],
+        }))
+    };
+    let s = parse(&doc(json!(1), json!([{ "nodes": [0] }, { "nodes": [1] }, { "nodes": [] }]))).unwrap();
+    assert_eq!(s.roots, [1]);
+    assert_eq!(
+        s.warnings,
+        ["scene 1 of 3 was read; the others were left out", "2 primitive(s) have morph targets, which were left out (drawn in the base shape)",]
+    );
+    // The morphed primitives are still drawn, in their base shape.
+    assert_eq!(s.meshes[0].parts.len(), 3);
+    // One scene, or an out-of-range choice, is not a warning about scenes.
+    let one = parse(&doc(json!(5), json!([{ "nodes": [0] }]))).unwrap();
+    assert_eq!((one.roots.as_slice(), one.warnings.len()), ([0].as_slice(), 1));
+    let s = parse(&one_mesh(&b, plain.clone())).unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+}
