@@ -315,6 +315,9 @@ impl VanishingPointWorkspace {
             let now = PlaneEdit::new(self.session.planes.clone(), self.session.torn.clone());
             events.push(VanishingPointEvent::Planes(EditEvent::set(Mixed::Same(was), now, label.clone(), None)));
         }
+        if before.paste != self.session.paste {
+            events.push(VanishingPointEvent::Paste(EditEvent::set(Mixed::Same(before.paste), self.session.paste, label.clone(), None)));
+        }
         if before.strokes != self.session.strokes {
             // A stroke is the event's value: the last one, or the last one emptied when the write cleared them.
             let was = before.strokes.last().cloned();
