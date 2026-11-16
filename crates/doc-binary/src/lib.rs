@@ -937,8 +937,13 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                         continue;
                     }
                     if prl.sgc() == 1 {
-                        fmt::apply_para(&mut pb.props, &prl);
+                        apply_para_prl(ctx.sheet, &mut pb.props, &prl);
                     }
+                }
+                // In a table, the frame sprms place the table (Word 2016 reads them as its
+                // `w:tblpPr`), not the paragraphs in its cells.
+                if row.is_some() {
+                    pb.props.frame = None;
                 }
                 if let Some(num) = num_of(ilfo) {
                     pb.props.numbering = Some(NumRef { num, level: ilvl });
@@ -1267,6 +1272,15 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
         },
         None => pb.push(c, props),
     }
+}
+
+/// A paragraph sprm, applied to the paragraph's own properties. A frame sprm changes the style's
+/// frame, which the paragraph's own replaces whole: the first one starts from the style's.
+fn apply_para_prl(sheet: &StyleSheet, props: &mut craft_wordmodel::props::ParaProps, prl: &sprm::Prl<'_>) {
+    if props.frame.is_none() && fmt::is_frame(prl.op) {
+        props.frame = props.style.as_deref().and_then(|id| sheet.get(id)).and_then(|s| s.para.frame.clone());
+    }
+    fmt::apply_para(props, prl);
 }
 
 /// The model id of paragraph style `istd`, when it names a style.

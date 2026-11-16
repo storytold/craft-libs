@@ -3485,3 +3485,96 @@ fn formatting_runs_break_where_the_chpx_changes() {
     // (the run from the field to CP 20), "d(ee" italic.
     assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
 }
+
+/// Frames, as Word 2016 wrote them from RTF frames and reads them into `w:framePr`: a full one
+/// (`x="1441" y="721" w="2880" h="1440" hRule="exact"`, margin and paragraph, 180 from text); a
+/// footer-style page number at the right (`xAlign="right" y="1" wrap="around"`); a drop cap in
+/// the margin over 3 lines; a style's frame whose paragraph only sets an "at least" height, which
+/// keeps the style's place; and a framed paragraph in a table, which Word reads as the table's
+/// position (`w:tblpPr`), not a frame.
+#[test]
+fn frames_and_drop_caps_are_read() {
+    use craft_wordmodel::props::TextFrame;
+    let s = |v: i16| v.to_le_bytes();
+    let u = |v: u16| v.to_le_bytes();
+    let styled = grpprl(&[(0x261B, &[0x90]), (0x8418, &s(-4)), (0x8419, &s(2881)), (0x2423, &[1])]);
+    let spec = RichSpec {
+        text: "Framed\rRight\rD\rStyled\rIn a cell\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "Framed", styled, Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (
+                0,
+                0,
+                grpprl(&[
+                    (0x8418, &s(1441)),
+                    (0x8419, &s(721)),
+                    (0x841A, &u(2880)),
+                    (0x261B, &[0x60]),
+                    (0x442B, &u(1440)),
+                    (0x842E, &u(180)),
+                    (0x842F, &u(180)),
+                ]),
+            ),
+            (7, 0, grpprl(&[(0x8418, &s(-8)), (0x8419, &s(1)), (0x261B, &[0x60]), (0x2423, &[2])])),
+            (13, 0, grpprl(&[(0x261B, &[0xA0]), (0x2423, &[2]), (0x442C, &u(0x1A))])),
+            (15, 1, grpprl(&[(0x442B, &u(0x8000 | 720))])),
+            (22, 0, grpprl(&[(0x2416, &[1]), (0x8419, &s(36)), (0x261B, &[0x60]), (0x2423, &[2])])),
+        ],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    // The paragraphs, those in table cells too.
+    let mut paras: Vec<&craft_wordmodel::para::Paragraph> = Vec::new();
+    for b in &doc.body {
+        match &**b {
+            craft_wordmodel::Block::Para(p) => paras.push(p),
+            craft_wordmodel::Block::Table(t) => {
+                paras.extend(t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).filter_map(|b| b.as_para()))
+            }
+        }
+    }
+    let props = |text: &str| paras.iter().find(|p| p.text == text).map(|p| p.props.clone()).expect(text);
+    let frame = |f: TextFrame| Some(TextFrame { wrap: "auto".into(), ..f });
+    assert_eq!(
+        props("Framed").frame,
+        frame(TextFrame {
+            w: Some(144.0),
+            h: Some(72.0),
+            h_exact: true,
+            x: 72.05,
+            y: 36.05,
+            h_anchor: "margin".into(),
+            v_anchor: "text".into(),
+            h_space: 9.0,
+            v_space: 9.0,
+            ..Default::default()
+        })
+    );
+    assert_eq!(
+        props("Right").frame,
+        Some(TextFrame {
+            x_align: Some("right".into()),
+            y: 0.05,
+            h_anchor: "margin".into(),
+            v_anchor: "text".into(),
+            wrap: "around".into(),
+            ..Default::default()
+        })
+    );
+    let d = props("D");
+    assert_eq!((d.drop_cap, d.drop_cap_margin), (Some(3), Some(true)));
+    assert_eq!(
+        props("Styled").frame,
+        Some(TextFrame {
+            h: Some(36.0),
+            x_align: Some("center".into()),
+            y: 144.05,
+            h_anchor: "page".into(),
+            v_anchor: "page".into(),
+            wrap: "notBeside".into(),
+            ..Default::default()
+        })
+    );
+    assert_eq!(props("In a cell").frame, None);
+}

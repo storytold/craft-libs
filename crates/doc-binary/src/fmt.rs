@@ -66,6 +66,17 @@ const P_BRC_LEFT: u16 = 0xC64F;
 const P_BRC_BOTTOM: u16 = 0xC650;
 const P_BRC_RIGHT: u16 = 0xC651;
 const P_BRC_BETWEEN: u16 = 0xC652;
+// Frames ([MS-DOC] §2.6.2), each a part of `ParaProps::frame`: the anchors (`PositionCodeOperand`),
+// the position, width, height, wrapping and distances from text; and a drop cap (`DcsOperand`).
+pub(crate) const P_PC: u16 = 0x261B;
+pub(crate) const P_DXA_ABS: u16 = 0x8418;
+pub(crate) const P_DYA_ABS: u16 = 0x8419;
+pub(crate) const P_DXA_WIDTH: u16 = 0x841A;
+pub(crate) const P_WR: u16 = 0x2423;
+pub(crate) const P_WHEIGHT_ABS: u16 = 0x442B;
+pub(crate) const P_DCS: u16 = 0x442C;
+pub(crate) const P_DYA_FROM_TEXT: u16 = 0x842E;
+pub(crate) const P_DXA_FROM_TEXT: u16 = 0x842F;
 // Paragraph shading: a 2-byte Shd80 (palette colours), and a cb(1) + 10-byte Shd (COLORREFs)
 // that Word 2000 and later write after it.
 const P_SHD80: u16 = 0x442D;
@@ -525,6 +536,96 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
         // automatic one is none. A truncated operand is ignored.
         P_SHD80 if prl.operand.len() >= 2 => p.shading = shd80_rgb(prl.operand),
         P_SHD if prl.operand.len() >= 11 => p.shading = prl.operand.get(1..).and_then(shd_rgb),
+        P_DCS => {
+            // Bits 0-2: 1 dropped, 2 in the margin (0 none); bits 3-7: the lines it drops.
+            let v = u16_of(prl).unwrap_or(0);
+            match v & 0x07 {
+                kind @ (1 | 2) => {
+                    p.drop_cap = Some(((v >> 3) & 0x1F).clamp(1, 10) as u8);
+                    p.drop_cap_margin = (kind == 2).then_some(true);
+                    p.drop_cap_distance = p.frame.as_ref().map(|f| f.h_space).filter(|d| *d > 0.0);
+                }
+                _ => (p.drop_cap, p.drop_cap_margin) = (None, None),
+            }
+        }
+        op if is_frame(op) => apply_frame(p, prl),
+        _ => {}
+    }
+}
+
+/// Whether `op` is one of the frame sprms [`apply_frame`] reads.
+pub(crate) fn is_frame(op: u16) -> bool {
+    matches!(op, P_PC | P_DXA_ABS | P_DYA_ABS | P_DXA_WIDTH | P_WR | P_WHEIGHT_ABS | P_DYA_FROM_TEXT | P_DXA_FROM_TEXT)
+}
+
+/// A frame sprm, applied to the paragraph's frame (made, at a column's left edge and the margin's
+/// top, wrapping `auto`, when it has none). As Word 2016 reads Word 97 and Word 6.0/95 files into
+/// `w:framePr`: the special positions become alignments, and the others are twips as stored
+/// (Word stores a frame at 0 as at 1). A width or height of 0 fits the text; a height with bit 15
+/// set is a minimum.
+fn apply_frame(p: &mut ParaProps, prl: &Prl) {
+    let tw = |v: i32| (v as f32 / 20.0).clamp(-1584.0, 1584.0);
+    let Some(v) = u16_of(prl).or_else(|| prl.operand.first().map(|&b| u16::from(b))) else { return };
+    let f = p.frame.get_or_insert_with(|| craft_wordmodel::props::TextFrame {
+        h_anchor: "text".into(),
+        v_anchor: "margin".into(),
+        wrap: "auto".into(),
+        ..Default::default()
+    });
+    let anchor = |code: u16, names: [&str; 3]| names.get(usize::from(code)).map(|s| (*s).to_owned());
+    match prl.op {
+        P_PC => {
+            // Bits 4-5 vertical: margin, page, paragraph; bits 6-7 horizontal: column, margin,
+            // page. 3, which no file had, leaves the anchor as it was.
+            if let Some(a) = anchor((v >> 4) & 3, ["margin", "page", "text"]) {
+                f.v_anchor = a;
+            }
+            if let Some(a) = anchor((v >> 6) & 3, ["text", "margin", "page"]) {
+                f.h_anchor = a;
+            }
+        }
+        P_DXA_ABS => {
+            let (x, align) = match v as i16 {
+                -4 => (0, Some("center")),
+                -8 => (0, Some("right")),
+                -12 => (0, Some("inside")),
+                -16 => (0, Some("outside")),
+                x => (i32::from(x), None),
+            };
+            (f.x, f.x_align) = (tw(x), align.map(str::to_owned));
+        }
+        P_DYA_ABS => {
+            let (y, align) = match v as i16 {
+                -4 => (0, Some("top")),
+                -8 => (0, Some("center")),
+                -12 => (0, Some("bottom")),
+                -16 => (0, Some("inside")),
+                // Word 2016 reads -20 as y="-20", not as "outside".
+                y => (i32::from(y), None),
+            };
+            (f.y, f.y_align) = (tw(y), align.map(str::to_owned));
+        }
+        P_DXA_WIDTH => f.w = (v != 0).then(|| tw(i32::from(v)).max(0.0)),
+        P_WHEIGHT_ABS => {
+            let h = v & 0x7FFF;
+            f.h = (h != 0).then(|| tw(i32::from(h)));
+            f.h_exact = h != 0 && v & 0x8000 == 0;
+        }
+        P_WR => {
+            f.wrap = match v {
+                1 => "notBeside",
+                2 => "around",
+                _ => "auto",
+            }
+            .into();
+        }
+        P_DXA_FROM_TEXT => {
+            f.h_space = tw(i32::from(v)).max(0.0);
+            if p.drop_cap.is_some() {
+                p.drop_cap_distance = Some(f.h_space).filter(|d| *d > 0.0);
+            }
+        }
+        P_DYA_FROM_TEXT => f.v_space = tw(i32::from(v)).max(0.0),
         _ => {}
     }
 }

@@ -1426,3 +1426,35 @@ fn headings_take_their_levels_from_the_sections_olst() {
     let doc = read(&word6_file(&d)).expect("opens");
     assert_eq!(labels(&doc), ["I. a", "A. b", "I.A.1. c", "I.A.2. d", "II. e", "A. f"]);
 }
+
+#[test]
+fn frames_and_drop_caps_are_read() {
+    // As Word 95 wrote the sample's first frame and drop cap: Word 97's frame sprms at their
+    // index + 2 (0x1A x, 0x1B y, 0x1C width, 0x1D anchors, 0x2D height, 0x30/0x31 distances), and
+    // the drop cap (0x2E) in one byte. Word 2016 reads x="1441" y="721" w="2880" h="1440"
+    // hRule="exact", margin and paragraph, 180 from text; and a drop cap over 3 lines.
+    use craft_wordmodel::props::TextFrame;
+    let framed: &[u8] = &[0x1D, 0x60, 0x1A, 0xA1, 0x05, 0x1B, 0xD1, 0x02, 0x1C, 0x40, 0x0B, 0x31, 0xB4, 0x00, 0x30, 0xB4, 0x00, 0x2D, 0xA0, 0x05];
+    let drop: &[u8] = &[0x1D, 0x20, 0x1A, 0x01, 0x00, 0x1B, 0x01, 0x00, 0x1C, 0x58, 0x02, 0x25, 0x01, 0x2D, 0xD0, 0x02, 0x2E, 0x19];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, framed), (2, 4, drop), (4, 6, &[])];
+    let doc = read(&word6_file(&Doc6 { text: b"F\rD\rt\r", paras, ..Default::default() })).expect("opens");
+    let p: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(
+        p[0].props.frame,
+        Some(TextFrame {
+            w: Some(144.0),
+            h: Some(72.0),
+            h_exact: true,
+            x: 72.05,
+            y: 36.05,
+            h_anchor: "margin".into(),
+            v_anchor: "text".into(),
+            wrap: "auto".into(),
+            h_space: 9.0,
+            v_space: 9.0,
+            ..Default::default()
+        })
+    );
+    assert_eq!((p[1].props.drop_cap, p[1].props.drop_cap_margin), (Some(3), None));
+    assert_eq!(p[2].props.frame, None);
+}

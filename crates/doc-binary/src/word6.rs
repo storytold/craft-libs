@@ -9,8 +9,9 @@
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
 //! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
 //! their separators and options), the comments, the character styles of runs, and paragraph and
-//! cell borders and shading, inline pictures, the bookmarks of the main text, and its
-//! auto-numbering (numbered and bulleted paragraphs and heading numbering, by `crate::anld`).
+//! cell borders and shading, inline pictures, the bookmarks of the main text, its
+//! auto-numbering (numbered and bulleted paragraphs and heading numbering, by `crate::anld`), and
+//! frames and drop caps.
 //!
 //! The layout as observed:
 //!
@@ -203,6 +204,19 @@ mod pap {
     pub(super) const BRC_BETWEEN: u8 = 0x2A;
     /// Paragraph shading: 2 bytes, laid out as Word 97's `Shd80` (icoFore, icoBack, ipat).
     pub(super) const SHD: u8 = 0x2F;
+    /// A frame: its horizontal and vertical position, width, anchors, wrapping, height, distances
+    /// from text, and a drop cap. Each is Word 97's sprm whose index is two less (sprmPDxaAbs is
+    /// index 0x18), with its operand, except the drop cap's, one byte here and two there. Each was
+    /// matched against Word's reading of a frame Word 95 wrote with it.
+    pub(super) const DXA_ABS: u8 = 0x1A;
+    pub(super) const DYA_ABS: u8 = 0x1B;
+    pub(super) const DXA_WIDTH: u8 = 0x1C;
+    pub(super) const PC: u8 = 0x1D;
+    pub(super) const WR: u8 = 0x25;
+    pub(super) const WHEIGHT_ABS: u8 = 0x2D;
+    pub(super) const DCS: u8 = 0x2E;
+    pub(super) const DYA_FROM_TEXT: u8 = 0x30;
+    pub(super) const DXA_FROM_TEXT: u8 = 0x31;
     /// Widow control (1 byte). Word 95 writes it only to turn it off: on is its default, as in
     /// the model.
     pub(super) const WIDOW: u8 = 0x33;
@@ -805,13 +819,16 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             // too (numbering level, no line numbers, frame anchoring, wrapping, no hyphenation).
             // 0x07 and 0x09 (keep together, page break before) were matched against Word.
             0x05 | 0x07..=0x09 | 0x0D | 0x0E | 0x18 | 0x19 | 0x1D | 0x25 | 0x2C | 0x33 | 0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 | 0xB7 | 0xB9 => 1,
+            // A drop cap (one byte here, two in Word 97), matched against Word.
+            0x2E => 1,
             // Section sprms ([`SEP`]): the operand of the Word 97 sprm each stands for.
             0x8E | 0x8F | 0x93 | 0x96 | 0x97 | 0x99 | 0x9F | 0xA2 => 1,
             0x8C | 0x8D | 0x90 | 0x91 | 0x9A..=0x9D | 0xA1 | 0xA4..=0xAB => 2,
-            // 0x1A/0x1B: a frame's position; 0x65: a raised or lowered position; 0x6B: kerning in
+            // 0x1A/0x1B, 0x1C, 0x2D and 0x30/0x31: a frame's position, width, height and distances
+            // from text; 0x65: a raised or lowered position; 0x6B: kerning in
             // half-points (H1 has 0x0024; Word shows kern=36); 0x26-0x2A: paragraph borders.
-            0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x65
-            | 0x6B | 0xB6 | 0xB8 | 0xBD | 0xC0 => 2,
+            0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x1C | 0x2D | 0x30 | 0x31 | 0x26 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2F | 0x50 | 0x5D
+            | 0x60 | 0x61 | 0x63 | 0x65 | 0x6B | 0xB6 | 0xB8 | 0xBD | 0xC0 => 2,
             0x14 => 4,
             // A count byte, then that many bytes (0x0C: a paragraph's numbering, 52 bytes; 0x85: a
             // section's heading numbering, 212).
@@ -1014,6 +1031,15 @@ fn translate_pap(grpprl: &[u8]) -> Vec<u8> {
                 }
             }
             pap::SHD => prl(&mut out, w97::P_SHD80, v),
+            pap::DXA_ABS => prl(&mut out, crate::fmt::P_DXA_ABS, v),
+            pap::DYA_ABS => prl(&mut out, crate::fmt::P_DYA_ABS, v),
+            pap::DXA_WIDTH => prl(&mut out, crate::fmt::P_DXA_WIDTH, v),
+            pap::PC => prl(&mut out, crate::fmt::P_PC, v),
+            pap::WR => prl(&mut out, crate::fmt::P_WR, v),
+            pap::WHEIGHT_ABS => prl(&mut out, crate::fmt::P_WHEIGHT_ABS, v),
+            pap::DCS => prl(&mut out, crate::fmt::P_DCS, &[v.first().copied().unwrap_or(0), 0]),
+            pap::DYA_FROM_TEXT => prl(&mut out, crate::fmt::P_DYA_FROM_TEXT, v),
+            pap::DXA_FROM_TEXT => prl(&mut out, crate::fmt::P_DXA_FROM_TEXT, v),
             pap::DEF_TABLE_SHD => prl(&mut out, w97::T_DEF_TABLE_SHD80, v),
             _ => {}
         }
