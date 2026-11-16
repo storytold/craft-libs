@@ -41,6 +41,7 @@ bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
 craft-gzip = { path = "crates/gzip" }
+craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
