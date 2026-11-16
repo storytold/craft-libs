@@ -26,6 +26,6 @@ pub mod paths;
 pub mod preflight;
 pub mod sniff;
 pub mod svgz;
-#[cfg(feature = "tree")]
+#[cfg(feature = "tree-core")]
 pub mod tree;
 pub mod write;

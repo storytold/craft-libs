@@ -1,4 +1,5 @@
-//! The full-window parts' own logic: the view's fit and zoom rules, the wheel zoom and the mapped overlay.
+//! The full-window parts' own logic: the view's fit and zoom rules, the wheel zoom, Escape on a focused canvas, the
+//! close of the dialog's own window and the mapped overlay.
 
 use craft_behavior::PixelSize;
 use craft_ui::canvas::ViewCommands;
@@ -213,6 +214,150 @@ mod momentary {
         assert_eq!(presses.get(), 0, "the tool sees no press while Space is held");
         let after = view.borrow().view().center;
         assert!(after.x < before.x && after.y < before.y, "the drag pans the view: {before:?} {after:?}");
+    }
+}
+
+/// Escape on a focused canvas inside a full-window dialog.
+mod escape {
+    use craft_behavior::{CancelReason, Intent, PixelSize};
+    use craft_ui::canvas::{CanvasTool, PixelRect, RasterSource, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
+    use craft_ui::contract::{Bind, ShowContainer as _};
+    use craft_ui::dialog::{FullWindowCanvas, FullWindowDialog, FullWindowView};
+    use craft_ui::primitives::{Draw, Revision};
+    use craft_ui::runtime::access::Role;
+    use craft_ui::runtime::focus::Initial;
+    use craft_ui::runtime::keys;
+    use craft_ui::testing::input::key_press;
+    use craft_ui::testing::{Fixture, trial};
+    use egui::{Color32, ColorImage, Key, Modifiers};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    struct Grey;
+
+    impl RasterSource for Grey {
+        fn size(&self) -> PixelSize {
+            PixelSize::new(800, 600)
+        }
+
+        fn revision(&self) -> Revision {
+            Revision::new(1)
+        }
+
+        fn damage(&self, _: Revision) -> Option<PixelRect> {
+            Some(PixelRect::default())
+        }
+
+        fn read(&self, _: PixelRect, _: u32, out: &mut ColorImage) {
+            out.pixels.fill(Color32::from_rgb(0x80, 0x80, 0x80));
+        }
+    }
+
+    /// A tool that takes its clicks and, when `takes_escape`, the Escape.
+    struct Picker {
+        takes_escape: bool,
+    }
+
+    impl CanvasTool for Picker {
+        fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+            ToolAction::Claimed
+        }
+
+        fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+        fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+        fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+        fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+            self.takes_escape && *key == ToolKey::Cancel
+        }
+
+        fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+        fn command_form(&self) -> ToolPath {
+            ToolPath::Command("the Edit command")
+        }
+    }
+
+    // The RAW Develop form: the canvas a click focused leaves the Escape its tool refuses to the dialog, which closes;
+    // the window, reading its intents last, sees none. An Escape the tool takes closes nothing.
+    #[trial]
+    fn escape_on_a_focused_canvas_in_a_full_window_dialog_closes_the_dialog_and_not_the_window() {
+        for takes_escape in [false, true] {
+            let open = Rc::new(Cell::new(true));
+            let window_cancels = Rc::new(Cell::new(0));
+            let view = Rc::new(RefCell::new(FullWindowView::new()));
+            let (shown, seen, viewed) = (open.clone(), window_cancels.clone(), view.clone());
+            let mut fixture = Fixture::new(move |ui| {
+                let mut is_open = shown.get();
+                let mut tool = Picker { takes_escape };
+                let mut view = viewed.borrow_mut();
+                FullWindowDialog::new("Workspace").opened(Bind::bound(&mut is_open)).initial_focus(Initial::Keep).show(ui, |ui, _| {
+                    FullWindowCanvas::new(Bind::bound(&mut *view), &Grey).tool(&mut tool).show(ui);
+                });
+                shown.set(is_open);
+                keys::with_window_intents(ui.ctx(), false, |window| {
+                    let took = window.take(Intent::Cancel);
+                    seen.set(seen.get() + u32::from(took));
+                    took
+                });
+            });
+            fixture.settle();
+            let canvas = fixture.by_role(Role::CANVAS).remove(0);
+            fixture.click(&canvas).settle();
+            assert!(open.get(), "a click on the canvas leaves the dialog open");
+            window_cancels.set(0);
+            fixture.frame(vec![key_press(Key::Escape, Modifiers::NONE)]).settle();
+            assert_eq!(open.get(), takes_escape, "Escape closes the dialog only when the tool leaves it (tool takes it: {takes_escape})");
+            assert_eq!(window_cancels.get(), 0, "the window sees no Escape (tool takes it: {takes_escape})");
+        }
+    }
+}
+
+/// A full-window dialog in a window of its own.
+mod own_window {
+    use craft_ui::contract::{Bind, ShowContainer as _};
+    use craft_ui::dialog::{DialogResult, FullWindowDialog};
+    use craft_ui::runtime::overlay::CloseReason;
+    use craft_ui::runtime::windows::WindowSpec;
+    use craft_ui::testing::trial;
+    use craft_ui_test_kit::windows::Windows;
+    use egui::{ViewportEvent, ViewportInfo};
+    use std::cell::Cell;
+
+    // The OS closing the dialog's window (its close button, a window manager's close) is a cancel: the dialog reports
+    // `Requested`, which every host but OK reads as Cancel, so an outer gesture over its edits is taken back.
+    #[trial]
+    fn closing_a_full_window_dialogs_own_window_cancels_it() {
+        let windows = Windows::new();
+        let open = Cell::new(true);
+        let closed = Cell::new(None);
+        let frame = || {
+            windows.frame(vec![], vec![], |ui| {
+                let mut is_open = open.get();
+                let output = FullWindowDialog::new("Workspace")
+                    .own_window(WindowSpec::dialog())
+                    .outer_gesture(true)
+                    .opened(Bind::bound(&mut is_open))
+                    .show(ui, |_, _| {})
+                    .output;
+                open.set(is_open);
+                if let Some(reason) = output.closed {
+                    closed.set(Some((reason, matches!(output.result(|| ()), Some(DialogResult::Cancel)))));
+                }
+            })
+        };
+        for _ in 0..4 {
+            frame();
+        }
+        assert!(open.get(), "the dialog opened in its own window");
+        windows.child_info(ViewportInfo { events: vec![ViewportEvent::Close], ..ViewportInfo::default() });
+        for _ in 0..2 {
+            frame();
+        }
+        assert!(!open.get(), "closing the dialog's window closes the dialog");
+        assert_eq!(closed.get(), Some((CloseReason::Requested, true)), "the close is a cancel");
     }
 }
 

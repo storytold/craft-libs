@@ -63,7 +63,7 @@ fn answered_by_platform(ctx: &Context, viewport: ViewportId) -> bool {
 pub(super) fn os_window(props: &ContainerProps, ctx: &Context, id: Id, env: &EnvView<'_>) -> Option<ViewportId> {
     let embedded = env.get::<ShellEntry>().0.is_some_and(|shell| shell.region().is_some());
     match &props.mount {
-        Mount::Viewport { .. } if viewports::available(ctx) => Some(viewports::viewport_id(id)),
+        Mount::Viewport { .. } if windows::mount_window(ctx, id) => Some(viewports::viewport_id(id)),
         Mount::Window { .. } | Mount::Pane(_) | Mount::Inline if !embedded => Some(pass::current_viewport(ctx)),
         Mount::Window { .. } | Mount::Pane(_) | Mount::Inline | Mount::Viewport { .. } | Mount::Layer(_) | Mount::FullWindow => None,
     }

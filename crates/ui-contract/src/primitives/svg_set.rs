@@ -1,7 +1,7 @@
 //! The SVG icon catalog the build embeds, the app icon sets registered beside it, and their rasteriser.
 
 use egui::{Color32, ColorImage};
-use resvg::tiny_skia;
+use craft_svg::tree::draw::{self as svg_draw, tiny_skia};
 use std::sync::{PoisonError, RwLock};
 
 use super::svg_tree;
@@ -151,13 +151,14 @@ fn draw(svg: &[u8], own: Option<f32>, px: u32, stroke_px: f32, mirrored: bool) -
         let text = std::str::from_utf8(svg).map_err(|e| e.to_string())?;
         tree = svg_tree::parse(scale_stroke_widths(text, units / own).as_bytes())?;
     }
-    let mut pixmap = tiny_skia::Pixmap::new(px, px).ok_or("zero size")?;
     let (sx, sy) = (px as f32 / view.width(), px as f32 / view.height());
     let transform =
         if mirrored { tiny_skia::Transform::from_row(-sx, 0.0, 0.0, sy, px as f32, 0.0) } else { tiny_skia::Transform::from_scale(sx, sy) };
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-    Ok(pixmap)
+    svg_draw::render(&tree, transform, px, px, 0, ICON_DRAW_BUDGET).map_err(|refusal| refusal.message)
 }
+
+/// Bytes drawing one icon may allocate, its target included.
+const ICON_DRAW_BUDGET: u64 = 64 << 20;
 
 /// `svg` with each `stroke-width="..."` attribute multiplied by `factor`.
 fn scale_stroke_widths(svg: &str, factor: f32) -> String {

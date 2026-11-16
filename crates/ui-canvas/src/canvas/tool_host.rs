@@ -1259,7 +1259,9 @@ impl<'a, 't: 'a> Run<'a, 't> {
 
     /// The keys the canvas holds: intents routed to it while it has focus, the arrows, Enter and Escape while nothing
     /// in the window has focus, and the chords the tool claimed at the end of the last pass. A session control in the
-    /// canvas body (`KeyUse::session`) has taken the arrows, Enter and Escape it acts on before this runs.
+    /// canvas body (`KeyUse::session`) has taken the arrows, Enter and Escape it acts on before this runs. The Escape
+    /// of the focused canvas reaches the tool once, through the window's intents (`with_window_intents` offers the
+    /// focused document canvas's Escape); one the tool leaves stays the canvas's, for the scopes around it.
     fn keys(&mut self, ctx: &Context, canvas: Id, rtl: bool) {
         keys::with_window_intents(ctx, rtl, |window| {
             let mut taken = self.offer(window, |intents| intents.take_nudge().map(|(direction, mods)| ToolKey::Nudge { direction, mods }));
@@ -1282,9 +1284,6 @@ impl<'a, 't: 'a> Run<'a, 't> {
             });
         }
         taken |= self.offer(&mut intents, |intents| intents.take(Intent::Submit).then_some(ToolKey::Submit));
-        if !self.cancelled {
-            taken |= self.offer(&mut intents, |intents| intents.take(Intent::Cancel).then_some(ToolKey::Cancel));
-        }
         if taken {
             keys::settle(ctx, Some(canvas), &intents);
         }
@@ -1308,11 +1307,6 @@ impl<'a, 't: 'a> Run<'a, 't> {
             if self.call(None, |tool, cx| tool.key(&kept, cx)) {
                 self.response.took_key = Some(kept);
             }
-        }
-        // An Escape the focused canvas's sessions and tool were offered and left is the window's, as it is with
-        // nothing focused.
-        if !self.cancelled {
-            keys::leave_to_window(ctx, canvas, |intent| *intent == Intent::Cancel);
         }
     }
 }

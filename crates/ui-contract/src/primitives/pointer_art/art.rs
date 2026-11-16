@@ -4,7 +4,7 @@
 use crate::primitives::SvgIcon;
 use crate::runtime::cursor::{CursorArt, CursorBitmap};
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2};
-use resvg::tiny_skia;
+use craft_svg::tree::draw::tiny_skia;
 use std::sync::Arc;
 
 /// How far past a mark's geometry its antialiasing reaches, in device pixels.

@@ -53,6 +53,7 @@ pub struct FakeLayers {
     /// filter's Missing.
     pub missing: Vec<u32>,
     info_calls: Cell<usize>,
+    sub_rows_calls: Cell<usize>,
 }
 
 impl FakeLayers {
@@ -254,7 +255,7 @@ impl FakeLayers {
         tree
     }
 
-    /// `count` pixel layers at the top level, for the 10,000-row test; counts the `info` calls.
+    /// `count` pixel layers at the top level, for the long-list trials; counts the `info` and `sub_rows` calls.
     pub fn flat(count: usize) -> Self {
         let mut tree = Self::default();
         for n in 0..count {
@@ -304,6 +305,11 @@ impl FakeLayers {
     /// How many times `info` was called since the last [`take_info_calls`](Self::take_info_calls).
     pub fn take_info_calls(&self) -> usize {
         self.info_calls.replace(0)
+    }
+
+    /// How many times `sub_rows` was called since the last [`take_sub_rows_calls`](Self::take_sub_rows_calls).
+    pub fn take_sub_rows_calls(&self) -> usize {
+        self.sub_rows_calls.replace(0)
     }
 }
 
@@ -394,6 +400,7 @@ impl LayerTree for FakeLayers {
     }
 
     fn sub_rows(&self, id: &u32, group: SubRowGroup) -> Option<SubRows> {
+        self.sub_rows_calls.set(self.sub_rows_calls.get() + 1);
         let layer = self.layer(id)?;
         match group {
             SubRowGroup::Effects => layer.effects.clone(),

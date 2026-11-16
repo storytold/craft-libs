@@ -36,7 +36,7 @@ craft-i18n = { workspace = true, features = ["collate"] }
 # The saved forms of `ScreenMode`, `RecentView` and `RecentSort`.
 serde = { workspace = true }
 # The caption button icons.
-resvg = { version = "0.45.1", default-features = false }
+craft-svg = { workspace = true, features = ["draw"] }
 # `std::time::Instant` on native; the browser clock on wasm, where `Instant::now` panics.
 web-time = "1.1"
 

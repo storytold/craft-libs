@@ -24,14 +24,14 @@ use crate::primitives::SurfaceSlot;
 use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
-use crate::runtime::egui::{alloc, areas, child, repaint, response, style, viewports};
+use crate::runtime::egui::{alloc, areas, child, repaint, response, style};
 use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, RowLine};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::{Driver, Presence, spec};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::pass_state;
-use crate::runtime::{keys, layout_memory, pointer, wheel};
+use crate::runtime::{keys, layout_memory, pointer, wheel, windows};
 use crate::style::ComponentStyle as _;
 use crate::style::{ScrollBarKind, StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
@@ -169,7 +169,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             // A viewport whose fallback covers the window is fixed in both modes, as a full-window mount is: its body
             // never sizes as a layer's content.
             Mount::Viewport { fallback, .. } if fallback.is_full_window() => true,
-            Mount::Viewport { .. } if viewports::available(&ctx) => true,
+            Mount::Viewport { .. } if windows::mount_window(&ctx, id) => true,
             Mount::Layer(_) | Mount::Viewport { .. } => {
                 let placement = overlay_of(props).map_or_else(Placement::default, |overlay| {
                     let screen = crate::contract::overlay::screen_for(&ctx, env, overlay);
@@ -617,7 +617,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let props = comp.props(Internal::new());
         let (scroll, layer) = (scroll_of(props), matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. }));
         // The OS asked a viewport mount's window to close: the container closes at step 15.
-        if matches!(props.mount, Mount::Viewport { .. }) && crate::runtime::windows::take_close_request(cx.core.memory.ctx(), cx.core.id) {
+        if matches!(props.mount, Mount::Viewport { .. }) && windows::take_close_request(cx.core.memory.ctx(), cx.core.id) {
             self.close = true;
             self.reason = self.reason.or(Some(CloseReason::Requested));
         }
@@ -654,7 +654,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.window_movable(viewport, cx);
         }
         self.pane_drag(props, cx);
-        if layer && !(matches!(props.mount, Mount::Viewport { .. }) && viewports::available(cx.core.memory.ctx())) {
+        if layer && !(matches!(props.mount, Mount::Viewport { .. }) && windows::mount_window(cx.core.memory.ctx(), cx.core.id)) {
             self.window_keys(props, cx);
             self.window_drag(props, cx);
         }

@@ -386,3 +386,63 @@ fn a_stacking_key_on_a_selected_smart_filter_row_moves_the_filter() {
         .collect();
     assert_eq!(moves, [(SMART, SubRowGroup::SmartFilters, 0, 1)], "{events:?}");
 }
+
+/// `count` pixel layers above a closed group and a smart object with two Smart Filters shown, at a fixed revision;
+/// returns the tree and the smart object.
+fn long(count: usize) -> (FakeLayers, u32) {
+    let mut tree = FakeLayers::flat(count);
+    let group = tree.add(None, LayerInfo::new("Closed Group", LayerKind::Group), false);
+    tree.add(Some(group), LayerInfo::new("Inside", LayerKind::Pixel), false);
+    let mut smart = LayerInfo::new("Smart Object", LayerKind::SmartObject);
+    smart.has_smart_filters = true;
+    let id = tree.add(None, smart, false);
+    let layer = tree.layer_mut(id);
+    layer.effects_open = true;
+    layer.smart_filters = Some(SubRows::new(SubRow::new("Smart Filters"), vec![sub_row("Gaussian Blur"), sub_row("Sharpen")]));
+    tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    tree.revision = Some(1);
+    (tree, id)
+}
+
+/// FW15: a long layer list asks the app only for the rows in view: a settled frame makes as many `info` and
+/// `sub_rows` calls for 2,000 layers as for 200, and an off-screen group or Smart Filter row lays out nothing.
+/// Scrolled into view they show; a filter selected there stays selected after it scrolls away again.
+#[trial]
+fn a_long_layer_list_asks_only_for_the_rows_in_view() {
+    let mut calls = Vec::new();
+    for count in [200, 2_000] {
+        let (tree, smart) = long(count);
+        let (mut fixture, app) = rig(tree);
+        let _ = (app.borrow().tree.take_info_calls(), app.borrow().tree.take_sub_rows_calls());
+        fixture.frame(vec![]);
+        calls.push((app.borrow().tree.take_info_calls(), app.borrow().tree.take_sub_rows_calls()));
+        for name in ["Closed Group", "Smart Object", "Gaussian Blur", "Sharpen"] {
+            assert!(fixture.by_label(name).is_none(), "{count} layers: the off-screen row {name:?} lays out nothing");
+        }
+
+        let list = node(&fixture, "Layers").center();
+        fixture.frame(vec![pointer::moved(list)]);
+        // The list's extent grows as it measures the rows a wheel brings in, so the end takes a few wheels.
+        for _ in 0..3 {
+            fixture.frame(vec![pointer::wheel(-1.0e7)]).settle();
+        }
+        for name in ["Closed Group", "Smart Object", "Gaussian Blur", "Sharpen"] {
+            assert!(fixture.by_label(name).is_some(), "{count} layers: scrolled to the bottom, {name:?} shows");
+        }
+        let blur = node(&fixture, "Gaussian Blur");
+        fixture.click(&blur).settle();
+        let selected = Some(LayerRowKey::Filters(smart, Some(0)));
+        assert_eq!(app.borrow().tree.selection.sub_row, selected, "{count} layers: the filter is selected");
+        take(&app);
+        for _ in 0..3 {
+            fixture.frame(vec![pointer::wheel(1.0e7)]).settle();
+        }
+        // The selected filter is the list's lead, which stays built out of view.
+        let view = node(&fixture, "Layers").rect;
+        let left = fixture.by_label("Gaussian Blur");
+        assert!(left.is_none_or(|row| !row.rect.intersects(view)), "{count} layers: scrolled back to the top, the filter is out of view");
+        assert!(take(&app).iter().all(|event| !matches!(event, LayersEvent::Select(_))), "{count} layers: scrolling selects nothing");
+        assert_eq!(app.borrow().tree.selection.sub_row, selected, "{count} layers: the filter stays selected");
+    }
+    assert_eq!(calls[0], calls[1], "a settled frame asks for as many rows for 2,000 layers as for 200 (info, sub_rows)");
+}

@@ -139,7 +139,7 @@ pub(super) fn overlay_of(props: &ContainerProps) -> Option<&crate::contract::Ove
 pub(super) fn measure_layer(props: &ContainerProps, id: Id, ui: &Ui) -> areas::Layer {
     let area = sub(id, "area");
     match &props.mount {
-        Mount::Viewport { .. } if windows::WindowHost::of(ui.ctx()).viewports_available() => ui.layer_id(),
+        Mount::Viewport { .. } if windows::mount_window(ui.ctx(), id) => ui.layer_id(),
         Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => {
             areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), overlay.rank), area)
         }
