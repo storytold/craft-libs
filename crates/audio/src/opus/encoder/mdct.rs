@@ -9,84 +9,7 @@
 
 use crate::opus::encoder::tables::OVERLAP;
 
-#[derive(Clone, Copy, Default, Debug)]
-pub struct Cpx {
-    pub re: f32,
-    pub im: f32,
-}
-
-impl Cpx {
-    #[inline]
-    fn mul(self, o: Cpx) -> Cpx {
-        Cpx { re: self.re * o.re - self.im * o.im, im: self.re * o.im + self.im * o.re }
-    }
-    #[inline]
-    fn add(self, o: Cpx) -> Cpx {
-        Cpx { re: self.re + o.re, im: self.im + o.im }
-    }
-}
-
-/// Mixed-radix (2, 3, 4, 5) forward complex FFT, unscaled (decimation in time, recursive).
-pub struct Fft {
-    n: usize,
-    factors: Vec<usize>,
-    twiddle: Vec<Cpx>,
-}
-
-impl Fft {
-    pub fn new(n: usize) -> Fft {
-        let mut factors = Vec::new();
-        let mut m = n;
-        for p in [4usize, 2, 3, 5] {
-            while m.is_multiple_of(p) {
-                factors.push(p);
-                m /= p;
-            }
-        }
-        assert_eq!(m, 1, "unsupported FFT size {n}");
-        let twiddle = (0..n)
-            .map(|k| {
-                let ph = -2.0 * std::f64::consts::PI * k as f64 / n as f64;
-                Cpx { re: ph.cos() as f32, im: ph.sin() as f32 }
-            })
-            .collect();
-        Fft { n, factors, twiddle }
-    }
-
-    pub fn process(&self, data: &mut [Cpx], scratch: &mut Vec<Cpx>) {
-        scratch.clear();
-        scratch.extend_from_slice(&data[..self.n]);
-        self.rec(&mut data[..self.n], scratch, 1, self.n, 0, 1);
-    }
-
-    fn rec(&self, out: &mut [Cpx], inp: &[Cpx], in_stride: usize, n: usize, fi: usize, tw_stride: usize) {
-        let p = self.factors[fi];
-        let m = n / p;
-        if m == 1 {
-            for (i, o) in out.iter_mut().enumerate().take(p) {
-                *o = inp[i * in_stride];
-            }
-        } else {
-            for q in 0..p {
-                self.rec(&mut out[q * m..(q + 1) * m], &inp[q * in_stride..], in_stride * p, m, fi + 1, tw_stride * p);
-            }
-        }
-        let big = self.n;
-        let mut t = [Cpx::default(); 5];
-        for k in 0..m {
-            for (q, tq) in t.iter_mut().enumerate().take(p) {
-                *tq = out[q * m + k].mul(self.twiddle[(q * k * tw_stride) % big]);
-            }
-            for q2 in 0..p {
-                let mut acc = Cpx::default();
-                for (q, tq) in t.iter().enumerate().take(p) {
-                    acc = acc.add(tq.mul(self.twiddle[((q * q2) % p) * (big / p)]));
-                }
-                out[q2 * m + k] = acc;
-            }
-        }
-    }
-}
+use crate::opus::fft::{Cpx, Fft};
 
 /// Forward MDCT producing `n` coefficients from a block of `n + OVERLAP` samples.
 pub struct Mdct {
@@ -197,6 +120,31 @@ mod tests {
                     / n as f64
             })
             .collect()
+    }
+
+    #[test]
+    fn fft_matches_dft() {
+        // Every radix combination, including the 480-point size of the 20 ms frame.
+        for &n in &[2usize, 3, 4, 5, 6, 8, 12, 15, 16, 20, 24, 30, 48, 60, 120, 240, 480] {
+            let fft = Fft::new(n);
+            let x: Vec<Cpx> = (0..n).map(|i| Cpx { re: ((i * 37 % 101) as f32 - 50.0) / 7.0, im: ((i * 53 % 89) as f32 - 44.0) / 9.0 }).collect();
+            let mut y = x.clone();
+            fft.process(&mut y, &mut Vec::new());
+            for k in 0..n {
+                let (mut re, mut im) = (0f64, 0f64);
+                for (j, v) in x.iter().enumerate() {
+                    let ph = -2.0 * std::f64::consts::PI * ((j * k) % n) as f64 / n as f64;
+                    re += v.re as f64 * ph.cos() - v.im as f64 * ph.sin();
+                    im += v.re as f64 * ph.sin() + v.im as f64 * ph.cos();
+                }
+                assert!(
+                    (y[k].re as f64 - re).abs() < 2e-3 && (y[k].im as f64 - im).abs() < 2e-3,
+                    "n={n} k={k}: ({}, {}) vs ({re}, {im})",
+                    y[k].re,
+                    y[k].im
+                );
+            }
+        }
     }
 
     #[test]

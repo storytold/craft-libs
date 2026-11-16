@@ -39,6 +39,86 @@ fn basic_reader() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_write_their_direction() {
+    // Word writes an RTL paragraph as `\rtlpar` (`\ltrpar` for LTR); reading it keeps the
+    // direction as w:bidi on the document paragraph, and export writes it back.
+    let rtf = br#"{\rtf1\ansi\pard\rtlpar RTL\par\pard\ltrpar LTR\par\pard plain\par}"#;
+    let flow = parse(rtf).unwrap();
+    let paras: Vec<&Para> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(paras[0].rtl, "rtlpar sets the direction");
+    assert!(!paras[1].rtl && !paras[2].rtl, "ltrpar and no word: not RTL");
+    // \rtldir and \ltrdir, which some writers used for paragraphs, are read too.
+    let old = parse(br#"{\rtf1\ansi\pard\rtldir RTL\par\pard\ltrdir LTR\par}"#).unwrap();
+    let old: Vec<&Para> = old.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(old[0].rtl && !old[1].rtl, "rtldir and ltrdir are read");
+    // \pard resets the direction.
+    let reset = parse(br#"{\rtf1\ansi\pard\rtlpar A\par\pard B\par}"#).unwrap();
+    let reset: Vec<&Para> = reset.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(reset[0].rtl && !reset[1].rtl, "pard resets the direction");
+    // Import keeps it as bidi on the document paragraph.
+    let bidi = |d: &Document| {
+        d.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.bidi.unwrap_or(false)) } else { None }).collect::<Vec<_>>()
+    };
+    let doc = import(rtf).unwrap();
+    assert_eq!(bidi(&doc), [true, false, false]);
+    // Export writes \rtlpar once, and not the \rtldir.
+    let out = export(&doc);
+    assert_eq!(out.matches("\\rtlpar").count(), 1, "{out}");
+    assert!(!out.contains("rtldir"), "{out}");
+    assert_eq!(bidi(&import(out.as_bytes()).unwrap()), [true, false, false]);
+}
+
+#[test]
+fn rtl_paragraph_styles_carry_their_direction() {
+    // Word often writes the direction in the style: `{\s1\rtlpar RTL;}` then `\pard\s1`.
+    let rtf = br#"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s1\rtlpar RTL;}{\s2\sbasedon1 Child;}{\s3\sbasedon1\ltrpar Back;}}
+\pard\s1 A\par\pard\s2 B\par\pard\s3 C\par\pard\s1\ltrpar D\par\pard\s0\rtlpar E\par\pard F\par}"#;
+    let flow = parse(rtf).unwrap();
+    let rtl: Vec<bool> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+    // A: style. B: inherited from the base style. C: the style overrides its base. D: direct
+    // \ltrpar beats the style. E: direct \rtlpar on Normal. F: \pard drops direct formatting.
+    assert_eq!(rtl, [true, true, false, false, true, false]);
+}
+
+#[test]
+fn oldpprops_keep_the_old_paragraph_direction() {
+    // A tracked change of direction: now LTR, before RTL (`\rtlpar` in the old properties).
+    let rtf = br"{\rtf1\ansi{\*\revtbl {Unknown;}{Alice;}}
+\pard\ltrpar\prauth1\prdate-2014675576{\*\oldpprops \pard \rtlpar}A\par}";
+    let flow = parse(rtf).unwrap();
+    let Some(FBlock::Para(p)) = flow.blocks.first() else { panic!("no paragraph") };
+    assert!(!p.rtl);
+    assert!(p.fmt_change.as_deref().expect("paragraph change").old.rtl, "old direction is RTL");
+    let doc = import(rtf).unwrap();
+    let c = doc_paras(&doc)[0].props.fmt_change.as_deref().expect("change");
+    assert_eq!(c.old.bidi, Some(true));
+}
+
+#[test]
+fn tracked_rtl_to_ltr_change_from_a_document_keeps_the_old_direction() {
+    use craft_wordmodel::props::{CharProps, ParaProps, PropChange};
+    use craft_wordmodel::{Revision, RevisionKind};
+    // Document origin (not RTF): now LTR, before RTL.
+    let mut p = craft_wordmodel::Paragraph::with_text("A", CharProps::default());
+    p.props.bidi = Some(false);
+    p.props.fmt_change = PropChange::boxed(0, ParaProps { bidi: Some(true), ..Default::default() });
+    let doc = doc_with(vec![p], vec![Revision::new(RevisionKind::Format, "Bob", "2025-01-02T08:05:00Z")]);
+    let flow = model::from_doc_tracked(&doc);
+    let Some(FBlock::Para(fp)) = flow.blocks.first() else { panic!("no paragraph") };
+    assert!(!fp.rtl);
+    assert!(fp.fmt_change.as_deref().expect("change").old.rtl, "snapshot keeps RTL");
+    let rtf = export(&doc);
+    assert!(rtf.contains("{\\*\\oldpprops"), "{rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let p = doc_paras(&back)[0];
+    assert_ne!(p.props.bidi, Some(true), "current direction is LTR");
+    let change = p.props.fmt_change.as_deref().expect("change read back");
+    assert_eq!(change.old.bidi, Some(true));
+    // Reject restores RTL.
+    assert_eq!(change.old.formatting().bidi, Some(true));
+}
+
+#[test]
 fn stylesheet_names_take_unicode_escapes() {
     // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
     let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
@@ -1168,7 +1248,7 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
     p.push_text("x", &Fmt { font: Some("Arial".into()), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() });
     let mut w = Writer {
         marks: Vec::new(),
-        t: Tables { fonts: vec!["Aptos".into()], colors: Vec::new() },
+        t: Tables::new("Aptos".into()),
         lists: Vec::new(),
         authors: None,
         base: Fmt::default(),
@@ -1179,6 +1259,39 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
     w.para(&p, false, None, "\\par", &mut out);
     let mono = w.t.font(model::MONO_FONT);
     assert!(out.contains(&format!("{{\\*\\oldcprops \\f{mono}\\crauth1}}")), "{out}");
+}
+
+#[test]
+fn many_distinct_fonts_colours_and_authors_take_constant_steps_each() {
+    use model::FmtChange;
+    // Each run has its own font, colour and tracked-change author.
+    let n = 3000;
+    let mut p = Para::default();
+    for i in 0..n {
+        let mark = RevMark { author: format!("Author {i}"), date: String::new(), id: None };
+        let color = Rgb((i >> 16) as u8, (i >> 8) as u8, i as u8);
+        let font: Arc<str> = format!("Font {i}").into();
+        p.push_text(
+            "x",
+            &Fmt { font: Some(font), color: Some(color), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() },
+        );
+    }
+    let mut w = Writer {
+        marks: Vec::new(),
+        t: Tables::new("Aptos".into()),
+        lists: Vec::new(),
+        authors: None,
+        base: Fmt::default(),
+        sections: Vec::new(),
+        sect_i: 0,
+    };
+    let mut out = String::new();
+    let steps = crate::write::lookup_steps(|| w.para(&p, false, None, "\\par", &mut out));
+    // One lookup each for the font and the colour, and two for a new author: the borrowed
+    // lookup, then the insert.
+    assert!(steps <= 4 * n, "{steps} steps for {n} runs");
+    assert!(out.contains(&format!("\\f{n}\\cf{n}")), "the last run names the last font and colour");
+    assert!(out.contains(&format!("\\crauth{n}")), "the last run names the last author");
 }
 
 /// The text runs of `rtf`'s paragraphs, in order, with their formatting.
@@ -1829,4 +1942,47 @@ fn compound_borders_round_trip() {
     assert_eq!(tops(&d), want);
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
+}
+
+fn para_aligns(flow: &Flow) -> Vec<(bool, Option<Align>)> {
+    flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
+}
+
+#[test]
+fn alignment_words_after_rtlpar_mean_start_and_end() {
+    // Word reads `\ql`/`\qr` that follow `\rtlpar` as start/end (the model's alignment is
+    // logical), so `\rtlpar\qr` sits at the right edge and `\rtlpar\ql` at the left edge.
+    // Words written before `\rtlpar` keep their plain meaning (checked in Word by saving to DOCX:
+    // `\qr\rtlpar` gives jc=right, i.e. end, in the bidi paragraph; `\ql\rtlpar` gives no jc).
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}\pard LTR one.\par \pard\rtlpar\qr A.\par \pard\rtlpar B.\par \pard\ltrpar Back.\par \pard\rtlpar\ql C.\par \pard\rtlpar\qc D.\par \pard\ql\rtlpar E.\par \pard\qr\rtlpar F.\par \pard\rtlpar\ltrpar\qr G.\par}"#;
+    let got = para_aligns(&parse(rtf).unwrap());
+    assert_eq!(
+        got,
+        [
+            (false, None),
+            (true, Some(Align::Left)),
+            (true, None),
+            (false, None),
+            (true, Some(Align::Right)),
+            (true, Some(Align::Center)),
+            (true, Some(Align::Left)),
+            (true, Some(Align::Right)),
+            (false, Some(Align::Right)),
+        ]
+    );
+}
+
+#[test]
+fn alignment_survives_an_export_import_round_trip() {
+    let rtf = br#"{\rtf1\ansi\pard\ql L.\par \pard\qr R.\par \pard\qc C.\par \pard\rtlpar\qr start.\par \pard\rtlpar\ql end.\par \pard\rtlpar\qc mid.\par \pard\rtlpar plain.\par}"#;
+    let first = para_aligns(&parse(rtf).unwrap());
+    let doc = import(rtf).unwrap();
+    let out = export(&doc);
+    let second = para_aligns(&parse(out.as_bytes()).unwrap());
+    let norm = |v: Vec<(bool, Option<Align>)>| v.into_iter().map(|(r, a)| (r, a.filter(|a| *a != Align::Left))).collect::<Vec<_>>();
+    assert_eq!(norm(first), norm(second.clone()), "{out}");
+    // `\rtlpar\qr` is start (no explicit alignment in the model) and `\rtlpar\ql` is end.
+    assert_eq!(norm(second)[3..5], [(true, None), (true, Some(Align::Right))], "{out}");
+    // The export writes the alignment before the direction, which Word reads as logical start/end.
+    assert!(out.contains("\\qr\\rtlpar"), "{out}");
 }
