@@ -1038,6 +1038,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
     let kept = doc.kept.of("odt");
     let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
+    w.unset_z = super::frames::unset_z_index(doc);
     w.note_numbers = Some([false, true].map(|endnote| {
         let o = doc.note_options(&doc.last_section, endnote);
         (o.num_fmt, o.num_start)
@@ -1166,6 +1167,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
     hw.reserved = std::sync::Arc::clone(&w.reserved);
+    hw.unset_z = w.unset_z;
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();

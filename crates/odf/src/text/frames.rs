@@ -443,9 +443,20 @@ pub(super) fn z_of(a: &Attrs) -> u32 {
     get(a, "draw:z-index").and_then(|v| v.trim().parse::<u32>().ok()).map_or(0, |z| z.saturating_add(1))
 }
 
-/// `float`'s place in the stacking order as `draw:z-index` (see [`z_of`]): 0 when unknown.
-pub(crate) fn z_index(float: Option<&Float>) -> u32 {
-    float.map_or(0, |f| f.z.saturating_sub(1))
+/// `float`'s place in the stacking order as `draw:z-index` (see [`z_of`]). One without a stored
+/// order (made in WordCraft, or nothing to place) takes `unset`, which the writer puts above every
+/// stored order, where [`Float::z`] stacks it.
+pub(crate) fn z_index(float: Option<&Float>, unset: u32) -> u32 {
+    match float.map(|f| f.z) {
+        Some(z) if z > 0 => z - 1,
+        _ => unset,
+    }
+}
+
+/// The `draw:z-index` the objects of `doc` without a stored order take: past the highest stored
+/// one (a stored order is one more than its `draw:z-index`), 0 when none has one.
+pub(crate) fn unset_z_index(doc: &craft_wordmodel::Document) -> u32 {
+    doc.stacking_orders().0.last().copied().unwrap_or(0)
 }
 
 /// How far a frame `h` points tall in line with the text is raised from standing on the
