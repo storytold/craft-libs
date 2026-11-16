@@ -72,7 +72,7 @@ fn shift_steps_keep_the_shorter_diagonal_offset() {
 #[test]
 fn shift_holds_a_freehand_drag_to_one_line() {
     let shift = |x: f64, y: f64| DraftPoint::new(Point::new(x, y), Mods::SHIFT, 1.0);
-    let mut draft = OutlineDraft::new(DraftKind::Mixed, REACH);
+    let mut draft = OutlineDraft::new(DraftKind::Mixed, REACH).locking_shift_drags();
     draft.press(at(10.0, 60.0, 1.0), true);
     for (x, y) in [(30.0, 63.0), (50.0, 55.0), (80.0, 68.0), (100.0, 52.0)] {
         draft.drag(shift(x, y));

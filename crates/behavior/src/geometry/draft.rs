@@ -28,7 +28,8 @@ pub enum DraftKind {
     /// again; releasing ⌥ with the button up closes. ⌥ held at the press means subtract (the
     /// tool's operation), not straight segments, until it is released and pressed again; with
     /// nothing selected it starts straight segments at once. ⇧ puts each clicked vertex on the
-    /// horizontal, vertical or 45° line through the previous one, and holds a freehand drag to one such line.
+    /// horizontal, vertical or 45° line through the previous one, and a draft built with
+    /// [`locking_shift_drags`](OutlineDraft::locking_shift_drags) (the Freeform Pen) holds a freehand drag to one such line.
     #[default]
     Mixed,
     /// The Polygonal Lasso: each click adds a vertex, ⇧ (without ⌥) puts it in the nearest of
@@ -152,6 +153,9 @@ pub struct OutlineDraft {
     document: Option<u64>,
     /// A ⇧ freehand drag's line: where it began and the unit direction it locked to (the nearest of eight).
     lock: Option<(Point, Vec2)>,
+    /// Whether ⇧ holds a freehand drag to one line (the Freeform Pen); the Lasso's ⇧ at the press adds to the
+    /// selection and its drag stays free.
+    locks_shift_drag: bool,
 }
 
 impl OutlineDraft {
@@ -168,7 +172,14 @@ impl OutlineDraft {
             alt_from_press: false,
             document: None,
             lock: None,
+            locks_shift_drag: false,
         }
+    }
+
+    /// This draft with ⇧ holding a freehand drag to one of eight directions (see [`DraftKind::Mixed`]).
+    pub fn locking_shift_drags(mut self) -> Self {
+        self.locks_shift_drag = true;
+        self
     }
 
     /// The rules this draft follows.
@@ -274,12 +285,12 @@ impl OutlineDraft {
         Some(DraftEvent::Changed)
     }
 
-    /// Where a freehand point of `at` goes. With ⇧ held a Mixed draft's drag follows one line: once the pointer has
+    /// Where a freehand point of `at` goes. With ⇧ held a [`locking_shift_drags`](Self::locking_shift_drags) Mixed draft's drag follows one line: once the pointer has
     /// travelled [`LOCK_DISTANCE`] screen points from the last vertex, the nearest of eight directions from there
     /// is locked and every later point is the pointer's projection onto it, however the pointer wanders, until ⇧ is
     /// released. Before the lock the point stays at the vertex. Otherwise [`shift_step`](Self::shift_step).
     fn drag_step(&mut self, at: DraftPoint) -> Point {
-        if self.kind != DraftKind::Mixed || !at.mods.shift || self.polygonal {
+        if !self.locks_shift_drag || self.kind != DraftKind::Mixed || !at.mods.shift || self.polygonal {
             self.lock = None;
             return self.shift_step(at);
         }
