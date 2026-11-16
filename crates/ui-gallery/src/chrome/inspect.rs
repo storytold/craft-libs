@@ -6,7 +6,7 @@ use super::panels::Panels;
 use crate::viewer::PanelId;
 use craft_theme::variant::Tone;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Pad, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Scroll, Show as _, ShowContainer as _};
 use craft_ui::display::{InspectLayers, Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::Env;
@@ -57,7 +57,7 @@ pub(super) fn panel(ui: &mut Ui, p: &mut Panels<'_>) {
     let least = Env::of(ui).tokens.size.control.sm;
     let (catalog, selected) = (p.catalog, selected_type(p));
     let layers = &mut *p.inspect.layers;
-    Stack::new().fill().pad(Pad::Regular).scroll(Scroll::vertical()).show(ui, |ui, _| {
+    Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
         Checkbox::new(Bind::bound(&mut layers.padding)).label("Padding").show(ui);
         Checkbox::new(Bind::bound(&mut layers.hits)).label("Hit areas").show(ui);
         Checkbox::new(Bind::bound(&mut layers.focus)).label("Focus order").show(ui);
