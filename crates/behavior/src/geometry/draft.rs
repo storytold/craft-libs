@@ -6,9 +6,12 @@
 //! calls and paints [`points`](OutlineDraft::points) itself.
 
 use craft_keymap::Mods;
-use kurbo::Point;
+use kurbo::{Point, Vec2};
 
-use super::lock::polygon_step;
+use super::lock::{Directions, polygon_step, round_to_direction};
+
+/// Screen points a ⇧ freehand drag travels before it locks its direction.
+const LOCK_DISTANCE: f64 = 3.0;
 
 /// The most points [`OutlineDraft`]'s close reach measures the outline's box from.
 const BOX_SAMPLES: usize = 64;
@@ -24,8 +27,8 @@ pub enum DraftKind {
     /// switches to straight segments, where each click adds a vertex and a drag draws freehand
     /// again; releasing ⌥ with the button up closes. ⌥ held at the press means subtract (the
     /// tool's operation), not straight segments, until it is released and pressed again; with
-    /// nothing selected it starts straight segments at once. ⇧ puts each new point on the
-    /// horizontal, vertical or 45° line through the previous one.
+    /// nothing selected it starts straight segments at once. ⇧ puts each clicked vertex on the
+    /// horizontal, vertical or 45° line through the previous one, and holds a freehand drag to one such line.
     #[default]
     Mixed,
     /// The Polygonal Lasso: each click adds a vertex, ⇧ (without ⌥) puts it in the nearest of
@@ -147,6 +150,8 @@ pub struct OutlineDraft {
     alt_from_press: bool,
     /// The document key the outline began under.
     document: Option<u64>,
+    /// A ⇧ freehand drag's line: where it began and the unit direction it locked to (the nearest of eight).
+    lock: Option<(Point, Vec2)>,
 }
 
 impl OutlineDraft {
@@ -162,6 +167,7 @@ impl OutlineDraft {
             polygonal: false,
             alt_from_press: false,
             document: None,
+            lock: None,
         }
     }
 
@@ -258,7 +264,7 @@ impl OutlineDraft {
             return None;
         }
         let point = if self.kind != DraftKind::Polygonal || at.mods.alt {
-            let point = self.shift_step(at);
+            let point = self.drag_step(at);
             self.append(point);
             point
         } else {
@@ -266,6 +272,30 @@ impl OutlineDraft {
         };
         self.cursor = Some(point);
         Some(DraftEvent::Changed)
+    }
+
+    /// Where a freehand point of `at` goes. With ⇧ held a Mixed draft's drag follows one line: once the pointer has
+    /// travelled [`LOCK_DISTANCE`] screen points from the last vertex, the nearest of eight directions from there
+    /// is locked and every later point is the pointer's projection onto it, however the pointer wanders, until ⇧ is
+    /// released. Before the lock the point stays at the vertex. Otherwise [`shift_step`](Self::shift_step).
+    fn drag_step(&mut self, at: DraftPoint) -> Point {
+        if self.kind != DraftKind::Mixed || !at.mods.shift || self.polygonal {
+            self.lock = None;
+            return self.shift_step(at);
+        }
+        let Some(&last) = self.points.last() else { return at.at };
+        let (origin, direction) = match self.lock {
+            Some(lock) => lock,
+            None => {
+                let delta = at.at - last;
+                if delta.hypot() * at.zoom < LOCK_DISTANCE {
+                    return last;
+                }
+                let direction = Vec2::from_angle(round_to_direction(delta.atan2(), Directions::Eight));
+                *self.lock.insert((last, direction))
+            }
+        };
+        origin + direction * (at.at - origin).dot(direction)
     }
 
     /// Where a new point of `at` goes: with ⇧, on the horizontal, vertical or 45° line through the previous point
@@ -302,6 +332,7 @@ impl OutlineDraft {
             return None;
         }
         self.down = false;
+        self.lock = None;
         if at.at.x.is_finite() && at.at.y.is_finite() {
             self.cursor = Some(at.at);
         }
@@ -451,5 +482,6 @@ impl OutlineDraft {
         self.down = false;
         self.polygonal = false;
         self.alt_from_press = false;
+        self.lock = None;
     }
 }

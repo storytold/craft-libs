@@ -189,9 +189,8 @@ pub struct PenTool {
     label: Arc<str>,
     pub(super) drag: Option<Drag>,
     pub(super) events: Vec<PenEvent>,
-    /// The anchors of the draft the host handed in: undo never removes them.
-    own: usize,
-    /// The leading anchors of the draft that keep their handles when the Curvature mode reflows it.
+    /// The leading anchors of the draft that belong to the path a press continued: they keep their handles when the
+    /// Curvature mode reflows the draft, and Undo, Backspace and Delete never take them back.
     pub(super) kept: usize,
 }
 
@@ -218,7 +217,6 @@ impl PenTool {
             label: Arc::from(""),
             drag: None,
             events: Vec::new(),
-            own: 0,
             kept: 0,
         }
     }
@@ -238,12 +236,10 @@ impl PenTool {
             match draft.filter(|draft| !draft.knots.is_empty()) {
                 Some(draft) => {
                     self.shown = draft.clone();
-                    self.own = draft.knots.len();
                     self.resume = true;
                 }
                 None => {
                     self.shown = EditSubpath::default();
-                    self.own = 0;
                     self.kept = 0;
                     self.resume = false;
                 }
@@ -263,8 +259,9 @@ impl PenTool {
         true
     }
 
-    /// The number of leading anchors of the handed-in draft that keep their handles when the Curvature mode reflows
-    /// the draft (the anchors of the path a press continued). Reset to 0 when the draft ends.
+    /// The number of leading anchors of the handed-in draft that belong to the path a press continued: they keep their
+    /// handles when the Curvature mode reflows the draft, and Undo, Backspace and Delete never take them back (they
+    /// end the draft as discarded instead). Reset to 0 when the draft ends.
     pub fn kept(&mut self, kept: usize) -> &mut Self {
         self.kept = kept;
         self
@@ -400,7 +397,6 @@ impl PenTool {
         self.run = None;
         self.drag = None;
         self.resume = false;
-        self.own = 0;
         self.kept = 0;
         self.foreign = false;
     }
@@ -426,7 +422,7 @@ impl PenTool {
     }
 
     fn remove_last_anchor(&mut self, reason: CancelReason) {
-        if self.own > 0 && self.shown.knots.len() <= self.own {
+        if self.kept > 0 && self.shown.knots.len() <= self.kept {
             // Undo never eats the anchors of the path the draft resumed.
             self.drop_run(reason);
             return;
