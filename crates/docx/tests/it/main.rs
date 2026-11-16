@@ -23,6 +23,7 @@ mod heading_levels;
 mod legacy_forms;
 mod ligatures;
 mod line_numbering;
+mod locked_canvas;
 mod malformed;
 mod missing_pictures;
 mod nested_block_controls;
