@@ -204,7 +204,7 @@ impl<K: Clone + Send + Sync + 'static> PresetFooter<'_, K> {
             slots.push(Slot::Custom(index));
         }
 
-        let (footer, zoom_edit) = FooterBar::actions(shown).show_footer_leading(ui, |ui| {
+        let (footer, zoom_edit) = FooterBar::actions(shown).show_footer_leading(ui, |ui, _| {
             if let Some(add) = &leading {
                 add(ui);
             }

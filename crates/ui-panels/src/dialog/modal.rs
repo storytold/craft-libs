@@ -245,8 +245,8 @@ impl<'a> Dialog<'a> {
         self.route_enter()
     }
 
-    /// The footer's content: the closure fills a footer bar above the buttons (under them with
-    /// [`side_buttons`](Dialog::side_buttons)), or alone.
+    /// The footer's content: the closure fills the start of the buttons' line (under the buttons with
+    /// [`side_buttons`](Dialog::side_buttons)), or a line of its own when there are no buttons.
     #[must_use]
     pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_, '_>) + 'a) -> Self {
         let region = self.footer_region();
