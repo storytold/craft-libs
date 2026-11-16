@@ -289,14 +289,16 @@ impl<'a, 'l> Records<'a, 'l> {
 
 /// The workbook part: BrtBeginBook, BrtWbProp, the BrtBundleSh list.
 /// The workbook part, and the tables its formulas refer to ([`Links`]): `None` when those can't
-/// be read, so that the workbook still opens, with every formula kept as its saved result.
+/// be read, so that the workbook still opens, with every formula kept as its saved result. Its
+/// defined names come back undecoded ([`Names`]): [`read_names`] decodes them once the workbook's
+/// tables are indexed, so a name's formula can use a structured reference.
 pub(crate) fn workbook(
     bytes: &[u8],
     rels: &Rels,
     limits: &Limits,
     budget: &Budget,
     warnings: &mut Warnings,
-) -> Result<(Workbook, Option<Links>), Error> {
+) -> Result<(Workbook, Option<Links>, Names), Error> {
     let mut records = Records::new(bytes, limits, budget);
     records.first(131, warnings)?;
     let mut wb = Workbook::default();
@@ -320,11 +322,7 @@ pub(crate) fn workbook(
                 if wb.sheets.is_empty() {
                     return Err(invalid("no supported worksheets"));
                 }
-                match links.as_mut() {
-                    Some(l) => wb.defined_names = defined_names(pending, &bundle_sheets, l, limits, budget, warnings),
-                    None => warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results"),
-                }
-                return Ok((wb, links));
+                return Ok((wb, links, Names { pending, sheets: bundle_sheets }));
             }
             39 | 355 | 357 | 358 | 362 | 667 => {
                 if let Some(l) = links.as_mut()
@@ -421,6 +419,22 @@ struct PendingName {
     comment: Option<String>,
     description: Option<String>,
     help: Option<String>,
+}
+
+/// The workbook part's defined names, not yet decoded, and each BrtBundleSh's place in
+/// [`Workbook::sheets`] (`None` for a skipped one).
+pub(crate) struct Names {
+    pending: Vec<PendingName>,
+    sheets: Vec<Option<u32>>,
+}
+
+/// Decodes the workbook part's defined names `names` into `wb`, after the tables in `links` are
+/// indexed. Without `links` none can be read, and formulas keep their saved results.
+pub(crate) fn read_names(wb: &mut Workbook, names: Names, links: Option<&mut Links>, limits: &Limits, budget: &Budget, warnings: &mut Warnings) {
+    match links {
+        Some(l) => wb.defined_names = defined_names(names.pending, &names.sheets, l, limits, budget, warnings),
+        None => warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results"),
+    }
 }
 
 /// The workbook's defined names, as `.xlsx` has them in `definedNames`: every `BrtName` but the

@@ -1804,6 +1804,42 @@ fn tables_of(bytes: &[u8]) -> (Vec<Table>, Vec<String>) {
 }
 
 #[test]
+fn a_name_using_a_structured_reference_is_decoded_after_tables_are_indexed() {
+    // `Vals` = `Sales[Val]`. Names are decoded after the workbook's tables are indexed, so
+    // the formula and a cell that uses it are kept, instead of only their saved results.
+    let name = brt_name(0, 0, WORKBOOK, "Vals", &ptg_list(0, 1, 1, 1, 1), None);
+    let list = [record(660, &1u32.to_le_bytes()), record(661, &wide("t1")), record(662, &[])];
+    let mut data = row(0);
+    data.extend(formula_cell(1, &[0x23, 5, 0, 0, 0], &[])); // =Vals, after the four names of `book_with_links`
+    let types = {
+        let t = TYPES.trim_end_matches("</Types>");
+        format!(r#"{t}<Override PartName="/tables/t1.bin" ContentType="application/vnd.ms-excel.table"/></Types>"#)
+    };
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="t1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/t1.bin"/></Relationships>"#;
+    let (one, two, strings, table) = (worksheet(&data, &list.concat()), worksheet(&[], &[]), sst(), sales(&sales_filters()));
+    let book = {
+        let plain = book_with_links(&xti());
+        let end = record(132, &[]);
+        [&plain[..plain.len() - end.len()], name.as_slice(), end.as_slice()].concat()
+    };
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", book.as_slice()),
+        ("records/_rels/book.bin.rels", RELS.as_bytes()),
+        ("data/one.bin", one.as_slice()),
+        ("data/_rels/one.bin.rels", sheet_rels.as_bytes()),
+        ("data/two.bin", two.as_slice()),
+        ("text/strings.bin", strings.as_slice()),
+        ("tables/t1.bin", table.as_slice()),
+    ]);
+    let names = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap().defined_names;
+    assert_eq!(names.iter().find(|n| n.name == "Vals").map(|n| n.formula.as_str()), Some("Sales[Val]"));
+    let wb = read(&bytes).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 1)), Some("Vals"), "{:?}", wb.warnings);
+}
+
+#[test]
 fn tables_are_read_as_their_xlsx_spelling() {
     // Spacing flags: 0x80 inside the outer brackets, 0x100 after commas.
     let cells: Vec<Vec<u8>> = vec![

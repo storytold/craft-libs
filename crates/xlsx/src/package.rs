@@ -149,10 +149,12 @@ impl<'a> Package<'a> {
         if self.binary.is_some() {
             let bytes = self.required(&self.workbook_part.clone())?;
             let rels = self.workbook_rels()?;
-            let (wb, mut links) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
+            let (mut wb, mut links, names) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
             if let Some(links) = links.as_mut() {
                 self.index_tables(&wb, links)?;
             }
+            // Names after tables: a name's formula may use a structured reference.
+            xlsb::read_names(&mut wb, names, links.as_mut(), &self.limits, &self.budget, &mut self.warnings);
             self.binary_links = Some(links);
             return Ok(wb);
         }
