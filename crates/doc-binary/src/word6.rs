@@ -8,8 +8,8 @@
 //! What is read: the main text, its paragraphs and fields, the code page of each run, the
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
 //! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
-//! their separators and options), the comments, and the character styles of runs. Pictures,
-//! borders and shading are not read yet.
+//! their separators and options), the comments, the character styles of runs, and paragraph and
+//! cell borders and shading. Pictures are not read yet.
 //!
 //! The layout as observed:
 //!
@@ -189,6 +189,15 @@ mod pap {
     pub(super) const TTP: u8 = 0x19;
     /// Suppress automatic hyphenation (1 byte).
     pub(super) const NO_AUTO_HYPH: u8 = 0x2C;
+    /// Paragraph borders: top, left, bottom, right and between, each a 2-byte BRC (see
+    /// [`brc80`]).
+    pub(super) const BRC_TOP: u8 = 0x26;
+    pub(super) const BRC_LEFT: u8 = 0x27;
+    pub(super) const BRC_BOTTOM: u8 = 0x28;
+    pub(super) const BRC_RIGHT: u8 = 0x29;
+    pub(super) const BRC_BETWEEN: u8 = 0x2A;
+    /// Paragraph shading: 2 bytes, laid out as Word 97's `Shd80` (icoFore, icoBack, ipat).
+    pub(super) const SHD: u8 = 0x2F;
     /// Widow control (1 byte). Word 95 writes it only to turn it off: on is its default, as in
     /// the model.
     pub(super) const WIDOW: u8 = 0x33;
@@ -197,9 +206,12 @@ mod pap {
     /// Row height in twips (signed, 2 bytes): positive at least, negative exactly.
     pub(super) const ROW_HEIGHT: u8 = 0xBD;
     /// The row's cells: u16 count, cell count, (count + 1) i16 cell edges, then a 10-byte
-    /// descriptor per cell whose first word's bit 0 starts a horizontal merge and bit 1 continues
-    /// it.
+    /// descriptor per cell: a word whose bit 0 starts a horizontal merge and bit 1 continues it,
+    /// then the cell's top, left, bottom and right BRCs.
     pub(super) const DEF_TABLE: u8 = 0xBE;
+    /// The cells' shading: a count byte, then a 2-byte `Shd80` per cell from the first, as Word
+    /// 97's `sprmTDefTableShd80`.
+    pub(super) const DEF_TABLE_SHD: u8 = 0xBF;
 }
 
 /// Word 97 opcodes the translations produce ([MS-DOC] §2.6).
@@ -237,6 +249,13 @@ mod w97 {
     pub(super) const P_DYA_LINE: u16 = 0x6412;
     pub(super) const P_IN_TABLE: u16 = 0x2416;
     pub(super) const P_TTP: u16 = 0x2417;
+    pub(super) const P_BRC_TOP80: u16 = 0x6424;
+    pub(super) const P_BRC_LEFT80: u16 = 0x6425;
+    pub(super) const P_BRC_BOTTOM80: u16 = 0x6426;
+    pub(super) const P_BRC_RIGHT80: u16 = 0x6427;
+    pub(super) const P_BRC_BETWEEN80: u16 = 0x6428;
+    pub(super) const P_SHD80: u16 = 0x442D;
+    pub(super) const T_DEF_TABLE_SHD80: u16 = 0xD609;
     pub(super) const T_JC: u16 = 0x5400;
     pub(super) const T_ROW_HEIGHT: u16 = 0x9407;
     pub(super) const T_DEF_TABLE: u16 = 0xD608;
@@ -775,9 +794,9 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             0x8E | 0x8F | 0x93 | 0x96 | 0x97 | 0x99 | 0x9F | 0xA2 => 1,
             0x8C | 0x8D | 0x90 | 0x91 | 0x9A..=0x9D | 0xA1 | 0xA4..=0xAB => 2,
             // 0x1A/0x1B: a frame's position; 0x65: a raised or lowered position; 0x6B: kerning in
-            // half-points (H1 has 0x0024; Word shows kern=36).
-            0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x65 | 0x6B
-            | 0xB6 | 0xB8 | 0xBD | 0xC0 => 2,
+            // half-points (H1 has 0x0024; Word shows kern=36); 0x26-0x2A: paragraph borders.
+            0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x65
+            | 0x6B | 0xB6 | 0xB8 | 0xBD | 0xC0 => 2,
             0x14 => 4,
             // A count byte, then that many bytes (0x0C: a bulleted style's numbering, 52 bytes).
             0x0C | 0x0F | 0x44 | 0xBF => 1 + usize::from(*after.first()?),
@@ -956,25 +975,76 @@ fn translate_pap(grpprl: &[u8]) -> Vec<u8> {
             pap::ROW_JC => prl(&mut out, w97::T_JC, v),
             pap::ROW_HEIGHT => prl(&mut out, w97::T_ROW_HEIGHT, v),
             pap::DEF_TABLE => def_table(&mut out, v),
+            pap::BRC_TOP | pap::BRC_LEFT | pap::BRC_BOTTOM | pap::BRC_RIGHT | pap::BRC_BETWEEN => {
+                let w97 = match op {
+                    pap::BRC_TOP => w97::P_BRC_TOP80,
+                    pap::BRC_LEFT => w97::P_BRC_LEFT80,
+                    pap::BRC_BOTTOM => w97::P_BRC_BOTTOM80,
+                    pap::BRC_RIGHT => w97::P_BRC_RIGHT80,
+                    _ => w97::P_BRC_BETWEEN80,
+                };
+                if let [a, b] = v {
+                    prl(&mut out, w97, &brc80(u16::from_le_bytes([*a, *b])));
+                }
+            }
+            pap::SHD => prl(&mut out, w97::P_SHD80, v),
+            pap::DEF_TABLE_SHD => prl(&mut out, w97::T_DEF_TABLE_SHD80, v),
             _ => {}
         }
     }
     out
 }
 
-/// A Word 6.0/95 table definition as a Word 97 `sprmTDefTable` holding the cell edges (the only
-/// part the table reader uses) and one `sprmTMerge` per horizontal merge.
+/// A Word 6.0/95 BRC as Word 97's `Brc80` (dptLineWidth, brcType, ico, then dptSpace and
+/// fShadow), as Word 2016 reads each one. Bits 0-2 of the BRC are a width in 3/4 pt (0 read as
+/// 1), bits 3-4 the type, bit 5 the shadow, bits 6-10 the ico and bits 11-15 the space in
+/// points. Type 0 is no border; 1 single; 2 thick, which Word shows as single at twice the width;
+/// 3 double. Width 6 is a dotted 3/4 pt line (a 1/4 pt single in a thick one) and width 7 a
+/// dashed 3/4 pt one, whatever the type.
+fn brc80(v: u16) -> [u8; 4] {
+    const SINGLE: u8 = 1;
+    const DOUBLE: u8 = 3;
+    const DOTTED: u8 = 6;
+    const DASHED: u8 = 7;
+    let width = (v & 7) as u8;
+    let kind = (v >> 3) & 3;
+    let (dpt, ty) = match (width, kind) {
+        (6, 2) => (2, SINGLE),
+        (6, _) => (6, DOTTED),
+        (7, _) => (6, DASHED),
+        (_, 0) => return [0; 4],
+        (w, 1) => (6 * w.max(1), SINGLE),
+        (w, 2) => (12 * w.max(1), SINGLE),
+        (w, _) => (6 * w.max(1), DOUBLE),
+    };
+    let ico = ((v >> 6) & 0x1F) as u8;
+    let tail = ((v >> 11) & 0x1F) as u8 | if v & 0x20 != 0 { 0x20 } else { 0 };
+    [dpt, ty, ico, tail]
+}
+
+/// A Word 6.0/95 table definition as a Word 97 `sprmTDefTable`: the cell edges, then a TC80 per
+/// cell with its borders (an unset side stays zero, as Word 97 writes one that shows the
+/// table's border), and one `sprmTMerge` per horizontal merge.
 fn def_table(out: &mut Vec<u8>, v: &[u8]) {
     let Some(&itc) = v.get(2) else { return };
     let itc = usize::from(itc).min(MAX_CELLS);
     let Some(edges) = v.get(3..3 + 2 * (itc + 1)) else { return };
-    // Word 97 operand: cb (u16: the bytes after it, plus one), the cell count, the edges.
-    let cb = (1 + edges.len() + 1) as u16;
+    let cells = v.get(3 + edges.len()..).unwrap_or_default();
+    // Word 97 operand: cb (u16: the bytes after it, plus one), the cell count, the edges, the
+    // TC80s (rgf, an unused word, four Brc80s).
+    let cb = (1 + edges.len() + 20 * itc + 1) as u16;
     out.extend_from_slice(&w97::T_DEF_TABLE.to_le_bytes());
     out.extend_from_slice(&cb.to_le_bytes());
     out.push(itc as u8);
     out.extend_from_slice(edges);
-    let cells = v.get(3 + edges.len()..).unwrap_or_default();
+    for i in 0..itc {
+        out.extend_from_slice(&[0; 4]);
+        for side in 0..4 {
+            let at = 10 * i + 2 + 2 * side;
+            let brc = cells.get(at..at + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+            out.extend_from_slice(&if brc == 0 { [0; 4] } else { brc80(brc) });
+        }
+    }
     let mut merges: Vec<(usize, usize)> = Vec::new();
     let mut start: Option<usize> = None;
     for i in 0..=itc {

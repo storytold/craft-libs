@@ -793,6 +793,112 @@ fn table_rows_and_merged_cells_are_read() {
     assert_eq!(body_texts(&doc), ["after"], "the paragraph after the table stays outside it");
 }
 
+/// Paragraph borders and shading in the bytes Word 95 writes (`bs.doc`), read as Word 2016
+/// shows them: a thick 2 (`26 12 00`) is a 3 pt single line, a double red (`28 99 01`), a dotted
+/// blue (`27 86 00`), a hairline (`26 16 00`, 1/4 pt), a single with 4 pt of space (`26 09 20`),
+/// the between border (0x2A) and the shading after it, solid yellow (`2F 07 04`), a clear yellow
+/// fill (`2F E0 00`), and a bottom border of none (`28 00 00`) that turns off its style's.
+#[test]
+fn paragraph_borders_and_shading_are_read() {
+    use craft_wordmodel::Rgb;
+    use craft_wordmodel::props::{Border, BorderStyle};
+    let paras: &[(u32, u32, &[u8])] = &[
+        (0, 2, &[0x26, 0x12, 0x00]),
+        (2, 4, &[0x28, 0x99, 0x01]),
+        (4, 6, &[0x27, 0x86, 0x00]),
+        (6, 8, &[0x26, 0x16, 0x00]),
+        (8, 10, &[0x26, 0x09, 0x20]),
+        (10, 12, &[0x26, 0x09, 0x00, 0x28, 0x09, 0x00, 0x2A, 0x09, 0x00, 0x2F, 0x07, 0x04]),
+        (12, 14, &[0x2F, 0xE0, 0x00]),
+        (14, 16, &[0x28, 0x00, 0x00]),
+    ];
+    let styles = &[Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", papx: &[0x28, 0x09, 0x00], ..Default::default() })];
+    let d = Doc6 { text: b"a\rb\rc\rd\re\rf\rg\rh\r", paras, styles, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let ps: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.clone()).collect();
+    let line = |style, width, color, space| Some(Border { style, width, color, space });
+    let side = |i: usize, f: fn(&craft_wordmodel::props::Borders) -> Option<Border>| ps[i].borders.as_ref().and_then(f);
+    assert_eq!(side(0, |b| b.top), line(BorderStyle::Single, 3.0, None, 0.0));
+    assert_eq!(side(1, |b| b.bottom), line(BorderStyle::Double, 0.75, Some(Rgb(255, 0, 0)), 0.0));
+    assert_eq!(side(2, |b| b.left), line(BorderStyle::Dotted, 0.75, Some(Rgb(0, 0, 255)), 0.0));
+    assert_eq!(side(3, |b| b.top), line(BorderStyle::Single, 0.25, None, 0.0));
+    assert_eq!(side(4, |b| b.top), line(BorderStyle::Single, 0.75, None, 4.0));
+    assert_eq!(side(5, |b| b.between), line(BorderStyle::Single, 0.75, None, 0.0));
+    assert_eq!(ps[5].shading, Some(Rgb(255, 255, 0)), "the sprm after 0x2A is read");
+    assert_eq!(ps[6].shading, Some(Rgb(255, 255, 0)));
+    assert_eq!(side(7, |b| b.bottom).map(|b| b.style), Some(BorderStyle::None));
+    let normal = doc.styles.get("Normal").expect("Normal");
+    assert_eq!(normal.para.borders.and_then(|b| b.bottom), line(BorderStyle::Single, 0.75, None, 0.0));
+}
+
+/// Every Word 6 BRC width and type, as Word 2016 reads them from a Word 95 file whose borders were
+/// set to each value in turn: type 0 is none, except widths 6 and 7; a thick line is single at
+/// twice the width; width 0 counts as 1; and the shadow bit changes neither.
+#[test]
+fn every_brc_width_and_type_reads_as_word_shows_it() {
+    use craft_wordmodel::props::BorderStyle as S;
+    for v in 0u16..64 {
+        let (width, kind) = (v & 7, (v >> 3) & 3);
+        let want = match (width, kind) {
+            (6, 2) => Some((S::Single, 0.25)),
+            (6, _) => Some((S::Dotted, 0.75)),
+            (7, _) => Some((S::Dashed, 0.75)),
+            (_, 0) => None,
+            (w, 1) => Some((S::Single, 0.75 * w.max(1) as f32)),
+            (w, 2) => Some((S::Single, 1.5 * w.max(1) as f32)),
+            (w, _) => Some((S::Double, 0.75 * w.max(1) as f32)),
+        };
+        let grpprl = [0x26, v as u8, 0];
+        let paras: &[(u32, u32, &[u8])] = &[(0, 2, &grpprl)];
+        let doc = read(&word6_file(&Doc6 { text: b"a\r", paras, ..Default::default() })).expect("opens");
+        let p = doc.body.iter().find_map(|b| b.as_para()).expect("paragraph");
+        let got = p.props.borders.and_then(|b| b.top).filter(|b| b.style != S::None).map(|b| (b.style, b.width));
+        assert_eq!(got, want, "BRC {v:#04x}");
+    }
+}
+
+/// Cell borders and shading in the bytes Word 95 writes (`bs.doc`'s first row): the BRCs after
+/// each cell's flags in the table definition (a box, a thick top and double red bottom, a dotted
+/// blue left, a hairline right), and 0xBF's `Shd80` per cell (none, 25%, solid yellow, a clear
+/// silver fill).
+#[test]
+fn cell_borders_and_shading_are_read() {
+    use craft_wordmodel::Rgb;
+    use craft_wordmodel::props::BorderStyle as S;
+    let cells: [[u16; 4]; 4] = [[0x09; 4], [0x12, 0, 0x199, 0], [0, 0x86, 0, 0], [0, 0, 0, 0x16]];
+    let mut rest = vec![4u8];
+    for e in [0i16, 2000, 4000, 6000, 8000] {
+        rest.extend_from_slice(&e.to_le_bytes());
+    }
+    for c in cells {
+        rest.extend_from_slice(&[0, 0]);
+        for b in c {
+            rest.extend_from_slice(&b.to_le_bytes());
+        }
+    }
+    let mut row = vec![0x18, 1, 0x19, 1, 0xBE];
+    row.extend_from_slice(&((rest.len() + 1) as u16).to_le_bytes());
+    row.extend(rest);
+    row.extend([0xBF, 8, 0x00, 0x00, 0x00, 0x14, 0x07, 0x04, 0x00, 0x02]);
+    let text = b"A\x07B\x07C\x07D\x07\x07";
+    let cell: &[u8] = &[0x18, 1];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, cell), (2, 4, cell), (4, 6, cell), (6, 8, cell), (8, 9, &row)];
+    let doc = read(&word6_file(&Doc6 { text, paras, ..Default::default() })).expect("opens");
+    let t = doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+    let c = &t.rows[0].cells;
+    let side = |b: Option<craft_wordmodel::props::Border>| b.map(|b| (b.style, b.width, b.color));
+    let b: Vec<_> = c.iter().map(|c| c.props.borders.unwrap_or_default()).collect();
+    assert_eq!([side(b[0].top), side(b[0].left), side(b[0].bottom), side(b[0].right)], [Some((S::Single, 0.75, None)); 4]);
+    assert_eq!(
+        (side(b[1].top), side(b[1].bottom), b[1].left, b[1].right),
+        (Some((S::Single, 3.0, None)), Some((S::Double, 0.75, Some(Rgb(255, 0, 0)))), None, None)
+    );
+    assert_eq!((side(b[2].left), b[2].top), (Some((S::Dotted, 0.75, Some(Rgb(0, 0, 255)))), None));
+    assert_eq!((side(b[3].right), b[3].top), (Some((S::Single, 0.25, None)), None));
+    let shading: Vec<_> = c.iter().map(|c| c.props.shading).collect();
+    assert_eq!(shading, [None, None, Some(Rgb(255, 255, 0)), Some(Rgb(192, 192, 192))]);
+}
+
 #[test]
 fn several_merges_in_one_row_each_keep_their_cells() {
     // Five cells merged as [A B] [C] [D E]: the second merge must not be shifted by the first.

@@ -66,6 +66,10 @@ const P_BRC_LEFT: u16 = 0xC64F;
 const P_BRC_BOTTOM: u16 = 0xC650;
 const P_BRC_RIGHT: u16 = 0xC651;
 const P_BRC_BETWEEN: u16 = 0xC652;
+// Paragraph shading: a 2-byte Shd80 (palette colours), and a cb(1) + 10-byte Shd (COLORREFs)
+// that Word 2000 and later write after it.
+const P_SHD80: u16 = 0x442D;
+const P_SHD: u16 = 0xC64D;
 
 /// Word's 16-colour `Ico` palette ([MS-DOC] §2.9.135), 0 = automatic.
 const ICO: [Rgb; 17] = [
@@ -165,6 +169,39 @@ fn brc(op: &[u8]) -> Option<Border> {
         None => None,
     };
     Some(Border { style: brc_style(b[5]), width: brc_width(b[5], b[4]), color, space: f32::from(b[6] & 0x1F) })
+}
+
+/// Background colour from a 10-byte `Shd`: cvFore, cvBack (COLORREFs), ipat. Solid patterns
+/// show the foreground; clear (0) and the other patterns show the background (Word writes a
+/// plain cell fill as clear with cvBack); nil (0xFFFF) and automatic colours are no fill.
+pub(crate) fn shd_rgb(b: &[u8]) -> Option<Rgb> {
+    let cv = |b: &[u8]| -> Option<Rgb> {
+        match b {
+            [_, _, _, 0xFF] => None, // fAuto
+            [r, g, bl, _] => Some(Rgb(*r, *g, *bl)),
+            _ => None,
+        }
+    };
+    let ipat = b.get(8..10).map(|x| u16::from_le_bytes([x[0], x[1]]))?;
+    match ipat {
+        0xFFFF => None,
+        1 => cv(b.get(0..4)?),
+        _ => cv(b.get(4..8)?),
+    }
+}
+
+/// Background colour from a 2-byte `Shd80` (icoFore, icoBack, ipat bit-fields). As in
+/// [`shd_rgb`], solid shows the foreground and clear (0) the background, which is how Word
+/// 97 writes a plain fill; ico 0 is automatic (no fill).
+pub(crate) fn shd80_rgb(b: &[u8]) -> Option<Rgb> {
+    let v = u16::from_le_bytes([*b.first()?, *b.get(1)?]);
+    let fore = v & 0x1F;
+    let back = (v >> 5) & 0x1F;
+    let ipat = v >> 10;
+    if fore == 0x1F && back == 0x1F {
+        return None;
+    }
+    ico(if ipat == 1 { fore as u8 } else { back as u8 })
 }
 
 /// Put a decoded border on the side its sprm names (`between` = the border between this
@@ -484,6 +521,10 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 set_border(p, prl.op, b);
             }
         }
+        // As the DOCX reader reads `w:shd`: the fill colour, or a solid pattern's; a clear or
+        // automatic one is none. A truncated operand is ignored.
+        P_SHD80 if prl.operand.len() >= 2 => p.shading = shd80_rgb(prl.operand),
+        P_SHD if prl.operand.len() >= 11 => p.shading = prl.operand.get(1..).and_then(shd_rgb),
         _ => {}
     }
 }

@@ -1271,6 +1271,75 @@ fn table_assembled_from_marks() {
     assert_eq!(last.text, "tail");
 }
 
+/// Paragraph shading as Word 2016 writes it and the DOCX reader reads `w:shd`: `sprmPShd80` (a
+/// solid yellow, ico 7 on ipat 1), then the `sprmPShd` Word writes after it, which wins (a clear
+/// fill of 0x112233); a 25% pattern in automatic colours has no fill.
+#[test]
+fn paragraph_shading_is_read() {
+    let shd = |fore: [u8; 4], back: [u8; 4], ipat: u16| -> Vec<u8> { [&[10u8][..], &fore, &back, &ipat.to_le_bytes()].concat() };
+    let spec = RichSpec {
+        text: "a\rb\rc\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, grpprl(&[(0x442D, &0x0407u16.to_le_bytes())])),
+            (2, 0, grpprl(&[(0x442D, &0x0407u16.to_le_bytes()), (0xC64D, &shd([0, 0, 0, 0xFF], [0x11, 0x22, 0x33, 0], 0))])),
+            (4, 0, grpprl(&[(0x442D, &0x1400u16.to_le_bytes())])),
+        ],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let shading: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.shading).collect();
+    assert_eq!(shading, [Some(craft_wordmodel::Rgb(255, 255, 0)), Some(craft_wordmodel::Rgb(0x11, 0x22, 0x33)), None]);
+}
+
+/// Cell borders from the TC80s of `sprmTDefTable`, as Word 2016 reads them: a zero side is
+/// unset (the table's border shows), an all-ones side is no border (`w:val="nil"`, hiding the
+/// table's), and any other side is that border.
+#[test]
+fn cell_borders_are_read_from_the_tc80s() {
+    use craft_wordmodel::props::{Border, BorderStyle};
+    let tc = |top: [u8; 4], left: [u8; 4], bottom: [u8; 4], right: [u8; 4]| -> Vec<u8> { [&[0u8; 4][..], &top, &left, &bottom, &right].concat() };
+    let (unset, nil) = ([0u8; 4], [0xFFu8; 4]);
+    let mut body = vec![3u8];
+    for e in [0i16, 1440, 2880, 4320] {
+        body.extend_from_slice(&e.to_le_bytes());
+    }
+    body.extend(tc(unset, unset, unset, unset));
+    body.extend(tc([6, 3, 6, 0], nil, unset, unset)); // top: double, 3/4 pt, red
+    body.extend(tc(unset, unset, [24, 1, 11, 2], unset)); // bottom: single, 3 pt, dark green, 2 pt off
+    let mut def = 0xD608u16.to_le_bytes().to_vec();
+    def.extend_from_slice(&((body.len() + 1) as u16).to_le_bytes());
+    def.extend(body);
+    let text = "a\u{7}b\u{7}c\u{7}\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def].concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl.clone()), (2, 0, in_tbl), (4, 0, ttp), (6, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let cells: Vec<_> = tbl.rows[0].cells.iter().map(|c| c.props.borders).collect();
+    assert_eq!(cells[0], None);
+    let b = cells[1].expect("cell 2's borders");
+    assert_eq!(b.top, Some(Border { style: BorderStyle::Double, width: 0.75, color: Some(craft_wordmodel::Rgb(255, 0, 0)), space: 0.0 }));
+    assert_eq!(b.left.map(|l| l.style), Some(BorderStyle::None), "nil hides the table's border");
+    assert_eq!((b.bottom, b.right), (None, None));
+    let b = cells[2].expect("cell 3's borders");
+    assert_eq!(b.bottom, Some(Border { style: BorderStyle::Single, width: 3.0, color: Some(craft_wordmodel::Rgb(0, 128, 0)), space: 2.0 }));
+    assert_eq!((b.top, b.left, b.right), (None, None, None));
+}
+
 #[test]
 fn table_merges_borders_shading() {
     // Two rows: the first "a\x07 b\x07 c\x07" with cells 0-1 horizontally merged; the second

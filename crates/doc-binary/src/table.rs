@@ -79,6 +79,8 @@ pub(crate) struct RowInfo {
     widths: Vec<(u8, f32)>,
     width_pcts: Vec<(u8, f32)>,
     valign: Vec<(u8, VAlign)>,
+    /// Cell borders from the TC80s of `sprmTDefTable`, for the cells that set a side.
+    cell_borders: Vec<(u8, Borders)>,
 }
 
 /// Read the table context out of a paragraph mark's PAPX grpprl.
@@ -139,7 +141,10 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             P_IN_TABLE => r.in_table = prl.operand.first().copied().unwrap_or(0) != 0,
             P_TTP => r.ttp = prl.operand.first().copied().unwrap_or(0) != 0,
             P_ITAP => r.depth = i32_of(&prl).unwrap_or(0).max(0) as u32,
-            T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
+            T_DEF_TABLE => {
+                r.edges = def_table_edges(prl.operand);
+                r.cell_borders = def_table_cell_borders(prl.operand);
+            }
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
             T_ROW_HEIGHT => {
@@ -187,7 +192,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                 }
             }
             T_SET_SHD => {
-                if let Some(rgb) = prl.operand.get(3..).and_then(shd_rgb)
+                if let Some(rgb) = prl.operand.get(3..).and_then(fmt::shd_rgb)
                     && let [a, b, ..] = prl.operand.get(1..3).unwrap_or(&[])
                 {
                     for c in *a..(*b).min(MAX_COLS as u8) {
@@ -198,7 +203,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             T_DEF_TABLE_SHD_80 => {
                 let cells = prl.operand.get(1..).unwrap_or(&[]);
                 for (i, b) in cells.as_chunks::<2>().0.iter().take(MAX_COLS).enumerate() {
-                    if let Some(rgb) = shd80_rgb(b) {
+                    if let Some(rgb) = fmt::shd80_rgb(b) {
                         set(&mut r.shading, i as u8, Some(rgb));
                     }
                 }
@@ -219,7 +224,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     if raw && b.get(8..10) == Some(&[0xFF, 0xFF]) {
                         continue;
                     }
-                    set(&mut r.shading, (first + i) as u8, shd_rgb(b));
+                    set(&mut r.shading, (first + i) as u8, fmt::shd_rgb(b));
                 }
             }
             T_CELL_WIDTH => {
@@ -310,6 +315,9 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             }
             if let Some((_, v)) = info.valign.iter().rfind(|(k, _)| *k == i) {
                 c.props.valign = Some(*v);
+            }
+            if let Some((_, b)) = info.cell_borders.iter().find(|(k, _)| *k == i) {
+                c.props.borders = Some(*b);
             }
         }
         for &(a, b) in info.merges.iter().take(MAX_COLS) {
@@ -442,8 +450,9 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
 }
 
 /// Cell-edge positions (points) from a `sprmTDefTable` operand: cb u16, itcMac u8, then
-/// itcMac+1 twip boundaries followed by the TC80s (skipped). Edges are returned as stored:
-/// per-row, in operand order; sorting and capping happen when the table grid is assembled.
+/// itcMac+1 twip boundaries followed by the TC80s (see [`def_table_cell_borders`]). Edges are
+/// returned as stored: per-row, in operand order; sorting and capping happen when the table grid
+/// is assembled.
 fn def_table_edges(operand: &[u8]) -> Vec<f32> {
     let itc = operand.get(2).copied().unwrap_or(0) as usize;
     if itc == 0 {
@@ -460,44 +469,30 @@ fn def_table_edges(operand: &[u8]) -> Vec<f32> {
     edges
 }
 
+/// Cell borders from the TC80s of a `sprmTDefTable` operand, after its edges: 20 bytes each,
+/// `rgf` and an unused word, then the top, left, bottom and right `Brc80MayBeNil`s ([MS-DOC]
+/// §2.9.328 TC80). As Word reads them, a zero side is unset, so the table's border shows, and an
+/// all-ones side is no border, hiding it. Only cells that set a side are returned.
+fn def_table_cell_borders(operand: &[u8]) -> Vec<(u8, Borders)> {
+    let itc = operand.get(2).copied().unwrap_or(0);
+    let start = 3 + 2 * (usize::from(itc) + 1);
+    let mut out = Vec::new();
+    for i in 0..itc {
+        let Some(tc) = operand.get(start + 20 * usize::from(i)..start + 20 * usize::from(i) + 20) else { break };
+        let side = |k: usize| tc.get(4 + 4 * k..8 + 4 * k).filter(|b| b.iter().any(|x| *x != 0)).and_then(fmt::brc80);
+        let b = Borders { top: side(0), left: side(1), bottom: side(2), right: side(3), between: None, inside_v: None };
+        if b != Borders::default() {
+            out.push((i, b));
+        }
+    }
+    out
+}
+
 /// Table borders from `sprmTTableBorders80`: cb (0x18) then six Brc80s in the order top,
 /// left, bottom, right, inside-horizontal, inside-vertical, read as paragraph borders are.
 fn table_borders(operand: &[u8]) -> Option<Borders> {
     let b = |i: usize| operand.get(1 + i * 4..1 + i * 4 + 4).and_then(fmt::brc80);
     Some(Borders { top: b(0), left: b(1), bottom: b(2), right: b(3), between: b(4), inside_v: b(5) })
-}
-
-/// Background colour from a 10-byte `Shd`: cvFore, cvBack (COLORREFs), ipat. Solid patterns
-/// show the foreground; clear (0) and the other patterns show the background (Word writes a
-/// plain cell fill as clear with cvBack); nil (0xFFFF) and automatic colours are no fill.
-fn shd_rgb(b: &[u8]) -> Option<Rgb> {
-    let cv = |b: &[u8]| -> Option<Rgb> {
-        match b {
-            [_, _, _, 0xFF] => None, // fAuto
-            [r, g, bl, _] => Some(Rgb(*r, *g, *bl)),
-            _ => None,
-        }
-    };
-    let ipat = b.get(8..10).map(|x| u16::from_le_bytes([x[0], x[1]]))?;
-    match ipat {
-        0xFFFF => None,
-        1 => cv(b.get(0..4)?),
-        _ => cv(b.get(4..8)?),
-    }
-}
-
-/// Background colour from a 2-byte `Shd80` (icoFore, icoBack, ipat bit-fields). As in
-/// [`shd_rgb`], solid shows the foreground and clear (0) the background, which is how Word
-/// 97 writes a plain fill; ico 0 is automatic (no fill).
-fn shd80_rgb(b: &[u8]) -> Option<Rgb> {
-    let v = u16::from_le_bytes([*b.first()?, *b.get(1)?]);
-    let fore = v & 0x1F;
-    let back = (v >> 5) & 0x1F;
-    let ipat = v >> 10;
-    if fore == 0x1F && back == 0x1F {
-        return None;
-    }
-    fmt::ico(if ipat == 1 { fore as u8 } else { back as u8 })
 }
 
 fn u16_of(p: &Prl) -> Option<u16> {
