@@ -70,6 +70,71 @@ impl Default for HumanAnatomySpec {
     }
 }
 
+/// Standard Cinematic Three-Point Studio Lighting Rig for cinema rendering and 3D scenes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CinematicLightingRig {
+    /// Key light (primary source defining shadows and form): direction, intensity (lux), kelvin temp.
+    pub key_light: LightSource,
+    /// Fill light (controls shadow contrast ratio, usually 2:1 or 4:1): intensity, soft bounce.
+    pub fill_light: LightSource,
+    /// Rim / Hair light (separates character from dark background, cinematic edge glow).
+    pub rim_light: LightSource,
+    /// Practical and ambient lights (room glow, city bokeh reflections, neon accents).
+    pub practicals: Vec<LightSource>,
+    /// Atmospheric haze density (creates god rays and depth separation).
+    pub atmospheric_haze: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LightSource {
+    pub name: String,
+    pub direction: [f32; 3],
+    pub color_rgb: [f32; 3],
+    pub color_temperature_kelvin: u32,
+    pub intensity_lux: f32,
+    pub diffusion_softness: f32, // 0.0 (hard sun/spot) to 1.0 (large softbox)
+}
+
+impl Default for CinematicLightingRig {
+    fn default() -> Self {
+        Self {
+            key_light: LightSource {
+                name: "Key Light".into(),
+                direction: [0.577, 0.577, 0.577], // 45-degree classic key
+                color_rgb: [1.0, 0.94, 0.85],
+                color_temperature_kelvin: 3200, // Warm tungsten/golden hour
+                intensity_lux: 1200.0,
+                diffusion_softness: 0.65, // Soft diffused key
+            },
+            fill_light: LightSource {
+                name: "Fill Light".into(),
+                direction: [-0.577, 0.2, 0.577],
+                color_rgb: [0.75, 0.85, 1.0],   // Cool sky bounce
+                color_temperature_kelvin: 5600, // Daylight sky fill
+                intensity_lux: 400.0,           // 3:1 key-to-fill ratio
+                diffusion_softness: 0.90,       // Heavy diffusion bounce
+            },
+            rim_light: LightSource {
+                name: "Rim / Back Light".into(),
+                direction: [0.0, -0.8, -0.6], // Behind and above subject
+                color_rgb: [1.0, 0.98, 0.9],
+                color_temperature_kelvin: 4000,
+                intensity_lux: 1800.0,    // High intensity edge separation
+                diffusion_softness: 0.25, // Sharp rim definition
+            },
+            practicals: vec![LightSource {
+                name: "City Street Amber Glow".into(),
+                direction: [0.0, -1.0, 0.0],
+                color_rgb: [1.0, 0.55, 0.1],
+                color_temperature_kelvin: 2200,
+                intensity_lux: 250.0,
+                diffusion_softness: 0.80,
+            }],
+            atmospheric_haze: 0.18,
+        }
+    }
+}
+
 /// Physical and visual lighting model for scene consistency.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LightingEnvironment {
@@ -288,6 +353,46 @@ impl StudioDirector {
                     "step_duration_secs": 0.5,
                     "feet_contact_magnetism": "vertical_wall",
                     "cloth_and_hair_gravity": [0.0, -1.0, 0.0]
+                }),
+                order: 3,
+            },
+        ]
+    }
+
+    /// Dispatches organized cinematic three-point lighting directly to CADCraft and PhotoCraft via MCP.
+    pub fn dispatch_cinematic_lighting_rig(&self, rig: &CinematicLightingRig) -> Vec<AppCommandDispatch> {
+        vec![
+            AppCommandDispatch {
+                target_app: "cadcraft".into(),
+                tool_name: "setup_3point_lighting_rig".into(),
+                parameters: serde_json::json!({
+                    "key_light": rig.key_light,
+                    "fill_light": rig.fill_light,
+                    "rim_light": rig.rim_light,
+                    "practicals_count": rig.practicals.len(),
+                    "atmospheric_haze": rig.atmospheric_haze
+                }),
+                order: 1,
+            },
+            AppCommandDispatch {
+                target_app: "photocraft".into(),
+                tool_name: "render_cinematic_subsurface_and_exposure".into(),
+                parameters: serde_json::json!({
+                    "color_space": "ACEScg",
+                    "exposure_stops": 0.0,
+                    "kelvin_white_balance": 4500,
+                    "bloom_intensity": 0.08,
+                    "anamorphic_flares": true
+                }),
+                order: 2,
+            },
+            AppCommandDispatch {
+                target_app: "filmcraft".into(),
+                tool_name: "apply_cinematic_color_lut".into(),
+                parameters: serde_json::json!({
+                    "lut_profile": "cinematic_teal_and_orange_film",
+                    "grain_intensity": 0.015,
+                    "tone_mapping": "ACES_fitted"
                 }),
                 order: 3,
             },
@@ -618,6 +723,15 @@ mod tests {
 
         let vector_human = director.synthesize_human_subject(&anatomy, AestheticStyle::AnimatedVector, "curious", &env);
         assert_eq!(vector_human[1].target_app, "vectorcraft");
+
+        // Test Cinematic 3-Point Lighting Rig MCP Dispatch
+        let rig = CinematicLightingRig::default();
+        let cinema_dispatches = director.dispatch_cinematic_lighting_rig(&rig);
+        assert_eq!(cinema_dispatches.len(), 3);
+        assert_eq!(cinema_dispatches[0].target_app, "cadcraft");
+        assert_eq!(cinema_dispatches[0].tool_name, "setup_3point_lighting_rig");
+        assert_eq!(cinema_dispatches[1].target_app, "photocraft");
+        assert_eq!(cinema_dispatches[2].target_app, "filmcraft");
 
         // Test Dual-Style Wall Walker (Half Photoreal, Half Pixar 3D)
         let split_walker = director.plan_dual_style_split_character(
