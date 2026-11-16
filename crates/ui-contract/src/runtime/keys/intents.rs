@@ -263,16 +263,18 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
     }
 }
 
-/// Offers the window's unfocused intents to `take` while nothing in the window has framework focus, and writes back
-/// what it left untaken. `take` returns whether it took any. `false` when something is focused or nothing was taken.
+/// Offers the window's intents to `take` while nothing in the window has framework focus or the focused stop is the
+/// window's document canvas (`KeyUse::chrome_key`), and writes back what it left untaken. `take` returns whether it
+/// took any. `false` when another stop is focused or nothing was taken.
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
-/// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge. A component or a
-/// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it), so an app
-/// that hosts the runtime reads them last in its UI to see what no component took. `rtl` reads horizontal moves in
-/// the window's direction.
+/// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with the document
+/// canvas focused, the Escape its sessions and its tool left (`leave_to_window`). A component or a scope that runs
+/// earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas session the one
+/// that ends it), so an app that hosts the runtime reads them last in its UI to see what no component took. `rtl`
+/// reads horizontal moves in the window's direction.
 pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
-    if focus::focused_rec(ctx).is_some() {
+    if focus::focused_rec(ctx).is_some_and(|rec| !rec.stop.keys.chrome_key) {
         return false;
     }
     let mut window = intents_of(ctx, None, rtl);
@@ -281,6 +283,30 @@ pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Inte
         settle(ctx, None, &window);
     }
     taken
+}
+
+/// Moves the intents `which` picks that the focused document canvas `from` left untaken this pass to the window's,
+/// where `with_window_intents` reads them. The canvas's tool host calls it once the canvas's session members and its
+/// tool had their chance. Nothing moves while `from` is not the focused stop.
+#[doc(hidden)]
+pub fn leave_to_window(ctx: &Context, from: Id, which: impl Fn(&Intent) -> bool) {
+    if crate::runtime::measure::active(ctx) || !focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == from && rec.stop.keys.chrome_key) {
+        return;
+    }
+    current(ctx, |stage| {
+        let Some(routed) = stage.routed.get_mut(&Some(from)) else { return };
+        let mut left = Vec::new();
+        routed.items.retain(|item| {
+            let moves = which(&item.intent);
+            if moves {
+                left.push(item.clone());
+            }
+            !moves
+        });
+        if !left.is_empty() {
+            stage.routed.entry(None).or_default().items.extend(left);
+        }
+    });
 }
 
 /// The keys an arena's session control borrowed this pass (`KeyUse::session`), with the ids they were routed to.

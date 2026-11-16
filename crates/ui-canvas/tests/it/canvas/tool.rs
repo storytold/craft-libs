@@ -866,7 +866,13 @@ fn a_held_space_pans_over_a_canvas_control_and_leaves_it_unchanged() {
     let corner = fixture.by_label("Crop corner, top left").expect("the crop shows its corners").rect.center();
     let before = view.get().expect("the canvas ran").center;
     let space = craft_keymap::Key::Space;
-    for input in [ToolInput::hold(space), ToolInput::down(PointerButton::Primary, corner), ToolInput::moved(corner + BY), ToolInput::up(corner + BY), ToolInput::let_go(space)] {
+    for input in [
+        ToolInput::hold(space),
+        ToolInput::down(PointerButton::Primary, corner),
+        ToolInput::moved(corner + BY),
+        ToolInput::up(corner + BY),
+        ToolInput::let_go(space),
+    ] {
         ToolHost::inject(fixture.ctx(), canvas.get(), input);
     }
     fixture.run_injected();
@@ -1159,5 +1165,41 @@ fn a_drag_past_the_canvas_edge_scrolls_the_view_and_a_turned_view_scrolls_on_the
         }
         fixture.frame(vec![pointer::release(Pos2::new(canvas.right() + 25.0, start.y))]);
         assert_eq!(tool.borrow().count(Call::Press), 1, "{:?}", tool.borrow().calls);
+    }
+}
+
+/// A canvas whose app reads the window's intents after the tool host, last in its UI: returns the fixture and how many
+/// Cancels the window took.
+fn window_reading_canvas(tool: impl CanvasTool + 'static) -> (Fixture, Rc<Cell<u32>>) {
+    let tool = RefCell::new(tool);
+    let cancels = Rc::new(Cell::new(0));
+    let seen = Rc::clone(&cancels);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |_, _| {});
+        let _ = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
+        craft_ui::runtime::keys::with_window_intents(ui.ctx(), false, |window| {
+            let took = window.take(craft_behavior::Intent::Cancel);
+            seen.set(seen.get() + u32::from(took));
+            took
+        });
+    });
+    fixture.settle();
+    (fixture, cancels)
+}
+
+/// On a canvas focused by a click, an Escape the tool does not take reaches the window's intents, and one the tool
+/// takes does not.
+#[trial]
+fn a_focused_canvas_leaves_the_cancel_no_tool_took_to_the_window() {
+    for takes in [false, true] {
+        let (mut fixture, cancels) =
+            if takes { window_reading_canvas(Recorder::default()) } else { window_reading_canvas(Probe::new("main", &Log::default())) };
+        let canvas = fixture.by_role(Role::CANVAS).remove(0);
+        fixture.click(&canvas).settle();
+        cancels.set(0);
+        fixture.frame(vec![key_press(Key::Escape, Modifiers::NONE)]).settle();
+        let want = if takes { 0 } else { 1 };
+        assert_eq!(cancels.get(), want, "the window sees the Escape only when the tool leaves it (tool takes it: {takes})");
     }
 }

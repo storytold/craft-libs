@@ -1322,5 +1322,10 @@ impl<'a, 't: 'a> Run<'a, 't> {
                 self.response.took_key = Some(kept);
             }
         }
+        // An Escape the focused canvas's sessions and tool were offered and left is the window's, as it is with
+        // nothing focused.
+        if !self.cancelled {
+            keys::leave_to_window(ctx, canvas, |intent| *intent == Intent::Cancel);
+        }
     }
 }
