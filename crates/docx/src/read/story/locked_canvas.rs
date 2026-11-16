@@ -102,17 +102,22 @@ fn picture(pic: &El) -> El {
 fn paragraphs(body: &El, theme: &[Rgb]) -> Vec<Node> {
     body.children("a:p")
         .map(|p| {
-            // A run's properties default to its paragraph's own (`a:pPr/a:defRPr`), then to the
-            // list style's for the paragraph's level (`lvl`, 0–8), property by property.
+            // A paragraph's properties default to the list style's for its level (`lvl`, 0–8),
+            // then to the list style's defaults (`a:defPPr`), property by property; a run's to its
+            // paragraph's own (`a:pPr/a:defRPr`), then to those two's.
             let ppr_el = p.child("a:pPr");
             let level = ppr_el.and_then(|pp| pp.attr("lvl")).and_then(|v| v.trim().parse::<u8>().ok()).filter(|l| *l <= 8).unwrap_or(0);
-            let level_style = body.child("a:lstStyle").and_then(|l| l.child(&format!("a:lvl{}pPr", level + 1)));
-            let defaults: Vec<&El> =
-                [ppr_el.and_then(|pp| pp.child("a:defRPr")), level_style.and_then(|l| l.child("a:defRPr"))].into_iter().flatten().collect();
+            let list_style = body.child("a:lstStyle");
+            let paragraph_styles: Vec<&El> =
+                [ppr_el, list_style.and_then(|l| l.child(&format!("a:lvl{}pPr", level + 1))), list_style.and_then(|l| l.child("a:defPPr"))]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+            let defaults: Vec<&El> = paragraph_styles.iter().filter_map(|pp| pp.child("a:defRPr")).collect();
             let defaults = defaults.as_slice();
             let mut ppr =
                 vec![Node::El(el("w:spacing", attrs(&[("w:before", "0"), ("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]), Vec::new()))];
-            let jc = match ppr_el.and_then(|pp| pp.attr("algn")) {
+            let jc = match paragraph_styles.iter().find_map(|pp| pp.attr("algn")) {
                 Some("ctr") => Some("center"),
                 Some("r") => Some("right"),
                 Some("just") => Some("both"),
@@ -151,7 +156,12 @@ fn paragraphs(body: &El, theme: &[Rgb]) -> Vec<Node> {
 fn run_props(rpr: Option<&El>, defaults: &[&El], theme: &[Rgb]) -> El {
     let get = |n: &str| rpr.and_then(|r| r.attr(n)).or_else(|| defaults.iter().find_map(|d| d.attr(n)));
     let child = |n: &str| rpr.and_then(|r| r.child(n)).or_else(|| defaults.iter().find_map(|d| d.child(n)));
-    let on = |n: &str| get(n).is_some_and(|v| v == "1" || v == "true");
+    // On, off (kept, so the document's style doesn't turn it back on), or not given.
+    let toggle = |n: &str| match get(n) {
+        Some("1" | "true") => Some(true),
+        Some("0" | "false") => Some(false),
+        _ => None,
+    };
     let mut kids = Vec::new();
     let mut push = |name: &str, a: &[(&str, &str)]| kids.push(Node::El(el(name, attrs(a), Vec::new())));
     // Theme fonts (`+mn-lt`) are left to the document's.
@@ -169,11 +179,12 @@ fn run_props(rpr: Option<&El>, defaults: &[&El], theme: &[Rgb]) -> El {
     if !fonts.is_empty() {
         push("w:rFonts", &fonts);
     }
-    if on("b") {
-        push("w:b", &[]);
-    }
-    if on("i") {
-        push("w:i", &[]);
+    for (drawingml, word) in [("b", "w:b"), ("i", "w:i")] {
+        match toggle(drawingml) {
+            Some(true) => push(word, &[]),
+            Some(false) => push(word, &[("w:val", "0")]),
+            None => {}
+        }
     }
     match get("cap") {
         Some("all") => push("w:caps", &[]),

@@ -122,6 +122,26 @@ fn a_locked_canvas_text_shape_and_paragraph_defaults() {
     }
 }
 
+/// A paragraph's alignment and its runs' properties fall back on its level's style, then on the
+/// list style's defaults (`a:defPPr`); a run's bold set off stays off.
+#[test]
+fn a_locked_canvas_paragraph_takes_its_level_and_the_list_defaults() {
+    use craft_wordmodel::props::Align;
+    let text = r#"<a:txSp><a:txBody><a:bodyPr/><a:lstStyle><a:defPPr algn="r"><a:defRPr sz="1600" b="1"/></a:defPPr><a:lvl2pPr algn="ctr"/></a:lstStyle><a:p><a:r><a:rPr lang="en-US" b="0"/><a:t>Plain</a:t></a:r></a:p><a:p><a:pPr lvl="1"/><a:r><a:rPr lang="en-US"/><a:t>Centred</a:t></a:r></a:p><a:p><a:pPr lvl="1" algn="l"/><a:r><a:rPr lang="en-US"/><a:t>Own</a:t></a:r></a:p></a:txBody><a:useSpRect/><a:xfrm><a:off x="635000" y="381000"/><a:ext cx="1270000" cy="508000"/></a:xfrm></a:txSp>"#;
+    let d = craft_docx::read(&docx(&drawing(text))).unwrap();
+    for d in [&d, &craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap()] {
+        let (_, _, children) = group(d);
+        let [shape] = &children[..] else { panic!("{children:?}") };
+        let InlineObject::Shape { story: Some(id), .. } = &shape.obj else { panic!("{:?}", shape.obj) };
+        let blocks = &d.parts.get(id).unwrap().blocks;
+        let para = |i: usize| blocks[i].as_para().unwrap();
+        let aligns: Vec<Option<Align>> = (0..3).map(|i| para(i).props.align).collect();
+        assert_eq!(aligns, [Some(Align::Right), Some(Align::Center), Some(Align::Left)], "the list defaults', the level's, its own");
+        let runs: Vec<(Option<f32>, Option<bool>)> = (0..3).map(|i| (para(i).runs[0].props.size, para(i).runs[0].props.bold)).collect();
+        assert_eq!(runs, [(Some(16.0), Some(false)), (Some(16.0), Some(true)), (Some(16.0), Some(true))]);
+    }
+}
+
 /// Before wordcraft#5060 only the canvas's first picture showed: the shapes and their text were dropped.
 #[test]
 fn a_locked_canvas_is_not_read_as_its_picture_alone() {
