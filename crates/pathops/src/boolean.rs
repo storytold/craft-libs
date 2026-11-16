@@ -722,7 +722,9 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
     // piece off its curve by (ten times the match of the ends), but no more than the precision asked for where that
     // is more than the match itself. Two input curves that share their ends and lie nearer than that to each
     // other (a lens between them thinner than ten matches) both pass the first, and the first of them in the
-    // input would take the pieces of the other, moving the boundary by as much as the lens is wide.
+    // input would take the pieces of the other, moving the boundary by as much as the lens is wide. Where the precision asked for is under the
+    // match itself, the match is the limit: the sweep puts a piece off its curve by that much (the ends are taken for the curve's within it),
+    // and a boundary that is moved by less than it is within what the sweep can tell.
     let middle_limit = (tol * 10.0).min(tidy.precision.max(tol));
     for i in tidy.curve_indices_around(a, b) {
         let Some((_, c)) = tidy.curves.get(i) else { continue };
@@ -3033,9 +3035,11 @@ mod tests {
                 let Ok(want) = std::panic::catch_unwind(|| unite_swept_twice(&[(&bp, rule)], DEFAULT_PRECISION)) else { continue };
                 for (got, sweeps, _) in unite_counting_sweeps(&[(&bp, rule)]) {
                     assert_eq!(got, want, "case {case}, {rule:?}");
-                    match sweeps {
-                        1 => once += 1,
-                        _ => twice += 1,
+                    assert!(matches!(sweeps, 1 | 2), "case {case}, {rule:?}: {sweeps} sweeps, where one or two are made");
+                    if sweeps == 1 {
+                        once += 1;
+                    } else {
+                        twice += 1;
                     }
                 }
             }

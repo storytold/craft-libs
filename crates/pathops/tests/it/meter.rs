@@ -301,9 +301,8 @@ fn an_admission_holds_memory_under_a_limit_of_three_gigabytes() {
     }
 }
 
-/// The inputs that must be made: rings, S-strokes, a hatch of 400, a circle of 100,000 cubics at 0, 1e9 and 1e12, 250 and 1,000 bars on one
-/// baseline, meshes of 140 and 170 cells a side, grids of squares of 200 and 250, 2,000 pies of 30 slices, the star of 1,291 points, and pairs
-/// of circles that run along one another, 512 of 1e6 and 2,048 of 1e5.
+/// The worst inputs that are admitted, which must be made: a circle of 100,000 cubics at 0, 1e9 and 1e12, 2,000 pies of 30 slices, the star of
+/// 1,291 points, a polygon of 262,000 sides, and pairs of circles that run along one another, 512 of 1e6 and 2,048 of 1e5.
 /// Seconds and up to 2.3 GB: in a release build only.
 #[cfg_attr(debug_assertions, ignore = "seconds and gigabytes: run with cargo test --release")]
 #[test]
