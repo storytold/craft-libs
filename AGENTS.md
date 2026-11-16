@@ -61,3 +61,5 @@ Shared Rust libraries for the Craft Apps.
 - **No app code.** A crate here must be useful to more than one app and must not depend on any app.
 - **Before merging:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`.
+
+- **Reuse shared implementations.** Before adding format, codec, protocol or UI functionality, check existing craft-libs crates and open pull requests; extend the appropriate reusable library rather than duplicate an app implementation, keep app-specific policy in consumers, and preserve behavioral parity, security limits and regression coverage.
