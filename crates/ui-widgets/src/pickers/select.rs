@@ -255,14 +255,14 @@ impl<T: Value + 'static> Component for Select<'_, T> {
                 self.pick(cx, to);
             }
         }
-        // The wheel gives one notch, up for a step forward. The end share of the gesture has no scroll and commits the run.
+        // The wheel gives one notch, down for a step forward (as a combo box and a tab strip step). The end share of the gesture has no scroll and commits the run.
         if let Some(wheel) = cx.take_wheel() {
             if matches!(wheel.phase, WheelPhase::End) {
                 cx.wheel_run(wheel.phase, None);
             } else if let StepResult::Set(along) =
                 wheel_step(&ValueSteps::new(0.0, -1.0, 1.0, 1.0, 1.0), ValueAxes::Both, &wheel, cx.env.direction().is_rtl())
                 && along != 0.0
-                && let Some(to) = step_stop(&stops, self.position(cx.value()), along > 0.0)
+                && let Some(to) = step_stop(&stops, self.position(cx.value()), along < 0.0)
                 && let Some(value) = self.entries[to].value()
             {
                 cx.wheel_run(wheel.phase, Some(value.clone()));
