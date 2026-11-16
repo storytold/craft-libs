@@ -97,12 +97,17 @@ pub use pen::{
     PathSelection, PenStyle,
 };
 pub use picture_fill::{PictureFill, PictureFillEditor, PictureFillOutput, PictureMode};
-pub use shape::{Arrowheads, ArrowheadsOutput, ArrowheadsPopover, LINE_WEIGHT_RANGE, RADIUS_RANGE, StrokeCells, VectorMode, VectorModeSelect};
+pub use shape::{
+    Arrowheads, ArrowheadsOutput, ArrowheadsPopover, LINE_WEIGHT_RANGE, RADIUS_RANGE, StrokeCells, StrokeCellsOutput, VectorMode, VectorModeSelect,
+};
+pub use shape::{BoxConstraintsOutput, BoxConstraintsPopover};
 pub use shape::{
     ChipSetup, LiveShape, ShapeAppearance, ShapeBar, ShapeBarOutput, ShapeChange, ShapePaint, ShapePanel, ShapePanelOutput, ShapeToolSettings,
     ShapeWords,
 };
-pub use shape_drag::{CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind};
+pub use shape_drag::{
+    BoxConstraint, BoxConstraints, CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind,
+};
 pub use shape_presets::{ShapeMenu, ShapePresetWords};
 pub use slice::{
     DivideBy, DivideSlices, DivideSlicesDialog, SliceBar, SliceBarOutput, SliceCommand, SliceEvent, SliceItem, SliceKind, SliceMode, SliceOptions,

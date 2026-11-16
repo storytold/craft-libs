@@ -15,6 +15,7 @@ pub(super) const SURFACES: &[(&str, &str, Surface)] = &[
     ("craft_color", "SampleSizeSelect", Chrome),
     ("craft_draw", "AddBesideHandles", Canvas),
     ("craft_draw", "ArrowheadsPopover", Chrome),
+    ("craft_draw", "BoxConstraintsPopover", Chrome),
     ("craft_draw", "ArtboardOverlay", Canvas),
     ("craft_draw", "BezierOverlay", Canvas),
     ("craft_draw", "ConnectorHandles", Canvas),

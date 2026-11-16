@@ -62,5 +62,25 @@ craft_ui::words! {
         set_as_default: "shape.setAsDefault" = "Set as default";
         /// The tooltip of that check box.
         set_as_default_tip: "shape.setAsDefaultTip" = "Use these settings for new arrows";
+        /// The Rectangle gear's button: its accessible name and tooltip.
+        shape_options: "shape.shapeOptions" = "Set additional shape and path options";
+        /// The gear's radio that draws the dragged box.
+        unconstrained: "shape.unconstrained" = "Unconstrained";
+        /// The gear's radio that draws a square.
+        square: "shape.square" = "Square";
+        /// The gear's radio that draws a box of a fixed width and height.
+        fixed_size: "shape.fixedSize" = "Fixed Size";
+        /// The gear's radio that draws a box of a fixed width to height ratio.
+        proportional: "shape.proportional" = "Proportional";
+        /// The gear's check box that draws from the press as the centre.
+        from_center: "shape.fromCenter" = "From Center";
+        /// The Fixed Size width field's accessible name.
+        fixed_width: "shape.fixedWidth" = "Fixed Size W";
+        /// The Fixed Size height field's accessible name.
+        fixed_height: "shape.fixedHeight" = "Fixed Size H";
+        /// The Proportional width field's accessible name.
+        ratio_width: "shape.ratioWidth" = "Proportional W";
+        /// The Proportional height field's accessible name.
+        ratio_height: "shape.ratioHeight" = "Proportional H";
     }
 }

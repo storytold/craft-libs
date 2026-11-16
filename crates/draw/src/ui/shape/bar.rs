@@ -28,7 +28,8 @@ pub struct ShapeBarOutput {
     pub screen_pick: Option<(ShapePaint, ScreenPickGesture)>,
     /// A chip asked for the app's full colour picker, with the chip it is for.
     pub pick_color: Option<(ShapePaint, ColorRequest)>,
-    /// The kind cell's (Radius, Sides, Weight) value was typed out of range.
+    /// A value typed past its cell's range this pass (the stroke width, or the kind's Radius, Sides or Weight), which
+    /// the field clamped: the app answers with its range alert.
     pub out_of_range: Option<RangeAlert>,
 }
 
@@ -113,11 +114,9 @@ impl<'a> ShapeBar<'a> {
         let (words, units) = (env.words::<ShapeWords>(), env.units());
         let mut pass = Cells::new(&words, &units, pixels_per_inch, appearance, fallbacks, sampled, chips);
         let mut stroke_open = stroke_open;
-        let mut out_of_range = None;
         Row::new().enabled(!appearance.locked).show(ui, |ui, _| {
             // The body may run more than once in a pass; each run starts clean.
             pass.begin();
-            out_of_range = None;
             if paint {
                 let fill_on = !matches!(appearance.fill, craft_color::ui::Paint::None);
                 let check = Checkbox::new(Bind::given(fill_on)).label(words.fill.clone()).show(ui).events;
@@ -140,8 +139,9 @@ impl<'a> ShapeBar<'a> {
                 if let Some(open) = stroke_open.as_mut() {
                     cells = cells.stroke_open(open.reborrowed());
                 }
-                let events = cells.show(ui);
-                pass.events.extend(events);
+                let out = cells.show(ui);
+                pass.events.extend(out.events);
+                pass.alert(out.out_of_range);
             }
             let cell = match kind {
                 ShapeKind::Rectangle | ShapeKind::RoundedRectangle => Some((
@@ -169,9 +169,9 @@ impl<'a> ShapeBar<'a> {
                     .inner
                     .unwrap_or_default();
                 pass.events.extend(events.map(change));
-                out_of_range = alert;
+                pass.alert(alert);
             }
         });
-        ShapeBarOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color, out_of_range }
+        ShapeBarOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color, out_of_range: pass.out_of_range }
     }
 }

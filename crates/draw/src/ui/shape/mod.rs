@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::stroke::StrokeStyle;
 
-use super::shape_drag::{ShapeDragOptions, ShapeKind};
+use super::shape_drag::{BoxConstraints, ShapeDragOptions, ShapeKind};
 
 mod arrowheads;
 mod bar;
+mod gear;
 mod mode_select;
 mod panel;
 #[cfg(feature = "screen-testing")]
@@ -21,9 +22,10 @@ mod words;
 
 pub use arrowheads::{ArrowheadsOutput, ArrowheadsPopover};
 pub use bar::{ShapeBar, ShapeBarOutput};
+pub use gear::{BoxConstraintsOutput, BoxConstraintsPopover};
 pub use mode_select::VectorModeSelect;
 pub use panel::{ChipSetup, ShapePaint, ShapePanel, ShapePanelOutput};
-pub use stroke_cells::StrokeCells;
+pub use stroke_cells::{StrokeCells, StrokeCellsOutput};
 pub use words::ShapeWords;
 
 /// The drawing mode of the vector tools.
@@ -53,15 +55,16 @@ pub struct Arrowheads {
     pub width: f64,
     /// The head's length in document pixels.
     pub length: f64,
-    /// The head's concavity in percent.
+    /// The head's concavity in percent of its length, in [`ARROW_CONCAVITY`](Self::ARROW_CONCAVITY); below 0 the
+    /// back bulges out.
     pub concavity: f64,
 }
 
 impl Arrowheads {
     /// The range of the width and length fields, in document pixels (production and engine units).
     pub const ARROW_SIZE: RangeInclusive<f64> = 1.0..=4096.0;
-    /// The range of the concavity field, in percent.
-    pub const ARROW_CONCAVITY: RangeInclusive<f64> = 0.0..=100.0;
+    /// The range of the concavity field, in whole percent.
+    pub const ARROW_CONCAVITY: RangeInclusive<f64> = -50.0..=50.0;
 
     /// No arrowheads at the default size.
     pub const fn new() -> Self {
@@ -118,6 +121,16 @@ pub enum LiveShape {
         /// Inner radius over outer radius; 1 for a plain polygon.
         star_ratio: f64,
     },
+    /// A triangle: one corner radius for every corner.
+    #[non_exhaustive]
+    Triangle {
+        /// Width in document pixels.
+        width: f64,
+        /// Height in document pixels.
+        height: f64,
+        /// The corner radius in document pixels.
+        corner_radius: f64,
+    },
     /// A line.
     #[non_exhaustive]
     Line {
@@ -143,6 +156,11 @@ impl LiveShape {
     /// A polygon (a star below a `star_ratio` of 1) of `width` by `height`.
     pub fn polygon(width: f64, height: f64, corner_radius: f64, sides: u32, star_ratio: f64) -> Self {
         LiveShape::Polygon { width, height, corner_radius, sides, star_ratio }
+    }
+
+    /// A triangle of `width` by `height` with `corner_radius` at every corner.
+    pub fn triangle(width: f64, height: f64, corner_radius: f64) -> Self {
+        LiveShape::Triangle { width, height, corner_radius }
     }
 
     /// A line of `weight`.
@@ -253,7 +271,7 @@ impl ShapeChange {
 }
 
 /// The Shape tools' persisted options-bar values (Fill on, radius, sides, star ratio, weight,
-/// stroke width); the paints are the app's foreground and background.
+/// stroke width, the Rectangle's gear); the paints are the app's foreground and background.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
@@ -272,11 +290,13 @@ pub struct ShapeToolSettings {
     pub stroke_width: f64,
     /// The Line's arrowheads.
     pub arrowheads: Arrowheads,
+    /// The Rectangle's gear ([`BoxConstraintsPopover`]).
+    pub rect_box: BoxConstraints,
 }
 
 impl Default for ShapeToolSettings {
     /// Fill on, square corners, 5 sides, a star ratio of 0.5 (production's Star), weight 3, no stroke, no
-    /// arrowheads.
+    /// arrowheads, an unconstrained Rectangle.
     fn default() -> Self {
         ShapeToolSettings {
             fill_on: true,
@@ -286,13 +306,19 @@ impl Default for ShapeToolSettings {
             line_weight: 3.0,
             stroke_width: 0.0,
             arrowheads: Arrowheads::default(),
+            rect_box: BoxConstraints::default(),
         }
     }
 }
 
 impl ShapeToolSettings {
-    /// The drag options of `kind` with these values.
+    /// The drag options of `kind` with these values; the gear's constraints apply to the Rectangle only.
     pub fn drag_options(&self, kind: ShapeKind) -> ShapeDragOptions {
-        ShapeDragOptions::new(kind).corner_radius(self.corner_radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight)
+        let options =
+            ShapeDragOptions::new(kind).corner_radius(self.corner_radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight);
+        match kind {
+            ShapeKind::Rectangle => options.constraints(self.rect_box),
+            _ => options,
+        }
     }
 }

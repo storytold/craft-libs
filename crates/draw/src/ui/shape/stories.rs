@@ -2,10 +2,10 @@
 //! for the document, and the panel and the bar edit it as an app does: each field's change is applied to the fake.
 
 use super::{
-    Arrowheads, ArrowheadsPopover, LiveShape, ShapeAppearance, ShapeBar, ShapeChange, ShapePanel, ShapeToolSettings, StrokeCells, VectorMode,
-    VectorModeSelect,
+    Arrowheads, ArrowheadsPopover, BoxConstraintsPopover, LiveShape, ShapeAppearance, ShapeBar, ShapeChange, ShapePanel, ShapeToolSettings,
+    StrokeCells, VectorMode, VectorModeSelect,
 };
-use crate::ui::shape_drag::ShapeKind;
+use crate::ui::shape_drag::{BoxConstraints, ShapeKind};
 use craft_behavior::EditEvent;
 use craft_color::ui::Paint;
 use craft_theme::Srgba;
@@ -41,12 +41,17 @@ fn apply(change: ShapeChange, shape: &mut LiveShape, look: &mut ShapeAppearance)
         }
         (
             ShapeChange::Size { width: w, height: h },
-            LiveShape::Rect { width, height, .. } | LiveShape::Ellipse { width, height } | LiveShape::Polygon { width, height, .. },
+            LiveShape::Rect { width, height, .. }
+            | LiveShape::Ellipse { width, height }
+            | LiveShape::Polygon { width, height, .. }
+            | LiveShape::Triangle { width, height, .. },
         ) => {
             (*width, *height) = (w, h);
         }
         (ShapeChange::Radii(next), LiveShape::Rect { radii, .. }) => *radii = next,
-        (ShapeChange::CornerRadius(next), LiveShape::Polygon { corner_radius, .. }) => *corner_radius = next,
+        (ShapeChange::CornerRadius(next), LiveShape::Polygon { corner_radius, .. } | LiveShape::Triangle { corner_radius, .. }) => {
+            *corner_radius = next
+        }
         (ShapeChange::Sides(next), LiveShape::Polygon { sides, .. }) => *sides = next,
         (ShapeChange::StarRatio(next), LiveShape::Polygon { star_ratio, .. }) => *star_ratio = next,
         (ShapeChange::Weight(next), LiveShape::Line { weight, .. }) => *weight = next,
@@ -93,6 +98,11 @@ fn shape_panel_rect(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ShapePanel<'static>, covers = [Default], drive = Drive::Never)]
 fn shape_panel_polygon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     panel(ui, data, polygon())
+}
+
+#[story(ShapePanel<'static>, covers = [Default], drive = Drive::Never)]
+fn shape_panel_triangle(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    panel(ui, data, LiveShape::triangle(240.0, 200.0, 0.0))
 }
 
 #[story(ShapePanel<'static>, covers = [Default], drive = Drive::Never)]
@@ -163,7 +173,9 @@ fn stroke_cells_with(ui: &mut Ui, data: &mut StoryData, corners: bool) -> StoryO
     let appearance = data.value("look", look()).clone();
     let mut open = *data.value("open", false);
     let events = Bar::new("Stroke options", BarKind::Options)
-        .show(ui, |ui, _| StrokeCells::new(&appearance, DOCUMENT_PIXELS_PER_INCH).corners(corners).stroke_open(Bind::bound(&mut open)).show(ui))
+        .show(ui, |ui, _| {
+            StrokeCells::new(&appearance, DOCUMENT_PIXELS_PER_INCH).corners(corners).stroke_open(Bind::bound(&mut open)).show(ui).events
+        })
         .inner
         .unwrap_or_default();
     *data.value("open", false) = open;
@@ -181,6 +193,18 @@ fn arrowheads_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     *data.value("open", true) = open;
     if let Some(next) = out.edits.iter().rev().find_map(|event| event.value()) {
         *data.value("arrows", Arrowheads::default()) = *next;
+    }
+    StoryOutput::default()
+}
+
+#[story(BoxConstraintsPopover<'static>, covers = [Default], drive = Drive::Never)]
+fn box_constraints_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = *data.value("box", BoxConstraints::default());
+    let mut open = *data.value("open", true);
+    let out = BoxConstraintsPopover::new(Bind::given(value), Bind::bound(&mut open), DOCUMENT_PIXELS_PER_INCH).show(ui);
+    *data.value("open", true) = open;
+    if let Some(next) = out.edits.iter().rev().find_map(|event| event.value()) {
+        *data.value("box", BoxConstraints::default()) = *next;
     }
     StoryOutput::default()
 }
