@@ -43,8 +43,9 @@ Buffers are checked once per call, before any pixel is written.
 * `lutfile::parse(name, bytes)` / `lutfile::write_cube(&lut)`: `.cube`, `.3dl` and `.look` LUT
   files; `lutfile::builtin(id)` returns generated looks (`lutfile::BUILTIN`). A `.3dl` shaper is
   kept as a 1-D curve in `LutFile::shaper` and applied ahead of the table by `lutfile::sample`
-  (`lutfile::shape` is the curve); `lutfile::write_3dl(&lut)` writes it back, or returns an error
-  for a look `.3dl` cannot hold (a 2-node table, a non-default domain).
+  (`lutfile::shape` is the curve); `lutfile::write_3dl(&lut)` writes it back (a 2-node table as
+  the 3-node table that renders the same), or returns an error for a look `.3dl` cannot hold (an
+  edge other than 2 or `2^bits + 1`, a non-default domain).
 * `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding
   with its profile ID set.
 * `profile_id(bytes)`: the MD5 profile ID of any profile, to check a stored one.

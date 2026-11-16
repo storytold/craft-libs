@@ -543,10 +543,14 @@ pub fn write_cube(l: &LutFile) -> String {
 /// fastest. This is the only format here that carries a shaper, so it is what a lookup with a
 /// curve is saved as (#11452).
 ///
-/// What `.3dl` cannot hold is refused, never written as something else:
-/// - a 2-node table (`.3dl` declares its edge only as `2^bits + 1` with `bits` in 1..=7, and an
-///   undeclared 3-value shaper row would read as a node, #9078), and any other edge that isn't
-///   `2^bits + 1`;
+/// A 2-node table, which `.3dl` cannot declare (the edge is `2^bits + 1` with `bits` in 1..=7, and
+/// an undeclared 3-value shaper row would read as a node, #9078), is written as the 3-node table
+/// that renders the same: the look is kept, curve included, rather than refused into a `.cube`
+/// that would drop the curve (photocraft#11581 review). It reopens with `size` 3.
+///
+/// What `.3dl` cannot hold is refused with an error the caller should report, never written as
+/// something else:
+/// - an edge that isn't `2^bits + 1` (other than 2);
 /// - a non-default input domain (the format has no such keyword);
 /// - a shaper with fewer than two finite knots, or a knot above 1 (the reader never produces one,
 ///   and no row can state a scale for it).
@@ -567,10 +571,18 @@ pub fn write_3dl(l: &LutFile) -> Result<String, LutError> {
         return err("a .3dl has no input domain keyword: the table's non-default domain can't be saved");
     }
     checked_data_len(l.size).and_then(|(_, len)| if l.data.len() == len { Ok(()) } else { err("the table doesn't match its size") })?;
+    // A 2-node table has no `Mesh` edge (`2^bits + 1`, bits 1 to 7), so it is written as the 3-node
+    // table holding the same function: trilinear interpolation of 2 nodes is multilinear, and its
+    // samples at the halfway points interpolate back to it exactly. The shaper stays as it is.
+    let refined;
+    let l = if l.size == 2 {
+        let flat = LutFile { shaper: None, ..l.clone() };
+        refined = LutFile { shaper: l.shaper.clone(), ..LutFile::from_fn(&l.title, 3, |c| sample(&flat, c))? };
+        &refined
+    } else {
+        l
+    };
     let edge = l.size - 1;
-    if edge == 1 {
-        return err("a 2-node table can't be saved as .3dl: it has no Mesh edge to declare (2^bits + 1, bits 1 to 7)");
-    }
     if !edge.is_power_of_two() || edge > 128 {
         return err(format!("a {}-node table can't be saved as .3dl: the edge must be 2^bits + 1 with bits 1 to 7", l.size));
     }
@@ -1128,16 +1140,21 @@ mod tests {
         assert!((sample(&back, [0.75, 0.0, 0.0])[0] - 256.0 / 1023.0).abs() < 1e-4, "the same look");
     }
 
-    /// A shaped 2-node table has no `.3dl` form: the format declares its edge only as `2^bits + 1`
-    /// (bits 1 to 7) and a 3-value shaper row would read as a node (#9078). Saving it as `.cube`
-    /// would drop the curve, so the writer refuses and says why; the render still honours the curve.
+    /// A shaped 2-node table has no `.3dl` edge to declare (`2^bits + 1`, bits 1 to 7), so it is
+    /// written as the 3-node table with the same render, curve kept (photocraft#11581 review):
+    /// saving it as `.cube` instead would drop the curve.
     #[test]
-    fn write_3dl_refuses_a_shaped_two_node_table() {
-        let l = with_shaper(LutFile::identity(2).unwrap(), &[0.0, 0.25, 1.0]);
-        let e = write_3dl(&l).unwrap_err().to_string();
-        assert!(e.contains("2-node"), "{e}");
-        assert!((sample(&l, [0.5; 3])[0] - 0.25).abs() < 1e-6, "the curve still renders on a 2-node table");
-        assert!(write_3dl(&with_shaper(LutFile::identity(2).unwrap(), &[0.0, 0.5])).is_err());
+    fn write_3dl_keeps_the_look_of_a_shaped_two_node_table() {
+        for knots in [&[0.0, 0.25, 1.0][..], &[0.0, 0.5][..]] {
+            let l = with_shaper(warped(2), knots);
+            let text = write_3dl(&l).unwrap();
+            assert!(text.starts_with("3DMESH\nMesh 1 16\n"), "{text}");
+            let back = parse_3dl(&text).unwrap();
+            assert_eq!(back.size, 3);
+            assert_eq!(back.shaper.as_deref().map(Vec::len), Some(knots.len()), "{text}");
+            assert_same_look(&l, &back, 3e-5);
+        }
+        assert_same_look(&warped(2), &parse_3dl(&write_3dl(&warped(2)).unwrap()).unwrap(), 3e-5);
     }
 
     /// What `.3dl` cannot declare is refused, never written as something else.
