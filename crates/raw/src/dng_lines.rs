@@ -1,11 +1,51 @@
 //! The raw image data of a DNG: finding the main raw IFD, and reading its strips or tiles
 //! (uncompressed or lossless JPEG) into one array of 16-bit samples.
 
-#[cfg(feature = "threads")]
+#[cfg(feature = "line-dng-threads")]
 use rayon::prelude::*;
 
-use crate::tiff::{Ifd, Tiff, tags};
-use crate::{Error, Result, ljpeg};
+use crate::ljpeg_lines as ljpeg;
+use craft_tiff::classic::{Ifd, Tiff, tags};
+
+/// Why DNG raw layout or sample data could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    /// The file is not classic TIFF.
+    #[error("not a TIFF")]
+    NotTiff,
+    /// Required bytes are missing.
+    #[error("truncated raw data")]
+    Truncated,
+    /// A limit on samples or allocation was exceeded.
+    #[error("raw image too large")]
+    TooLarge,
+    /// Invalid structure.
+    #[error("{0}")]
+    Malformed(&'static str),
+    /// A valid unsupported variation.
+    #[error("{0}")]
+    Unsupported(String),
+}
+/// Result of the bounded raw reader.
+pub type Result<T> = std::result::Result<T, Error>;
+impl From<craft_tiff::classic::Error> for Error {
+    fn from(e: craft_tiff::classic::Error) -> Self {
+        match e {
+            craft_tiff::classic::Error::NotTiff => Self::NotTiff,
+            craft_tiff::classic::Error::Malformed(s) => Self::Malformed(s),
+        }
+    }
+}
+impl From<crate::ljpeg_lines::Error> for Error {
+    fn from(e: crate::ljpeg_lines::Error) -> Self {
+        match e {
+            crate::ljpeg_lines::Error::Truncated => Self::Truncated,
+            crate::ljpeg_lines::Error::TooLarge => Self::TooLarge,
+            crate::ljpeg_lines::Error::Malformed(s) => Self::Malformed(s),
+            crate::ljpeg_lines::Error::Unsupported(s) => Self::Unsupported(s),
+        }
+    }
+}
 
 /// Largest raw image decoded, in samples (width × height × samples per pixel).
 pub const MAX_SAMPLES: usize = 1 << 27;
@@ -41,7 +81,7 @@ pub struct RawImage {
 
 fn uint_or(t: &Tiff, ifd: &Ifd, tag: u16, default: u64) -> Result<u64> {
     match ifd.get(tag) {
-        Some(e) => t.uint(e),
+        Some(e) => Ok(t.uint(e)?),
         None => Ok(default),
     }
 }
@@ -319,9 +359,9 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
     let mut data = vec![0u16; total];
     let band = |k: usize, out: &mut [u16]| -> Result<()> {
         let mine = chunks.get(k * across..((k + 1) * across).min(chunks.len())).unwrap_or(&[]);
-        #[cfg(feature = "threads")]
+        #[cfg(feature = "line-dng-threads")]
         let decoded: Vec<Result<Vec<u16>>> = mine.par_iter().map(|c| decode_chunk(c, &l, t.big_endian)).collect();
-        #[cfg(not(feature = "threads"))]
+        #[cfg(not(feature = "line-dng-threads"))]
         let decoded: Vec<Result<Vec<u16>>> = mine.iter().map(|c| decode_chunk(c, &l, t.big_endian)).collect();
         for (c, d) in mine.iter().zip(decoded) {
             let d = d?;
@@ -335,9 +375,9 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
         }
         Ok(())
     };
-    #[cfg(feature = "threads")]
+    #[cfg(feature = "line-dng-threads")]
     data.par_chunks_mut(band_rows * row_len).enumerate().try_for_each(|(k, out)| band(k, out))?;
-    #[cfg(not(feature = "threads"))]
+    #[cfg(not(feature = "line-dng-threads"))]
     data.chunks_mut(band_rows * row_len).enumerate().try_for_each(|(k, out)| band(k, out))?;
     Ok(raw(data))
 }
@@ -345,6 +385,37 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
 #[cfg(test)]
 mod unpack_tests {
     use super::*;
+
+    #[test]
+    fn reads_a_complete_uncompressed_cfa_strip() {
+        let mut bytes = b"II*\0".to_vec();
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        let entries: [(u16, u32); 9] = [
+            (tags::IMAGE_WIDTH, 2),
+            (tags::IMAGE_LENGTH, 2),
+            (tags::BITS_PER_SAMPLE, 8),
+            (tags::COMPRESSION, 1),
+            (tags::PHOTOMETRIC, PHOTOMETRIC_CFA as u32),
+            (tags::STRIP_OFFSETS, 122),
+            (tags::SAMPLES_PER_PIXEL, 1),
+            (tags::ROWS_PER_STRIP, 2),
+            (tags::STRIP_BYTE_COUNTS, 4),
+        ];
+        bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, value) in entries {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&4u16.to_le_bytes());
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2, 3, 4]);
+        let (tiff, first) = Tiff::new(&bytes).unwrap();
+        let ifds = tiff.all_ifds(first).unwrap();
+        let raw = read(&tiff, find_raw_ifd(&tiff, &ifds).unwrap()).unwrap();
+        assert_eq!((raw.width, raw.height, raw.bits), (2, 2, 8));
+        assert_eq!(raw.data, [1, 2, 3, 4]);
+    }
 
     #[test]
     fn zero_or_oversized_bit_depths_are_rejected_before_allocating() {
