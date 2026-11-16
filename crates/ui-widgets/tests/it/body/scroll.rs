@@ -3,11 +3,12 @@
 
 use craft_behavior::ColumnWidth;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Grid;
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::testing::layout::{Block, in_region};
 use craft_ui::testing::{Frames, pointer, trial};
+use craft_ui::text::TextField;
 use craft_ui_test_kit::body::Slab;
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -543,4 +544,52 @@ fn a_revealed_child_glides_to_the_view_start() {
     }
     assert!(arrived, "the child reached the view's start");
     assert!(between > 1, "the glide showed offsets between the start and the child: {between} frames");
+}
+
+/// A press on a field the view shows only in part focuses it where it lies: the body moves no content under the held
+/// press. Tab to the same field from one in view scrolls it wholly into view. Guards that a reveal follows a focus
+/// request or a key move, never a press (a crop frame overhanging its canvas panned the view under the press).
+#[trial]
+fn a_pressed_field_in_part_view_stays_put_and_tab_to_it_reveals_it() {
+    let fields: [Cell<(Id, Rect)>; 2] = [Cell::new((Id::NULL, Rect::NOTHING)), Cell::new((Id::NULL, Rect::NOTHING))];
+    let view = Cell::new(Rect::NOTHING);
+    // The block between the fields, sized after the first frames so the second field crosses the view's bottom edge.
+    let gap = Cell::new(VIEW.y / 2.0);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, cx| {
+                view.set(cx.rect);
+                for (at, field) in fields.iter().enumerate() {
+                    if at == 1 {
+                        Block::new(Vec2::new(LINE.x, gap.get())).show(ui);
+                    }
+                    let out = TextField::new(format!("Field {at}"), Bind::given(String::new())).id_salt(("field", at)).show(ui);
+                    if !ui.is_sizing_pass() {
+                        field.set((out.response.id, out.response.rect));
+                    }
+                }
+                Block::new(Vec2::new(LINE.x, VIEW.y)).show(ui);
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.screen(VIEW + ORIGIN.to_vec2() * 2.0);
+    frames.idle(3, &mut show);
+    let (_, second) = fields[1].get();
+    gap.set(gap.get() + view.get().bottom() - second.height() / 2.0 - second.top());
+    frames.idle(3, &mut show);
+    let (second_id, second) = fields[1].get();
+    assert!(second.top() < view.get().bottom() && second.bottom() > view.get().bottom(), "the second field shows in part: {second:?} in {:?}", view.get());
+    pointer::click(&mut frames, Pos2::new(second.center().x, (second.top() + view.get().bottom()) / 2.0), &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(frames.ctx.memory(|memory| memory.focused()), Some(second_id), "the press focused the field");
+    assert!((fields[1].get().1.top() - second.top()).abs() < SAME, "the press moved no content: {:?} then {second:?}", fields[1].get().1);
+    request(&frames.ctx, FocusTarget::Id(fields[0].get().0));
+    frames.idle(2, &mut show);
+    frames.frame(vec![craft_ui::testing::input::key_press(egui::Key::Tab, egui::Modifiers::NONE)], &mut show);
+    frames.frame(vec![craft_ui::testing::focus::key_release(egui::Key::Tab, egui::Modifiers::NONE)], &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(frames.ctx.memory(|memory| memory.focused()), Some(second_id), "Tab moved focus to the second field");
+    let (_, rect) = fields[1].get();
+    assert!(view.get().contains_rect(rect), "Tab scrolled the field into view: {rect:?} in {:?}", view.get());
 }

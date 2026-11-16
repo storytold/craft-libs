@@ -161,8 +161,18 @@ impl State {
         !made && self.find_stop((id, None)).is_none() && !self.stops.iter().chain(&self.last_stops).any(|rec| rec.stop.root == id)
     }
 
-    /// Moves focus to `rec`: the egui widget is its root, and the stop is recorded under that root.
+    /// Moves focus to `rec` and asks the enclosing scroll owner to reveal it: the egui widget is its root, and the stop
+    /// is recorded under that root.
     pub(super) fn focus_stop(&mut self, rec: StopRec) -> Vec<Act> {
+        let key = rec.stop.key();
+        let acts = self.focus_stop_in_place(rec);
+        self.revealed = Some(key);
+        acts
+    }
+
+    /// Moves focus to `rec` without a reveal: a press focuses a stop under the pointer, which is on screen already,
+    /// and scrolling it in would move the content under the held press.
+    pub(super) fn focus_stop_in_place(&mut self, rec: StopRec) -> Vec<Act> {
         self.note_entry(&rec);
         let stop = &rec.stop;
         let roving = stop.group.is_some();
@@ -180,7 +190,6 @@ impl State {
         }
         self.focused.insert(stop.root, stop.key());
         self.focus_now = Some(stop.root);
-        self.revealed = Some(stop.key());
         vec![Act::Focus(stop.root, filter)]
     }
 
