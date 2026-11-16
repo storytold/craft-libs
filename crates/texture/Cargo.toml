@@ -9,6 +9,7 @@ repository.workspace = true
 
 [features]
 default = []
+dds = ["dep:dds", "dep:bytemuck"]
 parallel = ["dep:rayon"]
 
 [lints]
@@ -17,3 +18,11 @@ workspace = true
 [dependencies]
 rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
+
+# Same decoder used by MaterialCraft; no parallel backend enabled.
+dds = { version = "0.2.0", default-features = false, optional = true }
+bytemuck = { workspace = true, optional = true }
+
+[dev-dependencies]
+dds = { version = "0.2.0", default-features = false }
+bytemuck = { workspace = true }
