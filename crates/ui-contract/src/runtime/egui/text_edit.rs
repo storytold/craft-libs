@@ -1,5 +1,6 @@
 //! Building `TextEdit` and its state: the one caller of egui's text editing.
 
+use crate::primitives::HAlign;
 use craft_theme::TypeRole;
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
 use egui::text_edit::TextEditState;
@@ -31,8 +32,8 @@ pub(crate) struct Edit<'a> {
     /// The bytes of `text` that are IME preedit, underlined.
     pub preedit: Option<Range<usize>>,
     pub rtl: bool,
-    /// The text sits in the middle of the rect.
-    pub centred: bool,
+    /// Where the text sits in the rect, relative to the interface's reading direction.
+    pub align: HAlign,
     /// Whether the caret is drawn in this pass.
     pub caret_visible: bool,
     /// The width of the preedit underline.
@@ -80,7 +81,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         char_limit,
         preedit,
         rtl,
-        centred,
+        align,
         caret_visible,
         underline,
         galley,
@@ -189,11 +190,11 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
                     // A laid-out galley sits at the rect's corner, as a painted run does.
-                    .align(match (centred, rtl) {
+                    .align(match (align, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
-                        (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, true) => egui::Align2::RIGHT_CENTER,
-                        (false, false) => egui::Align2::LEFT_CENTER,
+                        (HAlign::Center, _) => egui::Align2::CENTER_CENTER,
+                        (HAlign::Start, true) | (HAlign::End, false) => egui::Align2::RIGHT_CENTER,
+                        (HAlign::Start, false) | (HAlign::End, true) => egui::Align2::LEFT_CENTER,
                     });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);

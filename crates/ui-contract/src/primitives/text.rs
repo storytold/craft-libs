@@ -45,7 +45,7 @@ impl Wrap {
     }
 }
 
-/// Where the lines of a multi-line run sit within the run's width.
+/// Horizontal placement in reading order: within a text run's width, or a text input's room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum HAlign {
     /// At the start edge: left, right in a right-to-left interface.

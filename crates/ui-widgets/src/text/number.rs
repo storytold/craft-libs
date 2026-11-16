@@ -15,7 +15,7 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, Input, MeasureCx, Numeric, OverlayUi, Overlays as _, PaintUi,
     PartsCx, Pointer as _, Props as _, Role, Scrub, Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{Span, TextOptions, TextRun};
+use crate::primitives::{HAlign, TextOptions, TextRun};
 use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
@@ -208,9 +208,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             fixed_decimals: None,
             lengths: None,
             scale: 1.0,
-            // The value sits in the middle of its room in the monospace face, the presentation every number field has
-            // had; `centred` and `mono` let a caller choose either independently.
-            options: TextOptions { centred: true, mono: true, ..TextOptions::default() },
+            options: TextOptions { align: HAlign::Center, role: TypeRole::Mono, ..TextOptions::default() },
             scrub: false,
             track: 0.0,
             picked: None,
@@ -243,24 +241,19 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
-    /// Where the value sits in the room the field leaves for it: in the middle (the default), or at the logical reading
-    /// start, the edge the text is read from — the left edge in a left-to-right interface, the right edge in a
-    /// right-to-left one. The unit keeps its place at the end of the field either way, so a column of fields lines its
-    /// units up whichever presentation its values take. Values wider than the available room retain the existing
-    /// single-line clipping and scrolling behaviour.
+    /// Where the value sits in its room: centred by default, or at its logical start or end. The unit keeps its
+    /// place at the reading end. The same alignment places the resting text and its editor, including the caret.
     #[must_use]
-    pub fn centred(mut self, centred: bool) -> Self {
-        self.options.centred = centred;
+    pub fn align(mut self, align: HAlign) -> Self {
+        self.options.align = align;
         self
     }
 
-    /// The type role the value is set in: the monospace role, whose digits share one advance so values keep their places
-    /// as they change (the default), or the UI body role, whose face **and** size the value then takes. The role is the
-    /// one the field measures its value in, paints it in and edits it in, so the room a value takes is the room its text
-    /// and caret fill.
+    /// The value's type role, including its face and size, in measurement, paint and editing. Defaults to
+    /// [`TypeRole::Mono`]; use [`TypeRole::Body`] for the interface's body text.
     #[must_use]
-    pub fn mono(mut self, mono: bool) -> Self {
-        self.options.mono = mono;
+    pub fn role(mut self, role: TypeRole) -> Self {
+        self.options.role = role;
         self
     }
 
@@ -398,6 +391,11 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
     fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
         place(rect, &style.field, &self.leading, &self.trailing, rtl)
+    }
+
+    /// Measure the same type role the text adapter paints and edits.
+    fn value_run<'s>(&self, text: &'s str) -> TextRun<'s> {
+        TextRun::new(text).role(self.options.role)
     }
 
     /// The alert for `typed`, a typed number the rule held to its range, in shown units; `kept` is the committed

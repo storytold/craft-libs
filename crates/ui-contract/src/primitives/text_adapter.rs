@@ -3,7 +3,7 @@
 
 mod completion;
 
-use crate::primitives::{TextLayout, TextOptions};
+use crate::primitives::{HAlign, TextLayout, TextOptions};
 use crate::runtime::access::text::{Line, Run};
 use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, text_edit};
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
@@ -420,7 +420,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         char_limit: input.options.limit,
         preedit: preedit.clone(),
         rtl: input.rtl,
-        centred: input.options.centred,
+        align: input.options.align,
         caret_visible: input.caret_visible,
         underline: input.underline,
         galley: None,
@@ -535,7 +535,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             char_limit: None,
             preedit: None,
             rtl: false,
-            centred: false,
+            align: HAlign::Start,
             caret_visible: false,
             underline: 0.0,
             galley: Some(layout.galley.clone()),
