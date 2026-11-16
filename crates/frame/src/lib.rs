@@ -425,6 +425,52 @@ mod tests {
     }
 
     #[test]
+    fn odd_subsampled_frames_validate_chroma_and_alpha_independently() {
+        let make = |bits| VideoFrame {
+            width: 3,
+            height: 3,
+            data: PixelData::Yuv16 {
+                planes: [Arc::new(vec![128; 9]), Arc::new(vec![128; 4]), Arc::new(vec![128; 4])],
+                chroma: Chroma::C420,
+                bits,
+                alpha: Some(Arc::new(vec![255; 9])),
+            },
+            color: ColorInfo::REC709,
+            par: (1, 1),
+            pts: Tick::ZERO,
+        };
+        for bits in [9, 16] {
+            let mut valid = make(bits);
+            assert_eq!(valid.to_linear_f32().unwrap().len(), 36);
+            assert_eq!(valid.to_rgba8().unwrap().len(), 36);
+            if let PixelData::Yuv16 { planes, .. } = &mut valid.data {
+                planes[1] = Arc::new(vec![128; 3]);
+            }
+            assert_eq!(valid.to_linear_f32(), Err(FrameError::InvalidLayout));
+            let mut valid = make(bits);
+            if let PixelData::Yuv16 { alpha, .. } = &mut valid.data {
+                *alpha = Some(Arc::new(vec![255; 8]));
+            }
+            assert_eq!(valid.to_rgba8(), Err(FrameError::InvalidLayout));
+        }
+        let mut fast = VideoFrame {
+            width: 3,
+            height: 3,
+            data: PixelData::Yuv8 {
+                planes: [Arc::new(vec![128; 9]), Arc::new(vec![128; 4]), Arc::new(vec![128; 4])],
+                chroma: Chroma::C420,
+                alpha: None,
+            },
+            color: ColorInfo::REC709,
+            par: (1, 1),
+            pts: Tick::ZERO,
+        };
+        assert_eq!(fast.to_rgba8().unwrap().len(), 36);
+        fast.height = 4;
+        assert_eq!(fast.to_rgba8(), Err(FrameError::InvalidLayout));
+    }
+
+    #[test]
     fn frame_allocations_are_checked_before_reserving() {
         assert!(matches!(VideoFrame::transparent_f32(u32::MAX, u32::MAX), Err(FrameError::TooLarge)));
         let frame = VideoFrame::rgba8(1, 1, vec![0; 4]).unwrap();
