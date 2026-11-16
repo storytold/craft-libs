@@ -342,9 +342,6 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
         // Painted here, not as the container's surface, which lies over what `paint` draws. The header's band paints
         // the strip over it.
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
-        if cx.part_if_declared(MENU).is_some() {
-            ui.face(MENU, Self::menu_face(cx.words::<DockWords>().panel_menu.clone()));
-        }
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
@@ -373,8 +370,12 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
         }
     }
 
-    /// The group's frame, over the tabs and the body so the strip's tabs meet it.
+    /// The panel menu button, over the header's band, and the group's frame, over the tabs and the body so the strip's
+    /// tabs meet it.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if cx.part_if_declared(MENU).is_some() {
+            ui.face(MENU, Self::menu_face(cx.words::<DockWords>().panel_menu.clone()));
+        }
         ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
     }
 

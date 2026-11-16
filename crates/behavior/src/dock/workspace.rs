@@ -22,17 +22,18 @@ use super::{
 /// assignment, so a running drag on it ends. Edits ([`apply`](Self::apply), [`set_visible`](Self::set_visible), the
 /// dock's own) keep the revision.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(default, bound(deserialize = "P: serde::Deserialize<'de>"))]
+#[serde(bound(deserialize = "P: serde::Deserialize<'de>"))]
 #[non_exhaustive]
 pub struct Workspace<P> {
     /// Format version; files without one are v1 (`{layout, hidden}`). Always written as
     /// [`Workspace::VERSION`].
     #[serde(default = "first_version", serialize_with = "write_version")]
     pub version: u32,
-    /// The current arrangement, changes included.
+    /// The current arrangement, changes included. A save without one is no workspace: it does not load.
     pub layout: Layout<P>,
     /// Closed panels, and panels the application does not register now, with where each one
     /// goes back.
+    #[serde(default)]
     pub hidden: Vec<(P, Location<P>)>,
     /// Floating panels with the docked location each one left, so Dock Panel can return it. Saved with the
     /// workspace.
