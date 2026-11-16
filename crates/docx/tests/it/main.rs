@@ -27,6 +27,7 @@ mod malformed;
 mod missing_pictures;
 mod nested_block_controls;
 mod note_comments;
+mod partial_table_margins;
 mod passthrough;
 mod picture_links;
 mod positional_tabs;
