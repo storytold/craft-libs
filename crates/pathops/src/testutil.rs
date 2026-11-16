@@ -590,6 +590,74 @@ pub(crate) fn circle_pairs_apart(n: usize, r: f64, dx: f64, dy: f64) -> BezPath 
     bp
 }
 
+/// A circle of radius `r` at `(cx, cy)` as four cubics from the point at its right, made of exact numbers: no `sin`, `cos` or `tan`, whose last place is
+/// not the same in the standard library of every platform, so that it is the same to the bit on all of them, and so is what a sweep makes of it.
+/// (The sweep's own checks of curves as near as the pairs of circles here are, and the pricing's of the pairs next to one another, are hair-trigger:
+/// nudging each coordinate of the circles made with `sin` by one unit in the last place made the sweep's check fail for 97% of the circles that
+/// cross, and a pair of segments go uncharged for 17% of the circles with a crescent between.)
+pub(crate) fn exact_circle(r: f64, cx: f64, cy: f64) -> BezPath {
+    let h = r * KAPPA;
+    let mut bp = BezPath::new();
+    bp.move_to((cx + r, cy));
+    bp.curve_to((cx + r, cy + h), (cx + h, cy + r), (cx, cy + r));
+    bp.curve_to((cx - h, cy + r), (cx - r, cy + h), (cx - r, cy));
+    bp.curve_to((cx - r, cy - h), (cx - h, cy - r), (cx, cy - r));
+    bp.curve_to((cx + h, cy - r), (cx + r, cy - h), (cx + r, cy));
+    bp.close_path();
+    bp
+}
+
+/// [`circle_pairs_apart`] of the circles of [`exact_circle`].
+pub(crate) fn exact_circle_pairs_apart(n: usize, r: f64, dx: f64, dy: f64) -> BezPath {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 4.0 * r, (i / side) as f64 * 4.0 * r);
+        bp.extend(exact_circle(r, cx, cy));
+        bp.extend(exact_circle(r, cx + dx, cy + dy));
+    }
+    bp
+}
+
+/// The cosine and the sine of `m` eighths of a turn, exactly.
+fn eighth_turn(m: i32) -> (f64, f64) {
+    const C: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    [(1.0, 0.0), (C, C), (0.0, 1.0), (-C, C), (-1.0, 0.0), (-C, -C), (0.0, -1.0), (C, -C)][m.rem_euclid(8) as usize]
+}
+
+/// The arc of a circle of radius `r` at `(cx, cy)` from `m` eighths of a turn to one more (`dir` 1) or one less (`dir` -1), as one cubic's four
+/// points, made of exact numbers as [`exact_circle`] is.
+fn exact_eighth_arc(cx: f64, cy: f64, r: f64, m: i32, dir: i32) -> [Point; 4] {
+    // 4/3 tan(pi / 16), the length of the handles of an eighth of a turn, in radii.
+    const K: f64 = 0.265_216_489_839_544;
+    let (u0, u1) = (eighth_turn(m), eighth_turn(m + dir));
+    let at = |u: (f64, f64)| Point::new(cx + r * u.0, cy + r * u.1);
+    let along = |u: (f64, f64)| kurbo::Vec2::new(-u.1, u.0) * r;
+    let k = f64::from(dir) * K;
+    [at(u0), at(u0) + along(u0) * k, at(u1) - along(u1) * k, at(u1)]
+}
+
+/// [`circle_pairs_with_blockers_apart`] of the circles of [`exact_circle`] and the crescents of eighth-turn arcs of [`exact_eighth_arc`].
+pub(crate) fn exact_circle_pairs_with_blockers_apart(n: usize, r: f64, g: f64, dy: f64) -> BezPath {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 4.0 * r, (i / side) as f64 * 4.0 * r);
+        bp.extend(exact_circle(r, cx, cy));
+        bp.extend(exact_circle(r, cx + g, cy + dy));
+        for (m, dir) in [(0, 1), (4, -1), (6, -1), (6, 1)] {
+            let forward = exact_eighth_arc(cx + g / 3.0, cy + dy / 3.0, r, m, dir);
+            let back = exact_eighth_arc(cx + 2.0 * g / 3.0, cy + 2.0 * dy / 3.0, r, m, dir);
+            bp.move_to(forward[0]);
+            bp.curve_to(forward[1], forward[2], forward[3]);
+            bp.line_to(back[3]);
+            bp.curve_to(back[2], back[1], back[0]);
+            bp.close_path();
+        }
+    }
+    bp
+}
+
 /// The arc of a circle of radius `r` at `(cx, cy)` from the angle `a0` to `a1`, as one cubic's four points.
 pub(crate) fn circle_arc(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> [Point; 4] {
     let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan();

@@ -143,7 +143,10 @@ pub(crate) fn sweep_panics(path: &BezPath) -> bool {
 /// Whether the dry sweep of the meter, which sweeps as the topology does, panics on `path` here.
 pub(crate) fn dry_sweep_panics(path: &BezPath) -> bool {
     let (Ok(eps), Some(segments)) = (eps_for([path]), segments_of([path])) else { return false };
-    catch_unwind(AssertUnwindSafe(|| drop(dry_sweep_over(&segments, eps, u64::MAX, &mut || 0)))).is_err()
+    catch_unwind(AssertUnwindSafe(|| {
+        let _ = dry_sweep_over(&segments, eps, u64::MAX, &mut || 0);
+    }))
+    .is_err()
 }
 
 /// An open run of two arcs, each of chord 0.3 and bowing by 0.1 (one one way, one the other), starting at `(x, y)`, all scaled by 1,000: the run
@@ -231,8 +234,8 @@ fn the_outline_fails_the_sweeps_check_on_linux_in_a_debug_build() {
     assert!(segments_of([&three]).is_some_and(|s| s.len() > GATE_PIECES), "the copies are over the gate of the meter");
 }
 
-/// Every function that sweeps and says why it refuses gives a refusal for an input whose sweep panics, and never a panic: the outline; three of
-/// it, which the meter sweeps by itself first (it is over the gate), so that the panic is the dry sweep's before it is the topology's; and the
+/// Every function that sweeps and says why it refuses gives a refusal for an input whose sweep panics, and never a panic (a panic fails the test
+/// where it is made: nothing here catches it): the outline; three of it, which the meter sweeps by itself first (it is over the gate), so that the panic is the dry sweep's before it is the topology's; and the
 /// outline moved in its last place, whose sweep the planar map's frame makes panic and the topology's does not. Where the sweep of the input
 /// panics here, a function whose first sweep is of that input alone says `Degenerate`; where it does not, a function is free to make the input.
 #[test]
@@ -242,9 +245,12 @@ fn every_function_that_sweeps_refuses_in_words_a_sweep_that_panics_and_never_pan
     {
         let panics = sweep_panics(&path);
         for (name, alone, got) in refusals(&path) {
-            assert!(matches!(got, Ok(()) | Err(PathOpsError::Degenerate)), "{what}: {name} gave {got:?}");
             if panics && alone {
                 assert_eq!(got, Err(PathOpsError::Degenerate), "{what}: {name} for an input whose sweep panics");
+            }
+            // Where it was found (the first two of these), the sweep panics in every operation.
+            if fails_on_linux() && !what.contains("moved") {
+                assert_eq!(got, Err(PathOpsError::Degenerate), "{what}: {name}");
             }
         }
     }

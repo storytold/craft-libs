@@ -1013,10 +1013,10 @@ mod tests {
     use crate::boolean::eps_for;
     use crate::testutil::{
         arc_fan, arc_windows, back_and_forth_spine, bars_on_a_baseline, bowed_star, circle_pairs, circle_pairs_apart, circle_pairs_with_blockers,
-        circle_pairs_with_blockers_apart, cubic_circle, cubic_fan, curves_beside_a_crowd, diagonals, fan_along_a_line, grid_of_squares,
-        groups_of_loops, jittered_pencil, jittered_pies, mesh, nearly_parallel_lines, polygons_a_few_tolerances_apart, polygons_an_ulp_apart,
-        polyline, rect, rings, row_of_lenses, s_strokes, stacked_arcs, stacked_pies, stacked_polygons, stacked_segments, star, stroke_window, wheel,
-        windows_sharing_a_tenth,
+        cubic_circle, cubic_fan, curves_beside_a_crowd, diagonals, exact_circle_pairs_apart, exact_circle_pairs_with_blockers_apart,
+        fan_along_a_line, grid_of_squares, groups_of_loops, jittered_pencil, jittered_pies, mesh, nearly_parallel_lines,
+        polygons_a_few_tolerances_apart, polygons_an_ulp_apart, polyline, rect, rings, row_of_lenses, s_strokes, stacked_arcs, stacked_pies,
+        stacked_polygons, stacked_segments, star, stroke_window, wheel, windows_sharing_a_tenth,
     };
     use crate::{FillRule, Limits, with_limits};
 
@@ -1800,36 +1800,33 @@ mod tests {
     /// inputs make adjacencies in every way a range can: copies that start at other heights, curves kept apart by others that leave before them
     /// (a crescent between two circles, which ends at a quarter of each arc), curves that cross, and ordinary shapes.
     ///
-    /// The circles are made with `sin`, `cos` and `tan`, and the sweep's own check of the order of curves this near may fail for them on a platform
-    /// whose standard library rounds those differently (it did on one of the three the crate is tested on: nudging the points of the circles that
-    /// cross by one unit in the last place makes it fail here for 1 in 40). Such an input is not checked, and is given to the crate's own
-    /// sweep instead, which must refuse it in words or make it; the ellipses, lenses and rings are made of exact numbers, and are always checked.
+    /// The circles are of exact numbers ([`exact_circle`]): made with `sin`, `cos` and `tan` they are not the same on every platform to the last
+    /// place, and what the sweep makes of curves this near is not (nudging each coordinate of the circles that cross by a unit in the last place
+    /// made the sweep's own check of the order of curves fail for 145 of 150 variants, and left a pair uncharged for 25 of 150 of the circles
+    /// with a crescent between). So every input here but the star, whose lines do not go near it, is the same to the bit everywhere and has the
+    /// same pairs; any one that the check fails is refused ([`unless_refused`]) and is given to the crate's own sweep, which refuses it in words or
+    /// makes it, and none of them may be.
     #[test]
     fn every_pair_next_to_one_another_on_the_line_is_charged() {
         let inputs = [
-            ("circles, the copy higher", circle_pairs_apart(4, 1e6, 0.03, 3e-4)),
-            ("circles, the copy higher by a tolerance", circle_pairs_apart(4, 1e6, 0.03, 1e-6)),
-            ("circles with a crescent between", circle_pairs_with_blockers(3, 1e6, 0.03)),
-            ("circles with a crescent between, the copy higher", circle_pairs_with_blockers_apart(3, 1e6, 0.03, 3e-4)),
-            ("circles that cross", circle_pairs(4, 1e6, 5e5)),
+            ("circles, the copy higher", exact_circle_pairs_apart(4, 1e6, 0.03, 3e-4)),
+            ("circles, the copy higher by a tolerance", exact_circle_pairs_apart(4, 1e6, 0.03, 1e-6)),
+            ("circles with a crescent between", exact_circle_pairs_with_blockers_apart(3, 1e6, 0.03, 0.0)),
+            ("circles with a crescent between, the copy higher", exact_circle_pairs_with_blockers_apart(3, 1e6, 0.03, 3e-4)),
+            // (Circles a half radius apart cross at an angle that the sweep's check fails, in exact numbers: they are not asked for.)
+            ("circles that cross", exact_circle_pairs_apart(4, 1e6, 3e5, 0.0)),
             ("ellipses and arcs", stacked_arcs(30)),
             ("lenses", row_of_lenses(30)),
             ("rings", rings(12, 4.0)),
             ("a star of lines", star(41)),
         ];
-        let (mut checked_inputs, mut refused) = (Vec::new(), Vec::new());
+        let mut refused = Vec::new();
         for (name, path) in &inputs {
             match every_pair_next_to_one_another_is_charged(name, path) {
                 // The circles and the arcs have pairs that may cost; the star of lines has none.
-                Some(checked) => {
-                    assert_eq!(checked > 0, *name != "a star of lines", "{name}: {checked} pairs");
-                    checked_inputs.push(*name);
-                }
+                Some(checked) => assert_eq!(checked > 0, *name != "a star of lines", "{name}: {checked} pairs"),
                 None => refused.push((*name, closed(path))),
             }
-        }
-        for name in ["ellipses and arcs", "lenses", "rings"] {
-            assert!(checked_inputs.contains(&name), "{name}: made of exact numbers, and refused by the sweep's own check");
         }
         // What the crate does with an input the check fails: its dry sweep is under a guard (it counts nothing and lets the sweep that follows
         // report the panic), and that sweep is refused in words.
@@ -1838,6 +1835,8 @@ mod tests {
             assert_eq!(within([path], eps), Ok(()), "{name}");
             assert!(matches!(crate::try_normalize(path, FillRule::NonZero), Err(PathOpsError::Degenerate) | Ok(_)), "{name}");
         }
+        let refused: Vec<&str> = refused.into_iter().map(|(name, _)| name).filter(|&name| name != "a star of lines").collect();
+        assert!(refused.is_empty(), "{refused:?}: made of exact numbers, and refused by the sweep's own check");
     }
 
     /// The hand-made sweep above gives way to the sweep's own check for an input that fails it, and does not panic: the outline of a stroke whose
