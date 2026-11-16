@@ -3,7 +3,10 @@
 
 use std::io::{Read, Write};
 
+use std::sync::Arc;
+
 use craft_wordmodel::props::{Align, Kashida, ParaProps};
+use craft_wordmodel::styles::{Style, StyleKind, StyleSheet};
 use craft_wordmodel::{Document, Paragraph, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -86,4 +89,48 @@ fn kashida_length_round_trips() {
         assert_eq!(q.props.align, Some(Align::Justify));
         assert_eq!(q.props.kashida, kashida, "round-trip of {token}");
     }
+}
+
+fn body_style(kashida: Kashida) -> StyleSheet {
+    let mut sheet = StyleSheet::empty();
+    sheet.styles.push(Style {
+        id: "Body".into(),
+        name: "Body".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { align: Some(Align::Justify), kashida: Some(kashida), ..ParaProps::default() },
+        ..Style::default()
+    });
+    sheet
+}
+
+#[test]
+fn style_kashida_length_survives_a_write_when_the_paragraph_has_no_direct_jc() {
+    let mut p = Paragraph::with_text("مثال", Default::default());
+    p.props = ParaProps { style: Some("Body".into()), ..ParaProps::default() };
+    let mut d = Document::new();
+    d.styles = Arc::new(body_style(Kashida::Short));
+    d.body = vec![para_block(p)];
+    assert_eq!(d.styles.resolve_para(&d.body[0].as_para().unwrap().props).kashida, Kashida::Short);
+    let bytes = craft_docx::write(&d).unwrap();
+    let r = craft_docx::read(&bytes).unwrap();
+    let q = paras(&r)[0];
+    assert_eq!(q.props.kashida, None, "no direct w:jc on the paragraph");
+    assert_eq!(r.styles.resolve_para(&q.props).kashida, Kashida::Short);
+}
+
+#[test]
+fn writing_justify_without_a_local_kashida_keeps_the_style_length() {
+    let mut p = Paragraph::with_text("مثال", Default::default());
+    p.props = ParaProps { style: Some("Body".into()), align: Some(Align::Justify), kashida: None, ..ParaProps::default() };
+    let mut d = Document::new();
+    d.styles = Arc::new(body_style(Kashida::Medium));
+    d.body = vec![para_block(p)];
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains("w:val=\"mediumKashida\""), "expected mediumKashida in {xml}");
+    let r = craft_docx::read(&bytes).unwrap();
+    let q = paras(&r)[0];
+    assert_eq!(q.props.align, Some(Align::Justify));
+    assert_eq!(q.props.kashida, Some(Kashida::Medium));
+    assert_eq!(r.styles.resolve_para(&q.props).kashida, Kashida::Medium);
 }
