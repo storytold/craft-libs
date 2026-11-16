@@ -797,3 +797,77 @@ fn the_anchor_tools_take_no_press_off_the_paths_and_show_their_own_cursor() {
     });
     assert_eq!(cursor_at(&mut h, egui::Modifiers::NONE), Some(Cursor::Painted(PaintedCursor::Crosshair)));
 }
+
+// A Direct Selection marquee is a gesture like the other drags: it begins with its drag, a release commits it with the
+// anchors inside selected, and Escape cancels it and selects nothing.
+#[trial]
+fn a_marquee_is_one_gesture_that_escape_cancels() {
+    let from = |h: &Harness| h.screen(p(30.0, 30.0));
+    let to = |h: &Harness| h.screen(p(180.0, 80.0));
+
+    let mut h = two_paths();
+    let (start, end) = (from(&h), to(&h));
+    h.drag(start, end - start);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1)]));
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+    }
+
+    let mut h = two_paths();
+    h.update(|st| st.selection = sel(2, &[(0, 0)]));
+    let (start, end) = (from(&h), to(&h));
+    h.press_at(start);
+    h.move_to(start + (end - start) * 0.5);
+    h.move_to(end);
+    h.fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    h.release_at(end);
+    let st = h.state.borrow();
+    assert!(st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Commit), "{:?}", st.seen);
+    assert_eq!(st.selection, sel(2, &[(0, 0)]), "the cancelled marquee selects nothing");
+}
+
+// A click on empty canvas deselects the anchors and keeps the path they belong to as the one being edited.
+#[trial]
+fn a_click_on_empty_canvas_deselects_the_anchors_and_keeps_the_path() {
+    let mut h = two_paths();
+    h.update(|st| st.selection = sel(1, &[(0, 1)]));
+    let empty = h.screen(p(30.0, 30.0));
+    h.press_at(empty);
+    h.release_at(empty);
+    assert_eq!(h.state.borrow().selection, sel(1, &[]));
+}
+
+// Convert Point on an anchor that already is a corner still reports the click's edit: the host decides what it makes
+// of it.
+#[trial]
+fn a_convert_click_on_a_corner_reports_its_edit() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    let corner = h.screen(p(60.0, 60.0));
+    h.press_at(corner);
+    h.release_at(corner);
+    let st = h.state.borrow();
+    assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 1, out: None, .. })), "{:?}", st.changes);
+    assert!(st.seen.contains(&Seen::Set), "{:?}", st.seen);
+}
+
+// The arrow keys nudge the selected anchors, ⇧ by a larger step; each press is one edit, and with no anchor selected
+// they move nothing.
+#[trial]
+fn arrow_keys_nudge_the_selected_anchors_and_shift_nudges_farther() {
+    let mut h = two_paths();
+    // The canvas, then the overlay.
+    h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE).settle();
+    assert!(h.state.borrow().changes.is_empty(), "nothing selected, nothing moves: {:?}", h.state.borrow().changes);
+    h.update(|st| st.selection = sel(1, &[(0, 1), (0, 2)]));
+    h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE).settle();
+    let Some(PathEdit::MoveAnchors { anchors, by: small, .. }) = h.last_change() else { panic!("{:?}", h.last_change()) };
+    assert_eq!(anchors, vec![kr(1), kr(2)]);
+    assert!(small.x > 0.0 && small.y == 0.0, "{small:?}");
+    h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::SHIFT).settle();
+    let Some(PathEdit::MoveAnchors { by: far, .. }) = h.last_change() else { panic!("{:?}", h.last_change()) };
+    assert!(far.x > small.x, "{small:?} {far:?}");
+    assert_eq!(h.state.borrow().changes.len(), 2, "one edit per press");
+}

@@ -704,6 +704,14 @@ impl<'a> BezierOverlay<'a> {
         }
     }
 
+    /// The selection with no anchor or segment selected: the path stays the one being edited.
+    fn deselected(&self) -> PathSelection {
+        match self.selection.path {
+            Some(path) => self.selecting(path, Vec::new(), None),
+            None => PathSelection::default(),
+        }
+    }
+
     /// A one-shot `edit` of `paths` that is reported even when it changes nothing: a Convert Point click on an anchor
     /// that already is a corner is still the click's edit, and the host decides what it makes of it (a live shape
     /// becomes a path, the click is a History step).
@@ -723,7 +731,7 @@ impl<'a> BezierOverlay<'a> {
         });
         let operation = SelectionOperation::from_mods(mods);
         let Some((path, knots)) = inside else {
-            return (operation == SelectionOperation::New).then(PathSelection::default);
+            return (operation == SelectionOperation::New).then(|| self.deselected());
         };
         let current: Vec<KnotRef> = if self.selection.path == Some(path) { self.selection.anchors.clone() } else { Vec::new() };
         let anchors = match operation {
@@ -872,8 +880,8 @@ impl<'a> BezierOverlay<'a> {
                     self.report.select = self.marquee_selection(paths, rect, mods);
                     cx.commit();
                 }
-            } else if *self.selection != PathSelection::default() {
-                self.report.select = Some(PathSelection::default());
+            } else if !self.selection.anchors.is_empty() || self.selection.segment.is_some() {
+                self.report.select = Some(self.deselected());
             }
             return;
         }
