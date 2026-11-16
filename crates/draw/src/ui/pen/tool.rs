@@ -480,7 +480,7 @@ impl PenTool {
         } else {
             Kind::Pull
         };
-        let at = if kind == Kind::Close { 0 } else { n.saturating_sub(1) };
+        let knot = if kind == Kind::Close { 0 } else { n.saturating_sub(1) };
         let in_ctrl = match kind {
             Kind::Pull => {
                 let mut p = at;
@@ -491,12 +491,12 @@ impl PenTool {
                 p
             }
             Kind::Retract => {
-                let k = &mut draft.knots[at];
+                let k = &mut draft.knots[knot];
                 k.out_ctrl = k.anchor;
                 k.smooth = false;
                 k.in_ctrl
             }
-            Kind::Close | Kind::Grab(_) | Kind::Move(_) => draft.knots[at].in_ctrl,
+            Kind::Close | Kind::Grab(_) | Kind::Move(_) => draft.knots[knot].in_ctrl,
         };
         self.change(draft);
         self.drag = Some(Drag { origin: pos, kind, last: pos, moved: false, in_ctrl });
