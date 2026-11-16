@@ -1,0 +1,34 @@
+[package]
+name = "craft-unzip"
+description = "ZIP archives (APK, JAR, IPA, MSIX…) from hostile bytes, from Craft Anything: a central-directory listing with ZIP64, prepended-stub and multi-volume checks, and bounded entry reads checked against the declared size and CRC-32. Pure Rust, no I/O beyond an optional seekable reader."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+miniz_oxide = { workspace = true }
+# Entry methods beyond stored and DEFLATE. All pure Rust and wasm32-safe.
+bzip2-rs = { version = "0.1", optional = true } # MIT OR Apache-2.0
+lzma-rs = { version = "0.3", optional = true } # MIT
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"], optional = true } # MIT
+# `serde`: `Serialize` on the listing types, for apps that report listings as JSON.
+serde = { workspace = true, optional = true }
+
+[features]
+default = ["bzip2", "lzma", "zstd"]
+# Method 12.
+bzip2 = ["dep:bzip2-rs"]
+# Methods 14 (ZIP LZMA) and 95 (XZ).
+lzma = ["dep:lzma-rs"]
+# Method 93.
+zstd = ["dep:ruzstd"]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
