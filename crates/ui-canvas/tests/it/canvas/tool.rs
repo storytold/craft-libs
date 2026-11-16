@@ -1439,9 +1439,13 @@ fn a_drags_readout_is_not_reported_in_the_pass_its_release_ends_the_gesture() {
     let tool = RefCell::new(Measuring { hud: false });
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
-        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |_, _| {});
-        let reply = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
-        seen.set(reply.readout.is_some());
+        let mut reply = None;
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        seen.set(reply.unwrap_or_default().readout.is_some());
     });
     fixture.settle();
     let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
