@@ -160,6 +160,27 @@ fn a_press_on_the_first_anchor_closes_the_path_on_release_with_or_without_a_drag
     assert_eq!(done.knots.len(), 3, "no anchor added");
 }
 
+// Over the first anchor of an open draft the Pen's cursor carries the close badge (#4596); over the last anchor and
+// over empty canvas it does not.
+#[trial]
+fn the_cursor_has_the_close_badge_only_over_the_first_anchor() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
+    let mut pen = Pen::three();
+    let mut badge_at = |x: f64, y: f64| {
+        let at = pen.at(x, y);
+        pen.move_to(at, Modifiers::NONE);
+        pen.fixture.fixture().frame(Vec::new());
+        match craft_ui::runtime::cursor::current(pen.fixture.fixture().ctx()) {
+            Some(Cursor::Painted(PaintedCursor::Tool { badge, .. })) => badge,
+            other => panic!("the Pen shows its own cursor: {other:?}"),
+        }
+    };
+    assert_eq!(badge_at(60.0, 60.0), Some(CursorBadge::Close), "over the first anchor");
+    assert_eq!(badge_at(300.0, 250.0), None, "over empty canvas");
+    assert_eq!(badge_at(160.0, 160.0), None, "the last anchor does not close");
+    assert_eq!(badge_at(60.0, 60.0), Some(CursorBadge::Close), "back on the first anchor");
+}
+
 #[trial]
 fn remove_last_waits_for_a_press_that_is_still_down() {
     let mut pen = Pen::three();
