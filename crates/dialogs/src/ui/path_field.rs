@@ -3,7 +3,7 @@
 use craft_behavior::{EditEvent, Mixed};
 use craft_host::target::Caps;
 use craft_host::{PickId, PickRequest};
-use craft_ui::contract::{Bind, Held, NoValue, Outcome, Props as _, ShowContainer as _, Validity};
+use craft_ui::contract::{Bind, Held, NoValue, Outcome, ShowContainer as _, Validity};
 use craft_ui::form::Field;
 use craft_ui::patterns::form_dialogs::PathRow;
 use craft_ui::runtime::env::{Env, Label, Message};
