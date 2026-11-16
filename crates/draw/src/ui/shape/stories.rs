@@ -2,10 +2,10 @@
 //! for the document, and the panel and the bar edit it as an app does: each field's change is applied to the fake.
 
 use super::{
-    Arrowheads, ArrowheadsPopover, LiveShape, ShapeAppearance, ShapeBar, ShapeChange, ShapePanel, ShapeToolSettings, StrokeCells, VectorMode,
-    VectorModeSelect,
+    Arrowheads, ArrowheadsPopover, BoxConstraintsPopover, LiveShape, ShapeAppearance, ShapeBar, ShapeChange, ShapePanel, ShapeToolSettings,
+    StrokeCells, VectorMode, VectorModeSelect,
 };
-use crate::ui::shape_drag::ShapeKind;
+use crate::ui::shape_drag::{BoxConstraints, ShapeKind};
 use craft_behavior::EditEvent;
 use craft_color::ui::Paint;
 use craft_theme::Srgba;
@@ -191,6 +191,18 @@ fn arrowheads_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     *data.value("open", true) = open;
     if let Some(next) = out.edits.iter().rev().find_map(|event| event.value()) {
         *data.value("arrows", Arrowheads::default()) = *next;
+    }
+    StoryOutput::default()
+}
+
+#[story(BoxConstraintsPopover<'static>, covers = [Default], drive = Drive::Never)]
+fn box_constraints_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = *data.value("box", BoxConstraints::default());
+    let mut open = *data.value("open", true);
+    let out = BoxConstraintsPopover::new(Bind::given(value), Bind::bound(&mut open), DOCUMENT_PIXELS_PER_INCH).show(ui);
+    *data.value("open", true) = open;
+    if let Some(next) = out.edits.iter().rev().find_map(|event| event.value()) {
+        *data.value("box", BoxConstraints::default()) = *next;
     }
     StoryOutput::default()
 }

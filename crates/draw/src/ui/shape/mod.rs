@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::stroke::StrokeStyle;
 
-use super::shape_drag::{ShapeDragOptions, ShapeKind};
+use super::shape_drag::{BoxConstraints, ShapeDragOptions, ShapeKind};
 
 mod arrowheads;
 mod bar;
+mod gear;
 mod mode_select;
 mod panel;
 #[cfg(feature = "screen-testing")]
@@ -21,6 +22,7 @@ mod words;
 
 pub use arrowheads::{ArrowheadsOutput, ArrowheadsPopover};
 pub use bar::{ShapeBar, ShapeBarOutput};
+pub use gear::{BoxConstraintsOutput, BoxConstraintsPopover};
 pub use mode_select::VectorModeSelect;
 pub use panel::{ChipSetup, ShapePaint, ShapePanel, ShapePanelOutput};
 pub use stroke_cells::StrokeCells;
@@ -269,7 +271,7 @@ impl ShapeChange {
 }
 
 /// The Shape tools' persisted options-bar values (Fill on, radius, sides, star ratio, weight,
-/// stroke width); the paints are the app's foreground and background.
+/// stroke width, the Rectangle's gear); the paints are the app's foreground and background.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
@@ -288,11 +290,13 @@ pub struct ShapeToolSettings {
     pub stroke_width: f64,
     /// The Line's arrowheads.
     pub arrowheads: Arrowheads,
+    /// The Rectangle's gear ([`BoxConstraintsPopover`]).
+    pub rect_box: BoxConstraints,
 }
 
 impl Default for ShapeToolSettings {
     /// Fill on, square corners, 5 sides, a star ratio of 0.5 (production's Star), weight 3, no stroke, no
-    /// arrowheads.
+    /// arrowheads, an unconstrained Rectangle.
     fn default() -> Self {
         ShapeToolSettings {
             fill_on: true,
@@ -302,13 +306,19 @@ impl Default for ShapeToolSettings {
             line_weight: 3.0,
             stroke_width: 0.0,
             arrowheads: Arrowheads::default(),
+            rect_box: BoxConstraints::default(),
         }
     }
 }
 
 impl ShapeToolSettings {
-    /// The drag options of `kind` with these values.
+    /// The drag options of `kind` with these values; the gear's constraints apply to the Rectangle only.
     pub fn drag_options(&self, kind: ShapeKind) -> ShapeDragOptions {
-        ShapeDragOptions::new(kind).corner_radius(self.corner_radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight)
+        let options =
+            ShapeDragOptions::new(kind).corner_radius(self.corner_radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight);
+        match kind {
+            ShapeKind::Rectangle => options.constraints(self.rect_box),
+            _ => options,
+        }
     }
 }
