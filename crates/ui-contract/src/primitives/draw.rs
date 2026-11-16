@@ -406,7 +406,8 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::rule::Rule::edge(&look, rect, side, self.painter.pixels_per_point()));
     }
 
-    /// Paints the scroll bar in `track` along `axis` for `span`, in `state` (`ScrollBar::shapes`).
+    /// Paints the scroll bar in `track` along `axis` for `span`, in the bar's `state` (`ScrollBar::shapes`;
+    /// `CxCore::scroll_bar_state` gives it).
     pub fn scroll_bar(
         &self,
         look: &crate::style::ScrollBarLook,
@@ -416,7 +417,7 @@ impl<'a> Draw<'a> {
         span: &craft_behavior::ScrollSpan,
         state: &crate::style::StateSet,
     ) {
-        self.painter.extend(super::ScrollBar::shapes(look, track, axis, rtl, span, state, self.painter.pixels_per_point()));
+        self.painter.extend(super::ScrollBar::shapes(look, track, axis, rtl, span, state));
     }
 
     /// The width in points of the line `rule` paints for `kind`.

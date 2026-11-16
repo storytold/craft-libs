@@ -3,7 +3,7 @@
 use super::key::{EnvKey, Ink};
 use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
 use super::paint::{
-    HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, marker_look, reset_mark_look, rule_look,
+    HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarLook, handle_look, marker_look, reset_mark_look, rule_look,
     scroll_bar_look,
 };
 use super::surface::{SurfaceStyle, surface_style};
@@ -429,9 +429,9 @@ impl<'a> StyleCx<'a> {
         marker_look(self.tokens)
     }
 
-    /// The look of a scroll bar of `kind`.
-    pub fn scroll_bar(&self, kind: ScrollBarKind) -> ScrollBarLook {
-        scroll_bar_look(self.tokens, kind)
+    /// The look of a scroll bar.
+    pub fn scroll_bar(&self) -> ScrollBarLook {
+        scroll_bar_look(self.tokens)
     }
 
     /// The state layer: the theme's hover and press fills, clear at rest and while disabled. A part declared

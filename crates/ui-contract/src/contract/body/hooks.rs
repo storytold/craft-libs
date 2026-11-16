@@ -33,7 +33,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::pass_state;
 use crate::runtime::{keys, layout_memory, pointer, wheel, windows};
 use crate::style::ComponentStyle as _;
-use crate::style::{ScrollBarKind, StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_style};
+use crate::style::{StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
 use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
 use egui::{Context, CornerRadius, Id, Pos2, Rect, Shape, Ui, UiBuilder, Vec2};
@@ -875,7 +875,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     Some(scroll) => {
                         let off = self.offset;
                         let big = crate::contract::MAX_EXTENT;
-                        let bar = scroll_bar_look(&body_env.tokens, ScrollBarKind::Overlay).thickness;
+                        let bar = scroll_bar_look(&body_env.tokens).thickness;
                         let last = Vec2::new(self.last_extent.0, self.last_extent.1);
                         let inset = overflow_inset(scroll, last, at.size(), bar);
                         let shows = view_within(scroll, last, at, self.strip);

@@ -11,7 +11,7 @@ use crate::runtime::egui::{repaint, sizing};
 use crate::runtime::env::Env;
 use crate::runtime::lazy;
 use crate::runtime::pass_state;
-use crate::style::{ScrollBarKind, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
+use crate::style::{SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{Axis, PartKey, ScrollPos, ScrollSpan};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
@@ -164,7 +164,7 @@ impl BodyHooks<'_> {
     /// The edge fades and the scroll bars over the body. The fades blend the content into the surface it sits on.
     pub(super) fn paint_scroll_bars<C: Container>(&self, ui: &mut Ui, cx: &Cx<'_, C>, props: &ContainerProps, rtl: bool, env: &Env) {
         let tokens = &*env.tokens;
-        let look = scroll_bar_look(tokens, ScrollBarKind::Overlay);
+        let look = scroll_bar_look(tokens);
         if let Some(at) = self.view
             && let Some(scroll) = scroll_of(props)
             && let Some(strips) = self.strips(scroll, at)
@@ -191,13 +191,8 @@ impl BodyHooks<'_> {
                 if !overflow {
                     continue;
                 }
-                let enabled = cx.core.looks_enabled();
-                let state = crate::contract::steps::part_state(
-                    cx.core.results.get(&(bar.key, Some(crate::contract::cx::THUMB))).unwrap_or(&crate::primitives::PartResult::IDLE),
-                    enabled,
-                    None,
-                );
-                ui.painter().extend(ScrollBar::shapes(&look, bar.track, bar.axis, rtl, &span, &state, ui.ctx().pixels_per_point()));
+                let state = cx.core.scroll_bar_state(bar.key);
+                ui.painter().extend(ScrollBar::shapes(&look, bar.track, bar.axis, rtl, &span, &state));
             }
         }
     }
@@ -280,7 +275,7 @@ impl<'b> BodyHooks<'b> {
 
     pub(super) fn scroll_geometry(&self, props: &ContainerProps, view: Rect, rtl: bool, tokens: &UiTokens) -> Vec<(Bar, ScrollSpan)> {
         let Some(scroll) = scroll_of(props) else { return Vec::new() };
-        let thickness = scroll_bar_look(tokens, ScrollBarKind::Overlay).thickness;
+        let thickness = scroll_bar_look(tokens).thickness;
         let (v_on, h_on) = (scroll.vertical_on(), scroll.horizontal_on());
         let (ex, ey) = self.last_extent;
         let mut bars = Vec::new();
