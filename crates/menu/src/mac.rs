@@ -41,7 +41,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, IsMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -326,6 +326,15 @@ struct Target {
 /// How many failed builds in a row are tried again without a new sync ([`MacMenu::rebuild`]).
 const RETRIES: u8 = 3;
 
+/// How long a menu change waits before it is tried again: after a failed build, and while a menu is
+/// open.
+const RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// How long is left before a retried build is due at `retry_at`; `None` when it is due (or none is).
+fn waiting(retry_at: Option<Instant>, now: Instant) -> Option<Duration> {
+    retry_at.and_then(|at| at.checked_duration_since(now)).filter(|d| !d.is_zero())
+}
+
 /// After a build from an update: the failed builds in a row, and whether to try again later
 /// without a new sync ([`MacMenu::rebuild`]).
 fn after_build(retries: u8, built: bool) -> (u8, bool) {
@@ -358,6 +367,8 @@ struct MacMenu {
     stale: bool,
     /// Failed builds in a row since the last one that worked ([`MacMenu::rebuild`]).
     retries: u8,
+    /// A retried build waits until then ([`MacMenu::rebuild`]); frames before it leave it pending.
+    retry_at: Option<Instant>,
     window: Option<WindowMenu>,
     /// The latest menus, waiting for the open menu to close.
     pending: Option<MenuBar>,
@@ -377,6 +388,7 @@ impl MacMenu {
             structure: 0,
             stale: false,
             retries: 0,
+            retry_at: None,
             window: None,
             pending: None,
             options,
@@ -491,6 +503,7 @@ impl MacMenu {
         let (retries, again) = after_build(self.retries, built);
         self.retries = retries;
         if again {
+            self.retry_at = Some(Instant::now() + RETRY_DELAY);
             self.retry_later(bar.clone());
         }
     }
@@ -555,7 +568,7 @@ impl MacMenu {
     /// Nothing else may wake egui when the menu closes (Escape goes to the menu), so look again.
     fn retry_later(&mut self, bar: MenuBar) {
         self.pending = Some(bar);
-        self.ctx.request_repaint_after(Duration::from_millis(250));
+        self.ctx.request_repaint_after(RETRY_DELAY);
     }
 }
 
@@ -629,6 +642,7 @@ impl Backend for MacMenu {
             return;
         }
         self.pending = None;
+        self.retry_at = None;
         self.update(bar);
     }
 
@@ -651,6 +665,12 @@ impl Backend for MacMenu {
             out.push(event);
         }
         // After the events: they were chosen from the menus as they were.
+        if let Some(wait) = waiting(self.retry_at, Instant::now()) {
+            // A retried build waits out its delay, however many frames come first.
+            self.ctx.request_repaint_after(wait);
+            return out;
+        }
+        self.retry_at = None;
         if let Some(bar) = self.pending.take() {
             if self.tracking() {
                 self.retry_later(bar);
@@ -833,6 +853,18 @@ mod tests {
         assert_eq!(again, usize::from(RETRIES), "a failing build is retried RETRIES times, then waits for a sync");
         assert_eq!(after_build(retries, true), (0, false), "a build that works resets the count");
         assert_eq!(after_build(0, false), (1, true), "the first failure schedules a retry");
+    }
+
+    /// A retried build is not due until its delay has passed, whatever frames come before.
+    #[test]
+    fn a_retried_build_waits_out_its_delay() {
+        let now = Instant::now();
+        let at = now + RETRY_DELAY;
+        assert_eq!(waiting(Some(at), now), Some(RETRY_DELAY), "a frame right after the failure waits");
+        assert!(waiting(Some(at), now + Duration::from_millis(100)).is_some(), "a frame within the delay waits");
+        assert_eq!(waiting(Some(at), at), None, "due at the delay's end");
+        assert_eq!(waiting(Some(at), at + Duration::from_millis(1)), None, "due after it");
+        assert_eq!(waiting(None, now), None, "nothing to wait for");
     }
 
     #[test]
