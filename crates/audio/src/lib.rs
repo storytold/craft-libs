@@ -76,11 +76,11 @@ pub mod wav_markers;
 ))]
 mod write;
 
-/// Streaming WAVE and AIFF headers and sample packing.
-pub mod pcm_export;
 /// PCM WAVE and AIFF wrappers for interchange essence.
 #[cfg(feature = "pcm-encode")]
 pub mod essence_pcm;
+/// Streaming WAVE and AIFF headers and sample packing.
+pub mod pcm_export;
 /// Interleaved PCM packet decoding.
 pub mod pcm_interleaved;
 /// Range-backed PCM WAVE access and a 16-bit PCM writer.
