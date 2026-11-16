@@ -9,7 +9,8 @@
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
 //! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
 //! their separators and options), the comments, the character styles of runs, and paragraph and
-//! cell borders and shading, inline pictures, and the bookmarks of the main text.
+//! cell borders and shading, inline pictures, the bookmarks of the main text, and its
+//! auto-numbering (numbered and bulleted paragraphs and heading numbering, by `crate::anld`).
 //!
 //! The layout as observed:
 //!
@@ -390,6 +391,8 @@ pub(crate) struct Content {
     pub(crate) fonts: Vec<String>,
     /// The styles by index, their formatting translated to Word 97 grpprls.
     pub(crate) styles: Vec<RawStyle>,
+    /// The paragraphs' and styles' auto-numbering sprms, untranslated ([`crate::anld`]).
+    pub(crate) lists: crate::anld::Lists,
 }
 
 /// Read the text, formatting and fonts of a Word 6.0/95 file.
@@ -404,7 +407,7 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
     let fonts = fib.pair(PAIR_FONTS).map(|(fc, lcb)| font_table(word, fc, lcb)).unwrap_or_default();
     let chp_runs = fib.pair(PAIR_BTE_CHPX).map(|(fc, lcb)| fkp_runs(word, fc, lcb, false)).unwrap_or_default();
     let pap_runs = fib.pair(PAIR_BTE_PAPX).map(|(fc, lcb)| fkp_runs(word, fc, lcb, true)).unwrap_or_default();
-    let (styles, facts) = fib.pair(PAIR_STSH).map(|(fc, lcb)| stylesheet(word, fc, lcb)).unwrap_or_default();
+    let (styles, facts, style_lists) = fib.pair(PAIR_STSH).map(|(fc, lcb)| stylesheet(word, fc, lcb)).unwrap_or_default();
     let windows = fib.chse == 0;
     let default_code_page = match fib.chse {
         // Text that no run covers is formatted by the Normal style.
@@ -456,7 +459,8 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
     let chpx = Bins::translated(chp_runs.iter().map(|r| TranslatedRun { lo: r.lo, hi: r.hi, istd: 0, grpprl: translate_chp(r.grpprl) }).collect());
     let papx =
         Bins::translated(pap_runs.iter().map(|r| TranslatedRun { lo: r.lo, hi: r.hi, istd: r.istd, grpprl: translate_pap(r.grpprl) }).collect());
-    Ok(Content { pieces, chpx, papx, fonts: fonts.into_iter().map(|f| f.name).collect(), styles })
+    let lists = crate::anld::Lists::new(pap_runs.iter().map(|r| (r.lo, r.hi, crate::anld::Own::of(sprms(r.grpprl)))).collect(), style_lists);
+    Ok(Content { pieces, chpx, papx, fonts: fonts.into_iter().map(|f| f.name).collect(), styles, lists })
 }
 
 /// Mac OS Roman, the 8-bit text of a Macintosh Word document.
@@ -526,24 +530,27 @@ impl StyleFacts {
 
 /// The styles of the stylesheet at `word[fc..fc+lcb]`, by index (an empty slot is a default
 /// style, which keeps the indexes aligned), with their formatting translated, and each style's
-/// own font and language. Reading stops at the first entry that runs past the table.
-fn stylesheet(word: &[u8], fc: u32, lcb: u32) -> (Vec<RawStyle>, Vec<StyleFacts>) {
+/// own font and language, and its base and numbering sprms. Reading stops at the first entry
+/// that runs past the table.
+fn stylesheet(word: &[u8], fc: u32, lcb: u32) -> (Vec<RawStyle>, Vec<StyleFacts>, Vec<(u16, crate::anld::Own)>) {
     let Some(st) = (fc as usize).checked_add(lcb as usize).and_then(|end| word.get(fc as usize..end)) else { return Default::default() };
     let u16_at = |b: &[u8], at: usize| b.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]));
     let Some(cb_header) = u16_at(st, 0).map(usize::from) else { return Default::default() };
     let (Some(cstd), Some(cb_base)) = (u16_at(st, 2), u16_at(st, 4)) else { return Default::default() };
     let cb_base = usize::from(cb_base);
-    let (mut styles, mut facts) = (Vec::new(), Vec::new());
+    let (mut styles, mut facts, mut lists) = (Vec::new(), Vec::new(), Vec::new());
     let mut at = 2 + cb_header;
     for _ in 0..usize::from(cstd).min(MAX_STYLES) {
         let Some(cb) = u16_at(st, at).map(usize::from) else { break };
         let Some(std) = st.get(at + 2..at + 2 + cb) else { break };
         at += 2 + cb;
-        let (style, fact) = style(std, cb_base).unwrap_or_else(|| (RawStyle::default(), StyleFacts { base: 0x0FFF, ..Default::default() }));
+        let (style, fact, own) =
+            style(std, cb_base).unwrap_or_else(|| (RawStyle::default(), StyleFacts { base: 0x0FFF, ..Default::default() }, Default::default()));
+        lists.push((fact.base, own));
         styles.push(style);
         facts.push(fact);
     }
-    (styles, facts)
+    (styles, facts, lists)
 }
 
 /// The names of the built-in styles by sti: the "Index within built-in styles" of the reserved
@@ -660,7 +667,7 @@ const BUILT_IN_NAMES: [&str; 107] = [
 ];
 
 /// One style entry (`None` for an empty slot or one too short for its fixed part and name).
-fn style(std: &[u8], cb_base: usize) -> Option<(RawStyle, StyleFacts)> {
+fn style(std: &[u8], cb_base: usize) -> Option<(RawStyle, StyleFacts, crate::anld::Own)> {
     let u16_at = |at: usize| std.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]));
     if cb_base < 8 {
         return None;
@@ -692,7 +699,7 @@ fn style(std: &[u8], cb_base: usize) -> Option<(RawStyle, StyleFacts)> {
         _ => (&[][..], upxs.first().copied().unwrap_or_default()),
     };
     let fact = StyleFacts { base: istd_base, font: last_font(chpx), lid: last_lid(chpx) };
-    Some((RawStyle { stk, istd_base, name, papx: translate_pap(papx), chpx: translate_chp(chpx) }, fact))
+    Some((RawStyle { stk, istd_base, name, papx: translate_pap(papx), chpx: translate_chp(chpx) }, fact, crate::anld::Own::of(sprms(papx))))
 }
 
 /// One font table entry.
@@ -806,8 +813,9 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x65
             | 0x6B | 0xB6 | 0xB8 | 0xBD | 0xC0 => 2,
             0x14 => 4,
-            // A count byte, then that many bytes (0x0C: a bulleted style's numbering, 52 bytes).
-            0x0C | 0x0F | 0x44 | 0xBF => 1 + usize::from(*after.first()?),
+            // A count byte, then that many bytes (0x0C: a paragraph's numbering, 52 bytes; 0x85: a
+            // section's heading numbering, 212).
+            0x0C | 0x0F | 0x44 | 0xBF | crate::anld::OLST => 1 + usize::from(*after.first()?),
             // A 2-byte count, then one byte fewer than it says (as Word 97's sprmTDefTable).
             0xBE => 2 + usize::from(u16::from_le_bytes([*after.first()?, *after.get(1)?])).saturating_sub(1),
             _ => return None,
@@ -816,6 +824,11 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
         rest = after.get(len..).unwrap_or_default();
         Some((op, operand))
     })
+}
+
+/// The heading numbering (`OLST`) of a section's Word 6 grpprl, if it has one.
+pub(crate) fn olst(grpprl: &[u8]) -> Option<Vec<crate::anld::Anlv>> {
+    sprms(grpprl).filter(|(op, _)| *op == crate::anld::OLST).last().and_then(|(_, v)| crate::anld::parse_olst(v))
 }
 
 /// Append a Word 97 Prl: opcode, then operand.

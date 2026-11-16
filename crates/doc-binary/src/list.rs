@@ -37,7 +37,7 @@ struct RawLvl {
 
 /// A bullet level's character, with the 0xF000 flag bits stripped and the common
 /// Symbol/Wingdings glyphs mapped to their Unicode equivalents so every font renders them.
-fn bullet_char(c: u16) -> char {
+pub(crate) fn bullet_char(c: u16) -> char {
     match c & 0x0FFF {
         0xB7 => '\u{2022}',        // Symbol bullet
         0xA7 => '\u{25AA}',        // Wingdings small square

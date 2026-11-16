@@ -17,6 +17,7 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+mod anld;
 mod comments;
 mod crypt;
 mod dop;
@@ -434,9 +435,12 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     let hdd_base = ftn_base.saturating_add(fib.ccp_ftn);
     let edn_base = hdd_base.saturating_add(fib.ccp_hdd).saturating_add(fib.ccp_mcr).saturating_add(fib.ccp_atn);
     let fib97 = fib.as_word97();
+    // Each section's heading numbering, by its end.
+    let olsts = std::cell::RefCell::new(Vec::new());
     // A section's sprms, translated; in a fast-saved file the piece holding its section mark can
     // add more (Word 95 records a change to the section there), applied after the SEPX's.
     let sects = sections::parse_with(word, word, &fib97, |grpprl, end_cp| {
+        olsts.borrow_mut().push((end_cp, word6::olst(grpprl)));
         let mut sprms = word6::translate_sep(grpprl);
         sprms.extend(prm_sprms(content.pieces.piece_prm(end_cp.saturating_sub(1)), &work, |sgc| sgc == 4));
         sprms
@@ -461,6 +465,19 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     attach_sections(&mut doc, &mut paras, &sects, &hf_ids, fib.ccp_text);
     if paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
+    }
+    if !content.lists.is_empty() {
+        let mut olsts = olsts.into_inner();
+        olsts.sort_by_key(|o| o.0);
+        // A paragraph's mark: its FC finds its numbering sprms, its CP its section.
+        let mark = |p: &ParaOut| p.end_cp.saturating_sub(1);
+        let own_of = |p: &ParaOut| {
+            let fc = content.pieces.fc_of_cp(mark(p)).unwrap_or(0);
+            content.lists.at(fc, content.papx.papx(word, fc).0)
+        };
+        let olst_of = |p: &ParaOut| olsts.get(olsts.partition_point(|o| o.0 <= mark(p))).and_then(|o| o.1.as_ref());
+        let section_mark = |p: &ParaOut| p.para.text.is_empty() && sect_ends.binary_search(&p.end_cp).is_ok();
+        doc.numbering = Arc::new(anld::number(&mut paras, own_of, olst_of, section_mark, &content.fonts, content.pieces.default_code_page()));
     }
     doc.media.extend(pics.media);
     doc.body = table::assemble(paras);

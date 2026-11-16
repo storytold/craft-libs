@@ -1344,3 +1344,85 @@ fn bookmarks_are_read() {
     let doc = read(&word6_file(&Doc6 { text: b"one two three last\r", raw_pairs, ..Default::default() })).expect("opens");
     assert_eq!(super::with_bookmarks(first_para(&doc)), "[Outer[one [Inner[two]Inner] three]Outer] [_Hlt1[last]_Hlt1]");
 }
+
+/// A Word 6 `ANLD` sprm (0x0C): `nfc`, the text before and after, the flag byte (bit 2 `fPrev`,
+/// bit 3 `fHang`) and the start, with no font of its own and a 360-twip indent.
+fn anld(nfc: u8, before: &[u8], after: &[u8], flags: u8, start: u16) -> Vec<u8> {
+    let mut v = vec![0x0C, 52];
+    v.extend_from_slice(&anlv(nfc, before, after, flags, start));
+    v.extend_from_slice(&[0; 4]);
+    let mut text = [before, after].concat();
+    text.resize(32, 0);
+    v.extend_from_slice(&text);
+    v
+}
+
+/// An `ANLV`: nfc, the counts of text before and after, the flags, then font 0x8001 (none), size,
+/// start, indent 360 and space.
+fn anlv(nfc: u8, before: &[u8], after: &[u8], flags: u8, start: u16) -> Vec<u8> {
+    let mut v = vec![nfc, before.len() as u8, after.len() as u8, flags, 0, 0, 0x01, 0x80, 0, 0];
+    v.extend_from_slice(&start.to_le_bytes());
+    v.extend_from_slice(&360i16.to_le_bytes());
+    v.extend_from_slice(&[0, 0]);
+    v
+}
+
+/// Each main-text paragraph's list label, as the model counts them, and its text.
+fn labels(doc: &craft_wordmodel::Document) -> Vec<String> {
+    let mut counters = craft_wordmodel::numbering::Counters::default();
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    paras
+        .iter()
+        .map(|p| {
+            let label =
+                p.props.numbering.as_ref().and_then(|n| counters.next_label(&doc.numbering, n.num, n.level)).map(|(l, _)| l).unwrap_or_default();
+            format!("{label} {}", p.text)
+        })
+        .collect()
+}
+
+#[test]
+fn numbered_and_bulleted_paragraphs_count_as_word_95_does() {
+    // As Word 95 wrote them, nLvlAnm (0x0D) then the ANLD, here through the paragraphs' styles: a
+    // bullet and a skipped paragraph don't break the count, nor does another start; a plain
+    // paragraph and other text after the number do. Word 95 shows 1. 2. • 3. - 4. - 1. 1).
+    let dec = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 1)].concat();
+    let bullet = [&[0x0D, 11][..], &anld(0xFF, &[0xB7], b"", 0x08, 0)].concat();
+    let start7 = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 7)].concat();
+    let paren = [&[0x0D, 10][..], &anld(0, b"", b")", 0x08, 1)].concat();
+    let style = |name, papx| Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name, papx, chpx: &[] });
+    let styles = &[
+        Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", ..Default::default() }),
+        style("Decimal", &dec),
+        style("Bullet", &bullet),
+        style("Start 7", &start7),
+        style("Paren", &paren),
+    ];
+    let paras: &[(u32, u32, &[u8])] =
+        &[(0, 2, &[]), (2, 4, &[]), (4, 6, &[]), (6, 8, &[]), (8, 10, &[0x0D, 12]), (10, 12, &[]), (12, 14, &[]), (14, 16, &[]), (16, 18, &[])];
+    let para_styles = &[1, 1, 2, 1, 1, 3, 0, 1, 4];
+    let doc = read(&word6_file(&Doc6 { text: b"a\rb\rx\rc\rs\rd\rp\re\rf\r", paras, para_styles, styles, ..Default::default() })).expect("opens");
+    assert_eq!(labels(&doc), ["1. a", "2. b", "\u{2022} x", "3. c", " s", "4. d", " p", "1. e", "1) f"]);
+}
+
+#[test]
+fn headings_take_their_levels_from_the_sections_olst() {
+    // A section's OLST (0x85: nine ANLVs, 4 bytes, then the levels' texts in turn) numbers I. A.
+    // and, with fPrev, I.A.1.; the headings carry nLvlAnm 1-3, the first ones through their
+    // style alone. Word 95 shows I. A. I.A.1. I.A.2. II. A.
+    let mut olst = vec![0x85, 212];
+    for (nfc, flags) in [(1u8, 0x08u8), (3, 0x08), (0, 0x0C)] {
+        olst.extend_from_slice(&anlv(nfc, b"", b".", flags, 1));
+    }
+    olst.resize(2 + 9 * 16 + 4, 0);
+    olst.extend_from_slice(b"...");
+    olst.resize(2 + 212, 0);
+    let styles = &[
+        Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", ..Default::default() }),
+        Some(Std { sti: 1, sgc: 1, base: 0, name: "heading 1", papx: &[0x0D, 1], chpx: &[] }),
+    ];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, &[]), (2, 4, &[0x0D, 2]), (4, 6, &[0x0D, 3]), (6, 8, &[0x0D, 3]), (8, 10, &[]), (10, 12, &[0x0D, 2])];
+    let d = Doc6 { text: b"a\rb\rc\rd\re\rf\r", paras, para_styles: &[1, 0, 0, 0, 1, 0], styles, sections: &[(12, &olst)], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert_eq!(labels(&doc), ["I. a", "A. b", "I.A.1. c", "I.A.2. d", "II. e", "A. f"]);
+}
