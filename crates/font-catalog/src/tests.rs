@@ -587,3 +587,20 @@ fn shape_plan_cache_reuses_and_evicts_plans() {
     assert!(!Arc::ptr_eq(&first, &make(&languages[0])));
     assert_eq!(cache.len(), ShapePlanCache::CAPACITY);
 }
+
+#[test]
+fn bounded_sfnt_reader_preserves_face_names_and_collection_indices() {
+    let mut bold = spec("Example", "Bold Italic", 700);
+    bold.italic = true;
+    let data = font(&bold);
+    let faces = crate::sfnt::read_faces_bytes(&data);
+    assert_eq!(faces.len(), 1);
+    assert_eq!((&*faces[0].family, &*faces[0].style, faces[0].weight, faces[0].italic), ("Example", "Bold Italic", 700, true));
+    let mut hidden = spec("Hidden", "Regular", 400);
+    hidden.outlines = false;
+    let combined = collection(&[font(&hidden), data]);
+    let faces = crate::sfnt::read_faces_bytes(&combined);
+    assert_eq!(faces.len(), 1);
+    assert_eq!((faces[0].index, faces[0].family.as_str()), (1, "Example"));
+    assert!(crate::sfnt::read_faces_bytes(b"invalid").is_empty());
+}

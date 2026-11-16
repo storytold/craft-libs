@@ -99,12 +99,43 @@ mod tests {
     use harfrust::{FontRef, ShaperData};
 
     #[test]
+    fn synthetic_face_runs_without_installed_fonts() {
+        // A tiny face with a single .notdef glyph. The shaper still processes source
+        // clusters, direction, mapping, features and context without external font files.
+        let mut builder = write_fonts::FontBuilder::new();
+        let mut head = vec![0; 54];
+        head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+        let mut hhea = vec![0; 36];
+        hhea[34..36].copy_from_slice(&1u16.to_be_bytes());
+        for (tag, bytes) in [(b"head", head), (b"hhea", hhea), (b"hmtx", vec![0, 100, 0, 0]), (b"maxp", vec![0, 0, 0x50, 0, 0, 1])] {
+            builder.add_raw(write_fonts::types::Tag::new(tag), bytes);
+        }
+        check_run(&builder.build());
+    }
+
+    #[test]
     fn run_matches_direct_shaping_with_source_clusters_and_context() {
         let Ok(dir) = std::env::var("CRAFT_FONTS_DIR") else { return };
         let bytes = std::fs::read(std::path::Path::new(&dir).join("fonts/noto-sans-arabic/NotoSansArabic.ttf")).unwrap();
-        let font = FontRef::from_index(&bytes, 0).unwrap();
+        check_run(&bytes);
+    }
+
+    fn check_run(bytes: &[u8]) {
+        let font = FontRef::from_index(bytes, 0).unwrap();
         let data = ShaperData::new(&font);
         let shaper = data.shaper(&font).build();
+        let overflow = RunInput {
+            text: "ab",
+            source_start: usize::MAX,
+            pre_context: "",
+            post_context: "",
+            direction: Direction::LeftToRight,
+            language: None,
+            features: &[],
+            character_clusters: false,
+            uppercase: false,
+        };
+        assert!(shape_run(&shaper, &overflow, |c| c, |s, d, script, lang, f| Arc::new(ShapePlan::new(s, d, script, lang, f))).is_err());
         let language: Language = "ar".parse().unwrap();
         let features = [Feature::new(harfrust::Tag::new(b"kern"), 0, 19..25)];
         for direction in [Direction::LeftToRight, Direction::RightToLeft, Direction::TopToBottom] {
