@@ -3,7 +3,7 @@
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CanvasView, EditEvent};
-use craft_draw::ui::pen::{EditSubpath, Knot, PenEnd, PenEvent, PenMode, PenTool};
+use craft_draw::ui::pen::{EditSubpath, Knot, PenDraft, PenEnd, PenEvent, PenMode, PenTool};
 use craft_ui::testing::{ToolFixture, trial};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, vec2};
 
@@ -173,18 +173,39 @@ fn remove_last_waits_for_a_press_that_is_still_down() {
     assert_eq!(pen.draft().knots.len(), 3, "one request removes one anchor");
 }
 
-// Delete takes back the draft's last anchor; with `deletes` off (the anchors are not the selected tool's to take back)
-// the key is left to the app and the draft stays.
+// Delete and the host's Undo agree: both take back the last anchor of the selected tool's draft, and both leave a
+// draft kept for another tool (`PenDraft::Foreign`) to the app, whether it was handed in kept or became another
+// tool's while open.
 #[trial]
-fn delete_removes_the_last_anchor_unless_the_host_keeps_the_key() {
-    let mut pen = Pen::three();
+fn delete_and_undo_agree_on_whose_anchors_they_take_back() {
+    let mut drawn = Pen::three();
+    drawn.fixture.fixture().key(egui::Key::Delete, Modifiers::NONE);
+    drawn.sync();
+    assert_eq!(drawn.draft().knots.len(), 2);
+    let open = drawn.draft();
+    drawn.fixture.tool_mut().draft(Some(PenDraft::Foreign(&open)));
+    drawn.fixture.fixture().key(egui::Key::Delete, Modifiers::NONE);
+    assert!(!drawn.fixture.tool_mut().remove_last(), "Undo is the app's");
+    drawn.sync();
+    assert_eq!(drawn.draft().knots.len(), 2, "the key is the app's");
+
+    let mut pen = pen();
+    let kept = EditSubpath::new(vec![Knot::corner(doc(60.0, 60.0)), Knot::corner(doc(160.0, 60.0)), Knot::corner(doc(160.0, 160.0))], false);
+    pen.fixture.tool_mut().draft(Some(PenDraft::Foreign(&kept)));
+    pen.fixture.fixture().settle();
+    pen.fixture.fixture().key(egui::Key::Delete, Modifiers::NONE);
+    assert!(!pen.fixture.tool_mut().remove_last());
+    pen.sync();
+    assert_eq!(pen.kinds(), ["begin"], "a kept draft loses no anchor to either");
+    pen.fixture.tool_mut().draft(Some(PenDraft::Own(&kept)));
+    pen.click_doc(260.0, 160.0);
     pen.fixture.fixture().key(egui::Key::Delete, Modifiers::NONE);
     pen.sync();
-    assert_eq!(pen.draft().knots.len(), 2);
-    pen.fixture.tool_mut().deletes(false);
-    pen.fixture.fixture().key(egui::Key::Delete, Modifiers::NONE);
+    assert_eq!(pen.draft(), kept, "back with its tool, Delete takes back the added anchor");
+    pen.click_doc(260.0, 160.0);
+    assert!(pen.fixture.tool_mut().remove_last());
     pen.sync();
-    assert_eq!(pen.draft().knots.len(), 2, "the key is the app's");
+    assert_eq!(pen.draft(), kept, "and so does Undo");
 }
 
 #[trial]
@@ -239,7 +260,7 @@ fn space_moves_the_anchor_with_its_handles() {
 fn removing_a_resumed_drafts_own_anchor_restores_the_path_and_ends_the_draft() {
     let mut pen = pen();
     let own = EditSubpath::new(vec![Knot::corner(doc(60.0, 60.0)), Knot::corner(doc(160.0, 60.0))], false);
-    pen.fixture.tool_mut().draft(Some(&own));
+    pen.fixture.tool_mut().draft(Some(PenDraft::Own(&own)));
     pen.fixture.fixture().settle();
     pen.sync();
     assert_eq!(pen.kinds(), ["begin"], "the handed-in draft begins its gesture at once");
@@ -269,7 +290,7 @@ fn a_curvature_resume_keeps_the_carried_knots_and_replace_updates_the_draft() {
         let mut tool = pen.fixture.tool_mut();
         tool.mode(PenMode::Curvature);
         tool.kept(2);
-        tool.draft(Some(&carried));
+        tool.draft(Some(PenDraft::Own(&carried)));
     }
     pen.fixture.fixture().settle();
     pen.sync();
@@ -313,7 +334,7 @@ fn three_curvature_clicks_give_three_anchors() {
                 if round_trip {
                     let held = pen.draft();
                     let mut tool = pen.fixture.tool_mut();
-                    tool.mode(PenMode::Curvature).draft((!held.knots.is_empty()).then_some(&held)).kept(0);
+                    tool.mode(PenMode::Curvature).draft((!held.knots.is_empty()).then_some(PenDraft::Own(&held))).kept(0);
                 }
                 pen.fixture.fixture().frame(vec![event]);
                 pen.sync();

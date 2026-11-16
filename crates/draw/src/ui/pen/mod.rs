@@ -21,5 +21,5 @@ pub use bezier::{
 };
 pub use mode::{PathMode, PathTool, PenMode};
 pub use options::{PATH_OPTIONS_COLOR_KEY, PathOptionsOutput, PathOptionsPopover, PathOptionsSettings, PathOptionsWords};
-pub use tool::{PenEnd, PenEvent, PenStyle, PenTool};
+pub use tool::{PenDraft, PenEnd, PenEvent, PenStyle, PenTool};
 pub use words::PenWords;

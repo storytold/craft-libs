@@ -18,7 +18,7 @@ const CONVERT_TIP: Vec2 = Vec2::new(ICON_BOX / 2.0, 5.5);
 /// overlay does nothing, so it never starts a path.
 ///
 /// - The open pen draft ([`draft`](Self::draft)), when the host passes it, is drawn and keeps its keys (Enter,
-///   Escape, and Delete unless [`PenTool::deletes`] leaves it to the app) as [`PathMode`](super::PathMode)
+///   Escape, and Delete unless the draft is [`PenDraft::Foreign`](super::PenDraft::Foreign)) as [`PathMode`](super::PathMode)
 ///   describes; it takes no press.
 /// - Cursor off the overlay's parts: the crosshair under the canvas's precise cursor
 ///   ([`CanvasSpace::precise`](craft_ui::canvas::CanvasSpace::precise)); with ⌘ Direct Selection's arrow; else Add
