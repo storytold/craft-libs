@@ -315,7 +315,8 @@ fn withdraw_taken(ctx: &Context, target: Option<&StopRec>, batch: &Batch, held: 
         return;
     }
     let places: Vec<usize> = presses.iter().filter_map(|press| press.in_egui).collect();
-    let open = crate::runtime::egui::input::withdraw(ctx, &places, texts);
+    let text_places: Vec<usize> = texts.iter().filter_map(|at| batch.texts.get(*at).and_then(|typed| typed.in_egui)).collect();
+    let open = crate::runtime::egui::input::withdraw(ctx, &places, &text_places);
     current(ctx, |stage| {
         for key in presses.iter().zip(open).filter(|(_, open)| *open).filter_map(|(press, _)| press.release) {
             if !stage.consumed.contains(&key) {

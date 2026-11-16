@@ -116,7 +116,8 @@ impl Strip<'_> {
                     }
                 }
                 // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
-                batch.texts.push(Typed { text, claimed });
+                batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts) });
+                batch.egui_texts += 1;
                 true
             }
             KeyEvent::Clip { command, text } if (self.edits)(command) => {

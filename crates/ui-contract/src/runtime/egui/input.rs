@@ -51,27 +51,26 @@ pub(crate) fn hold_back_presses(input: &mut RawInput, frame: u64, held: &mut Hel
     !held.events.is_empty()
 }
 
-/// Takes key presses and texts out of the running pass's input: `places` counts the input's key presses, in order,
-/// and `texts` its text events. Each press goes with its release when that is in the input too; otherwise its key is
-/// no longer down. Returns, for each place, whether the release is still to come.
+/// Takes key presses and texts out of the running pass's input. `places` and `texts` are the places the key stage
+/// recorded as it left them in the input (`in_egui`): a press's among the input's key presses, a text's among its text
+/// events. Each press goes with its release when that is in the input too; otherwise its key is no longer down.
+/// Returns, for each press place, whether the release is still to come.
 pub(crate) fn withdraw(ctx: &Context, places: &[usize], texts: &[usize]) -> Vec<bool> {
     ctx.input_mut(|input| {
-        let presses: Vec<(usize, egui::Key)> = input
-            .events
-            .iter()
-            .enumerate()
-            .filter_map(|(at, event)| match event {
-                Event::Key { key, pressed: true, .. } => Some((at, *key)),
-                _ => None,
-            })
-            .collect();
+        // The index in the input of the event at each recorded place of its kind.
+        let at_places = |kind: fn(&Event) -> bool, wanted: &[usize]| -> Vec<usize> {
+            let of_kind: Vec<usize> = input.events.iter().enumerate().filter(|(_, event)| kind(event)).map(|(at, _)| at).collect();
+            wanted.iter().filter_map(|place| of_kind.get(*place).copied()).collect()
+        };
+        let presses = at_places(|event| matches!(event, Event::Key { pressed: true, .. }), places);
+        let texts = at_places(|event| matches!(event, Event::Text(_)), texts);
         let mut gone = vec![false; input.events.len()];
-        let text_events = input.events.iter().enumerate().filter(|(_, event)| matches!(event, Event::Text(_))).map(|(at, _)| at);
-        for (nth, at) in text_events.enumerate() {
-            gone[at] |= texts.contains(&nth);
+        for at in texts {
+            gone[at] = true;
         }
-        let mut open = Vec::with_capacity(places.len());
-        for (at, key) in places.iter().filter_map(|place| presses.get(*place).copied()) {
+        let mut open = Vec::with_capacity(presses.len());
+        for at in presses {
+            let Event::Key { key, .. } = input.events[at] else { continue };
             gone[at] = true;
             let release = input.events[at + 1..]
                 .iter()

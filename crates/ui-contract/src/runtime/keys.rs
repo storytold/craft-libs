@@ -121,8 +121,10 @@ struct Batch {
     shortcuts: Vec<Shortcut>,
     /// The text of the paste the focused component takes.
     paste: Option<String>,
-    /// Every text event of the pass, in order: its place here is its place among the text events in egui's input.
+    /// Every text event of the pass, in order.
     texts: Vec<Typed>,
+    /// How many text events the strip left in egui's input.
+    egui_texts: usize,
     clips: Vec<EditCommand>,
     access: Vec<Action>,
     escapes: usize,
@@ -148,6 +150,8 @@ struct Typed {
     text: String,
     /// A claim took the press that typed it: the text is the claim's too, so it reaches no field.
     claimed: bool,
+    /// The text's place among the text events the strip left in egui's input, `None` when the strip took it.
+    in_egui: Option<usize>,
 }
 
 /// A key press a following text event may belong to.
