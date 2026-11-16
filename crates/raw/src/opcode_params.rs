@@ -28,11 +28,19 @@ pub struct Area {
     pub col_pitch: usize,
 }
 impl Area {
-    pub fn rows(&self) -> impl Iterator<Item = usize> + use<> {
-        (self.top..self.bottom.max(self.top)).step_by(self.row_pitch)
+    /// Iterate sampled rows, rejecting a zero pitch even for caller-constructed areas.
+    pub fn rows(&self) -> Result<impl Iterator<Item = usize> + use<>, ParseError> {
+        if self.row_pitch == 0 {
+            return Err(ParseError::Malformed("opcode area with a zero pitch"));
+        }
+        Ok((self.top..self.bottom.max(self.top)).step_by(self.row_pitch))
     }
-    pub fn cols(&self) -> impl Iterator<Item = usize> + use<> {
-        (self.left..self.right.max(self.left)).step_by(self.col_pitch)
+    /// Iterate sampled columns, rejecting a zero pitch even for caller-constructed areas.
+    pub fn cols(&self) -> Result<impl Iterator<Item = usize> + use<>, ParseError> {
+        if self.col_pitch == 0 {
+            return Err(ParseError::Malformed("opcode area with a zero pitch"));
+        }
+        Ok((self.left..self.right.max(self.left)).step_by(self.col_pitch))
     }
 }
 /// Borrowed bad-pixel coordinates, decoded lazily without copying the payload.
@@ -290,6 +298,23 @@ mod tests {
     fn ctx() -> Context {
         Context { width: 4, height: 3, planes: 2, mosaic: false, allow_trim: true }
     }
+    #[test]
+    fn caller_constructed_areas_reject_zero_pitch() -> Result<(), ParseError> {
+        let mut area = Area { top: 1, left: 2, bottom: 7, right: 9, plane: 0, planes: 1, row_pitch: 2, col_pitch: 3 };
+        assert_eq!(area.rows()?.collect::<Vec<_>>(), vec![1, 3, 5]);
+        assert_eq!(area.cols()?.collect::<Vec<_>>(), vec![2, 5, 8]);
+        area.row_pitch = 0;
+        area.col_pitch = 0;
+        assert!(area.rows().is_err());
+        assert!(area.cols().is_err());
+        // Empty/reversed bounds must not allow an invalid pitch through either.
+        area.bottom = 0;
+        area.right = 0;
+        assert!(area.rows().is_err());
+        assert!(area.cols().is_err());
+        Ok(())
+    }
+
     #[test]
     fn parses_all_variants_and_clamps_areas() -> Result<(), ParseError> {
         let area = u(&[0, 1, 8, 9, 1, 5, 1, 2]);
