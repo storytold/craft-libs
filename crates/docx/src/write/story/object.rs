@@ -1,7 +1,7 @@
 use super::drawing::{DrawingInfo, shape_name, spin_attrs, write_fill, xfrm_spin_only};
 use super::field::{FieldData, field_run};
 use super::section::comment_reference_style;
-use super::{CharProps, Fill, InlineObject, NoteKind, PartRels, TextColor, W, Wrap, Writer, emu, n, rpr};
+use super::{Anchor, CharProps, Fill, Float, InlineObject, NoteKind, PartRels, ShapeKind, TextColor, W, Wrap, Writer, emu, n, rpr};
 
 impl Writer<'_> {
     /// Write an inline object (`Bookmark`, `Comment`, `Equation`, `Field`, `Shape`, etc.).
@@ -366,6 +366,11 @@ impl Writer<'_> {
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
+        // A Word 2010 shape (`wps`) goes in `mc:AlternateContent`, as Word writes it: a reader
+        // that doesn't know `wps` (Word 2007, the Office Compatibility Pack) takes the VML
+        // fallback, or skips the shape when VML has no form for it, instead of refusing the file.
+        w.open("mc:AlternateContent", &[]);
+        w.open("mc:Choice", &[("Requires", "wps")]);
         w.open("w:drawing", &[]);
         let docpr = self.shape_docpr(extra.id);
         let link = Self::drawing_link(props, rels);
@@ -387,13 +392,136 @@ impl Writer<'_> {
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
-        self.wsp(w, o, None, (0.0, 0.0), rels, depth);
+        let content = self.wsp(w, o, None, (0.0, 0.0), rels, depth);
         w.close("a:graphicData");
         w.close("a:graphic");
         w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
         w.close("w:drawing");
+        w.close("mc:Choice");
+        if freeform.is_none() && vml_tag(*kind).is_some() {
+            // The same text again: the fallback is a copy of the choice, not more of the story.
+            let content = content.and_then(|r| w.s.get(r)).map(str::to_owned);
+            w.open("mc:Fallback", &[]);
+            self.vml_shape(w, o, float, content.as_deref());
+            w.close("mc:Fallback");
+        }
+        w.close("mc:AlternateContent");
         w.close("w:r");
         self.rev_close(w, props);
+    }
+
+    /// A shape as VML (`w:pict`), for readers older than Word 2010 shapes: its frame, place,
+    /// wrapping, fill, outline and text box. Only for a kind [`vml_tag`] names.
+    fn vml_shape(&self, w: &mut W, o: &InlineObject, float: &Float, content: Option<&str>) {
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, extra, .. } = o else { return };
+        let Some(tag) = vml_tag(*kind) else { return };
+        let pt = |v: f32| format!("{:.2}pt", craft_wordmodel::geom::finite(v));
+        let mut style = Vec::new();
+        if float.wrap != Wrap::Inline {
+            style.push("position:absolute".to_string());
+            style.push(format!("margin-left:{}", pt(float.x)));
+            style.push(format!("margin-top:{}", pt(float.y)));
+        }
+        style.push(format!("width:{}", pt(sw.max(0.0))));
+        style.push(format!("height:{}", pt(sh.max(0.0))));
+        let spin = float.spin();
+        if spin.deg != 0.0 {
+            style.push(format!("rotation:{}", spin.deg));
+        }
+        match (spin.flip_h, spin.flip_v) {
+            (true, true) => style.push("flip:x y".into()),
+            (true, false) => style.push("flip:x".into()),
+            (false, true) => style.push("flip:y".into()),
+            (false, false) => {}
+        }
+        if float.wrap != Wrap::Inline {
+            // The stacking order the choice was given; behind the text is below it.
+            let z = i64::from(self.z);
+            style.push(format!("z-index:{}", if float.wrap == Wrap::BehindText { -z } else { z }));
+            if let Some(a) = float.h_align {
+                style.push(format!("mso-position-horizontal:{}", a.ooxml(true)));
+            }
+            style.push(format!("mso-position-horizontal-relative:{}", vml_rel(float.h_rel, true)));
+            if let Some(a) = float.v_align {
+                style.push(format!("mso-position-vertical:{}", a.ooxml(false)));
+            }
+            style.push(format!("mso-position-vertical-relative:{}", vml_rel(float.v_rel, false)));
+        }
+        let body = (*story).and_then(|id| self.doc.parts.get(&id)).map(|p| p.body).unwrap_or_default();
+        style.push(
+            match body.anchor {
+                craft_wordmodel::props::VAlign::Top => "v-text-anchor:top",
+                craft_wordmodel::props::VAlign::Center => "v-text-anchor:middle",
+                craft_wordmodel::props::VAlign::Bottom => "v-text-anchor:bottom",
+            }
+            .into(),
+        );
+        let style = style.join(";");
+        let mut attrs: Vec<(&str, String)> = vec![("style", style)];
+        if *kind == ShapeKind::RoundedRectangle {
+            // The same fraction of the shorter side: VML's in 1/65536ths, DrawingML's in 1/100000ths.
+            let c = match extra.corner {
+                Some(c) => c.min(craft_wordmodel::connector::MAX_CORNER) as f32 / 100_000.0,
+                None => craft_wordmodel::connector::DEFAULT_CORNER,
+            };
+            attrs.push(("arcsize", format!("{}f", (c * 65_536.0).round() as u32)));
+        }
+        if float.wrap != Wrap::Inline {
+            attrs.push(("o:allowincell", (if float.outside_cell { "f" } else { "t" }).into()));
+        }
+        let opacity = match fill.as_ref() {
+            Some(f) => {
+                attrs.push(("fillcolor", format!("#{}", f.main_color().hex())));
+                match f {
+                    Fill::Solid { transparency, .. } if *transparency > 0.0 => Some(format!("{:.4}", (1.0 - transparency / 100.0).clamp(0.0, 1.0))),
+                    _ => None,
+                }
+            }
+            None => {
+                attrs.push(("filled", "f".into()));
+                None
+            }
+        };
+        match stroke {
+            Some(c) => {
+                attrs.push(("strokecolor", format!("#{}", c.hex())));
+                attrs.push(("strokeweight", pt(stroke_width.clamp(0.0, 100.0))));
+            }
+            None => attrs.push(("stroked", "f".into())),
+        }
+        let attrs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        w.open("w:pict", &[]);
+        w.open(tag, &attrs);
+        if let Some(opacity) = &opacity {
+            w.empty("v:fill", &[("opacity", opacity)]);
+        }
+        if let Some(content) = content {
+            let inset = body.inset.map(|i| i.map(|v| pt(v.min(craft_wordmodel::MAX_TEXT_BOX_INSET) as f32 / 12_700.0)).join(","));
+            let mut tb: Vec<(&str, &str)> = Vec::new();
+            if let Some(inset) = &inset {
+                tb.push(("inset", inset));
+            }
+            if body.auto_fit {
+                tb.push(("style", "mso-fit-shape-to-text:t"));
+            }
+            w.open("v:textbox", &tb);
+            w.raw(content);
+            w.close("v:textbox");
+        }
+        let wrap = match float.wrap {
+            Wrap::Square => Some("square"),
+            Wrap::Tight => Some("tight"),
+            Wrap::Through => Some("through"),
+            Wrap::TopAndBottom => Some("topAndBottom"),
+            Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText => None,
+        };
+        if let Some(wrap) = wrap {
+            let side = float.wrap_text.ooxml();
+            let attrs: &[(&str, &str)] = if float.wrap_text.is_both() { &[("type", wrap)] } else { &[("type", wrap), ("side", side)] };
+            w.empty("w10:wrap", attrs);
+        }
+        w.close(tag);
+        w.close("w:pict");
     }
 
     fn write_group(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
@@ -484,6 +612,33 @@ impl Writer<'_> {
         w.close("w:drawing");
         w.close("w:r");
         self.rev_close(w, props);
+    }
+}
+
+/// The VML element that draws a shape kind, for the kinds VML has one for.
+fn vml_tag(kind: ShapeKind) -> Option<&'static str> {
+    match kind {
+        ShapeKind::Rectangle | ShapeKind::TextBox => Some("v:rect"),
+        ShapeKind::RoundedRectangle => Some("v:roundrect"),
+        ShapeKind::Ellipse => Some("v:oval"),
+        _ => None,
+    }
+}
+
+/// A floating object's anchor as VML names it (`mso-position-horizontal-relative`, `-vertical-`).
+fn vml_rel(a: Anchor, horiz: bool) -> &'static str {
+    match (a, horiz) {
+        (Anchor::Margin, _) => "margin",
+        (Anchor::Page, _) => "page",
+        (Anchor::InsideMargin, _) => "inner-margin-area",
+        (Anchor::OutsideMargin, _) => "outer-margin-area",
+        (Anchor::LeftMargin, true) => "left-margin-area",
+        (Anchor::RightMargin, true) => "right-margin-area",
+        (Anchor::Character, true) => "char",
+        (Anchor::TopMargin, false) => "top-margin-area",
+        (Anchor::BottomMargin, false) => "bottom-margin-area",
+        (Anchor::Line, false) => "line",
+        _ => "text",
     }
 }
 
