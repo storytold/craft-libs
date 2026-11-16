@@ -166,7 +166,10 @@ pub struct StandardPrompt {
     /// `PromptAnswer::tag` or `PromptAnswer::take_tag`.
     #[prop(boxed)]
     tag: Option<Box<dyn Any + Send>>,
-    /// What Escape and the close action answer.
+    /// Escape and the close action answer `choice` in place of Cancel, for a prompt with no Cancel button ("Switched
+    /// to CPU"). A choice the prompt has no enabled button for leaves the default: Cancel, else the Alternate, else
+    /// the default button.
+    #[prop]
     escape: PromptChoice,
     /// The counted noun of the delete question, as a count word with `{n}` (one and other forms); the default is
     /// "{n} item" and "{n} items".
@@ -315,15 +318,6 @@ impl StandardPrompt {
     #[must_use]
     pub fn dont_show_again(mut self) -> Self {
         self.skip_box = true;
-        self
-    }
-
-    /// Escape and the close action answer `choice` in place of Cancel, for a prompt with no Cancel button ("Switched
-    /// to CPU"). A choice the prompt has no enabled button for leaves the default: Cancel, else the Alternate, else
-    /// the default button.
-    #[must_use]
-    pub fn escape(mut self, choice: PromptChoice) -> Self {
-        self.escape = choice;
         self
     }
 
