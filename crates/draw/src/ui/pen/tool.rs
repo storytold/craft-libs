@@ -180,6 +180,8 @@ pub struct PenTool {
     pub(super) auto_add_delete: bool,
     options: PathOptionsSettings,
     pub(super) ends: Vec<(u64, KnotRef, Point)>,
+    /// The open subpath a Curvature press anywhere carries on, as the draft it would make ([`carry_on`](Self::carry_on)).
+    pub(super) carry: Option<(u64, KnotRef, EditSubpath)>,
     /// The draft being drawn; empty between drafts.
     pub(super) shown: EditSubpath,
     run: Option<Run>,
@@ -210,6 +212,7 @@ impl PenTool {
             auto_add_delete: false,
             options: PathOptionsSettings::default(),
             ends: Vec::new(),
+            carry: None,
             shown: EditSubpath::default(),
             run: None,
             resume: false,
@@ -306,6 +309,15 @@ impl PenTool {
     /// The end points of the open paths a press continues: the path's key, the end's knot and its document point.
     pub fn ends(&mut self, ends: &[(u64, KnotRef, Point)]) -> &mut Self {
         self.ends = ends.to_vec();
+        self
+    }
+
+    /// The open subpath the next press carries on, with no draft: its path's key, its end's knot and the subpath as the
+    /// draft it becomes (its anchors in drawing order, the end last). In Curvature mode a press that is not on an end
+    /// point of [`ends`](Self::ends) reports [`PenEvent::Resumed`] for it and adds its anchor to that draft, whose
+    /// anchors are [`kept`](Self::kept). The host gives the end it has selected (Photoshop carries on from it).
+    pub fn carry_on(&mut self, carry: Option<(u64, KnotRef, &EditSubpath)>) -> &mut Self {
+        self.carry = carry.map(|(path, knot, draft)| (path, knot, draft.clone()));
         self
     }
 

@@ -369,11 +369,28 @@ fn carried_anchors_are_neither_toggled_nor_grabbed() {
         tool.draft(Some(PenDraft::Own(&carried)));
     }
     pen.fixture.fixture().settle();
-    pen.click_doc(60.0, 60.0);
-    pen.click_doc(60.0, 60.0);
+    // The second anchor: a press on the first of a draft of three or more closes it instead.
+    pen.click_doc(160.0, 60.0);
+    pen.click_doc(160.0, 60.0);
     let draft = pen.draft();
     assert_eq!(draft.knots[..3], carried.knots[..], "the carried anchors keep their handles and places");
     assert!(draft.knots.len() > 3, "a press on a carried anchor adds an anchor");
+}
+
+// With a subpath to carry on, a Curvature press away from every end point reports the resume and adds its anchor to
+// the carried subpath, whose anchors keep their handles.
+#[trial]
+fn a_curvature_press_carries_on_the_given_subpath() {
+    let mut pen = pen();
+    pen.fixture.tool_mut().mode(PenMode::Curvature);
+    let carried = EditSubpath::new(vec![Knot::corner(doc(60.0, 60.0)), Knot::corner(doc(160.0, 60.0))], false);
+    pen.fixture.tool_mut().carry_on(Some((7, craft_draw::ui::pen::KnotRef::new(0, 1), &carried)));
+    pen.click_doc(300.0, 200.0);
+    assert_eq!(pen.kinds().first(), Some(&"resumed"), "{:?}", pen.kinds());
+    let draft = pen.draft();
+    assert_eq!(draft.knots.len(), 3, "the carried anchors and the new one");
+    assert_eq!((draft.knots[0], draft.knots[1].anchor), (carried.knots[0], carried.knots[1].anchor), "the carried anchors keep their places");
+    assert_eq!(draft.knots[2].anchor, doc(300.0, 200.0));
 }
 
 /// Three clicks of the Curvature Pen far apart give three anchors, each click an `Update`: on its own, and with the
