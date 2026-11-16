@@ -3,11 +3,7 @@
 //! cursor image instead where the window takes one. They come from the drag session's data and the cursor record; the
 //! layer takes no input.
 
-mod art;
-mod pointers;
-
-pub(crate) use art::Art;
-pub(crate) use pointers::paint_badge;
+use crate::primitives::pointer_art::{self as pointers, Art};
 
 use crate::primitives::{Draw, DrawEnv, IconSet, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};

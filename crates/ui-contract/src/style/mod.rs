@@ -33,7 +33,7 @@ pub use replacements::{DuplicateStyle, StyleReplacements};
 pub use span::Span;
 pub use state::StateSet;
 pub use surface::{BandFill, SurfaceEdge, SurfaceStyle};
-pub use surround::{SurroundLook, paint_surround};
+pub use surround::SurroundLook;
 pub use tokens::UiTokens;
 
 #[doc(hidden)]

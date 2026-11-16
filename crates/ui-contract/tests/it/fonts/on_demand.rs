@@ -319,6 +319,7 @@ fn the_han_preference_follows_the_ui_language_then_the_os_locale() {
 
 #[trial]
 fn the_deflated_defaults_are_eguis_default_faces_and_draw_its_icons() {
+    use epaint_default_fonts::special_emojis::{GIT, GITHUB, OS_ANDROID, OS_APPLE, OS_WINDOWS};
     use epaint_default_fonts::{EGUI_ICONS, EMOJI_ICON, HACK_REGULAR, NOTO_EMOJI_REGULAR, UBUNTU_LIGHT};
     let defaults = deflated_default_definitions();
     for (name, bytes, scale) in [("Hack", HACK_REGULAR, 1.0), ("Ubuntu-Light", UBUNTU_LIGHT, 1.0), ("egui-icons", EGUI_ICONS, 0.90)] {
@@ -333,14 +334,16 @@ fn the_deflated_defaults_are_eguis_default_faces_and_draw_its_icons() {
         assert_eq!(data.tweak.scale, scale);
     }
 
-    // egui's own icons draw in both families, which the strict missing-glyph policy of headless runs depends on.
+    // egui's own icons draw in both families, which the strict missing-glyph policy of headless runs depends on. The
+    // penguin (`OS_LINUX`) is a plain emoji that only an emoji face draws, so it is left out: a runner's system fonts
+    // decide whether it draws.
     let mut frames = Frames::new();
     frames.ctx.set_fonts(defaults);
     for _ in 0..2 {
         frames.frame(vec![], |_| {});
     }
     for family in [FontId::proportional(14.0), FontId::monospace(14.0)] {
-        for icon in [epaint_default_fonts::special_emojis::GITHUB, epaint_default_fonts::special_emojis::OS_LINUX] {
+        for icon in [GIT, GITHUB, OS_ANDROID, OS_APPLE, OS_WINDOWS] {
             assert!(frames.ctx.fonts_mut(|f| f.has_glyph(&family, icon)), "{icon} in {:?}", family.family);
         }
     }

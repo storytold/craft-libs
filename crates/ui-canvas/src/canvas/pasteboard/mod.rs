@@ -8,11 +8,10 @@ mod stories;
 
 use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};
-use crate::primitives::{CheckerArea, PaintShape, Rule, StrokeWidth, TextRun};
+use crate::primitives::{CheckerArea, PaintShape, Rule, StrokeWidth, TextRun, paint_surround};
 use crate::runtime::env::Label;
 use crate::style::{
     ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, SurroundLook, TypeRole,
-    paint_surround,
 };
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CanvasView, HitLevel, HitPriority, HitShape, Metrics, PartKey, Sense};

@@ -67,7 +67,6 @@ pub use container::{
 pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
 #[doc(hidden)]
 pub use cx::THUMB;
-pub(crate) use cx::gesture_key;
 pub use cx::{
     Accessible, Activation, BodyCx, Cx, CxCore, Edit, Focus, ItemCx, ItemOpener, MeasureCx, PartBuilder, PartsCx, Pointer, Styled, WordSetCx,
 };

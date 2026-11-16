@@ -3,9 +3,12 @@
 //! art is drawn in points around the hotspot, like an OS cursor bitmap, so its coordinates are data tables, not layout
 //! sizes.
 
-use super::art::{Art, Mark};
-use crate::primitives::SvgIcon;
+mod art;
+
+use super::SvgIcon;
 use crate::style::UiTokens;
+pub(crate) use art::Art;
+use art::Mark;
 use craft_behavior::{CountMark, CursorBadge, PaintedCursor};
 use craft_i18n::Direction;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
@@ -114,7 +117,7 @@ fn v(point: [f32; 2]) -> Vec2 {
 
 /// What the pointers draw with: the art they add marks to, the mark colour, its halo, the hairline width, and whether
 /// the reading direction is right to left (marks that point along it mirror).
-pub(super) struct Pen {
+pub(crate) struct Pen {
     pub art: RefCell<Art>,
     pub fill: Color32,
     pub halo: Color32,
@@ -185,18 +188,18 @@ impl Pen {
 }
 
 /// A circle of `radius` points around the pointer.
-pub(super) fn circle(pen: &Pen, radius: f32, width: f32, color: Color32) {
+pub(crate) fn circle(pen: &Pen, radius: f32, width: f32, color: Color32) {
     pen.lines(width, color, &[Line::Circle(Vec2::ZERO, radius)]);
 }
 
 /// A crosshair with arms of `arm` points.
-pub(super) fn crosshair(pen: &Pen, arm: f32, width: f32, color: Color32) {
+pub(crate) fn crosshair(pen: &Pen, arm: f32, width: f32, color: Color32) {
     pen.lines(width, color, &[Line::Segment(v([-arm, 0.0]), v([arm, 0.0])), Line::Segment(v([0.0, -arm]), v([0.0, arm]))]);
 }
 
 /// A brush tip's marks on the pointer: the centre mark when `centre`, a crosshair of `PaintedCursor::CENTRE_ARM` arms
 /// in the tip's own line of `width` in `color`, and `badge` centred over it.
-pub(super) fn tip_marks(pen: &Pen, centre: bool, badge: Option<CursorBadge>, width: f32, color: Color32) {
+pub(crate) fn tip_marks(pen: &Pen, centre: bool, badge: Option<CursorBadge>, width: f32, color: Color32) {
     if centre {
         crosshair(pen, PaintedCursor::CENTRE_ARM, width, color);
     }
@@ -206,7 +209,7 @@ pub(super) fn tip_marks(pen: &Pen, centre: bool, badge: Option<CursorBadge>, wid
 }
 
 /// Rings of a brush tip, as offsets from the pointer.
-pub(super) fn outline(pen: &Pen, rings: &[Vec<Pos2>]) {
+pub(crate) fn outline(pen: &Pen, rings: &[Vec<Pos2>]) {
     for ring in rings.iter().filter(|ring| ring.len() >= 2) {
         let points: Vec<Vec2> = ring.iter().map(|p| p.to_vec2()).collect();
         pen.push(Mark::Path(points.clone(), true, Stroke::new(pen.thin * 3.0, pen.halo)));
@@ -216,7 +219,7 @@ pub(super) fn outline(pen: &Pen, rings: &[Vec<Pos2>]) {
 
 /// The hand: open, or the fist while `closed`. Its silhouette is in the mark colour over the same grown by a hairline in
 /// the halo colour, with the creases between the fingers.
-pub(super) fn hand(pen: &Pen, closed: bool) {
+pub(crate) fn hand(pen: &Pen, closed: bool) {
     let shift = |p: [f32; 2]| v(p) + v(HAND_SHIFT);
     for (grow, color) in [(pen.thin, pen.halo), (0.0, pen.fill)] {
         let (center, half, round) = if closed { (FIST_CENTER, FIST_HALF, FIST_ROUND) } else { (PALM_CENTER, PALM_HALF, PALM_ROUND) };
@@ -252,7 +255,7 @@ pub(super) fn hand(pen: &Pen, closed: bool) {
 }
 
 /// The magnifier with a plus, or a minus when `out`.
-pub(super) fn zoom(pen: &Pen, out: bool) {
+pub(crate) fn zoom(pen: &Pen, out: bool) {
     let (a, b, r) = HANDLE;
     for (grow, color) in [(pen.thin, pen.halo), (0.0, pen.fill)] {
         pen.disc(Vec2::ZERO, LENS + grow, color);
@@ -268,7 +271,7 @@ pub(super) fn zoom(pen: &Pen, out: bool) {
 /// A tool's `icon` of `side` points with `hotspot` (a point of the icon's 24-unit box) on the pointer, in the mark
 /// colour over a halo of the icon drawn a hairline off in every direction, and its badge at the icon's lower right. An
 /// icon the catalog lacks leaves only the badge.
-pub(super) fn tool(pen: &Pen, icon: Option<SvgIcon>, hotspot: Vec2, badge: Option<CursorBadge>, side: f32) {
+pub(crate) fn tool(pen: &Pen, icon: Option<SvgIcon>, hotspot: Vec2, badge: Option<CursorBadge>, side: f32) {
     let rect = Rect::from_min_size((-hotspot * (side / ICON_UNITS)).to_pos2(), Vec2::splat(side));
     if let Some(icon) = icon {
         icon_on_halo(pen, rect, icon);
@@ -297,7 +300,7 @@ fn i_beam() -> [Line; 3] {
 }
 
 /// The type tool's pointer: the I-beam inside a dotted ellipse, or crossed by a dotted wave when `path`.
-pub(super) fn type_on(pen: &Pen, path: bool) {
+pub(crate) fn type_on(pen: &Pen, path: bool) {
     let dots: Vec<Vec2> = if path {
         (0..WAVE_DOTS)
             .map(|i| {
@@ -327,7 +330,7 @@ pub(super) fn type_on(pen: &Pen, path: bool) {
 }
 
 /// The locator: a square frame centred on the pointer between halo frames a hairline outside and inside it.
-pub(super) fn locator(pen: &Pen) {
+pub(crate) fn locator(pen: &Pen) {
     let rect = Rect::from_center_size(Pos2::ZERO, Vec2::splat(LOCATOR_SIDE));
     let halo = Stroke::new(pen.thin, pen.halo);
     pen.push(Mark::Frame(rect.expand(pen.thin), halo));
@@ -337,7 +340,7 @@ pub(super) fn locator(pen: &Pen) {
 
 /// The arrow with its tip on the pointer: filled with the halo and edged in the mark colour, or the other way round when
 /// `hollow`.
-pub(super) fn arrow(pen: &Pen, hollow: bool) {
+pub(crate) fn arrow(pen: &Pen, hollow: bool) {
     let (fill, edge) = if hollow { (pen.fill, pen.halo) } else { (pen.halo, pen.fill) };
     for triangle in ARROW_TRIANGLES {
         pen.push(Mark::Polygon(triangle.iter().map(|&i| v(ARROW[i])).collect(), fill, Stroke::NONE));
@@ -346,7 +349,7 @@ pub(super) fn arrow(pen: &Pen, hollow: bool) {
 }
 
 /// The I-beam across a path with a filled triangle toward each grabbable end: right for `start`, left for `end`.
-pub(super) fn path_text(pen: &Pen, start: bool, end: bool) {
+pub(crate) fn path_text(pen: &Pen, start: bool, end: bool) {
     pen.marks(&i_beam());
     for sign in [start.then_some(1.0f32), end.then_some(-1.0)].into_iter().flatten() {
         pen.polygon(GRAB_TRIANGLE.iter().map(|&[x, y]| Vec2::new(x * sign, y)).collect());
@@ -356,7 +359,7 @@ pub(super) fn path_text(pen: &Pen, start: bool, end: bool) {
 /// A crosshair with arms of `side` points in a line of `width` in `color`, as the plain crosshair pointer, with the tool's
 /// `icon` of `side` points below and right of it. An icon the catalog lacks leaves only the crosshair.
 // A missing icon still shows the crosshair.
-pub(super) fn crosshair_tool(pen: &Pen, icon: Option<SvgIcon>, side: f32, width: f32, color: Color32) {
+pub(crate) fn crosshair_tool(pen: &Pen, icon: Option<SvgIcon>, side: f32, width: f32, color: Color32) {
     crosshair(pen, side, width, color);
     if let Some(icon) = icon {
         icon_on_halo(pen, Rect::from_min_size(v(CROSSHAIR_ICON).to_pos2(), Vec2::splat(side)), icon);
@@ -386,7 +389,7 @@ pub(crate) fn paint_badge(painter: &egui::Painter, tokens: &UiTokens, direction:
 }
 
 /// A badge centred `center` from the pointer.
-pub(super) fn badge(pen: &Pen, center: Vec2, badge: CursorBadge) {
+pub(crate) fn badge(pen: &Pen, center: Vec2, badge: CursorBadge) {
     let h = BADGE_HALF;
     let at = |x: f32, y: f32| center + Vec2::new(x, y);
     let axes = [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y];
@@ -476,12 +479,12 @@ pub(super) fn badge(pen: &Pen, center: Vec2, badge: CursorBadge) {
 }
 
 /// A badge beside a system pointer arrow.
-pub(super) fn badge_beside(pen: &Pen, kind: CursorBadge) {
+pub(crate) fn badge_beside(pen: &Pen, kind: CursorBadge) {
     badge(pen, v(BADGE_BESIDE), kind);
 }
 
 /// The rotate pointer: an arc with an arrowhead at each end, bent round the corner in direction `toward`.
-pub(super) fn turn(pen: &Pen, toward: Vec2) {
+pub(crate) fn turn(pen: &Pen, toward: Vec2) {
     let len = toward.length();
     if !len.is_finite() || len < f32::EPSILON {
         return;
@@ -513,7 +516,7 @@ fn unit(dir: Vec2, fallback: Vec2) -> Vec2 {
 }
 
 /// The free-distort pointer: a dart with its tip on the pointer, pointing along `dir` (up and left for zero).
-pub(super) fn distort(pen: &Pen, dir: Vec2) {
+pub(crate) fn distort(pen: &Pen, dir: Vec2) {
     let u = unit(dir, v([-1.0, -1.0]).normalized());
     let perp = Vec2::new(-u.y, u.x);
     let base = -u * DART_LENGTH;
@@ -526,7 +529,7 @@ pub(super) fn distort(pen: &Pen, dir: Vec2) {
 }
 
 /// The skew pointer: two opposed arrows beside each other along `dir` (along x for zero).
-pub(super) fn skew(pen: &Pen, dir: Vec2) {
+pub(crate) fn skew(pen: &Pen, dir: Vec2) {
     let u = unit(dir, Vec2::X);
     let perp = Vec2::new(-u.y, u.x);
     for (offset, sign) in [(SKEW_GAP, 1.0f32), (-SKEW_GAP, -1.0)] {

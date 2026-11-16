@@ -720,7 +720,7 @@ impl<'m> ToolHost<'m> {
     /// controls' own gesture records in the viewport the canvas last ran in; false before the canvas's first pass.
     pub fn controls_pressing(ctx: &Context, canvas: Id) -> bool {
         let viewport = with_session(ctx, state_id(canvas), |state: &mut HostState| state.viewport);
-        crate::runtime::edit::member_gesture_running(ctx, viewport, canvas)
+        crate::primitives::member_gesture_running(ctx, viewport, canvas)
     }
 
     /// The canvas space the host of `canvas` used in its last pass, `None` before its first.

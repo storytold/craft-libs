@@ -5,12 +5,13 @@
 //! hover and presses itself against the shapes registered last pass, so the winner never depends on show order.
 //! Every root runs the lifecycle, arena root or not: a leaf is an arena of its own id with no members.
 
+use crate::runtime::edit::{RemovalWatch, gesture_key};
 use crate::runtime::egui::areas::{self, Layer, LayerMap};
 use crate::runtime::egui::pass;
 use crate::runtime::egui::response::{self, MemberView, PressView};
 use crate::runtime::env::ArenaId;
 use crate::runtime::frame::PerViewport;
-use crate::runtime::memory::sub;
+use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::pointer;
 use crate::runtime::pointer::PassPointer;
 use craft_behavior::{
@@ -369,6 +370,15 @@ pub(crate) fn members(ctx: &Context, viewport: ViewportId, arena: ArenaId) -> Sm
         }
         ids
     })
+}
+
+/// Whether a member of the arena root `arena` (a canvas control in a canvas, say) has a running gesture, in
+/// `viewport`: begun and not yet committed, cancelled or removed. It reads each member's own gesture record, so a
+/// reader before or after the arena's pass reads the same fact.
+pub fn member_gesture_running(ctx: &Context, viewport: ViewportId, arena: Id) -> bool {
+    members(ctx, viewport, ArenaId::new(arena))
+        .into_iter()
+        .any(|member| MemoryStage::peek_with::<RemovalWatch, _>(ctx, gesture_key(member), RemovalWatch::armed))
 }
 
 /// Notes a root shown in the body of `arena` that is not one of its members and takes a press, over `rect`: the

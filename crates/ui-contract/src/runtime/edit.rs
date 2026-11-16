@@ -4,7 +4,7 @@ use super::egui::repaint;
 use crate::runtime::memory::MemoryStage;
 use crate::runtime::pass_state;
 use craft_behavior::{CancelReason, Gesture, GestureId, Value};
-use egui::{Context, Id, ViewportId};
+use egui::{Context, Id};
 
 /// The latest `cancel_all`: a serial that grows with each call, and why.
 #[derive(Clone, Copy, Default)]
@@ -29,25 +29,21 @@ pub(crate) fn latest(ctx: &Context) -> (u64, Option<CancelReason>) {
     pass_state::with::<CancelAll, _>(ctx, |all| (all.serial, all.reason))
 }
 
+/// The key of the gesture slot under a component's base id.
+pub(crate) fn gesture_key(id: Id) -> Id {
+    crate::runtime::memory::sub(id, "edit")
+}
+
 /// The note the component `id` set on its running gesture with [`Cx::propose_with`](crate::contract::Cx::propose_with),
 /// when it is an `N`; `None` while no gesture of the component runs. `V` is the component's value type, under which
 /// its gesture is kept. A reader outside the component's pass, drawn before or after it, reads the same note.
 pub fn gesture_note<V: Value, N: Clone + 'static>(ctx: &Context, id: Id) -> Option<N> {
-    MemoryStage::peek_with::<Gesture<V>, _>(ctx, crate::contract::gesture_key(id), |gesture| {
+    MemoryStage::peek_with::<Gesture<V>, _>(ctx, gesture_key(id), |gesture| {
         if !gesture.is_running() {
             return None;
         }
         gesture.note.as_ref()?.get::<N>().cloned()
     })
-}
-
-/// Whether a member of the arena root `arena` (a canvas control in a canvas, say) has a running gesture, in
-/// `viewport`: begun and not yet committed, cancelled or removed. It reads each member's own gesture record, so a
-/// reader before or after the arena's pass reads the same fact.
-pub fn member_gesture_running(ctx: &Context, viewport: ViewportId, arena: Id) -> bool {
-    crate::primitives::sensing::members(ctx, viewport, crate::runtime::env::ArenaId::new(arena))
-        .into_iter()
-        .any(|member| MemoryStage::peek_with::<RemovalWatch, _>(ctx, crate::contract::gesture_key(member), RemovalWatch::armed))
 }
 
 /// The newest gesture id handed out in this context, and how many times a component has reported its gesture running

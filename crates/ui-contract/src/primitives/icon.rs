@@ -231,7 +231,7 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
                 icon.paint(painter, square, color);
             }
         }
-        IconSource::Mark(badge) => crate::contract::ghost::paint_badge(painter, tokens, direction, square, *badge, color),
+        IconSource::Mark(badge) => super::pointer_art::paint_badge(painter, tokens, direction, square, *badge, color),
     }
 }
 

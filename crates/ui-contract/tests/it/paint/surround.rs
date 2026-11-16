@@ -2,8 +2,8 @@
 //! turned off, draws the fill alone and makes no texture (#4542).
 
 use craft_theme::{Contrast, Mode, Rgba, Size};
-use craft_ui::primitives::CheckerArea;
-use craft_ui::style::{SurroundLook, UiTokens, paint_surround};
+use craft_ui::primitives::{CheckerArea, paint_surround};
+use craft_ui::style::{SurroundLook, UiTokens};
 use craft_ui::testing::{Frames, trial};
 use egui::{CornerRadius, Rect, Shape, TextureId, pos2, vec2};
 use std::sync::Arc;

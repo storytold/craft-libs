@@ -24,9 +24,9 @@ mod stories;
 use super::app_shell::{RegionBody, RegionFn, ShellRegion};
 use super::words::ShellWords;
 use crate::contract::{BodyCx, NoValue, Outcome, PaneEdge, Props as _, ShellPane, ShowContainer as _};
-use crate::primitives::CheckerArea;
+use crate::primitives::{CheckerArea, paint_surround};
 use crate::runtime::env::{BodyMode, Env, Label, ShellEntry};
-use crate::style::{SurroundLook, paint_surround};
+use crate::style::SurroundLook;
 use egui::{CornerRadius, Rect, Response, Ui};
 
 /// The slot keys of the preset.

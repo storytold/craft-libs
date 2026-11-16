@@ -6,7 +6,7 @@ use crate::primitives::Adopted;
 use craft_behavior::{
     CancelReason, EditEvent, Gesture, GestureNote, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value, WheelPhase,
 };
-use egui::{Id, Pos2};
+use egui::Pos2;
 use std::sync::Arc;
 
 impl CxCore<'_> {
@@ -77,10 +77,7 @@ pub trait Edit {
     fn cancel(&mut self, reason: CancelReason);
 }
 
-/// The key of the gesture slot under a component's base id.
-pub(crate) fn gesture_key(id: Id) -> Id {
-    crate::runtime::memory::sub(id, "edit")
-}
+pub(crate) use crate::runtime::edit::gesture_key;
 
 impl<C: Component> Cx<'_, C> {
     fn gesture_slot(&mut self) -> &mut Gesture<ValueOf<C>> {
