@@ -271,16 +271,7 @@ impl Reader<'_> {
         if !sheet.styles.iter().any(|s| s.quick) {
             sheet.add_default_gallery();
         }
-        // WordCraft used to save Table Grid with no base, so Word gave those tables no cell margins
-        // though they were written with them in view: they keep what WordCraft showed, and Word
-        // shows the same after a save. Word itself always writes this base.
-        if let Some(normal) = sheet.styles.iter().find(|s| s.is_normal_table()).map(|s| s.id.clone()) {
-            for st in
-                sheet.styles.iter_mut().filter(|s| s.kind == StyleKind::Table && s.based_on.is_none() && s.name.eq_ignore_ascii_case("Table Grid"))
-            {
-                st.based_on = Some(normal.clone());
-            }
-        }
+        base_table_grid_on_normal_table(&mut sheet);
         self.doc.styles = Arc::new(sheet);
         Ok(())
     }
@@ -470,4 +461,14 @@ impl Reader<'_> {
 /// leaves the label at the paragraph's left edge, as Word shows it), no text.
 fn default_level(_i: usize) -> Level {
     Level { indent: 0.0, hanging: 0.0, text: String::new(), ..Level::default() }
+}
+
+/// WordCraft used to save Table Grid with no base, so Word gave those tables no cell margins though
+/// they were written with them in view: they keep what WordCraft showed, and Word shows the same
+/// after a save. Word itself always writes this base.
+fn base_table_grid_on_normal_table(sheet: &mut StyleSheet) {
+    let Some(normal) = sheet.styles.iter().find(|s| s.is_normal_table()).map(|s| s.id.clone()) else { return };
+    for st in sheet.styles.iter_mut().filter(|s| s.kind == StyleKind::Table && s.based_on.is_none() && s.name.eq_ignore_ascii_case("Table Grid")) {
+        st.based_on = Some(normal.clone());
+    }
 }

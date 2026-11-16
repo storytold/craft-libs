@@ -344,6 +344,8 @@ impl Reader<'_> {
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
         }
+        // The margins the file gives the table, before the zeros for a file with no default table style.
+        let file_margins = table.props.cell_margins;
         self.no_default_margins(&mut table.props);
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g
@@ -397,7 +399,7 @@ impl Reader<'_> {
             table.grid = vec![72.0; cols];
         }
         if sc.cell_depth == 0 {
-            self.settle_start_without_normal_table(&mut table);
+            self.settle_start_without_normal_table(&mut table, file_margins);
         }
         // The cells' paragraphs, with the run formatting the table style gives each cell (a
         // table inside has marked its own).
@@ -423,9 +425,11 @@ impl Reader<'_> {
     /// styles and a save, which may add Normal Table, looks the same in Word.
     ///
     /// Not without a margin from the table or its style: Word has no margin then, and an indent
-    /// for ours would move the table once saved. Not with an indent from a style: that's the
+    /// for ours would move the table once saved. The zeros [`Self::no_default_margins`] gives a
+    /// table in a file with no default table style are that absence too, so `file_margins` is the
+    /// table's own as the file wrote them. Not with an indent from a style: that's the
     /// indent Word starts from.
-    fn settle_start_without_normal_table(&self, table: &mut Table) {
+    fn settle_start_without_normal_table(&self, table: &mut Table, file_margins: Option<[f32; 4]>) {
         if self.doc.settings.compat_mode >= 15 || table.props.indent.is_some() || table.props.float.is_some() {
             return;
         }
@@ -440,7 +444,7 @@ impl Reader<'_> {
             Some(id) => sets_indent(&id.to_string()),
             None => read && self.pc.default_table_styles.iter().any(sets_indent),
         };
-        let margins = table.props.cell_margins.or_else(|| styles.table_style(named?)?.parts.cell_margins);
+        let margins = file_margins.or_else(|| styles.table_style(named?)?.parts.cell_margins);
         if let (false, Some(margins)) = (indented, margins) {
             // A margin of zero has nothing to cancel, and Word would read an indent of zero as set.
             table.props.indent = table.rows.first().and_then(|r| r.cells.first()).map(|c| c.props.resolved_margins(margins)[1]).filter(|m| *m > 0.0);
