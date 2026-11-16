@@ -267,3 +267,33 @@ fn rows_in_a_shared_unit_follow_the_units_row() {
     enter(&mut fixture, "Width", "0");
     assert_eq!(values.borrow().number("width"), Some(0.0), "a typed zero reaches the value");
 }
+
+/// An optional number row has no value until its Custom box is on; a typed value is held to the bounds, and the value
+/// typed before the box went off comes back when it goes on again.
+#[trial]
+fn an_optional_number_is_held_to_its_bounds_and_remembered_while_off() {
+    let params = vec![Param::new("quality", "Quality", ParamKind::optional_number(0.0, 12.0, None, 5.0, 0))];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    assert_eq!(values.borrow().number("quality"), None, "the default is no value");
+    let toggle = |fixture: &mut Fixture| {
+        let custom = fixture.by_label("Custom").expect("the Custom check box");
+        fixture.click(&custom).settle();
+    };
+    let enter = |fixture: &mut Fixture, text: &str| {
+        let field = fixture.by_label("Quality").expect("the number field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(text).key(Key::Tab, Modifiers::NONE).settle();
+    };
+    toggle(&mut fixture);
+    assert_eq!(values.borrow().number("quality"), Some(5.0), "the box on starts from the initial value");
+    enter(&mut fixture, "-5");
+    assert_eq!(values.borrow().number("quality"), Some(0.0), "a value below the bounds is held to the least");
+    enter(&mut fixture, "99");
+    assert_eq!(values.borrow().number("quality"), Some(12.0), "a value above the bounds is held to the greatest");
+    enter(&mut fixture, "7");
+    toggle(&mut fixture);
+    assert_eq!(values.borrow().number("quality"), None, "the box off leaves no value");
+    toggle(&mut fixture);
+    assert_eq!(values.borrow().number("quality"), Some(7.0), "the box on again brings back the value typed before");
+}
