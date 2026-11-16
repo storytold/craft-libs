@@ -366,11 +366,16 @@ impl Writer<'_> {
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
-        // A Word 2010 shape (`wps`) goes in `mc:AlternateContent`, as Word writes it: a reader
-        // that doesn't know `wps` (Word 2007, the Office Compatibility Pack) takes the VML
-        // fallback, or skips the shape when VML has no form for it, instead of refusing the file.
-        w.open("mc:AlternateContent", &[]);
-        w.open("mc:Choice", &[("Requires", "wps")]);
+        // A Word 2010 shape (`wps`) with a VML form goes in `mc:AlternateContent`, as Word writes
+        // it: a reader that doesn't know `wps` (Word 2007, the Office Compatibility Pack) takes the
+        // VML fallback instead of refusing the file. A shape without one stays bare: guarded with
+        // no fallback, that reader would open the file without the shape and drop it on its next
+        // save, which is worse than refusing the file.
+        let fallback = freeform.is_none() && vml_tag(*kind).is_some();
+        if fallback {
+            w.open("mc:AlternateContent", &[]);
+            w.open("mc:Choice", &[("Requires", "wps")]);
+        }
         w.open("w:drawing", &[]);
         let docpr = self.shape_docpr(extra.id);
         let link = Self::drawing_link(props, rels);
@@ -389,6 +394,8 @@ impl Writer<'_> {
         }
         let float = &float;
         self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text(), link: link.as_deref() });
+        // This shape's stacking order: floating objects in its text box move `self.z` on.
+        let z = self.z;
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
@@ -397,22 +404,22 @@ impl Writer<'_> {
         w.close("a:graphic");
         w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
         w.close("w:drawing");
-        w.close("mc:Choice");
-        if freeform.is_none() && vml_tag(*kind).is_some() {
+        if fallback {
+            w.close("mc:Choice");
             // The same text again: the fallback is a copy of the choice, not more of the story.
             let content = content.and_then(|r| w.s.get(r)).map(str::to_owned);
             w.open("mc:Fallback", &[]);
-            self.vml_shape(w, o, float, content.as_deref());
+            self.vml_shape(w, o, float, z, content.as_deref());
             w.close("mc:Fallback");
+            w.close("mc:AlternateContent");
         }
-        w.close("mc:AlternateContent");
         w.close("w:r");
         self.rev_close(w, props);
     }
 
     /// A shape as VML (`w:pict`), for readers older than Word 2010 shapes: its frame, place,
     /// wrapping, fill, outline and text box. Only for a kind [`vml_tag`] names.
-    fn vml_shape(&self, w: &mut W, o: &InlineObject, float: &Float, content: Option<&str>) {
+    fn vml_shape(&self, w: &mut W, o: &InlineObject, float: &Float, z: u32, content: Option<&str>) {
         let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, extra, .. } = o else { return };
         let Some(tag) = vml_tag(*kind) else { return };
         let pt = |v: f32| format!("{:.2}pt", craft_wordmodel::geom::finite(v));
@@ -436,8 +443,14 @@ impl Writer<'_> {
         }
         if float.wrap != Wrap::Inline {
             // The stacking order the choice was given; behind the text is below it.
-            let z = i64::from(self.z);
+            let z = i64::from(z);
             style.push(format!("z-index:{}", if float.wrap == Wrap::BehindText { -z } else { z }));
+            // The same clearances from the text as the choice's `distL`/`distR`/`distT`/`distB`.
+            let d = pt(float.dist.clamp(0.0, 1584.0));
+            style.push(format!("mso-wrap-distance-left:{d}"));
+            style.push(format!("mso-wrap-distance-right:{d}"));
+            style.push(format!("mso-wrap-distance-top:{}", pt(float.dist_top.clamp(0.0, 1584.0))));
+            style.push(format!("mso-wrap-distance-bottom:{}", pt(float.dist_bottom.clamp(0.0, 1584.0))));
             if let Some(a) = float.h_align {
                 style.push(format!("mso-position-horizontal:{}", a.ooxml(true)));
             }
@@ -456,6 +469,9 @@ impl Writer<'_> {
             }
             .into(),
         );
+        if float.hidden {
+            style.push("visibility:hidden".into());
+        }
         let style = style.join(";");
         let mut attrs: Vec<(&str, String)> = vec![("style", style)];
         if *kind == ShapeKind::RoundedRectangle {
@@ -501,8 +517,18 @@ impl Writer<'_> {
             if let Some(inset) = &inset {
                 tb.push(("inset", inset));
             }
+            // Text direction as the VML reader takes it (stacked letters have no VML form).
+            let mut tb_style = match body.vert {
+                craft_wordmodel::props::TextVert::Vert => vec!["layout-flow:vertical"],
+                craft_wordmodel::props::TextVert::Vert270 => vec!["layout-flow:vertical", "mso-layout-flow-alt:bottom-to-top"],
+                craft_wordmodel::props::TextVert::Horz | craft_wordmodel::props::TextVert::Stacked => Vec::new(),
+            };
             if body.auto_fit {
-                tb.push(("style", "mso-fit-shape-to-text:t"));
+                tb_style.push("mso-fit-shape-to-text:t");
+            }
+            let tb_style = tb_style.join(";");
+            if !tb_style.is_empty() {
+                tb.push(("style", &tb_style));
             }
             w.open("v:textbox", &tb);
             w.raw(content);
