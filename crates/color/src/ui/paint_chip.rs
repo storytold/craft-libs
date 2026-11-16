@@ -275,8 +275,13 @@ pub struct PaintChip<'a> {
     #[prop]
     sampled: Option<Srgba>,
     screen_pick: Option<ScreenPickGesture>,
+    /// The recent colours the popover shows beside the picker.
+    #[prop]
     recent: &'a [Srgba],
     swatches: Option<(&'a [SwatchGroup], Bind<'a, PresetState<SwatchKey>>)>,
+    /// The document's CMYK converter, which draws CMYK swatches and gives their colours when picked; without it they
+    /// use the built-in coated CMYK, as in the Swatches panel.
+    #[prop]
     cmyk: Option<&'a CmykConverter>,
     /// A Color Picker… button at the end of the kind row opens the full picker.
     #[prop]
@@ -311,26 +316,11 @@ impl<'a> PaintChip<'a> {
     /// The [`ColorRequest::key`] of the full picker the Color Picker… button asks for.
     pub const COLOR_KEY: &'static str = "paintChip";
 
-    /// The recent colours the popover shows beside the picker.
-    #[must_use]
-    pub fn recent(mut self, colors: &'a [Srgba]) -> Self {
-        self.recent = colors;
-        self
-    }
-
     /// The swatches the popover lists (rows from `swatch_rows`) beside the picker: the groups the Swatches panel takes,
     /// so a host builds no library copy each pass.
     #[must_use]
     pub fn swatches(mut self, groups: &'a [SwatchGroup], state: Bind<'a, PresetState<SwatchKey>>) -> Self {
         self.swatches = Some((groups, state));
-        self
-    }
-
-    /// The document's CMYK converter, which draws CMYK swatches and gives their colours when picked; without it they
-    /// use the built-in coated CMYK, as in the Swatches panel.
-    #[must_use]
-    pub fn cmyk(mut self, converter: &'a CmykConverter) -> Self {
-        self.cmyk = Some(converter);
         self
     }
 
