@@ -109,8 +109,19 @@ fn line_winding(start: Point, end: Point, p: Point) -> i32 {
     const EXPONENT: u64 = 0x7ff0_0000_0000_0000;
     let scale = f64::from_bits(a.abs().max(b.abs()).to_bits() & EXPONENT).max(f64::MIN_POSITIVE);
     let (a, b) = (a / scale, b / scale);
-    let c = a * start.x + b * start.y;
-    if (a * p.x + b * p.y - c) * f64::from(sign) <= 0.0 { sign } else { 0 }
+    // With a and b under 2 the products can still overflow for coordinates past 2^1021 (the slope 1.5 times a point's x of 2.75 x 2^1022):
+    // the same line and point at half the size, which is exact, until the sums are numbers (at most a few times).
+    let (mut start, mut p) = (start, p);
+    for _ in 0..4 {
+        let c = a * start.x + b * start.y;
+        let side = a * p.x + b * p.y - c;
+        if side.is_finite() {
+            return if side * f64::from(sign) <= 0.0 { sign } else { 0 };
+        }
+        let half = |q: Point| Point::new(q.x * 0.5, q.y * 0.5);
+        (start, p) = (half(start), half(p));
+    }
+    0
 }
 
 /// A cubic's crossings with the ray: its pieces whose height rises or falls the whole way, each of which crosses the
@@ -741,6 +752,29 @@ mod tests {
                 assert_eq!(bits(scaled), bits(unit), "({a}, {b}, {c}) times 2^{k}");
             }
         }
+    }
+
+    /// Where the coordinates are past 2^1021 the products of the line's equation overflow though the line's own steps do not (the slope 1.5
+    /// times a point's x of 2.75 x 2^1022 is 4.1 x 2^1022): the line wound its point as if it were left of the crossing, for a crossing to its right.
+    /// At every scale up to the top the line and its points wind as at unit scale.
+    #[test]
+    fn a_line_at_the_top_of_the_range_winds_as_at_unit_scale() {
+        let line = |s: f64| PathSeg::Line(kurbo::Line::new((2.0 * s, 2.0 * s), (3.0 * s, 3.5 * s)));
+        let grid: Vec<(f64, f64)> = (0..=40).flat_map(|i| (0..=40).map(move |j| (1.5 + f64::from(i) * 0.05, 1.5 + f64::from(j) * 0.1))).collect();
+        let unit: Vec<i32> = grid.iter().map(|&(x, y)| segment_winding(line(1.0), Point::new(x, y))).collect();
+        assert!(unit.iter().any(|&w| w != 0) && unit.contains(&0));
+        for k in [1020, 1021, 1022] {
+            let s = power_of_two(k);
+            for (&(x, y), &w) in grid.iter().zip(&unit) {
+                // Not the points the line passes within a thousandth of a unit of: there the sides are the arithmetic's.
+                let off = ((x - 2.0) * 1.5 - (y - 2.0)).abs() / 1.8;
+                if off > 1e-3 && 3.5 * s < f64::MAX {
+                    assert_eq!(segment_winding(line(s), Point::new(x * s, y * s)), w, "2^{k}, ({x}, {y})");
+                }
+            }
+        }
+        let s = power_of_two(1022);
+        assert_eq!(segment_winding(line(s), Point::new(2.75 * s, 3.25 * s)), segment_winding(line(1.0), Point::new(2.75, 3.25)));
     }
 
     /// A line and its points scaled by a power of two wind as at unit scale to the last (the arithmetic scales exactly): from 2^-560, where
