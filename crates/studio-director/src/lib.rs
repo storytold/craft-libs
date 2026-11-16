@@ -156,6 +156,9 @@ impl StudioDirector {
 
     /// Registers a character with guaranteed visual consistency rules.
     pub fn register_character(&mut self, name: &str, description: &str, height_cm: f32, palette: Vec<String>) -> Option<Uuid> {
+        if self.active_project.is_none() {
+            self.create_project("Default Production", "Auto-initialized studio production");
+        }
         let project = self.active_project.as_mut()?;
         let char_id = Uuid::new_v4();
         let character = CharacterIdentity {
@@ -171,6 +174,9 @@ impl StudioDirector {
 
     /// Synthesizes a new shot into executable cross-app instructions.
     pub fn plan_shot_across_apps(&mut self, action: &str, duration: f32) -> Option<&StoryShot> {
+        if self.active_project.is_none() {
+            self.create_project("Default Production", "Auto-initialized studio production");
+        }
         let project = self.active_project.as_mut()?;
         let shot_id = Uuid::new_v4();
         let shot_index = project.timeline.len() as u32 + 1;
