@@ -17,6 +17,7 @@ craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
+craft-render-parity = { path = "crates/render-parity" }
 acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
