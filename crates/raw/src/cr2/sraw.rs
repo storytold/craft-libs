@@ -388,6 +388,7 @@ pub(super) fn decode(bytes: &[u8], tiff: &Tiff, raw: &Ifd, mode: Mode, limits: &
         // the camera's white balance is already applied, as in Sony's linear YCbCr
         wb_multipliers: Some([1.0; 3]),
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),

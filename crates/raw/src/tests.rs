@@ -44,6 +44,7 @@ fn an_active_area_that_wraps_past_the_image_is_corrupt() {
         color: ColorData::default(),
         wb_multipliers: None,
         linearized: false,
+        linearization_table: None,
         opcodes: OpcodeLists::default(),
         camera: Camera::default(),
         cinema: Default::default(),
