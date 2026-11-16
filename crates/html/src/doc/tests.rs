@@ -956,3 +956,94 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+#[test]
+fn conflicting_mso_vmerge_declarations_last_wins() {
+    let html_restart_wins = "<table><tr><td style='mso-yfti-vmerge: continue; mso-yfti-vmerge: restart'>A</td></tr></table>";
+    let f1 = parse(html_restart_wins);
+    let FBlock::Table(t1) = &f1.blocks[0] else { panic!() };
+    assert!(t1.rows[0][0].vmerge_restart);
+    assert!(!t1.rows[0][0].covered);
+
+    let html_continue_wins = "<table><tr><td style='mso-yfti-vmerge: restart; mso-yfti-vmerge: continue'>B</td></tr></table>";
+    let f2 = parse(html_continue_wins);
+    let FBlock::Table(t2) = &f2.blocks[0] else { panic!() };
+    assert!(!t2.rows[0][0].vmerge_restart);
+    assert!(t2.rows[0][0].covered);
+}
+
+#[test]
+fn export_flow_derives_rowspan_for_vmerge_continuations() {
+    let html = "<table>\
+        <tr><td style='mso-yfti-vmerge:restart'>Top</td><td>B1</td></tr>\
+        <tr><td style='mso-yfti-vmerge:continue'>Cont</td><td>B2</td></tr>\
+    </table>";
+    let f = parse(html);
+    let exported = export_flow(&f, "en");
+    assert!(exported.contains("<td rowspan=\"2\""), "must derive rowspan=\"2\" for restart cell: {exported}");
+    assert!(!exported.contains("Cont</td>"), "covered continuation cell should not be emitted: {exported}");
+    assert!(exported.contains(">B1</td>"), "{exported}");
+    assert!(exported.contains(">B2</td>"), "{exported}");
+}
+
+#[test]
+fn export_flow_preserves_orphan_covered_continuation_content() {
+    let html = "<table>\
+        <tr><td style='mso-yfti-vmerge:continue'>Orphan0</td><td>B0</td></tr>\
+        <tr><td>A1</td><td>B1</td></tr>\
+    </table>";
+    let f = parse(html);
+    let exported = export_flow(&f, "en");
+    assert!(exported.contains("Orphan0</td>"), "orphan continuation content in row 0 must be preserved: {exported}");
+}
+
+#[test]
+fn html_roundtrip_preserves_colgroups_widths_and_vmerge() {
+    use craft_wordmodel::props::VMerge;
+
+    let html = "<table>\
+        <colgroup><col style='width: 80pt'></colgroup>\
+        <colgroup><col style='width: 120pt'></colgroup>\
+        <tr><td style='mso-yfti-vmerge:restart'>MergeA</td><td>B1</td></tr>\
+        <tr><td style='mso-yfti-vmerge:continue'>MergeA_cont</td><td>B2</td></tr>\
+    </table>";
+
+    let f1 = parse(html);
+    let FBlock::Table(t1) = &f1.blocks[0] else { panic!() };
+    assert_eq!(t1.widths, [80.0, 120.0]);
+    assert_eq!(t1.rows.len(), 2);
+    assert_eq!(t1.rows[0].len(), 2);
+    assert_eq!(t1.rows[1].len(), 2);
+    assert!(!t1.rows[0][0].covered);
+    assert!(t1.rows[0][0].vmerge_restart);
+    assert!(t1.rows[1][0].covered);
+
+    let doc1 = model::to_doc(&f1);
+    let craft_wordmodel::Block::Table(tb1) = &*doc1.body[0] else { panic!() };
+    assert_eq!(tb1.rows[0].cells[0].props.vmerge, VMerge::Restart);
+    assert_eq!(tb1.rows[1].cells[0].props.vmerge, VMerge::Continue);
+    assert_eq!(tb1.vertical_extent(0, 0), Some((0, 2)));
+
+    // Export to HTML via export()
+    let exported = export(&doc1);
+    assert!(exported.contains("<colgroup>"), "exported HTML must contain colgroup: {exported}");
+    assert!(exported.contains("width:80.00pt"), "{exported}");
+    assert!(exported.contains("width:120.00pt"), "{exported}");
+    assert!(exported.contains("rowspan=\"2\""), "exported HTML must emit rowspan=\"2\": {exported}");
+
+    // Parse the exported HTML again
+    let f2 = parse(&exported);
+    let FBlock::Table(t2) = &f2.blocks[0] else { panic!() };
+    assert_eq!(t2.widths, t1.widths, "column widths must match");
+    assert_eq!(t2.rows.len(), t1.rows.len(), "row counts must match");
+    assert_eq!(t2.rows[0].len(), t1.rows[0].len(), "row 0 cell count must match");
+    assert_eq!(t2.rows[1].len(), t1.rows[1].len(), "row 1 cell count must match");
+    assert_eq!(t2.rows[0][0].covered, t1.rows[0][0].covered, "row 0 cell 0 covered flag must match");
+    assert_eq!(t2.rows[1][0].covered, t1.rows[1][0].covered, "row 1 cell 0 covered flag must match");
+
+    let doc2 = model::to_doc(&f2);
+    let craft_wordmodel::Block::Table(tb2) = &*doc2.body[0] else { panic!() };
+    assert_eq!(tb2.rows[0].cells[0].props.vmerge, tb1.rows[0].cells[0].props.vmerge, "vmerge restart matches");
+    assert_eq!(tb2.rows[1].cells[0].props.vmerge, tb1.rows[1].cells[0].props.vmerge, "vmerge continue matches");
+    assert_eq!(tb2.vertical_extent(0, 0), tb1.vertical_extent(0, 0), "vertical merge extent matches");
+}

@@ -1227,8 +1227,10 @@ impl<'r> Builder<'r> {
                         _ => {}
                     }
                 }
-                let is_mso_vmerge_continue = decls(&css).any(|(k, v)| k == "mso-yfti-vmerge" && v.trim().eq_ignore_ascii_case("continue"));
-                let is_mso_vmerge_restart = decls(&css).any(|(k, v)| k == "mso-yfti-vmerge" && v.trim().eq_ignore_ascii_case("restart"));
+                // The last declaration wins, as in the cascade.
+                let mso_vmerge = decls(&css).filter(|(k, _)| k == "mso-yfti-vmerge").last().map(|(_, v)| v.trim().to_ascii_lowercase());
+                let is_mso_vmerge_continue = mso_vmerge.as_deref() == Some("continue");
+                let is_mso_vmerge_restart = mso_vmerge.as_deref() == Some("restart");
                 let rowspan = attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 1000)).unwrap_or(1);
                 self.cells.push(Cell {
                     blocks: Vec::new(),
