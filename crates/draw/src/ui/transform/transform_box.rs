@@ -300,7 +300,9 @@ pub struct TransformBox<'a> {
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
     #[prop]
     line: Option<LineLook>,
-    /// How far outside the frame, in screen points, a plain press moves the box (0: off); set by `TransformOverlay`.
+    /// A plain press within `points` screen points outside the frame moves the box (0: off). Crate-private: the
+    /// public entry is `TransformOverlay::move_reach`.
+    #[prop(quantity = "press reach outside the frame, in screen points")]
     move_reach: f32,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
     pivot_held: bool,
@@ -346,14 +348,6 @@ impl<'a> TransformBox<'a> {
             .with_allow(BoxAllow::new(false, false, false).with_warp(false))
             .with_min_side(4.0);
         Self::new(label, state, start, 0.0).rules(rules).reference_point(false).inside_moves(false).rotate_zone(RotateZone::Band)
-    }
-
-    /// A plain press within `points` screen points outside the frame moves the box (0: off). Crate-private: the
-    /// public entry is `TransformOverlay::move_reach`.
-    #[must_use]
-    pub(crate) fn move_reach(mut self, points: f32) -> Self {
-        self.move_reach = points;
-        self
     }
 
     /// Whether the middle of the box is a move part: the reference point is hidden, so it does not take that place.

@@ -119,15 +119,12 @@ pub struct RulerOverlay<'a> {
     #[common]
     common: Common,
     line: Bind<'a, Option<RulerLine>>,
-    /// Whether the overlay only paints: no parts, no Tab stop, no keys.
-    #[prop]
-    read_only: bool,
 }
 
 impl<'a> RulerOverlay<'a> {
     /// An overlay named `label` over the Ruler `line` (document units).
     pub fn new(label: impl Into<Label>, line: Bind<'a, Option<RulerLine>>) -> Self {
-        RulerOverlay { common: Common::new(), line, read_only: false }.label(label)
+        RulerOverlay { common: Common::new(), line }.label(label)
     }
 }
 
@@ -181,7 +178,7 @@ impl Component for RulerOverlay<'_> {
     /// The points: drag parts at handle priority in one roving group, in keyboard order; a plain ruler's line: a drag
     /// part under them.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
-        if self.read_only {
+        if cx.resolved.read_only {
             return;
         }
         let (Some(space), Some(line)) = (canvas_space(&cx.env), cx.value().copied().flatten()) else { return };
@@ -211,7 +208,7 @@ impl Component for RulerOverlay<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if self.read_only {
+        if cx.resolved.read_only {
             return;
         }
         let (Some(space), Some(line)) = (canvas_space(&cx.env), cx.value().copied().flatten()) else { return };
@@ -308,7 +305,7 @@ impl Component for RulerOverlay<'_> {
         let units = cx.env.units();
         let rulers = space.rulers();
         access.value(reading_text(&line, &space, &units, &words));
-        if self.read_only {
+        if cx.resolved.read_only {
             return;
         }
         for (part, name) in [(RulerPart::Start, &words.start), (RulerPart::End, &words.end), (RulerPart::Protractor, &words.protractor)] {

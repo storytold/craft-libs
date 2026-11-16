@@ -225,7 +225,8 @@ pub struct ParamDialog<'a> {
     /// The patterns the dialog's [`ParamKind::Pattern`] rows offer.
     #[prop]
     patterns: Cow<'a, [PresetRow<String>]>,
-    /// A muted line at the footer's start edge (JPEG Options' size estimate).
+    /// A muted line at the footer's start edge, left of the buttons (a file size estimate, say).
+    #[prop(into)]
     footer_note: Option<Label>,
     /// A section under the rows that only reads the values (a monitor note).
     #[prop(func = "Fn(&mut Ui, &DialogFields)")]
@@ -234,19 +235,24 @@ pub struct ParamDialog<'a> {
     /// The host's answers to the requests of earlier passes; the dialog writes them into its values first.
     #[prop]
     answers: Vec<HostAnswer>,
-    /// The values a [`HostedParamDialog`] opened before the first pass: the first pass leaves them and Reset restores
-    /// them.
+    /// Marks the bound values as opened by the host with `opening`, so the first pass doesn't open them again and
+    /// Reset restores `opening`.
+    #[prop]
     values_opened: Option<DialogFields>,
-    /// OK keeps the dialog open and reports its answer in `ParamDialogOutput::held` ([`HostedParamDialog::held_ok`]).
+    /// Makes OK keep the dialog open and report its answer in `ParamDialogOutput::held`.
+    #[prop(name = "hold_ok")]
     hold: bool,
-    /// The host accepted the held OK: this pass closes the dialog as OK.
+    /// Closes the dialog as OK in this pass: the host accepted the held answer.
+    #[prop]
     finish_held: bool,
-    /// Why the host refused the held OK, and the values it refused: the notice under the rows shows while the values
-    /// are those.
+    /// Shows `reason` under the rows while the values are `refused`.
+    #[prop]
     refusal: Option<(Label, DialogFields)>,
-    /// The picture point this pass centres the preview pane's view on ([`HostedParamDialog::centre_preview`]).
+    /// Centres the preview pane's view on the picture point `point` in this pass; without a picture it does nothing.
+    #[prop(name = "centre_on")]
     centre: Option<Pos2>,
-    /// The colours a child picker previews in the colour rows, by row key ([`HostedParamDialog::preview_color`]).
+    /// The colours the colour rows show in place of their values in this pass, by row key.
+    #[prop]
     preview_colors: Vec<(String, Srgba)>,
 }
 
@@ -311,43 +317,6 @@ impl<'a> ParamDialog<'a> {
     /// has no setter for (`Dialog::overlay`, say). It runs after the settings `ParamDialog` makes itself.
     pub fn shaped(mut self, shape: impl FnOnce(Dialog<'a>) -> Dialog<'a> + 'a) -> Self {
         self.shaped = Some(Shaped(Box::new(shape)));
-        self
-    }
-
-    /// Marks the bound values as opened by the host with `opening`, so the first pass doesn't open them again and
-    /// Reset restores `opening`.
-    pub(crate) fn values_opened(mut self, opening: DialogFields) -> Self {
-        self.values_opened = Some(opening);
-        self
-    }
-
-    /// Makes OK keep the dialog open and report its answer in `ParamDialogOutput::held`.
-    fn hold_ok(mut self, on: bool) -> Self {
-        self.hold = on;
-        self
-    }
-
-    /// Closes the dialog as OK in this pass: the host accepted the held answer.
-    fn finish_held(mut self, on: bool) -> Self {
-        self.finish_held = on;
-        self
-    }
-
-    /// Shows `reason` under the rows while the values are `refused`.
-    fn refusal(mut self, refusal: Option<(Label, DialogFields)>) -> Self {
-        self.refusal = refusal;
-        self
-    }
-
-    /// Centres the preview pane's view on the picture point `point` in this pass; without a picture it does nothing.
-    fn centre_on(mut self, point: Option<Pos2>) -> Self {
-        self.centre = point;
-        self
-    }
-
-    /// The colours the colour rows show in place of their values in this pass, by row key.
-    fn preview_colors(mut self, colors: Vec<(String, Srgba)>) -> Self {
-        self.preview_colors = colors;
         self
     }
 
@@ -611,12 +580,6 @@ impl<'a> ParamDialog<'a> {
             held,
             preview_centre: shown_preview.centre,
         }
-    }
-
-    /// A muted line at the footer's start edge, left of the buttons (a file size estimate, say).
-    pub fn footer_note(mut self, note: impl Into<Label>) -> Self {
-        self.footer_note = Some(note.into());
-        self
     }
 }
 
@@ -1125,9 +1088,13 @@ impl StackDialog for HostedParamDialog {
             .opened(Bind::bound(&mut self.open))
             .hold_ok(self.hold)
             .finish_held(finish)
-            .refusal(self.held.refusal().map(|(reason, refused)| (reason.clone(), refused.fields.clone())))
-            .preview_colors(self.requests.previewed_colors().to_vec())
-            .centre_on(centre);
+            .preview_colors(self.requests.previewed_colors().to_vec());
+        if let Some((reason, refused)) = self.held.refusal() {
+            dialog = dialog.refusal((reason.clone(), refused.fields.clone()));
+        }
+        if let Some(point) = centre {
+            dialog = dialog.centre_on(point);
+        }
         // OK waits for the host's answer: a second OK cannot file over the held one.
         if self.held.is_waiting() {
             dialog = dialog.ok_enabled(false);

@@ -85,7 +85,7 @@ pub struct PrintPanel<'a> {
     #[prop]
     driver: bool,
     /// The driver's paper in points, as the caller last took it.
-    #[prop]
+    #[prop(quantity = "paper size the printer driver reports, in points")]
     page: Option<egui::Vec2>,
     /// Why the driver gave no page.
     #[prop]

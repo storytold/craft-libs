@@ -79,6 +79,9 @@ pub struct ReportDialog<'a> {
     title: Label,
     summary: Label,
     notes: Vec<ReportNote>,
+    /// Plain `lines` shown as the notes, in place of ones built with [`ReportNote`]: each line is selectable text,
+    /// and Copy hands them back as they are.
+    #[prop]
     lines: Vec<Label>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
@@ -89,13 +92,6 @@ impl<'a> ReportDialog<'a> {
     /// A report titled `title` with one `summary` line and the `notes`.
     pub fn new(title: impl Into<Label>, summary: impl Into<Label>, notes: Vec<ReportNote>) -> Self {
         ReportDialog { title: title.into(), summary: summary.into(), notes, lines: Vec::new(), open: None }
-    }
-
-    /// Plain `lines` shown as the notes, in place of ones built with [`ReportNote`]: each line is selectable text,
-    /// and Copy hands them back as they are.
-    pub fn lines(mut self, lines: Vec<Label>) -> Self {
-        self.lines = lines;
-        self
     }
 
     /// The notes as the Copy button hands them back, one per line with the tone's word first; plain

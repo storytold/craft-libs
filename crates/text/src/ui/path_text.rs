@@ -242,7 +242,7 @@ pub struct PathTextMarkers<'a> {
     range: Bind<'a, PathRange>,
     track: &'a dyn PathTrack,
     /// Where the paragraph's anchor sits in the span: 0 the start, 0.5 the centre, 1 the end.
-    #[prop]
+    #[prop(quantity = "fraction of the span")]
     anchor: f64,
     /// The text overflows the range: the end mark shows a plus.
     #[prop]

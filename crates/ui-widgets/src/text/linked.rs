@@ -154,7 +154,9 @@ pub struct LinkedFields<'a, const N: usize> {
     /// Each field's own range.
     #[prop]
     ranges: Option<[RangeInclusive<f64>; N]>,
-    /// The lengths every field keeps and shows (`LinkedFields::lengths`); plain numbers without it.
+    /// Makes every field a length field (`NumberField::length`): the values are kept in `units.stored` and shown in
+    /// `units.shown`. `range` is then in the stored unit.
+    #[prop]
     lengths: Option<LengthUnits>,
 }
 
@@ -174,14 +176,6 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
             lengths: None,
         }
         .label(label)
-    }
-
-    /// Makes every field a length field (`NumberField::length`): the values are kept in `units.stored` and shown in
-    /// `units.shown`. `range` is then in the stored unit.
-    #[must_use]
-    pub fn lengths(mut self, units: LengthUnits) -> Self {
-        self.lengths = Some(units);
-        self
     }
 
     /// Shows a caption with each field that also scrubs it, and names the field: inside the field at its start in the
