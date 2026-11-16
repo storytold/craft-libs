@@ -27,11 +27,6 @@ pub(crate) fn focused(ctx: &Context) -> Option<Id> {
     ctx.memory(|memory| memory.focused())
 }
 
-/// Whether an egui popup of the running viewport is open: an app's own popup or menu, which reads its keys from egui.
-pub(crate) fn popup_open(ctx: &Context) -> bool {
-    egui::Popup::is_any_open(ctx)
-}
-
 /// Whether egui holds a label text selection, which egui copies on a copy or cut event.
 pub(crate) fn label_selection(ctx: &Context) -> bool {
     ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|state| state.has_selection()).unwrap_or(false)

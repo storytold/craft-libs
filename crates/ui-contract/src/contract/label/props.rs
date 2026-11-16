@@ -154,6 +154,14 @@ impl InsideLabel {
     }
 }
 
+impl<'a> EnvView<'a> {
+    /// The inside label the component shows in its slot, when it is the control of a side label with
+    /// `FieldLayout::Inside`.
+    pub fn inside_label(&self) -> Option<&'a InsideLabel> {
+        self.inside_held().and_then(|held| held.downcast_ref())
+    }
+}
+
 /// The inside label a control under `side` shows in its slot: `Some` for a glyph label with `FieldLayout::Inside`.
 pub(crate) fn inside(env: EnvView<'_>, side: &SideLabel, enabled: bool) -> Option<Arc<InsideLabel>> {
     let LabelKind::Glyph(glyph) = &side.kind else { return None };

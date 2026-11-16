@@ -109,6 +109,7 @@ pub struct AltTextFieldStyle {
 /// An alt text editor: a multi-line description box and a Mark as decorative check. While the check is on, the box
 /// keeps its text and does not edit it. The field's label is the prompt that names the box.
 #[derive(crate::contract::Component)]
+#[component(overlay)]
 pub struct AltTextField<'a> {
     #[common]
     common: Common,

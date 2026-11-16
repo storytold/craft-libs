@@ -256,7 +256,7 @@ impl PictureEdges {
     fn normal(&self, p: Point) -> Vec2 {
         let d = |dx: f64, dy: f64| self.image.subject_distance(p.x + dx, p.y + dy);
         let g = Vec2::new(d(1.0, 0.0) - d(-1.0, 0.0), d(0.0, 1.0) - d(0.0, -1.0));
-        if g.hypot() > 0.0 { g / g.hypot() } else { Vec2::new(0.0, -1.0) }
+        if g.hypot() > 0.0 { g / g.hypot() } else { Vec2::from((0.0, -1.0)) }
     }
 
     /// The point of the outline nearest `p`; `None` beyond the search's width or where the edge is weaker than its

@@ -1,1 +1,9 @@
 config_version = 1
+
+[[exception]]
+name = "preview-picture-bars"
+kind = "marker"
+rule = "raw-colour/const"
+path = "crates/timeline/src/ui/preview.rs"
+reason = "The bars around a video picture are black in every theme, as in a video player."
+count = 1

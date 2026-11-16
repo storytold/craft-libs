@@ -43,7 +43,7 @@ impl Slide {
             slider = slider.wheel_step(step);
         }
         if let Some((start, end)) = self.trim {
-            slider = slider.trim(start, end);
+            slider = slider.trim(start..=end);
         }
         self.events.borrow_mut().extend(slider.show_at(ui, FIELD).events);
     }

@@ -149,8 +149,10 @@ pub struct ListRow<'a> {
     #[style_key]
     #[prop]
     pub(super) role: Option<TypeRole>,
-    /// How tall the row is: its collection sets it from `CollectionProps::row_height` in `Collection::dress`.
+    /// The row is `rows` tall: the height its collection's rows take. Its collection sets it from
+    /// `CollectionProps::row_height` in `Collection::dress`.
     #[style_key]
+    #[prop]
     pub(super) rows: RowHeight,
     /// The sub-row form, from the collection's row state (`RowState::sub_row`): a small control high, the icon and
     /// toggle marks at the small control's icon side, and its toggle cells `sub_steps` indent steps into its content
@@ -265,7 +267,7 @@ pub struct ListRow<'a> {
     /// On an option that runs a command (a command palette's row): the lead row is the command highlight, as a menu's,
     /// and no edge outlines the lead or the chosen row.
     #[style_key]
-    #[prop(flag)]
+    #[prop(flag, name = "command_row")]
     pub(super) command: bool,
     /// On an option of a list that picks a value: the row keeps a mark column, with the check mark when `true`.
     #[prop]
@@ -375,13 +377,6 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn disclosure_by_host(mut self) -> Self {
         self.disclosure_by_host = true;
-        self
-    }
-
-    /// The row is `rows` tall: the height its collection's rows take.
-    #[must_use]
-    pub(crate) fn rows(mut self, rows: RowHeight) -> Self {
-        self.rows = rows;
         self
     }
 

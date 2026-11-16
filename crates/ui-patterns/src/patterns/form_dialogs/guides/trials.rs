@@ -6,6 +6,7 @@ use crate::canvas_data::{Guide, GuideColor};
 use crate::contract::{Bind, SaveKey};
 use crate::runtime::env::UnitKind;
 use crate::runtime::requests::ColorRequest;
+use crate::testing::relations::{aligned_left, grows_with};
 use crate::testing::{Fixture, trial};
 use craft_behavior::Axis;
 use craft_theme::Rgba;
@@ -32,7 +33,7 @@ fn the_preview_check_box_under_the_side_buttons_starts_on_at_every_open() {
     let (Some(preview), Some(ok)) = (fixture.by_label("Preview"), fixture.by_label("OK")) else {
         panic!("the Preview check box and OK are shown");
     };
-    assert!(preview.rect.min.y >= ok.rect.max.y && (preview.rect.min.x - ok.rect.min.x).abs() < 0.5, "Preview sits under the buttons");
+    assert!(grows_with(ok.rect.max.y, preview.rect.min.y) && aligned_left(ok.rect, preview.rect), "Preview sits under the buttons");
     fixture.click(&preview);
     fixture.settle();
     assert!(!previewing.get(), "with Preview off the dialog previews nothing");

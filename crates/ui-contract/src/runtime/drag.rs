@@ -141,7 +141,7 @@ pub struct DropZone {
 
 impl DropZone {
     /// The zone `rect` on `layer` (the `layer_id` of the `Ui` that draws the area), in that layer's space.
-    pub const fn new(layer: egui::LayerId, rect: Rect) -> Self {
+    pub const fn new(layer: crate::runtime::egui::areas::Layer, rect: Rect) -> Self {
         DropZone { layer, rect }
     }
 

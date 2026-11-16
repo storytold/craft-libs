@@ -2,7 +2,7 @@
 //! image a window shows as its cursor. Both come from the one list, so the two look the same.
 
 use crate::primitives::SvgIcon;
-use crate::runtime::cursor::CursorBitmap;
+use crate::runtime::cursor::{CursorArt, CursorBitmap};
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use resvg::tiny_skia;
 use std::sync::Arc;
@@ -95,7 +95,7 @@ impl Art {
     /// The art as a cursor image at `scale` device pixels per point, its hotspot on the centre pixel of an odd square;
     /// `None` for art with no marks, with a size that is not finite, or wider than `max_side` pixels. The size is
     /// checked before anything is allocated.
-    pub(crate) fn rasterise(&self, scale: f32, max_side: u16) -> Option<CursorBitmap> {
+    fn rasterise_art(&self, scale: f32, max_side: u16) -> Option<CursorBitmap> {
         if !scale.is_finite() || scale <= 0.0 {
             return None;
         }
@@ -242,5 +242,11 @@ fn composite(pixmap: &mut tiny_skia::Pixmap, mask: &egui::ColorImage, left: i64,
             *dst = tiny_skia::PremultipliedColorU8::from_rgba(channel(r, dst.red()), channel(g, dst.green()), channel(b, dst.blue()), alpha)
                 .unwrap_or(*dst);
         }
+    }
+}
+
+impl CursorArt for Art {
+    fn rasterise(&self, scale: f32, max_side: u16) -> Option<CursorBitmap> {
+        self.rasterise_art(scale, max_side)
     }
 }

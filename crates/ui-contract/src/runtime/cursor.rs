@@ -1,7 +1,6 @@
 //! The cursor service (8.5): requests of a pass collect here, the end hook picks the winner and records it, and a
 //! painted winner reaches the window as its cursor image where the window shows one.
 
-use crate::contract::ghost::Art;
 use crate::runtime::egui::{output, pass, viewports};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
@@ -9,6 +8,7 @@ use craft_behavior::cursor::pick;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority, PaintedCursor};
 use craft_host::target::Os;
 use egui::{Context, ViewportId};
+use std::any::Any;
 use std::sync::Arc;
 
 /// The largest side of a cursor image in device pixels on Linux, where X servers and hardware cursor planes commonly
@@ -44,7 +44,7 @@ pub(crate) struct State {
     record: Option<Cursor>,
     /// The last image handed to the window with the art and scale it was drawn from. egui-winit uploads an image to
     /// the OS whenever its `Arc` changes, so an unchanged pointer hands over the same one.
-    image: Option<(Art, f32, CursorBitmap)>,
+    image: Option<(Box<dyn Any + Send + Sync>, f32, CursorBitmap)>,
 }
 
 /// Requests `cursor` for the running pass of this viewport.
@@ -104,19 +104,25 @@ pub(crate) fn image_target(ctx: &Context) -> Option<ImageTarget> {
     })
 }
 
+/// A painted pointer the window can take as its cursor image: drawn at a scale, compared with the last one handed over.
+pub(crate) trait CursorArt: Any + Clone + PartialEq + Send + Sync {
+    /// The image at `scale` device pixels per point, `None` where the art has none at that size.
+    fn rasterise(&self, scale: f32, max_side: u16) -> Option<CursorBitmap>;
+}
+
 /// Hands `art` to the window as its cursor image at `target`, drawing it only when the art or the scale changed since
 /// the last image; the crosshair is the system cursor an integration that cannot take the image falls back to.
 /// Returns false, and hands nothing over, when the art has no image at that size.
-pub(crate) fn show_image(ctx: &Context, art: &Art, target: ImageTarget) -> bool {
+pub(crate) fn show_image<A: CursorArt>(ctx: &Context, art: &A, target: ImageTarget) -> bool {
     let bitmap = PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         if let Some((last, scale, bitmap)) = &state.image
-            && last == art
+            && last.downcast_ref::<A>() == Some(art)
             && *scale == target.scale
         {
             return Some(bitmap.clone());
         }
         let bitmap = art.rasterise(target.scale, target.max_side)?;
-        state.image = Some((art.clone(), target.scale, bitmap.clone()));
+        state.image = Some((Box::new(art.clone()), target.scale, bitmap.clone()));
         Some(bitmap)
     });
     let Some(bitmap) = bitmap else { return false };

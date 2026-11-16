@@ -2,7 +2,7 @@
 
 use crate::runtime::commands::{CommandInput, CommandSet as _, EditCommands, NavCommand};
 use crate::runtime::drag::{self, DragPreview};
-use crate::runtime::egui::fixture;
+use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::RootEnv;
 use crate::runtime::focus::{EditSet, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
@@ -163,16 +163,16 @@ fn an_open_egui_popup_keeps_escape() {
     let (host, mut base) = host_window();
     let mut show = move |ui: &mut Ui| {
         base(ui);
-        fixture::host_popup(ui, popup, Pos2::ZERO);
+        areas::host_popup(ui, popup, Pos2::ZERO);
     };
     let mut frames = Frames::new();
     frames.frame(Vec::new(), &mut show);
-    fixture::open_host_popup(&frames.ctx, popup);
+    areas::open_host_popup(&frames.ctx, popup);
     frames.frame(Vec::new(), &mut show);
-    assert!(fixture::host_popup_open(&frames.ctx, popup));
+    assert!(areas::host_popup_open(&frames.ctx, popup));
     press_key(&mut frames, &mut show, Key::Escape);
     assert_eq!(seen(&host), (vec![Key::Escape], 0), "the popup's Escape is egui's");
-    assert!(!fixture::host_popup_open(&frames.ctx, popup), "egui closed the popup");
+    assert!(!areas::host_popup_open(&frames.ctx, popup), "egui closed the popup");
     frames.frame(Vec::new(), &mut show);
     press_key(&mut frames, &mut show, Key::Escape);
     assert_eq!(seen(&host), (Vec::new(), 1), "with the popup closed, Escape is the window's Cancel again");

@@ -41,6 +41,7 @@ fn payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<&str>().map(|s| (*s).to_owned()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn unix_secs() -> u64 {
     (crate::clock::unix_ms() / 1000.0) as u64
 }

@@ -9,11 +9,12 @@
 //! to be shown again, and whether it did something a replay cannot repeat (an overlay it shows, paint on another
 //! layer, a label scope open around it). Such a record is never replayed: the region runs.
 
+use crate::runtime::egui::areas::Layer;
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame;
 use crate::runtime::pass_state;
 use crate::runtime::reads::BindKey;
-use egui::{Context, Id, LayerId};
+use egui::{Context, Id};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -86,7 +87,7 @@ pub(crate) fn open(ctx: &Context) {
 }
 
 /// Ends the innermost record, the one around a run on `layer`: paint or widgets on another layer block it.
-pub(crate) fn close(ctx: &Context, layer: LayerId) -> Record {
+pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     OPEN.fetch_sub(1, Ordering::AcqRel);
     let (open, journal) = pass_state::with::<Recorder, _>(ctx, |recorder| {
         // A close with no open record ends one that holds nothing and is never replayed.

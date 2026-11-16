@@ -3,11 +3,12 @@
 //! with its box and access facts, the hit areas the sensing core registered and the focus stops in Tab order.
 
 use crate::runtime::egui::areas;
+use crate::runtime::egui::areas::Layer;
 use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, measure, pass_state, pointer};
 use craft_behavior::PartRef;
-use egui::{Context, Id, LayerId, Rect, Ui};
+use egui::{Context, Id, Rect, Ui};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -181,8 +182,8 @@ impl Recorded {
 /// A region being recorded.
 struct Open {
     /// The layer the region is shown on, which the record's rects are in.
-    layer: LayerId,
-    elements: Vec<(Element, LayerId)>,
+    layer: Layer,
+    elements: Vec<(Element, Layer)>,
     parts: Vec<Element>,
     /// The elements whose show has not finished, outermost first.
     stack: Vec<usize>,
@@ -286,7 +287,7 @@ fn edited(ctx: &Context, read: BindKey, editor: Id) {
 /// component.
 fn finish(ctx: &Context, open: Open) -> Recorded {
     let from_screen = areas::layer_to_screen(ctx, open.layer).inverse();
-    let to_region = |layer: LayerId, rect: Rect| from_screen * (areas::layer_to_screen(ctx, layer) * rect);
+    let to_region = |layer: Layer, rect: Rect| from_screen * (areas::layer_to_screen(ctx, layer) * rect);
     let ids: HashSet<Id> = open.elements.iter().map(|(element, _)| element.id).collect();
     let mut elements: Vec<Element> = Vec::with_capacity(open.elements.len() + open.parts.len());
     let mut parts = open.parts;

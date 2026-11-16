@@ -4,21 +4,6 @@ include-tests = false
 deny-unused = true
 
 [[exempt]]
-path = "crates/ui-contract/src/runtime/egui"
-rules = ["style-mutation"]
-reason = "the egui adapter: the one place that sets egui's style and zoom from the theme"
-
-[[exempt]]
-path = "crates/ui-contract/src/testing"
-rules = ["literal-size"]
-reason = "test fixtures: rooms, drag offsets and window sizes, not looks"
-
-[[exempt]]
-path = "crates/ui-canvas/src/canvas/testing"
-rules = ["literal-size"]
-reason = "test fixtures: rooms, drag offsets and window sizes, not looks"
-
-[[exempt]]
 path = "crates/ui-panels/src/rails/panel_rail/trials.rs"
 rules = ["literal-size"]
 reason = "trial rooms, not looks"

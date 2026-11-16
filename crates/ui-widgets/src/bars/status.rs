@@ -144,7 +144,7 @@ impl StatusProgress {
                 Some(reason) => button.tooltip(TooltipSpec::new(label).disabled_text(reason)).enabled(false),
                 None => button,
             };
-            button.show(ui).clicked()
+            crate::contract::clicked(&button.show(ui))
         });
         StatusProgressOutput { response, cancelled }
     }

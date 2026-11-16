@@ -180,7 +180,7 @@ impl DataMode {
     /// The mode of a component painting in `state`: `Dimmed` in its Disabled state, which step 12 gives a disabled
     /// component that is not faded as a whole.
     pub(crate) fn of(state: &crate::style::StateSet) -> Self {
-        if state.state == craft_theme::State::Disabled { DataMode::Dimmed } else { DataMode::Full }
+        if state.is_disabled() { DataMode::Dimmed } else { DataMode::Full }
     }
 
     /// A colour from data as this mode paints it.

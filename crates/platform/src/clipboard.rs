@@ -21,11 +21,13 @@ mod probe;
 mod types;
 
 pub use backend::*;
-pub(crate) use convert::*;
 pub use event::*;
 pub use facade::*;
 pub use probe::*;
 pub use types::*;
+
+#[cfg(test)]
+pub(crate) use convert::rgba8_image;
 
 // The probe's backend lives on its worker.
 const _: () = {

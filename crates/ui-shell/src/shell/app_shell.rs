@@ -268,7 +268,10 @@ pub struct AppShell<'a, S> {
     window: WindowKey,
     bare: bool,
     embedded: bool,
-    /// An embedded shell as tall as its content, with the most a body that fills takes.
+    /// An embedded shell as wide as the room of the flow it is shown in and as tall as its body's content and its top
+    /// and bottom slots, from the measure its body keeps while its inputs hold; a body that fills takes at most this
+    /// room. Shown with [`show`](Self::show), it takes that room in the flow.
+    #[prop(name = "content_height", quantity = "room the host's flow offers, in points")]
     content_room: Option<f32>,
     /// The screen mode. Without a binding the shell keeps it, starting at `Standard`.
     #[prop]
@@ -327,13 +330,6 @@ impl<'a, S> AppShell<'a, S> {
     /// its state, its Tab toggle and its dialog host, so two embedded shells need two keys.
     pub fn embedded(window: WindowKey) -> Self {
         AppShell { embedded: true, ..Self::new(window) }
-    }
-
-    /// An embedded shell as wide as the room of the flow it is shown in and as tall as its body's content and its top
-    /// and bottom slots, from the measure its body keeps while its inputs hold; a body that fills takes at most `room`.
-    /// Shown with [`show`](Self::show), it takes that room in the flow.
-    pub fn content_height(self, room: f32) -> Self {
-        AppShell { embedded: true, content_room: Some(room), ..self }
     }
 
     /// The title bar slot, the first top slot, keyed `"title"`: visible, and revealing in body-only mode. The title bar
@@ -430,6 +426,7 @@ impl<'a, S> AppShell<'a, S> {
             slots,
             mut body,
         } = self;
+        let embedded = embedded || content_room.is_some();
         if let Some(title) = window_title
             && !embedded
             && !ui.is_sizing_pass()

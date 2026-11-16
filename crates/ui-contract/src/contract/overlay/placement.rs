@@ -51,6 +51,7 @@ fn stored_opening(ctx: &Context, id: Id) -> Option<Opening> {
 /// bar stay below the bar ([`OverlayUi::contain_popups_below`](super::OverlayUi::contain_popups_below)). `None`, the
 /// root's, lets popups take the whole safe rect.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct PopupRegion(pub Option<Rect>);
 
 impl crate::runtime::env::EnvValue for PopupRegion {
