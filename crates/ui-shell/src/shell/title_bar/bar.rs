@@ -57,6 +57,8 @@ impl Outcome for TitleBarOutput {
 /// - **Integrated.** The caption buttons of the window's layout sit at the two ends, flush with the window's edges.
 ///   A double click maximizes or restores.
 ///
+/// An end with no caption buttons or lights keeps the content `space.pad.regular` off the window's edge.
+///
 /// In full screen the bar shows no captions and reserves no room. The free area is the container's move band:
 /// pressing and dragging it moves the window, and a double click acts as above.
 ///
@@ -164,7 +166,9 @@ impl<'a> TitleBar<'a> {
     /// Shows one end's room and buttons, and acts on a click: Minimize and Maximize go to the window the bar acts on,
     /// Close is reported.
     fn show_end(&mut self, ui: &mut Ui, cx: &BodyCx<'_>, end: &End, window: &Window) {
-        let height = SlotSize::TitleBar.resolve(&Env::of(ui).tokens);
+        let tokens = Env::of(ui).tokens.clone();
+        let height = SlotSize::TitleBar.resolve(&tokens);
+        let pad = tokens.tokens().space.pad.regular;
         // The running window's captions take the glyphs of the desktop's icon theme; a frame given in place of the
         // window's (a story, a preview) draws the family's own.
         let ctx = cx.memory.ctx().clone();
@@ -184,7 +188,7 @@ impl<'a> TitleBar<'a> {
                 Placed::new(("caption", index), button)
             })
             .collect();
-        arrange(ui, &Strip::new(end, height), &mut buttons);
+        arrange(ui, &Strip::padded(end, height, pad), &mut buttons);
         let (host, viewport) = (WindowHost::of(&ctx), pass::current_viewport(&ctx));
         for (slot, placed) in end.captions.iter().zip(&buttons) {
             if !placed.response().is_some_and(Response::clicked) {
