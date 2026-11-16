@@ -327,9 +327,13 @@ impl SvgWriter {
     pub fn raw(&mut self, svg: &str) {
         self.0.raw(svg);
     }
+    /// What has been written so far, including any element that is still open.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
     /// How many bytes have been written so far.
     pub fn len(&self) -> usize {
-        self.0.as_str().len()
+        self.as_str().len()
     }
     /// Has nothing been written yet?
     pub fn is_empty(&self) -> bool {
@@ -454,6 +458,7 @@ mod tests {
         let mut compact = SvgWriter::fragment();
         compact.decl("ISO-8859-1", "");
         compact.root().open();
+        assert_eq!(compact.as_str(), "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\">");
         compact.close();
         assert_eq!(compact.finish(), "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\"></svg>");
     }
