@@ -133,7 +133,7 @@ struct PendingKey(Option<GuideKey>);
 ///   ([`Canvas::rulers`](crate::canvas::Canvas::rulers)).
 /// - [`pending`](Guides::pending) shows the guide a ruler drag is creating. Show the `Rulers` before the guides in
 ///   the canvas body: the guides read the drag the rulers reported in the same pass.
-/// - While a drag moves or creates a guide, [`running`] reads that guide's axis and position by the canvas id, from
+/// - While a drag moves or creates a guide, [`running`](reading::running) reads that guide's axis and position by the canvas id, from
 ///   the note the drag sets on its gesture.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(canvas_control, content_painter)]
@@ -175,7 +175,7 @@ pub(crate) fn guides_id(canvas: egui::Id) -> egui::Id {
 impl<'a> Guides<'a> {
     /// The guides named `label` over `guides`, in document units, on the canvas `canvas` (the id of the `Canvas` whose
     /// body shows them): they take their id from it, so
-    /// [`running`] finds their drag by the canvas.
+    /// [`running`](reading::running) finds their drag by the canvas.
     pub fn new(label: impl Into<Label>, canvas: egui::Id, guides: Bind<'a, Vec<Guide>>) -> Self {
         Guides {
             common: Common::new(),
