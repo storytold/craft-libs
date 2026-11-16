@@ -1785,9 +1785,12 @@ name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "harfrust 0.13.3",
  "kurbo 0.13.1",
  "skrifa 0.47.0",
  "thiserror 2.0.21",
+ "unicode-bidi",
+ "unicode-segmentation",
  "windows-registry",
  "write-fonts 0.54.1",
 ]
