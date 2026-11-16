@@ -533,7 +533,7 @@ impl Component for TextEditor<'_> {
                 EditorInput::Tab => edits.done.changed |= edits.insert_text("\t", EditKind::Typed),
                 EditorInput::Move(step, mods) => edits.motion(step, mods),
                 EditorInput::Delete { forward, by, .. } => edits.done.changed |= edits.delete(forward, by),
-                EditorInput::DeleteSurrounding { before, after, .. } => edits.done.changed |= edits.delete_around(before, after),
+                EditorInput::DeleteSurrounding { before, after, unit, .. } => edits.done.changed |= edits.delete_around(before, after, unit),
                 EditorInput::Select { anchor, focus, .. } => {
                     let lines = lines_of(&mut *edits.host, fallback);
                     edits.end_composition();

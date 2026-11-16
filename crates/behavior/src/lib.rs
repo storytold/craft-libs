@@ -76,7 +76,7 @@ pub use digit_keys::{DigitEntry, DigitKeys};
 pub use doc_key::DocKey;
 pub use dock::DockSide;
 pub use edit_history::EditHistory;
-pub use editor::EditorInput;
+pub use editor::{EditorInput, SurroundingUnit};
 pub use flow::{Axis, Flow, Insets};
 pub use focus::{CancelRule, KeyOwner, OwnerClass, PressFocus, ScopeKind};
 pub use grid::{GridCursor, GridMeasure, resolve_columns};

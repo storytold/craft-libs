@@ -152,7 +152,8 @@ impl Draft {
                 self.insert(&text);
             }
             EditorInput::Delete { forward, by, .. } => self.delete(forward, by),
-            EditorInput::DeleteSurrounding { before, after, .. } => {
+            EditorInput::DeleteSurrounding { before, after, unit, .. } => {
+                let (before, after) = (unit.chars_before(before, &self.text[..self.caret]), unit.chars_after(after, &self.text[self.caret..]));
                 for _ in 0..before {
                     self.delete(false, Granularity::Unit);
                 }

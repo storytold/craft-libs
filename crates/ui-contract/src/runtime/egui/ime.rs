@@ -15,6 +15,11 @@ pub(crate) enum Raw {
         before: usize,
         after: usize,
     },
+    /// The same, counted in bytes of UTF-8 text (winit on macOS and Wayland).
+    DeleteSurroundingBytes {
+        before: usize,
+        after: usize,
+    },
     /// The OS finished the reset with this request id.
     ResetCompleted(egui::ImeResetId),
     /// The integration dropped the reset request with this id; no completion follows.
@@ -33,6 +38,9 @@ pub(crate) fn take_events(events: &mut Vec<Event>) -> Vec<Raw> {
                 ImeEvent::Commit(text) => taken.push(Raw::Commit(text.clone())),
                 ImeEvent::DeleteSurrounding { before_chars, after_chars } => {
                     taken.push(Raw::DeleteSurrounding { before: *before_chars, after: *after_chars })
+                }
+                ImeEvent::DeleteSurroundingBytes { before_bytes, after_bytes } => {
+                    taken.push(Raw::DeleteSurroundingBytes { before: *before_bytes, after: *after_bytes })
                 }
                 _ => {}
             }

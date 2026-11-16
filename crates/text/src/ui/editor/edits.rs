@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use craft_behavior::kurbo::Point;
-use craft_behavior::{Granularity, MoveMods, NavMove};
+use craft_behavior::{Granularity, MoveMods, NavMove, SurroundingUnit};
 
 use super::{EditKind, TextEditorHost, TextSelection};
 use crate::quotes::{QuoteStyle, smart_quotes};
@@ -262,11 +262,16 @@ impl Edits<'_> {
         }
     }
 
-    /// An input method's delete-surrounding: the chars around the marked text, or the selection.
-    pub fn delete_around(&mut self, before: usize, after: usize) -> bool {
+    /// An input method's delete-surrounding: the text around the marked text, or the selection, counted in `unit`.
+    pub fn delete_around(&mut self, before: usize, after: usize, unit: SurroundingUnit) -> bool {
         let chars = self.chars();
         let range = self.session.preedit.clone().filter(|r| r.end <= chars).unwrap_or_else(|| self.clamped());
         let (start, end) = (range.start, range.end);
+        let (before, after) = {
+            let text = self.host.text();
+            let byte = |at: usize| text.char_indices().nth(at).map_or(text.len(), |(byte, _)| byte);
+            (unit.chars_before(before, &text[..byte(start)]), unit.chars_after(after, &text[byte(end)..]))
+        };
         let to = end.saturating_add(after).min(chars);
         let from = start.saturating_sub(before);
         if from >= start && end >= to {

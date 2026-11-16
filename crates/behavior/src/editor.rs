@@ -4,6 +4,38 @@ use crate::intent::{EditCommand, Granularity, MoveMods, NavMove, TextPos};
 use std::ops::Range;
 use std::sync::Arc;
 
+/// What an input method counts the text around the caret in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurroundingUnit {
+    /// Characters.
+    Chars,
+    /// Bytes of UTF-8 text.
+    Bytes,
+}
+
+impl SurroundingUnit {
+    /// The characters `n` of this unit cover at the end of `text`, the editor's text before the deletion. A character
+    /// the range only partly covers stays.
+    pub fn chars_before(self, n: usize, text: &str) -> usize {
+        match self {
+            SurroundingUnit::Chars => n,
+            SurroundingUnit::Bytes => {
+                let from = text.len().saturating_sub(n);
+                text.char_indices().filter(|(at, _)| *at >= from).count()
+            }
+        }
+    }
+
+    /// The characters `n` of this unit cover at the start of `text`, the editor's text after the deletion. A
+    /// character the range only partly covers stays.
+    pub fn chars_after(self, n: usize, text: &str) -> usize {
+        match self {
+            SurroundingUnit::Chars => n,
+            SurroundingUnit::Bytes => text.char_indices().take_while(|(at, c)| at + c.len_utf8() <= n).count(),
+        }
+    }
+}
+
 /// One input of an editor part.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -20,13 +52,15 @@ pub enum EditorInput {
         /// How much to delete.
         by: Granularity,
     },
-    /// Characters around the caret, deleted for the IME.
+    /// Text around the caret or the marked text, deleted for the IME.
     #[non_exhaustive]
     DeleteSurrounding {
-        /// Characters before the caret.
+        /// How much lies before the caret, in `unit`.
         before: usize,
-        /// Characters after the caret.
+        /// How much lies after the caret, in `unit`.
         after: usize,
+        /// What `before` and `after` count.
+        unit: SurroundingUnit,
     },
     /// AccessKit `SetTextSelection`.
     #[non_exhaustive]
@@ -64,7 +98,12 @@ impl EditorInput {
 
     /// A `DeleteSurrounding` of `before` and `after` characters.
     pub const fn delete_surrounding(before: usize, after: usize) -> Self {
-        EditorInput::DeleteSurrounding { before, after }
+        EditorInput::DeleteSurrounding { before, after, unit: SurroundingUnit::Chars }
+    }
+
+    /// A `DeleteSurrounding` of `before` and `after` bytes of UTF-8 text, as winit reports it.
+    pub const fn delete_surrounding_bytes(before: usize, after: usize) -> Self {
+        EditorInput::DeleteSurrounding { before, after, unit: SurroundingUnit::Bytes }
     }
 
     /// A `Preedit` of `text` with the IME's cursor.

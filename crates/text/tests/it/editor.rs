@@ -243,6 +243,21 @@ fn a_click_during_composition_keeps_the_marked_text_and_interrupts_the_compositi
     assert_eq!(editor.commits.get(), 0, "a press in the text keeps the session open");
 }
 
+/// An input method that counts the text around the caret in bytes (winit on macOS and Wayland) deletes the characters
+/// those bytes cover: "é" is two bytes, "€" three, and a character the range only partly covers stays.
+#[trial]
+fn the_input_methods_byte_counts_delete_the_characters_around_the_caret() {
+    let mut editor = session("xé€y", None);
+    editor.focus();
+    *editor.selection.borrow_mut() = TextSelection::caret_at(2);
+    editor.fixture.settle();
+    editor.fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 2 })]).settle();
+    assert_eq!(editor.text(), "xé€y", "a range that ends inside a character deletes nothing of it");
+    editor.fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurroundingBytes { before_bytes: 2, after_bytes: 3 })]).settle();
+    assert_eq!(editor.text(), "xy", "two bytes before cover \"é\", three after cover \"€\"");
+    assert_eq!(*editor.selection.borrow(), TextSelection::caret_at(1), "the caret stays between the neighbours");
+}
+
 /// Cmd+. cancels a session with edits, though Esc commits (the default); while a composition is open it does nothing,
 /// and a session without edits gives no `Cancel`. A press frame that runs a second pass cancels once.
 #[trial]
