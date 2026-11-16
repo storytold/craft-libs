@@ -12,7 +12,7 @@ use crate::runtime::pointer;
 use craft_behavior::OwnerClass;
 use craft_behavior::overlay::Side;
 use egui::emath::TSTransform;
-use egui::{Context, Id, LayerId, Pos2, Rect, ViewportId};
+use egui::{Context, Id, Pos2, Rect, ViewportId};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -385,7 +385,7 @@ pub fn top(ctx: &Context) -> Option<Id> {
 /// Whether `layer` is the layer of a popup open above `below` in last pass's overlay stack: `layer` belongs to a
 /// non-exiting popup entry, and `below` is the window's base layer (no entry's layer) or the layer of an entry
 /// opened before it. The stack, not egui's area order, says which layer was opened above which.
-pub(crate) fn popup_above(ctx: &Context, layer: LayerId, below: LayerId) -> bool {
+pub(crate) fn popup_above(ctx: &Context, layer: Layer, below: Layer) -> bool {
     with_pass(ctx, |pass| {
         // Entries are recorded parent first, so an earlier entry was opened before a later one.
         let Some(at) = pass.last.iter().position(|entry| entry.layer == layer && entry.rank == Rank::Popup && !entry.exiting) else {

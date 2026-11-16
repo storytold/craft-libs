@@ -319,6 +319,7 @@ pub(crate) fn type_on(pen: &Pen, path: bool) {
             .collect()
     };
     let dot = |centre: Vec2, grow: f32, color: Color32| {
+        // design: allow[literal-size/vec2](pointer art is a fixed bitmap-like drawing around the hotspot, not a layout size)
         pen.push(Mark::Block(Rect::from_center_size(centre.to_pos2(), Vec2::splat(DOT_SIDE)).expand(grow), 0.0, color));
     };
     // The dots' halos go under the beam and their fills over it, so a dot on the stem stays whole.
@@ -333,6 +334,7 @@ pub(crate) fn type_on(pen: &Pen, path: bool) {
 
 /// The locator: a square frame centred on the pointer between halo frames a hairline outside and inside it.
 pub(crate) fn locator(pen: &Pen) {
+    // design: allow[literal-size/vec2](pointer art is a fixed bitmap-like drawing around the hotspot, not a layout size)
     let rect = Rect::from_center_size(Pos2::ZERO, Vec2::splat(LOCATOR_SIDE));
     let halo = Stroke::new(pen.thin, pen.halo);
     pen.push(Mark::Frame(rect.expand(pen.thin), halo));
