@@ -363,6 +363,7 @@ impl StackDialog for HostedLayerStyle {
         let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft))
             .opened(Bind::bound(open))
             .preview(Some(Bind::bound(&mut preview)))
+            .side_buttons(true)
             .extra_buttons([FooterButton::new(new_style, DialogRole::Other)])
             .footer_extra(|ui| {
                 if let (Some(paint), Some(draft)) = (preview_thumb.as_deref(), snapshot.as_ref()) {

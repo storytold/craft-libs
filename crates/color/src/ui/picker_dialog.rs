@@ -454,6 +454,7 @@ impl StackDialog for ColorPickerDialog {
         let shown = Dialog::new(title.clone())
             .opened(Bind::bound(open))
             .buttons(buttons)
+            .side_buttons(true)
             .close_on_enter(true)
             .initial_focus(Initial::Keep)
             .roomy(true)

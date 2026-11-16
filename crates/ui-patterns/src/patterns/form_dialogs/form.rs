@@ -158,8 +158,9 @@ type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
 /// - The body returns whether the value can be accepted; OK is enabled while it can and `ok_enabled` is true.
 /// - With [`history`](FormDialog::history), Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z step the dialog's own value; a drag or a
 ///   typing run is one step.
-/// - With [`preview`](FormDialog::preview), the buttons stand in a column beside the body, with the Preview check box
-///   and the footer controls under them.
+/// - The footer goes across the foot, the Preview check box and the footer controls at its start edge; with
+///   [`side_buttons`](FormDialog::side_buttons) the buttons stand in a column beside the body, with the Preview check
+///   box and the footer controls under them.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern)]
 #[pattern(probe(FormDialog<'static, bool>))]
@@ -179,6 +180,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     closable: bool,
     accept_stays_open: bool,
     enter_confirms: bool,
+    side_buttons: bool,
     footer_extra: Option<FooterExtraFn<'a>>,
     /// The Preview check box when shown, over its owner's bind or (`None`) the footer's memory.
     preview: Option<Option<Bind<'a, bool>>>,
@@ -210,6 +212,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable: true,
             accept_stays_open: false,
             enter_confirms: true,
+            side_buttons: false,
             footer_extra: None,
             preview: None,
             extra_buttons: Vec::new(),
@@ -308,12 +311,18 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// The Preview check box, first under the buttons, which stand beside the body: the host previews the value while
-    /// it is on, and the unfiltered picture while it is held ([`FormOutput::comparing`]). With `on`, the box reads and
-    /// writes that bind (a kept bind starts on). Without it, every open starts with the box on, and the dialog keeps
-    /// it off while it stays open.
+    /// The Preview check box, first in the footer: the host previews the value while it is on, and the unfiltered
+    /// picture while it is held ([`FormOutput::comparing`]). With `on`, the box reads and writes that bind (a kept
+    /// bind starts on). Without it, every open starts with the box on, and the dialog keeps it off while it stays open.
     pub fn preview(mut self, on: Option<Bind<'a, bool>>) -> Self {
         self.preview = Some(on);
+        self
+    }
+
+    /// Whether the buttons stand in a column beside the body, with the Preview check box and the footer controls under
+    /// them (`Dialog::side_buttons`), instead of across the foot: Photoshop's button-column dialogs.
+    pub fn side_buttons(mut self, on: bool) -> Self {
+        self.side_buttons = on;
         self
     }
 
@@ -375,6 +384,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable,
             accept_stays_open,
             enter_confirms,
+            side_buttons,
             footer_extra,
             preview,
             extra_buttons,
@@ -413,7 +423,11 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 }
             }
         };
-        let mut dialog = Dialog::new(title).closable(closable).close_on_enter(ok_enabled && enter_confirms).outer_gesture(outer_gesture);
+        let mut dialog = Dialog::new(title)
+            .closable(closable)
+            .close_on_enter(ok_enabled && enter_confirms)
+            .outer_gesture(outer_gesture)
+            .side_buttons(side_buttons);
         dialog = reset.install(dialog, accept, restore);
         if let Some(open) = open {
             dialog = dialog.opened(open);
@@ -423,9 +437,6 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         }
         let changed = RefCell::new(None::<V>);
         let (preview_on, comparing) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
-        if preview.is_some() {
-            dialog = dialog.side_buttons(true);
-        }
         if footer_extra.is_some() || preview.is_some() {
             let (on, held, label) = (Rc::clone(&preview_on), Rc::clone(&comparing), env.words::<FormDialogWords>().preview.clone());
             let (mut extra, mut preview) = (footer_extra, preview);
