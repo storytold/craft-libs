@@ -54,13 +54,15 @@ pub trait CraftApp: eframe::App + 'static {
     where
         Self: Sized;
 
-    /// How to set up wgpu (adapter limits, backends). The default is egui-wgpu's.
+    /// How to set up wgpu (backends, adapter, device). The default is egui-wgpu's, except that
+    /// the device asks for the adapter's own limits: egui-wgpu's defaults are more than some
+    /// adapters allow (the iPad simulator's), and with them no device could be made.
     #[must_use]
     fn wgpu_configuration() -> eframe::egui_wgpu::WgpuConfiguration
     where
         Self: Sized,
     {
-        eframe::egui_wgpu::WgpuConfiguration::default()
+        host::wgpu_configuration()
     }
 
     /// A file the system handed over: opened from Files, shared to the app, or dropped on it.
@@ -206,7 +208,45 @@ macro_rules! export {
 
 #[cfg(test)]
 mod tests {
-    use super::Action;
+    use eframe::egui_wgpu::WgpuSetup;
+    use eframe::wgpu;
+
+    use super::{Action, CraftApp, PickedFile, Platform, Snapshot};
+
+    /// An app that keeps every default.
+    struct Probe;
+
+    impl eframe::App for Probe {
+        fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+    }
+
+    impl CraftApp for Probe {
+        fn create(_ctx: &egui::Context, _wgpu: Option<eframe::egui_wgpu::RenderState>, _platform: Platform) -> Self {
+            Self
+        }
+        fn open_file(&mut self, _ctx: &egui::Context, _file: PickedFile) {}
+        fn action(&mut self, _ctx: &egui::Context, _action: &Action) -> Result<(), String> {
+            Ok(())
+        }
+        fn snapshot(&self) -> Snapshot {
+            Snapshot::default()
+        }
+    }
+
+    /// Found on the iPad simulator: its adapter allows 15 inter-stage shader variables, egui-wgpu's
+    /// default device asked for 16, the device couldn't be made and the canvas stayed black.
+    #[test]
+    fn the_default_gpu_device_asks_for_the_adapters_own_limits() {
+        let WgpuSetup::CreateNew(setup) = Probe::wgpu_configuration().wgpu_setup else {
+            panic!("the default makes its own device");
+        };
+        let Ok(adapter) = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter here: skipped");
+            return;
+        };
+        let descriptor = (setup.device_descriptor)(&adapter);
+        assert_eq!(descriptor.required_limits, adapter.limits());
+    }
 
     #[test]
     fn actions_arrive_as_tagged_json() {

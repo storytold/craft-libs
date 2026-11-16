@@ -31,7 +31,8 @@ SwiftUI / Compose shell  ──actions (JSON)──▶  craft-mobile host  ─�
    `../craft-libs/crates/mobile` and take `CRAFT_MOBILE_DIR` to point elsewhere).
 2. **`CraftApp`.**
    - `create`: build the app exactly as the desktop does, minus desktop-only services.
-   - `wgpu_configuration`: only if the app needs adapter limits beyond egui-wgpu's defaults.
+   - `wgpu_configuration`: rarely needed. The default device asks for the adapter's own limits
+     (egui-wgpu's defaults are more than the iPad simulator allows).
    - `open_file`: push into the app's inbox (most apps already have one for the web build).
    - `action`: `Open/Save/Undo/Redo` → the app's menu ids, run *as the menu runs them*
      (dialogs and enable rules included); `Select`/`SetVisible` → its item commands;

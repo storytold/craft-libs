@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use eframe::egui_wgpu::{self, RenderState, RendererOptions, ScreenDescriptor, WgpuConfiguration};
+use eframe::egui_wgpu::{self, RenderState, RendererOptions, ScreenDescriptor, WgpuConfiguration, WgpuSetupCreateNew};
 use eframe::wgpu;
 use egui::{Event, Pos2, RawInput, TouchDeviceId, TouchId, TouchPhase, ViewportId};
 
@@ -54,6 +54,23 @@ impl ViewSize {
         let px = egui::vec2(self.width_px as f32, self.height_px as f32);
         px / self.scale
     }
+}
+
+/// egui-wgpu's setup, but the device asks for the adapter's own limits. egui-wgpu's default asks
+/// for wgpu's default limits, which not every adapter meets: the iPad simulator's allows 15
+/// inter-stage shader variables, not 16, and then no device can be made and nothing draws. The
+/// adapter's limits are by definition ones it can grant, and apps get all the GPU offers (an
+/// iPad's 16384-pixel textures, not 8192).
+pub(crate) fn wgpu_configuration() -> WgpuConfiguration {
+    let setup = WgpuSetupCreateNew {
+        device_descriptor: Arc::new(|adapter| wgpu::DeviceDescriptor {
+            label: Some("craft-mobile"),
+            required_limits: adapter.limits(),
+            ..wgpu::DeviceDescriptor::default()
+        }),
+        ..WgpuSetupCreateNew::without_display_handle()
+    };
+    WgpuConfiguration { wgpu_setup: setup.into(), ..WgpuConfiguration::default() }
 }
 
 /// One touch as the platform reports it, in points from the view's top-left corner.
