@@ -2904,6 +2904,7 @@ version = "0.1.0"
 dependencies = [
  "craft-atomic",
  "craft-host",
+ "craft-settings",
  "dirs",
  "serde",
  "serde_json",
@@ -3019,6 +3020,7 @@ dependencies = [
  "craft-behavior",
  "craft-font-manager",
  "craft-host",
+ "craft-keymap",
  "craft-theme",
  "craft-ui",
  "egui",
