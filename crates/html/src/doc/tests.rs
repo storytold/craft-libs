@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn thai_distributed_exports_as_justified() {
+    let mut p = craft_wordmodel::Paragraph::with_text("ภาษาไทย", Default::default());
+    p.props.align = Some(Align::ThaiDistribute);
+    let mut doc = Document::new();
+    doc.body = vec![craft_wordmodel::para_block(p)];
+    assert!(export(&doc).contains("text-align:justify"));
+}
+
+#[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");
     assert_eq!(unescape("a&#x+41;b"), "a&#x+41;b");

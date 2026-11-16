@@ -50,6 +50,35 @@ fn doc_with(blocks: Vec<Paragraph>) -> Document {
     d
 }
 
+#[test]
+fn thai_and_regular_distributed_alignments_remain_distinct() {
+    let mut thai = Paragraph::with_text("ภาษาไทย", CharProps::default());
+    thai.props.align = Some(Align::ThaiDistribute);
+    let mut regular = Paragraph::with_text("English", CharProps::default());
+    regular.props.align = Some(Align::Distribute);
+    let mut doc = doc_with(vec![thai, regular]);
+    Arc::make_mut(&mut doc.styles).upsert(Style {
+        id: "ThaiStyle".into(),
+        name: "Thai Style".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
+        ..Default::default()
+    });
+    let bytes = craft_docx::write(&doc).expect("write");
+
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("w:val=\"thaiDistribute\""));
+    assert!(xml.contains("w:val=\"distribute\""));
+
+    let reopened = craft_docx::read(&bytes).expect("read");
+    let paragraphs = paras(&reopened);
+    assert_eq!(paragraphs[0].props.align, Some(Align::ThaiDistribute));
+    assert_eq!(paragraphs[1].props.align, Some(Align::Distribute));
+    assert_eq!(reopened.styles.get("ThaiStyle").unwrap().para.align, Some(Align::ThaiDistribute));
+}
+
 /// A paragraph built from (text, props) runs.
 fn para_runs(runs: &[(&str, CharProps)]) -> Paragraph {
     let mut p = Paragraph::new();
@@ -230,6 +259,7 @@ fn every_para_prop_round_trips() {
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
+        ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
         ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
