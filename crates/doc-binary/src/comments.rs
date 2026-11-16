@@ -14,6 +14,9 @@ use crate::fib::Fib;
 
 /// Comments read per document.
 const MAX: usize = 10_000;
+/// UTF-16 units (or bytes) kept of an author's name: each comment holds a copy of its author's,
+/// so a long one named by every comment can't multiply into a large allocation.
+const MAX_AUTHOR: usize = 255;
 /// Pair indexes ([MS-DOC] `FibRgFcLcb97`, `FibRgFcLcb2002`).
 const PLCF_AND_REF: usize = 4;
 const PLCF_AND_TXT: usize = 5;
@@ -55,8 +58,9 @@ pub(crate) fn parse(table: &[u8], fib: &Fib, layout: Layout) -> Vec<RawComment> 
     let bytes =
         |pair: usize| fib.pair(pair).and_then(|(fc, lcb)| table.get(fc as usize..(fc as usize).saturating_add(lcb as usize))).unwrap_or_default();
     let refs = bytes(PLCF_AND_REF);
-    let n = refs.len().saturating_sub(4) / (4 + atrd);
-    let n = n.min(MAX);
+    // The ATRDs follow all the stored CPs, however many are read.
+    let stored = refs.len().saturating_sub(4) / (4 + atrd);
+    let n = stored.min(MAX);
     let cps = plc_cps(refs, n + 1);
     let txts = plc_cps(bytes(PLCF_AND_TXT), n + 1);
     let owners = owners(bytes(GRP_XST_ATN_OWNERS), layout);
@@ -64,29 +68,34 @@ pub(crate) fn parse(table: &[u8], fib: &Fib, layout: Layout) -> Vec<RawComment> 
         Layout::Word97 => (ranges(bytes(STTBF_ATN_BKMK), bytes(PLCF_ATN_BKF), bytes(PLCF_ATN_BKL)), dates(bytes(ATRD_EXTRA), n)),
         Layout::Word6(_) => (Vec::new(), Vec::new()),
     };
+    // The first range of each tag, as a scan would find it.
+    let mut by_tag: std::collections::HashMap<i32, (u32, u32)> = std::collections::HashMap::new();
+    for (t, r) in ranges {
+        by_tag.entry(t).or_insert(r);
+    }
     let mut out = Vec::new();
     let mut kept_to = 0;
     for i in 0..n {
         let (Some(&cp), Some(&a), Some(&b)) = (cps.get(i), txts.get(i), txts.get(i + 1)) else { break };
-        let Some(d) = refs.get(4 * (n + 1) + atrd * i..4 * (n + 1) + atrd * (i + 1)) else { break };
+        let Some(d) = refs.get(4 * (stored + 1) + atrd * i..4 * (stored + 1) + atrd * (i + 1)) else { break };
         // As for notes: a story starting before the end of the last one kept is a hostile table
         // reading the same text again.
         if b <= a || a < kept_to {
             continue;
         }
         kept_to = b;
-        let i16_at = |at: usize| d.get(at..at + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+        let u16_at = |at: usize| d.get(at..at + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
         let i32_at = |at: usize| d.get(at..at + 4).map_or(-1, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
         let (initials, ibst, tag) = match layout {
             Layout::Word97 => {
-                let len = usize::from(i16_at(0)).min(9);
-                let units: Vec<u16> = (0..len).map(|k| i16_at(2 + 2 * k)).collect();
-                (String::from_utf16_lossy(&units), i16_at(20), i32_at(26))
+                let len = usize::from(u16_at(0)).min(9);
+                let units: Vec<u16> = (0..len).map(|k| u16_at(2 + 2 * k)).collect();
+                (String::from_utf16_lossy(&units), u16_at(20), i32_at(26))
             }
             Layout::Word6(cp) => {
                 let len = usize::from(d.first().copied().unwrap_or(0)).min(9);
                 let initials = d.get(1..1 + len).unwrap_or_default().iter().map(|&b| craft_codepage::code_page_byte(cp, b)).collect();
-                (initials, i16_at(10), i32_at(16))
+                (initials, u16_at(10), i32_at(16))
             }
         };
         out.push(RawComment {
@@ -95,7 +104,7 @@ pub(crate) fn parse(table: &[u8], fib: &Fib, layout: Layout) -> Vec<RawComment> 
             author: owners.get(usize::from(ibst)).cloned().unwrap_or_default(),
             initials,
             date: dates.get(i).cloned().unwrap_or_default(),
-            range: ranges.iter().find(|(t, _)| *t == tag && tag != -1).map(|(_, r)| *r),
+            range: (tag != -1).then(|| by_tag.get(&tag).copied()).flatten(),
         });
     }
     out
@@ -116,7 +125,7 @@ fn owners(grp: &[u8], layout: Layout) -> Vec<String> {
                 let Some(b) = grp.get(at..at + 2) else { break };
                 let len = usize::from(u16::from_le_bytes([b[0], b[1]]));
                 let Some(text) = grp.get(at + 2..at + 2 + 2 * len) else { break };
-                let units: Vec<u16> = text.as_chunks::<2>().0.iter().map(|u| u16::from_le_bytes(*u)).collect();
+                let units: Vec<u16> = text.as_chunks::<2>().0.iter().take(MAX_AUTHOR).map(|u| u16::from_le_bytes(*u)).collect();
                 out.push(String::from_utf16_lossy(&units));
                 at += 2 + 2 * len;
             }
@@ -124,7 +133,7 @@ fn owners(grp: &[u8], layout: Layout) -> Vec<String> {
                 let Some(&len) = grp.get(at) else { break };
                 let len = usize::from(len);
                 let Some(text) = grp.get(at + 1..at + 1 + len) else { break };
-                out.push(text.iter().map(|&b| craft_codepage::code_page_byte(cp, b)).collect());
+                out.push(text.iter().take(MAX_AUTHOR).map(|&b| craft_codepage::code_page_byte(cp, b)).collect());
                 at += 1 + len;
             }
         }
@@ -253,6 +262,29 @@ mod tests {
                 (24, (20, 29), "Ann Able", "AA", Some((12, 24)), date),
             ]
         );
+    }
+
+    #[test]
+    fn more_comments_than_are_read_keep_their_atrds_and_short_authors() {
+        // 10,001 comments, one more than are read: the ATRDs still start after all the stored
+        // CPs, so the first comment keeps its initials and author. Its author's name, 300
+        // characters, keeps its first 255.
+        let n = super::MAX + 1;
+        let cps: Vec<u32> = (0..=n as u32).collect();
+        let atrds: Vec<u8> = (0..n).flat_map(|i| atrd97(if i == 0 { "ZZ" } else { "AA" }, u16::from(i == 0), -1)).collect();
+        let refs = [u32s(&cps), atrds].concat();
+        let txts = u32s(&(0..=n as u32).map(|i| 2 * i).collect::<Vec<_>>());
+        let long = "x".repeat(300);
+        let mut owners = Vec::new();
+        for name in ["Ann", long.as_str()] {
+            owners.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            owners.extend(name.encode_utf16().flat_map(u16::to_le_bytes));
+        }
+        let (fib, table) = with(&[(4, refs), (5, txts), (36, owners)]);
+        let got = parse(&table, &fib, Layout::Word97);
+        assert_eq!(got.len(), super::MAX);
+        assert_eq!((got[0].initials.as_str(), got[0].author.len()), ("ZZ", super::MAX_AUTHOR));
+        assert_eq!((got[1].initials.as_str(), got[1].author.as_str()), ("AA", "Ann"));
     }
 
     #[test]
