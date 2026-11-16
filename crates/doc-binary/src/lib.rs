@@ -1230,7 +1230,8 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
         };
         // The run's character style, whose formatting joins the paragraph style's as the base of
         // the run's own sprms (see `fmt::with_char_style`).
-        let char_style = char_style(ctx, grpprl);
+        let prc_style = prc_with_style(ctx.pieces.piece_prm(cp));
+        let char_style = char_style(ctx, prc_style.unwrap_or(grpprl));
         let combined;
         let base = match char_style {
             Some(cs) => {
@@ -1239,7 +1240,17 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
             }
             None => para_base,
         };
-        let mut props = char_props(grpprl, ctx.fonts, base);
+        // A Prc naming a style resets what the CHPX gave the run, but for what sprmCIstd keeps.
+        let mut props = match prc_style {
+            Some(_) => {
+                let mut kept = base.clone();
+                for prl in sprm::iter(grpprl).filter(|p| p.sgc() == 2 && fmt::kept_by_istd(p.op)) {
+                    fmt::apply_char(&mut kept, &prl, base, ctx.fonts);
+                }
+                kept
+            }
+            None => char_props(grpprl, ctx.fonts, base),
+        };
         apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
         // Kept as direct formatting: what differs from what the styles give the run, as the model
         // resolves them (the paragraph style, then the character style over it). A toggle the
@@ -1294,7 +1305,15 @@ fn style_of(ctx: &WalkCtx<'_>, istd: u16) -> Option<String> {
 /// read ahead once per paragraph.
 fn style_ahead(ctx: &WalkCtx<'_>, cp: u32, end: u32) -> Option<String> {
     let mut at = cp;
+    // No further than the walk may read: past that it stops anyway, and a file whose pieces
+    // repeat a stretch with no paragraph mark can't make this scan run on for it. Each step,
+    // a character or a skipped stretch, counts.
+    let mut left = ctx.budget.get();
     while at < end {
+        if left == 0 {
+            return None;
+        }
+        left -= 1;
         match ctx.pieces.char_at(ctx.word, at) {
             Ok((c, units)) => {
                 let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&at.saturating_add(1)).is_ok();
@@ -1398,10 +1417,8 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
             if !work.charge(g.len() as u64, Cost::Formatting) {
                 return;
             }
-            for prl in sprm::iter(g) {
-                if prl.sgc() == 2 {
-                    fmt::apply_char(props, &prl, base, fonts);
-                }
+            for prl in fmt::after_istd(g) {
+                fmt::apply_char(props, &prl, base, fonts);
             }
         }
         PrmRef::Grpprl(None) => {}
@@ -1411,12 +1428,19 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
 /// Character props from a CHPX grpprl applied over `base`.
 fn char_props(grpprl: &[u8], fonts: &[String], base: &CharProps) -> CharProps {
     let mut p = base.clone();
-    for prl in sprm::iter(grpprl) {
-        if prl.sgc() == 2 {
-            fmt::apply_char(&mut p, &prl, base, fonts);
-        }
+    for prl in fmt::after_istd(grpprl) {
+        fmt::apply_char(&mut p, &prl, base, fonts);
     }
     p
+}
+
+/// A piece's Prm1 grpprl, when it names a character style (`sprmCIstd`): applied after the
+/// CHPX, its style is the run's and resets the CHPX's formatting.
+fn prc_with_style<'w>(prm: PrmRef<'w>) -> Option<&'w [u8]> {
+    match prm {
+        PrmRef::Grpprl(Some(g)) if fmt::char_style_istd(g).is_some() => Some(g),
+        _ => None,
+    }
 }
 
 /// Read a root-level stream fully; `None` if it is absent or cannot be read. A stream larger than

@@ -3405,3 +3405,32 @@ fn section_note_options_are_explicit() {
     assert_eq!((f.pos, f.num_restart, f.num_start), (Some(NotePos::PageBottom), Some(NoteRestart::Continuous), Some(3)));
     assert_eq!((e.num_restart, e.num_start), (Some(NoteRestart::EachSect), None));
 }
+
+/// `sprmCIstd` resets the run to its paragraph style before the style applies ([MS-DOC] §2.6.1),
+/// so bold before it is undone and highlighting, which it keeps, is not: bold then an italic
+/// style is italic, not bold italic. A piece's Prc naming a style is applied after the CHPX, so
+/// its style is the run's, and resets the CHPX's bold too.
+#[test]
+fn a_character_style_resets_the_formatting_before_it() {
+    let styles = vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (2, 0x0FFF, "Emph", Vec::new(), grpprl(&[(0x0836, &[0x01])]))];
+    let read_with = |chpx: Vec<u8>, extra: RichExtra| {
+        let spec = RichSpec {
+            text: "ab\r",
+            styles: styles.clone(),
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, chpx), (2, Vec::new())],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
+        let p = para0(&doc);
+        let r = p.runs.first().expect("a run");
+        let c = doc.styles.resolve_char(p.props.style.as_deref(), &r.props);
+        (r.props.style.clone(), c.bold, c.italic, r.props.highlight.is_some())
+    };
+    let emph = || Some("Emph".to_owned());
+    let chpx = grpprl(&[(0x0835, &[0x01]), (0x2A0C, &[0x07]), (0x4A30, &1u16.to_le_bytes())]);
+    assert_eq!(read_with(chpx, RichExtra::default()), (emph(), false, true, true));
+    let bold = grpprl(&[(0x0835, &[0x01])]);
+    let prc = grpprl(&[(0x4A30, &1u16.to_le_bytes())]);
+    assert_eq!(read_with(bold, RichExtra { prcs: vec![prc], prm: 0x0001, ..Default::default() }), (emph(), false, true, false));
+}
