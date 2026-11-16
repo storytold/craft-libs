@@ -1043,7 +1043,13 @@ fn check_finite(scene: &Scene) -> Result<()> {
     let materials = scene.materials.iter().all(|m| {
         let values = [m.metallic, m.roughness, m.normal_scale, m.occlusion_strength];
         let cutoff = if let AlphaMode::Mask(c) = m.alpha_mode { c } else { 0.0 };
-        m.base_color.iter().chain(&m.emissive).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite()
+        let slots = [&m.base_color_texture, &m.metallic_roughness_texture, &m.normal_texture, &m.occlusion_texture, &m.emissive_texture];
+        let transforms = slots
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.transform)
+            .all(|t| t.offset.iter().chain(&t.scale).chain([&t.rotation]).all(|x| x.is_finite()));
+        m.base_color.iter().chain(&m.emissive).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite() && transforms
     });
     if positions && nodes && materials { Ok(()) } else { Err(malformed(KIND, "a position, transform or material value is not finite")) }
 }

@@ -786,6 +786,10 @@ fn writer_refuses_what_is_not_gltf() {
     s.materials[0].roughness = f32::NAN;
     assert!(write_glb(&s, &limits).is_err());
     let mut s = painted();
+    let t = s.materials.iter_mut().find_map(|m| m.base_color_texture.as_mut().and_then(|t| t.transform.as_mut())).unwrap();
+    t.rotation = f32::NAN;
+    assert!(write_glb(&s, &limits).is_err(), "a texture transform that is not finite");
+    let mut s = painted();
     s.meshes[0].parts[0].corners[0].position = 50;
     assert!(write_glb(&s, &limits).is_err());
     let mut s = painted();
