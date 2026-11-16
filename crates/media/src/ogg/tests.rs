@@ -91,6 +91,11 @@ fn pkt(i: usize, len: usize) -> Vec<u8> {
 
 /// Header pages, then pages of 3 packets each; the last page's granule trims `trim` samples.
 fn opus_file(npk: usize, pre_skip: u16, trim: i64) -> Vec<u8> {
+    opus_file_with(npk, pre_skip, |done, last| done as i64 * 960 - if last { trim } else { 0 })
+}
+
+/// Like `opus_file`, with the granule of each data page chosen by `granule(packets_done, is_last_page)`.
+fn opus_file_with(npk: usize, pre_skip: u16, granule: impl Fn(usize, bool) -> i64) -> Vec<u8> {
     let mut f = Vec::new();
     let head = opus_head(pre_skip);
     let (l, b) = lace(&[&head], false);
@@ -103,10 +108,7 @@ fn opus_file(npk: usize, pre_skip: u16, trim: i64) -> Vec<u8> {
     for (seq, chunk) in (2..).zip(pkts.chunks(3)) {
         done += chunk.len();
         let last = done == npk;
-        let mut g = done as i64 * 960;
-        if last {
-            g -= trim;
-        }
+        let g = granule(done, last);
         let refs: Vec<&[u8]> = chunk.iter().map(Vec::as_slice).collect();
         let (l, b) = lace(&refs, false);
         page(&mut f, if last { 0x04 } else { 0 }, g, 9, seq, &l, &b);
@@ -646,4 +648,136 @@ fn theora_codec_params_carry_the_picture_size() {
     }
     let p = open(&f).unwrap().streams[0].codec_params();
     assert_eq!((p.width, p.height), (Some(1920), Some(1080)));
+}
+
+/// Bit-at-a-time CRC of RFC 3533 §6 (polynomial 0x04C11DB7, initial value 0, no reflection, no final XOR).
+fn crc32_bitwise(mut crc: u32, data: &[u8]) -> u32 {
+    for &b in data {
+        crc ^= u32::from(b) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04C1_1DB7 } else { crc << 1 };
+        }
+    }
+    crc
+}
+
+#[test]
+fn crc_matches_bitwise_reference_on_every_length_and_alignment() {
+    let mut seed = 7u64;
+    let buf: Vec<u8> = (0..70_100)
+        .map(|_| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u8
+        })
+        .collect();
+    // every short length (covers the 16-byte main loop and every tail length), at several start offsets
+    for start in 0..4 {
+        for len in 0..=64 {
+            let d = &buf[start..start + len];
+            assert_eq!(crc32(d), crc32_bitwise(0, d), "start {start} len {len}");
+        }
+    }
+    for len in [65, 255, 4096, 65_307, 70_000] {
+        for start in [0, 1, 3] {
+            let d = &buf[start..start + len];
+            assert_eq!(crc32(d), crc32_bitwise(0, d), "start {start} len {len}");
+        }
+    }
+    // all-zero and all-ones input
+    assert_eq!(crc32(&[0u8; 100]), 0);
+    assert_eq!(crc32(&[0xFFu8; 100]), crc32_bitwise(0, &[0xFFu8; 100]));
+}
+
+#[test]
+fn crc_update_continues_across_any_split() {
+    let data: Vec<u8> = (0..200u32).map(|i| (i * 31 + 5) as u8).collect();
+    let whole = crc32(&data);
+    for cut in 0..=data.len() {
+        let (a, b) = data.split_at(cut);
+        assert_eq!(crc32_update(crc32_update(0, a), b), whole, "cut {cut}");
+        assert_eq!(crc32_update(crc32_bitwise(0, a), b), whole, "cut {cut} (reference head)");
+    }
+}
+
+#[test]
+fn read_packet_checks_its_ranges_against_the_source_before_allocating() {
+    let f = opus_file(10, 312, 500);
+    let o = open(&f[..]).unwrap();
+    let s = o.stream_of(Codec::Opus).unwrap();
+    // The last packet lies past the end of a source cut short: an error, not a read of missing bytes.
+    let short = &f[..f.len() / 2];
+    assert!(matches!(o.read_packet(short, s, 9), Err(Error::Invalid(_))));
+}
+
+#[test]
+fn opus_timing_includes_packets_after_the_last_known_granule() {
+    let f = opus_file(6, 312, 0);
+    let o = open(&f[..]).unwrap();
+    let mut stream = o.streams[0].clone();
+    // Missing granules on complete-packet pages are non-conforming. The recovery fallback still
+    // assigns their packet positions; the total must include the same samples.
+    stream.packets.last_mut().unwrap().granule = None;
+    let timing = OpusTiming::of(&stream, 312);
+    assert_eq!(timing.starts, vec![-312, 648, 1608, 2568, 3528, 4488]);
+    assert_eq!(timing.total, 6 * 960 - 312);
+
+    // With no usable granule, every complete packet still contributes its TOC duration.
+    for packet in &mut stream.packets {
+        packet.granule = None;
+    }
+    let timing = OpusTiming::of(&stream, 312);
+    assert_eq!(timing.starts, vec![-312, 648, 1608, 2568, 3528, 4488]);
+    assert_eq!(timing.total, 6 * 960 - 312);
+}
+
+/// The timing must be defined, bounded and panic-free for any granule a file can carry.
+fn assert_sane_timing(t: &OpusTiming, npk: usize) {
+    assert_eq!(t.starts.len(), npk);
+    // treated as unknown granules: the packets simply follow one another from the start
+    for (k, s) in t.starts.iter().enumerate() {
+        assert_eq!(*s, k as i64 * 960 - 312, "packet {k}");
+    }
+    // as for a truncated file with no usable granule, the total stays 0: it never exceeds what the packets add up to
+    assert!((0..=npk as i64 * 960).contains(&t.total), "total {}", t.total);
+}
+
+#[test]
+fn opus_timing_ignores_a_granule_near_i64_max() {
+    // panicked with "attempt to add with overflow" in debug builds, wrapped in release
+    let f = opus_file_with(10, 312, |done, _| i64::MAX - 10 + done as i64 / 3);
+    let o = open(&f).unwrap();
+    assert_sane_timing(&OpusTiming::of(&o.streams[0], 312), 10);
+}
+
+#[test]
+fn opus_timing_ignores_a_granule_of_i64_min() {
+    // panicked with "attempt to subtract with overflow" in debug builds
+    for g in [i64::MIN, i64::MIN + 1, -2] {
+        let f = opus_file_with(10, 312, |_, _| g);
+        let o = open(&f).unwrap();
+        assert_sane_timing(&OpusTiming::of(&o.streams[0], 312), 10);
+    }
+}
+
+#[test]
+fn opus_timing_with_a_bad_granule_on_one_page_recovers_on_the_next() {
+    // pages of 3 packets: the second page's granule is absurd, the others are right
+    let f = opus_file_with(9, 0, |done, _| if done == 6 { i64::MAX } else { done as i64 * 960 });
+    let o = open(&f).unwrap();
+    let t = OpusTiming::of(&o.streams[0], 0);
+    let expect: Vec<i64> = (0..9).map(|k| k * 960).collect();
+    assert_eq!(t.starts, expect);
+    assert_eq!(t.total, 9 * 960);
+}
+
+#[test]
+fn largest_trusted_granule_with_a_huge_pre_skip_stays_in_range() {
+    let f = opus_file_with(6, 0, |done, _| MAX_OPUS_GRANULE - 6 * 960 + done as i64 * 960);
+    let o = open(&f).unwrap();
+    let t = OpusTiming::of(&o.streams[0], u32::MAX);
+    // shift = base (the first raw start, 2^62 - 5760) + u32::MAX; every start is relative to it
+    let expect: Vec<i64> = (0..6).map(|k| k * 960 - u32::MAX as i64).collect();
+    assert_eq!(t.starts, expect);
+    // the end (2^62) lies before the shift, so nothing is playable
+    assert_eq!(t.total, 0);
 }

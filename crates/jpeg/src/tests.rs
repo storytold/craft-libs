@@ -760,6 +760,52 @@ fn extended_huffman_matches_zune_on_baseline_data() {
 }
 
 #[test]
+fn progressive_huffman_matches_zune() {
+    let bytes = include_bytes!("../tests/data/testorig-huffman-progressive.jpg");
+    let (reference, (w, h)) = zune_decode(bytes);
+    let ours = decode_default(bytes).unwrap();
+    assert_eq!((ours.width, ours.height, ours.components), (w, h, 3));
+    assert!(!ours.damaged);
+    let Samples::U8(samples) = ours.samples else { panic!("8-bit fixture decoded with another precision") };
+    let mad = samples.iter().zip(&reference).map(|(&a, &b)| f32::from(a.abs_diff(b))).sum::<f32>() / samples.len() as f32;
+    assert!(mad < 2.0, "mean absolute difference {mad}");
+}
+
+#[test]
+fn avi1_default_huffman_tables_restore_a_missing_dht() {
+    let fixture = include_bytes!("../tests/data/testorig.jpg");
+    let mut without = fixture[..2].to_vec();
+    let mut at = 2;
+    while at + 1 < fixture.len() {
+        if fixture[at] != 0xFF {
+            break;
+        }
+        let marker = fixture[at + 1];
+        if marker == 0xDA {
+            without.extend_from_slice(&fixture[at..]);
+            break;
+        }
+        if marker == 0xC4 {
+            let len = usize::from(u16::from_be_bytes([fixture[at + 2], fixture[at + 3]]));
+            at += 2 + len;
+        } else if (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+            without.extend_from_slice(&fixture[at..at + 2]);
+            at += 2;
+        } else {
+            let len = usize::from(u16::from_be_bytes([fixture[at + 2], fixture[at + 3]]));
+            without.extend_from_slice(&fixture[at..at + 2 + len]);
+            at += 2 + len;
+        }
+    }
+    assert!(matches!(with_avi1_default_huffman(&without), std::borrow::Cow::Owned(_)));
+    let restored = with_avi1_default_huffman(&without);
+    let decoded = decode_default(&restored).unwrap();
+    let expected = decode_default(fixture).unwrap();
+    assert_eq!(decoded, expected);
+    assert!(matches!(with_avi1_default_huffman(fixture), std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
 fn malformed_streams_return_errors_not_panics() {
     let blocks = coefficients(6, 5, 500);
     let mut streams = vec![
@@ -814,10 +860,11 @@ fn limits_are_checked_before_allocating() {
     segment(&mut s, 0xC9, &[8, 0xFF, 0xFF, 0xFF, 0xFF, 3, 1, 0x44, 0, 2, 0x11, 0, 3, 0x11, 0]);
     let small = Limits { max_alloc: 1 << 20, ..Limits::default() };
     assert!(matches!(decode(&s, &small, None), Err(Error::LimitExceeded(_))));
-    // 64×64 gray: 32 KiB of coefficients and plane plus 4 KiB of output, each under the limit
-    // alone but not together.
+    // 64×64 gray: 32 KiB of coefficients and plane, 4 KiB of output and 128 upsampling steps,
+    // each under the limit alone but not together.
     let stream = arith_stream(8, 8, 8, &coefficients(64, 1, 100), &[(0, 63, 0, 0)], 0);
-    for (max_alloc, ok) in [(36 << 10, true), ((36 << 10) - 1, false), (32 << 10, false)] {
+    let all = (36 << 10) + 128 * size_of::<UpsampleStep>() as u64;
+    for (max_alloc, ok) in [(all, true), (all - 1, false), (36 << 10, false), (32 << 10, false)] {
         let limits = Limits { max_alloc, ..Limits::default() };
         assert_eq!(decode(&stream, &limits, None).is_ok(), ok, "max_alloc {max_alloc}");
     }

@@ -5,7 +5,7 @@ references, the entry paths, the limits for reading a manifest, and the runner f
 migrations. The document model stays in PhotoCraft and is a type parameter here. The crate
 does not read ZIP archives, open files or decode tiles. No `unsafe`, no panics on malformed
 input, and it builds for `wasm32-unknown-unknown`. The dependencies are `serde`, `serde_json`
-and `thiserror`.
+`thiserror`, and `flate2`.
 
 ```toml
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
@@ -22,6 +22,7 @@ A bundle is a ZIP archive or a directory with these entries:
 | `blobs/<blake3>.zst` | `blob_path(hash)` | binary data, zstd |
 | `thumb.png` | `THUMB` | optional thumbnail |
 | `composite/preview.png` | `COMPOSITE` | optional flattened preview |
+| `composite/full.png` | `FULL_COMPOSITE` | optional full-canvas flattened image |
 | `save.lock` | `SAVE_LOCK` | directory bundles only: held while a save runs (empty) |
 
 `<blake3>` is the BLAKE3 hash of the uncompressed bytes as 64 lowercase hex digits.
@@ -51,17 +52,22 @@ let manifest: Manifest<MyDocument> = craft_pcraft_format::read_manifest(&manifes
   than `thumb.png` or a `composite` other than `composite/preview.png` gives `Corrupt`.
   `Manifest` has no `Deserialize` and is `#[non_exhaustive]`: `Manifest::new(generator,
   document)` builds one at `FORMAT_VERSION` without previews.
+- `Manifest::full_composite` optionally names `composite/full.png`. A missing or null member
+  reads as `None`; any other path gives `Corrupt`. When absent, serialization omits this member,
+  preserving the bytes of manifests without a full-canvas image. It does not change the format version.
 - `TileRef` has `tx`, `ty` and `hash`, and is `#[non_exhaustive]`: `TileRef::new(tx, ty, hash)`
   builds one. `TileRef::path` gives its entry, or `None` when the hash is not valid.
 - `check_manifest(json, &Limits)` checks the size, the nesting and the item count in one pass
   without recursion. PhotoCraft's own check of a manifest it saves tests the nesting and the
   item count only. `parse_manifest(json, &Limits)` runs that check and then parses into a
   `serde_json::Value` with serde_json's 128-level recursion limit turned off.
+- `check_manifest_with_cancel(json, &Limits, &cancelled)` applies those same checks while
+  polling a callback between bounded portions of JSON. A true result stops with `Error::Cancelled`.
 - `migrate(&mut value, steps, target)` upgrades the JSON in place, where `steps[i]` upgrades
   version `i + 1` to `i + 2`, and returns the version the file had. `Step<E>` is
   `fn(&mut Value) -> Result<(), E>`; with `E: From<Error>`, the steps return the caller's own
   error type.
-- `Error` is `Corrupt`, `Unsupported`, `TooNew`, `LimitExceeded` or `Json`. A manifest whose
+- `Error` is `Corrupt`, `Unsupported`, `TooNew`, `LimitExceeded`, `Json` or `Cancelled`. A manifest whose
   `format_version` is newer than `target` gives `TooNew`, and one with no step to the next
   version gives `Unsupported`. A missing or invalid `format_version` gives `Corrupt`, and any
   other missing or mistyped member gives `Json`. `TooNew` holds `found`, `supported` and the manifest's
@@ -114,3 +120,15 @@ limits.max_manifest_bytes = 16 << 20;
 
 `.github/workflows/pcraft-format.yml` runs fmt, clippy and the tests on Linux and Windows, and
 a `wasm32-unknown-unknown` check.
+
+## Brush-tip envelope
+
+`tip::encode`, `tip::decode` and `tip::decode_with_max_side` share PhotoCraft's PCTIP1
+brush-tip codec: a six-byte magic, one-byte depth, little-endian width/height and zlib
+samples. Eight-bit-compatible samples use 8 bits, otherwise 16-bit little-endian.
+Dimensions, sample count, exact inflated length and caller preview side limits are checked.
+Preset group schemas, tip hashes and storage policy remain application-owned.
+
+Ported from `storytold/photocraft` commit `19aec5eb44131de44361189d64910e7b3e19e57c`,
+`crates/engine/src/preset_store.rs`. Original codec by Brandon Thomas (PhotoCraft #82),
+with later bounds/backend/storage changes by David Mann and FinnNk, under MIT OR Apache-2.0.

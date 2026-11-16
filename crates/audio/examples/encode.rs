@@ -1,6 +1,6 @@
-//! Write a tone as WAV and FLAC, whole and streamed.
+//! Write a tone as WAV, FLAC and AAC in M4A, whole and streamed, and as AAC packets.
 //!
-//! `cargo run -p craft-audio --example encode --features lossless-encode -- out`
+//! `cargo run -p craft-audio --example encode --features lossless-encode,aac-encode -- out`
 
 use craft_audio::{AudioBuffer, BitDepth, ChannelLayout, EncodeFormat, EncodeOptions, FileEncoder, encode};
 
@@ -27,5 +27,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         enc.write(&[chunk, chunk], chunk.len())?;
     }
     enc.finish()?;
+
+    // AAC in M4A at 160 kbit/s: the same call, with a bit rate in place of a bit depth.
+    let m4a = encode(&stereo, &EncodeOptions::new(EncodeFormat::Aac).with_bitrate(160_000))?;
+    std::fs::write(dir.join("tone.m4a"), m4a)?;
+
+    // AAC packets for a muxer of your own, with the configuration its sample entry needs.
+    let mut aac = craft_audio::aac::Encoder::new(craft_audio::aac::EncoderConfig::cbr(rate as u32, 2, 128_000))?;
+    let mut units = aac.encode(&[&tone, &tone]);
+    units.extend(aac.flush());
+    println!("{} AAC access units, AudioSpecificConfig {:02x?}, priming {}", units.len(), aac.audio_specific_config(), aac.priming_samples());
     Ok(())
 }

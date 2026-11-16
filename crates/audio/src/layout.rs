@@ -145,7 +145,14 @@ impl TryFrom<RawLayout> for ChannelLayout {
 }
 
 /// A channel count as the API holds it, saturating at `u16::MAX`.
-#[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "pcm-encode"
+))]
 pub(crate) fn count(n: usize) -> u16 {
     u16::try_from(n).unwrap_or(u16::MAX)
 }
@@ -274,6 +281,40 @@ pub(crate) fn flac_assumed_mask(channels: usize) -> u32 {
         7 => 0x70F,
         n => ChannelLayout::default_for(n as u16).mask().unwrap_or(0),
     }
+}
+
+/// The surround speaker a layout may name in place of `speaker`: formats with one surround pair
+/// do not tell side from back, so a pair of either kind feeds it.
+fn surround_twin(speaker: Speaker) -> Option<Speaker> {
+    Some(match speaker {
+        Speaker::SideLeft => Speaker::BackLeft,
+        Speaker::SideRight => Speaker::BackRight,
+        Speaker::BackLeft => Speaker::SideLeft,
+        Speaker::BackRight => Speaker::SideRight,
+        _ => return None,
+    })
+}
+
+/// How audio with `layout` feeds a format whose layout for the channel count is `mask`: for each
+/// channel the format takes, the channel of the audio that feeds it. `order` is the format's
+/// channel order over `mask` (for each of its channels, the WAV-order channel of `mask`; `None`
+/// when it takes WAV order). `None` when `layout` is not the format's layout: it is unordered, or
+/// has a speaker the format has not.
+pub(crate) fn channel_map(mask: u32, order: Option<&[usize]>, layout: &ChannelLayout) -> Option<Vec<usize>> {
+    let speakers = ChannelLayout::from_mask(mask).speakers();
+    if speakers.len() != usize::from(layout.channels()) {
+        return None;
+    }
+    let mut map = Vec::with_capacity(speakers.len());
+    for j in 0..speakers.len() {
+        let speaker = *speakers.get(order.and_then(|o| o.get(j).copied()).unwrap_or(j))?;
+        let at = layout.index_of(speaker).or_else(|| surround_twin(speaker).and_then(|t| layout.index_of(t)))?;
+        if map.contains(&at) {
+            return None;
+        }
+        map.push(at);
+    }
+    Some(map)
 }
 
 #[cfg(test)]

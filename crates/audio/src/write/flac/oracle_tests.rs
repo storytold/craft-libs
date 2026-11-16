@@ -357,6 +357,58 @@ fn ogg_flac_before_opus_is_the_first_track() {
     }
 }
 
+/// The first page of a Speex stream, which symphonia has no reader for.
+#[cfg(feature = "symphonia")]
+fn speex_ogg_page(serial: u32) -> Vec<u8> {
+    let mut packet = b"Speex   ".to_vec();
+    packet.resize(80, 0);
+    let mut page = b"OggS\0\x02".to_vec(); // the start of a stream
+    page.extend_from_slice(&[0; 8]); // granule position
+    page.extend_from_slice(&serial.to_le_bytes());
+    page.extend_from_slice(&[0; 8]); // page number and checksum
+    page.extend_from_slice(&[1, packet.len() as u8]);
+    page.extend_from_slice(&packet);
+    let crc = craft_media::ogg::crc32(&page);
+    page[22..26].copy_from_slice(&crc.to_le_bytes());
+    page
+}
+
+/// A stream symphonia has no track for does not stop the default decode from reading the next one,
+/// and it keeps its index.
+#[cfg(feature = "symphonia")]
+#[test]
+fn ogg_flac_after_a_stream_with_no_reader_is_the_default_track() {
+    use crate::{CodecId, DecodeOptions};
+    let Some(ff) = ffmpeg() else { return };
+    let args = ["-c:a", "flac"];
+    for reversed in [false, true] {
+        let Some(flac) = two_ogg_streams(&ff, "ogg-speex-flac", &args, reversed) else { return };
+        for speex_serial in [0, 9] {
+            let file = [speex_ogg_page(speex_serial), flac.clone()].concat();
+            let codecs: Vec<_> = crate::tracks(&file, None).unwrap().iter().map(|t| t.codec).collect();
+            assert_eq!(codecs, [CodecId::Speex, CodecId::Flac, CodecId::Flac]);
+            let info = crate::decode(&file, None).unwrap().0;
+            assert_eq!((info.codec, info.sample_rate), (CodecId::Flac, 48_000), "reversed {reversed}, speex {speex_serial}");
+            assert!(crate::decode_with(&file, None, &DecodeOptions::default().with_track(0)).is_err());
+            let second = crate::decode_with(&file, None, &DecodeOptions::default().with_track(2)).unwrap().0;
+            assert_eq!(second.sample_rate, 44_100, "reversed {reversed}, speex {speex_serial}");
+        }
+    }
+}
+
+/// Bytes before the first page do not lose the file's track order or mask comments.
+#[cfg(feature = "symphonia")]
+#[test]
+fn ogg_flac_after_leading_bytes_keeps_its_track_order() {
+    use crate::{ChannelLayout, DecodeOptions};
+    let Some(ff) = ffmpeg() else { return };
+    let args = ["-c:a", "flac", "-metadata:s:a:0", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107"];
+    let Some(bytes) = two_ogg_streams(&ff, "ogg-leading-bytes", &args, true) else { return };
+    let file = [vec![0; 64], bytes].concat();
+    let info = crate::decode_with(&file, None, &DecodeOptions::default().with_track(0)).unwrap().0;
+    assert_eq!((info.sample_rate, info.layout), (48_000, ChannelLayout::from_mask(0x107)));
+}
+
 #[test]
 fn the_mask_comment_is_written_only_when_decoders_would_assume_otherwise() {
     use super::mask_comment;

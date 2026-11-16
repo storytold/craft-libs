@@ -23,17 +23,27 @@ const TICKS_PER_SECOND: f64 = 254_016_000_000.0;
 /// Calls `stop` with each member name of the JSON object `text` starts with, in order, as far as
 /// `text` goes, until it returns `true`. Members of nested objects are skipped. A name is given as
 /// written, escapes included.
-fn top_level_keys<'a>(text: &'a [u8], mut stop: impl FnMut(&'a [u8]) -> bool) {
-    let Some(body) = text.trim_ascii_start().strip_prefix(b"{") else { return };
+fn top_level_keys<'a>(text: &'a [u8], control: Option<&crate::cancel::Control<'_>>, mut stop: impl FnMut(&'a [u8]) -> bool) -> Result<(), Error> {
+    let mut scan = crate::cancel::Scan::new(control);
+    let mut start = 0;
+    while text.get(start).is_some_and(u8::is_ascii_whitespace) {
+        scan.check(start)?;
+        start += 1;
+    }
+    let Some(body) = text.get(start..).and_then(|s| s.strip_prefix(b"{")) else { return Ok(()) };
+    // Start a new offset domain after leading whitespace.
+    let mut scan = crate::cancel::Scan::new(control);
     let (mut depth, mut want_key, mut i) = (0u32, true, 0);
     while let Some(&b) = body.get(i) {
+        scan.check(i)?;
         match b {
             b'"' => {
                 let start = i + 1;
                 let mut end = start;
                 loop {
+                    scan.check(end)?;
                     match body.get(end) {
-                        None => return,
+                        None => return Ok(()),
                         Some(b'\\') => end += 2,
                         Some(b'"') => break,
                         Some(_) => end += 1,
@@ -44,26 +54,31 @@ fn top_level_keys<'a>(text: &'a [u8], mut stop: impl FnMut(&'a [u8]) -> bool) {
                     && let Some(key) = body.get(start..end)
                     && stop(key)
                 {
-                    return;
+                    return Ok(());
                 }
                 want_key = false;
                 i = end;
             }
             b'{' | b'[' => depth += 1,
-            b'}' | b']' if depth == 0 => return,
+            b'}' | b']' if depth == 0 => return Ok(()),
             b'}' | b']' => depth -= 1,
             b',' if depth == 0 => want_key = true,
             _ => {}
         }
         i += 1;
     }
+    Ok(())
 }
 
 /// A project starts with `savedBy` followed by `schema`, or, saved before `savedBy` existed, with
 /// `schema` followed by `items` or `savedBy`, all top-level members.
 pub(crate) fn sniff(head: &[u8]) -> bool {
+    sniff_checked(head, None).unwrap_or(false)
+}
+
+pub(crate) fn sniff_checked(head: &[u8], control: Option<&crate::cancel::Control<'_>>) -> Result<bool, Error> {
     let (mut first, mut found) = (None::<&[u8]>, false);
-    top_level_keys(head, |key| match first {
+    top_level_keys(head, control, |key| match first {
         None => {
             first = Some(key);
             !matches!(key, b"savedBy" | b"schema")
@@ -76,8 +91,8 @@ pub(crate) fn sniff(head: &[u8]) -> bool {
             found = key == b"items" || key == b"savedBy";
             found
         }
-    });
-    found
+    })?;
+    Ok(found)
 }
 
 fn json<'a>(bytes: &'a [u8], budget: &Budget) -> Result<&'a [u8], Error> {
@@ -88,9 +103,14 @@ fn json<'a>(bytes: &'a [u8], budget: &Budget) -> Result<&'a [u8], Error> {
 /// The project's [`Head`] read with [`Head::read`]; [`ReadError::TooNew`] when its schema is
 /// newer than this crate reads.
 fn read_head(json: &[u8], budget: &Budget) -> Result<Result<Head, ReadError>, Error> {
-    check_depth(json, budget.limits.max_depth)?;
+    check_depth(json, budget.limits.max_depth, budget.control)?;
     let text = std::str::from_utf8(json).map_err(|e| malformed(format!("the project is not UTF-8: {e}")))?;
-    Ok(Head::read(text))
+    let head = match budget.control {
+        Some(control) => Head::read_from(crate::cancel::Reader::new(json, Some(control))),
+        None => Head::read(text),
+    };
+    budget.check_cancelled()?;
+    Ok(head)
 }
 
 /// The project's [`Head`], refused when its schema is newer than this crate reads.
@@ -185,12 +205,23 @@ struct SwitchesM {
 pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
     let json = json(bytes, budget)?;
     head(json, budget)?;
-    let p: Project = parse(json, budget.limits)?;
-    let mut comps: Vec<ItemM> = p.items.into_values().filter(|i| i.kind.kind == "Comp").collect();
+    let p: Project = parse(json, budget)?;
+    project_outline(p, budget)
+}
+
+fn project_outline(p: Project, budget: &Budget) -> Result<Outline, Error> {
+    let mut comps = Vec::new();
+    for i in p.items.into_values() {
+        budget.check_cancelled()?;
+        if i.kind.kind == "Comp" {
+            comps.push(i);
+        }
+    }
     comps.sort_by_key(|i| i.id);
     let pages = comps
         .into_iter()
         .map(|i| {
+            budget.check_cancelled()?;
             let k = i.kind;
             let (Some(width), Some(height)) = (k.width, k.height) else {
                 return Err(malformed(format!("composition `{}` has no size", i.name)));
@@ -205,17 +236,41 @@ pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Erro
                 .unwrap_or_default()
                 .into_iter()
                 .rev()
-                .map(|l| Layer {
-                    name: l.name,
-                    kind: l.source.map(|s| s.kind).unwrap_or_default(),
-                    visible: l.switches.is_none_or(|s| s.video),
-                    opacity: None,
-                    blend: l.blend_mode,
-                    children: vec![],
+                .map(|l| {
+                    budget.check_cancelled()?;
+                    Ok(Layer {
+                        name: l.name,
+                        kind: l.source.map(|s| s.kind).unwrap_or_default(),
+                        visible: l.switches.is_none_or(|s| s.video),
+                        opacity: None,
+                        blend: l.blend_mode,
+                        children: vec![],
+                    })
                 })
-                .collect();
+                .collect::<Result<_, Error>>()?;
             Ok(Page { name: i.name, x: 0.0, y: 0.0, width: f64::from(width), height: f64::from(height), timing, layers })
         })
         .collect::<Result<_, Error>>()?;
     Ok(Outline { canvas: None, pages, layers: vec![] })
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn conversion_stops_inside_composition_layers() {
+        let project: Project =
+            serde_json::from_str(r#"{"items":{"1":{"id":1,"kind":{"type":"Comp","width":1,"height":1,"layers":[{},{},{},{},{},{}]}}}}"#).unwrap();
+        let polls = Cell::new(0);
+        let cancel = || {
+            polls.set(polls.get() + 1);
+            polls.get() == 6
+        };
+        let result = crate::cancel::run(&cancel, |control| project_outline(project, &Budget::controlled(&crate::Limits::default(), control)));
+        assert_eq!(result, Err(Error::Cancelled));
+        assert_eq!(polls.get(), 6);
+    }
 }

@@ -1,0 +1,580 @@
+# Per-model evidence that overrides the format rules in coverage.py. status: verified | preview | unsupported.
+# "verified" means a real file from this body decoded from sensor data in a corpus test or a recorded bulk check (source column).
+maker	camera	status	source
+Apple	iPhone 12 Pro Rear Wide Camera	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 40D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 550D (EOS Digital Rebel T2i, EOS Kiss X4 Digital)	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 5D Mark II	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 5DS R	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 6D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 7D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 80D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS M50 (EOS Kiss M)	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (exact sensor hashes, docs/cr3.md)
+Canon	EOS R100	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (exact sensor hashes, docs/cr3.md)
+Canon	EOS R5 Mark II	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hashes, docs/cr3.md); bulk: QP maps of 33,665 C-RAW files
+Canon	EOS R8	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (exact sensor hashes, docs/cr3.md)
+Canon	EOS-1D X Mark III	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS 90D	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS 250D (EOS Rebel SL3, EOS 200D II, EOS Kiss X10)	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS 850D (EOS Kiss X10i, EOS Rebel T8i)	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS M200	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS M50 Mark II	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS M6 Mark II	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R (** see note)	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R3	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R5	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R6	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R6 Mark II	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md; C-RAW with adaptive QP above 168 still opens as the preview)
+Canon	EOS R6 Mark III	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R7	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md; lossless only, C-RAW unverified)
+Canon	EOS R10	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS RP	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R50	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R50 V	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	PowerShot G5 X Mark II	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	PowerShot G7 X Mark III	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	PowerShot SX70 HS	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	PowerShot V1	verified	corpus: crates/raw/tests/it/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS-5D Mark III	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS 70D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 800D (EOS Digital Rebel T7i, EOS Kiss X9i)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G9X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 3000D (EOS Rebel T100, EOS 4000D)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 1000D (EOS Digital Rebel XS, EOS Kiss F)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G1 X Mark II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 500D (EOS Digital Rebel T1i, EOS Kiss X3 Digital)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 400D (EOS Digital Rebel XTi, EOS Kiss Digital X)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot S110	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 1300D (EOS Digital Rebel T6, EOS Kiss X80)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 600D (EOS Digital Rebel T3i, EOS Kiss X5 Digital)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G1 X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G16	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G3 X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS M	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-1D X Mark II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 750D (EOS Digital Rebel T6i, EOS Kiss X8i)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 5DS	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot S100V	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 350D (EOS Digital Rebel XT, EOS Kiss Digital N)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 1200D (EOS Digital Rebel T5, EOS Kiss X70)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G11	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 100D (EOS Digital Rebel SL1, EOS Kiss X7)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G15	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-1D Mark IV	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS M5	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot S100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 650D (EOS Digital Rebel T4i, EOS Kiss X4i)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot SX50	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS M2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS M3	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G12	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 6D Mark II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS M10	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 700D (EOS Digital Rebel T5i, EOS Kiss X7i)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 1100D (EOS Digital Rebel T3, EOS Kiss X50 Digital)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 77D (EOS 9000D)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 1500D (EOS Rebel T7, EOS Kiss X90, EOS 2000D)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-5D Mark IV (** see note)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-1D Mark III	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 60D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-1D Mark II N	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS M100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G5 X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G9	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 5D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS M6	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G7 X Mark II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 7D Mark II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot S120	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot S95	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G1 X Mark III	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 50D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 20D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G7 X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 450D (EOS Digital Rebel XSi, EOS Kiss Digital X2)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot SX60 HS	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 200D (EOS Kiss X9, EOS Rebel SL2)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	PowerShot G9 X Mark II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 760D (EOS Digital Rebel T6s, EOS Kiss 8000D)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 30D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	GFX 100	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	GFX 100RF (Final Support)	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	GFX 100S	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	GFX 50S	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-A2	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-A5	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-E1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-E5	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-H2	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-H2S	verified	docs/raf-compression.md (supplied files, exact sensor arrays)
+Fujifilm	X-M5	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-T2	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-T20	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-T4**	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-T5	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Fujifilm	X-T50	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Google	Pixel 2 XL	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Hasselblad	Lunar	verified	issue #1275: raw.pixls.us 4051 (a Sony NEX-7 ARW under Make HASSELBLAD) decodes from sensor data; black 512 and SR2SubIFD WB as on a NEX-7
+Leica	C (Typ 112)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	D-Lux (Typ 109)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	D-Lux 3	verified	PR #215: raw.pixls.us bulk check of every RW2 / RWL / RAW body
+Leica	D-Lux 4	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	D-Lux 5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	D-Lux 6	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	D-Lux 7	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	Digilux 2	verified	PR #215: raw.pixls.us bulk check of every RW2 / RWL / RAW body
+Leica	Digilux 3	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	Q3	verified	recorded check 2026-10-11: 38 private Q3 DNGs (landscape and portrait) decoded from sensor data and developed at full size without error, mean CIE76 dE to the camera JPEG 6.3-13.9 at 400 px (not committed; docs/raw-parity.md)
+Leica	V-LUX (Typ 114)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	V-LUX 1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	V-LUX 4	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	V-LUX 5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Leica	M Monochrom	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash)
+Leica	CL	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	M10	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	C-Lux	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	M Monochrom (Typ 246)	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash)
+Leica	M8	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash)
+Leica	X2	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	Q2	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	SL (Typ 601)	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	M10-R	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	SL2	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Leica	M9	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash)
+Leica	Q (Typ 116)	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX B700	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Nikon	D5100	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Nikon	D7000	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Nikon	D7500	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Nikon	Z f	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Nikon	D700	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	XF10	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-A10	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D5300	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-Pro1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 V1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 J4	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	GFX 100S II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D610	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D5	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D2H	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 6 II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX P1000	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix X100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X30	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix X10	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D2Xs	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D4	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D800	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D780	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D850	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-E2S	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D500	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	GFX 50R	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Df	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-S10	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 V2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 V3	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3s	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z fc	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D810	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-A3	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D40	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D800E	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X100V**	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D4S	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T30 III	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	XQ2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T10	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D2X	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X70	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D80	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-H1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 J5	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 J1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D7200	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T30 II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 50	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D5000	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	XQ1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix HS30 EXR	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D70S	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D5200	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX P1100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-S20	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 30	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-E2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D60	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 J2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D5600	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D300	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix SL1000	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-Pro3**	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-Pro2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 S1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X100VI	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T200	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3200	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T3	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix F550 EXR	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D5500	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-A7	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3300	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 5	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	1 J3	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 9 (*See note)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX A1000	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X100S	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D2Hs	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D90	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D50	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3000	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X100T	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 50 II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D600	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	XF1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D7100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-E3	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-A1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3500	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix HS50 EXR	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	GFX 100 II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X100F	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D40x	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX A	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X20	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-E4	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	GFX 50S II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D1H	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D200	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix HS33 EXR	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix S1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 7 II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D70	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D300s	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix X-S1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D750	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3100	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D3400	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix X-M1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T30	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX P950	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix F770 EXR	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	COOLPIX 5700	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two stacked half-height fields, CMYG mosaic read as RGB; green vs camera JPEG r 0.12-0.36)
+Nikon	COOLPIX 8400	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two stacked half-height fields, CMYG mosaic read as RGB; green vs camera JPEG r 0.12-0.36)
+Nikon	COOLPIX 8800	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two stacked half-height fields, CMYG mosaic read as RGB; green vs camera JPEG r 0.12-0.36)
+Olympus	E-1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Olympus	EVOLT E-400	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Olympus	Stylus XZ-2 iHS	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Panasonic	LUMIX DC - G97 (DC-G99M2)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-FZ1000M2 (DC-FZ10002)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-FZ80 (DC-FZ82, DC-FZ85)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-G100 (DC-G110)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-G100D	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-G9	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-G95D	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-G99 (DC-G90, DC-G91, DC-G95)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GF10 (DC-GF90)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GF9 (DC-GX850, DC-GX800)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GH5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GH5M2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GH5s	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GH6	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GH7	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GX880	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-GX9 (DC-GX7MK3)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-LX100 II	verified	PR #215: raw.pixls.us bulk check of every RW2 / RWL / RAW body
+Panasonic	LUMIX DC-S1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S1H	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S1M2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S1M2ES (Final Support)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S1R	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S1RM2 (Final Support)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S5M2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S5M2X	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-S9	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-TX2D (DC-TZ200D, DC-TZ202D, DC-TZ220D, DC-ZS200D, DC-ZS220D)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-ZS70 (DC-TZ90, DC-TZ91, DC-TZ92, DC-TZ93)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-ZS80 (DC-TZ95, DC-TZ96, DC-TZ97)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DC-ZS80D (DC-TZ95D, DC-TZ96D)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DCG9M2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-CM1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FX150	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ100	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ1000	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ150	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ18	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ200	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ2500 (DMC-FZ2000, DMC-FZH1)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ28	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ30	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ300	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ330	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ35	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ38	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ40 (DMC-FZ45)	verified	PR #215: raw.pixls.us bulk check of every RW2 / RWL / RAW body
+Panasonic	LUMIX DMC-FZ50	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ70	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ72	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-FZ8	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G10	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G3	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G6	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G7	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-G8 (DMC-G80, DMC-G81, DMC-G85)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GF1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GF2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GF3	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GF5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GF6	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GF7	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GF8	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GH1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GH2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GH3	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GH4	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GM1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GM1S	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GM5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GX1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GX7	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GX8	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-GX85 (DMC-GX80, DMC-GX7MK2)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-L1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-L10	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LF1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LX1	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LX100	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LX2	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LX3	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LX5	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LX7	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-LX9 (DMC-LX10, DMC-LX15)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-ZS100 (DMC-ZS110, DMC-TZ100, DMC-TZ101, DMC-TZ110, DMC-TX1)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-ZS40 (DMC-TZ60, DMC-TZ61)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-ZS50 (DMC-TZ70, DMC-TZ71)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX DMC-ZS60 (DMC-TZ80, DMC-TZ81, DMC-TZ85)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Panasonic	LUMIX ZS200 (DC-TX2, DC-TZ200, DC-TZ202, DC-TZ220, DC-ZS220)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
+Pentax	K-3	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Pentax	K-5 IIs	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Pentax	K10D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Ricoh	GR III	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Pentax	K-1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	*ist DL	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Ricoh	GX200	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash)
+Pentax	KP	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-3 Mark III Monochrome	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash)
+Pentax	K-70	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Ricoh	GR IIIx	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K20D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	*ist DS	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-3 Mark III	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-01	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K110D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	Q7	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-S1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	*ist D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-30	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K200D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-5	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-x	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Ricoh	GR	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	645D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K100D	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-500	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K2000 K-m	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-50	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	645Z	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-5 II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	Q	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	MX-1	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K100D Super	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Ricoh	GR II	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-S2	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-r	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	KF	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-3 II († see note)	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-7	verified	corpus: crates/raw/tests/it/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Samsung	TL500 (EX1)	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Sony	A100 (DSLR-A100)	preview	issue #702 fixed (#774): opens from its embedded JPEG; its raw (no CFA image IFD) is not decoded
+Sony	A200 (DSLR-A200)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A230 (DSLR-A230)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A290 (DSLR-A290)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A300 (DSLR-A300)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A3000 (ILCE-3000)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A33 (SLT-A33)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A330 (DSLR A330)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A35 (SLT-A35)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A350 (DSLR-A350)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A3500 (ILCE-3500)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A37 (SLT-A37)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A380 (DSLR-A380)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A390 (DSLR-A390)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A450 (DSLR-A450)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A500 (DSLR-A500)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A5000 (ILCE-5000)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A5100 (ILCE-5100)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A550 (DSLR-A550)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A55V (SLT-A55V)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies
+Sony	A560 (DSLR-A560)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A57 (SLT-A57)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A58 (SLT-A58)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A580 (DSLR-A580)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A6000 (ILCE-6000)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A6100 (ILCE-6100)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A6300 (ILCE-6300)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A6400 (ILCE-6400)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A65 (SLT-A65)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A6500 (ILCE-6500)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A6600 (ILCE-6600)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A6700 (ILCE-6700)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A68 (ILCA-68)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7 (ILCE-7)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7 II (ILCE-A7M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies
+Sony	A7 III (ILCE-7M3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7 IV (ILCE-7M4)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A700 (DSLR-A700)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A77 (SLT-A77)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A77 II (ILCA-77M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7C (ILCE-7C)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7C II (ILCE-7CM2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7CR (ILCE-7CR)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7R (ILCE-7R)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7R II (ILCE-7RM2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7R III (ILCE-7RM3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7R IIIA (ILCE-7RM3A)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7R IV (ILCE-7RM4)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7R IVA (ILCE-7RM4A)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7R V (ILCE-7RM5)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7S (ILCE-7S)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7S II (ILCE-7SM2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A7s III (ILCE-7SM3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A850 (DSLR-A850)	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A9 (ILCE-9)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A9 II (ILCE-9M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A9 III (ILCE-9M3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A900 (DSLR-A900)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	A99 (SLT-A99V)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies
+Sony	A99 II (ILCA-99M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	Alpha 1 (ILCE-1)*	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	DSC-F828	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
+Sony	DSC-HX95	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	DSC-HX99	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	DSC-V3	unsupported	SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file
+Sony	FX3 (ILME-FX3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	FX30 (ILME-FX30)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-3	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-3N	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-5	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-5N	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-5R	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-5T	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-6	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-7	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-C3	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	NEX-F3	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	QX1 (ILCE-QX1)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX0 (DSC-RX0)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX0 II (DSC-RX0M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX1 (DSC-RX1)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX10 (DSC-RX10)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX10 II (DSC-RX10M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX10 III (DSC-RX10M3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX10 IV (DSC-RX10M4)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 (DSC-RX100)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 II (DSC-RX100M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 III (DSC-RX100M3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 IV (DSC-RX100M4)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 V (DSC-RX100M5)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 VA (DSC-RX100M5A)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 VI (DSC-RX100M6)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX100 VII (DSC-RX100M7)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX1R (DSC-RX1R)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	RX1R II (DSC-RX1RM2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	ZV-1 (DCZV1/B)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	ZV-E1	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	ZV-E10	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
+Sony	ZV-1M2	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	ZV-E10M2	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	RX1R III (DSC-RX1RM3)	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	A1 II (ILCE-1M2) (** see note)	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	DSC-RX100M7A	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	A7 V (ILCE-7M5) (** see note)	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	FX2 (ILMEFX2) (** see note)	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	ILCE - 6400A	verified	corpus: crates/raw/tests/it/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	SP-550 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	E-10	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash)
+Olympus	Camedia C-5060 Zoom	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	SP-565 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	OM-D E-M5 Mark II	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	EVOLT E-300	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	Stylus SH-2	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	Camedia C-7070 Wide Zoom	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	Stylus XZ-10	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	EVOLT E-330	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	SP-570 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	SP-510 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	PEN-F	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	EVOLT E-500	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Samsung	TL350 (WB2000)	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Samsung	NX1000	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Samsung	NX1100	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Sony	A100 (DSLR-A100)	unsupported	issue #702: regression, refused as not a readable photo
+Sony	DSC-F828	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
+Epson	R-D1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Epson	R-D1s	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Epson	R-D1x	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Mamiya	ZD	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Apple	iPhone 6s Plus	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Apple	iPhone 7 Plus	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Apple	iPhone XS	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+DJI	DJI Mavic 2 Pro (Hasselblad L1D-20c)	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+DJI	DJI Mavic 3 (Hasselblad L2D-20c)	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+DJI	DJI Mavic 4 Pro (DJI FC9287)	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+DJI	DJI Mini 2	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Google	Pixel 4 XL	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Google	Pixel 4a Rear Wide Camera	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Google	Pixel 6 Pro Rear Main Camera	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Google	Pixel 8 Pro Wide Camera*	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Hasselblad	CFV-50c	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
+Hasselblad	H5D-40	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
+Hasselblad	H5D-50c	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
+Hasselblad	X1D	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
+Hasselblad	X1D II 50C	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
+Hasselblad	X2D 100C	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
+Nikon	D6	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); checked compressed NEF only; uncompressed remains preview-only (#671)
+Nikon	Z 6	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); checked compressed NEF only; uncompressed remains preview-only (#671)
+Nikon	Z 7	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); checked compressed NEF only; uncompressed remains preview-only (#671)
+Nikon	Z 8	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); HE / HE* remain preview-only
+Parrot	Anafi	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Samsung	Galaxy S21 Ultra Rear Main Camera	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Samsung	Galaxy S22 Ultra Rear Wide Camera	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Samsung	Galaxy S23 Rear Wide Camera	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Samsung	Galaxy S7 Edge	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Samsung	Galaxy S8	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Samsung	Galaxy S8+	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Sigma	fp	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Sigma	fp L	verified	corpus: crates/raw/tests/it/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
+Konica Minolta	DiMAGE 7Hi	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE A1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE A200	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Konica Minolta	Maxxum 7D Dynax 7D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE 7	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
+Konica Minolta	DiMAGE A2	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
+Canon	EOS D30	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	EOS D60	verified	corpus: crates/raw/tests/it/corpus.rs; 18 maintainer files exact (craft-libs crates/crw/clean-room/03-verification.md)
+Canon	EOS 10D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES; 3 files)
+Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES; 3 files)
+Canon	PowerShot G1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	PowerShot G6	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Canon	PowerShot G5	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/02-crw-format.md section 4); embedded JPEG
+Olympus	OM-D E-M1	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
+Olympus	OM-D E-M10 Mark III	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
