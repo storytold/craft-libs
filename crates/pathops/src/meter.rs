@@ -1145,6 +1145,19 @@ mod tests {
         assert_eq!(within([&starts_closed], 1e-6), Ok(()));
     }
 
+    /// The arena of segments panics for a path whose steps are not numbers (a line from -1.7e308 to 1.7e308 is 3.4e308 high, and 11,562 of 20,000
+    /// paths of such extremes, subnormal and huge, made it panic): it is no segments here, as for a path the arena refuses, and the meter leaves it
+    /// to the sweep. (The functions of the crate refuse such coordinates before they come to the meter; this is the guard of the meter's own.)
+    #[test]
+    fn a_path_the_arena_panics_on_is_no_segments() {
+        let mut line = BezPath::new();
+        line.move_to((-1.7e308, -1.7e308));
+        line.line_to((1.7e308, 1.7e308));
+        line.close_path();
+        assert!(segments_of([&line]).is_none());
+        assert_eq!(within([&line], 1e-6), Ok(()));
+    }
+
     /// An input of the gate's size or fewer is not swept, and one piece more is.
     #[test]
     fn the_gate_is_a_count_of_monotone_pieces() {
