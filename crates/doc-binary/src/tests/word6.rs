@@ -1536,6 +1536,6 @@ fn frames_and_drop_caps_are_read() {
             ..Default::default()
         })
     );
-    assert_eq!((p[1].props.drop_cap, p[1].props.drop_cap_margin), (Some(3), None));
+    assert_eq!((p[1].props.drop_cap, p[1].props.drop_cap_margin), (Some(3), Some(false)));
     assert_eq!(p[2].props.frame, None);
 }

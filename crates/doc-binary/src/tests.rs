@@ -3693,3 +3693,20 @@ fn frames_and_drop_caps_are_read() {
     );
     assert_eq!(props("In a cell").frame, None);
 }
+
+/// A paragraph's sprmPDcs overrides its style's drop cap: 0 turns it off and a dropped cap
+/// replaces one in the margin, each stored as such, as the model's unset values inherit.
+#[test]
+fn a_paragraphs_drop_cap_overrides_its_styles() {
+    let margin_cap = grpprl(&[(0x442C, &0x1Au16.to_le_bytes())]);
+    let spec = RichSpec {
+        text: "a\rb\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "Capped", margin_cap, Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, grpprl(&[(0x442C, &0u16.to_le_bytes())])), (2, 1, grpprl(&[(0x442C, &0x19u16.to_le_bytes())]))],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let caps: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| (p.props.drop_cap, p.props.drop_cap_margin)).collect();
+    assert_eq!(caps, [(Some(0), None), (Some(3), Some(false))]);
+}

@@ -583,15 +583,16 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
         P_SHD80 if prl.operand.len() >= 2 => p.shading = shd80_rgb(prl.operand),
         P_SHD if prl.operand.len() >= 11 => p.shading = prl.operand.get(1..).and_then(shd_rgb),
         P_DCS => {
-            // Bits 0-2: 1 dropped, 2 in the margin (0 none); bits 3-7: the lines it drops.
+            // Bits 0-2: 1 dropped, 2 in the margin (0 none); bits 3-7: the lines it drops. Each is
+            // explicit, as it can turn off or change its style's drop cap.
             let v = u16_of(prl).unwrap_or(0);
             match v & 0x07 {
                 kind @ (1 | 2) => {
                     p.drop_cap = Some(((v >> 3) & 0x1F).clamp(1, 10) as u8);
-                    p.drop_cap_margin = (kind == 2).then_some(true);
+                    p.drop_cap_margin = Some(kind == 2);
                     p.drop_cap_distance = p.frame.as_ref().map(|f| f.h_space).filter(|d| *d > 0.0);
                 }
-                _ => (p.drop_cap, p.drop_cap_margin) = (None, None),
+                _ => (p.drop_cap, p.drop_cap_margin) = (Some(0), None),
             }
         }
         op if is_frame(op) => apply_frame(p, prl),
