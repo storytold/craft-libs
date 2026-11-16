@@ -4,8 +4,10 @@ use craft_behavior::CanvasView;
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Vec2 as DocVec;
 use craft_behavior::kurbo::{Point, Rect, Size};
-use craft_ui::canvas::{Canvas, CanvasTool, HandTool, NavigationOptions, RotateViewTool, ToolHost, ViewCommands, ViewTarget, ZoomTool};
-use craft_ui::contract::ShowContainer as _;
+use craft_ui::canvas::{Canvas, CanvasTool, HandTool, LayerBounds, NavigationOptions, RotateViewTool, ToolHost, ViewCommands, ViewTarget, ZoomTool};
+use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::runtime::access::Role;
+use craft_ui::runtime::commands::{self, FireSource};
 use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
 use egui::{Event, Modifiers, Pos2};
 use std::cell::{Cell, RefCell};
@@ -138,8 +140,10 @@ fn view_commands_run_with_their_facts_and_are_disabled_without() {
     let size = Size::new(4000.0, 3000.0);
     let board = Rect::new(2500.0, 400.0, 3500.0, 1200.0);
     let layers = Rect::new(100.0, 2000.0, 300.0, 2900.0);
-    let full = ViewTarget::new(size).artboard(board).layers(layers).ppi(300.0);
+    let full = ViewTarget::new(size).artboard(board).ppi(300.0);
     let bare = ViewTarget::from(size);
+    let bounds = || Some(layers);
+    let given: Option<LayerBounds<'_>> = Some(&bounds);
     let start = CanvasView::new(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0)), Point::new(2000.0, 1500.0), 0.1);
     let device = |view: &CanvasView| zoom::device(view, ppp);
     let shows = |view: &CanvasView, rect: Rect| {
@@ -156,15 +160,15 @@ fn view_commands_run_with_their_facts_and_are_disabled_without() {
     ];
     for (command, owed) in rows {
         let mut view = start;
-        assert!(command.available(&start, &full, ppp), "{command:?} runs with its fact");
-        assert!(command.apply(&mut view, &full, ppp) && owed(&view), "{command:?} gives {view:?}");
+        assert!(command.available(&start, &full, given, ppp), "{command:?} runs with its fact");
+        assert!(command.apply(&mut view, &full, given, ppp) && owed(&view), "{command:?} gives {view:?}");
         if command == ViewCommands::TwoHundredPercent {
-            assert!(command.available(&start, &bare, ppp), "200% needs no fact");
+            assert!(command.available(&start, &bare, None, ppp), "200% needs no fact");
             continue;
         }
         let mut view = start;
-        assert!(!command.available(&start, &bare, ppp), "{command:?} is disabled without its fact");
-        assert!(!command.apply(&mut view, &bare, ppp) && view == start, "{command:?} leaves the view without its fact");
+        assert!(!command.available(&start, &bare, None, ppp), "{command:?} is disabled without its fact");
+        assert!(!command.apply(&mut view, &bare, None, ppp) && view == start, "{command:?} leaves the view without its fact");
     }
 }
 
@@ -287,7 +291,7 @@ fn the_rotate_commands_step_fifteen_degrees_on_screen_in_a_flipped_view_too() {
         for (command, screen_turn) in [(ViewCommands::RotateClockwise, 15.0), (ViewCommands::RotateCounterclockwise, -15.0)] {
             let before = turned(room, 20.0, flip_x);
             let mut view = before;
-            assert!(command.apply(&mut view, &target, 1.0), "{command:?} turns the view");
+            assert!(command.apply(&mut view, &target, None, 1.0), "{command:?} turns the view");
             let turned_by = (angle(&view) - angle(&before) + 540.0).rem_euclid(360.0) - 180.0;
             assert!(
                 (turned_by - screen_turn).abs() < 0.01,
@@ -404,4 +408,36 @@ fn a_held_zoom_press_zooms_about_its_point_at_a_frame_rate_independent_rate() {
     rig.drag_to(at, at + egui::vec2(100.0, 0.0), 4, FRAME);
     rig.release(at + egui::vec2(100.0, 0.0), FRAME);
     assert!((rig.device() / device - 2.0).abs() < 1e-3, "a drag scrubs one doubling per 100 points: {}", rig.device() / device);
+}
+
+/// A canvas asks the app for the layers' bounds only in the pass that runs Fit Layers: passes that only show the
+/// command enabled never walk the layers.
+#[trial]
+fn a_canvas_asks_for_the_layer_bounds_only_when_fit_layers_runs() {
+    let size = Size::new(4000.0, 3000.0);
+    let layers = Rect::new(100.0, 2000.0, 300.0, 2900.0);
+    let unshown = CanvasView::new(egui::Rect::NOTHING, Point::new(2000.0, 1500.0), 1.0);
+    let (asked, view) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(unshown)));
+    let (shown_asked, shown_view) = (Rc::clone(&asked), Rc::clone(&view));
+    let mut fixture = Fixture::new(move |ui| {
+        let bounds = || {
+            shown_asked.set(shown_asked.get() + 1);
+            Some(layers)
+        };
+        let mut held = shown_view.get();
+        Canvas::new("Document").document(size).layer_bounds(&bounds).view(Bind::bound(&mut held)).show(ui, |_, _| {});
+        shown_view.set(held);
+    });
+    fixture.settle();
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas).settle();
+    assert_eq!(asked.get(), 0, "showing the canvas and its enabled commands asks for no bounds");
+    let before = view.get();
+    assert!(commands::fire(fixture.ctx(), ViewCommands::FitLayers, FireSource::Menu), "a menu row fires Fit Layers");
+    fixture.frame(vec![]);
+    assert!(asked.get() > 0, "the pass that runs Fit Layers asks for the bounds");
+    assert_ne!(view.get(), before, "and fits them");
+    let once = asked.get();
+    fixture.idle(3);
+    assert_eq!(asked.get(), once, "later passes ask no more");
 }
