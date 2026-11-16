@@ -847,7 +847,7 @@ fn styles_as_read(doc: &Document, kept: Option<&craft_wordmodel::kept::KeptXml>,
     let changed = super::kept::changed(&k.style_prints, &super::kept::prints(&now));
     // The name WordCraft writes a style id under (`My_20_Custom` was read as `MyCustom`).
     let ours = |id: &str| super::writer::odf_name(id);
-    let rewritten = super::kept::rewritten_defs(&styles, &now, &k.defs, &changed, &k.style_ids, &ours);
+    let rewritten = super::kept::rewritten_defs(&now, &k.defs, &changed, &k.style_ids, &ours);
     super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten)
 }
 
