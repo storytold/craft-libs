@@ -247,7 +247,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// start, the edge the text is read from — the left edge in a left-to-right interface, the right edge in a
     /// right-to-left one. The unit keeps its place at the end of the field either way, so a column of fields lines its
     /// units up whichever presentation its values take. Values wider than the available room retain the existing
-    /// single-line clipping and scrolling behavior.
+    /// single-line clipping and scrolling behaviour.
     #[must_use]
     pub fn centred(mut self, centred: bool) -> Self {
         self.options.centred = centred;
@@ -415,9 +415,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         }
     }
 
-    /// The run the value is measured in: the role and the face of the text part's options, which is the one rule the
-    /// text adapter lays the shown and edited text out by (`tokens.font` reads the mono face from the span, else the
-    /// role's). A measure that named the face by itself would size a proportional field's value in the mono face.
+    /// Measure the value with the same type role and monospace setting as the text adapter. A mono span selects the
+    /// monospace role's font and size; otherwise the configured role is used.
     fn value_run<'s>(&self, text: &'s str) -> TextRun<'s> {
         let span = if self.options.mono { Span::new(text).mono() } else { Span::new(text) };
         TextRun::spans(vec![span]).role(self.options.role)
