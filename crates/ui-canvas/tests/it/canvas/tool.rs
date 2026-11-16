@@ -1244,7 +1244,7 @@ fn the_tool_and_the_canvas_controls_read_one_precise_cursor_from_the_canvas() {
             let canvas = Canvas::new("Document").document(DOCUMENT).view(view).precise_cursors(preference).show(ui, |_, cx| {
                 body_seen.set(canvas_space(&cx.env).map(|space| space.precise()));
             });
-            ToolHost::new().run(ui, &canvas.output, &mut PreciseProbe(Rc::clone(&tool_seen)));
+            let _ = ToolHost::new().run(ui, &canvas.output, &mut PreciseProbe(Rc::clone(&tool_seen)));
         });
         let ctx = fixture.ctx().clone();
         for caps_lock in [false, true] {
