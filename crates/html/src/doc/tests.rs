@@ -718,6 +718,195 @@ fn cells_give_their_columns_widths() {
 }
 
 #[test]
+fn col_elements_give_table_column_widths() {
+    let f = parse("<table><colgroup><col width=100><col style='width: 150pt'></colgroup><tr><td>A</td><td>B</td></tr></table>");
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert_eq!(t.widths, [75.0, 150.0]);
+
+    // col with span
+    let f2 = parse(
+        "<table><colgroup><col span=2 style='width: 72pt'><col style='width: 144pt'></colgroup><tr><td>1</td><td>2</td><td>3</td></tr></table>",
+    );
+    let FBlock::Table(t2) = &f2.blocks[0] else { panic!() };
+    assert_eq!(t2.widths, [72.0, 72.0, 144.0]);
+
+    // Childless colgroup defines widths across declared span
+    let f3 = parse("<table><colgroup span=2 width=100></colgroup><tr><td>1</td><td>2</td></tr></table>");
+    let FBlock::Table(t3) = &f3.blocks[0] else { panic!() };
+    assert_eq!(t3.widths, [75.0, 75.0]);
+
+    // Child col elements override colgroup widths
+    let f4 = parse("<table><colgroup width=100><col width=200></colgroup><tr><td>1</td></tr></table>");
+    let FBlock::Table(t4) = &f4.blocks[0] else { panic!() };
+    assert_eq!(t4.widths, [150.0]);
+
+    // Mixed childless colgroup and colgroup with child col elements
+    let f5 = parse(
+        "<table><colgroup span=1 width=100></colgroup><colgroup><col style='width: 200pt'><col style='width: 300pt'></colgroup><tr><td>1</td><td>2</td><td>3</td></tr></table>",
+    );
+    let FBlock::Table(t5) = &f5.blocks[0] else { panic!() };
+    assert_eq!(t5.widths, [75.0, 200.0, 300.0]);
+
+    // Child col elements inherit parent colgroup width when unset
+    let f6 = parse("<table><colgroup width=120><col><col></colgroup><tr><td>1</td><td>2</td></tr></table>");
+    let FBlock::Table(t6) = &f6.blocks[0] else { panic!() };
+    assert_eq!(t6.widths, [90.0, 90.0]);
+
+    // Child col elements without width inherit group width while explicit child width takes precedence
+    let f7 = parse("<table><colgroup width=120><col width=200><col></colgroup><tr><td>1</td><td>2</td></tr></table>");
+    let FBlock::Table(t7) = &f7.blocks[0] else { panic!() };
+    assert_eq!(t7.widths, [150.0, 90.0]);
+
+    // Partial explicit col widths fall back to average for unset columns
+    let f8 = parse("<table><colgroup><col style='width: 100pt'><col></colgroup><tr><td>1</td><td>2</td></tr></table>");
+    let FBlock::Table(t8) = &f8.blocks[0] else { panic!() };
+    assert_eq!(t8.widths, [100.0, 100.0]);
+
+    // Export includes colgroup
+    let doc = model::to_doc(&f);
+    let html = export(&doc);
+    assert!(html.contains("<colgroup>"), "html export includes colgroup: {html}");
+    assert!(html.contains("<col style=\"width:75.00pt\">"), "{html}");
+    assert!(html.contains("<col style=\"width:150.00pt\">"), "{html}");
+}
+
+#[test]
+fn word_html_vertical_merge_is_preserved() {
+    use craft_wordmodel::props::VMerge;
+    let html = "<table>\
+        <tr><td style='mso-yfti-vmerge:restart'>Top</td><td>B1</td></tr>\
+        <tr><td style='mso-yfti-vmerge:continue'>Cont</td><td>B2</td></tr>\
+    </table>";
+    let f = parse(html);
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert_eq!(t.rows.len(), 2);
+    assert_eq!(t.rows[0].len(), 2);
+    assert_eq!(t.rows[1].len(), 2, "second row must have exactly 2 cells, no duplicate synthetic cell");
+    assert!(!t.rows[0][0].covered);
+    assert!(t.rows[1][0].covered);
+
+    let doc = model::to_doc(&f);
+    let craft_wordmodel::Block::Table(tb) = &*doc.body[0] else { panic!() };
+    assert_eq!(tb.rows[0].cells[0].props.vmerge, VMerge::Restart);
+    assert_eq!(tb.rows[1].cells[0].props.vmerge, VMerge::Continue);
+    assert_eq!(tb.rows[1].cells.len(), 2, "table model second row has exactly 2 cells");
+    assert_eq!(tb.vertical_extent(0, 0), Some((0, 2)));
+}
+
+#[test]
+fn html_multiple_colgroups_do_not_backfill_earlier_groups() {
+    // Earlier colgroup with unset column must not be backfilled by later colgroup width.
+    let html = "<table>\
+        <colgroup><col></colgroup>\
+        <colgroup style='width: 200pt'><col style='width: 50pt'></colgroup>\
+        <tr><td>1</td><td>2</td></tr>\
+    </table>";
+    let f = parse(html);
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert_eq!(t.widths, [50.0, 50.0], "column 0 was not backfilled by group 2 width of 200pt");
+}
+
+#[test]
+fn word_html_rowspan_with_explicit_vmerge_continue_no_duplicate_cell() {
+    use craft_wordmodel::props::VMerge;
+    let html = "<table>\
+        <tr><td rowspan=2 style='mso-yfti-vmerge:restart'>A</td><td>B1</td></tr>\
+        <tr><td style='mso-yfti-vmerge:continue'>A_cont</td><td>B2</td></tr>\
+    </table>";
+    let f = parse(html);
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert_eq!(t.rows.len(), 2);
+    assert_eq!(t.rows[0].len(), 2);
+    assert_eq!(t.rows[1].len(), 2, "second row must have exactly 2 cells, not ragged");
+    assert!(!t.rows[0][0].covered);
+    assert!(t.rows[1][0].covered);
+
+    let doc = model::to_doc(&f);
+    let craft_wordmodel::Block::Table(tb) = &*doc.body[0] else { panic!() };
+    assert_eq!(tb.rows[0].cells[0].props.vmerge, VMerge::Restart);
+    assert_eq!(tb.rows[1].cells[0].props.vmerge, VMerge::Continue);
+    assert_eq!(tb.rows[1].cells.len(), 2);
+    assert_eq!(tb.vertical_extent(0, 0), Some((0, 2)));
+}
+
+#[test]
+fn to_doc_normalises_row_0_continue_cell() {
+    use craft_wordmodel::props::VMerge;
+    // Case 1: Row 0 has continue and Row 1 has continue -> Row 0 normalised to Restart.
+    let html_multi = "<table>\
+        <tr><td style='mso-yfti-vmerge:continue'>TopCont</td><td>B1</td></tr>\
+        <tr><td style='mso-yfti-vmerge:continue'>BottomCont</td><td>B2</td></tr>\
+    </table>";
+    let f_multi = parse(html_multi);
+    let doc_multi = model::to_doc(&f_multi);
+    let craft_wordmodel::Block::Table(tb_multi) = &*doc_multi.body[0] else { panic!() };
+    assert_eq!(tb_multi.rows[0].cells[0].props.vmerge, VMerge::Restart, "row 0 continue normalised to restart");
+    assert_eq!(tb_multi.rows[1].cells[0].props.vmerge, VMerge::Continue);
+
+    // Case 2: Row 0 has continue but table has only 1 row (or no continuation) -> normalised to None.
+    let html_single = "<table>\
+        <tr><td style='mso-yfti-vmerge:continue'>SoloCont</td><td>B1</td></tr>\
+    </table>";
+    let f_single = parse(html_single);
+    let doc_single = model::to_doc(&f_single);
+    let craft_wordmodel::Block::Table(tb_single) = &*doc_single.body[0] else { panic!() };
+    assert_eq!(tb_single.rows[0].cells[0].props.vmerge, VMerge::None, "orphaned row 0 continue normalised to none");
+
+    // Case 3: Row 0 col 1 has continue, Row 1 has a spanning continue starting at col 0 -> col 1 normalised to None.
+    let html_span = "<table>\
+        <tr><td>A0</td><td style='mso-yfti-vmerge:continue'>B0</td></tr>\
+        <tr><td colspan='2' style='mso-yfti-vmerge:continue'>SpanCont</td></tr>\
+    </table>";
+    let f_span = parse(html_span);
+    let doc_span = model::to_doc(&f_span);
+    let craft_wordmodel::Block::Table(tb_span) = &*doc_span.body[0] else { panic!() };
+    assert_eq!(tb_span.rows[0].cells[1].props.vmerge, VMerge::None, "unaligned spanning continuation in row 1 must not mark row 0 cell as restart");
+}
+
+/// #1785: A covered continuation cell with `rowspan > 1` expands into the following row when
+/// no restart cell above spans it.
+#[test]
+fn covered_continuation_with_rowspan_expands_into_next_row() {
+    use craft_wordmodel::props::VMerge;
+    let html = "<table>\
+        <tr><td style='mso-yfti-vmerge:restart'>Top</td><td>B0</td></tr>\
+        <tr><td rowspan='2' style='mso-yfti-vmerge:continue'>Mid</td><td>B1</td></tr>\
+        <tr><td>B2</td></tr>\
+    </table>";
+    let f = parse(html);
+    let doc = model::to_doc(&f);
+    let craft_wordmodel::Block::Table(tb) = &*doc.body[0] else { panic!() };
+    assert_eq!(tb.rows.len(), 3);
+    assert_eq!(tb.rows[2].cells.len(), 2, "row 2 should have placeholder + B2");
+    assert_eq!(tb.rows[2].cells[0].props.vmerge, VMerge::Continue);
+}
+
+/// #1785: A plain `rowspan=2` cell `A` in col 0 followed by `B` (`vmerge:restart`) and `D`
+/// must still insert a placeholder for `A` in row 1 even when `B`'s explicit `vmerge:continue`
+/// is the first `<td>` in row 1.
+#[test]
+fn rowspan_before_explicit_vmerge_continue_keeps_grid_columns() {
+    use craft_wordmodel::props::VMerge;
+    let html = "<table>\
+        <tr><td rowspan='2'>A</td><td rowspan='2' style='mso-yfti-vmerge:restart'>B</td><td>D</td></tr>\
+        <tr><td style='mso-yfti-vmerge:continue'>B_cont</td><td>D1</td></tr>\
+    </table>";
+    let f = parse(html);
+    let doc = model::to_doc(&f);
+    let craft_wordmodel::Block::Table(tb) = &*doc.body[0] else { panic!() };
+    assert_eq!(tb.rows.len(), 2);
+    assert_eq!(tb.rows[0].cells.len(), 3);
+    assert_eq!(tb.rows[1].cells.len(), 3, "row 1 should have placeholder for A, B_cont, and D1");
+    assert_eq!(tb.rows[1].cells[0].props.vmerge, VMerge::Continue);
+    assert_eq!(tb.rows[1].cells[1].props.vmerge, VMerge::Continue);
+    let craft_wordmodel::Block::Para(p1) = &*tb.rows[1].cells[1].blocks[0] else { panic!() };
+    assert_eq!(p1.text, "B_cont");
+    assert_eq!(tb.rows[1].cells[2].props.vmerge, VMerge::None);
+    let craft_wordmodel::Block::Para(p2) = &*tb.rows[1].cells[2].blocks[0] else { panic!() };
+    assert_eq!(p2.text, "D1");
+}
+
+#[test]
 fn cells_take_their_css_borders() {
     use craft_wordmodel::props::{Border, BorderStyle};
     let f = parse(
