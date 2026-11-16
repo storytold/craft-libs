@@ -64,7 +64,10 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
         if func == 0x020C && cv.window_set && player_target.is_none() && !cv.viewport_set {
             let we = cv.map.window_ext();
             let target = (we.0.abs(), we.1.abs());
-            cv.play_into(None, target);
+            // Before an explicit viewport, its default (1, 1) retains any
+            // SCALEVIEWPORTEXT factors already applied by the file.
+            let scale = cv.map.viewport_ext();
+            cv.play_into(None, (target.0 * scale.0, target.1 * scale.1));
             player_target = Some(target);
         }
         parsed += 1;

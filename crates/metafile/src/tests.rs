@@ -2744,3 +2744,17 @@ fn wmf_viewport_scaling_does_not_resize_the_player_frame() {
         assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 100.0, 100.0));
     }
 }
+
+#[test]
+fn wmf_viewport_scaling_before_first_window_is_retained() {
+    let recs = [
+        wrec(0x0103, &h16(8)),
+        wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(1)])),
+        wrec(0x020C, &cat(vec![h16(100), h16(100)])),
+        wrec(0x041B, &cat(vec![h16(100), h16(100), h16(0), h16(0)])),
+    ];
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (100.0, 100.0));
+    assert_eq!(p.skipped_records, 0);
+    assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 50.0, 100.0));
+}
