@@ -238,4 +238,23 @@ fn a_raised_expanded_budget_applies_at_once() {
     assert!(reader.limited_part("other.big", 4096).is_err(), "256 read + 512 is past 600");
     BUDGET.store(1024, std::sync::atomic::Ordering::Relaxed);
     assert!(reader.limited_part("other.big", 4096).is_ok(), "768 fits the raised 1024");
+    // a lowered budget does not forget what was read: 768 + 256 is past 1000 after a dip to 100
+    BUDGET.store(100, std::sync::atomic::Ordering::Relaxed);
+    assert!(reader.limited_part("document.json", 4096).is_err());
+    BUDGET.store(1000, std::sync::atomic::Ordering::Relaxed);
+    assert!(reader.limited_part("document.json", 4096).is_err(), "1024 is past 1000");
+    BUDGET.store(1024, std::sync::atomic::Ordering::Relaxed);
+    assert!(reader.limited_part("document.json", 4096).is_ok());
+}
+
+/// An entry whose local header can't be read is refused at open, not skipped.
+#[test]
+fn an_unreadable_entry_is_refused() {
+    let mut writer = Writer::new(LIMITS);
+    writer.part("document.json", b"{}", false).unwrap();
+    writer.part("other.json", b"[]", false).unwrap();
+    let mut bytes = writer.finish().unwrap();
+    let second = bytes.windows(4).enumerate().filter(|(_, w)| *w == b"PK\x03\x04").map(|(i, _)| i).nth(1).unwrap();
+    bytes[second + 2] = 0;
+    assert!(Reader::new(Cursor::new(bytes), LIMITS).is_err());
 }

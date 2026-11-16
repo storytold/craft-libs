@@ -83,11 +83,18 @@ fn family_lists(family: &Family, root: &Path, out: &mut String, mods: &mut Strin
 /// Whether a change file declares its `step` function (`fn step(`, `pub fn step (` …) on a line of
 /// code: a mention in a comment or a note is not a declaration.
 fn declares_step(text: &str) -> bool {
-    without_comments(text).lines().map(str::trim_start).any(|line| {
-        let line = line.strip_prefix("pub(crate)").or_else(|| line.strip_prefix("pub")).unwrap_or(line).trim_start();
-        line.strip_prefix("fn").is_some_and(|rest| {
-            rest.starts_with(char::is_whitespace) && rest.trim_start().strip_prefix("step").is_some_and(|rest| rest.trim_start().starts_with('('))
-        })
+    let code = without_comments(text);
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    // `fn`, whitespace, `step`, then `(` (or generics), across lines
+    code.match_indices("fn").any(|(at, _)| {
+        let before_ok = code[..at].chars().next_back().is_none_or(|c| !ident(c));
+        let rest = &code[at + 2..];
+        before_ok
+            && rest.starts_with(char::is_whitespace)
+            && rest
+                .trim_start()
+                .strip_prefix("step")
+                .is_some_and(|rest| matches!(rest.trim_start().chars().next(), Some('(' | '<')) && !rest.starts_with(ident))
     })
 }
 

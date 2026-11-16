@@ -205,3 +205,14 @@ fn kept_elements_check_each_other() {
     // serde_json drops deep values recursively; leak it rather than overflow the test thread
     std::mem::forget(said);
 }
+
+/// A record whose whole identity typed reading drops is matched by its place while the list keeps
+/// its length, so an unchanged save keeps its fields.
+#[test]
+fn a_record_without_a_surviving_identity_is_matched_by_place() {
+    let mut said = NewerFile::new("App", &newer());
+    said.compare(&json!({"items": [{"id": 7, "extra": 1}]}), &json!({"items": [{}]}), "placeholder", &[]);
+    let mut saved = json!({"items": [{}]});
+    assert!(said.restore_into(&mut saved).is_empty());
+    assert_eq!(saved, json!({"items": [{"id": 7, "extra": 1}]}));
+}

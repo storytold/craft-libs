@@ -91,6 +91,10 @@ fn a_step_is_a_declaration_not_a_mention() {
     assert!(!declares_step("const S: &str = \"\nfn step(v) \";\n"), "inside a string");
     // a comment between the words is whitespace
     assert!(declares_step("pub fn/* migration */step(v: &mut Value) {}\n"));
+    // across lines
+    assert!(declares_step("//! A change with a step.\npub fn step\n    (_v: &mut Value) -> Result {\n    Ok(())\n}\n"));
+    assert!(declares_step("pub fn\nstep(v: &mut Value) {}\n"));
+    assert!(!declares_step("fn stepper(v: &mut Value) {}\nfn prefn step() {}\n"), "other names");
     assert!(declares_step("const X: u8 = 1; // fn step() is below\nfn step(v: &mut Value) {}\n"));
     assert!(declares_step("//! a note\npub(crate) fn  step(v: &mut Value) -> Result<(), E> { Ok(()) }\n"));
     assert!(declares_step("//! a note\n    fn step(v: &mut Value) {}\n"));

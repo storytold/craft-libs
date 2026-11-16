@@ -229,6 +229,8 @@ pub struct Reader {
     pub hydrated: usize,
     document: Option<Arc<[u8]>>,
     limits: Limits,
+    /// Every byte part reads have expanded to, whatever the budget was at the time.
+    read_total: u64,
 }
 
 impl Reader {
@@ -280,7 +282,7 @@ impl Reader {
             }
         }
 
-        Ok(Self { archive, blobs: BTreeMap::new(), hydrated: 0, document: None, limits })
+        Ok(Self { archive, blobs: BTreeMap::new(), hydrated: 0, document: None, limits, read_total: 0 })
     }
 
     /// The file's own part, `document.json`, read once and kept: provisional caches and the
@@ -315,15 +317,17 @@ impl Reader {
         }
         // the expanded budget is read each time: a raised (or lowered) one applies at once, the
         // bytes already read still counting against it
-        let used = self.archive.budget().used();
         let budget = self.archive.budget_mut();
         *budget = craft_zip::Budget::new(budget.what(), (self.limits.max_expanded)() as u64);
-        let _ = budget.charge(used.min(budget.limit()));
+        if budget.charge(self.read_total).is_err() {
+            return Err(invalid("package too large"));
+        }
         // Read within budget. craft-zip's read() handles decompression bombs via the limit.
         let bytes = self.archive.read(name, limit as u64).map_err(invalid)?.ok_or_else(|| invalid("part not found"))?;
         if bytes.len() as u64 != expected {
             return Err(invalid("part length mismatch"));
         }
+        self.read_total = self.read_total.saturating_add(expected);
         Ok(bytes)
     }
 

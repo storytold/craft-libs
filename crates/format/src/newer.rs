@@ -369,15 +369,12 @@ fn anchor_of(element: &Value) -> Option<Anchor> {
     element.get("name").and_then(Value::as_str).map(|name| Anchor::Name(name.to_string()))
 }
 
-/// The identity of `element` that `known`'s records still carry: its id, or else its name. An
-/// element with an identity neither of which survived has none.
+/// The identity of `element` that `known`'s records still carry: its id, or else its name. When
+/// typed reading kept neither, there is none, and the record is matched by its place.
 fn surviving_anchor(element: &Value, known: &Positions) -> Option<Anchor> {
     let id = element.get("id").and_then(Value::as_u64).map(Anchor::Id);
     let name = element.get("name").and_then(Value::as_str).map(|n| Anchor::Name(n.to_string()));
-    match (id, name) {
-        (Some(id), Some(name)) => Some(if known.find(usize::MAX, &id).is_some() { id } else { name }),
-        (id, name) => id.or(name),
-    }
+    [id, name].into_iter().flatten().find(|anchor| known.find(usize::MAX, anchor).is_some())
 }
 
 /// Where each id and name first appears in a list, so matching records is not a scan per record.
