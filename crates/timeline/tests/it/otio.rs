@@ -573,7 +573,7 @@ fn relative_target_urls_are_percent_decoded() {
     assert_eq!(media_key(p, clip.item), "/proj/media/Clip A.mov");
 }
 
-#[test]
+#[trial]
 fn optional_report_limit_bounds_distinct_otio_diagnostics_without_changing_default() {
     let children: Vec<_> = (0..10).map(|i| serde_json::json!({"OTIO_SCHEMA": format!("Unsupported{i}.1")})).collect();
     let doc = serde_json::json!({"OTIO_SCHEMA":"Timeline.1", "tracks":{"OTIO_SCHEMA":"Stack.1", "children":[{"OTIO_SCHEMA":"Track.1", "kind":"Video", "children":children}]}}).to_string();

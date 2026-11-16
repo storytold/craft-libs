@@ -767,7 +767,7 @@ fn a_huge_link_group_does_not_write_quadratic_links() {
     assert!(rep.has_warnings(), "{rep}");
 }
 
-#[test]
+#[trial]
 fn nested_sequence_chain_is_bounded_and_reimported_at_a_shallower_depth() {
     let mut doc = String::from("<xmeml><project><children>");
     for i in 0..66 {

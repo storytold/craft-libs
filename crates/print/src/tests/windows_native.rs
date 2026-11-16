@@ -2,6 +2,7 @@
 //! the incremental update that gives them one shape (all platforms), and a job reaching a
 //! paused test printer (Windows).
 
+use crate::Error;
 use craft_ui::testing::trial;
 
 /// One page of a test PDF: its MediaBox (`None` = inherited from the page tree's root, which is
@@ -177,7 +178,7 @@ fn shrink_to_fit_reframes_sheets_on_the_paper() {
     assert_eq!(shapes(&sheets.update(&edits).unwrap()), [((612, 792), 0), ((612, 792), 270), ((612, 792), 0)]);
 }
 
-#[test]
+#[trial]
 fn shrink_to_fit_refuses_a_sheet_the_output_cannot_represent() {
     use crate::sheets::{Fit, plan, read};
     // A runaway-zoom export: 16 000 000 pt wide. Written with four decimals the scale would be
@@ -189,7 +190,7 @@ fn shrink_to_fit_refuses_a_sheet_the_output_cannot_represent() {
     assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("shrink")), "{refused:?}");
 }
 
-#[test]
+#[trial]
 fn shrink_to_fit_holds_the_one_percent_scale_boundary() {
     use crate::sheets::{Fit, plan, read};
     // The matrix carries the scale through the four-decimal formatter, so the plan refuses when

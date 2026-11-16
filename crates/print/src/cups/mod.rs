@@ -14,7 +14,8 @@
 //! promise bounded completion for arbitrary named hosts/Unix listeners. No detached timeout
 //! thread is spawned; callers needing cancellation must supply a separately bounded transport.
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests;
 
 use super::{Duplex, Error, Job, Printer, Scaling};
@@ -66,7 +67,9 @@ static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 /// How the scheduler is reached: its unix socket, else its loopback port.
 #[derive(Clone, Debug)]
 pub enum Server {
+    /// The scheduler's unix socket.
     Unix(PathBuf),
+    /// The scheduler's loopback port.
     Tcp(SocketAddr),
     /// A caller-authorized host. DNS is resolved once for each connection attempt.
     Named(String, u16),
@@ -253,6 +256,7 @@ pub fn printers() -> Result<Vec<Printer>, Error> {
     printers_at(&endpoints())
 }
 
+/// [`printers`] from the given scheduler endpoints.
 pub fn printers_at(endpoints: &[Server]) -> Result<Vec<Printer>, Error> {
     let queues = discover(endpoints, OPERATION_CUPS_GET_PRINTERS)?;
     let default = discover(endpoints, OPERATION_CUPS_GET_DEFAULT).ok().and_then(|names| names.into_iter().next());
@@ -315,7 +319,9 @@ pub(crate) fn print_job_at(endpoints: &[Server], pdf: &[u8], job: &Job) -> Resul
 /// explicit rather than guessing it from a name shared by a printer and a class.
 #[derive(Clone, Debug)]
 pub struct Destination {
+    /// The queue or class name.
     pub name: String,
+    /// Whether the destination is a class rather than a printer queue.
     pub is_class: bool,
 }
 
@@ -370,11 +376,17 @@ pub fn default_at(endpoints: &[Server]) -> Result<Option<String>, Error> {
 /// Metadata from one CUPS printer group, without losing which fields belong together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Queue {
+    /// The queue name (`printer-name`).
     pub name: String,
+    /// The description the queue shows (`printer-info`).
     pub info: String,
+    /// The IPP `printer-state` value.
     pub state: u32,
+    /// Whether the queue accepts new jobs (`printer-is-accepting-jobs`).
     pub accepting_jobs: bool,
+    /// Whether this is the scheduler's default destination.
     pub is_default: bool,
+    /// Whether the queue is a class rather than a printer.
     pub is_class: bool,
 }
 impl Default for Queue {

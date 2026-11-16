@@ -507,7 +507,7 @@ fn relative_media_urls_are_percent_decoded() {
 }
 
 // Parity regressions from FilmCraft e6df318 (including #4799), adapted to the neutral model.
-#[test]
+#[trial]
 fn media_cut_off_by_the_depth_limit_is_complete_when_reached_higher_up() {
     // m0 … m64 nest one inside the next. Project A reaches m63 at the depth limit, so m64 is left
     // out of it; project B refers to m63 directly, where m64 fits, and must not get the cut-off copy.
@@ -532,7 +532,7 @@ fn media_cut_off_by_the_depth_limit_is_complete_when_reached_higher_up() {
     assert_eq!(m63.video_tracks[0].items.len(), 1, "M63 keeps its nested M64");
 }
 
-#[test]
+#[trial]
 fn media_cut_off_by_xml_layout_is_complete_when_revisited_at_the_same_media_depth() {
     // Both references have media-chain depth zero, but the first is reached through connected
     // clips. Its resource must not remain cached as complete after the XML-layout guard fires.
@@ -563,7 +563,7 @@ fn media_cut_off_by_xml_layout_is_complete_when_revisited_at_the_same_media_dept
     }
 }
 
-#[test]
+#[trial]
 fn flat_resource_chain_is_bounded_even_when_xml_is_shallow() {
     let mut media = String::new();
     for i in 0..512 {
@@ -580,7 +580,7 @@ fn flat_resource_chain_is_bounded_even_when_xml_is_shallow() {
     assert!(imp.project.items.len() <= 65, "the flat resource graph is not expanded beyond the semantic limit");
 }
 
-#[test]
+#[trial]
 fn shallower_retry_does_not_link_a_cached_ancestor_back_to_the_rebuilt_item() {
     let mut media = String::new();
     for i in 0..64 {

@@ -90,7 +90,10 @@ fn every_channel_count_decodes_on_the_right_speakers() {
 /// a valid field name is left out.
 #[test]
 fn tags_reach_ffprobe() {
-    let Some(probe) = crate::integration::codecs::common::tool("ffprobe").or_else(|| crate::integration::codecs::common::skip("ffprobe not found")) else { return };
+    let Some(probe) = crate::integration::codecs::common::tool("ffprobe").or_else(|| crate::integration::codecs::common::skip("ffprobe not found"))
+    else {
+        return;
+    };
     let opts = OggVorbisOptions::new(3.0)
         .with_tag("TITLE", "Smörgåsbord ✓")
         .with_tag("ARTIST", "Craft")

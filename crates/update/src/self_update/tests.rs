@@ -1343,7 +1343,7 @@ fn a_custom_flatpak_identity_is_used_for_the_restart() {
     assert!(!args.iter().any(|arg| arg == "ai.storyteller.artcraft"));
 }
 
-#[test]
+#[trial]
 fn nextest_archive_binaries_do_not_update_themselves() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("relocated-artifacts");

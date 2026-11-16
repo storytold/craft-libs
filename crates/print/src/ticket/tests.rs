@@ -452,7 +452,7 @@ fn validated_partial(width: Option<u32>, height: Option<u32>) -> String {
 /// sheet. With the sheet the request names, the job goes on with the size it asked for; a
 /// side the driver did report must still agree with it, and a request that names no sheet is
 /// refused as before.
-#[test]
+#[trial]
 fn a_legacy_v3_drivers_zero_side_falls_back_to_the_requested_paper() {
     let a4 = (210_000, 297_000);
     assert_eq!(verify_ticket(&validated_partial(None, Some(297_000)), Some(a4), false), Ok(a4));
@@ -497,7 +497,7 @@ fn validated_referenced(width: u32, height: u32) -> String {
 /// A paper side a driver keeps in a `ParameterRef` is resolved through the `ParameterInit`
 /// the ticket sets, and checked like a direct one: a referenced width that disagrees with the
 /// sheet the request names is refused, one that agrees is taken.
-#[test]
+#[trial]
 fn a_referenced_paper_side_is_resolved_through_the_parameter_it_names() {
     let a4 = (210_000, 297_000);
     assert_eq!(verify_ticket(&validated_referenced(210_000, 297_000), Some(a4), false), Ok(a4));
@@ -516,7 +516,7 @@ fn a_referenced_paper_side_is_resolved_through_the_parameter_it_names() {
 /// resort only: no full entry matched, a Print Schema keyword entry, and its known side
 /// agrees with the sheet.
 #[cfg(windows)]
-#[test]
+#[trial]
 fn a_partially_known_paper_is_a_candidate_of_last_resort_only() {
     let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
     let partial = paper(0, 297_000, Some("A4"), true);
@@ -537,7 +537,7 @@ fn a_partially_known_paper_is_a_candidate_of_last_resort_only() {
 /// standard sheet or not. The known side agrees only to a quarter of a millimetre: exactly
 /// the tolerance is taken, one micrometre past it is another paper.
 #[cfg(windows)]
-#[test]
+#[trial]
 fn a_single_partially_known_paper_that_agrees_is_still_taken() {
     let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
     assert_eq!(matching_paper(&[paper(215_900, 0, Some("Legal 215.9 x 355.6 mm"), true)], 612.0, 1008.0), Some(0), "named like the sheet");
@@ -553,7 +553,7 @@ fn a_single_partially_known_paper_that_agrees_is_still_taken() {
 /// modifier word, another paper: a known "Letter Extra" name contradicts a Letter sheet too.
 /// Without a name there is nothing contradicting, and the agreeing entry is taken as before.
 #[cfg(windows)]
-#[test]
+#[trial]
 fn a_single_partially_known_paper_whose_known_name_contradicts_the_sheet_is_refused() {
     let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
     assert_eq!(
@@ -573,7 +573,7 @@ fn a_single_partially_known_paper_whose_known_name_contradicts_the_sheet_is_refu
 /// width) are told apart by name, as full candidates are; when nothing tells them apart,
 /// none is chosen, not the first one that agrees.
 #[cfg(windows)]
-#[test]
+#[trial]
 fn two_partially_known_papers_that_agree_are_told_apart_by_their_names() {
     let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
     let both = [paper(215_900, 0, Some("Letter"), true), paper(215_900, 0, Some("Legal"), true)];
