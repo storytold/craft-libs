@@ -771,3 +771,25 @@ fn rle_chunks_use_the_callers_pool_and_report_panics() {
         assert!(map_chunks(2, vec![0, 1], |_| panic!("worker")).is_err());
     });
 }
+
+#[test]
+fn padded_packbits_preserves_recovery_without_weakening_strict_decode() {
+    for (input, expected) in
+        [(&[0, 7][..], vec![7, 0, 0]), (&[3, 1, 2, 3, 4][..], vec![1, 2, 3]), (&[253, 9][..], vec![9, 9, 9]), (&[128][..], vec![0, 0, 0])]
+    {
+        let mut out = vec![42];
+        super::packbits::decode_padded_into(input, 3, 3, &mut out).unwrap();
+        assert_eq!(&out[1..], expected);
+        assert_eq!(out[0], 42);
+        assert!(super::packbits::decode(input, 3).is_err());
+    }
+    for input in [&[3, 1][..], &[255][..]] {
+        assert!(super::packbits::decode_padded_into(input, 1, 1, &mut vec![]).is_err());
+    }
+    let mut out = vec![42];
+    assert!(super::packbits::decode_padded_into(&[], 4, 3, &mut out).is_err());
+    assert_eq!(out, [42]);
+    super::packbits::decode_padded_into(&[255], 0, 0, &mut out).unwrap();
+    super::packbits::decode_padded_into(&[0, 7, 255], 1, 1, &mut out).unwrap();
+    assert_eq!(out, [42, 7]);
+}
