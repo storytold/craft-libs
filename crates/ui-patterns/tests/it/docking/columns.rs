@@ -31,6 +31,21 @@ fn default_heights_give_way_to_the_group_that_fills_before_it_gets_less() {
     assert!(sum(&heights) <= ROOM, "the groups fit the room");
 }
 
+#[trial]
+fn only_the_last_open_group_fills_the_column() {
+    let asks = || {
+        let mut group = open(MIN);
+        group.content = Some(DockHeights::new(100.0).compact(80.0).fill(150.0));
+        group
+    };
+    let mut minimized = asks();
+    minimized.minimized = true;
+    let heights = group_heights(&[asks(), asks(), minimized], STRIP, ROOM);
+    assert_eq!(heights[0], 100.0, "an earlier group keeps its default although it asks for a fill");
+    assert!(heights[1] > heights[0], "the last open group takes the rest");
+    assert_eq!(sum(&heights), ROOM, "the column is filled");
+}
+
 /// Canvas 1 beside an end dock: column A holds panel 2 (200 to 400 wide), column B panel 3 (at least 150), and
 /// column C, iconic, panel 4.
 fn end_dock_layout() -> Layout<u32> {
