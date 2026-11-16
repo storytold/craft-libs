@@ -38,4 +38,3 @@ pub use stack::{DialogId, DialogStack, dialog_id};
 pub use unsaved::{UnsavedAnswer, UnsavedChangesDialog, UnsavedChangesOutput};
 pub use words::DialogWords;
 
-pub use crate::sections::accelerator_labels;
