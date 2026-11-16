@@ -422,7 +422,10 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
 
         let list = node(&fixture, "Layers").center();
         fixture.frame(vec![pointer::moved(list)]);
-        fixture.frame(vec![pointer::wheel(-1.0e7)]).settle();
+        // The list's extent grows as it measures the rows a wheel brings in, so the end takes a few wheels.
+        for _ in 0..3 {
+            fixture.frame(vec![pointer::wheel(-1.0e7)]).settle();
+        }
         for name in ["Closed Group", "Smart Object", "Gaussian Blur", "Sharpen"] {
             assert!(fixture.by_label(name).is_some(), "{count} layers: scrolled to the bottom, {name:?} shows");
         }
@@ -431,8 +434,13 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
         let selected = Some(LayerRowKey::Filters(smart, Some(0)));
         assert_eq!(app.borrow().tree.selection.sub_row, selected, "{count} layers: the filter is selected");
         take(&app);
-        fixture.frame(vec![pointer::wheel(1.0e7)]).settle();
-        assert!(fixture.by_label("Gaussian Blur").is_none(), "{count} layers: scrolled back to the top");
+        for _ in 0..3 {
+            fixture.frame(vec![pointer::wheel(1.0e7)]).settle();
+        }
+        // The selected filter is the list's lead, which stays built out of view.
+        let view = node(&fixture, "Layers").rect;
+        let left = fixture.by_label("Gaussian Blur");
+        assert!(left.is_none_or(|row| !row.rect.intersects(view)), "{count} layers: scrolled back to the top, the filter is out of view");
         assert!(take(&app).iter().all(|event| !matches!(event, LayersEvent::Select(_))), "{count} layers: scrolling selects nothing");
         assert_eq!(app.borrow().tree.selection.sub_row, selected, "{count} layers: the filter stays selected");
     }
