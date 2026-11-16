@@ -113,6 +113,9 @@ fn room_counts_written_parts_and_reads_keep_part_limits() {
     writer.part("large.big", &[0; 500 * 1024], false).unwrap();
     assert!(!writer.room(1, 200 * 1024, 600 * 1024));
     assert!(writer.room(1, 1024, 1 << 20));
+    // what is written already is past the budget: not even an empty part fits
+    assert!(!writer.room(1, 0, 400 * 1024));
+    assert_eq!(writer.space(1, 400 * 1024), 0);
     let wide = Limits { part_limit: |_| 1 << 20, ..LIMITS };
     let mut writer = Writer::new(wide);
     writer.part("document.json", &[b' '; 2048], false).unwrap();
@@ -160,4 +163,60 @@ fn a_source_that_grows_while_read_is_refused() {
     writer.part("document.json", b"{}", false).unwrap();
     let bytes = writer.finish().unwrap();
     assert!(Reader::new(Growing(Cursor::new(bytes), false), LIMITS).err().is_some_and(|e| e.to_string().contains("changed")));
+}
+
+/// Compressed parts use the configured Deflate level.
+#[test]
+fn compressed_parts_use_the_configured_level() {
+    // words in a varied order, so the levels compress them differently
+    let words = ["alpha ", "beta ", "gamma ", "delta ", "epsilon ", "zeta ", "eta ", "theta "];
+    let mut seed = 7u32;
+    let text: Vec<u8> = (0..150)
+        .flat_map(|_| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            words[(seed >> 16) as usize % words.len()].bytes()
+        })
+        .take(1000)
+        .collect();
+    let size = |level: fn(&str, usize) -> i64| {
+        let mut writer = Writer::new(Limits { level, ..LIMITS });
+        writer.part("document.json", &text, true).unwrap();
+        writer.finish().unwrap().len()
+    };
+    assert_ne!(size(|_, _| 1), size(|_, _| 9), "the level is used");
+    assert_eq!(size(|_, _| 42), size(|_, _| 9), "past 9 is clamped");
+    assert_eq!(size(|_, _| -3), size(|_, _| 1), "below 1 is clamped");
+}
+
+/// An archive naming one part twice is refused.
+#[test]
+fn a_repeated_part_name_is_refused() {
+    let mut writer = Writer::new(LIMITS);
+    writer.part("document.json", b"{}", false).unwrap();
+    writer.part("documenX.json", b"[]", false).unwrap();
+    let mut bytes = writer.finish().unwrap();
+    let (from, to) = (b"documenX.json", b"document.json");
+    let mut at = 0;
+    while let Some(i) = bytes[at..].windows(from.len()).position(|w| w == from) {
+        bytes[at + i..at + i + to.len()].copy_from_slice(to);
+        at += i + to.len();
+    }
+    assert!(Reader::new(Cursor::new(bytes), LIMITS).is_err());
+}
+
+/// Cached documents and blobs keep the current part limits.
+#[test]
+fn cached_parts_keep_the_current_part_limits() {
+    let wide = Limits { part_limit: |_| 1 << 20, ..LIMITS };
+    let mut writer = Writer::new(wide);
+    writer.part("document.json", &[b' '; 512], false).unwrap();
+    let blob = writer.blob(&[7; 512], "bin", false).unwrap();
+    let bytes = writer.finish().unwrap();
+    let mut reader = Reader::new(Cursor::new(bytes), wide).unwrap();
+    let reference = serde_json::json!({"blob": blob});
+    assert!(reader.document(4096).is_ok());
+    assert!(reader.blob(&reference, "blob", "bin").is_ok());
+    reader.limits = Limits { part_limit: |_| 128, ..wide };
+    assert!(reader.document(4096).is_err());
+    assert!(reader.limited_blob(&reference, "blob", "bin", 4096).is_err());
 }

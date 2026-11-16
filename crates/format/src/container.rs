@@ -144,7 +144,12 @@ impl Writer {
         if cancelled.is_some_and(|c| c()) {
             return Err(FormatError::Cancelled);
         }
-        let compression = if compressed { craft_zip::Compression::Deflated } else { craft_zip::Compression::Stored };
+        // the configured level, clamped to the Deflate levels craft-zip writes (1 to 9)
+        let compression = if compressed {
+            craft_zip::Compression::Level((self.limits.level)(name, bytes.len()).clamp(1, 9) as u8)
+        } else {
+            craft_zip::Compression::Stored
+        };
         match cancelled {
             Some(cancelled) if bytes.len() > PIECE => {
                 let mut stopped = false;
@@ -180,16 +185,22 @@ impl Writer {
     /// file within `budget` and its expanded size within the reader's budget? The parts already
     /// written count at their expanded size (an upper bound on what they take in the file).
     pub fn room(&self, entries: usize, extra: usize, budget: usize) -> bool {
-        self.names.len().saturating_add(entries) <= self.limits.max_entries && extra <= self.space(entries, budget)
+        self.remaining(entries, budget).is_some_and(|left| extra <= left)
     }
 
     /// The bytes `entries` more optional parts may hold together ([`Writer::room`]).
     pub fn space(&self, entries: usize, budget: usize) -> usize {
-        if self.names.len().saturating_add(entries) > self.limits.max_entries {
-            return 0;
-        }
-        let overhead = self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536);
-        budget.saturating_sub(overhead.saturating_add(self.expanded)).min((self.limits.max_expanded)().saturating_sub(self.expanded))
+        self.remaining(entries, budget).unwrap_or(0)
+    }
+
+    /// The bytes left for `entries` more parts, or `None` when the entries don't fit or what is
+    /// written already is past `budget` or the reader's budget.
+    fn remaining(&self, entries: usize, budget: usize) -> Option<usize> {
+        let count = self.names.len().checked_add(entries).filter(|&n| n <= self.limits.max_entries)?;
+        let overhead = count.saturating_mul(256).saturating_add(65_536);
+        let in_file = budget.checked_sub(overhead.saturating_add(self.expanded))?;
+        let expanded = (self.limits.max_expanded)().checked_sub(self.expanded)?;
+        Some(in_file.min(expanded))
     }
 
     /// Add a payload as a blob, `blobs/<sha256>.<extension>`, and say its name, for the JSON that
@@ -241,6 +252,10 @@ impl Reader {
             craft_zip::Limits { max_entries: limits.max_entries as u64, max_total_bytes: (limits.max_expanded)() as u64 },
         )
         .map_err(invalid)?;
+        // the directory lists distinct names, so a repeated name is caught here
+        if archive.has_duplicate_names() {
+            return Err(invalid("duplicate or invalid archive entry"));
+        }
 
         // Validate entry names match format rules: no empty, no backslashes,
         // no path components that are "." or "..", and no duplicates; and every part's declared
@@ -272,6 +287,8 @@ impl Reader {
             let bytes = self.limited_part("document.json", limit)?;
             self.document = Some(bytes.into());
         }
+        // a cached document still keeps the current part limit
+        let limit = limit.min((self.limits.part_limit)("document.json"));
         self.document.as_ref().filter(|d| d.len() <= limit).cloned().ok_or_else(|| invalid("metadata budget"))
     }
 
@@ -310,6 +327,8 @@ impl Reader {
     /// reference counts against the resolved budget.
     pub fn limited_blob(&mut self, value: &Value, field: &str, extension: &str, limit: usize) -> Result<&[u8], FormatError> {
         let name = value.get(field).and_then(Value::as_str).ok_or_else(|| invalid(format!("missing `{field}` reference")))?;
+        // a cached blob still keeps the part's current limit
+        let limit = limit.min((self.limits.part_limit)(name));
         let hash = name
             .strip_prefix("blobs/")
             .and_then(|n| n.strip_suffix(&format!(".{extension}")))

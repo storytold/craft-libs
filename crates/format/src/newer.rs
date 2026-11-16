@@ -153,12 +153,17 @@ impl NewerFile {
 
     /// Compare the file as it reads (`file`, after the same upgrade as what was read) with what was
     /// read of it (`known`, its typed record written out): what `known` lacks is kept and named.
-    /// An object whose `type` is `placeholder_tag` (an element the app kept whole) and the fields
-    /// in `container_only` (what a container adds beside the file's own) are not compared; nor
-    /// are the top level's `format` and `format_pending`.
+    /// An object whose `type` is `placeholder_tag` (an element the app kept whole) is not
+    /// compared; nor are these top-level fields: those in `container_only` (what a container adds
+    /// beside the file's own), `format` and `format_pending`, and the sections kept whole (they go
+    /// back whole).
     pub fn compare(&mut self, file: &Value, known: &Value, placeholder_tag: &str, container_only: &[&str]) {
         let mut paths = Vec::new();
-        self.kept = vanished(file, known, "", &mut paths, placeholder_tag, container_only);
+        let mut top_only: Vec<&str> = container_only.to_vec();
+        top_only.extend(["format", "format_pending"]);
+        top_only.extend(self.sections.iter().map(|s| s.key.as_str()));
+        let kept = vanished(file, known, "", &mut paths, placeholder_tag, &top_only);
+        self.kept = kept;
         self.not_understood.extend(paths);
         for section in &mut self.sections {
             section.empty = known.get(&section.key).cloned();
@@ -182,8 +187,11 @@ impl NewerFile {
             }
             for (key, element) in &self.elements {
                 let name = element.get("name");
+                // the identity records are matched by: an id first, else a name
+                let anchor = anchor_of(element);
+                let taken = |list: &[Value]| anchor.as_ref().is_some_and(|a| Positions::of(list).find(list.len(), a).is_some());
                 match top.entry(key.clone()).or_insert_with(|| json!([])) {
-                    Value::Array(list) if name.is_none() || !list.iter().any(|x| x.get("name") == name) => list.push(element.clone()),
+                    Value::Array(list) if !taken(list) => list.push(element.clone()),
                     _ => lost.push(format!("`{key}` element {}, replaced by what was made here", name.and_then(Value::as_str).unwrap_or("unnamed"))),
                 }
             }
@@ -285,7 +293,8 @@ pub fn looks_default(v: &Value) -> bool {
 }
 
 /// What `raw` has that `known`, what was read of it, doesn't. `paths` gets those fields' names.
-fn vanished(raw: &Value, known: &Value, path: &str, paths: &mut Vec<String>, placeholder_tag: &str, container_only: &[&str]) -> Option<Kept> {
+/// `top_only` are top-level keys left out of the comparison.
+fn vanished(raw: &Value, known: &Value, path: &str, paths: &mut Vec<String>, placeholder_tag: &str, top_only: &[&str]) -> Option<Kept> {
     match (raw, known) {
         (Value::Object(raw), Value::Object(known)) => {
             if known.get("type").and_then(Value::as_str) == Some(placeholder_tag) {
@@ -293,7 +302,7 @@ fn vanished(raw: &Value, known: &Value, path: &str, paths: &mut Vec<String>, pla
             }
             let mut kept = BTreeMap::new();
             for (key, value) in raw {
-                if container_only.contains(&key.as_str()) || (path.is_empty() && matches!(key.as_str(), "format" | "format_pending")) {
+                if path.is_empty() && top_only.contains(&key.as_str()) {
                     continue;
                 }
                 let inner = if path.is_empty() { key.clone() } else { format!("{path}.{key}") };
@@ -305,7 +314,7 @@ fn vanished(raw: &Value, known: &Value, path: &str, paths: &mut Vec<String>, pla
                         kept.insert(key.clone(), Kept::Field(value.clone()));
                     }
                     Some(known) => {
-                        if let Some(k) = vanished(value, known, &inner, paths, placeholder_tag, container_only) {
+                        if let Some(k) = vanished(value, known, &inner, paths, placeholder_tag, top_only) {
                             kept.insert(key.clone(), k);
                         }
                     }
@@ -324,7 +333,7 @@ fn vanished(raw: &Value, known: &Value, path: &str, paths: &mut Vec<String>, pla
                     (None, Anchor::Id(id)) => format!("{path}[{id}]"),
                     _ => format!("{path}[{at}]"),
                 };
-                if let Some(k) = vanished(element, partner, &label, paths, placeholder_tag, container_only) {
+                if let Some(k) = vanished(element, partner, &label, paths, placeholder_tag, top_only) {
                     items.push((anchor, k));
                 }
             }

@@ -126,3 +126,41 @@ fn records_match_by_id_name_or_unchanged_index() {
     by_name.restore_into(&mut renamed);
     assert_eq!(renamed["l"][0], json!({"name": "a", "x": 1}));
 }
+
+/// A section kept whole goes back whole, even when this build's record of it has fields.
+#[test]
+fn a_section_kept_whole_is_not_compared_field_by_field() {
+    let mut said = NewerFile::new("App", &newer());
+    said.keep_section("plugins", json!({"mode": "future", "payload": 1}), None, "unreadable");
+    let file = json!({"name": "A", "plugins": {"mode": "future", "payload": 1}});
+    said.compare(&file, &json!({"name": "A", "plugins": {"mode": "none"}}), "placeholder", &[]);
+    let mut saved = json!({"name": "A", "plugins": {"mode": "none"}});
+    assert!(said.restore_into(&mut saved).is_empty());
+    assert_eq!(saved, file);
+}
+
+/// A kept element goes back only while no record has its id or name.
+#[test]
+fn a_kept_element_keeps_record_identity() {
+    let mut said = NewerFile::new("App", &newer());
+    said.keep_element("items", json!({"id": 7, "kind": "future"}), "element 7".into());
+    said.keep_element("items", json!({"kind": "anonymous"}), "unnamed".into());
+    let mut clash = json!({"items": [{"id": 7, "kind": "made here"}]});
+    assert_eq!(said.restore_into(&mut clash).len(), 1);
+    assert_eq!(clash, json!({"items": [{"id": 7, "kind": "made here"}, {"kind": "anonymous"}]}));
+    let mut free = json!({"items": []});
+    assert!(said.restore_into(&mut free).is_empty());
+    assert_eq!(free, json!({"items": [{"id": 7, "kind": "future"}, {"kind": "anonymous"}]}));
+}
+
+/// Container-only fields are left out at the top level only.
+#[test]
+fn container_only_fields_are_top_level() {
+    let mut said = NewerFile::new("App", &newer());
+    let file = json!({"thumbnail": "t", "layer": {"thumbnail": "nested"}});
+    said.compare(&file, &json!({"layer": {}}), "placeholder", &["thumbnail"]);
+    assert_eq!(said.not_understood, ["field `layer.thumbnail`"]);
+    let mut saved = json!({"layer": {}});
+    assert!(said.restore_into(&mut saved).is_empty());
+    assert_eq!(saved, json!({"layer": {"thumbnail": "nested"}}));
+}

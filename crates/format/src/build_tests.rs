@@ -79,6 +79,11 @@ fn a_step_is_a_declaration_not_a_mention() {
     assert!(!declares_step("//! No fn step() is needed.\n"));
     assert!(!declares_step("//! a note\n// fn step(v) was removed\nconst X: u8 = 1;\n"));
     assert!(declares_step("//! a note\npub fn step (v: &mut Value) -> Result<(), E> { Ok(()) }\n"));
+    // a declaration inside a block comment, nested or not, is not one
+    assert!(!declares_step("//! Documentation only.\n/*\nfn step() {}\n*/\n"));
+    assert!(!declares_step("/* outer /* inner */\nfn step() {}\n*/\nconst X: u8 = 1;\n"));
+    assert!(declares_step("/* a note */\nfn step(v: &mut Value) {}\n"));
+    assert!(declares_step("const X: u8 = 1; // fn step() is below\nfn step(v: &mut Value) {}\n"));
     assert!(declares_step("//! a note\npub(crate) fn  step(v: &mut Value) -> Result<(), E> { Ok(()) }\n"));
     assert!(declares_step("//! a note\n    fn step(v: &mut Value) {}\n"));
     assert!(!declares_step("//! a note\nfn stepper(v: &mut Value) {}\nfn fnstep() {}\n"));

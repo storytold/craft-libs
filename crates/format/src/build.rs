@@ -83,12 +83,44 @@ fn family_lists(family: &Family, root: &Path, out: &mut String, mods: &mut Strin
 /// Whether a change file declares its `step` function (`fn step(`, `pub fn step (` …) on a line of
 /// code: a mention in a comment or a note is not a declaration.
 fn declares_step(text: &str) -> bool {
-    text.lines().map(str::trim_start).filter(|line| !line.starts_with("//")).any(|line| {
+    without_comments(text).lines().map(str::trim_start).any(|line| {
         let line = line.strip_prefix("pub(crate)").or_else(|| line.strip_prefix("pub")).unwrap_or(line).trim_start();
         line.strip_prefix("fn").is_some_and(|rest| {
             rest.starts_with(char::is_whitespace) && rest.trim_start().strip_prefix("step").is_some_and(|rest| rest.trim_start().starts_with('('))
         })
     })
+}
+
+/// `text` with its `//` and (nested) `/* */` comments taken out; a comment's line breaks stay, so
+/// what follows a block comment is still on its own line.
+fn without_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut depth = 0usize;
+    while let Some(c) = chars.next() {
+        match (c, chars.peek().copied()) {
+            ('/', Some('*')) => {
+                chars.next();
+                depth += 1;
+            }
+            ('*', Some('/')) if depth > 0 => {
+                chars.next();
+                depth -= 1;
+            }
+            ('/', Some('/')) if depth == 0 => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            ('\n', _) => out.push('\n'),
+            (c, _) if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The `Part`s of the change files in `dir`, in file-name order, and a module for each. A missing
