@@ -32,6 +32,7 @@ mod lab;
 mod options;
 pub mod orientation;
 pub mod png_probe;
+pub mod raw_metadata;
 pub mod resolution;
 pub mod source_settings;
 pub mod tiff_probe;
