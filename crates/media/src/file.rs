@@ -150,18 +150,21 @@ impl FileReader {
     }
 
     pub(crate) fn open_in(path: &Path, pool: &Arc<FilePool>) -> io::Result<Self> {
+        // Resolve once against this process's cwd, so a later cwd change cannot
+        // make a reopen after eviction open a different file of the same length.
+        let path = std::path::absolute(path)?;
         // checked before opening: opening a named pipe with no writer blocks the caller for good
-        if !std::fs::metadata(path)?.is_file() {
-            return Err(not_a_file(path));
+        if !std::fs::metadata(&path)?.is_file() {
+            return Err(not_a_file(&path));
         }
-        let file = open_nonblocking(path)?;
+        let file = open_nonblocking(&path)?;
         let m = file.metadata()?;
         if !m.is_file() {
-            return Err(not_a_file(path));
+            return Err(not_a_file(&path));
         }
         let id = pool.next_id();
         pool.insert(id, file);
-        Ok(Self { path: path.to_path_buf(), len: m.len(), id, pool: pool.clone() })
+        Ok(Self { path, len: m.len(), id, pool: pool.clone() })
     }
 
     /// The open file, reopened when the pool closed it. A file now shorter than when it was opened
@@ -278,6 +281,54 @@ mod tests {
             let f = super::open_nonblocking(&fifo).unwrap();
             assert!(!f.metadata().unwrap().is_file());
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// After eviction, a reader opened with a relative path must still read the original file
+    /// even if the process working directory has changed (same-length substitute in the new cwd).
+    /// The harness runs in a subprocess so it cannot change this process's cwd.
+    #[test]
+    fn reopening_a_relative_path_stays_on_the_original_file() {
+        const FLAG: &str = "CRAFT_MEDIA_FILE_READER_CWD_TEST";
+        const ROOT: &str = "CRAFT_MEDIA_FILE_READER_CWD_ROOT";
+        if std::env::var_os(FLAG).is_some() {
+            let root = PathBuf::from(std::env::var_os(ROOT).expect("test root"));
+            let a = root.join("a");
+            let b = root.join("b");
+            std::env::set_current_dir(&a).unwrap();
+            let pool = Arc::new(FilePool::new(1));
+            let reader = FileReader::open_in(Path::new("clip.bin"), &pool).unwrap();
+            let _evict = FileReader::open_in(Path::new("other.bin"), &pool).unwrap();
+            std::env::set_current_dir(&b).unwrap();
+            let mut buf = [0u8; 4];
+            reader.read_at(0, &mut buf).unwrap();
+            assert_eq!(&buf, b"AAAA", "reopen must not follow the new cwd to b/clip.bin");
+            return;
+        }
+
+        let dir = craft_media_testkit::private_dir("file-cwd");
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::fs::write(dir.join("a").join("clip.bin"), b"AAAA").unwrap();
+        std::fs::write(dir.join("a").join("other.bin"), b"XXXX").unwrap();
+        std::fs::write(dir.join("b").join("clip.bin"), b"BBBB").unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(&exe)
+            .env(FLAG, "1")
+            .env(ROOT, &dir)
+            .env("RUST_TEST_THREADS", "1")
+            .args(["--exact", "file::tests::reopening_a_relative_path_stays_on_the_original_file"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success()
+                && stdout.contains("test file::tests::reopening_a_relative_path_stays_on_the_original_file")
+                && stdout.contains("ok"),
+            "subprocess failed\nstatus: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            out.status
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
