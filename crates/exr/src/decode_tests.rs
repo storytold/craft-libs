@@ -574,13 +574,13 @@ fn mixed_one_tile(channels: &[&str], tile: u32, size: i32) -> Vec<u8> {
 
 #[test]
 fn a_chunk_beside_a_deep_part_must_fit_the_rest_of_the_file() {
-    // 2^15 × 2^15 tiles of three floats let a chunk hold up to 12 GiB, so the crate would
+    // 2^14 × 2^14 tiles of three floats let a chunk hold up to 3 GiB (also on 32-bit), so the crate would
     // allocate the 2 GiB this chunk declares before it found the file too short.
     let limits = Limits::default();
     let channels = ["B", "G", "R"];
-    let good = mixed_one_tile(&channels, 1 << 15, 12);
+    let good = mixed_one_tile(&channels, 1 << 14, 12);
     assert_eq!(decode_part(&good, 0, &all, &limits).unwrap().channel("R").unwrap().samples, Samples::F32(vec![1.0]));
-    let b = mixed_one_tile(&channels, 1 << 15, i32::MAX);
+    let b = mixed_one_tile(&channels, 1 << 14, i32::MAX);
     for r in [decode_part(&b, 0, &all, &limits).map(|_| ()), decode_display_part(&b, 0, &all, &|_| 0.0, &limits).map(|_| ())] {
         assert!(matches!(&r, Err(Error::Malformed(m)) if m.contains("remain in the file")), "{r:?}");
     }
@@ -689,6 +689,7 @@ fn cropped_mixed_display_bounds_block_tracking() {
 
 #[test]
 fn dense_block_ordinals_cover_scan_lines_and_all_tile_levels() {
+    use exr::block::chunk::TileCoordinates;
     use exr::meta::attribute::LevelMode;
     for tiled in [false, true] {
         let bytes = file(vec![layer(None, 9, 7, &["R"], tiled, exr::prelude::Compression::ZIP1)], (9, 7));

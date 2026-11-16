@@ -245,7 +245,7 @@ fn window_size(size: exr::math::Vec2<usize>) -> (u32, u32) {
 
 /// Reads the headers and checks every part's declared size, alone and together, before any pixel
 /// allocation. Headers are read without the crate's validation, which refuses deep parts.
-fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData> {
+pub(super) fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData> {
     check_previews(bytes)?;
     let meta = MetaData::read_from_buffered(Cursor::new(bytes), false).map_err(map_exr)?;
     let (mut total, mut flat, mut dwa) = (0u64, 0u64, 0u64);
@@ -758,7 +758,7 @@ fn tables_start(bytes: &[u8]) -> Result<u64> {
 
 /// Stable dense ordinal without materializing every tile. The library's block iterator
 /// internally allocates a Vec of all coordinates, which is unsuitable for cropped reads.
-fn flat_block_ordinal(header: &Header, tile: TileCoordinates) -> Result<usize> {
+pub(super) fn flat_block_ordinal(header: &Header, tile: TileCoordinates) -> Result<usize> {
     use exr::math::Vec2;
     use exr::meta::attribute::LevelMode;
     let mut start = 0usize;
