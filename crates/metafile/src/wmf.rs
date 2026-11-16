@@ -50,7 +50,8 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
         cv.set_clip_surface([0.0, 0.0, size.0, size.1]);
         cv.pattern_px = PT_PER_PX;
     }
-    let mut player_viewport = bounds.is_some();
+    // Keep the player target independent of subsequent mapping changes.
+    let mut player_target = bounds.map(|(_, size)| size);
     let mut parsed = 0usize;
     while !cv.full() {
         let (Some(words), Some(func)) = (input.u32(pos), pos.checked_add(4).and_then(|o| input.u16(o))) else { break };
@@ -60,10 +61,11 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
             break;
         }
         record(&mut cv, func, Bytes(rec));
-        if func == 0x020C && cv.window_set && !player_viewport && !cv.viewport_set {
+        if func == 0x020C && cv.window_set && player_target.is_none() && !cv.viewport_set {
             let we = cv.map.window_ext();
-            cv.play_into(None, (we.0.abs(), we.1.abs()));
-            player_viewport = true;
+            let target = (we.0.abs(), we.1.abs());
+            cv.play_into(None, target);
+            player_target = Some(target);
         }
         parsed += 1;
         let Some(next) = pos.checked_add(len) else { break };
@@ -82,9 +84,8 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
             let rect = [a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs()];
             (rect[2] > 0.0 && rect[3] > 0.0).then_some(Frame { rect, size: Some(size) })
         }
-        None if player_viewport && !cv.viewport_set && cv.map.uses_extents() => {
-            let ve = cv.map.viewport_ext();
-            Some(Frame { rect: [0.0, 0.0, ve.0, ve.1], size: None })
+        None if !cv.viewport_set && cv.map.uses_extents() && player_target.is_some() => {
+            player_target.map(|(w, h)| Frame { rect: [0.0, 0.0, w, h], size: None })
         }
         None if cv.window_set => Some(Frame { rect: cv.map.window_rect(), size: None }),
         None => None,

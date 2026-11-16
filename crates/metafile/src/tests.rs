@@ -2727,3 +2727,20 @@ fn wmf_scale_window_ext_and_offset_origins_change_the_mapping() {
     let got = extent(vec![wrec(0x0412, &cat(vec![h16(0), h16(1), h16(0), h16(1)]))]);
     assert!(close(got.0, 10.0) && close(got.1, 10.0) && close(got.2, 20.0) && close(got.3, 20.0), "zero denominator: {got:?}");
 }
+
+#[test]
+fn wmf_viewport_scaling_does_not_resize_the_player_frame() {
+    for numerator in [1, 4] {
+        let recs = [
+            wrec(0x0103, &h16(8)),
+            wrec(0x020C, &cat(vec![h16(100), h16(100)])),
+            wrec(0x041B, &cat(vec![h16(100), h16(100), h16(0), h16(0)])),
+            // Change the mapping after drawing, without a matching RESTOREDC.
+            wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(numerator)])),
+        ];
+        let p = parse(&wmf(&recs, None)).unwrap();
+        assert_eq!((p.width, p.height), (100.0, 100.0));
+        assert_eq!(p.skipped_records, 0);
+        assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 100.0, 100.0));
+    }
+}
