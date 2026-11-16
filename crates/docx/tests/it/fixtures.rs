@@ -1861,6 +1861,65 @@ fn a_link_on_an_office_2016_charts_drawing_is_kept() {
     }
 }
 
+/// A package with one invented waterfall chart (432 x 252 pt) whose `mc:Fallback` is `fallback`.
+fn chartex_text_fallback_docx(fallback: &str) -> Vec<u8> {
+    let chart = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chart><cx:title pos="t"><cx:tx><cx:txData><cx:v>Steps</cx:v></cx:txData></cx:tx></cx:title><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"/></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+    let frame = r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="1" name="Chart 1"/><wp:cNvGraphicFramePr/>"#;
+    let body = format!(
+        r#"<w:p><w:r><w:t>Before</w:t></w:r></w:p><w:p><w:r><mc:AlternateContent><mc:Choice xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent></w:r></w:p>"#
+    );
+    let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="charts/chartEx1.xml"/></Relationships>"#;
+    let types = format!(
+        r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/charts/chartEx1.xml" ContentType="{CT_CHARTEX}"/></Types>"#
+    );
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
+        ("word/charts/chartEx1.xml", chart.as_bytes()),
+    ])
+}
+
+/// #6820: an Office 2016 chart whose fallback is only text keeps its 432 x 252 pt place (as a
+/// placeholder) instead of becoming the fallback words, and is written back unchanged.
+#[test]
+fn office_2016_chart_with_a_text_fallback_keeps_its_size_through_saves() {
+    let mut d = craft_docx::read(&chartex_text_fallback_docx("<w:t>Chart not available.</w:t>")).unwrap();
+    for _ in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { w, h, graphic, .. }] = g.as_slice() else { panic!("the chart is an object: {g:?}") };
+        assert_eq!((*w, *h), (432.0, 252.0));
+        assert_eq!((graphic.w, graphic.h), (432.0, 252.0));
+        assert!(
+            graphic.items.iter().any(|i| matches!(i, craft_wordmodel::graphic::GraphicItem::Text { text, .. } if text.starts_with("Waterfall chart"))),
+            "{:?}",
+            graphic.items
+        );
+        assert!(!paras(&d).iter().any(|p| p.text.contains("not available")), "the fallback words are not body text");
+        let files = unzip(&craft_docx::write(&d).unwrap());
+        let body = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:extent", "cx"), ["5486400"], "the chart's frame; the text fallback has none: {body}");
+        assert!(body.contains("<w:t>Chart not available.</w:t>"), "the fallback is written back as it was: {body}");
+        let [cx_id] = attr_values(&body, "cx:chart", "r:id").try_into().unwrap_or_else(|_| panic!("chart lost: {body}"));
+        let (kind, target) = rel(&text(&files, "word/_rels/document.xml.rels"), &cx_id);
+        assert!(kind.ends_with("/chartEx"), "{kind}");
+        assert!(text(&files, &part_at("word", &target)).contains(r#"layoutId="waterfall""#));
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        d = craft_docx::read(&zip(&entries)).unwrap();
+    }
+}
+
+/// A fallback that holds a run (not run content) can't be written back inside the object's own
+/// run, so it is read as before: its text, no chart object.
+#[test]
+fn office_2016_chart_with_a_run_fallback_is_read_as_before() {
+    let d = craft_docx::read(&chartex_text_fallback_docx("<w:r><w:t>Chart not available.</w:t></w:r>")).unwrap();
+    assert!(graphics(&d).is_empty());
+    assert!(paras(&d).iter().any(|p| p.text.contains("Chart not available.")));
+}
+
 #[test]
 fn resized_office_2016_chart_resizes_its_fallback_too() {
     let mut d = craft_docx::read(&chartex_docx("cx1", "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex")).unwrap();
