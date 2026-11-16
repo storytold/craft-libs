@@ -279,6 +279,7 @@ fn write(ctx: &Context, key: Id, edit: impl FnOnce(&mut Kept) -> bool) {
 fn edited(ctx: &Context, read: BindKey, editor: Id) {
     crate::runtime::lazy::note_edit(ctx, read);
     if reads::earlier(ctx, read, editor).other {
+        log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "{editor:?} edited {read:?}, read earlier in the pass");
         request_discard(ctx, Rerun::Edit);
     }
 }

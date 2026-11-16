@@ -171,6 +171,7 @@ pub(crate) fn rerun_after_edit(
     }
     let earlier = reads::earlier(&ctx, key, id);
     if edit.written && earlier.other {
+        log::debug!(target: sizing::RERUN_LOG, "{id:?} wrote {key:?}, which another component read earlier in the pass");
         return sizing::request_discard(&ctx, sizing::Rerun::Edit);
     }
     let resized = if leaf {
@@ -182,6 +183,7 @@ pub(crate) fn rerun_after_edit(
         earlier.measured
     };
     if resized {
+        log::debug!(target: sizing::RERUN_LOG, "{id:?} changed {key:?}, which an earlier measure in the pass took its size from");
         sizing::request_discard(&ctx, sizing::Rerun::Edit);
     }
 }

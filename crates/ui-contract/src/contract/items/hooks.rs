@@ -848,6 +848,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let room = (Vec2::new(0.0, self.offset as f32), Vec2::new(0.0, (self.max_offset(view.y) - self.offset) as f32));
         if let Some(shift) = lazy::follow(&mut self.anchor, &placed, moved, view, room, (false, true)) {
             self.offset += f64::from(shift.y);
+            log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "collection {id:?} keeps its anchor row in place by {shift:?}");
             crate::runtime::egui::sizing::request_discard(ctx, crate::runtime::egui::sizing::Rerun::Layout);
         }
     }

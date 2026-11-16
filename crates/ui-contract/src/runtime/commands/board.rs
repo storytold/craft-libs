@@ -1008,6 +1008,7 @@ pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef,
         let key = BindKey::Command(number, Some(instance));
         lazy::note_edit(ctx, key);
         if reads::earlier(ctx, key, instance).other {
+            log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "{instance:?} published a new state of {command}, read earlier in the pass");
             request_discard(ctx, Rerun::Edit);
         }
     }

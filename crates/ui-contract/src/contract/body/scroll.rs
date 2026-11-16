@@ -86,6 +86,7 @@ pub(super) fn queue_jump(ctx: &Context, id: Id, offset: ScrollPos) {
         jumps.0.push((id, offset, frame));
     });
     // A bound offset reaches the app in the repeated pass.
+    log::debug!(target: sizing::RERUN_LOG, "{id:?} jumps to {offset:?}");
     sizing::request_discard(ctx, sizing::Rerun::HeldUpdate);
     if !ctx.will_discard() {
         repaint::request(ctx);
@@ -149,6 +150,7 @@ pub(super) fn follow_anchor(
     if let Some(shift) = lazy::follow(anchor, placed, moved, view, (back, ahead), (scroll.horizontal_on(), scroll.vertical_on())) {
         offset.x += f64::from(shift.x);
         offset.y += f64::from(shift.y);
+        log::debug!(target: sizing::RERUN_LOG, "a scroll body keeps {:?} in place by {shift:?}", anchor.map(|anchor| anchor.child));
         sizing::request_discard(ctx, sizing::Rerun::Layout);
     }
 }

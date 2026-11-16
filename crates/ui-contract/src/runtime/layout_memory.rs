@@ -251,6 +251,7 @@ impl Entries {
     /// A real run found the content changed: drops the kept transcripts of `body` and of every body the real run is
     /// inside, up to the first boundary, and asks for the discard pass.
     fn changed(&mut self, frame: u64, body: Option<Id>) {
+        log::debug!(target: sizing::RERUN_LOG, "the content of {body:?} changed from its kept transcript");
         let invalidate = |kept: &mut HashMap<Id, Kept>, body: Id| {
             if let Some(kept) = kept.get_mut(&body) {
                 kept.valid = false;
@@ -453,6 +454,7 @@ pub(crate) fn record(ctx: &Context, id: Id, real: Vec2) {
         if let Some(recorded) = placed
             && measured_change_asks_for_discard(recorded, real, changed_last_frame, tolerance)
         {
+            log::debug!(target: sizing::RERUN_LOG, "{id:?} measured {real:?}; the pass placed it by {recorded:?}");
             memory.ask = true;
         }
         let entry = memory.entries.entry(id).or_default();
@@ -783,12 +785,11 @@ fn check(ctx: &Context, moment: &Moment, id: Id, made: &[Call], mut ask: impl Fn
 }
 
 fn mismatch(ctx: &Context, moment: &Moment, what: Id) {
+    log::debug!(target: sizing::RERUN_LOG, "a kept transcript changed at {what:?}");
     #[cfg(feature = "testing")]
     if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
         eprintln!("layout memory: a kept transcript changed at {what:?}\n{}", std::backtrace::Backtrace::force_capture());
     }
-    #[cfg(not(feature = "testing"))]
-    let _ = what;
     with(ctx, moment, |memory| memory.changed(moment.frame, None));
 }
 
@@ -1105,7 +1106,9 @@ pub fn forget_kept(ctx: &Context) {
 }
 
 /// Asks the end hook for the frame's discard pass, as a change of measured size does.
+#[track_caller]
 pub(crate) fn ask_discard(ctx: &Context) {
+    log::debug!(target: sizing::RERUN_LOG, "a discard asked at {}", std::panic::Location::caller());
     let moment = Moment::of(ctx);
     with(ctx, &moment, |memory| memory.ask = true);
 }

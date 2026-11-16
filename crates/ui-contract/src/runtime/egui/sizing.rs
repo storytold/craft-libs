@@ -47,8 +47,12 @@ fn running_pass(ctx: &Context) -> u64 {
     super::pass::pass_nr(ctx, super::pass::current_viewport(ctx))
 }
 
+/// The `log` target of the rerun diagnostics: each ask names its class here, and the site that asks names what changed.
+pub(crate) const RERUN_LOG: &str = "craft_ui::rerun";
+
 /// Asks egui to discard the running pass and run it again.
 pub(crate) fn request_discard(ctx: &Context, rerun: Rerun) {
+    log::debug!(target: RERUN_LOG, "pass {} asks for a rerun: {rerun:?}", running_pass(ctx));
     let (id, pass) = (asked_id(ctx), running_pass(ctx));
     super::memory::locked(ctx, |data| {
         let asked = data.get_temp_mut_or(id, Asked { pass, reasons: Vec::new() });
