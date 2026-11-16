@@ -1340,6 +1340,45 @@ fn cell_borders_are_read_from_the_tc80s() {
     assert_eq!((b.top, b.left, b.right), (None, None, None));
 }
 
+/// Two cells merged across (sprmTMerge), the right border only on the second, as
+/// Word 2016 writes `\clmgf`/`\clmrg` with a right border on the second cell: Word keeps the cells
+/// and draws that border on the merged area's right edge, so the one merged cell has it.
+#[test]
+fn a_merged_cell_keeps_its_last_cells_right_border() {
+    use craft_wordmodel::props::BorderStyle;
+    let tc = |rgf: u16, right: [u8; 4]| -> Vec<u8> { [&rgf.to_le_bytes()[..], &[0, 0], &[0; 12], &right].concat() };
+    let mut body = vec![2u8];
+    for e in [0i16, 1440, 2880] {
+        body.extend_from_slice(&e.to_le_bytes());
+    }
+    body.extend(tc(0, [0; 4]));
+    body.extend(tc(0, [24, 1, 0, 0]));
+    let mut def = 0xD608u16.to_le_bytes().to_vec();
+    def.extend_from_slice(&((body.len() + 1) as u16).to_le_bytes());
+    def.extend(body);
+    let text = "a\u{7}\u{7}\u{7}\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x5624, &[0, 2])]), def].concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl.clone()), (2, 0, in_tbl), (3, 0, ttp), (4, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let cell = tbl.rows[0].cells.first().expect("a cell");
+    assert_eq!(cell.props.span, 2);
+    assert_eq!(cell.props.borders.and_then(|b| b.right).map(|r| r.style), Some(BorderStyle::Single));
+}
+
 #[test]
 fn table_merges_borders_shading() {
     // Two rows: the first "a\x07 b\x07 c\x07" with cells 0-1 horizontally merged; the second
