@@ -69,6 +69,8 @@ pub use half::f16;
 
 #[cfg(feature = "sgi")]
 use crate::codecs::sgi;
+#[cfg(feature = "sunraster")]
+use crate::codecs::sunraster;
 use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
@@ -108,6 +110,16 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::SunRaster => {
+            #[cfg(feature = "sunraster")]
+            {
+                sunraster::decode(bytes, l)
+            }
+            #[cfg(not(feature = "sunraster"))]
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
         Format::Sgi => {
             #[cfg(feature = "sgi")]
             {
@@ -225,11 +237,12 @@ pub fn decode_png_rows<E: From<CodecError>>(
 }
 
 /// The upright pixel size [`decode`] would return, read from the file's header without decoding
-/// pixels, for WebP, OpenEXR (flat), AVIF (with `avif-decode`) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same
-/// header reads and size checks as the decoder (default [`Limits`]) and swaps the size for an
-/// EXIF orientation of 5–8 (AVIF: its container's `clap` and `irot`), so wherever [`decode`]
-/// succeeds the two agree. Other formats (and deep EXR) return [`CodecError::Unsupported`]: decode
-/// those to learn their size.
+/// pixels, for PNG, JPEG, TIFF (the page [`decode`] opens), WebP, OpenEXR (flat), AVIF (with
+/// `avif-decode`) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same header reads and size
+/// checks as the decoder (default [`Limits`]) and swaps the size for an orientation of 5–8 (EXIF,
+/// the TIFF page's own tag, or AVIF's container `clap` and `irot`), so wherever [`decode`]
+/// succeeds the two agree. Other formats (and deep EXR) return [`CodecError::Unsupported`]:
+/// decode those to learn their size.
 pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     if !caps(format).read {
@@ -237,6 +250,12 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     }
     let l = &Limits::default();
     let (w, h, exif) = match format {
+        Format::Png => png::probe(bytes, l)?,
+        Format::Jpeg => jpeg::probe(bytes, l)?,
+        Format::Tiff => {
+            let (w, h, o) = tiff::probe(bytes, l)?;
+            return Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) });
+        }
         Format::WebP => webp::probe(bytes, l)?,
         Format::OpenExr => exr::probe(bytes, l).map(|(w, h)| (w, h, None))?,
         #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
@@ -493,6 +512,16 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
         Format::Iff => iff::encode(image, plan),
+        Format::SunRaster => {
+            #[cfg(feature = "sunraster")]
+            {
+                sunraster::encode(image, plan)
+            }
+            #[cfg(not(feature = "sunraster"))]
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
         Format::Sgi => {
             #[cfg(feature = "sgi")]
             {

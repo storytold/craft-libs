@@ -171,7 +171,7 @@ mod tags;
 mod ycbcr;
 
 pub use decode::TiffBands;
-pub(crate) use decode::{decode, decode_page, has_unretained_samples, orientation};
+pub(crate) use decode::{decode, decode_page, has_unretained_samples, orientation, probe};
 pub(crate) use encode::encode;
 #[cfg(test)]
 use encode::{Extras, try_with_capacity};
