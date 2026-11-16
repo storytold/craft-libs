@@ -478,6 +478,9 @@ mod tests {
         let mid = format!("{}é{}", "x".repeat(MAX_NAME), "x".repeat(200_000));
         let in_value = format!("<!DOCTYPE svg [<!ENTITY c \"<!ENTITY{mid}\">]><svg/>");
         assert!(entities_expand_past(&in_value, MAX_ENTITY_EXPANSION));
+        // The recorded overlong key must stay a short prefix, not the whole suffix
+        // the old unwrap_or(rest) fallback would have stored.
+        assert!(declared(&in_value).keys().all(|name| name.len() <= MAX_NAME + 4));
         // A short multibyte name is still read as a normal declaration.
         let short = "<!DOCTYPE svg [<!ENTITY é \"x\">]><svg id=\"&é;\"/>";
         assert!(!entities_expand_past(short, MAX_ENTITY_EXPANSION));
