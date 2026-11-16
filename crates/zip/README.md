@@ -70,3 +70,12 @@ calls it first.
 `preflight`, `read_entry` and `Budget`: the ZIP half of the craft-archive proposal (#126, #129).
 `check_entry_count`: craft-opc's `guard`. Duplicate detection: craft-penpot's rule, made exact
 by walking the directory. The writer: craft-opc's `ZipOut`.
+
+## Seekable indexing
+
+`MetadataReader::new(reader, metadata_bytes)` wraps a `Read + Seek` source without loading its
+payload into memory. During ZIP indexing it admits reads only from the last `metadata_bytes`
+bytes and charges repeated reads against twice that number. Call `Indexing::finish` on the
+returned handle after the ZIP index has been parsed to permit normal streaming payload reads.
+The caller must still enforce entry-count, declared-size and overlap limits: the wrapper only
+bounds metadata reads and does not validate the archive.

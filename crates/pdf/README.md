@@ -16,6 +16,7 @@ No feature is enabled by default.
 | `filters` | The `/Filter` chain for editing and writing PDF files: decode and encode, with limits and accounting. No reader or writer dependency |
 | `crypt` | The standard security handler: decrypt, encrypt and create encryption. No reader or writer dependency |
 | `cos` | `crypt` and `filters` plus the object layer: open, edit and save PDF files (incremental and full saves). No reader or writer dependency |
+| `content` | `cos` plus `cos::content`: parse content streams into operators with source spans, write them back, and the matrix arithmetic. Uses hayro-syntax's tokenizer for inline images |
 
 ## Reading and rendering
 
@@ -132,6 +133,11 @@ let r = doc.add(obj);
 let bytes = write_incremental(&doc, &SaveOptions::default())?; // append a revision
 let bytes = write_full(&doc, &SaveOptions::default())?;        // rewrite what the trailer reaches
 ```
+
+With `content`, `cos::content` reads and writes page content streams. `parse` keeps each
+operator's byte span and skips (and counts) what it cannot read instead of failing; inline images
+stay whole, so `parse` → `serialize_ops` round-trips them. `Matrix` holds the arithmetic content
+interpretation needs.
 
 - Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
   file whose cross-reference data is wrong or missing is rebuilt by scanning for object headers,
