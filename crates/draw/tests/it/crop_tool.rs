@@ -1,5 +1,5 @@
 //! The Crop tool and its session through the public API: the pass, the keys the overlay leaves to the tool, the
-//! session's box history, and one drag through the overlay on a canvas.
+//! session's box history, drags through the overlay on a canvas, and the snapping of a Straighten line's ends.
 
 use craft_behavior::CanvasView;
 use craft_behavior::geometry::CropBox;
@@ -473,6 +473,39 @@ fn a_straighten_line_fits_when_armed_turns_in_place_when_held_and_always_spends_
     assert!(host.tool.straighten_armed());
     host.tool.discard();
     assert!(!host.tool.straighten_armed());
+}
+
+/// A Straighten line drawn inside a frame levels the frame on the line as drawn: its ends snap as points, never by the
+/// offset that would snap the frame if the press moved it. Moved by the line's (277, 30), the frame's left edge would
+/// land 3 units from the guide at x = 300.
+#[trial]
+fn a_straighten_line_inside_the_frame_snaps_its_ends_as_points_not_as_a_frame_move() {
+    use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
+    use std::sync::Arc;
+
+    let angle_of = |from: (f64, f64), to: (f64, f64)| {
+        let mut rig = Rig::new(classic());
+        let mut targets = SnapTargets::new();
+        targets.add(SnapTarget::new(craft_behavior::Axis::Y, 300.0, SnapKind::Guide));
+        {
+            let mut host = rig.host.borrow_mut();
+            host.snap = Some(Snap::new(Arc::new(targets), SnapOptions::default()));
+            let _ = host.tool.crop_to(upright(20.0, 20.0, 390.0, 290.0));
+            host.tool.toggle_straighten();
+        }
+        rig.run();
+        rig.drag(from, to);
+        rig.frame().expect("a frame").angle
+    };
+    let level = |from: (f64, f64), to: (f64, f64)| CropBox::level_angle(Point::new(from.0, from.1), Point::new(to.0, to.1)).expect("a line");
+
+    let angle = angle_of((60.0, 100.0), (337.0, 130.0));
+    let drawn = level((60.0, 100.0), (337.0, 130.0));
+    assert!((angle - drawn).abs() < 1e-3, "{angle} vs {drawn}: both ends clear of the guide stay where the pointer was");
+
+    let angle = angle_of((60.0, 100.0), (298.0, 130.0));
+    let snapped = level((60.0, 100.0), (300.0, 130.0));
+    assert!((angle - snapped).abs() < 1e-3, "{angle} vs {snapped}: an end within reach of the guide snaps onto it");
 }
 
 #[trial]
