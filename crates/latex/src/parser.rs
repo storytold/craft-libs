@@ -75,7 +75,7 @@ pub(super) const DROP_WITH_ARGS: &[(&str, &str)] = &[
     ("markright", "m"),
     ("linespread", "m"),
     ("setstretch", "m"),
-    ("fancyhf", "m"),
+    ("fancyhf", "om"),
     ("fancyhead", "om"),
     ("fancyfoot", "om"),
     ("lstset", "m"),
