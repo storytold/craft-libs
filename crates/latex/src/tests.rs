@@ -276,6 +276,23 @@ fn leading_brackets_stay_text() {
 }
 
 #[test]
+fn a_second_optional_argument_is_not_text() {
+    // Both optional arguments sit in one token (`[3cm][l]`), and the second was left over as text.
+    for src in ["a\\makebox[3cm][l]{x}b", "a\\framebox[3cm][r]{x}b", "a\\makebox[3cm] [l]{x}b"] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["axb".to_string()], "{src}");
+    }
+    let t = texts("\\begin{document}\\begin{minipage}[t][2cm][c]{3cm}x\\end{minipage}\\end{document}");
+    assert_eq!(t, vec!["x".to_string()]);
+}
+
+#[test]
+fn a_definition_with_a_default_argument_shows_nothing() {
+    // `[2][x]`: the default was left over as text, and the definition's body with it.
+    assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2][x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);
+    assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2] [x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);
+}
+
+#[test]
 fn special_characters_round_trip() {
     let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";
     let d = Document::from_text(text);

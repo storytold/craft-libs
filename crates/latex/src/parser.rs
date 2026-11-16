@@ -228,35 +228,45 @@ impl<'a> Parser<'a> {
 
     /// The tokens of an optional `[…]` argument, if one follows.
     pub(super) fn opt_arg(&mut self) -> Option<String> {
-        let save = self.pos;
-        self.skip_spaces();
-        let Some(Tok::Text(s)) = self.t.get(self.pos) else {
-            self.pos = save;
-            return None;
-        };
-        if !s.starts_with('[') {
-            self.pos = save;
-            return None;
+        let t = self.t;
+        let mut out = String::new();
+        if let Some(p) = self.pending.take() {
+            // Text left after the previous argument's `]` comes first: in `\makebox[3cm][l]` the
+            // second argument is in the first one's token and waits there.
+            let Some(body) = p.trim_start().strip_prefix('[') else {
+                self.pending = Some(p);
+                return None;
+            };
+            if self.close_opt(body, &mut out) {
+                return Some(out);
+            }
+        } else {
+            let save = self.pos;
+            self.skip_spaces();
+            let Some(Tok::Text(s)) = t.get(self.pos) else {
+                self.pos = save;
+                return None;
+            };
+            let Some(body) = s.strip_prefix('[') else {
+                self.pos = save;
+                return None;
+            };
+            self.pos += 1;
+            if self.close_opt(body, &mut out) {
+                return Some(out);
+            }
         }
         // Collect raw text up to the matching `]` (no nested brackets across tokens).
-        let mut out = String::new();
-        let mut first = true;
-        while let Some(tok) = self.t.get(self.pos) {
+        while let Some(tok) = t.get(self.pos) {
+            if matches!(tok, Tok::Par) {
+                break;
+            }
+            self.pos += 1;
             match tok {
                 Tok::Text(s) => {
-                    let s = if first { s.get(1..).unwrap_or("") } else { s.as_str() };
-                    first = false;
-                    if let Some(end) = s.find(']') {
-                        out.push_str(s.get(..end).unwrap_or(""));
-                        let rest = s.get(end + 1..).unwrap_or("").to_string();
-                        self.pos += 1;
-                        if !rest.trim().is_empty() {
-                            // The text after `]` comes next (tokens are shared, so it waits here).
-                            self.pending = Some(rest);
-                        }
+                    if self.close_opt(s, &mut out) {
                         return Some(out);
                     }
-                    out.push_str(s);
                 }
                 Tok::Open => out.push('{'),
                 Tok::Close => out.push('}'),
@@ -264,12 +274,25 @@ impl<'a> Parser<'a> {
                     out.push('\\');
                     out.push_str(c);
                 }
-                Tok::Par => break,
                 _ => {}
             }
-            self.pos += 1;
         }
         Some(out)
+    }
+
+    /// Adds `s` to an optional argument's text up to its `]`. True when the `]` was there; the
+    /// text after it then comes next (tokens are shared, so it waits in `pending`).
+    fn close_opt(&mut self, s: &str, out: &mut String) -> bool {
+        let Some(end) = s.find(']') else {
+            out.push_str(s);
+            return false;
+        };
+        out.push_str(s.get(..end).unwrap_or(""));
+        let rest = s.get(end + 1..).unwrap_or("");
+        if !rest.trim().is_empty() {
+            self.pending = Some(rest.to_string());
+        }
+        true
     }
 
     /// The tokens of a `{…}` argument (or a single token), consumed.
@@ -377,6 +400,13 @@ impl<'a> Parser<'a> {
             }
         }
         loop {
+            if self.pending.is_some() {
+                // Text after a `]`: another optional argument, or the text that follows.
+                if self.opt_arg().is_none() {
+                    return;
+                }
+                continue;
+            }
             let save = self.pos;
             self.skip_spaces();
             match self.t.get(self.pos) {
@@ -385,9 +415,6 @@ impl<'a> Parser<'a> {
                 }
                 Some(Tok::Text(s)) if s.starts_with('[') => {
                     let _ = self.opt_arg();
-                    if self.pending.is_some() {
-                        return;
-                    }
                 }
                 _ => {
                     self.pos = save;
@@ -815,6 +842,11 @@ impl<'a> Parser<'a> {
             | "proposition" => {
                 // Floats and boxes: their content, in order.
                 let _ = self.opt_arg();
+                if name == "minipage" {
+                    // `[position][height][inner position]`.
+                    let _ = self.opt_arg();
+                    let _ = self.opt_arg();
+                }
                 if matches!(name, "minipage" | "subfigure" | "multicols" | "multicols*") {
                     let _ = self.arg_raw();
                 }
