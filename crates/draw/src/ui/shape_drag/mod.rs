@@ -19,6 +19,7 @@ use kurbo::Point;
 use serde::{Deserialize, Serialize};
 
 use crate::geometry::shape::ShapeGeometry;
+use crate::ui::shape::VectorMode;
 
 pub use dialog::{CreateShapeDialog, CreateShapeOptions, CreatedShape};
 pub use tool::ShapeDragTool;
@@ -124,6 +125,9 @@ pub struct ShapeDragOptions {
     pub line_weight: f64,
     /// The gear's constraints for a box drag; ⇧ and ⌥ turn its Square and From Center off.
     pub constraints: BoxConstraints,
+    /// What the drag makes: a Rectangle in Shape mode ends a click within 1 screen point, every other drag within
+    /// the press slop.
+    pub mode: VectorMode,
 }
 
 impl ShapeDragOptions {
@@ -166,10 +170,18 @@ impl ShapeDragOptions {
         self.constraints = constraints;
         self
     }
+
+    /// What the drag makes (the options bar's mode).
+    #[must_use]
+    pub fn mode(mut self, mode: VectorMode) -> Self {
+        self.mode = mode;
+        self
+    }
 }
 
 impl Default for ShapeDragOptions {
-    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3, unconstrained (PhotoCraft's defaults).
+    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3, unconstrained, Shape mode (PhotoCraft's
+    /// defaults).
     fn default() -> Self {
         ShapeDragOptions {
             kind: ShapeKind::Rectangle,
@@ -178,6 +190,7 @@ impl Default for ShapeDragOptions {
             star_ratio: 1.0,
             line_weight: 3.0,
             constraints: BoxConstraints::default(),
+            mode: VectorMode::Shape,
         }
     }
 }

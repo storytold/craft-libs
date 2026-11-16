@@ -12,6 +12,7 @@ use craft_ui::runtime::env::Label;
 use kurbo::{Point, Vec2};
 
 use super::words::ShapeDragWords;
+use crate::ui::shape::VectorMode;
 use super::{BoxConstraint, ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
 use crate::geometry::shape::{BoxRule, MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, equilateral_in, line_drag};
 
@@ -27,7 +28,8 @@ const OUTLINE_TOLERANCE: f32 = 0.25;
 /// - The press starts at the snapped point; past the press slop the drag begins and each pass reports
 ///   the shape it would draw; release commits it.
 /// - A side under 1 px makes nothing: the gesture is cancelled as `Dismissed`.
-/// - A press and release inside the slop is a [`Click`](ShapeDragEvent::Click) at the press.
+/// - A press and release inside the slop is a [`Click`](ShapeDragEvent::Click) at the press; a Rectangle in
+///   Shape mode has a slop of 1 screen point, so a 2 × 1 point drag draws.
 /// - ⇧ makes a square or circle from the drag's shorter side (a Line: onto the axis within 30° of it, keeping the
 ///   offset along it, else onto the diagonal at the shorter offset); ⌥ draws from the centre.
 ///   Both may go down or up mid-drag; the shape follows the modifiers held now.
@@ -82,6 +84,8 @@ struct Drag {
     options: ShapeDragOptions,
     /// The press on screen, for the press slop.
     press: egui::Pos2,
+    /// How far the pointer may move from the press, in screen points, before the drag begins.
+    click_slop: f32,
     /// The press as the pointer made it, snapped.
     origin: Point,
     /// The press, moved by Space.
@@ -219,7 +223,7 @@ impl ShapeDragTool {
         drag.space = space_held;
         drag.at = at;
         if !drag.began {
-            if pos.distance(drag.press) < cx.slop {
+            if pos.distance(drag.press) < drag.click_slop {
                 self.drag = Some(drag);
                 return;
             }
@@ -274,12 +278,15 @@ impl CanvasTool for ShapeDragTool {
         let Some(space) = cx.space() else { return ToolAction::Ignored };
         let options = self.options;
         let origin = cx.snap(space.view.to_doc(pointer.pos));
+        // pc: crates/ui-egui/src/dialogs/shape_dialog.rs `is_tool_click` (#13340).
+        let click_slop = if options.kind == ShapeKind::Rectangle && options.mode == VectorMode::Shape { 1.0 } else { cx.slop };
         self.next = self.next.next();
         self.drag = Some(Drag {
             id: self.next,
             label: Arc::from(cx.words::<ShapeDragWords>().draw.as_str()),
             options,
             press: pointer.pos,
+            click_slop,
             origin,
             start: origin,
             at: origin,

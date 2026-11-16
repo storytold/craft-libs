@@ -3,6 +3,7 @@
 use craft_behavior::kurbo::{Point, Rect, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::geometry::shape::ShapeGeometry;
+use craft_draw::ui::shape::VectorMode;
 use craft_draw::ui::shape_drag::{
     BoxConstraint, BoxConstraints, CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind,
 };
@@ -223,6 +224,25 @@ fn a_triangle_fills_its_box_and_shift_makes_it_equilateral() {
     assert!(centred.len() >= 3, "a triangle: {centred:?}");
     let centre = (centred[0].to_vec2() + centred[1].to_vec2() + centred[2].to_vec2()) / 3.0;
     assert!((centre.to_point() - PRESS).hypot() < 1e-9, "⇧⌥ puts the centre on the press, got {centre:?}");
+}
+
+/// A press moved 2 × 1 points and released: a Rectangle in Shape mode draws it, in Path mode it is a click, and an
+/// Ellipse in Shape mode keeps the press slop.
+#[trial]
+fn a_shape_mode_rectangle_ends_a_click_within_one_point() {
+    let nudge = |kind: ShapeKind, mode: VectorMode| {
+        let mut shapes = Shapes::new(ShapeDragOptions::new(kind).mode(mode));
+        let to = PRESS + Vec2::new(2.0, 1.0);
+        shapes.press(PRESS, Modifiers::NONE);
+        shapes.move_to(to, Modifiers::NONE);
+        shapes.release(to, Modifiers::NONE);
+        shapes
+    };
+    let drawn = nudge(ShapeKind::Rectangle, VectorMode::Shape);
+    assert!(!drawn.clicked(), "the Rectangle in Shape mode drew: {:?}", drawn.log);
+    assert_eq!(drawn.committed_box(), Some(Rect::new(100.0, 100.0, 102.0, 101.0)));
+    assert!(nudge(ShapeKind::Rectangle, VectorMode::Path).clicked(), "in Path mode the press slop holds");
+    assert!(nudge(ShapeKind::Ellipse, VectorMode::Shape).clicked(), "other kinds keep the press slop");
 }
 
 #[trial]
