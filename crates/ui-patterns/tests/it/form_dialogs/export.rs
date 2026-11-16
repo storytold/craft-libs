@@ -5,7 +5,7 @@ use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
     ExportAsDialog, ExportAsResult, ExportOptions, ExportOptionsKind, ExportSize, FormatOptions, FormatOptionsDialog, HostedExportAs,
-    HostedFormatOptions, JpegOptions, OutputPathRow, Resample, SizeEstimate,
+    HostedFormatOptions, JpegOptions, OutputPathRow, Resample, ScaleRow, ScaleSize, SizeEstimate,
 };
 use craft_ui::runtime::requests::PathRequest;
 use craft_ui::testing::{Fixture, trial};
@@ -38,13 +38,16 @@ fn requested_file(name: &str) -> String {
     filed.file_name.expect("the request names a file")
 }
 
-/// The default file name is the document's, made safe on every platform: reserved characters become underscores, dots and
-/// spaces at the ends go, and a name with nothing left is Untitled.
+/// The suggested file name is the document's with what no file name holds turned into underscores; spaces and dots
+/// at its ends stay, as production PhotoCraft keeps them, and a name of nothing but spaces and dots is Untitled.
 #[trial]
-fn the_default_file_name_is_made_safe() {
+fn the_suggested_file_name_keeps_its_ends_and_drops_what_no_file_name_holds() {
     assert_eq!(requested_file("Poster"), "Poster.png");
-    assert_eq!(requested_file("  ..My: poster/v2?.. "), "My_ poster_v2_.png");
+    assert_eq!(requested_file(" Artboard 1 "), " Artboard 1 .png");
+    assert_eq!(requested_file(" a/b "), " a_b .png");
+    assert_eq!(requested_file("a/b:c*?"), "a_b_c__.png");
     assert_eq!(requested_file(" . "), "Untitled.png");
+    assert_eq!(requested_file("..."), "Untitled.png");
     let long = "x".repeat(100);
     assert_eq!(requested_file(&long).len(), 80 + ".png".len(), "at most 80 characters");
 }
@@ -259,7 +262,8 @@ fn export_as_starts_from_its_remembered_options_and_stores_the_confirmed_ones() 
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
     fixture.room(Vec2::new(1400.0, 1000.0));
-    let jpeg = options("jpg", 40);
+    let mut jpeg = options("jpg", 40);
+    jpeg.scale_all = vec![ScaleRow::default(), ScaleRow::new(ScaleSize::X2, "@2x")];
 
     let first = export_from(&host, &mut fixture, jpeg.clone());
     assert_eq!(first.options.format, "jpg", "nothing stored: the dialog exports what it was given");
@@ -268,11 +272,13 @@ fn export_as_starts_from_its_remembered_options_and_stores_the_confirmed_ones() 
     first.remember(fixture.ctx());
     let reopened = opened_with(&host, &mut fixture, ExportOptions::default());
     assert_eq!((reopened.format.as_str(), reopened.quality), ("jpg", 40), "the stored options replace the given ones at open");
+    assert_eq!(reopened.scale_all, jpeg.scale_all, "the stored Scale All rows come back with them");
 
     let webp = options("webp", 55);
     let _unstored = export_from(&host, &mut fixture, webp);
     let again = opened_with(&host, &mut fixture, ExportOptions::default());
     assert_eq!((again.format.as_str(), again.quality), ("jpg", 40), "a result not stored leaves the stored options as they were");
+    assert_eq!(again.scale_all, jpeg.scale_all, "and their Scale All rows");
 }
 
 /// Export As with the app's resample methods offers no other: an unlisted opening method opens as the first listed

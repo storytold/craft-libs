@@ -123,7 +123,8 @@ impl Outcome for ExportAsOutput {
 ///   turns Cancel into Reset, which restores the settings the dialog opened with. Export asks the app for a file
 ///   to write (`ExportAsOutput::requests`), or a folder with more than one Scale All row, and the dialog stays open
 ///   until the app answers with the path. Without [`folder_export`](ExportAsDialog::folder_export), more than one row
-///   refuses Export with a note.
+///   refuses Export with a note. An export of several files ([`files`](ExportAsDialog::files)) asks for a folder
+///   too where the app can write one.
 /// - Settings: the dialog opens on the value in the bind, fitted to the document, and writes its edits back.
 /// - Previews: whenever the settings change, `wanted_preview` carries a new revision. The app encodes a proxy and
 ///   gives it back with `preview`; a size estimate shows at once ("≈ 1.2 MB"), and the app may follow with an exact
@@ -173,6 +174,10 @@ pub struct ExportAsDialog<'a> {
     /// whose file dialog answers no folder (the browser) sets it off.
     #[prop]
     folder_export: bool,
+    /// How many files the export writes before Scale All, one per exportable layer of a layer export; the default is
+    /// 1. With more than one and [`folder_export`](ExportAsDialog::folder_export), Export asks for a folder.
+    #[prop]
+    files: usize,
 }
 
 impl<'a> ExportAsDialog<'a> {
@@ -194,6 +199,7 @@ impl<'a> ExportAsDialog<'a> {
             remember: None,
             opening: None,
             folder_export: true,
+            files: 1,
         }
     }
 
@@ -215,6 +221,7 @@ impl<'a> ExportAsDialog<'a> {
             remember,
             opening,
             folder_export,
+            files,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<ExportWords>();
@@ -287,7 +294,7 @@ impl<'a> ExportAsDialog<'a> {
         if reset.pick(picked) == Some(ResetPick::Accept)
             && let Some(options) = &latest
         {
-            requests.request_path(save_request(&formats, options, &file_name, &words));
+            requests.request_path(save_request(&formats, options, &file_name, folder_export && files > 1, &words));
         }
         let result = accepted.zip(answered.into_inner()).map(|(options, path)| answer_of(options, source, path, remember));
         let events = events.into_inner();
@@ -301,9 +308,9 @@ impl<'a> ExportAsDialog<'a> {
 }
 
 /// The save dialog Export asks for: the document's name with the format's extension and filter; a folder for more than
-/// one Scale All row.
-fn save_request(formats: &[ExportFormat], options: &ExportOptions, file_name: &str, words: &ExportWords) -> PathRequest {
-    if options.scale_all.len() > 1 {
+/// one Scale All row, or when `several_files` (a layer export of more than one layer, where the app writes a folder).
+fn save_request(formats: &[ExportFormat], options: &ExportOptions, file_name: &str, several_files: bool, words: &ExportWords) -> PathRequest {
+    if options.scale_all.len() > 1 || several_files {
         return PathRequest::new(SAVE_KEY, PathKind::Folder);
     }
     let format = formats.iter().find(|format| format.id == options.format);
@@ -360,6 +367,7 @@ pub struct HostedExportAs {
     /// The path the host's save dialog answered, or automation set; Export finishes with it.
     path: Option<PathBuf>,
     folder_export: bool,
+    files: usize,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -414,6 +422,7 @@ impl HostedExportAs {
             remember: None,
             path: None,
             folder_export: true,
+            files: 1,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -423,6 +432,13 @@ impl HostedExportAs {
     #[must_use]
     pub fn folder_export(mut self, on: bool) -> Self {
         self.folder_export = on;
+        self
+    }
+
+    /// How many files the export writes before Scale All ([`ExportAsDialog::files`]).
+    #[must_use]
+    pub fn files(mut self, count: usize) -> Self {
+        self.files = count;
         self
     }
 
@@ -505,7 +521,8 @@ impl StackDialog for HostedExportAs {
         let Some(path) = self.path.clone() else {
             if !self.saving {
                 let words = Env::of_root(ctx).words::<ExportWords>();
-                self.requests.request_path(save_request(&self.formats, &self.options, &self.file_name, &words));
+                let several_files = self.folder_export && self.files > 1;
+                self.requests.request_path(save_request(&self.formats, &self.options, &self.file_name, several_files, &words));
                 self.saving = true;
             }
             return None;
@@ -563,6 +580,7 @@ impl StackDialog for HostedExportAs {
             remember: self.remember.clone(),
             opening: Some(self.opening.clone()),
             folder_export: self.folder_export,
+            files: self.files,
             ..ExportAsDialog::new(self.file_name.clone(), self.source, Bind::bound(&mut self.options))
         };
         let mut shown = dialog.show(ui);

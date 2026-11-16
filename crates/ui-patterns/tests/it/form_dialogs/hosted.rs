@@ -314,6 +314,67 @@ fn export_as_writes_one_file_per_scale_all_row_and_only_from_its_button() {
     assert!(pick(&host).is_none() && !host.borrow_mut().confirm::<HostedExportAs>(&ctx), "without a folder two rows refuse Export");
 }
 
+/// A layer export of several files asks for a folder where the app can write one, the browser's build keeps the save
+/// request, and an export of one file asks for that file by name.
+#[trial]
+fn an_export_of_several_files_asks_for_a_folder() {
+    use craft_ui::runtime::requests::PathKind;
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let pick = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path);
+    for (files, folder_export, folder) in [(2, true, true), (2, false, false), (1, true, false)] {
+        host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()).files(files).folder_export(folder_export));
+        fixture.idle(10);
+        let export = fixture.by_label("Export…").expect("the Export button");
+        fixture.click(&export).idle(4);
+        let request = pick(&host).expect("Export asks where to write");
+        let case = format!("{files} files, folder export {folder_export}");
+        assert_eq!(matches!(request.kind, PathKind::Folder), folder, "{case}: a folder");
+        if !folder {
+            assert_eq!(request.file_name.as_deref(), Some("Poster.png"), "{case}: the file is named");
+        }
+        fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+        assert!(host.borrow().is_empty(), "{case}: Escape cancels");
+    }
+}
+
+/// Enter in a field of Export As commits that field and leaves the dialog open. + adds sizes in their order up to the
+/// row limit, then is disabled, and a suffix is cut at its limit.
+#[trial]
+fn export_as_keeps_scale_all_within_its_limits_and_enter_in_a_field_only_commits_it() {
+    use craft_ui::patterns::form_dialogs::{ScaleRow, ScaleSize};
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()));
+    fixture.idle(10);
+    let options = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<HostedExportAs>().map(|dialog| dialog.options().clone()).expect("open");
+
+    let scale = fixture.by_label("Scale").expect("the Scale field");
+    fixture.click(&scale).idle(2);
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("50");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_open::<HostedExportAs>(), "Enter in the Scale field leaves the dialog open");
+    assert_eq!(options(&host).output_size(PICTURE), PixelSize::new(800, 450), "Enter commits the field");
+
+    for _ in 1..ScaleRow::MAX_ROWS {
+        let add = fixture.by_label("Add a size").expect("the + button");
+        fixture.click(&add).idle(4);
+    }
+    let rows = options(&host).scale_rows();
+    assert_eq!(rows.len(), ScaleRow::MAX_ROWS, "+ adds rows up to the limit");
+    let added: Vec<ScaleSize> = rows.iter().skip(1).map(|row| row.size).collect();
+    let order: Vec<ScaleSize> = ScaleSize::ADD_ORDER.iter().copied().filter(|size| *size != rows[0].size).take(added.len()).collect();
+    assert_eq!(added, order, "+ adds the sizes in their order");
+    let add = fixture.by_label("Add a size").expect("the + button");
+    assert!(fixture.tree().is_disabled_key(add.node), "+ is disabled at the limit");
+
+    let suffix = fixture.by_label("Suffix 2").expect("the second row's suffix");
+    fixture.click(&suffix).idle(2);
+    fixture.key(Key::A, Modifiers::COMMAND).type_text(&"s".repeat(ScaleRow::MAX_SUFFIX + 10));
+    fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+    assert_eq!(options(&host).scale_rows()[1].suffix.chars().count(), ScaleRow::MAX_SUFFIX, "a suffix is cut at its limit");
+}
+
 /// Image Size's readout counts the flat image in whole-byte rows (a Bitmap row of 9 pixels takes 2 bytes) and says
 /// "(was …)" only once the pixel size differs from the document's.
 #[trial]

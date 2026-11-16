@@ -512,7 +512,7 @@ impl ExportPreview {
 pub struct ExportAsResult {
     /// The settings the user confirmed.
     pub options: ExportOptions,
-    /// The file the user chose to write.
+    /// The file the user chose to write; the folder when the export writes more than one file.
     pub path: PathBuf,
     /// The output size in pixels.
     pub size: PixelSize,
@@ -570,13 +570,12 @@ impl<T: Clone + PartialEq> Revisions<T> {
     }
 }
 
-/// A file name safe on every platform: at most 80 characters, control characters and `< > : " / \ | ? *` replaced by
-/// `_`, leading and trailing dots and spaces trimmed; empty becomes `fallback` ("layer" for per-layer exports, the
-/// document name otherwise).
+/// The file name a save dialog suggests for `name`: each control character and each character a file name can't hold
+/// (`< > : " / \ | ? *`) turned into `_`, at most 80 characters; spaces and dots at the ends stay as the name holds
+/// them. `fallback` for a name of nothing but whitespace and dots.
 pub(crate) fn export_file_name(name: &str, fallback: &str) -> String {
     let name: String = name.chars().take(MAX_NAME_CHARS).map(|c| if c.is_control() || RESERVED.contains(c) { '_' } else { c }).collect();
-    let name = name.trim().trim_matches('.');
-    if name.is_empty() { fallback.to_owned() } else { name.to_owned() }
+    if name.chars().all(|c| c.is_whitespace() || c == '.') { fallback.to_owned() } else { name }
 }
 
 const MAX_NAME_CHARS: usize = 80;
