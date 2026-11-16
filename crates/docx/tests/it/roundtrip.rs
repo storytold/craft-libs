@@ -2384,6 +2384,10 @@ fn bibliography_sources_round_trip() {
 
     assert_bibliography_parts(&bytes);
     assert_bibliography_sources_round_trip(&bytes);
+    // Saved again after reading, the store keeps one relationship, from the main part.
+    let again = craft_docx::write(&craft_docx::read(&bytes).expect("read")).expect("write again");
+    assert_bibliography_parts(&again);
+    assert_eq!(craft_docx::read(&again).expect("read again").sources.len(), d.sources.len());
 }
 
 /// #4848: a corporate author saves as Word's `b:Corporate`, in place of a name list (a role holds
@@ -2425,10 +2429,14 @@ fn assert_bibliography_parts(bytes: &[u8]) {
     assert!(zip.by_name("customXml/itemProps1.xml").is_ok());
     assert!(zip.by_name("customXml/_rels/item1.xml.rels").is_ok());
 
+    // Word finds the sources' data store only through the main part's relationships.
     let mut rels_xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("_rels/.rels").unwrap(), &mut rels_xml).unwrap();
-    assert!(rels_xml.contains("relationships/customXml"), "{rels_xml}");
-    assert!(rels_xml.contains("Target=\"customXml/item1.xml\""), "{rels_xml}");
+    std::io::Read::read_to_string(&mut zip.by_name("word/_rels/document.xml.rels").unwrap(), &mut rels_xml).unwrap();
+    assert_eq!(rels_xml.matches("relationships/customXml\"").count(), 1, "{rels_xml}");
+    assert!(rels_xml.contains("Target=\"../customXml/item1.xml\""), "{rels_xml}");
+    let mut root_xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("_rels/.rels").unwrap(), &mut root_xml).unwrap();
+    assert!(!root_xml.contains("relationships/customXml\""), "{root_xml}");
 
     let mut ct_xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut ct_xml).unwrap();
