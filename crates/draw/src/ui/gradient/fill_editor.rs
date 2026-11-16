@@ -8,7 +8,7 @@ use craft_color::ui::gradient::{GradientEditor, GradientStops, StopColor, StopRe
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Segmented};
-use craft_ui::contract::{Bind, Entry, Outcome, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::presets::PresetState;
@@ -206,7 +206,7 @@ impl<'a> GradientFillEditor<'a> {
             let align = Checkbox::new(Bind::given(now.align)).label(words.align.clone()).show(ui);
             absorb(&mut events, lift(align.events, &now, |fill, on| fill.align = on));
             let reset = Button::new(words.reset_alignment.clone()).enabled(now.offset != kurbo::Vec2::ZERO).show(ui);
-            if reset.clicked() {
+            if clicked(&reset) {
                 let mut centred = now.clone();
                 centred.offset = kurbo::Vec2::ZERO;
                 events.push(EditEvent::set(Mixed::Same(now.clone()), centred, Arc::from(words.reset_alignment.as_str()), None));

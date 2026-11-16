@@ -12,6 +12,7 @@ use super::state::{PresetState, PresetView};
 use super::words::PresetWords;
 use crate::contract::{Bind, Entry, NoValue, Outcome, Pattern, Props, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::layout_components::Stack;
 use crate::list::RowTest;
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
@@ -142,8 +143,11 @@ impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> PresetManager<'
         }
         let shown = dialog.show(ui, |ui, _| {
             let kind_pick = Select::new(words.manager_kind.clone(), kind.reborrowed(), kinds).show(ui).value().cloned();
-            let events: Vec<PresetEvent<K>> = ui
-                .push_id(("preset-kind", index), |ui| {
+            // Each kind's browser keeps its own state: its search, scroll and open groups.
+            let events: Vec<PresetEvent<K>> = Stack::new()
+                .id_salt(("preset-kind", index))
+                .fill_width()
+                .show(ui, |ui, _| {
                     PresetBrowser::new(title.clone(), Bind::<PresetState<K>>::kept(), rows)
                         .view_lock(PresetView::List)
                         .toolbar(false)
@@ -156,7 +160,8 @@ impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> PresetManager<'
                         .show(ui)
                         .events
                 })
-                .inner;
+                .inner
+                .unwrap_or_default();
             (kind_pick, events)
         });
 

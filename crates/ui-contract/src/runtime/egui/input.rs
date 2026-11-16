@@ -648,3 +648,21 @@ pub(crate) fn held_press_origin(ctx: &Context) -> Option<Pos2> {
 pub(crate) fn plain_horizontal_arrow_pressed(ctx: &Context) -> bool {
     ctx.input(|input| input.modifiers.is_none() && (input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::ArrowRight)))
 }
+
+/// An Up, Down, Page Up or Page Down press reached egui this pass.
+pub(crate) fn step_key_pressed(ctx: &Context) -> bool {
+    ctx.input(|input| [Key::ArrowUp, Key::ArrowDown, Key::PageUp, Key::PageDown].into_iter().any(|key| input.key_pressed(key)))
+}
+
+/// Removes this pass's Tab and Shift+Tab presses from the input events; returns whether there was one. A Tab with
+/// Ctrl, Cmd or Alt is the window's, not the field's, and stays.
+pub(crate) fn take_tab(ctx: &Context) -> bool {
+    ctx.input_mut(|input| {
+        let before = input.events.len();
+        input.events.retain(|event| {
+            !matches!(event, Event::Key { key: Key::Tab, pressed: true, modifiers, .. }
+                if !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd && !modifiers.alt)
+        });
+        input.events.len() != before
+    })
+}

@@ -284,7 +284,7 @@ impl CropTool {
         }
         if !edit.events.is_empty() {
             // The first edit of a hidden default frame draws a new frame.
-            self.session.show();
+            self.session.show_frame();
         }
         for event in edit.events {
             match &event {
@@ -303,7 +303,7 @@ impl CropTool {
         if straightened.is_some() || straighten_ended {
             // The button was armed when the line began: a line made with Cmd alone turns the frame in place.
             let fit = self.session.straighten().armed();
-            self.session.show();
+            self.session.show_frame();
             // A click with no line spends the armed button too.
             self.session.straighten_mut().disarm();
             if let Some(angle) = straightened {
@@ -367,7 +367,7 @@ impl CropTool {
     /// began with while `editing`, as one box step. Returns the frame's `Set` for the host's mirror, or
     /// `None` when nothing changed. In image mode the next pass turns the view with the frame.
     pub fn refit(&mut self, settings: &CropSettings, document: &CropDocument, units: &Units, editing: bool) -> Option<CropEvent> {
-        self.session.show();
+        self.session.show_frame();
         let base = self.session.ratio_base(editing);
         self.end_nudges();
         if self.dragging {
@@ -429,7 +429,7 @@ impl CropTool {
         }
         let frame = self.session.frame()?;
         self.end_nudges();
-        self.session.show();
+        self.session.show_frame();
         let event = self.session.set(frame, false, &self.step);
         self.synced = None;
         Some(CropEvent::Frame(event))

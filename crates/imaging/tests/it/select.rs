@@ -4,8 +4,8 @@
 use craft_behavior::geometry::{Constraint, SelectionOperation, SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::{Axis, CancelReason, EditEvent, PixelSize, PointerButton};
 use craft_imaging::ui::select::{
-    DragKind, EdgeSearch, EdgeTracer, LassoTool, MagneticLassoTool, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectPhase,
-    SelectToolPass, SelectionDrag, SelectionProbe, SelectionShape,
+    DragKind, EdgeSearch, EdgeTracer, LassoTool, MagneticLassoTool, MagneticSettings, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent,
+    SelectPhase, SelectToolPass, SelectionDrag, SelectionProbe, SelectionShape,
 };
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{CanvasTool, Snap, ToolAccess, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer};
@@ -909,4 +909,25 @@ fn the_magnetic_lasso_shows_the_width_circle_under_the_precise_cursor() {
         let circle = matches!(cursor, Some(Cursor::Painted(PaintedCursor::Circle { .. })));
         assert_eq!(circle, caps_lock, "Caps Lock {caps_lock}: {cursor:?}");
     }
+}
+
+#[trial]
+fn width_steps_by_one_and_shift_jumps_to_the_limits() {
+    let mut settings = MagneticSettings::default();
+    settings.width = 10.4;
+    settings.step_width(1, false);
+    assert_eq!(settings.width, 11.0, "a step adds one to the rounded width");
+    settings.width = 1.0;
+    settings.step_width(-1, false);
+    assert_eq!(settings.width, 1.0, "the step stops at the minimum");
+    settings.width = 256.0;
+    settings.step_width(1, false);
+    assert_eq!(settings.width, 256.0, "the step stops at the maximum");
+    settings.step_width(-1, true);
+    assert_eq!(settings.width, 1.0, "Shift+[ goes to the minimum");
+    settings.step_width(1, true);
+    assert_eq!(settings.width, 256.0, "Shift+] goes to the maximum");
+    settings.width = f32::NAN;
+    settings.step_width(1, false);
+    assert_eq!(settings.width, MagneticSettings::default().width, "a width that is no number goes back to the default");
 }

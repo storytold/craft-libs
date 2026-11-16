@@ -3,10 +3,11 @@
 use crate::contract::Pointer as _;
 use crate::contract::cx::CxCore;
 use crate::primitives::{FocusKind, FocusRing, PaintShape, StateLayer, StateLayerKind, surface_look_shapes};
+use crate::runtime::egui::areas::Layer;
 use crate::runtime::env::{Env, EnvValue};
 use crate::style::{Ink, StateSet, StyleView, surface_style};
 use craft_theme::Opacity;
-use egui::{Color32, LayerId, Shape, Ui};
+use egui::{Color32, Shape, Ui};
 
 /// The ink the surface reads in: the surface kind of the state, else `inherited`.
 pub(crate) fn surface_ink(look: Option<&crate::style::SurfaceLook>, state: &StateSet, inherited: Ink) -> Ink {
@@ -16,7 +17,7 @@ pub(crate) fn surface_ink(look: Option<&crate::style::SurfaceLook>, state: &Stat
 /// Where a faded component's shapes start in its layer's paint list, and the ground its veil takes.
 #[derive(Clone, Copy)]
 pub(crate) struct Fade {
-    layer: LayerId,
+    layer: Layer,
     from: usize,
     ground: Color32,
     /// The component lies under the veil of a faded owner that shows it from its paint: it paints its enabled look
@@ -27,7 +28,7 @@ pub(crate) struct Fade {
 /// The layer whose open veil the components shown here lie under: set by `PaintUi` for the children a faded
 /// component shows while its paint runs, which its veil covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct UnderVeil(pub Option<LayerId>);
+pub(crate) struct UnderVeil(pub Option<Layer>);
 
 impl EnvValue for UnderVeil {
     fn root() -> Self {

@@ -327,19 +327,6 @@ fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
     }
 }
 
-/// Removes this pass's Tab and Shift+Tab presses from the input events; returns whether there was one. A Tab with
-/// Ctrl, Cmd or Alt is the window's, not the field's, and stays.
-fn take_tab(ctx: &Context) -> bool {
-    ctx.input_mut(|input| {
-        let before = input.events.len();
-        input.events.retain(|event| {
-            !matches!(event, egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. }
-                if !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd && !modifiers.alt)
-        });
-        input.events.len() != before
-    })
-}
-
 /// The modifiers held in this pass, which are the Enter press's.
 fn held_mods(ctx: &Context) -> Mods {
     let os = crate::runtime::windows::os_of(ctx);
@@ -400,7 +387,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     }
     let separated = input.focused && !input.read_only && state.preedit.is_none() && egui_input::take_separator(ctx, input.options.commit_on);
     // The part keeps Tab (`keys_of`), so the focus service left it here; it is taken before the widget would insert it.
-    if input.focused && input.options.tab_rewrites && !input.read_only && state.preedit.is_none() && take_tab(ctx) {
+    if input.focused && input.options.tab_rewrites && !input.read_only && state.preedit.is_none() && egui_input::take_tab(ctx) {
         state.end = Some(End::Rewrite { refuses: true });
     }
     let filter = egui_focus::event_filter(input.keys.keep, false);
@@ -463,8 +450,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && !input.options.multiline()
         && state.preedit.is_none()
         && state.draft.is_some()
-        && ctx
-            .input(|i| [egui::Key::ArrowUp, egui::Key::ArrowDown, egui::Key::PageUp, egui::Key::PageDown].into_iter().any(|key| i.key_pressed(key)));
+        && egui_input::step_key_pressed(ctx);
     let submitted =
         (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| !input.options.multiline() || (input.options.submits && mods.cmd));
     if let Some(mods) = submitted {

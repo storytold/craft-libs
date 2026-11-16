@@ -7,7 +7,7 @@ use super::{ContentPainter, Cx, Show, TipFn};
 use super::{InsideLabel, SideLabel};
 use crate::primitives::sensing::PartResults;
 use crate::primitives::text_adapter;
-use crate::primitives::{ContentPainterCx, DataMode, Draw, DrawEnv, PaintRecord, TextRun};
+use crate::primitives::{ContentPainterCx, DataMode, Draw, DrawEnv, PaintRecord, PaintSlot, TextRun};
 use crate::runtime::access;
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Label};
@@ -242,6 +242,12 @@ impl PaintUi<'_> {
             own.baseline.get_or_insert(baseline);
         }
         own.faces.push(record);
+    }
+
+    /// Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code
+    /// that holds no painter (`PaintSlot::extend`).
+    pub fn reserve_slot(&self, clip: Rect) -> PaintSlot {
+        PaintSlot::reserve_on(self.ui.ctx(), self.response.layer_id, clip)
     }
 
     /// The raw painter for an allowlisted content painter, clipped to the component's own rect. Its data paths paint

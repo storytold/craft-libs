@@ -277,9 +277,9 @@ pub(super) fn show_list(ui: &mut Ui, stack: &mut BodyCx<'_>, selected: &RefCell<
         if let Some(comp) = comp_at(cx.comps, item.at)
             && !comp.comment.is_empty()
         {
-            let comment: &str = &comp.comment;
+            let comment = comp.comment.clone();
             item.tip(move |ui| {
-                ui.label(comment);
+                let _ = Text::new(comment).show(ui);
             });
         }
         build_row(cx, item.at)

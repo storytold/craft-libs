@@ -67,10 +67,8 @@ impl<'a> AdjustmentsPanel<'a> {
         let AdjustmentsPanel { label, kinds } = self;
         let env = Env::of(ui);
         let words = env.words::<AdjustWords>();
-        // An icon button is square at the control height; the grid steps by the columns that fit the width given.
-        let side = env.tokens.tokens().size.control.md;
         let gap = BUTTON_GAP.points(ui);
-        let columns = (((ui.available_width() + gap) / (side + gap)).floor() as usize).clamp(1, kinds.len().max(1));
+        let columns = ButtonGrid::columns(&StyleCx::of_env(ui.ctx(), &env), ui.available_width(), gap, kinds.len());
         let mut picked = None;
         let shown = ButtonGrid::new(label, columns).show(ui, |ui, _| {
             for &kind in kinds {
@@ -105,6 +103,13 @@ struct ButtonGrid {
 }
 
 impl ButtonGrid {
+    /// How many of `count` buttons fit across `width` with `gap` between them. An icon button is square at the
+    /// control height.
+    fn columns(cx: &StyleCx<'_>, width: f32, gap: f32, count: usize) -> usize {
+        let side = cx.tokens.size.control.md;
+        (((width + gap) / (side + gap)).floor() as usize).clamp(1, count.max(1))
+    }
+
     fn new(label: Label, columns: usize) -> Self {
         let props = ContainerProps::new()
             .pad(Pad::None)
