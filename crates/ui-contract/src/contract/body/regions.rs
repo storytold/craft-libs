@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use crate::contract::cx::BodyCx;
-use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PaneEdge, Sizing};
+use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, Sizing};
 use crate::layout::{ColumnGroup, Columns, Reached};
 use crate::primitives::{RectSide, Rule};
 use crate::runtime::access::{self};
@@ -172,18 +172,11 @@ impl RegionFrame<'_> {
     }
 }
 
-/// The divider along the inner edge of the edge pane that encloses a container with `edge_rule`, inside `rect`: the
-/// edge toward the window's centre, mirrored for a start or end pane under right-to-left.
+/// The divider along the inner edge of an edge pane with `edge_rule`, inside `rect`: the edge toward the window's
+/// centre (`RectSide::toward_centre`).
 pub(super) fn paint_edge_rule(ui: &mut Ui, props: &ContainerProps, env: &Env, rect: Rect) {
-    let Some(edge) = env.pane_edge.filter(|_| props.edge_rule) else { return };
-    let rtl = env.direction.is_rtl();
-    let side = match edge {
-        PaneEdge::Start => RectSide::end(rtl),
-        PaneEdge::End => RectSide::start(rtl),
-        PaneEdge::Top => RectSide::Bottom,
-        PaneEdge::Bottom => RectSide::Top,
-        PaneEdge::Center => return,
-    };
+    let Mount::Pane(pane) = &props.mount else { return };
+    let Some(side) = RectSide::toward_centre(pane.edge, env.direction.is_rtl()).filter(|_| props.edge_rule) else { return };
     let rule = rule_look(&env.tokens, RuleKind::Divider);
     ui.painter().extend(Rule::edge(&rule, rect, side, ui.ctx().pixels_per_point()));
 }

@@ -704,8 +704,8 @@ pub struct ContainerProps {
     pub least_width: Option<LeastWidth>,
     /// The line length of the body's paragraphs while the container takes its width from its content, from a size role.
     pub wrap_width: Option<WrapWidth>,
-    /// A divider along the inner edge of the edge pane the container sits in: the edge that faces the window's centre.
-    /// Outside an edge pane it draws nothing.
+    /// A divider along the inner edge of a container mounted as an edge pane (`Mount::Pane` at an edge): the edge that
+    /// faces the window's centre. Any other container draws nothing.
     pub edge_rule: bool,
     /// A scope size for the body.
     pub child_size: Option<ControlSize>,
@@ -931,7 +931,7 @@ impl ContainerProps {
         self
     }
 
-    /// Draws a divider along the inner edge of the edge pane the container sits in.
+    /// Draws a divider along the inner edge of a container mounted as an edge pane.
     pub const fn edge_rule(mut self, on: bool) -> Self {
         self.edge_rule = on;
         self

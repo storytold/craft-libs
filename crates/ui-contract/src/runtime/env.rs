@@ -160,8 +160,6 @@ pub struct Scoped {
     pub(crate) unbounded: (bool, bool),
     /// The view of the innermost scroll area, for the children that run only in view (`contract::Lazy`).
     pub(crate) lazy: Option<crate::runtime::lazy::View>,
-    /// The window edge of the innermost edge pane that encloses the scope (`Mount::Pane`).
-    pub(crate) pane_edge: Option<PaneEdge>,
     /// The id of the collection item the scope shows: its root is not a Tab stop (17.3).
     pub(crate) item: Option<Id>,
     /// The roving group of the collection row the scope shows: the stops of its components and parts join it, so
@@ -349,7 +347,6 @@ impl Scoped {
         self.wheel = WheelScope::Plain;
         self.unbounded = (false, false);
         self.lazy = None;
-        self.pane_edge = None;
         self.glyphs = GlyphRole::Control;
         self.item = None;
         self.row = None;
@@ -501,7 +498,6 @@ impl Env {
                 scroll_owner: None,
                 unbounded: (false, false),
                 lazy: None,
-                pane_edge: None,
                 item: None,
                 row: None,
                 item_facts: None,
