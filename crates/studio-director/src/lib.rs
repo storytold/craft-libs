@@ -182,6 +182,38 @@ impl StudioDirector {
 
 impl StudioDirector {
     /// Translates a natural language creative request into multi-app execution steps.
+
+    /// Dispatches financial model, asset budgeting and spreadsheet formulas to GridCraft.
+    pub fn plan_financial_and_asset_budgeting(&mut self, project_title: &str, asset_count: usize) -> AppCommandDispatch {
+        AppCommandDispatch {
+            target_app: "gridcraft".into(),
+            tool_name: "generate_production_budget".into(),
+            parameters: serde_json::json!({
+                "sheet_name": format!("{project_title} - Budget"),
+                "asset_rows": asset_count,
+                "auto_sum_formula": "=SUM(C2:C100)",
+                "currency": "USD"
+            }),
+            order: 10,
+        }
+    }
+
+    /// Dispatches multi-page publication, artbook and editorial layout to DesignCraft.
+    pub fn plan_publication_artbook(&mut self, book_title: &str, page_count: usize) -> AppCommandDispatch {
+        AppCommandDispatch {
+            target_app: "designcraft".into(),
+            tool_name: "create_master_page_document".into(),
+            parameters: serde_json::json!({
+                "title": book_title,
+                "pages": page_count,
+                "bleed_mm": 3.0,
+                "facing_pages": true,
+                "primary_text_flow": true
+            }),
+            order: 11,
+        }
+    }
+
     pub fn translate_concept_to_app_pipeline(&self, concept: &str) -> Vec<AppCommandDispatch> {
         let mut plan = Vec::new();
 
@@ -285,5 +317,12 @@ mod tests {
         assert_eq!(pipeline[3].target_app, "photocraft");
         assert_eq!(pipeline[4].target_app, "effectcraft");
         assert_eq!(pipeline[5].target_app, "filmcraft");
+        let grid_dispatch = director.plan_financial_and_asset_budgeting("The Journey", 15);
+        assert_eq!(grid_dispatch.target_app, "gridcraft");
+        assert_eq!(grid_dispatch.tool_name, "generate_production_budget");
+
+        let design_dispatch = director.plan_publication_artbook("The Journey Artbook", 64);
+        assert_eq!(design_dispatch.target_app, "designcraft");
+        assert_eq!(design_dispatch.tool_name, "create_master_page_document");
     }
 }
