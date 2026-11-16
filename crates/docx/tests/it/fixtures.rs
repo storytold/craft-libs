@@ -4912,3 +4912,58 @@ fn vml_horizontal_rules_are_read_and_kept() {
     let d = read_body(&body);
     assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
 }
+
+#[test]
+fn extreme_raw_orders_share_one_map_across_parts_without_replaying_chunks() {
+    let shape = |name: &str, z: &str| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let doc = format!(
+        r#"<w:document {W_NS}><w:body><w:p>{}{}{}</w:p><w:altChunk r:id="chunk"/><w:sectPr><w:headerReference w:type="default" r:id="header"/></w:sectPr></w:body></w:document>"#,
+        shape("zero", "0"),
+        shape("lower", "4294967292"),
+        shape("high", "4294967294")
+    );
+    let header = format!(
+        r#"<w:hdr {W_NS}><w:p>{}{}</w:p></w:hdr>"#,
+        shape("maximum", "429496729&#53;").replace("relativeHeight", "alien:relativeHeight"),
+        shape("equal", "4294967295")
+    )
+    .replace("xmlns:wp=", "xmlns:position=")
+    .replace("wp:", "position:");
+    let header: Vec<u8> = [vec![0xff, 0xfe], header.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat();
+    let ignored = format!(r#"<w:hdr {W_NS}><w:p>{}</w:p></w:hdr>"#, shape("wrong-case duplicate", "4294967293"));
+    let rel = rels(&[("header", "header", "header.part"), ("chunk", "aFChunk", "chunk.txt")]);
+    let bytes = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", rel.as_bytes()),
+        ("word/header.part", &header),
+        ("WORD/HEADER.PART", ignored.as_bytes()),
+        ("word/chunk.txt", b"external chunk"),
+    ]);
+    let calls = std::cell::Cell::new(0);
+    let importer = |_: &craft_docx::AltChunk| {
+        calls.set(calls.get() + 1);
+        Some(Document::from_text("Imported once"))
+    };
+    let mut d = craft_docx::read_with(&bytes, &craft_docx::ReadOptions { chunks: Some(&importer), ..Default::default() }).unwrap();
+    assert_eq!(calls.get(), 1);
+    let orders = |d: &Document| {
+        let body: Vec<u32> = paras(d).iter().flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        let header = &d.parts[&d.last_section.headers.default.unwrap()];
+        let header: Vec<u32> =
+            header.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        (body, header)
+    };
+    let expected = (vec![1, u32::MAX - 2, u32::MAX - 1], vec![u32::MAX, u32::MAX]);
+    assert_eq!(orders(&d), expected);
+    for _ in 0..2 {
+        d = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(orders(&d), expected);
+    }
+    assert_eq!(calls.get(), 1);
+    let malformed = doc.replace("</w:body>", "");
+    assert!(craft_docx::read(&zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", malformed.as_bytes())])).is_err());
+}

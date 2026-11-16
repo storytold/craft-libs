@@ -572,3 +572,29 @@ fn extreme_stacking_orders_remain_distinct_after_repeated_roundtrips() {
         }
     }
 }
+
+#[test]
+fn extreme_raw_orders_are_normalized_once_across_body_and_headers() {
+    let shape = |z: &str| format!(r#"<draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="{z}"/>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>{}{}</text:p></office:text></office:body></office:document-content>"#,
+        shape("0"),
+        shape("4294967294")
+    );
+    let styles = format!(
+        r#"<office:document-styles {NS_T} {NS_D}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>{}{}</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#,
+        shape("429496729&#53;"),
+        shape("4294967295")
+    );
+    let mut d = import(&zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes())])).unwrap();
+    for _ in 0..3 {
+        let body: Vec<u32> =
+            d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        let header = &d.parts[&d.last_section.headers.default.unwrap()];
+        let head: Vec<u32> =
+            header.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        assert_eq!(body, [1, u32::MAX - 1]);
+        assert_eq!(head, [u32::MAX, u32::MAX]);
+        d = import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
+    }
+}

@@ -78,6 +78,7 @@ pub(super) fn read(
     fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
     objects: (&[String], &std::collections::HashMap<String, String>),
     spaces_left: &mut usize,
+    file_orders: craft_wordmodel::para::FileOrders,
 ) -> Parts {
     let mut found: Vec<(String, Slot, Vec<Ev>)> = Vec::new();
     let mut master: Option<String> = None;
@@ -127,6 +128,7 @@ pub(super) fn read(
     let mut out = Parts::default();
     for (name, kind, evs) in found {
         let mut reader = Body::new(styles, &none, fetch);
+        reader.file_orders = file_orders;
         reader.in_text = true;
         (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
         reader.spaces_left = *spaces_left;

@@ -13,11 +13,13 @@ use crate::props::{CharProps, ParaProps};
 use crate::section::SectionProps;
 use crate::{DocError, Result};
 
+mod file_orders;
 mod float;
 mod inline_kinds;
 mod inline_object;
 mod run;
 
+pub use file_orders::{FileOrderScan, FileOrders};
 pub use float::{AltText, Anchor, Float, FloatAlign, MAX_ALT_TEXT, Wrap, WrapText, cap_alt};
 pub use inline_kinds::{NoteKind, PTabAlign, PTabBase, RubyAlign, ShapeKind, ruby_offset, ruby_raise};
 pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_GROUP_CHILDREN};

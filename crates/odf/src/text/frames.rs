@@ -725,3 +725,37 @@ pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, Stri
     }
     (anchor, props, xy)
 }
+
+/// Scan the same already-inflated content/style streams as the body and header readers.
+/// The existing event parser supplies the same entity, malformed-input and 128-attribute
+/// truncation behavior; no picture fetch or embedded-object callback is invoked.
+pub(super) fn read_orders(content: &[u8], styles: Option<&[u8]>) -> Result<craft_wordmodel::para::FileOrders, String> {
+    use craft_wordmodel::para::FileOrderScan;
+    let bytes = (content.len() as u64).checked_add(styles.map_or(0, |s| s.len() as u64)).ok_or("stacking-order source size overflow")?;
+    let mut scan = FileOrderScan::new(bytes)?;
+    for xml in std::iter::once(content).chain(styles) {
+        super::xml::events(xml, |ev| {
+            if let super::xml::Ev::Start(_, attrs) = ev
+                && let Some(raw) = get(&attrs, "draw:z-index").and_then(|s| s.trim().parse::<u32>().ok())
+            {
+                scan.observe(raw);
+            }
+        });
+    }
+    scan.finish()
+}
+
+#[cfg(test)]
+mod file_order_tests {
+    #[test]
+    fn file_order_scan_uses_the_existing_odf_attribute_and_entity_rules() {
+        let ignored = format!(r#"<r {} draw:z-index="4294967295"/>"#, (0..128).map(|i| format!(r#"a{i}="x""#)).collect::<Vec<_>>().join(" "));
+        let map = super::read_orders(ignored.as_bytes(), None).unwrap();
+        assert_eq!(map.model_order(Some(u32::MAX - 1)), u32::MAX);
+        let custom = br#"<!DOCTYPE r [<!ENTITY rank "4294967295">]><r draw:z-index="&rank;"/>"#;
+        assert_eq!(super::read_orders(custom, None).unwrap().model_order(Some(u32::MAX - 1)), u32::MAX);
+        let numeric = br#"<r draw:z-index="429496729&#53;"><x draw:z-index="4294967294"/></r>"#;
+        let map = super::read_orders(numeric, None).unwrap();
+        assert_eq!((map.model_order(Some(u32::MAX - 1)), map.model_order(Some(u32::MAX))), (u32::MAX - 1, u32::MAX));
+    }
+}

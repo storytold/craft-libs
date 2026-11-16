@@ -875,6 +875,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         None if styles_xml.is_some() => EMPTY_CONTENT.as_bytes().to_vec(),
         None => return Err("ODT: content.xml is missing".into()),
     };
+    let file_orders = super::frames::read_orders(&content, styles_xml.as_deref())?;
     let mut styles = Styles::default();
     let mut pages = Pages::default();
     if let Some(s) = &styles_xml {
@@ -916,10 +917,13 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
     let objects = (entries.as_slice(), &manifest);
     // One `text:s` budget for the headers and footers and then the body.
     let mut spaces_left = MAX_EXTRA_SPACES;
-    let mut parts =
-        styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects, &mut spaces_left)).unwrap_or_default();
+    let mut parts = styles_xml
+        .as_deref()
+        .map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects, &mut spaces_left, file_orders))
+        .unwrap_or_default();
     first_pages(&mut pages);
     let mut body = Body::new(&styles, &pages, &mut fetch);
+    body.file_orders = file_orders;
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
     body.raw = &content;
     body.spaces_left = spaces_left;
