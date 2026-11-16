@@ -875,19 +875,27 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
         return words(text);
     }
     // Check if character at index i can join adjacent characters into a Hebrew word (quotes/gershayim/maqaf)
+    // Skipping vowel marks / combining marks (e.g. צָהָ"ל, וכוּ')
     let is_hebrew_joiner = |idx: usize, c: char| -> bool {
         match c {
             '״' | '־' => true,
             '"' | '”' | '“' => {
-                // Only join ASCII/curly double quotes if immediately bordered by Hebrew letters
-                let prev_he = text.get(..idx).and_then(|s| s.chars().next_back()).is_some_and(crate::he::is_hebrew_letter);
-                let next_he = text.get(idx + c.len_utf8()..).and_then(|s| s.chars().next()).is_some_and(crate::he::is_hebrew_letter);
+                // Only join ASCII/curly double quotes if bordered by Hebrew letters (skipping niqqud)
+                let prev_he = text
+                    .get(..idx)
+                    .and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+                    .is_some_and(crate::he::is_hebrew_letter);
+                let next_he = text
+                    .get(idx + c.len_utf8()..)
+                    .and_then(|s| s.chars().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+                    .is_some_and(crate::he::is_hebrew_letter);
                 prev_he && next_he
             }
             '\'' | '’' | '׳' => {
-                // Geresh/apostrophe can join or follow Hebrew letters
-                let prev_he = text.get(..idx).and_then(|s| s.chars().next_back()).is_some_and(crate::he::is_hebrew_letter);
-                prev_he
+                // Geresh/apostrophe can follow or join Hebrew letters (skipping niqqud)
+                text.get(..idx)
+                    .and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+                    .is_some_and(crate::he::is_hebrew_letter)
             }
             _ => false,
         }
@@ -896,7 +904,9 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     for (i, c) in text.char_indices() {
-        let is_w = c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c) || is_hebrew_joiner(i, c);
+        // Keep ''' and '-' as general word characters as words() does, so English words in mixed paragraphs
+        // (like doesn't, co-operate) are not split.
+        let is_w = c.is_alphanumeric() || c == '\'' || c == '-' || unicode_normalization::char::is_combining_mark(c) || is_hebrew_joiner(i, c);
         match (start, is_w) {
             (None, true) => start = Some(i),
             (Some(s), false) => {
@@ -3123,7 +3133,6 @@ mod tests {
     /// Combining marks stay in their word (#3562 review): a decomposed word is one word, with the
     /// byte range of what was typed, and it is checked as its composed form in every language.
     #[test]
-    #[test]
     fn hebrew_spelling_tokenizer_mixed_quotes_and_curly_quotes() {
         crate::he::test_dict::install();
         // Point 1: Quotes joining across language spans (xx"שלום should not swallow the Hebrew word)
@@ -3140,8 +3149,21 @@ mod tests {
         let words_idf = words_for_spelling("צה”ל", &|_| ProofLang::He);
         let texts_idf: Vec<&str> = words_idf.iter().map(|&(a, b)| &"צה”ל"[a..b]).collect();
         assert_eq!(texts_idf, ["צה”ל"], "Internal curly quotes stay intact: {texts_idf:?}");
+
+        // Vowel marks before quotes and apostrophes: צָהָ"ל and וכוּ'
+        let words_niqqud = words_for_spelling("צָהָ\"ל וכוּ'", &|_| ProofLang::He);
+        let texts_niqqud: Vec<&str> = words_niqqud.iter().map(|&(a, b)| &"צָהָ\"ל וכוּ'"[a..b]).collect();
+        assert_eq!(texts_niqqud, ["צָהָ\"ל", "וכוּ'"], "Niqqud before quotes/apostrophes should remain intact: {texts_niqqud:?}");
+
+        // Mixed paragraphs should not break English apostrophes or hyphens: doesn't co-operate שלום
+        let text_mixed = "doesn't co-operate שלום";
+        let words_eng = words_for_spelling(text_mixed, &|idx| if idx >= 19 { ProofLang::He } else { ProofLang::En });
+        let texts_eng: Vec<&str> = words_eng.iter().map(|&(a, b)| &text_mixed[a..b]).collect();
+        assert!(texts_eng.contains(&"doesn't"), "doesn't should be preserved: {texts_eng:?}");
+        assert!(texts_eng.contains(&"co-operate"), "co-operate should be preserved: {texts_eng:?}");
     }
 
+    #[test]
     fn hebrew_spelling_tokenizer_preserves_acronyms_and_abbreviations() {
         crate::he::test_dict::install();
         let issues = check_spelling_in("החייל משרת בצה״ל וכו׳.", ProofLang::He);
