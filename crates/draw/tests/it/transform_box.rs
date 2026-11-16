@@ -681,6 +681,40 @@ fn a_live_line_takes_a_press_only_at_its_ends_and_an_end_drag_scales_from_the_ot
     }
 }
 
+/// A press on the rotate band at any corner keeps rotating when the box it began on hands the drag to a box that
+/// takes the whole outside (the Move tool's controls opening Free Transform): both declare the outside near corner
+/// `i` under one part.
+#[trial]
+fn a_band_press_at_any_corner_rotates_after_the_hand_off_to_the_whole_outside() {
+    for corner in 0..4usize {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.zone = RotateZone::Band;
+            config.inside_moves = false;
+            config.reference_point = false;
+        });
+        let quad = h.state().quad;
+        let centre = quad[0].midpoint(quad[2]);
+        let out = (quad[corner] - centre).normalize() * 14.0;
+        let start = h.screen(quad[corner] + out);
+        frame(&mut h, vec![pointer::moved(start)]);
+        frame(&mut h, vec![pointer::press(start)]);
+        {
+            let mut config = h.config.borrow_mut();
+            config.zone = RotateZone::Outside;
+            config.inside_moves = true;
+            config.reference_point = true;
+        }
+        let turn = by(-(start.y - h.screen(centre).y), start.x - h.screen(centre).x).normalized() * 30.0;
+        frame(&mut h, vec![pointer::moved(start + turn * 0.5)]);
+        frame(&mut h, vec![pointer::moved(start + turn)]);
+        frame(&mut h, vec![pointer::release(start + turn)]);
+        frame(&mut h, Vec::new());
+        let turned = h.state().quad;
+        assert!((turned[1].y - turned[0].y).abs() > 1.0, "corner {corner}: the box turns after the hand-off: {turned:?}");
+        assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit), "corner {corner}");
+    }
+}
+
 /// A level line's ends stand for the side handles they point to.
 #[trial]
 fn a_level_live_lines_ends_stand_for_the_sides() {

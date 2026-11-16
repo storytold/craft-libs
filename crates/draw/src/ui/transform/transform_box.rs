@@ -29,8 +29,9 @@ use crate::ui::corner::{CornerStyle, paint_widget};
 /// The part of the box a handle, the inside or the reference point is: `BOX.at(part.index())`.
 pub const BOX: PartKey = PartKey::new("box");
 
-/// The parts that stand for the outside of the box: `OUTSIDE.at(0)` in [`RotateZone::Outside`], and `OUTSIDE.at(i)`
-/// for the band at corner `i` in [`RotateZone::Band`].
+/// The parts that stand for the outside of the box near corner `i`: `OUTSIDE.at(i)` is the outside nearest that corner
+/// in [`RotateZone::Outside`] and the band at that corner in [`RotateZone::Band`]. One key scheme in both zones, so a
+/// press that began on a band keeps its part when the box it hands off to takes the whole outside.
 const OUTSIDE: PartKey = PartKey::new("outside");
 
 /// The pointer-only part of an edge: the whole side, beside the midpoint handle `BOX.at(Edge(k))` that the keyboard
@@ -903,10 +904,12 @@ impl Component for TransformBox<'_> {
         }
         match self.rotate_zone {
             RotateZone::Outside => {
-                cx.part(OUTSIDE.at(0), HitShape::outside_polygon(rect, quad.to_vec()))
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
-                    .priority(HitPriority::new(HitLevel::Background, 0))
-                    .pointer_only(ROTATE_BY_KEY);
+                for (corner, region) in outside_regions(&quad, rect).into_iter().enumerate() {
+                    cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(region))
+                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .priority(HitPriority::new(HitLevel::Background, 0))
+                        .pointer_only(ROTATE_BY_KEY);
+                }
             }
             RotateZone::Band if self.rules.allows(BoxPart::Outside) => {
                 for (corner, ring) in band_rings(&screen, style).into_iter().enumerate() {
@@ -1060,6 +1063,53 @@ fn box_point_pull(state: &BoxState, p: Point, reach: f64) -> Point {
 fn nearest_corner(screen: &BoxState, p: Pos2) -> (usize, f32) {
     let p = Point::new(f64::from(p.x), f64::from(p.y));
     (0..4).map(|i| (i, screen.quad[i].distance(p) as f32)).min_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((0, f32::INFINITY))
+}
+
+/// The outside of the box `quad` within `within`, split into one region per corner: region `i` lies between the rays
+/// from the box's centre through the midpoints of the two sides that meet at corner `i`. For a convex box the regions
+/// tile the outside; where a folded box makes one reach inside, the inside part ranks above it.
+fn outside_regions(quad: &[Pos2; 4], within: Rect) -> [Vec<Pos2>; 4] {
+    let centre = quad.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
+    let centre = centre.to_pos2();
+    let far = (within.size().length() + centre.distance(within.center())) * 2.0 + 1.0;
+    // Side `k` runs from corner `k` to corner `k + 1`; a box with no extent there points the ray along an axis.
+    let mid = |k: usize| quad[k % 4].lerp(quad[(k + 1) % 4], 0.5);
+    let ray = |k: usize| {
+        let along = mid(k) - centre;
+        if along.length() > 1e-3 { along.normalized() } else { [Vec2::new(0.0, -1.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(-1.0, 0.0)][k % 4] }
+    };
+    std::array::from_fn(|i| {
+        let (previous, next) = (i + 3, i);
+        let between = ray(previous) + ray(next);
+        // Far enough along the bisector to lie past the canvas however wide the angle between the rays is.
+        let out = if between.length() > 0.1 { between * (2.0 * far / between.length_sq()) } else { (quad[i] - centre).normalized() * far };
+        let region = vec![quad[i], mid(next), mid(next) + ray(next) * far, centre + out, mid(previous) + ray(previous) * far, mid(previous)];
+        clipped_to(&region, within)
+    })
+}
+
+/// `polygon` clipped to `rect` (Sutherland-Hodgman, one rect side at a time).
+fn clipped_to(polygon: &[Pos2], rect: Rect) -> Vec<Pos2> {
+    // How far a point lies inside each side of the rect.
+    let sides: [fn(Pos2, Rect) -> f32; 4] = [|p, r| p.x - r.min.x, |p, r| r.max.x - p.x, |p, r| p.y - r.min.y, |p, r| r.max.y - p.y];
+    let mut out = polygon.to_vec();
+    for inside in sides {
+        let input = std::mem::take(&mut out);
+        for (k, &here) in input.iter().enumerate() {
+            let before = input[(k + input.len() - 1) % input.len()];
+            let (a, b) = (inside(before, rect), inside(here, rect));
+            if (a >= 0.0) != (b >= 0.0) {
+                out.push(before + (here - before) * (a / (a - b)));
+            }
+            if b >= 0.0 {
+                out.push(here);
+            }
+        }
+        if out.is_empty() {
+            break;
+        }
+    }
+    out
 }
 
 /// The rotate band at each corner of `screen`: the L-shaped ring outside the box between the band's inner and outer
