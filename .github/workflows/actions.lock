@@ -40,6 +40,10 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
+    '.github/workflows/docs.yml':
+        - 'actions/checkout@v7'
+        - 'dtolnay/rust-toolchain@stable'
+        - 'swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0'
     '.github/workflows/ecproj-format.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -101,6 +105,9 @@ workflows:
         - 'step-security/harden-runner@v2.22.4'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/sonarcloud.yml': []
+    '.github/workflows/theme.yml':
+        - 'actions/checkout@v7'
+        - 'dtolnay/rust-toolchain@stable'
     '.github/workflows/ui.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -146,6 +153,11 @@ dependencies:
         commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
         owner_id: 44036562
         repo_id: 197814629
+    'actions/checkout@v7':
+        ref: 'v7'
+        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
+        owner_id: 44036562
+        repo_id: 197814629
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -181,6 +193,11 @@ dependencies:
         commit: 'sha1-76747d22a7567cc4438546a84f11bdf18e670ab8'
         owner_id: 88700172
         repo_id: 1382753260
+    'swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0':
+        ref: 'v2.9.3'
+        commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
+        owner_id: 580492
+        repo_id: 298565987
     'swatinem/rust-cache@v2.9.3':
         ref: 'v2.9.3'
         commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'

@@ -617,7 +617,7 @@ fn shallower_retry_does_not_link_a_cached_ancestor_back_to_the_rebuilt_item() {
     }
 }
 
-#[test]
+#[trial]
 fn optional_report_limit_bounds_distinct_fcpxml_diagnostics() {
     let unknown = (0..10).map(|i| format!("<video name=\"missing{i}\" duration=\"1s\"/> ")).collect::<String>();
     let doc = format!(
@@ -633,7 +633,7 @@ fn optional_report_limit_bounds_distinct_fcpxml_diagnostics() {
     assert_eq!(ordinary.entries.len(), 10);
 }
 
-#[test]
+#[trial]
 fn optional_report_limit_bounds_fcpxml_export_diagnostics_without_changing_output() {
     let (p, s) = project();
     let mut ordinary = Report::default();

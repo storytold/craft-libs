@@ -22,7 +22,7 @@ jobs:
           # The token isn't needed after checkout; cargo runs build scripts and proc macros from
           # dependencies, so don't leave it in .git/config for that third-party code to read.
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown

@@ -788,7 +788,7 @@ fn nested_sequence_chain_is_bounded_and_reimported_at_a_shallower_depth() {
     assert!(nested.is_some_and(|seq| seq.video_tracks.first().is_some_and(|track| track.items.len() == 1)));
 }
 
-#[test]
+#[trial]
 fn optional_report_limit_bounds_distinct_fcp7_diagnostics() {
     let clips = (0..10).map(|i| format!("<clipitem id=\"c{i}\"><name>A{i}</name><start>{i}</start><end>{}</end><in>0</in><out>1</out><file id=\"f{i}\"><name>missing{i}</name></file></clipitem>", i + 1)).collect::<String>();
     let doc = format!("<xmeml><sequence id=\"s\"><name>S</name><media><video><track>{clips}</track></video></media></sequence></xmeml>");

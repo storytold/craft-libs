@@ -597,8 +597,9 @@ M2   A001           -012.0                00;00;00;00\n\
 #[cfg(test)]
 mod report_limit_tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn caps_distinct_unrecognized_lines_without_changing_default() {
         let text = (0..10).map(|i| format!("unrecognized-{i}\n")).collect::<String>();
         let mut limited = Report::default();

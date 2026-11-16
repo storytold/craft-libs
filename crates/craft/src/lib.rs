@@ -12,7 +12,7 @@ pub use craft_aaf as aaf;
 pub use craft_aep as aep;
 #[cfg(feature = "affinity")]
 pub use craft_affinity as affinity;
-#[cfg(feature = "ai-agents")]
+#[cfg(feature = "craft-ai-agents")]
 pub use craft_ai_agents as ai_agents;
 #[cfg(feature = "ai-core")]
 pub use craft_ai_core as ai_core;
