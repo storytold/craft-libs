@@ -465,6 +465,7 @@ mod tests {
             color: crate::ColorData::default(),
             wb_multipliers: None,
             linearized: false,
+            linearization_table: None,
             pixel_aspect: 1.0,
             opcodes: OpcodeLists::default(),
             camera: Default::default(),
