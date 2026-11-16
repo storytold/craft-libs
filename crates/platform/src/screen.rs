@@ -140,7 +140,6 @@ fn run(stop: &AtomicBool, _scale: f32) -> Result<Capture, ScreenError> {
     backend::capture(stop).map(Capture::Images)
 }
 
-
 /// The scale a monitor image gets: the app's native pixels per point, or 1 when it has none.
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 fn usable_scale(scale: f32) -> f32 {

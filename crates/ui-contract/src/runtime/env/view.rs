@@ -4,7 +4,7 @@ use super::app_values::EnvValue;
 use super::label::Label;
 use super::units::{PointSize, UnitWords, Units};
 use super::values::{MotionPolicy, Scale};
-use super::{ItemFacts, Scoped};
+use super::{Held, ItemFacts, Scoped};
 use crate::runtime::commands::CommandChain;
 use craft_host::Host;
 use craft_host::target::ShellInfo;
@@ -58,10 +58,9 @@ impl<'a> EnvView<'a> {
         self.scoped.roving
     }
 
-    /// The inside label the component shows in its slot, when it is the control of a side label with
-    /// `FieldLayout::Inside`.
-    pub fn inside_label(&self) -> Option<&'a crate::contract::InsideLabel> {
-        self.scoped.inside_label.as_deref()
+    /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).
+    pub(crate) fn inside_held(&self) -> Option<&'a Held> {
+        self.scoped.inside_label.as_ref()
     }
 
     /// The surface the component sits on: the innermost container or collection surface that paints a fill, else the

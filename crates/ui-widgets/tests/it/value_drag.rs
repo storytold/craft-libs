@@ -43,7 +43,7 @@ impl Slide {
             slider = slider.wheel_step(step);
         }
         if let Some((start, end)) = self.trim {
-            slider = slider.trim(start, end);
+            slider = slider.trim(start..=end);
         }
         self.events.borrow_mut().extend(slider.show_at(ui, FIELD).events);
     }
@@ -153,10 +153,10 @@ fn a_leaf_at_a_degenerate_rect_neither_panics_nor_changes_its_value() {
 fn the_wheel_steps_a_value_control_when_focused_or_freed_and_otherwise_scrolls_the_panel() {
     use craft_ui::contract::{ContainerProps, Entry, Scroll, ShowContainer as _};
     use craft_ui::pickers::Select;
-    use craft_ui::text::NumberField;
     use craft_ui::runtime::env::{WheelScope, with_env};
     use craft_ui::runtime::focus::{FocusTarget, request};
     use craft_ui::testing::layout::{Block, in_region};
+    use craft_ui::text::NumberField;
     use craft_ui_test_kit::body::Slab;
     use std::cell::Cell;
 

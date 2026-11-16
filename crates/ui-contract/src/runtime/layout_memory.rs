@@ -1188,6 +1188,7 @@ pub(crate) mod guard {
         ("contract::steps::id::IdPass", "id registration: a measuring run keeps the ids it uses out of the pass (keeping_ids)"),
         // Read in measuring runs; written by real runs, the frame hooks or the host.
         ("runtime::env::ViewportEnvs", "env per viewport: installs the run restores, and reads"),
+        ("runtime::env::system::Source", "OS appearance: read; written by install, the input hook and the host's reader"),
         ("runtime::frame::FrameState", "frame state: read"),
         ("runtime::frame::ViewportRecord", "viewport record: read"),
         ("runtime::windows::Shared", "window shells: read"),

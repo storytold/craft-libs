@@ -2,9 +2,9 @@
 //! the width of a line. `TextRun` lays out through the first two and `StyleCx::text_width` through the third, so the
 //! sizes that follow the text agree with the text that is drawn.
 
+use super::Span;
 use super::tokens::UiTokens;
 use crate::fonts::StackFacts;
-use crate::primitives::Span;
 use crate::runtime::egui::text_layout;
 use craft_i18n::Direction;
 use craft_theme::TypeRole;

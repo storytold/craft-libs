@@ -1,1 +1,9 @@
 config_version = 1
+
+[[exception]]
+name = "view-fit-margins"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/ui-canvas/src/canvas/tools.rs"
+reason = "The room a view fit leaves around the document is in screen points, not a look."
+count = 2

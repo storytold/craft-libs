@@ -422,8 +422,8 @@ impl ListRow<'_> {
             .iter()
             .zip(&kept)
             .filter(|(_, kept)| **kept)
-            .map(|(item, _)| ShrinkUnit { ideal: item.width, least: item.least })
-            .chain(std::iter::once(ShrinkUnit { ideal: indent_full, least: 0.0 }))
+            .map(|(item, _)| ShrinkUnit::new(item.width, item.least))
+            .chain(std::iter::once(ShrinkUnit::new(indent_full, 0.0)))
             .collect();
         let gaps = kept.iter().filter(|kept| **kept).count() as f32 * sizes.gap;
         let mut given = shrink_widths(&units, base + column + leading_width + sizes.min_label + gaps, end, ShrinkOrder::Even);

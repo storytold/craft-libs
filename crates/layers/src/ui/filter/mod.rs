@@ -669,7 +669,7 @@ impl<'a> LayerFilterBar<'a> {
     pub fn show(self, ui: &mut Ui) -> LayerFilterOutput {
         let Self { mut filter, blend_modes, focus_name, types: offered } = self;
         if offered.is_empty() {
-            return LayerFilterOutput { response: ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()), changed: false, edit: None };
+            return LayerFilterOutput { response: Row::new().show(ui, |_, _| {}).output, changed: false, edit: None };
         }
         let words = Env::of(ui).words::<LayerFilterWords>();
         let mut edit = None;

@@ -146,11 +146,6 @@ fn a_settled_overview_card_runs_no_component() {
     }
 }
 
-/// The registered type name of the component listed as `name`.
-fn type_of(name: &str) -> &'static str {
-    Catalog::linked().components.iter().find(|component| component.name == name).unwrap_or_else(|| panic!("{name} is listed")).type_name
-}
-
 fn painted(fixture: &Fixture, text: &str) -> bool {
     fixture.texts().iter().any(|run| run.text == text)
 }
@@ -179,32 +174,31 @@ fn level_of(name: &str) -> &'static str {
 fn a_storys_dialog_starts_closed_opens_over_the_view_and_closes_back_to_the_opener() {
     let (mut store, report) = SettingsStore::<GallerySettings>::open_with(OpenOptions::new(Location::Memory));
     let mut settings = store.get().clone();
-    settings.level = level_of("Dialog").to_owned();
-    settings.filter = "Dialog".to_owned();
-    settings.stories.insert(type_of("Dialog").to_owned(), "dialog".to_owned());
+    settings.level = level_of("FindReplaceDialog").to_owned();
+    settings.filter = "FindReplaceDialog".to_owned();
     store.set(settings);
     let mut gallery = Gallery::new(Catalog::linked(), Persisted::new(store, &report));
     let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
     fixture.room(Vec2::new(1400.0, 900.0)).settle();
-    // Other cards of the filter show the same body in flow.
-    let (closed, inline) = (openers(&fixture), painted_times(&fixture, "Snap to grid"));
+    // The body shows only while the dialog is open.
+    let (closed, inline) = (openers(&fixture), painted_times(&fixture, "Find what:"));
     assert!(closed >= 1, "the picked story shows its opener");
-    // The Dialog card's opener: the first under the card's title, in its column.
-    let title = fixture.texts().iter().find(|run| run.text == "Dialog").expect("the Dialog card's title").rect;
+    // The card's opener: the first under the card's title, in its column.
+    let title = fixture.texts().iter().find(|run| run.text == "FindReplaceDialog").expect("the card's title").rect;
     let opener = fixture
         .by_role(Role::BUTTON)
         .into_iter()
         .filter(|button| fixture.tree().name_of(button.node) == Some("Show dialog"))
         .filter(|button| button.rect.top() > title.top() && button.rect.left() < title.right() && button.rect.right() > title.left() - 40.0)
         .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
-        .expect("the Dialog card's opener");
+        .expect("the card's opener");
     fixture.click(&opener).settle();
-    assert_eq!(painted_times(&fixture, "Snap to grid"), inline + 1, "the opener opens the dialog");
+    assert_eq!(painted_times(&fixture, "Find what:"), inline + 1, "the opener opens the dialog");
     assert_eq!(openers(&fixture), closed - 1, "the opener gives way to the story");
     fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
     // The exit fade runs on the fixture's clock.
     fixture.advance(1.0).settle();
-    assert_eq!(painted_times(&fixture, "Snap to grid"), inline, "the dialog closed");
+    assert_eq!(painted_times(&fixture, "Find what:"), inline, "the dialog closed");
     assert_eq!(openers(&fixture), closed, "closing the story's dialog brings the opener back");
 }
 

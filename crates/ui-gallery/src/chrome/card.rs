@@ -331,7 +331,12 @@ impl StoryBody {
         }
         if let (Some((key, layers)), Some(recorded)) = (self.inspect, recorded) {
             let pointed = inspect::pointed(ui.ctx(), key);
-            InspectOverlay::new(recorded).layers(layers).pointed(pointed).show_at(ui, surface.output.rect);
+            let overlay = InspectOverlay::new(recorded).layers(layers);
+            let overlay = match pointed {
+                Some(index) => overlay.pointed(index),
+                None => overlay,
+            };
+            overlay.show_at(ui, surface.output.rect);
         }
         if let Some(shown) = ran.get() {
             let dialog = &mut state.dialog;

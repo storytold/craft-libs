@@ -127,7 +127,7 @@ trait Sink {
 pub(super) const MORE: PartKey = PartKey::new("more");
 
 /// A card or a heading of the card collection.
-#[derive(craft_ui::contract::Component)]
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub(crate) struct CommentRow<'r> {
     #[common]
     common: Common,
@@ -138,7 +138,8 @@ pub(crate) struct CommentRow<'r> {
     now: i64,
     editing: Option<(usize, &'r str)>,
     reply: &'r str,
-    /// The activation key reached the card this pass: the reply box takes the focus.
+    /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
+    #[prop]
     focus_reply: bool,
     words: Option<Arc<CommentsWords>>,
     /// The heights the editor field and the reply field measured, for the paint of the same pass.
@@ -187,12 +188,6 @@ impl<'r> CommentRow<'r> {
         self.selected = selected;
         self.editable = editable;
         self.now = now;
-        self
-    }
-
-    /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
-    pub(crate) fn focus_reply(mut self, on: bool) -> Self {
-        self.focus_reply = on;
         self
     }
 

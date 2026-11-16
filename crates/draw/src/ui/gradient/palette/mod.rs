@@ -75,11 +75,14 @@ impl GradientRef {
 /// ```
 /// use craft_theme::Srgba;
 /// use craft_color::ui::gradient::{ColorStop, GradientStops};
-/// use craft_draw::ui::{GradientGroup, GradientItem, GradientPalette};
+/// use craft_draw::ui::{GradientGroup, GradientItem, GradientPalette, GradientRef};
+/// use craft_ui::contract::{Bind, Show as _};
+/// use craft_ui::patterns::presets::PresetState;
 /// # egui::__run_test_ui(|ui| {
 /// let stops = GradientStops::new(vec![ColorStop::new(0.0, Srgba::rgb(0.0, 0.0, 0.0)), ColorStop::new(1.0, Srgba::rgb(1.0, 1.0, 1.0))]);
 /// let groups = [GradientGroup::new("Basics", vec![GradientItem::new("Black, White", stops)])];
-/// let picked = GradientPalette::new("presets", "Gradient presets", &groups).show(ui);
+/// let mut state = PresetState::<GradientRef>::new();
+/// let picked = GradientPalette::new("Gradient presets", &groups, Bind::bound(&mut state)).show(ui);
 /// if let Some(pick) = picked.picked {
 ///     // copy the preset's stops into the host's gradient
 ///     let _ = pick;

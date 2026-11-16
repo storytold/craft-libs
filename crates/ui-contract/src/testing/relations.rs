@@ -16,6 +16,26 @@ pub fn above(a: Rect, b: Rect) -> bool {
     a.max.y <= b.min.y + EPS
 }
 
+/// `lower` starts below where `upper` ends, with a gap between them.
+pub fn apart_above(upper: Rect, lower: Rect) -> bool {
+    lower.min.y > upper.max.y + EPS
+}
+
+/// `inner` ends above the foot of `outer`, not on it.
+pub fn off_foot(inner: Rect, outer: Rect) -> bool {
+    inner.max.y < outer.max.y - EPS
+}
+
+/// `a` and `b` start at the same left edge.
+pub fn aligned_left(a: Rect, b: Rect) -> bool {
+    (a.min.x - b.min.x).abs() <= EPS
+}
+
+/// `a` and `b` stand in one column: the same left edge and the same width.
+pub fn same_column(a: Rect, b: Rect) -> bool {
+    aligned_left(a, b) && (a.width() - b.width()).abs() <= EPS
+}
+
 /// `inner` lies within `outer`.
 pub fn inside(inner: Rect, outer: Rect) -> bool {
     inner.min.x >= outer.min.x - EPS && inner.min.y >= outer.min.y - EPS && inner.max.x <= outer.max.x + EPS && inner.max.y <= outer.max.y + EPS

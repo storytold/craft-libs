@@ -68,7 +68,17 @@ pub struct TransformOverlay<'a, W> {
 impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     /// The overlay of `session` named `label`, with the box rules `settings` give.
     pub fn new(label: impl Into<Label>, session: &'a TransformSession<W>, settings: &'a TransformSettings) -> Self {
-        Self { label: label.into(), session, settings, rules: None, pixel_grid: false, mods: None, menu_rows: &[], move_reach: 0.0, id: IdSource::Auto }
+        Self {
+            label: label.into(),
+            session,
+            settings,
+            rules: None,
+            pixel_grid: false,
+            mods: None,
+            menu_rows: &[],
+            move_reach: 0.0,
+            id: IdSource::Auto,
+        }
     }
 
     /// Salts the box's id with `salt`, as [`Props::id_salt`](craft_ui::contract::Props::id_salt) does: a host that

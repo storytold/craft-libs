@@ -390,6 +390,10 @@ fn stage(
                     .map_err(|e| permissions_error(e, path))
             })
             .and_then(|()| fs.sync(&file).map_err(|e| write_error(e, path, dir, existed)));
+        #[allow(
+            clippy::drop_non_drop,
+            reason = "File has no drop glue on wasm32-unknown-unknown; on other targets the drop closes it before the next step"
+        )]
         drop(file);
         if written.is_err() {
             let _ = fs.remove(&tmp);
@@ -489,6 +493,10 @@ fn copy_new(fs: &dyn AtomicFs, tmp: &Path, target: &Path, permissions: NewFilePe
         }
         fs.sync(&to)
     });
+    #[allow(
+        clippy::drop_non_drop,
+        reason = "File has no drop glue on wasm32-unknown-unknown; on other targets the drop closes it before the next step"
+    )]
     drop(to);
     if copied.is_err() {
         let _ = fs.remove(target);

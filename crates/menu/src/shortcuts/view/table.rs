@@ -726,6 +726,7 @@ impl ChordChip {
         ChordChip { common: Common::new(), chord, pressed: false }
     }
 
+    #[cfg(feature = "screen-testing")]
     fn sample() -> Self {
         ChordChip::new("Ctrl+S".to_owned()).label("Save, Ctrl+S")
     }

@@ -1,5 +1,6 @@
 //! Stories of `LayersPanel`: a tree with groups, masks and effects; no active layer; a filtered
-//! tree; extra columns; effects and Smart Filters open.
+//! tree; extra columns; effects and Smart Filters open; filtered by Artboard and by Group, which keep each group open or
+//! closed.
 
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -97,5 +98,23 @@ fn layers_panel_effects_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         layer.effects_open = layer.effects.is_some() || layer.smart_filters.is_some();
     }
     let shown = LayersPanel::new(&tree).show(ui);
+    with_readout(data, shown)
+}
+
+/// The artboard that holds the selected "Oak", with its contents.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_by_artboard(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tree = FakeLayers::boards();
+    let filter = data.value("filter", LayerFilter { by: FilterBy::Artboard, ..LayerFilter::default() });
+    let shown = LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui);
+    with_readout(data, shown)
+}
+
+/// Every group with its contents; the closed groups stay closed.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_by_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tree = FakeLayers::fifty();
+    let filter = data.value("filter", LayerFilter { by: FilterBy::Group, ..LayerFilter::default() });
+    let shown = LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui);
     with_readout(data, shown)
 }

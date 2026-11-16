@@ -95,7 +95,11 @@ pub fn cancel_captured_presses(ctx: &egui::Context) {
 /// pass: how a host test that found a component by its node (a list row by its name) finds a pointer-only part of it
 /// (a thumbnail, a drag handle), which has no node of its own. [`Fixture::part_rect`](super::Fixture::part_rect) is
 /// the same lookup by the component's id. Callers assert how rects relate (inside, below), not their size.
-pub fn part_rect_of_node(ctx: &egui::Context, node: accesskit::NodeId, part: impl Into<craft_behavior::PartRef>) -> Option<egui::Rect> {
+pub fn part_rect_of_node(
+    ctx: &egui::Context,
+    node: crate::runtime::egui::access::NodeId,
+    part: impl Into<craft_behavior::PartRef>,
+) -> Option<egui::Rect> {
     crate::runtime::pointer::node_part_bounds(ctx, node, part.into())
 }
 

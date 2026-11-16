@@ -1,9 +1,7 @@
-//! Stories of `LayerFilterBar`: each filter type in one card, with the count of a document's layers it lets through;
-//! and `LayersPanel` filtered by Artboard and by Group, which keep each group open or closed.
+//! Stories of `LayerFilterBar`: each filter type in one card, with the count of a document's layers it lets through.
 
 use super::{EffectKind, FilterBy, FilterKind, LayerAttribute, LayerFilter, LayerFilterBar, SmartKind};
 use crate::ui::mock::FakeLayers;
-use crate::ui::panel::LayersPanel;
 use crate::ui::tree::LayerTree as _;
 use craft_theme::LabelColor;
 use craft_ui::contract::Bind;
@@ -86,20 +84,4 @@ fn by_artboard(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn by_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let filter = data.value("filter", LayerFilter { by: FilterBy::Group, ..LayerFilter::default() });
     show(ui, filter)
-}
-
-/// The artboard that holds the selected "Oak", with its contents.
-#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
-fn layers_panel_by_artboard(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let tree = FakeLayers::boards();
-    let filter = data.value("filter", LayerFilter { by: FilterBy::Artboard, ..LayerFilter::default() });
-    StoryOutput::from(LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui))
-}
-
-/// Every group with its contents; the closed groups stay closed.
-#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
-fn layers_panel_by_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let tree = FakeLayers::fifty();
-    let filter = data.value("filter", LayerFilter { by: FilterBy::Group, ..LayerFilter::default() });
-    StoryOutput::from(LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui))
 }

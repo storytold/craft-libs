@@ -16,8 +16,8 @@ use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Env;
 use egui::Pos2;
 
-use super::session::{CropDocKey, DocOwner};
 use super::perspective_crop::{PerspectiveCropOutput, PerspectiveCropQuad, PerspectiveQuad, grid_color, grid_lines, grid_step, is_valid, ordered};
+use super::session::{CropDocKey, DocOwner};
 use super::words::CropWords;
 
 /// The key of the Perspective Crop To... command form.

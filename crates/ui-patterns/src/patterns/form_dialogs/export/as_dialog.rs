@@ -186,8 +186,22 @@ impl<'a> ExportAsDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ExportAsOutput {
-        let ExportAsDialog { file_name, source, bound, formats, methods, title, open, defaults, preview, answers, saving, mut presets, remember, opening } =
-            self;
+        let ExportAsDialog {
+            file_name,
+            source,
+            bound,
+            formats,
+            methods,
+            title,
+            open,
+            defaults,
+            preview,
+            answers,
+            saving,
+            mut presets,
+            remember,
+            opening,
+        } = self;
         let env = Env::of(ui);
         let words = env.words::<ExportWords>();
         // A frame can run the body twice: the library lives in a cell the passes share, and `events` collects the edits
@@ -210,8 +224,11 @@ impl<'a> ExportAsDialog<'a> {
         let wanted = RefCell::new(None::<PreviewRequest<ExportOptions>>);
         let latest = RefCell::new(None::<ExportOptions>);
         let answered = RefCell::new(None::<PathBuf>);
-        let mut dialog =
-            FormDialog::new(title.unwrap_or_else(|| words.title.clone()), bound).ok_label(words.export.clone()).ok_enabled(!saving).accept_stays_open(true).answers(answers);
+        let mut dialog = FormDialog::new(title.unwrap_or_else(|| words.title.clone()), bound)
+            .ok_label(words.export.clone())
+            .ok_enabled(!saving)
+            .accept_stays_open(true)
+            .answers(answers);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -545,7 +562,13 @@ impl StackDialog for HostedExportAs {
 
 /// The settings the dialog opens with: the remembered ones when there are any, else `base`, fitted to the formats and
 /// the source.
-fn opened_options(base: ExportOptions, last: Option<ExportOptions>, formats: &[ExportFormat], methods: &[Resample], source: PixelSize) -> ExportOptions {
+fn opened_options(
+    base: ExportOptions,
+    last: Option<ExportOptions>,
+    formats: &[ExportFormat],
+    methods: &[Resample],
+    source: PixelSize,
+) -> ExportOptions {
     last.unwrap_or(base).fitted(formats, methods, source)
 }
 

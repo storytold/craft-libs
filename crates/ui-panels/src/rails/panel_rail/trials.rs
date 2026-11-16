@@ -7,6 +7,7 @@ use crate::contract::Show as _;
 use crate::rails::tool::stories::{StoryTools, tools};
 use crate::runtime::commands::CommandState;
 use crate::testing::pointer::{moved, wheel};
+use crate::testing::relations::{above, grows_with};
 use crate::testing::{Fixture, trial};
 use egui::{Rect, Shape, Vec2};
 use std::cell::Cell;
@@ -41,8 +42,8 @@ fn in_a_short_window_the_icons_scroll_above_the_footer_that_stays_in_view() {
         }
         fixture.settle();
         let last = rect(&fixture, "Clone Stamp");
-        assert!(last.top() >= first.top() - 0.5, "{height}: the last icon is in view after scrolling: {last:?}");
-        assert!(last.bottom() <= foot.top() + 0.5, "{height}: the last icon is above the footer after scrolling: {last:?}");
+        assert!(grows_with(first.top(), last.top()), "{height}: the last icon is in view after scrolling: {last:?}");
+        assert!(above(last, foot), "{height}: the last icon is above the footer after scrolling: {last:?}");
         assert_eq!(rect(&fixture, "Foot"), foot, "{height}: the footer stays put");
     }
 }

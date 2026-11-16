@@ -44,6 +44,16 @@ fn behind_modal(ctx: &Context, viewport: ViewportId, layer: egui::LayerId) -> bo
     crate::runtime::commands::modal_root(ctx, viewport).is_some() && !ctx.memory(|memory| memory.is_above_modal_layer(layer))
 }
 
+/// The AccessKit id of a node, as a host test holds it.
+#[cfg(feature = "testing")]
+pub type NodeId = accesskit::NodeId;
+
+/// The AccessKit id of the node of `id`.
+#[cfg(feature = "testing")]
+pub(crate) fn node_id(id: Id) -> NodeId {
+    id.accesskit_id()
+}
+
 /// The AccessKit role of a node.
 pub(crate) type NodeRole = accesskit::Role;
 

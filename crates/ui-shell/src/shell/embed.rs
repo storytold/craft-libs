@@ -6,6 +6,8 @@
 //! [`crate::runtime::keys::with_window_intents`], last in the app's UI.
 
 use crate::fonts::{Stack, UiFonts};
+#[cfg(feature = "app")]
+use crate::runtime::egui::memory;
 use crate::runtime::frame::{FrameInput, FrameOutput, set_input, take_output};
 use crate::runtime::windows;
 use crate::runtime::{InstallError, InstallSpec};
@@ -62,15 +64,19 @@ pub fn before_ui(ctx: &Context, frame: &eframe::Frame) {
     fit_once(ctx);
 }
 
+/// Whether the fit has run for this context.
+#[cfg(feature = "app")]
+#[derive(Default)]
+struct Fitted(bool);
+
 /// Runs [`fit_first`] from the first passes until its monitor is known, then never again for this context.
 #[cfg(feature = "app")]
 fn fit_once(ctx: &Context) {
-    let key = egui::Id::unique("craft_ui_shell::embed::fitted");
-    if ctx.data(|data| data.get_temp::<bool>(key)).unwrap_or(false) {
+    if memory::with::<Fitted, _>(ctx, |fitted| fitted.0) {
         return;
     }
     if fit_first(ctx) {
-        ctx.data_mut(|data| data.insert_temp(key, true));
+        memory::with::<Fitted, _>(ctx, |fitted| fitted.0 = true);
     }
 }
 

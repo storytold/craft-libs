@@ -1,2 +1,25 @@
 config_version = 1
 
+[[exception]]
+name = "dock-header-gap"
+kind = "marker"
+rule = "style-mutation"
+path = "crates/ui-panels/src/docking/group.rs"
+reason = "The header lays its title cells with an egui layout and sets that layout gap."
+count = 1
+
+[[exception]]
+name = "iconic-story-stage"
+kind = "marker"
+rule = "style/token-read"
+path = "crates/ui-panels/src/docking/iconic/stories.rs"
+reason = "A story sizes its stage from the rail token."
+count = 1
+
+[[exception]]
+name = "iconic-trial-rooms"
+kind = "exempt"
+rule = "literal-size"
+path = "crates/ui-panels/src/docking/iconic/trials.rs"
+reason = "Trial rooms, not looks."
+count = 1

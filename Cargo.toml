@@ -138,6 +138,7 @@ craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-review = { path = "crates/review" }
 craft-settings = { path = "crates/settings" }
+craft-figcraft-format = { path = "crates/figcraft-format" }
 craft-scraft-format = { path = "crates/scraft-format" }
 craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }

@@ -266,8 +266,9 @@ impl Cells<'_> {
                 if let Some(c) = conversion {
                     field = if units.is_some() {
                         // Fixed Size with the host's units: typed text may carry any unit, read through the document.
+                        // Its right-click is the unit menu, so the field opens no edit menu of its own.
                         let reader = Env::of(ui).units().document_reader(c.unit, c.extent, c.pixels_per_inch, c.points_per_inch);
-                        field.codec(NumberCodec::new(reader, *c.unit.decimals().end()))
+                        field.codec(NumberCodec::new(reader, *c.unit.decimals().end())).own_context_menu()
                     } else {
                         field.unit_kind(c.unit)
                     };

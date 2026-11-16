@@ -510,7 +510,9 @@ impl<'a> ParamDialog<'a> {
             }
             for answer in cx.take_answers() {
                 let answered = match &answer {
-                    HostAnswer::Color { key, .. } | HostAnswer::Eyedropper { key, .. } | HostAnswer::Path { key, .. } => params.iter().find(|param| param.key == *key),
+                    HostAnswer::Color { key, .. } | HostAnswer::Eyedropper { key, .. } | HostAnswer::Path { key, .. } => {
+                        params.iter().find(|param| param.key == *key)
+                    }
                     HostAnswer::Listing { .. } => None,
                 };
                 let held = answered.and_then(|param| values.get(&param.key).cloned());
@@ -1138,9 +1140,7 @@ impl StackDialog for HostedParamDialog {
                 result.id = self.id;
                 Some(DialogResult::Ok(result))
             }
-            (None, Some(CloseReason::Activated)) if finish => {
-                Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok))
-            }
+            (None, Some(CloseReason::Activated)) if finish => Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok)),
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
         }

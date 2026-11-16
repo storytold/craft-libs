@@ -284,7 +284,7 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
     }
 
     /// Whether the panel menu button shows: it is asked for and the menu has rows.
-    fn menu_button(&self) -> bool {
+    fn shows_menu_button(&self) -> bool {
         self.panel_menu_shown && !self.menu.is_empty()
     }
 
@@ -324,7 +324,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
         let (band, rest) = flow.take_start(grip_width(&cx.tokens.size.handle));
         let sense = if self.movable { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS };
         let _ = cx.header_part(HeaderEdge::End, GRIP, band).sense(sense).focusable();
-        if self.menu_button() {
+        if self.shows_menu_button() {
             // An icon button is square: its side is the slot's room past the band and the gap.
             let side = (slot.width() - grip_width(&cx.tokens.size.handle) - cx.tokens.space.gap.item).max(0.0);
             let end = rest.take_end(side).0;
@@ -414,8 +414,11 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
     /// The drag band, then the panel menu button when it shows, at the header's end edge.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         let band = grip_width(&cx.tokens.size.handle);
-        let button =
-            if self.menu_button() { cx.tokens.space.gap.item + cx.face(Self::menu_face(cx.words::<DockWords>().panel_menu.clone())).x } else { 0.0 };
+        let button = if self.shows_menu_button() {
+            cx.tokens.space.gap.item + cx.face(Self::menu_face(cx.words::<DockWords>().panel_menu.clone())).x
+        } else {
+            0.0
+        };
         HeaderParts::NONE.end(band + button)
     }
 
@@ -445,7 +448,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         let drags = crate::runtime::drag::started(ui.ctx());
         let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
         ui.with_layout(layout, |ui| {
-            ui.spacing_mut().item_spacing.x = gap;
+            ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
             if let Some(hook) = extra.as_mut() {
                 hook.run(ui, cx);
             }
