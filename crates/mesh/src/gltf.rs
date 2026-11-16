@@ -5,8 +5,8 @@
 //! primitives (`TRIANGLES`, `TRIANGLE_STRIP`, `TRIANGLE_FAN`, indexed or not) with POSITION,
 //! NORMAL, TANGENT, every TEXCOORD_n, COLOR_0, JOINTS_0 and WEIGHTS_0 of any component type the
 //! specification or `KHR_mesh_quantization` allows, strided buffer views, sparse accessors,
-//! metallic-roughness materials (factors, the five texture slots with their UV set and wrap
-//! modes, alpha modes, double-sided, `KHR_materials_emissive_strength`, `KHR_materials_unlit`;
+//! metallic-roughness materials (factors, the five texture slots with their UV set, wrap
+//! modes and `KHR_texture_transform`, alpha modes, double-sided, `KHR_materials_emissive_strength`, `KHR_materials_unlit`;
 //! `KHR_materials_pbrSpecularGlossiness` as its diffuse colour and texture with roughness from
 //! the glossiness), textures whose image is only in `EXT_texture_webp`, images (embedded
 //! in a buffer view or a `data:` URI, or named), skins, animations of translation, rotation

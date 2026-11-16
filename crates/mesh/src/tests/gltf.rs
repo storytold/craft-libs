@@ -741,9 +741,14 @@ fn written_files_read_back() {
     let back = parse(&glb).unwrap();
     back.validate().unwrap();
     assert!(back.warnings.is_empty(), "{:?}", back.warnings);
-    let json = split_glb(&glb).unwrap().0;
-    let used: Value = serde_json::from_slice(json).unwrap();
-    assert_eq!(used["extensionsUsed"].as_array().map(|a| a.iter().filter(|e| *e == "KHR_texture_transform").count()), Some(1));
+    let uses_transform = |glb: &[u8]| {
+        let used: Value = serde_json::from_slice(split_glb(glb).unwrap().0).unwrap();
+        used["extensionsUsed"].as_array().map_or(0, |a| a.iter().filter(|e| *e == "KHR_texture_transform").count())
+    };
+    assert_eq!(uses_transform(&glb), 1);
+    let mut plain = painted();
+    plain.materials.iter_mut().filter_map(|m| m.base_color_texture.as_mut()).for_each(|t| t.transform = None);
+    assert_eq!(uses_transform(&write_glb(&plain, &Limits::default()).unwrap()), 0, "listed only when used");
     // The hierarchy: names, placement, and the mesh without triangles gone from its node.
     assert_eq!(back.roots, [2]);
     assert_eq!(
