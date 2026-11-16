@@ -103,7 +103,7 @@ fn main() {
                 .push(Node::Item(Item::new("layer.mergeVisible", "Merge Visible").alternate(Alternate::new(Mods::ALT, "layer.stampVisible"))));
         }
         for n in 1..documents {
-            bar.documents.push(Document::new(format!("doc.{n}"), format!("Untitled-{}", n + 1)));
+            bar.documents.push(Document::new(CommandRef::new(format!("doc.{n}")), format!("Untitled-{}", n + 1)));
         }
         bar
     };

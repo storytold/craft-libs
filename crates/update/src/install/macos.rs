@@ -50,6 +50,8 @@ pub struct Expect<'a> {
 }
 
 impl<'a> Expect<'a> {
+    /// What a release's own app must prove before it replaces an installed one: a Developer ID
+    /// signature by [`TEAM_ID`], the release's version, and that the installed app has quit.
     pub fn release(release: &'a Release) -> Self {
         Self { team: Some(TEAM_ID), version: release.version.as_ref(), quit_first: true }
     }
@@ -72,7 +74,11 @@ static SIGNATURE_CHECKS: Queue = Queue::new();
 /// How a job waits for its turn at the signature check: `phase` hears of the wait, and `stop`
 /// can cancel it.
 pub struct CheckTurn<'a> {
+    /// Whether the job was cancelled, asked again while the check waits for its turn; a cancelled
+    /// check doesn't run.
     pub stop: &'a Stop,
+    /// Hears of the wait ([`JobPhase::Waiting`]), then of the check itself
+    /// ([`JobPhase::Installing`]).
     pub phase: &'a mut dyn FnMut(JobPhase),
 }
 
@@ -85,6 +91,11 @@ const CODESIGN: &str = "/usr/bin/codesign";
 /// Stops a `codesign` that hangs.
 const CODESIGN_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Installs the app from a release's `dmg`: attaches it at a fresh mount point in `paths.cache`,
+/// checks the app inside against `expect`, and copies it into place over `existing` (else into
+/// `destination`, else `/Applications` or `~/Applications`). `replace` allows replacing a copy
+/// this launcher didn't install, and `wait` hears of the signature check's turn. Returns the
+/// installed bundle, with the image detached again.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dmg(
     app: &App,

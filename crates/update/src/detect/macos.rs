@@ -14,6 +14,8 @@ pub fn candidates(app: &App) -> Vec<PathBuf> {
     out
 }
 
+/// The first of [`candidates`]' folders that holds a bundle of this app, read as [`read_bundle`]
+/// reads it.
 pub fn detect(app: &App) -> Option<Installed> {
     candidates(app).iter().find_map(|p| read_bundle(app, p))
 }

@@ -47,7 +47,9 @@ required-features = ["screen-testing"]
 # The test reads AppKit's menu bar back and feeds it real events, through safe objc2 calls.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder"] }
+# The event constructors this test calls are gated on `NSGraphicsContext` in objc2-app-kit;
+# enabling only `NSEvent` leaves those associated functions unavailable.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSControl", "NSEvent", "NSGraphicsContext", "NSMenu", "NSMenuItem", "NSResponder"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSGeometry", "NSRunLoop", "NSString"] }
 
 [lints]

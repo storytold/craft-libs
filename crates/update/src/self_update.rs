@@ -34,6 +34,7 @@ use crate::{InstallSource, Installed};
 use crate::http::{Http, Stop};
 use crate::install::{self, Job};
 use crate::paths::Paths;
+#[cfg(any(windows, target_os = "linux"))]
 use crate::process;
 
 /// How this running launcher was installed.
