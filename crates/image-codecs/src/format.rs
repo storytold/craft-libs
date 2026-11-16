@@ -45,6 +45,12 @@ pub enum Format {
     Iff,
     /// JPEG 2000 (JP2 container or raw J2K codestream): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Jp2,
+    /// Sun Raster (`.ras`): 1-, 8-, 24- and 32-bit, uncompressed or RLE.
+    SunRaster,
+    /// SGI image files (`.sgi`, `.rgb`, `.bw`): 8- and 16-bit gray, gray + alpha, RGB and RGBA.
+    Sgi,
+    /// JPEG-LS (`.jls`): lossless and near-lossless gray and RGB.
+    JpegLs,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -116,7 +122,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 24] = [
+    pub const ALL: [Format; 27] = [
         Format::Png,
         Format::Jpeg,
         Format::Jp2,
@@ -141,6 +147,9 @@ impl Format {
         Format::Cineon,
         Format::Dicom,
         Format::Iff,
+        Format::SunRaster,
+        Format::Sgi,
+        Format::JpegLs,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -179,6 +188,9 @@ impl Format {
             Format::Dicom => "DICOM",
             Format::Iff => "Amiga IFF",
             Format::Jp2 => "JPEG 2000",
+            Format::SunRaster => "Sun Raster",
+            Format::Sgi => "SGI",
+            Format::JpegLs => "JPEG-LS",
         }
     }
 
@@ -210,6 +222,9 @@ impl Format {
             Format::Dicom => &["dcm", "dicom", "dc3"],
             Format::Iff => &["iff", "lbm", "ilbm"],
             Format::Jp2 => &["jp2", "j2k", "j2c", "jpf", "jpx"],
+            Format::SunRaster => &["ras", "sun"],
+            Format::Sgi => &["sgi", "rgb", "rgba", "bw"],
+            Format::JpegLs => &["jls"],
         }
     }
 
@@ -239,13 +254,16 @@ impl Format {
             Format::Dicom => "application/dicom",
             Format::Iff => "image/x-iff",
             Format::Jp2 => "image/jp2",
+            Format::SunRaster => "image/x-sun-raster",
+            Format::Sgi => "image/x-sgi",
+            Format::JpegLs => "image/jls",
         }
     }
 
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif | Format::Iff => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::Iff | Format::Sgi | Format::JpegLs => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,
@@ -315,6 +333,17 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
+        Format::SunRaster => FormatCaps {
+            read: cfg!(feature = "sunraster"),
+            write: cfg!(feature = "sunraster"),
+            layouts: &[L::Gray, L::Rgb, L::Rgba],
+            alpha: true,
+            ..base
+        },
+        Format::Sgi => {
+            FormatCaps { read: cfg!(feature = "sgi"), write: cfg!(feature = "sgi"), depths: &[S::U8, S::U16], layouts: RGB_GRAY, alpha: true, ..base }
+        }
+        Format::JpegLs => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
     }
 }
@@ -325,6 +354,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(Format::Png);
+    }
+    if crate::codecs::jpegls::looks_like_jpegls(b) {
+        return Some(Format::JpegLs);
     }
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some(Format::Jpeg);
@@ -392,6 +424,14 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if b.starts_with(b"/* XPM */") || b.starts_with(b"! XPM2\n") || b.starts_with(b"! XPM2\r\n") {
         return Some(Format::Xpm);
+    }
+    #[cfg(feature = "sunraster")]
+    if crate::codecs::sunraster::looks_like_sunraster(b) {
+        return Some(Format::SunRaster);
+    }
+    #[cfg(feature = "sgi")]
+    if crate::codecs::sgi::looks_like_sgi(b) {
+        return Some(Format::Sgi);
     }
     if crate::codecs::pcx::looks_like_pcx(b) {
         return Some(Format::Pcx);

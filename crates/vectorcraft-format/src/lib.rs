@@ -34,6 +34,7 @@
 //! [`sniff`] reads: a reader of a compressed file decompresses it with its own limits first.
 
 pub mod base64;
+pub mod stream;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -769,10 +770,20 @@ impl<'a> Tail<'a> {
 
     /// Write what follows the JSON: [`BLOB_MAGIC`] and the entries, or nothing when there are none.
     pub fn write_to(&self, mut w: impl Write) -> io::Result<()> {
+        self.write_to_with(&mut w, |_, _| Ok(()))
+    }
+
+    /// Write the marker and parts, calling `before_part` before each payload. A compressed
+    /// writer can use the MIME type to switch between compressed and stored deflate blocks.
+    pub fn write_to_with<W: Write>(&self, mut w: W, mut before_part: impl FnMut(&mut W, &str) -> io::Result<()>) -> io::Result<()> {
         if self.parts.is_empty() {
             return Ok(());
         }
         w.write_all(BLOB_MAGIC)?;
-        self.parts.iter().try_for_each(|p| w.write_all(p.bytes))
+        for part in &self.parts {
+            before_part(&mut w, &part.mime)?;
+            w.write_all(part.bytes)?;
+        }
+        Ok(())
     }
 }
