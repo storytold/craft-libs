@@ -279,7 +279,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.given = self.given_axes(props, &env, at);
         self.fixed_height = self.fixed_height(props, at);
         self.passes = self.passes_width(props, &env, at);
-        self.across = self.held(props, &env) && matches!(env.column, Some(ColumnSweep::Column(_)));
+        self.held = self.held(props, &env);
+        self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(_)));
         self.in_column = label::in_column(ui);
         self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
@@ -336,7 +337,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.given = self.given_axes(&props, at.env, at.at);
         self.fixed_height = self.fixed_height(&props, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
-        self.across = self.held(&props, at.env) && matches!(at.env.column, Some(ColumnSweep::Column(_)));
+        self.held = self.held(&props, at.env);
+        self.across = self.held && matches!(at.env.column, Some(ColumnSweep::Column(_)));
         // A held container across its column measures at the column's width.
         if let Some(ColumnSweep::Column(width)) = at.env.column.filter(|_| self.across && at.width.is_none()) {
             self.room.x = width;
@@ -786,7 +788,6 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // A stack is a content column where its width comes from its content: a content-sized stack in flow, or a
         // held fill-width container. A stack given its width (a rect it is shown at, or a column's width it passes
         // on) is a given column, so the width reaches down through nested stacks.
-        let sizing = self.sizing(&props);
         let content_column = !self.wide() && matches!(props.layout, layout::BodyLayout::Stack);
         let layout_id = sub(id, "layout");
         // The body is measured in the line the real run gives it: what the header and the end region leave. The
@@ -851,7 +852,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             && env.values.get::<label::LabelScheme>() == label::LabelScheme::Inspector;
         let body_env = line_env.derive_local(|scoped| {
             let label_width = label_extra.x;
-            self.scope_body(scoped, &props, id, BodyScope { room, real, sizing, content_column, scroll, label_width, beside: regions.beside });
+            self.scope_body(scoped, &props, id, BodyScope { room, real, content_column, scroll, label_width, beside: regions.beside });
             scoped.inside_label = inside.map(|inside| inside as crate::runtime::env::Held);
             scoped.cell_fills = cell_fills;
             // A scrolling body shows its first child wherever the view is: the container has no first line there.

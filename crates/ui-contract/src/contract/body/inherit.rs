@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use super::reorder::REORDER_SCOPE;
-use crate::contract::{Container, ContainerProps, Cx, DragBand, Mount, Scroll, Sizing};
+use crate::contract::{Container, ContainerProps, Cx, DragBand, Mount, Scroll};
 use crate::runtime::commands::{self, CommandSet as _, WindowCommand};
 use crate::runtime::env::{AppValues, ArenaId, Scoped, ScrollOwner};
 use crate::style::{ComponentStyle as _, SurfaceKind};
@@ -13,7 +13,6 @@ use egui::{Context, Id, Vec2};
 pub(super) struct BodyScope {
     pub(super) room: Vec2,
     pub(super) real: bool,
-    pub(super) sizing: Sizing,
     pub(super) content_column: bool,
     pub(super) scroll: Option<Scroll>,
     /// The width a side label beside the body took from the container's row.
@@ -99,7 +98,7 @@ impl BodyHooks<'_> {
 
     /// What the body inherits on top of the line's env: arena, transform, the room it is offered and its scroll axes.
     pub(super) fn scope_body(&self, scoped: &mut Scoped, props: &ContainerProps, id: Id, body: BodyScope) {
-        let BodyScope { room, real, sizing, content_column, scroll, label_width, beside } = body;
+        let BodyScope { room, real, content_column, scroll, label_width, beside } = body;
         if props.arena {
             scoped.arena = Some(ArenaId::new(id));
         }
@@ -109,19 +108,17 @@ impl BodyHooks<'_> {
         scoped.row_room = None;
         scoped.row_line = None;
         scoped.content = (!self.wide(), !self.given.1);
-        // A content-sized container offers its children, in the real run, the width this pass measured it at: a
-        // child that fits itself into its room (a bar moving items into "More") fits the width the container
-        // takes, not the room it could have taken. A fill container that is not given the width still takes at
-        // least the room (`regions`), so it offers the room, and so does a container that passes its column's width
-        // on: its measuring run offered the room too.
+        // A container not given the width offers its children, in the real run, the width this pass measured it at:
+        // its parent sizes from its content, so a fill container there is shown at its measured width like a
+        // content-sized one, and a child that fits itself into its room (a bar moving items into "More") fits the
+        // width the container takes, not the room it could have taken. A fill container held in a content-sized
+        // column shows across the width the column settles on, so it offers the room, and so does a container that
+        // passes its column's width on: its measuring run offered the room too.
         // The regions beside the body on its line and a side label's column are not the body's: the children are
         // offered what is left beside them.
         scoped.offered = (!self.given.0 && room.x.is_finite()).then(|| {
-            let offered = if real && sizing == Sizing::Content && !self.passes {
-                self.wanted_width(props).map_or(room.x, |wanted| wanted.min(room.x))
-            } else {
-                room.x
-            };
+            let offered =
+                if real && !self.held && !self.passes { self.wanted_width(props).map_or(room.x, |wanted| wanted.min(room.x)) } else { room.x };
             (offered - beside - label_width).max(0.0)
         });
         if scroll.is_some() || props.scroll_owner {

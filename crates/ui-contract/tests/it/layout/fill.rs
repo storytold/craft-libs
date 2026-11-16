@@ -2,8 +2,12 @@
 //! that scrolls along y the children that fill its height share what the view leaves, at least their content. A child
 //! that fills a bounded room never takes less than its least; in an unbounded one it keeps its ideal.
 
+use crate::collection::kit::{Count, List, Row as ListRow};
 use craft_behavior::{Proposal, Sense};
-use craft_ui::contract::{Common, Component, ContainerProps, Cx, MeasureCx, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{
+    Common, Component, ContainerProps, Cx, MeasureCx, Props as _, Role, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Sizing,
+};
 use craft_ui::layout::BodyLayout;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::layout::Block;
@@ -265,4 +269,56 @@ fn fill_children_measure_once_per_sweep() {
         }
         assert_eq!(sweeps.get(), 0, "{name}: unchanged inputs ran the body's measuring run");
     }
+}
+
+/// What fills the start of the `content_row` rig.
+#[derive(Clone, Copy, Debug)]
+enum First {
+    /// A leaf that fills the width.
+    Leaf,
+    /// A fill-width container whose body holds that leaf.
+    Held,
+    /// A list that fills.
+    List,
+}
+
+/// The row, what fills its start and the member after it, in a content-sized `Row` inside a content-sized `Stack`.
+fn content_row(first: First) -> [Rect; 3] {
+    let seen = Rc::new(Cell::new([Rect::NOTHING; 3]));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (sink, after) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+        let asked = Asked::default();
+        let rects = Panel::new().id_salt("column").show(ui, |ui, _| {
+            let row = Panel::new().layout(BodyLayout::row()).id_salt("row").show(ui, |ui, _| {
+                let leaf = |ui: &mut egui::Ui| Stretch::new(&sink, &asked).sizing(Sizing::FillWidth).id_salt("fill").show(ui).rect;
+                let filled = match first {
+                    First::Leaf => leaf(ui),
+                    First::Held => Panel::new().sizing(Sizing::FillWidth).id_salt("held").show(ui, |ui, _| leaf(ui)).inner.unwrap_or(Rect::NOTHING),
+                    First::List => List::new(SelectMode::None).id_salt("list").show_items(ui, &Count(8), &mut |_, _| ListRow::new()).response.rect,
+                };
+                let next = Probe::new(&after).size(Vec2::new(100.0, LINE)).id_salt("after").show(ui).rect;
+                [filled, next]
+            });
+            let [filled, next] = row.inner.unwrap_or([Rect::NOTHING; 2]);
+            [row.output.rect, filled, next]
+        });
+        out.set(rects.inner.unwrap_or([Rect::NOTHING; 3]));
+    });
+    fixture.room(Vec2::new(900.0, 400.0)).settle();
+    seen.get()
+}
+
+// A row sized from its content gives a child that fills its width the width it measured, not the row's room: the
+// member after it follows it, and both stay inside the row.
+#[trial]
+fn a_fill_child_of_a_content_sized_row_takes_its_measured_width_and_the_next_member_follows_it() {
+    for first in [First::Leaf, First::Held, First::List] {
+        let [row, fill, after] = content_row(first);
+        assert!(fill.width() > 0.0, "{first:?}: the fill child shows: {fill:?}");
+        assert!(fill.max.x <= after.min.x + 0.5, "{first:?}: the member after the fill child follows it: {fill:?}, {after:?}");
+        assert!(row.contains_rect(fill) && row.contains_rect(after), "{first:?}: both stay inside the row {row:?}: {fill:?}, {after:?}");
+    }
+    let [_, leaf, _] = content_row(First::Held);
+    assert!(leaf.width() >= IDEAL - 0.5, "the held leaf shows at least its ideal: {leaf:?}");
 }

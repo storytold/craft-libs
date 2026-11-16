@@ -148,7 +148,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     /// One step of a tree's indent: the icon side at the collection's size, as its rows indent.
     indent_step: f32,
     /// The axes (x, y) the collection takes from its content under a body sized from its content: the height in every
-    /// run, the width in a measuring run (the real run shows a collection that fills across the column it is held in).
+    /// run, the width in every run except the real run of a collection held in a content-sized column, which shows
+    /// across the width the column settles on.
     from_content: (bool, bool),
     scrolls: bool,
     /// The collection senses the wheel itself (a tab strip stepping its tabs): the wheel is its own, not the rows'

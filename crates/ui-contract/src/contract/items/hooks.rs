@@ -178,9 +178,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.indent_step = scx.control().icon;
         let env = Env::of(ui);
         let room = Self::inner_room(comp, &env.tokens, room);
-        // Where the enclosing body does not give the width, a measuring run takes the collection's width from its
-        // content, whether it fills or fills the width, as a container does.
-        self.from_content = (!env.gives_width() && crate::runtime::measure::active(ui.ctx()), env.content.1);
+        // Where the enclosing body does not give the width, the collection takes its width from its content, whether
+        // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
+        // across the width the column settles on.
+        let held = env.content_column || crate::layout::in_grid_content_column(ui);
+        self.from_content = (!env.gives_width() && (crate::runtime::measure::active(ui.ctx()) || !held), env.content.1);
         self.header.measure(scx);
         self.header.read_content(ui.ctx(), id);
         let bounded = room.x.is_finite();
