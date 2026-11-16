@@ -416,15 +416,18 @@ fn intra_mb(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, mb: &MbIn) -> MbP
     let mut rec = mb.src.clone();
     for i in 0..ctx.blocks() {
         let cc = if i < 4 { 0 } else { 1 + (i & 1) };
-        let f = fdct(&mb.src.block(i, cbw));
         let mut levels = [0i32; 64];
-        levels[0] = match ctx.fallback {
-            Fallback::Minimal => st.dc[cc],
-            _ => ((f[0] / dc_mult as f32).round() as i32).clamp(0, dc_max),
-        };
-        if ctx.fallback == Fallback::None {
-            for pos in 1..64 {
-                levels[pos] = quant_intra(f[pos], ctx.intra_matrix[pos], qs);
+        // The minimal fallback repeats the DC predictor and codes no coefficients, so it needs
+        // no transform.
+        if ctx.fallback == Fallback::Minimal {
+            levels[0] = st.dc[cc];
+        } else {
+            let f = fdct(&mb.src.block(i, cbw));
+            levels[0] = ((f[0] / dc_mult as f32).round() as i32).clamp(0, dc_max);
+            if ctx.fallback == Fallback::None {
+                for pos in 1..64 {
+                    levels[pos] = quant_intra(f[pos], ctx.intra_matrix[pos], qs);
+                }
             }
         }
         let diff = levels[0] - st.dc[cc];
