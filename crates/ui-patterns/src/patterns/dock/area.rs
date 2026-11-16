@@ -803,7 +803,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .command_states(states.clone());
             if minimized {
                 group = group.minimized();
-            } else if !document(scene.spec(&members[at])) {
+            } else if !document(&scene.spec(&members[at])) {
                 group = group.pad(Pad::Regular);
             }
             if scene.config.tab_close_buttons {

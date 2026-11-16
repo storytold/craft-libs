@@ -15,7 +15,7 @@ mod stories;
 use super::words::CanvasWords;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, Styled as _, THUMB, WordSetCx as _,
+    Role, THUMB, WordSetCx as _,
 };
 use crate::runtime::access::Numeric;
 use crate::runtime::env::Label;
