@@ -3,10 +3,10 @@
 use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
-    AnchorDelete, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, PathEdit,
-    PathSelection, SegmentMark,
+    AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
+    PathEdit, PathSelection, PathTool, SegmentMark,
 };
-use craft_ui::canvas::{Canvas, Guide};
+use craft_ui::canvas::{Canvas, Guide, ToolHost};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -172,6 +172,10 @@ struct State {
     lone_selects: usize,
     /// Presses the overlay left to the canvas's tool.
     tool_clicks: usize,
+    /// The anchor tool the canvas runs under the overlay, if any.
+    canvas_tool: Option<PathTool>,
+    /// Passes in which that tool ran a gesture.
+    tool_gestures: usize,
 }
 
 struct Harness {
@@ -234,6 +238,8 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         hover: None,
         lone_selects: 0,
         tool_clicks: 0,
+        canvas_tool: None,
+        tool_gestures: 0,
     }));
     let shown = Rc::clone(&state);
     let mut fixture = Fixture::new(move |ui| {
@@ -268,6 +274,10 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         });
         if canvas.output.click_at().is_some() {
             st.tool_clicks += 1;
+        }
+        if let Some(tool) = st.canvas_tool {
+            let reply = ToolHost::new().run(ui, &canvas.output, &mut AnchorTool::new(tool));
+            st.tool_gestures += usize::from(reply.gesture.is_some());
         }
         if st.pans {
             st.view = canvas.output.view.or(st.view);
@@ -727,4 +737,63 @@ fn add_anchor_shows_the_pen_with_plus_over_a_segment_and_the_arrow_over_an_ancho
     for at in [segment, anchor] {
         assert_eq!(cursor_at(&mut h, at, egui::Modifiers::NONE), Some(Cursor::Painted(PaintedCursor::Crosshair)), "{at:?}");
     }
+}
+
+// The anchor tools' canvas tool: a press off the paths begins nothing (it never starts a path), and off the paths the
+// cursor says what a click does: the arrow for Add Anchor (the pen with "-" under ⌥, where a click deletes), the pen
+// with "-" for Delete Anchor, the Convert Point icon, the arrow for Direct Selection and under ⌘, the crosshair when
+// the canvas's cursor is precise.
+#[trial]
+fn the_anchor_tools_take_no_press_off_the_paths_and_show_their_own_cursor() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
+    let empty = p(320.0, 250.0);
+    let cursor_at = |h: &mut Harness, mods: egui::Modifiers| {
+        let at = h.screen(empty);
+        h.fixture.hold(mods);
+        h.fixture.frame(vec![pointer::moved(at)]);
+        h.fixture.frame(Vec::new());
+        h.fixture.hold(egui::Modifiers::NONE);
+        craft_ui::runtime::cursor::current(h.fixture.ctx())
+    };
+    let pen = |badge: CursorBadge, cursor: &Option<Cursor>| matches!(cursor, Some(Cursor::Painted(PaintedCursor::Tool { badge: b, .. })) if *b == Some(badge));
+    let arrow = Some(Cursor::Painted(PaintedCursor::arrow(false)));
+
+    let mut h = two_paths();
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+    });
+    let before = h.state.borrow().paths.clone();
+    let at = h.screen(empty);
+    h.press_at(at);
+    h.fixture.frame(vec![pointer::release(at)]);
+    h.fixture.settle();
+    assert_eq!(h.state.borrow().tool_gestures, 0, "a press off the paths begins no gesture");
+    assert_eq!(h.state.borrow().paths, before);
+
+    assert_eq!(cursor_at(&mut h, egui::Modifiers::NONE), arrow);
+    let with_alt = cursor_at(&mut h, egui::Modifiers::ALT);
+    assert!(pen(CursorBadge::Subtract, &with_alt), "{with_alt:?}");
+    assert_eq!(cursor_at(&mut h, egui::Modifiers::COMMAND), arrow);
+
+    h.update(|st| {
+        st.tool = BezierTool::DeleteAnchor;
+        st.canvas_tool = Some(PathTool::DeleteAnchor);
+    });
+    let delete = cursor_at(&mut h, egui::Modifiers::NONE);
+    assert!(pen(CursorBadge::Subtract, &delete), "{delete:?}");
+
+    h.update(|st| {
+        st.tool = BezierTool::Convert;
+        st.canvas_tool = Some(PathTool::ConvertPoint);
+    });
+    let convert = cursor_at(&mut h, egui::Modifiers::NONE);
+    assert!(matches!(convert, Some(Cursor::Painted(PaintedCursor::Tool { badge: None, .. }))), "{convert:?}");
+
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.precise = true;
+    });
+    assert_eq!(cursor_at(&mut h, egui::Modifiers::NONE), Some(Cursor::Painted(PaintedCursor::Crosshair)));
 }
