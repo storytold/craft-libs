@@ -7,7 +7,9 @@ use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDial
 use crate::form::Field;
 use crate::pickers::Select;
 use crate::runtime::env::{ColumnSize, UnitKind};
+use crate::runtime::{keys, overlay};
 use craft_behavior::PixelSize;
+use craft_keymap::{Chord, Mods};
 use egui::Ui;
 use serde_json::json;
 
@@ -201,6 +203,19 @@ impl<'a> ImageSize<'a> {
                 kit.sides(ui, &mut state.size);
                 kit.resolution(ui, &mut state.size);
 
+                if !ui.is_sizing_pass() && overlay::drawing_top_modal(ui.ctx()) {
+                    let owner = ui.scope_id().with("resample-keys");
+                    for (key, method) in Resample::KEYS {
+                        let chord = Chord::new(Mods::ALT, key);
+                        keys::capture(ui.ctx(), owner, chord);
+                        while keys::take_claimed(ui.ctx(), owner, chord) {
+                            let offered = |method: &Resample| entries.iter().any(|entry| entry.value() == Some(method));
+                            if let Some(method) = method.filter(|method| state.size.is_resampling() && offered(method)) {
+                                state.method = method;
+                            }
+                        }
+                    }
+                }
                 let on = Checkbox::new(Bind::given(state.size.is_resampling())).label(words.resample.clone()).id_salt("resample").show(ui);
                 if let Some(on) = on.value().copied() {
                     state.size.resampling(on);

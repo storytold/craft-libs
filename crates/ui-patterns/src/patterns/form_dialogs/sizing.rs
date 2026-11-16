@@ -13,6 +13,7 @@ use crate::runtime::env::{Env, Label, UnitKind, Units};
 use crate::runtime::overlay::CloseReason;
 use crate::text::{LinkMode, LinkedWords, link_toggle};
 use craft_behavior::PixelSize;
+use craft_keymap::Key;
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 use serde::{Deserialize, Serialize};
@@ -109,6 +110,20 @@ impl Resample {
         Resample::NearestNeighbor,
         Resample::Bilinear,
         Resample::Lanczos,
+    ];
+
+    /// The Alt+digit keys that pick a method, Photoshop's: Alt+3 (Preserve Details 2.0 there) picks nothing and
+    /// Lanczos has no key. The dialog takes every one of them, also when it picks nothing, so no digit reaches a
+    /// focused field.
+    pub const KEYS: [(Key, Option<Resample>); 8] = [
+        (Key::Num1, Some(Resample::Automatic)),
+        (Key::Num2, Some(Resample::PreserveDetails)),
+        (Key::Num3, None),
+        (Key::Num4, Some(Resample::BicubicSmoother)),
+        (Key::Num5, Some(Resample::BicubicSharper)),
+        (Key::Num6, Some(Resample::Bicubic)),
+        (Key::Num7, Some(Resample::NearestNeighbor)),
+        (Key::Num8, Some(Resample::Bilinear)),
     ];
 
     /// The method's name in the list.

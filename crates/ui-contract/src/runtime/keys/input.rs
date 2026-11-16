@@ -1,7 +1,7 @@
 //! The input hook's key steps (H3): what it strips from each raw key event and records.
 
 use super::route::layout_of;
-use super::{AltTrack, Batch, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, current, with};
+use super::{AltTrack, Batch, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
 use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
 use crate::runtime::env::Env;
@@ -66,8 +66,13 @@ impl Strip<'_> {
                     batch.enter_down = Some(true);
                 }
                 let pushed = batch.presses.len();
+                let claims = batch.claimed.len();
                 let kept = self.press(batch, key, &input, repeat);
-                batch.last_press = Some((input, (batch.presses.len() > pushed).then_some(pushed)));
+                batch.last_press = Some(LastPress {
+                    input,
+                    pressed: (batch.presses.len() > pushed).then_some(pushed),
+                    claimed: batch.claimed.len() > claims,
+                });
                 if kept {
                     if let Some(press) = batch.presses.get_mut(pushed) {
                         press.in_egui = Some(batch.egui_presses);
@@ -88,7 +93,7 @@ impl Strip<'_> {
             KeyEvent::Release { input } => {
                 // The press's text comes before its release: a text after it is no press's.
                 let key = input.physical.or(input.typed);
-                if batch.last_press.as_ref().is_some_and(|(pressed, _)| pressed.physical.or(pressed.typed) == key) {
+                if batch.last_press.as_ref().is_some_and(|last| last.input.physical.or(last.input.typed) == key) {
                     batch.last_press = None;
                 }
                 if let Some(at) = key.and_then(|held| consumed.iter().position(|k| *k == held)) {
@@ -103,12 +108,16 @@ impl Strip<'_> {
             }
             KeyEvent::Text(text) => {
                 alt.other_key = true;
-                if let Some((input, pressed)) = batch.last_press.take() {
-                    if let Some(press) = pressed.and_then(|at| batch.presses.get_mut(at)) {
-                        press.text = Some(batch.texts.len());
-                    }
+                if let Some(LastPress { input, pressed, claimed }) = batch.last_press.take() {
                     if let Some(physical) = input.physical.filter(|_| !alt.right) {
                         batch.learned.push((physical, input.mods, text.clone()));
+                    }
+                    if claimed {
+                        // The claim took the press, and with it what the press typed: no field gets the character.
+                        return false;
+                    }
+                    if let Some(press) = pressed.and_then(|at| batch.presses.get_mut(at)) {
+                        press.text = Some(batch.texts.len());
                     }
                 }
                 batch.texts.push(text);

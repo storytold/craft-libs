@@ -896,6 +896,13 @@ pub fn is_top_modal(ctx: &Context, id: Id) -> bool {
     pass::live_viewports(ctx).into_iter().any(|viewport| top_modal_in(ctx, viewport).is_some_and(|modal| modal.id == id))
 }
 
+/// Whether the modal layer whose body is running is the top modal layer: a dialog's own chords reach it, wherever the
+/// focus is inside it.
+#[doc(hidden)]
+pub fn drawing_top_modal(ctx: &Context) -> bool {
+    modal_drawing(ctx).is_some_and(|id| is_top_modal(ctx, id))
+}
+
 /// Whether a popup stands over a modal layer in any viewport.
 pub(crate) fn popup_over_modal(ctx: &Context) -> bool {
     pass::live_viewports(ctx).into_iter().any(|viewport| with_persist(ctx, viewport, |persist| persist.popup_over_modal))

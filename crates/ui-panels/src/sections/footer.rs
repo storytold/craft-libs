@@ -496,12 +496,6 @@ fn letters_reach_footer(ctx: &Context) -> bool {
     focus::focus_in_scope(ctx, scope) == Some(true) && focus::focused_rec(ctx).is_some_and(|rec| rec.stop.keys.owner == OwnerClass::Widget)
 }
 
-/// Whether a button's modified chord reaches the footer being shown: the dialog the footer sits in is the top modal,
-/// wherever the focus is. A text part does not own modified chords, so a focused field does not stop it.
-fn chords_reach_footer(ctx: &Context) -> bool {
-    focus::open_scope(ctx).is_some_and(|scope| crate::runtime::overlay::is_top_modal(ctx, scope))
-}
-
 /// Whether an Enter reaches the default button of the footer being shown: focus is inside the focus scope the footer
 /// sits in (the dialog's, whether it is a layer or a full window), or nothing is focused and that dialog is the top
 /// modal.
@@ -647,7 +641,8 @@ impl FooterBar {
                 let mut shown = Shown::default();
                 let (ctx, owner) = (ui.ctx().clone(), ui.scope_id());
                 let lettered = letters_reach_footer(&ctx);
-                let chorded = chords_reach_footer(&ctx);
+                // A text part does not own modified chords, so a focused field does not stop a button's chord.
+                let chorded = crate::runtime::overlay::drawing_top_modal(&ctx);
                 // Labels are resolved in the scope's language before the letters decorate them.
                 let env = Env::of(ui);
                 let resolved: Vec<Label> = buttons.iter().map(|button| env.view().resolve(&button.label)).collect();

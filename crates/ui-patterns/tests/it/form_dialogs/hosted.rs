@@ -331,3 +331,70 @@ fn image_size_readout_counts_whole_byte_rows_and_says_was_only_after_a_change() 
     fixture.key(Key::Tab, Modifiers::NONE).settle();
     assert!(texts(&fixture).iter().any(|text| text.contains("(was 16 bytes)")), "{:?}", texts(&fixture));
 }
+
+/// Alt+1..8 pick the Resample method (#15054), each press with the text it typed taken out of the input, so the
+/// focused field types nothing; a press that picks nothing takes its text too.
+#[trial]
+fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
+    use craft_ui::patterns::form_dialogs::Resample;
+    use craft_ui::testing::input::{key_press, text};
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let resample = |host: &Rc<RefCell<DialogHost>>| {
+        host.borrow().open_dialogs().into_iter().next().and_then(|open| open.fields).and_then(|fields| fields.get("resample").cloned())
+    };
+    let field_text = |fixture: &Fixture, label: &str| {
+        let field = fixture.by_label(label).expect("the field");
+        fixture.tree().value_of(field.node).unwrap_or_default().to_owned()
+    };
+    let alt_digit = |fixture: &mut Fixture, key: Key, typed: &str, modifiers: Modifiers| {
+        fixture.frame(vec![key_press(key, modifiers), text(typed)]).settle();
+    };
+    let alt = Modifiers::ALT;
+
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    let width = fixture.by_label("Width").expect("the Width field");
+    fixture.click(&width).settle();
+    let before = field_text(&fixture, "Width");
+    alt_digit(&mut fixture, Key::Num7, "7", alt);
+    assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks Nearest Neighbor");
+    assert_eq!(field_text(&fixture, "Width"), before, "Alt+7 types nothing into the focused field");
+    alt_digit(&mut fixture, Key::Num8, "•", alt);
+    assert_eq!(resample(&host), Some(json!("bilinear")), "Alt+8 picks Bilinear");
+    alt_digit(&mut fixture, Key::Num3, "3", alt);
+    assert_eq!(resample(&host), Some(json!("bilinear")), "Alt+3 picks nothing");
+    assert_eq!(field_text(&fixture, "Width"), before, "Alt+3 types nothing either");
+    alt_digit(&mut fixture, Key::Num7, "7", alt | Modifiers::CTRL);
+    assert_eq!(resample(&host), Some(json!("bilinear")), "Ctrl+Alt+7 (AltGr) leaves the method alone");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("50");
+    assert_eq!(field_text(&fixture, "Width"), "50", "plain typing still edits the field");
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().cancel::<HostedImageSize>(&ctx), "the dialog closes");
+    host.borrow_mut().take::<HostedImageSize>();
+    fixture.settle();
+
+    // Resample off: the keys pick nothing and type nothing into the resolution field.
+    host.borrow_mut().open(HostedImageSize::new(ImageSizeValues::new(PICTURE).resampling(false), |values| ImageSize::new(values)));
+    fixture.settle();
+    let resolution = fixture.by_label("Resolution").expect("the Resolution field");
+    fixture.click(&resolution).settle();
+    let before = field_text(&fixture, "Resolution");
+    alt_digit(&mut fixture, Key::Num7, "7", alt);
+    assert_eq!(resample(&host), Some(Value::Null), "Resample stays off");
+    assert_eq!(field_text(&fixture, "Resolution"), before, "the resolution field types nothing");
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().cancel::<HostedImageSize>(&ctx), "the dialog closes");
+    host.borrow_mut().take::<HostedImageSize>();
+    fixture.settle();
+
+    // A method the dialog does not offer is not picked.
+    host.borrow_mut().open(HostedImageSize::new(ImageSizeValues::new(PICTURE), |values| {
+        ImageSize::new(values).methods(vec![Resample::Automatic, Resample::NearestNeighbor])
+    }));
+    fixture.settle();
+    alt_digit(&mut fixture, Key::Num5, "5", alt);
+    assert_eq!(resample(&host), Some(json!("automatic")), "Alt+5 picks nothing when Bicubic Sharper is not listed");
+    alt_digit(&mut fixture, Key::Num7, "7", alt);
+    assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks a listed method");
+}
