@@ -585,25 +585,25 @@ fn a_lasso_click_deselects_only_in_new_mode() {
     let selected = Rect::new(20.0, 20.0, 100.0, 100.0);
     let shift_alt = Mods { shift: true, alt: true, ..NONE };
     for (mods, deselects) in [(NONE, true), (Mods::SHIFT, false), (Mods::ALT, false), (shift_alt, false)] {
-        let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(selected));
-        click(&mut rig, (200.0, 150.0), mods);
+        let mut clicked = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+        click(&mut clicked, (200.0, 150.0), mods);
         let expected = if deselects { vec![SelectEvent::Deselect] } else { Vec::new() };
-        assert_eq!(rig.tool_mut().events(), expected, "a click with {mods:?}");
+        assert_eq!(clicked.tool_mut().events(), expected, "a click with {mods:?}");
     }
 
-    let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(selected));
-    rig.tool_mut().tool().operation(SelectionOperation::Add);
-    click(&mut rig, (200.0, 150.0), NONE);
-    assert!(rig.tool_mut().events().is_empty(), "a plain click with Add on the bar keeps the selection");
+    let mut adding = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+    adding.tool_mut().tool().operation(SelectionOperation::Add);
+    click(&mut adding, (200.0, 150.0), NONE);
+    assert!(adding.tool_mut().events().is_empty(), "a plain click with Add on the bar keeps the selection");
 
-    let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(selected));
-    down(&mut rig, (200.0, 150.0), NONE);
+    let mut drawing = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+    down(&mut drawing, (200.0, 150.0), NONE);
     for point in [(260.0, 150.0), (260.0, 200.0), (230.0, 220.0)] {
-        drag_to(&mut rig, point, NONE);
+        drag_to(&mut drawing, point, NONE);
     }
-    up(&mut rig, (200.0, 200.0), NONE);
+    up(&mut drawing, (200.0, 200.0), NONE);
     assert!(
-        matches!(rig.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::New, .. }]),
+        matches!(drawing.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::New, .. }]),
         "a drag from outside the selection still selects"
     );
 }
