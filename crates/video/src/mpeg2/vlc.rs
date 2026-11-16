@@ -22,7 +22,7 @@ pub(crate) struct Vlc {
     table: Vec<Entry>,
 }
 
-fn parse_code(s: &str) -> (u32, u32) {
+pub(crate) fn parse_code(s: &str) -> (u32, u32) {
     let mut v = 0u32;
     let mut n = 0u32;
     for c in s.chars() {

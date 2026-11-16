@@ -32,15 +32,17 @@ fn err(s: &str) -> RawError {
 /// Huffman decoding table (T.81 Annex C "BITS"/"HUFFVAL").
 #[derive(Clone, Debug)]
 pub struct Huffman {
-    /// For peeks of `LOOKUP` bits: (code length, symbol); length 0 = slow path.
-    fast: Vec<(u8, u8)>,
+    /// Indexed by the next `LOOKUP` bits; length 0 = slow path. Per entry: bits 0-7 the symbol, bits 8-11 the code
+    /// length, bits 12-15 the length of code plus extra bits when both fit in the lookup (0 = they do not), and
+    /// bits 16-31 the signed difference in that case.
+    fast: Vec<u32>,
     maxcode: [i32; 18],
     valptr: [i32; 17],
     mincode: [i32; 17],
     values: Vec<u8>,
 }
 
-const LOOKUP: u32 = 10;
+const LOOKUP: u32 = 12;
 
 impl Huffman {
     /// Build from the 16 code-length counts and the symbol list.
@@ -52,7 +54,7 @@ impl Huffman {
         let mut maxcode = [-1i32; 18];
         let mut valptr = [0i32; 17];
         let mut mincode = [0i32; 17];
-        let mut fast = vec![(0u8, 0u8); 1 << LOOKUP];
+        let mut fast = vec![0u32; 1 << LOOKUP];
         let mut code = 0i32;
         let mut k = 0usize;
         for len in 1..=16usize {
@@ -63,9 +65,10 @@ impl Huffman {
                 if len as u32 <= LOOKUP {
                     let shift = LOOKUP - len as u32;
                     let base = (code as usize) << shift;
+                    let ssss = values[k] as u32;
                     for i in 0..(1usize << shift) {
                         if let Some(slot) = fast.get_mut(base + i) {
-                            *slot = (len as u8, values[k]);
+                            *slot = fast_entry(len as u32, ssss, base + i);
                         }
                     }
                 }
@@ -84,12 +87,41 @@ impl Huffman {
 
     #[inline]
     pub fn decode<B: Bits>(&self, br: &mut B) -> Result<u8, RawError> {
-        let peek = br.peek(LOOKUP);
-        let (len, sym) = self.fast[peek as usize];
+        let e = self.fast[br.peek(LOOKUP) as usize];
+        let len = (e >> 8) & 15;
         if len > 0 {
-            br.consume(len as u32);
-            return Ok(sym);
+            br.consume(len);
+            return Ok(e as u8);
         }
+        self.decode_slow(br)
+    }
+
+    /// One symbol and its T.81 difference in a single lookup when code and extra bits fit in `LOOKUP` bits; the same
+    /// as [`Huffman::decode`] followed by [`diff_value`]. `strict`: a category above 16 is an error (subsampled
+    /// scans) instead of reading 16 bits.
+    #[inline]
+    pub fn decode_diff<B: Bits>(&self, br: &mut B, strict: bool) -> Result<i32, RawError> {
+        let e = self.fast[br.peek(LOOKUP) as usize];
+        let len = (e >> 8) & 15;
+        let total = (e >> 12) & 15;
+        if total > 0 {
+            br.consume(total);
+            return Ok((e as i32) >> 16);
+        }
+        let ssss = if len > 0 {
+            br.consume(len);
+            e as u8
+        } else {
+            self.decode_slow(br)?
+        };
+        if strict && ssss > 16 {
+            return Err(err("invalid difference category"));
+        }
+        Ok(diff_value(br, ssss))
+    }
+
+    #[cold]
+    fn decode_slow<B: Bits>(&self, br: &mut B) -> Result<u8, RawError> {
         let mut code = br.peek(LOOKUP + 1) as i32;
         let mut len = LOOKUP as usize + 1;
         while len <= 16 && code > self.maxcode[len] {
@@ -103,6 +135,21 @@ impl Huffman {
         let idx = self.valptr[len] + code - self.mincode[len];
         self.values.get(idx as usize).copied().ok_or_else(|| err("invalid Huffman code"))
     }
+}
+
+/// Lookup entry for a code of `len` bits (`len <= LOOKUP`) naming category `ssss`, at window position `index`
+/// (the code is the top `len` bits of the `LOOKUP`-bit window). See [`Huffman::fast`].
+fn fast_entry(len: u32, ssss: u32, index: usize) -> u32 {
+    let base = (len << 8) | ssss;
+    if ssss == 0 {
+        return base | (len << 12);
+    }
+    if ssss > 11 || len + ssss > LOOKUP {
+        return base;
+    }
+    let v = ((index >> (LOOKUP - len - ssss)) & ((1 << ssss) - 1)) as i32;
+    let d = if v < (1 << (ssss - 1)) { v - (1 << ssss) + 1 } else { v };
+    base | ((len + ssss) << 12) | ((d as i16 as u16 as u32) << 16)
 }
 
 /// A source of entropy-coded bits, first bit most significant.
@@ -614,11 +661,7 @@ pub fn decode_subsampled(d: &[u8], max_samples: usize, prediction: Prediction) -
                             Prediction::Sequential if mx == 0 && dx == 0 && dy == 0 => row_first[c],
                             Prediction::Sequential => last[c],
                         };
-                        let ssss = tables[c].decode(&mut br)?;
-                        if ssss > 16 {
-                            return Err(err("invalid difference category"));
-                        }
-                        let value = ((pred + diff_value(&mut br, ssss)) & 0xffff) as u16;
+                        let value = ((pred + tables[c].decode_diff(&mut br, true)?) & 0xffff) as u16;
                         plane[i] = value;
                         last[c] = i32::from(value);
                         if mx == 0 && dx == 0 && dy == 0 {
@@ -640,6 +683,44 @@ pub fn decode_subsampled(d: &[u8], max_samples: usize, prediction: Prediction) -
         }
     }
     Ok(FrameSubsampled { width: h.width, height: h.height, vertical_subsampling: vertical, planes })
+}
+
+/// T.81 Table H.1 predictor `pred` (1..=7; 0 = none) from the left, above and above-left neighbours.
+#[inline(always)]
+fn predict(pred: u8, ra: i32, rb: i32, rc: i32) -> i32 {
+    match pred {
+        0 => 0,
+        1 => ra,
+        2 => rb,
+        3 => rc,
+        4 => ra + rb - rc,
+        5 => ra + ((rb - rc) >> 1),
+        6 => rb + ((ra - rc) >> 1),
+        _ => (ra + rb) >> 1,
+    }
+}
+
+/// Decode the pixels `x0..x1` (`x0 >= 1`) of one row with the fixed predictor `P`. `prev` is empty on the first
+/// line, which only predicts from the left (`P = 1`).
+#[inline(always)]
+fn decode_run<const P: u8>(
+    tables: &[&Huffman],
+    br: &mut BitReader<'_>,
+    cur: &mut [u16],
+    prev: &[u16],
+    nc: usize,
+    x0: usize,
+    x1: usize,
+) -> Result<(), RawError> {
+    for x in x0..x1 {
+        for (c, table) in tables.iter().enumerate() {
+            let i = x * nc + c;
+            let ra = cur[i - nc] as i32;
+            let p = if P <= 1 { predict(P, ra, 0, 0) } else { predict(P, ra, prev[i] as i32, prev[i - nc] as i32) };
+            cur[i] = ((p + table.decode_diff(br, false)?) & 0xffff) as u16;
+        }
+    }
+    Ok(())
 }
 
 /// Decode a lossless JPEG stream. `max_samples` bounds the allocation (hostile headers).
@@ -680,18 +761,23 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
         let (prev_rows, cur_rows) = out.split_at_mut(y * row_len);
         let cur = &mut cur_rows[..row_len];
         let prev = if y > 0 { &prev_rows[(y - 1) * row_len..] } else { &[][..] };
-        for x in 0..w {
-            if h.restart > 0 {
-                if restart_left == 0 {
-                    if !br.restart() {
-                        return Err(err("missing restart marker"));
-                    }
-                    restart_left = h.restart;
-                    first_line = true;
-                    reset_pending = true;
+        let mut x = 0;
+        while x < w {
+            if h.restart > 0 && restart_left == 0 {
+                if !br.restart() {
+                    return Err(err("missing restart marker"));
                 }
-                restart_left -= 1;
+                restart_left = h.restart;
+                first_line = true;
+                reset_pending = true;
             }
+            // pixels up to the next restart marker or the end of the row
+            let mut end = w;
+            if h.restart > 0 {
+                end = w.min(x + restart_left);
+                restart_left -= end - x;
+            }
+            // the first pixel of the run has the special predictions (start of the interval, first column)
             #[allow(clippy::needless_range_loop)] // `c` indexes the tables and the sample position alike
             for c in 0..nc {
                 let i = x * nc + c;
@@ -702,24 +788,28 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
                 } else if x == 0 || pred == 0 {
                     if pred == 0 { 0 } else { prev[i] as i32 }
                 } else {
-                    let ra = cur[i - nc] as i32;
-                    let rb = prev[i] as i32;
-                    let rc = prev[i - nc] as i32;
-                    match pred {
-                        1 => ra,
-                        2 => rb,
-                        3 => rc,
-                        4 => ra + rb - rc,
-                        5 => ra + ((rb - rc) >> 1),
-                        6 => rb + ((ra - rc) >> 1),
-                        _ => (ra + rb) >> 1,
-                    }
+                    predict(pred, cur[i - nc] as i32, prev[i] as i32, prev[i - nc] as i32)
                 };
-                let ssss = tables[c].decode(&mut br)?;
-                let diff = diff_value(&mut br, ssss);
-                cur[i] = ((p + diff) & mask) as u16;
+                cur[i] = ((p + tables[c].decode_diff(&mut br, false)?) & mask) as u16;
             }
             reset_pending = false;
+            // the rest of the run: the predictor is fixed, so it is chosen once here, not per sample
+            if first_line {
+                // the first line of an interval predicts from the left neighbour
+                decode_run::<1>(&tables, &mut br, cur, prev, nc, x + 1, end)?;
+            } else {
+                match pred {
+                    0 => decode_run::<0>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                    1 => decode_run::<1>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                    2 => decode_run::<2>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                    3 => decode_run::<3>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                    4 => decode_run::<4>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                    5 => decode_run::<5>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                    6 => decode_run::<6>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                    _ => decode_run::<7>(&tables, &mut br, cur, prev, nc, x + 1, end)?,
+                }
+            }
+            x = end;
         }
         first_line = false;
         if br.overrun > 64 * 8 {

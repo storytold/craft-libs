@@ -21,7 +21,12 @@ pub use link::safe_url;
 mod read;
 #[cfg(feature = "read")]
 pub use read::*;
+#[cfg(feature = "paths")]
+pub mod paths;
 #[cfg(feature = "raster")]
 pub mod raster;
 #[cfg(feature = "write")]
 pub mod write;
+#[cfg(feature = "write-raster")]
+#[path = "write/raster.rs"]
+pub mod write_raster;
