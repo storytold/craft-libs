@@ -443,47 +443,78 @@ pub(super) fn z_of(a: &Attrs) -> u32 {
     get(a, "draw:z-index").and_then(|v| v.trim().parse::<u32>().ok()).map_or(0, |z| z.saturating_add(1))
 }
 
-/// `float`'s place in the stacking order as `draw:z-index` (see [`z_of`]). One without a stored
-/// order (made in WordCraft, or nothing to place) takes `unset`, which the writer puts above every
-/// stored order, where [`Float::z`] stacks it.
-pub(crate) fn z_index(float: Option<&Float>, unset: u32) -> u32 {
+/// Export orders leave room for the one-more representation used on import.
+/// At the upper boundary, remove an unused model order rather than saturating.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Stacking {
+    unset: u32,
+    gap: Option<u32>,
+}
+
+/// A stored order stays below every unset order; equal stored orders remain equal.
+pub(crate) fn z_index(float: Option<&Float>, stacking: Stacking) -> u32 {
     match float.map(|f| f.z) {
-        Some(z) if z > 0 => z - 1,
-        _ => unset,
+        Some(z) if z > 0 => z - 1 - u32::from(stacking.gap.is_some_and(|gap| z > gap)),
+        _ => stacking.unset,
     }
 }
 
-/// The `draw:z-index` the objects of `doc` without a stored order take: past the highest stored
-/// one (a stored order is one more than its `draw:z-index`), 0 when none has one. A group's
-/// members are written with their own orders too, so theirs count as well as the floating
-/// objects' ([`craft_wordmodel::Document::stacking_orders`]).
-pub(crate) fn unset_z_index(doc: &craft_wordmodel::Document) -> u32 {
+/// Include group members and inline frames too: the ODF writer emits their orders.
+pub(crate) fn stacking(doc: &craft_wordmodel::Document) -> Result<Stacking, String> {
     use craft_wordmodel::para::{GroupChild, InlineObject};
-    fn members(children: &[GroupChild], depth: usize, top: &mut u32) {
+    use std::collections::BTreeSet;
+    fn members(children: &[GroupChild], depth: usize, orders: &mut BTreeSet<u32>, unset: &mut bool) {
         for c in children {
+            if let Some((_, _, f)) = c.obj.frame()
+                && f.z > 0
+            {
+                orders.insert(f.z);
+            }
             if let Some((_, _, f)) = c.obj.frame() {
-                *top = (*top).max(f.z);
+                *unset |= f.z == 0;
             }
             if let InlineObject::Group { children, .. } = &c.obj
                 && depth < craft_flow::MAX_GROUP_DEPTH
             {
-                members(children, depth + 1, top);
+                members(children, depth + 1, orders, unset);
             }
         }
     }
-    let mut top = doc.stacking_orders().0.last().copied().unwrap_or(0);
+    let (mut orders, unset_count) = doc.stacking_orders();
+    let mut unset = unset_count > 0;
     for blocks in std::iter::once(&doc.body).chain(doc.parts.values().map(|p| &p.blocks)) {
         for b in blocks {
             craft_wordmodel::walk::each_para(b, 0, &mut |p| {
                 for o in &p.objects {
+                    if let Some((_, _, f)) = o.frame()
+                        && f.z > 0
+                    {
+                        orders.insert(f.z);
+                    }
+                    if let Some((_, _, f)) = o.frame() {
+                        unset |= f.z == 0;
+                    }
                     if let InlineObject::Group { children, .. } = o {
-                        members(children, 0, &mut top);
+                        members(children, 0, &mut orders, &mut unset);
                     }
                 }
             });
         }
     }
-    top
+    let top = orders.last().copied().unwrap_or(0);
+    if top < u32::MAX || !unset {
+        return Ok(Stacking { unset: top, gap: None });
+    }
+    // Find a missing positive value in linear time in the number of distinct orders,
+    // not the numeric range. This needs no second map and preserves relative order.
+    let mut gap = 1u32;
+    for z in orders {
+        if z != gap {
+            break;
+        }
+        gap = gap.checked_add(1).ok_or("too many distinct ODF stacking orders")?;
+    }
+    Ok(Stacking { unset: top - 1, gap: Some(gap) })
 }
 
 /// How far a frame `h` points tall in line with the text is raised from standing on the

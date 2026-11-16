@@ -509,3 +509,66 @@ fn a_frame_offering_several_formats_shows_the_first_it_can_read() {
     let d = import(&zip_of(&[("content.xml", only.as_bytes()), ("Pictures/a.svm", &svm)])).unwrap();
     assert_eq!(pictures(&d), 0);
 }
+
+/// Export must leave room for import's one-more encoding, including group members.
+#[test]
+fn extreme_stacking_orders_remain_distinct_after_repeated_roundtrips() {
+    for (grouped, location) in [(false, 0), (true, 0), (false, 1), (true, 1), (false, 2), (true, 2), (false, 3)] {
+        let shapes = r#"<draw:rect svg:width="1in" svg:height="1in"/>"#.repeat(5);
+        let objects = if grouped {
+            format!(r#"<draw:g text:anchor-type="paragraph">{shapes}</draw:g>"#)
+        } else {
+            shapes.replace("<draw:rect ", r#"<draw:rect text:anchor-type="paragraph" "#)
+        };
+        let objects = if location == 3 { objects.replacen(r#"text:anchor-type="paragraph""#, r#"text:anchor-type="as-char""#, 1) } else { objects };
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>{objects}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+        let zs = [1, u32::MAX - 1, u32::MAX, u32::MAX, 0];
+        if grouped {
+            d.objects_mut(&|o| matches!(o, InlineObject::Group { .. }), &mut |o| {
+                let InlineObject::Group { float, children, .. } = o else { return };
+                float.z = 1;
+                for (child, z) in children.iter_mut().zip(zs) {
+                    child.obj.float_mut().unwrap().z = z;
+                }
+            });
+        } else {
+            let mut orders = zs.into_iter();
+            d.objects_mut(&|o| o.frame().is_some(), &mut |o| {
+                let f = o.float_mut().unwrap();
+                f.z = orders.next().unwrap();
+                if location == 3 && f.wrap == Wrap::Inline {
+                    f.y = 6.0;
+                }
+            });
+        }
+        let mut expected =
+            vec!["0".to_string(), (u32::MAX - 3).to_string(), (u32::MAX - 2).to_string(), (u32::MAX - 2).to_string(), (u32::MAX - 1).to_string()];
+        if grouped {
+            expected.insert(0, "0".into());
+        }
+        if location == 1 || location == 2 {
+            let blocks = std::mem::replace(&mut d.body, vec![craft_wordmodel::para_block(craft_wordmodel::Paragraph::new())]);
+            let kind = if location == 1 { craft_wordmodel::PartKind::Header } else { craft_wordmodel::PartKind::Footer };
+            d.parts.insert(1, craft_wordmodel::Part { kind, blocks, body: Default::default() });
+            if location == 1 {
+                d.last_section.headers.default = Some(1);
+            } else {
+                d.last_section.footers.default = Some(1);
+            }
+        }
+        for pass in 0..3 {
+            let bytes = crate::text::tests::export_model(&d).unwrap();
+            let content = crate::text::tests::entry(&bytes, if location == 1 || location == 2 { "styles.xml" } else { "content.xml" });
+            let actual: Vec<&str> = content.split(r#"draw:z-index=""#).skip(1).filter_map(|s| s.split('"').next()).collect();
+            assert_eq!(actual, expected, "grouped={grouped}, location={location}, pass={pass}: {content}");
+            if location == 3 {
+                assert!(content.contains(r#"text:anchor-type="as-char""#), "inline must remain inline");
+                assert!(content.contains(r#"svg:y="-78pt""#), "baseline raise must survive: {content}");
+            }
+            d = import(&bytes).unwrap();
+        }
+    }
+}
