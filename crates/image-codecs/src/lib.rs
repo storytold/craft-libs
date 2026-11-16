@@ -15,6 +15,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod allocation;
+pub mod apng;
+pub mod bmp_probe;
 pub mod cicp;
 mod codecs;
 mod error;
@@ -24,13 +26,16 @@ mod fidelity;
 mod format;
 mod image;
 mod inspection;
+pub mod jpeg_sef;
 mod lab;
 mod options;
 pub mod orientation;
+pub mod png_probe;
 pub mod resolution;
 pub mod source_settings;
+pub mod tiff_probe;
 pub mod web;
-pub use crate::allocation::probe_allocation_size;
+pub use crate::allocation::{probe_allocation_size, probe_stored_size};
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
@@ -62,7 +67,9 @@ pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
-use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+#[cfg(feature = "sgi")]
+use crate::codecs::sgi;
+use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -101,13 +108,36 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::Sgi => {
+            #[cfg(feature = "sgi")]
+            {
+                sgi::decode(bytes, l)
+            }
+            #[cfg(not(feature = "sgi"))]
+            {
+                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
+            }
+        }
+        Format::JpegLs => jpegls::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
         Format::Jxl => Err(CodecError::unsupported(format, "JPEG XL reading is not yet available; export is supported")),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
+        #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+        Format::Avif => codecs::avif_decode::decode(bytes, l, opts.keep_orientation),
+        #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
+        Format::Avif => via_image::decode(format, bytes, l),
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::decode(format, bytes, l),
     }?;
     finish_format(format, bytes, img, opts)
+}
+
+/// Decode AVIF pixels and report their original AV1 bit depth (8, 10 or 12).
+/// The returned image may use a wider sample type, particularly for linear HDR.
+#[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+pub fn decode_avif_with_depth(bytes: &[u8], opts: &DecodeOptions) -> Result<(Image, u8), CodecError> {
+    let (image, depth) = codecs::avif_decode::decode_with_depth(bytes, &opts.limits, opts.keep_orientation)?;
+    Ok((finish_format(Format::Avif, bytes, image, opts)?, depth))
 }
 
 /// What [`decode_as_with`] does with a PNG decoded in steps by [`PngDecodeRows`] (`img` is its
@@ -162,10 +192,11 @@ fn finish_format(format: Format, bytes: &[u8], mut img: Image, opts: &DecodeOpti
     }
     // Turn the pixels upright, like Photoshop: a TIFF records it in the decoded page's own
     // directory, the others in their EXIF block. The metadata is rewritten to Orientation = 1
-    // on the way. HEIF keeps it in its container, and its decoder has already applied it.
+    // on the way. HEIF and AVIF keep it in their container, and their decoders have already
+    // applied it.
     let o = match format {
         Format::Tiff => tiff::orientation(bytes, None),
-        Format::Heif => 1,
+        Format::Heif | Format::Avif => 1,
         Format::Dpx => dpx::orientation(bytes),
         Format::Cineon => dpx::cineon_orientation(bytes),
         _ => img.meta.exif.as_deref().map_or(1, exif_orientation),
@@ -194,10 +225,11 @@ pub fn decode_png_rows<E: From<CodecError>>(
 }
 
 /// The upright pixel size [`decode`] would return, read from the file's header without decoding
-/// pixels, for WebP, OpenEXR (flat) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same
+/// pixels, for WebP, OpenEXR (flat), AVIF (with `avif-decode`) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same
 /// header reads and size checks as the decoder (default [`Limits`]) and swaps the size for an
-/// EXIF orientation of 5–8, so wherever [`decode`] succeeds the two agree. Other formats (and
-/// deep EXR or AVIF) return [`CodecError::Unsupported`]: decode those to learn their size.
+/// EXIF orientation of 5–8 (AVIF: its container's `clap` and `irot`), so wherever [`decode`]
+/// succeeds the two agree. Other formats (and deep EXR) return [`CodecError::Unsupported`]: decode
+/// those to learn their size.
 pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     if !caps(format).read {
@@ -207,7 +239,11 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let (w, h, exif) = match format {
         Format::WebP => webp::probe(bytes, l)?,
         Format::OpenExr => exr::probe(bytes, l).map(|(w, h)| (w, h, None))?,
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::probe(format, bytes, l)?,
+        #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+        Format::Avif => codecs::avif_decode::probe(bytes, l).map(|(w, h)| (w, h, None))?,
+        #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
+        Format::Avif => via_image::probe(format, bytes, l)?,
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::probe(format, bytes, l)?,
         _ => return Err(CodecError::unsupported(format, "no header-only size probe")),
     };
     let o = exif.as_deref().map_or(1, exif_orientation);
@@ -235,6 +271,17 @@ pub struct JpegInfo {
 /// [`JpegInfo`] of `bytes`; `None` without a readable frame of 1, 3 or 4 components.
 pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
     jpeg::info(bytes)
+}
+
+/// PCX's dimensions are available from its fixed-size header without decoding the RLE rows.
+pub fn pcx_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    codecs::pcx::dimensions(bytes)
+}
+
+/// The X11 color-name lookup used by XPM files, expressed as normalized sRGB.
+pub fn xpm_named_color_rgb(name: &str) -> Option<[f32; 3]> {
+    let rgb = codecs::xpm::exact_x11_name(name)?;
+    Some(rgb.map(|channel| f32::from(channel) / 255.0))
 }
 
 /// The colour table of a GIF's first frame (its Local Color Table, else the Global one) and the
@@ -446,6 +493,17 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
         Format::Iff => iff::encode(image, plan),
+        Format::Sgi => {
+            #[cfg(feature = "sgi")]
+            {
+                sgi::encode(image, plan)
+            }
+            #[cfg(not(feature = "sgi"))]
+            {
+                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
+            }
+        }
+        Format::JpegLs => jpegls::encode(image, plan),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jp2 => Err(CodecError::unsupported(format, "JPEG 2000 is import-only; save as PNG or TIFF instead")),
