@@ -239,6 +239,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   primitives (`.abr`, `.asl`, `.aco`, `.act`, `.ase`, `.grd`, `.pat`, `.atn`, `.csh`, `.shc`) and
   the Photoshop blocks of a layered TIFF. Bounded and panic-free on hostile input. Compositing
   and the mapping onto a document stay in each app.
+- [`craft-ipc`](crates/ipc/README.md): Craft apps talking on one machine: per-user local sockets (Unix socket, Windows named pipe), token auth, instance discovery, launch on demand, focus hand-off, frame transfer and linked-file watching. Native only: it does not build for `wasm32`. Protocol in [PROTOCOL.md](crates/ipc/PROTOCOL.md).
 - [`craft-jmap`](crates/jmap/README.md): the JMAP protocol core (RFC 8620), from MailCraft, without
   sockets: session, requests of method calls with back-references, responses, ids, address
   templates, credentials and the judgement of HTTP answers, over any HTTP implementation. Bounded
@@ -400,7 +401,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-kra`](crates/kra/README.md): Krita documents (`.kra`, `.krz`), read: the ZIP archive, the `maindoc.xml` node tree as written, and the tiled pixel files with their LZF compression, a tile at a time. From PhotoCraft.
 - [`craft-xcf`](crates/xcf/README.md): GIMP XCF images (`.xcf`, `.xcf.gz`), read: header, properties, parasites, layers with their item paths, channels, and tiled pixels (uncompressed, RLE, zlib) at every precision, under a caller's byte budget. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
-- [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats.
+- [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats. With the `lenient` feature, also a reader of the raw bytes without the `zip` crate, from Craft Anything, for inspectors that must describe damaged archives rather than refuse them: the central-directory listing with ZIP64, prepended-stub and multi-volume checks, CP437 and Info-ZIP Unicode Path names, and entry reads (stored, DEFLATE, and bzip2, LZMA, XZ and Zstandard behind `lenient-*` features) checked against the declared size and CRC-32.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared

@@ -15,6 +15,7 @@ craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
+craft-ssip = { path = "crates/ssip" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
 craft-render-parity = { path = "crates/render-parity" }
@@ -95,6 +96,7 @@ craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
+craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
 craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
