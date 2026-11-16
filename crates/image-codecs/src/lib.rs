@@ -225,11 +225,12 @@ pub fn decode_png_rows<E: From<CodecError>>(
 }
 
 /// The upright pixel size [`decode`] would return, read from the file's header without decoding
-/// pixels, for WebP, OpenEXR (flat), AVIF (with `avif-decode`) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same
-/// header reads and size checks as the decoder (default [`Limits`]) and swaps the size for an
-/// EXIF orientation of 5–8 (AVIF: its container's `clap` and `irot`), so wherever [`decode`]
-/// succeeds the two agree. Other formats (and deep EXR) return [`CodecError::Unsupported`]: decode
-/// those to learn their size.
+/// pixels, for PNG, JPEG, TIFF (the page [`decode`] opens), WebP, OpenEXR (flat), AVIF (with
+/// `avif-decode`) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same header reads and size
+/// checks as the decoder (default [`Limits`]) and swaps the size for an orientation of 5–8 (EXIF,
+/// the TIFF page's own tag, or AVIF's container `clap` and `irot`), so wherever [`decode`]
+/// succeeds the two agree. Other formats (and deep EXR) return [`CodecError::Unsupported`]:
+/// decode those to learn their size.
 pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     if !caps(format).read {
@@ -237,6 +238,12 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     }
     let l = &Limits::default();
     let (w, h, exif) = match format {
+        Format::Png => png::probe(bytes, l)?,
+        Format::Jpeg => jpeg::probe(bytes, l)?,
+        Format::Tiff => {
+            let (w, h, o) = tiff::probe(bytes, l)?;
+            return Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) });
+        }
         Format::WebP => webp::probe(bytes, l)?,
         Format::OpenExr => exr::probe(bytes, l).map(|(w, h)| (w, h, None))?,
         #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
