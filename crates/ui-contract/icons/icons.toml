@@ -36,7 +36,7 @@ stroke_drawings = [
     "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
     "distribute-right", "distribute-top", "distribute-vcenter", "distribute-vertical", "eraser-background",
     "eraser-magic", "extract-clip", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
-    "gradient-radial", "gradient-reflected", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
+    "gradient-radial", "gradient-reflected", "gradient-swatch", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
     "key-ease-in", "key-ease-out", "key-hold", "key-linear", "key-linear-filled", "keyframe-auto-bezier",
     "keyframe-bezier", "keyframe-ease-in", "keyframe-ease-out", "keyframe-easy-ease", "keyframe-hold",
     "keyframe-linear", "lasso", "lasso-magnetic", "lasso-select", "layer-mask", "lift-clip", "lollipop", "mark-in",
@@ -1292,7 +1292,7 @@ tabler = "square-x"  # near: box with small X, not corner to corner
 [[icon]]
 name = "gradient"
 directional = false
-phosphor = "gradient"
+phosphor = "gradient-swatch"
 carbon = "gradient"
 
 [[icon]]
