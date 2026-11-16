@@ -69,6 +69,8 @@ pub use half::f16;
 
 #[cfg(feature = "sgi")]
 use crate::codecs::sgi;
+#[cfg(feature = "sunraster")]
+use crate::codecs::sunraster;
 use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
@@ -108,6 +110,16 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::SunRaster => {
+            #[cfg(feature = "sunraster")]
+            {
+                sunraster::decode(bytes, l)
+            }
+            #[cfg(not(feature = "sunraster"))]
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
         Format::Sgi => {
             #[cfg(feature = "sgi")]
             {
@@ -500,6 +512,16 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
         Format::Iff => iff::encode(image, plan),
+        Format::SunRaster => {
+            #[cfg(feature = "sunraster")]
+            {
+                sunraster::encode(image, plan)
+            }
+            #[cfg(not(feature = "sunraster"))]
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
         Format::Sgi => {
             #[cfg(feature = "sgi")]
             {
