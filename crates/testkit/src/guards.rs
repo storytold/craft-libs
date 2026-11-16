@@ -2258,8 +2258,10 @@ const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55"
 ///
 /// On Unix the open does not follow a symbolic link (`O_NOFOLLOW`) and does not wait for a writer on a
 /// FIFO (`O_NONBLOCK`), and the type is then read from the opened file, so a file replaced between a
-/// directory listing and the open is checked as it is when opened. On other platforms a path that is a
-/// symbolic link is skipped before the open, and the opened file must be a regular file.
+/// directory listing and the open is checked as it is when opened. On Windows the open does not follow
+/// a reparse point (`FILE_FLAG_OPEN_REPARSE_POINT`), so an opened symbolic link or junction is the link
+/// itself and returns `Ok(None)`. On other platforms a
+/// path that is a symbolic link is skipped before the open, and the opened file must be a regular file.
 #[cfg(not(target_arch = "wasm32"))]
 fn open_regular_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
     #[cfg(unix)]
@@ -2269,7 +2271,9 @@ fn open_regular_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
             .map(std::fs::File::from)
             .map_err(std::io::Error::from)
     };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let opened = open_without_following(path);
+    #[cfg(not(any(unix, windows)))]
     let opened = {
         if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
             return Ok(None);
@@ -2285,14 +2289,38 @@ fn open_regular_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
     Ok(file.metadata()?.file_type().is_file().then_some(file))
 }
 
+/// The Win32 `FILE_FLAG_OPEN_REPARSE_POINT` flag: open a reparse point itself instead of its target.
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+/// Open `path` for reading without following a reparse point: a symbolic link or junction opens as the
+/// link itself.
+#[cfg(windows)]
+fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)
+}
+
+/// The Win32 `FILE_ATTRIBUTE_REPARSE_POINT` attribute of a file that is a reparse point.
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+
 /// Whether `dir` holds a `CACHEDIR.TAG` regular file that starts with [`CACHEDIR_SIGNATURE`]. A marker
 /// that is a symbolic link, a folder, a FIFO or another special file is not read and does not count.
+/// On Windows a marker that is a reparse point of any kind, cloud placeholders included, does not count.
 #[cfg(not(target_arch = "wasm32"))]
 fn is_cache_dir(dir: &Path) -> bool {
     use std::io::Read;
     let Ok(Some(file)) = open_regular_file(&dir.join("CACHEDIR.TAG")) else {
         return false;
     };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if !file.metadata().is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0) {
+            return false;
+        }
+    }
     let mut head = Vec::with_capacity(CACHEDIR_SIGNATURE.len());
     file.take(CACHEDIR_SIGNATURE.len() as u64).read_to_end(&mut head).is_ok() && head == CACHEDIR_SIGNATURE
 }
@@ -2310,7 +2338,8 @@ fn is_cache_dir(dir: &Path) -> bool {
 ///   name starts with `.`, or that holds a `CACHEDIR.TAG` regular file starting with the signature line
 ///   `Signature: 8a477f597d28d172789f06886806bc55` (a build output folder with another name). A
 ///   `CACHEDIR.TAG` that is a symbolic link or a special file such as a FIFO is not read, and its folder
-///   is listed.
+///   is listed. On Windows a `CACHEDIR.TAG` that is a reparse point of any kind, cloud placeholders
+///   included, does not mark its folder either.
 /// * Symbolic links (and, on Windows, junctions) to files or folders, which are not followed.
 ///
 /// Results are sorted lexicographically by file path for deterministic behavior across platforms.
@@ -2400,10 +2429,10 @@ mod tests {
     }
 
     /// A new empty folder under the system temporary folder, removed when dropped.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     struct TempDir(std::path::PathBuf);
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     impl TempDir {
         fn new(tag: &str) -> Self {
             let path = std::env::temp_dir().join(format!("craft-testkit-unit-{tag}-{}", std::process::id()));
@@ -2413,14 +2442,14 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn open_regular_file_opens_a_regular_file() {
         let dir = TempDir::new("open_regular");
@@ -2456,6 +2485,47 @@ mod tests {
             }
         }
         assert!(super::open_regular_file(&fifo).expect("open").is_none());
+        assert!(!super::is_cache_dir(&dir.0));
+    }
+
+    /// A file symbolic link to `target` at `link`, or `None` with a printed note when this account may not
+    /// create symbolic links.
+    #[cfg(windows)]
+    fn windows_file_symlink(target: &std::path::Path, link: &std::path::Path) -> Option<()> {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => Some(()),
+            Err(err) => {
+                eprintln!("skipped: symbolic links cannot be created here ({err})");
+                None
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn open_without_following_opens_the_link_itself() {
+        let dir = TempDir::new("open_no_follow");
+        let target = dir.0.join("target.tag");
+        std::fs::write(&target, super::CACHEDIR_SIGNATURE).expect("write target");
+        let link = dir.0.join("CACHEDIR.TAG");
+        if windows_file_symlink(&target, &link).is_none() {
+            return;
+        }
+        let opened = super::open_without_following(&link).expect("open");
+        assert!(opened.metadata().expect("metadata").file_type().is_symlink());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_symlinked_cachedir_tag_does_not_mark_its_folder() {
+        let dir = TempDir::new("tag_symlink");
+        let target = dir.0.join("target.tag");
+        std::fs::write(&target, super::CACHEDIR_SIGNATURE).expect("write target");
+        let link = dir.0.join("CACHEDIR.TAG");
+        if windows_file_symlink(&target, &link).is_none() {
+            return;
+        }
+        assert!(super::open_regular_file(&link).expect("open").is_none());
         assert!(!super::is_cache_dir(&dir.0));
     }
 
