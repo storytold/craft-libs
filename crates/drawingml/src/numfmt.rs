@@ -837,11 +837,11 @@ fn date_text(toks: &[DTok], v: f64, date_1904: bool, dec: char) -> String {
     let subs = toks.iter().find_map(|t| if let DTok::Frac(n) = t { Some((*n).min(3)) } else { None }).unwrap_or(0);
     let shows_sec = toks.iter().any(|t| matches!(t, DTok::Sec(_) | DTok::Elapsed('s', _)));
     let exact = v * 86_400_000.0;
-    // Seconds that show are rounded once, to what shows (a hundredth of a millisecond of slack
+    // Seconds that show are rounded once, to what shows (0.01 ms of slack
     // absorbs the float error of the serial); without them the time is cut, not rounded.
     let ms = if shows_sec || subs > 0 {
         let unit = 10i64.pow(3 - subs as u32);
-        ((exact / unit as f64 + 0.5 + 1e-5).floor() as i64) * unit
+        (((exact + 0.01) / unit as f64 + 0.5).floor() as i64) * unit
     } else {
         exact.round() as i64
     };
@@ -1204,7 +1204,12 @@ mod tests {
 
     #[test]
     fn seconds_round_once_from_the_serial() {
-        check(&[("ss", 0.4996 / 86_400.0, "00"), ("ss", 0.5004 / 86_400.0, "01"), ("ss.0", 0.04996 / 86_400.0, "00.0")]);
+        check(&[
+            ("ss", 0.4996 / 86_400.0, "00"),
+            ("ss", 0.5004 / 86_400.0, "01"),
+            ("ss.0", 0.04996 / 86_400.0, "00.0"),
+            ("ss.00", 45_292.0 + 0.005 / 86_400.0, "00.01"),
+        ]);
     }
 
     #[test]
