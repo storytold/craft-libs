@@ -81,7 +81,7 @@ impl<'a> AgentsPage<'a> {
         let env = Env::of(ui);
         let words = env.words::<AgentsWords>();
         let units = env.units();
-        let app = env.host().map_or("", |host| host.app().name);
+        let app = env.view().host().map_or("", |host| host.app().name);
         let key = |name: &str| format!("{page}.{name}");
         let defaults = AgentSettings::default();
         let mut changed = false;
