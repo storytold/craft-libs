@@ -69,8 +69,11 @@ fn row(content: &str) -> String {
     format!("<w:tr>{content}</w:tr>")
 }
 
-/// (parent, number of preceding structural children, tag, sorted attributes), in XML order.
-fn markers(xml: &str) -> Vec<(String, usize, String, Vec<(String, String)>)> {
+/// A bookmark marker: parent, preceding structural child count, tag and sorted attributes.
+type Marker = (String, usize, String, Vec<(String, String)>);
+
+/// Collect bookmark markers in XML order.
+fn markers(xml: &str) -> Vec<Marker> {
     use quick_xml::events::Event;
     let mut r = quick_xml::Reader::from_str(xml);
     let mut stack: Vec<(String, usize)> = Vec::new();
