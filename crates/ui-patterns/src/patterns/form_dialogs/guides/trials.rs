@@ -129,3 +129,45 @@ fn a_new_guide_remembers_its_confirmed_values_for_the_next_open() {
     reopen(&mut fixture);
     assert_eq!(*values.borrow(), NewGuideValues::new(Axis::Y, typed, GuideColor::Magenta), "Cancel stored nothing: the OK'd values come back");
 }
+
+/// Position text that does not parse keeps OK from making a guide at the last good position: nothing is made and the
+/// dialog stays open until the text is a number.
+#[trial]
+fn position_text_that_does_not_parse_keeps_ok_from_making_a_guide() {
+    let open = Rc::new(Cell::new(true));
+    let made: Rc<RefCell<Vec<Guide>>> = Rc::default();
+    let enabled = Rc::new(Cell::new(true));
+    let (opened, seen, ok_seen) = (Rc::clone(&open), Rc::clone(&made), Rc::clone(&enabled));
+    let mut values = NewGuideValues::new(Axis::X, 30.0, GuideColor::Magenta);
+    let mut fixture = Fixture::new(move |ui| {
+        let units = GuideUnits::new(UnitKind::Pixels, 3000.0, 2000.0, 300.0);
+        let mut is_open = opened.get();
+        let shown = NewGuideDialog::new(units, Bind::bound(&mut values)).opened(Bind::bound(&mut is_open)).show(ui);
+        opened.set(is_open);
+        ok_seen.set(shown.ok_enabled);
+        seen.borrow_mut().extend(shown.result);
+    });
+    fixture.settle();
+    let position = fixture.by_label("Position").expect("the Position field");
+    fixture.click(&position).settle();
+    fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
+    fixture.type_text("far");
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    assert!(!enabled.get(), "OK is disabled while the text does not parse");
+    let ok = fixture.by_label("OK").expect("the footer has OK");
+    fixture.click(&ok).settle();
+    assert!(open.get(), "the dialog stays open");
+    assert!(made.borrow().is_empty(), "no guide is made at the last good position");
+
+    let position = fixture.by_label("Position").expect("the Position field");
+    fixture.click(&position).settle();
+    fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
+    fixture.type_text("40");
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    assert!(enabled.get(), "a number enables OK again");
+    let ok = fixture.by_label("OK").expect("the footer has OK");
+    fixture.click(&ok).settle();
+    assert!(!open.get(), "OK closes the dialog");
+    let confirmed: Vec<_> = made.borrow().iter().map(|guide| guide.position).collect();
+    assert_eq!(confirmed, [40.0]);
+}
