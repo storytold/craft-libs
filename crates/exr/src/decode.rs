@@ -515,18 +515,23 @@ impl<'s> ReadChannels<'s> for DisplaySelect<'_> {
                 u32s: vec![],
             });
         }
-        // The EXR crate decompresses each accepted block before `read_block` can discard ignored
-        // channels. Bound that all-channel input separately from the selected output planes.
-        let Some(block_bytes) = layer_w
-            .checked_mul(layer_h)
-            .and_then(|pixels| pixels.checked_mul(header.channels.list.len().max(1)))
-            .and_then(|samples| samples.checked_mul(std::mem::size_of::<f32>()))
-        else {
+        // The EXR crate decompresses each accepted block, with every channel, before `read_block`
+        // can discard the ignored ones, so bound that all-channel block separately from the
+        // selected output planes. Blocks are decompressed one at a time, so the bound is the
+        // largest block (a tile within the data window, or a scan-line group across it), not the
+        // whole part: a part whose full channel set is larger than `max_bytes` still decodes when
+        // the kept planes and each block fit.
+        let block_pixels = match header.blocks {
+            exr::meta::BlockDescription::Tiles(tiles) => tiles.tile_size.0.min(layer_w).checked_mul(tiles.tile_size.1.min(layer_h)),
+            // a part shorter than its compression's scan-line group has only its own rows
+            exr::meta::BlockDescription::ScanLines => header.compression.scan_lines_per_block().min(layer_h).checked_mul(layer_w),
+        };
+        let Some(block_bytes) = block_pixels.and_then(|pixels| pixels.checked_mul(header.channels.bytes_per_pixel.max(1))) else {
             self.block_limit.set(Some(format!("data-window block size exceeds {}", self.limits.max_bytes)));
             return Err(exr::error::Error::Invalid("data-window block size overflow".into()));
         };
         if u64::try_from(block_bytes).map_or(true, |bytes| bytes > self.limits.max_bytes) || block_bytes > isize::MAX as usize {
-            self.block_limit.set(Some(format!("{block_bytes} data-window bytes exceed {}", self.limits.max_bytes)));
+            self.block_limit.set(Some(format!("{block_bytes} bytes in one data-window block exceed {}", self.limits.max_bytes)));
             return Err(exr::error::Error::Invalid("data-window blocks exceed limit".into()));
         }
         let pixels = display_w.checked_mul(display_h).filter(|n| *n > 0).ok_or(exr::error::Error::Invalid("display window".into()))?;

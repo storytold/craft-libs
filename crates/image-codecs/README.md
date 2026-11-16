@@ -1,9 +1,10 @@
 # craft-image-codecs
 
 Codecs for flat raster image formats, written in pure Rust. This crate defines its own `Image`
-type and shares its baseline and extended JPEG decoders through `craft-jpeg`, and its optional
-HEIF decoder through `craft-heif`. It builds for `wasm32-unknown-unknown` and does no filesystem
-I/O: decoders take `&[u8]` and encoders return `Vec<u8>`.
+type and shares its baseline and extended JPEG decoders through `craft-jpeg`, its optional HEIF
+decoder through `craft-heif`, and its optional AVIF decoder through `craft-video`'s AV1 decoder.
+It builds for `wasm32-unknown-unknown` and does no filesystem I/O: decoders take `&[u8]` and
+encoders return `Vec<u8>`.
 
 It follows the "Avoiding GIMP's hole" rules in `docs/architecture.md` §1.1:
 
@@ -56,7 +57,10 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
-| AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
+| Sun Raster (`.ras`) | with feature `sunraster` (incl. RLE and colour maps) | with feature `sunraster` (uncompressed) | U8 | Gray, RGB, RGBA | yes | no | no | no | no | no | no | `sunraster` (off by default) |
+| SGI (`.sgi`, `.rgb`, `.bw`) | with feature `sgi` | with feature `sgi` (RLE) | U8, U16 | Gray, Gray+A, RGB, RGBA | yes | no | no | no | no | no | no | `sgi` (off by default) |
+| JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
+| AVIF | with feature `avif-decode` (native only) | only with feature `avif` | U8, U16 (10/12-bit decodes to U16; PQ/HLG to linear F32) | RGB, RGBA | yes (auxiliary alpha) | read (`colr` prof/rICC) | read | read | no | no | yes | `craft-video` AV1 decoder; `image` + `ravif` to write |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
 "Native" means the data is stored and read back without conversion. Anything else is converted by
@@ -177,10 +181,20 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   decodes to RGB. Image sequences, overlays and identity derivations, multilayer HEVC and some
   4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
-* **AVIF.** Encoding uses `ravif`, which is pure Rust. Decoding
-  needs `dav1d`, which is C. AVIF is therefore read-unsupported, and write support is gated
-  behind the non-default `avif` feature. In a default build it is neither readable nor writable,
-  so the symmetric guarantee holds. It is listed in `ASYMMETRIC_EXCEPTIONS`.
+* **AVIF.** Encoding uses `ravif`, which is pure Rust, behind the non-default `avif` feature.
+  Decoding (`codecs::avif_decode`, behind the non-default `avif-decode` feature) reads the HEIF
+  boxes itself and decodes the AV1 pictures with `craft-video`'s clean-room pure-Rust AV1 decoder:
+  one `av01` image or a `grid`, 8/10/12-bit, 4:2:0/4:2:2/4:4:4/monochrome, the `nclx` colour (or
+  the sequence header's) and an ICC profile, an `auxl` alpha plane (`prem` too), the Exif and XMP
+  items, and `clap`/`irot`/`imir`, which are applied unless `keep_orientation` is set, as for HEIF.
+  PQ and HLG open as linear light in F32, as HEIF does. Image sequences (animated AVIF), depth and
+  gain-map auxiliary images and layered progressive images aren't read. It is bounded like the
+  other decoders: the `Limits` are checked against the declared size before any picture decodes,
+  against every picture and every output buffer, `max_alloc` caps the AV1 decoder's picture store,
+  box, item and extent counts are capped, item data can't exceed the file, and a decoder panic is
+  `CodecError::Malformed`. wasm32 builds leave AVIF unreadable, since a panic there aborts. In a
+  default build AVIF is neither readable nor writable, so the symmetric guarantee holds; a build
+  with only one of the two features is listed in `ASYMMETRIC_EXCEPTIONS`.
 * **Lossy WebP.** Lossless (VP8L, via `image-webp`) is the default. `webp_lossless: false`
   writes a lossy file with our own clean-room VP8 key-frame encoder (`codecs::vp8`, from
   RFC 6386; `webp_quality` 0–100 on libwebp's scale sets the quantizer). Alpha travels losslessly
@@ -302,9 +316,11 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 `DecodeOptions { limits: Limits { max_width, max_height, max_pixels, max_alloc }, .. }` guards
 decoding. Header dimensions are checked before the pixel buffer is allocated, and the budget is
 also passed to the underlying decoders. A violation returns `CodecError::LimitExceeded`. The
-defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
+defaults are 262144 px per side, 2^30 pixels and 8 GiB (1 GiB on 32-bit targets such as wasm).
 PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
+`Image::to_rgba_f32(&limits)` checks its output buffer against the same `Limits` and returns
+`CodecError::LimitExceeded` before allocating when the RGBA f32 copy would exceed them.
 PNG `cICP` and `cLLI` values are retained as image color metadata. `encode_png_pq` writes linear-light
 Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the required chunks.
 
@@ -324,3 +340,25 @@ Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the r
 
 If `corpus/pngsuite/*.png` exists at the repo root, every file in it is compared against the
 `image` crate's decoder. Without it, that test is skipped.
+
+With the `corpus` feature, the deep EXR test reads `11.deep.exr`, `42.deep.exr`, `64.deep.exr`,
+`multivariate.deep.exr` and `objectid.deep.exr` from `corpus/exr/` at the repo root. These are the
+deep test images in `src/test/bin/test_images` of the
+[OpenEXR repository at commit `69b2604fc76e370615438bdc8d2cd95b9349c12e`](https://github.com/AcademySoftwareFoundation/openexr/tree/69b2604fc76e370615438bdc8d2cd95b9349c12e/src/test/bin/test_images).
+The test checks each file against the SHA-256 pinned in `REAL_FILE_SHA256` in
+`tests/it/deep_exr.rs` before decoding it, and fails when a file is missing, is not a regular
+file, is larger than 4 MiB or does not match. It reads no other file in the folder. To fill the
+folder, copy the five files from that commit into `corpus/exr/`, or run
+`cargo xtask corpus --exr` in a checkout of [PhotoCraft](https://github.com/storytold/PhotoCraft)
+at commit `74330157cb601573ae4523a95bb9132822fc3918` and copy its `corpus/exr/` here, as CI does.
+The images are not committed here; OpenEXR distributes them under its
+[license](https://github.com/AcademySoftwareFoundation/openexr/blob/69b2604fc76e370615438bdc8d2cd95b9349c12e/LICENSE.md).
+
+## Redistribution notices
+
+JPEG encoding uses `jpeg-encoder` 0.6.1, including work from the Independent JPEG Group.
+Retain this crate's [NOTICE](NOTICE) with binary distributions using that encoder. It includes
+its MIT license, the IJG acknowledgement and original IJG/SIMD notices. Both upstream license
+alternatives and source checksums are retained in
+[`licenses/jpeg-encoder-0.6.1`](https://github.com/storytold/craft-libs/tree/main/licenses/jpeg-encoder-0.6.1)
+at the repository root.

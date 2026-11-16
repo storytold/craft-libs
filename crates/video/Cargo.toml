@@ -34,6 +34,8 @@ mpeg2-encode = ["mpeg2-decode"]
 # MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder.
 mpeg4 = ["mpeg4-encode"]
 mpeg4-encode = ["craft-media/bitstream"]
+# FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
+ffv1 = []
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
 # H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
@@ -52,13 +54,18 @@ vp9-encode = ["craft-media/isobmff"]
 av1 = ["av1-decode", "av1-encode"]
 av1-decode = []
 av1-encode = ["craft-media/isobmff"]
+# Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
+av1-large-encode = ["av1-encode", "dep:rav1e"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
-threads = ["dep:rayon"]
+threads = ["dep:rayon", "rav1e?/threading"]
 
 [dependencies]
 craft-media = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rav1e = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
@@ -137,6 +144,10 @@ required-features = ["mpeg4-encode"]
 [[test]]
 name = "mpeg2"
 required-features = ["mpeg2-decode"]
+
+[[test]]
+name = "ffv1"
+required-features = ["ffv1"]
 
 [[test]]
 name = "prores"
