@@ -148,7 +148,7 @@ fn a_leaf_at_a_degenerate_rect_neither_panics_nor_changes_its_value() {
 /// The wheel over a value control in a scrolling panel (a slider, a number field, a select) scrolls the panel while the
 /// control has no focus; it steps the control once the control has focus, or without focus inside a `WheelScope::Free`
 /// scope (an adjustment dialog, an options bar). An outer `WheelScope::Gated` scope (a card in the Overview) wins over a
-/// free one inside it.
+/// free one inside it. A trackpad steps the control only while it has focus, in a free scope too.
 #[trial]
 fn the_wheel_steps_a_value_control_when_focused_or_freed_and_otherwise_scrolls_the_panel() {
     use craft_ui::contract::{ContainerProps, Entry, Scroll, ShowContainer as _};
@@ -169,7 +169,7 @@ fn the_wheel_steps_a_value_control_when_focused_or_freed_and_otherwise_scrolls_t
 
     /// How far the value and the panel moved after one wheel turn over `control`, shown in the scopes `scopes`
     /// (outer first) inside the panel.
-    fn turned(control: Control, scopes: &[WheelScope], focused: bool) -> (f64, f32) {
+    fn turned(control: Control, scopes: &[WheelScope], focused: bool, turn: fn(f32) -> egui::Event) -> (f64, f32) {
         fn nested(ui: &mut Ui, scopes: &[WheelScope], body: &mut dyn FnMut(&mut Ui)) {
             match scopes.split_first() {
                 Some((scope, inner)) => with_env(ui, |set| set.wheel = Some(*scope), |ui| nested(ui, inner, body)),
@@ -215,21 +215,71 @@ fn the_wheel_steps_a_value_control_when_focused_or_freed_and_otherwise_scrolls_t
         }
         let (value_before, top_before) = (*value.borrow(), top.get());
         frames.frame(vec![pointer::moved(rect.center())], &mut show);
-        frames.frame(vec![pointer::wheel(-40.0)], &mut show);
+        frames.frame(vec![turn(-40.0)], &mut show);
         frames.idle(2, &mut show);
         (*value.borrow() - value_before, top_before - top.get())
     }
 
     for control in [Control::Slider, Control::Number, Control::Select] {
-        let (value, panel) = turned(control, &[], false);
+        let (value, panel) = turned(control, &[], false, pointer::wheel);
         assert!(value == 0.0 && panel > 0.0, "{control:?} unfocused: the panel scrolls and the value stays ({value}, {panel})");
-        let (value, panel) = turned(control, &[], true);
+        let (value, panel) = turned(control, &[], true, pointer::wheel);
         assert!(value != 0.0 && panel == 0.0, "{control:?} focused: it steps and the panel stays ({value}, {panel})");
-        let (value, panel) = turned(control, &[WheelScope::Free], false);
+        let (value, panel) = turned(control, &[WheelScope::Free], false, pointer::wheel);
         assert!(value != 0.0 && panel == 0.0, "{control:?} in a free scope: it steps unfocused ({value}, {panel})");
-        let (value, panel) = turned(control, &[WheelScope::Gated, WheelScope::Free], false);
+        let (value, panel) = turned(control, &[WheelScope::Gated, WheelScope::Free], false, pointer::wheel);
         assert!(value == 0.0 && panel > 0.0, "{control:?}: a gated scope wins over a free one inside it ({value}, {panel})");
+        let (value, panel) = turned(control, &[WheelScope::Free], false, pointer::trackpad);
+        assert!(value == 0.0 && panel > 0.0, "{control:?} in a free scope: a trackpad scrolls the panel unfocused ({value}, {panel})");
+        let (value, panel) = turned(control, &[WheelScope::Free], true, pointer::trackpad);
+        assert!(value != 0.0 && panel == 0.0, "{control:?} focused: a trackpad steps it ({value}, {panel})");
     }
+}
+
+/// A wheel gesture that starts over a free control (the font field in an options bar) steps it; once the pointer
+/// leaves, the gesture is no longer the control's, and coming back over it in the same gesture does not step it again.
+#[trial]
+fn a_wheel_gesture_that_leaves_a_free_control_does_not_step_it_on_coming_back() {
+    use craft_ui::contract::{ContainerProps, Entry, Scroll, ShowContainer as _};
+    use craft_ui::pickers::Select;
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    use craft_ui::testing::layout::{Block, in_region};
+    use craft_ui_test_kit::body::Slab;
+    use std::cell::Cell;
+
+    let entries: Vec<Entry<u8>> = (40..=60).map(|n| Entry::new(n, format!("{n} pt"))).collect();
+    let pick = RefCell::new(50_u8);
+    let select = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 200.0)), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, _| {
+                with_env(
+                    ui,
+                    |set| set.wheel = Some(WheelScope::Free),
+                    |ui| select.set(Select::new("Size", Bind::bound(&mut *pick.borrow_mut()), &entries).show(ui).response.rect),
+                );
+                Block::new(Vec2::new(100.0, 1000.0)).show(ui);
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    let on = select.get().center();
+    let off = on + Vec2::new(0.0, 80.0);
+    assert!(!select.get().contains(off), "the off point lies outside the select: {:?}", select.get());
+    // One gesture, each event well inside the gap of the one before; the panel is at its top, so the upward scroll
+    // moves nothing once the gesture is the panel's.
+    frames.frame(vec![pointer::moved(on)], &mut show);
+    frames.frame(vec![pointer::wheel(40.0)], &mut show);
+    let stepped = *pick.borrow();
+    assert_eq!(stepped.abs_diff(50), 1, "the gesture's start over the free select steps it once");
+    frames.frame(vec![pointer::moved(off)], &mut show);
+    frames.frame(vec![pointer::wheel(40.0)], &mut show);
+    frames.frame(vec![pointer::moved(on)], &mut show);
+    frames.frame(vec![pointer::wheel(40.0)], &mut show);
+    frames.frame(vec![pointer::wheel(40.0)], &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(*pick.borrow(), stepped, "coming back over the select in the same gesture does not step it again");
 }
 
 #[trial]

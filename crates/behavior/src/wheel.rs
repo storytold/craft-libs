@@ -28,6 +28,28 @@ pub enum WheelPhase {
     Cancel,
 }
 
+/// The device a wheel event came from, where the system says (egui reports it on macOS only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum WheelSource {
+    /// The system does not say.
+    #[default]
+    Unknown,
+    /// A physical wheel.
+    Wheel,
+    /// Fingers on a trackpad or a touch surface.
+    Trackpad,
+    /// The system continuing a finger scroll after the fingers lifted.
+    Momentum,
+}
+
+impl WheelSource {
+    /// Whether fingers drive the scroll: a trackpad or its momentum.
+    pub const fn fingers(self) -> bool {
+        matches!(self, WheelSource::Trackpad | WheelSource::Momentum)
+    }
+}
+
 use crate::Sense;
 use craft_keymap::Mods;
 use emath::{Pos2, Rect, Vec2};
@@ -46,6 +68,8 @@ pub struct Wheel {
     pub unit: WheelUnit,
     /// The gesture phase.
     pub phase: WheelPhase,
+    /// The device; a trackpad steps only a value control that is focused or armed (`split`).
+    pub source: WheelSource,
     /// Where the pointer was; a zoom is about this point. In screen points as the wheel service splits the wheel; a
     /// component's `take_wheel` hands it in the component's layer space.
     pub at: Option<Pos2>,
@@ -63,7 +87,7 @@ pub struct Wheel {
 impl Wheel {
     /// A scroll of `scroll` points with no zoom.
     pub const fn new(scroll: Vec2, mods: Mods, unit: WheelUnit, phase: WheelPhase) -> Self {
-        Wheel { scroll, zoom: 1.0, mods, unit, phase, at: None, zooms: false, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0 }
+        Wheel { scroll, zoom: 1.0, mods, unit, phase, source: WheelSource::Unknown, at: None, zooms: false, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0 }
     }
 
     /// The same gesture with zoom factor `zoom`.
@@ -87,6 +111,12 @@ impl Wheel {
     /// The same gesture with the two-finger touch rotation `radians`.
     pub const fn touch_rotation(mut self, radians: f32) -> Self {
         self.touch_rotation = radians;
+        self
+    }
+
+    /// The same gesture from `source`.
+    pub const fn source(mut self, source: WheelSource) -> Self {
+        self.source = source;
         self
     }
 
@@ -379,9 +409,12 @@ const fn scroll_only(wheel: Wheel) -> Wheel {
 /// field reads it itself, so no taker gets it. A running `gesture` (an event at `now` less than [`GESTURE_GAP`] after
 /// its last one, inside its device phase) keeps the taker it started on: each scroll axis that taker takes goes to it
 /// wherever the pointer is, and the rest by position to a taker that is no value control (`WheelTaker::value`), so a
-/// control the pointer passes over does not take the scroll over. A new gesture splits by position: each axis of `wheel` goes to the innermost
-/// taker under `at` that takes it; a share no taker takes, or that a scroll region at its end in that direction cannot
-/// move, passes to the next enclosing one. A gated taker takes no axis unless it is `focused` or `armed`. Shift turns a
+/// control the pointer passes over does not take the scroll over. A value control that is not the focused field keeps
+/// its gesture only while the pointer is over it: when the pointer leaves, it gets a zero-scroll `WheelPhase::End`
+/// share and the gesture goes on by position without it. A new gesture splits by position: each axis of `wheel` goes
+/// to the innermost taker under `at` that takes it; a share no taker takes, or that a scroll region at its end in that
+/// direction cannot move, passes to the next enclosing one. A gated taker takes no axis unless it is `focused` or
+/// `armed`, and a trackpad (`WheelSource::fingers`) opens a value control only then. Shift turns a
 /// vertical wheel sideways when its vertical owner is a scroll region. When the innermost open taker under `at` for the
 /// vertical share is a zoom zone, the share goes to the innermost open zoom taker enclosing it, with `Wheel::zooms`
 /// set; without one the zone is passed over. The pinch, touch zoom and rotations travel only in the zoom share, which
@@ -402,8 +435,18 @@ pub fn split<O: Copy + PartialEq>(
     if !running {
         *gesture = WheelGesture::default();
     }
-    let latch = running.then_some(gesture.owner);
     let field = focus.taker.filter(|focused| takers.iter().any(|taker| taker.field && taker.owner == *focused));
+    // A value control keeps its gesture only while the pointer is over it: once the pointer leaves, the gesture goes
+    // on by position as a running one (value controls excluded) and the control hears its end now, so its edit run
+    // commits and coming back in the same gesture does not step it again.
+    let left = gesture
+        .owner
+        .filter(|owner| running && field != Some(*owner))
+        .filter(|owner| takers.iter().any(|taker| taker.owner == *owner && taker.value && !taker.rect.contains(at)));
+    if left.is_some() {
+        gesture.owner = None;
+    }
+    let latch = running.then_some(gesture.owner);
     let mut shares = if (field.is_some() || focus.app_field) && wheel.scroll != Vec2::ZERO && for_field(&wheel) {
         let mut shares =
             if pinches(&wheel) { split_at(takers, at, Wheel { scroll: Vec2::ZERO, ..wheel }, focus.taker, armed, latch) } else { Vec::new() };
@@ -421,6 +464,9 @@ pub fn split<O: Copy + PartialEq>(
     gesture.last = now;
     if gesture.owner.is_none() {
         gesture.owner = shares.first().map(|(owner, _)| *owner);
+    }
+    if let Some(owner) = left {
+        shares.insert(0, (owner, Wheel { scroll: Vec2::ZERO, phase: WheelPhase::End, ..scroll_only(wheel) }));
     }
     if matches!(wheel.phase, WheelPhase::End | WheelPhase::Cancel) {
         gesture.device_ended = true;
@@ -447,7 +493,11 @@ fn split_at<O: Copy + PartialEq>(
     // Takers register outer first, so among equal areas the later one is the deeper (or the upper) and goes first.
     let mut under: Vec<&WheelTaker<O>> = takers.iter().rev().filter(|taker| taker.rect.contains(at)).collect();
     under.sort_by(|a, b| a.rect.area().total_cmp(&b.rect.area()));
-    let open = |taker: &WheelTaker<O>| !taker.gated || armed == Some(taker.owner) || focused == Some(taker.owner);
+    // A trackpad steps a value control only while it is focused or armed: over anything else it scrolls the panel.
+    let fingers = wheel.source.fingers();
+    let open = |taker: &WheelTaker<O>| {
+        (!taker.gated && !(fingers && taker.value)) || armed == Some(taker.owner) || focused == Some(taker.owner)
+    };
     // The running gesture's owner, while it is registered and open; it takes its axes wherever the pointer is. A
     // focused field holds the wheel by the field rule alone, so a wheel with Alt or Cmd/Ctrl still reaches the view.
     let held: Option<&WheelTaker<O>> = latch

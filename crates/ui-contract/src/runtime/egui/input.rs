@@ -4,10 +4,10 @@ use super::control_click::ControlClick;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::pen::PenPass;
 use craft_behavior::one_press::split_after_first_press;
-use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerSample, WheelPhase, WheelUnit};
+use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerSample, WheelPhase, WheelSource, WheelUnit};
 use craft_host::target::Os;
 use craft_keymap::{KeyInput, Mods};
-use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
+use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
 
 pub use egui::RawInput;
 
@@ -395,17 +395,18 @@ pub(crate) fn hit_targets(ctx: &Context) -> (Option<Id>, Option<Id>) {
 }
 
 /// The wheel input of the pass: the summed scroll in points (`line` and `page` points per line and page), the
-/// last event's unit, phase and modifiers. `None` when no wheel event arrived.
+/// last event's unit, phase and modifiers, and the device: fingers when any event of the pass came from them. `None`
+/// when no wheel event arrived.
 ///
 /// A wheel event's modifiers are the windowing layer's modifier state, which on Windows can miss a held Alt while the
 /// Alt key's own press and release still arrive: Alt counts as held from its key's press to its release, starting from
 /// whether it was down before the pass's first Alt key event (egui's held keys when the pass has none).
-pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, WheelUnit, WheelPhase, Mods)> {
+pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, WheelUnit, WheelPhase, Mods, WheelSource)> {
     let os = crate::runtime::windows::os_of(ctx);
     let zoom_modifier = ctx.options(|options| options.input_options.zoom_modifier);
     let is_alt = |key: &Key| matches!(key, Key::AltLeft | Key::AltRight);
     ctx.input(|input| {
-        let mut read: Option<(Vec2, WheelUnit, WheelPhase, Mods)> = None;
+        let mut read: Option<(Vec2, WheelUnit, WheelPhase, Mods, WheelSource)> = None;
         // A repeat means the key was already down; a release means it was down until then.
         let mut alt_key = input
             .raw
@@ -422,7 +423,7 @@ pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, W
             {
                 alt_key = *pressed;
             }
-            if let Event::MouseWheel { unit, delta, modifiers, phase, .. } = event {
+            if let Event::MouseWheel { unit, delta, modifiers, phase, source } = event {
                 let (unit, points) = match unit {
                     MouseWheelUnit::Point => (WheelUnit::Point, 1.0),
                     MouseWheelUnit::Line => (WheelUnit::Line, line),
@@ -438,7 +439,17 @@ pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, W
                 let share = if modifiers.matches_any(zoom_modifier) { Vec2::ZERO } else { *delta * points };
                 let sum = read.map_or(Vec2::ZERO, |(sum, ..)| sum) + share;
                 let held = egui::Modifiers { alt: modifiers.alt || alt_key, ..*modifiers };
-                read = Some((sum, unit, phase, Mods::from_egui(&held, os)));
+                let source = match source {
+                    MouseWheelSource::Unknown => WheelSource::Unknown,
+                    MouseWheelSource::Wheel => WheelSource::Wheel,
+                    MouseWheelSource::Trackpad => WheelSource::Trackpad,
+                    MouseWheelSource::Momentum => WheelSource::Momentum,
+                };
+                let source = match read {
+                    Some((.., before)) if before.fingers() && !source.fingers() => before,
+                    _ => source,
+                };
+                read = Some((sum, unit, phase, Mods::from_egui(&held, os), source));
             }
         }
         read
