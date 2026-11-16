@@ -438,7 +438,10 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                             *d = 0;
                         }
                         let pad = " ".repeat(conts.get(lv).copied().unwrap_or(0));
-                        let text = escape_lines(body).replace("\\\n", &format!("\\\n{pad}"));
+                        let text = match p.kind {
+                            Kind::Heading(n) => format!("{} {}", "#".repeat(n.clamp(1, 6) as usize), heading_text(&body)),
+                            _ => escape_lines(body).replace("\\\n", &format!("\\\n{pad}")),
+                        };
                         out.push(format!("{pad}{text}").trim_end().to_string());
                         out.push(String::new());
                     }

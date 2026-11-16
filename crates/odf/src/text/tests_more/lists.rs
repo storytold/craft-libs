@@ -366,3 +366,44 @@ fn a_further_paragraph_opening_or_closing_a_section_ends_the_list_there() {
     let (open, header) = (c.find("<text:section"), c.find(">Header<"));
     assert!(open.is_some() && header.is_some() && open < header, "the section opens before Header: {c}");
 }
+
+/// A heading (`text:h`) in a list item is one of its further paragraphs: it stays in its item in
+/// HTML, Markdown and ODT written from the model, and the list numbers on after it.
+#[test]
+fn a_heading_in_a_list_item_stays_in_it() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_X}><office:body><office:text><text:list text:style-name="L"><text:list-item><text:p>One</text:p><text:h text:outline-level="2">Head</text:h><text:p>After</text:p></text:list-item><text:list-item><text:p>Two</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let html = craft_html::doc::export(&d);
+    assert_eq!(html.matches("<ol").count(), 1, "{html}");
+    assert!(html.contains("<li>One<h2>Head</h2><p>After</p></li>"), "{html}");
+    let md = craft_markdown::export(&d);
+    assert!(md.contains("1. One\n\n   ## Head\n\n   After\n\n2. Two"), "{md}");
+    // Edited, so the list is written from the model.
+    let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "One")).unwrap();
+    d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+    let out = export(&d).unwrap();
+    let c = crate::text::tests::content_of(&out);
+    assert!(c.contains("Edited One</text:p><text:h"), "{c}");
+    assert!(c.contains(">Head</text:h>"), "{c}");
+    assert!(c.contains("After</text:p></text:list-item><text:list-item>"), "{c}");
+    let back = import(&out).unwrap();
+    let rows: Vec<_> =
+        back.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.is_some(), p.props.list_item)).collect();
+    assert_eq!(
+        rows,
+        [
+            ("Edited One".to_string(), true, None),
+            ("Head".to_string(), false, Some(0)),
+            ("After".to_string(), false, Some(0)),
+            ("Two".to_string(), true, None)
+        ],
+        "{c}"
+    );
+    let head = back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Head").unwrap();
+    assert_eq!(head.props.style.as_deref(), Some("Heading2"), "{c}");
+}

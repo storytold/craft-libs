@@ -709,7 +709,7 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
                     {
                         // A code block, quote or heading in the item joins the item's last
                         // paragraph, a sublist's included, with a line break: it is no item of
-                        // its own, and the writers keep only plain paragraphs in an item.
+                        // its own, and only a plain paragraph is read as a further one.
                         prev.push_text("\n", &Fmt::default());
                         prev.inlines.extend(p.inlines);
                         continue;

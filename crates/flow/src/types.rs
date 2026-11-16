@@ -1098,9 +1098,11 @@ pub fn clean_text(s: &str) -> String {
 
 /// Whether the paragraph at `i` in `blocks` is a list item's further paragraph, and the level of
 /// its item: HTML and Markdown keep it in its item, so the list doesn't start again after it.
+/// A plain paragraph or a heading (ODF's `text:h` may sit in a list item); the writers have no
+/// way to put the other kinds in an item.
 pub fn continues_list(blocks: &[FBlock], i: usize) -> Option<u8> {
     match blocks.get(i) {
-        Some(FBlock::Para(p)) if p.list.is_none() && p.kind == Kind::Normal => p.item.map(|l| l.min(8)),
+        Some(FBlock::Para(p)) if p.list.is_none() && matches!(p.kind, Kind::Normal | Kind::Heading(_)) => p.item.map(|l| l.min(8)),
         _ => None,
     }
 }
