@@ -486,6 +486,11 @@ impl SwatchEdit {
     pub fn delete(swatch: String) -> Self {
         SwatchEdit::Delete { swatch }
     }
+
+    /// Moves the group named `group` to position `to`.
+    pub fn move_group(group: String, to: usize) -> Self {
+        SwatchEdit::MoveGroup { group, to }
+    }
 }
 
 impl SwatchLibrary {

@@ -144,6 +144,18 @@ pub enum HistoryEvent {
     NewDocument,
 }
 
+impl HistoryEvent {
+    /// Renames snapshot `snapshot` to `text`.
+    pub fn rename(snapshot: u64, text: impl Into<String>) -> Self {
+        HistoryEvent::Rename { snapshot, text: text.into() }
+    }
+
+    /// Asks for a new snapshot with `mods` held.
+    pub const fn new_snapshot(mods: Mods) -> Self {
+        HistoryEvent::NewSnapshot { mods }
+    }
+}
+
 /// What [`HistoryPanel`] reports.
 #[non_exhaustive]
 pub struct HistoryPanelOutput {
