@@ -132,7 +132,8 @@ impl Outcome for ParamDialogOutput {
 /// buttons and a footer note.
 ///
 /// - Keys: Tab walks the fields, Enter is OK unless a field owns it, Escape cancels. Holding Alt turns Cancel into
-///   Reset, which restores the values from when the dialog opened (or `reset_to`) and keeps the dialog open.
+///   Reset, which restores the values from when the dialog opened, with `reset_to`'s over them, and keeps the dialog
+///   open. Keys added since the open (a host's own data without a row) go.
 /// - Values: the `values` binding holds them; without one the dialog keeps its own between passes. The first pass
 ///   fills the parameters' defaults and, with `remember`, the values saved by [`ParamResult::remember`].
 /// - Preview: a dialog that `previews` has the Preview check box; the host renders from the reported values while
@@ -181,8 +182,8 @@ pub struct ParamDialog<'a> {
     /// Whether the body is one collection that owns the scroll (a browse list): the dialog's own body scroll is off.
     #[prop]
     collection_body: bool,
-    /// The values Reset sets, instead of the values from when the dialog opened. Keys the target lacks keep their
-    /// value.
+    /// The values Reset sets over the values from when the dialog opened: keys it lacks take their opening value, and
+    /// keys added since the open go.
     #[prop]
     reset_to: Option<DialogFields>,
     /// Where the preview pane sits.
@@ -455,14 +456,16 @@ impl<'a> ParamDialog<'a> {
             .collection_body(collection_body)
             .closable(closable)
             .accept_stays_open(hold)
-            .answers(answers)
-            .reset_with(move |current, opened| {
-                let mut values = current.clone();
-                for (name, value) in reset_to.as_ref().unwrap_or(opened).iter() {
+            .answers(answers);
+        if let Some(reset_to) = reset_to {
+            form = form.reset_with(move |_, opened| {
+                let mut values = opened.clone();
+                for (name, value) in reset_to.iter() {
                     values.set(name, value.clone());
                 }
                 values
             });
+        }
         if let Some(reason) = ok_reason {
             form = form.ok_reason(reason);
         }

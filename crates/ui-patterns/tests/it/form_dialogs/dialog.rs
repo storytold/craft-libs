@@ -414,9 +414,10 @@ fn enter_on_a_focused_cancel_cancels_the_form() {
     assert!(matches!(closed, Some((reason, false)) if !matches!(reason, CloseReason::Activated | CloseReason::Enter)), "Enter cancels: {closed:?}");
 }
 
-// Alt turns Cancel into Reset, which sets the `reset_to` keys and leaves the keys `reset_to` lacks as they are.
+// Alt turns Cancel into Reset, which restores the opening values with the `reset_to` ones over them: a key `reset_to`
+// lacks returns to its opening value, and a key without a row added since the open goes.
 #[trial]
-fn alt_reset_sets_the_reset_to_values_and_keeps_the_other_keys() {
+fn alt_reset_restores_the_opening_values_with_the_reset_to_values_over_them() {
     let values = Rc::new(RefCell::new(DialogFields::new()));
     let shown = values.clone();
     let mut fixture = Fixture::new(move |ui| {
@@ -426,16 +427,20 @@ fn alt_reset_sets_the_reset_to_values_and_keeps_the_other_keys() {
             .show(ui);
     });
     fixture.settle();
+    let opening = values.borrow().bool("smooth");
     let smooth = fixture.by_label("Smooth").expect("the smooth row has a check box");
     fixture.click(&smooth).settle();
-    assert_eq!(values.borrow().bool("smooth"), Some(true));
+    assert_ne!(values.borrow().bool("smooth"), opening);
+    values.borrow_mut().set("points", FieldValue::Int(3));
+    fixture.settle();
 
     fixture.hold(Modifiers::ALT).idle(2);
     let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
     fixture.click(&reset).idle(2);
     fixture.hold(Modifiers::NONE).settle();
     assert_eq!(values.borrow().number("radius"), Some(50.0), "Reset sets the reset_to value");
-    assert_eq!(values.borrow().bool("smooth"), Some(true), "Reset keeps a key reset_to lacks");
+    assert_eq!(values.borrow().bool("smooth"), opening, "a key reset_to lacks returns to its opening value");
+    assert!(!values.borrow().contains("points"), "a key without a row set since the open goes");
     assert!(fixture.by_label("Blur").is_some(), "Reset keeps the dialog open");
 }
 
