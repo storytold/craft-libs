@@ -33,7 +33,8 @@ pub enum RawFormat {
     Nv12,
     /// Luma only (`Y800`, `GREY`, `Y8  `).
     Gray8,
-    /// 24-bit R, G, B; rows unpadded (QuickTime `raw ` at depth 24).
+    /// 24-bit R, G, B; rows padded to an even byte count (QuickTime `raw ` at depth 24). A sample
+    /// too short for the padding is read with unpadded rows.
     Rgb24,
     /// 10-bit 4:2:2 Y'CbCr, six pixels in four little-endian words, rows padded to 128 bytes
     /// (QuickTime `v210`); shown at 8 bits.
@@ -42,8 +43,9 @@ pub enum RawFormat {
 
 impl RawFormat {
     /// The layout of an AVI video stream: `BI_RGB` with its bit count, or a YUV FourCC.
+    /// `BI_BITFIELDS` needs its colour masks, so it goes through [`Self::from_avi_bitfields`].
     pub fn from_avi(compression: [u8; 4], bit_count: u16) -> Option<RawFormat> {
-        if matches!(u32::from_le_bytes(compression), 0 | 3) {
+        if u32::from_le_bytes(compression) == 0 {
             return match bit_count {
                 24 => Some(RawFormat::Bgr24),
                 32 => Some(RawFormat::Bgrx32),
@@ -61,6 +63,12 @@ impl RawFormat {
             b"Y800" | b"GREY" | b"GRAY" | b"Y8  " => RawFormat::Gray8,
             _ => return None,
         })
+    }
+
+    /// The layout of an AVI `BI_BITFIELDS` stream: only 32-bit with the masks that make it B, G, R, X
+    /// (R `0x00ff_0000`, G `0x0000_ff00`, B `0x0000_00ff`). Other masks are a different byte order.
+    pub fn from_avi_bitfields(bit_count: u16, [r, g, b]: [u32; 3]) -> Option<RawFormat> {
+        (bit_count == 32 && (r, g, b) == (0x00ff_0000, 0x0000_ff00, 0x0000_00ff)).then_some(RawFormat::Bgrx32)
     }
 
     /// The layout of a QuickTime / MP4 video sample entry (`raw ` RGB at depth 24, `2vuy`, `v210`).
@@ -109,13 +117,17 @@ pub fn decode(format: RawFormat, width: u32, height: u32, bottom_up: bool, s: &[
             RawPixels::Rgba(rgba)
         }
         RawFormat::Rgb24 => {
-            let stride = w * 3;
+            // QuickTime starts each scanline on an even byte, so odd widths carry one pad byte
+            let padded = (w * 3).next_multiple_of(2);
+            let stride = if s.len() >= padded * h { padded } else { w * 3 };
             if s.len() < stride * h {
                 return Err(short());
             }
             let mut rgba = Vec::with_capacity(w * h * 4);
-            for px in s.get(..stride * h).unwrap_or_default().as_chunks::<3>().0 {
-                rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+            for row in s.chunks_exact(stride).take(h) {
+                for px in row[..w * 3].as_chunks::<3>().0 {
+                    rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+                }
             }
             RawPixels::Rgba(rgba)
         }
@@ -241,7 +253,10 @@ mod tests {
         ] {
             assert_eq!(RawFormat::from_avi(cc, 0), Some(want));
         }
-        assert_eq!(RawFormat::from_avi(3u32.to_le_bytes(), 32), Some(RawFormat::Bgrx32));
+        assert_eq!(RawFormat::from_avi(3u32.to_le_bytes(), 32), None);
+        assert_eq!(RawFormat::from_avi_bitfields(32, [0x00ff_0000, 0x0000_ff00, 0x0000_00ff]), Some(RawFormat::Bgrx32));
+        assert_eq!(RawFormat::from_avi_bitfields(32, [0x0000_00ff, 0x0000_ff00, 0x00ff_0000]), None);
+        assert_eq!(RawFormat::from_avi_bitfields(24, [0x00ff_0000, 0x0000_ff00, 0x0000_00ff]), None);
         assert_eq!(RawFormat::from_avi([0; 4], 16), None);
         assert_eq!(RawFormat::from_avi(*b"H264", 0), None);
         assert_eq!(RawFormat::from_mov(*b"raw ", 24), Some(RawFormat::Rgb24));
@@ -264,6 +279,9 @@ mod tests {
     #[test]
     fn rgb_v210_and_planar_layouts_decode() -> Result<(), Error> {
         assert_eq!(decode(RawFormat::Rgb24, 1, 1, false, &[1, 2, 3])?, RawPixels::Rgba(vec![1, 2, 3, 255]));
+        // odd width: each row carries one pad byte
+        assert_eq!(decode(RawFormat::Rgb24, 1, 2, false, &[1, 2, 3, 0, 4, 5, 6, 0])?, RawPixels::Rgba(vec![1, 2, 3, 255, 4, 5, 6, 255]));
+        assert_eq!(decode(RawFormat::Rgb24, 2, 1, false, &[1, 2, 3, 4, 5, 6])?, RawPixels::Rgba(vec![1, 2, 3, 255, 4, 5, 6, 255]));
         assert_eq!(decode(RawFormat::Bgrx32, 1, 1, false, &[1, 2, 3, 9])?, RawPixels::Rgba(vec![3, 2, 1, 255]));
         // v210: Cb, Y0, Cr in the first word, Y1 in the low bits of the second; rows are 128 bytes.
         let mut row = vec![0u8; 128];
