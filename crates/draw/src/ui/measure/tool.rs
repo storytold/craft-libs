@@ -2,10 +2,10 @@
 //! line from a press on the background and moves the whole line with the arrow keys.
 
 use super::model::{MIN_LINE, RulerLine, RulerPart};
-use super::overlay::{RulerOverlay, moved, reading_text};
+use super::overlay::{RulerOverlay, moved, reading_text, ruler_cursor, translated};
 use super::words::RulerWords;
 use craft_behavior::kurbo::Point;
-use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed};
+use craft_behavior::{CancelReason, Cursor, EditEvent, GestureId, Mixed};
 use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::StraightLinePreview;
 use craft_ui::contract::{Bind, Show as _};
@@ -31,7 +31,9 @@ struct Drag {
 /// - **Events:** the line's changes, in order, from [`take_events`](Self::take_events) after the host has run: the
 ///   overlay's edits and the tool's. A drag is `Begin`, `Update`s and `Commit` (`Cancel` on Escape); a key press is a
 ///   `Set`. The app stores the value; it is not an undo step.
-/// - **Cursor:** the crosshair.
+/// - **Cursor:** the Ruler's arrow with a ruler; the crosshair while the canvas shows precise cursors. Over an end
+///   with Alt the overlay shows the protractor ([`RulerOverlay`]).
+/// - Under the other tools the app draws the line with [`show_ruler`].
 #[derive(Debug, Default)]
 pub struct RulerTool {
     drag: Option<Drag>,
@@ -68,10 +70,7 @@ impl RulerPass<'_> {
     pub fn show_line(&mut self, ui: &mut Ui, rect: Rect) {
         let Some(line) = self.line else { return };
         let words = craft_ui::runtime::env::Env::of(ui).words::<RulerWords>();
-        StraightLinePreview::new(words.group.clone(), line.start, line.end).show_at(ui, rect);
-        if let Some(arm) = line.protractor {
-            StraightLinePreview::new(words.protractor.clone(), line.start, arm).show_at(ui, rect);
-        }
+        show_lines(ui, rect, line, &words);
         let mut shown = Some(line);
         let edit = RulerOverlay::new(words.group.clone(), Bind::bound(&mut shown)).show_at(ui, rect);
         if !edit.events.is_empty() {
@@ -102,19 +101,32 @@ impl RulerPass<'_> {
         if by.hypot() == 0.0 {
             return false;
         }
-        let by = by / by.hypot() * step;
-        let mut next = line;
-        next.start += by;
-        next.end += by;
-        next.protractor = line.protractor.map(|arm| arm + by);
+        let next = translated(line, by / by.hypot() * step);
         self.report(Some(next), EditEvent::set(Mixed::Same(Some(line)), Some(next), Self::label(cx), None));
         true
     }
 }
 
+/// The Ruler line and its protractor arm.
+fn show_lines(ui: &mut Ui, rect: Rect, line: RulerLine, words: &RulerWords) {
+    StraightLinePreview::new(words.group.clone(), line.start, line.end).show_at(ui, rect);
+    if let Some(arm) = line.protractor {
+        StraightLinePreview::new(words.protractor.clone(), line.start, arm).show_at(ui, rect);
+    }
+}
+
+/// Draws the Ruler `line` read only over the canvas `rect`: the line, the protractor arm and the crosses at its
+/// points, taking no press, key or focus. The app calls it in the canvas body while another tool is active (the ruler
+/// stays drawn until View > Extras hides it); under the Ruler tool, [`RulerPass::show_line`] draws it.
+pub fn show_ruler(ui: &mut Ui, rect: Rect, line: RulerLine) {
+    let words = craft_ui::runtime::env::Env::of(ui).words::<RulerWords>();
+    show_lines(ui, rect, line, &words);
+    let _ = RulerOverlay::new(words.group.clone(), Bind::given(Some(line))).read_only(true).show_at(ui, rect);
+}
+
 impl CanvasTool for RulerPass<'_> {
-    fn cursor(&self, _: &ToolContext<'_>) -> Cursor {
-        Cursor::System(CursorIcon::Crosshair)
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        ruler_cursor(cx.precise(), false)
     }
 
     /// Starts a new line at the press (Begin).

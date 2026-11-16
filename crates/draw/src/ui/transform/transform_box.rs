@@ -217,6 +217,13 @@ struct Grip {
     last: BoxState,
 }
 
+impl Grip {
+    /// Whether the box follows the pointer inside the slop: every part whose click means nothing.
+    fn follows_in_slop(&self) -> bool {
+        self.part != BoxPart::Outside && !self.moves_pivot
+    }
+}
+
 impl Default for Grip {
     fn default() -> Self {
         let none = BoxState::from_rect(DocRect::ZERO);
@@ -535,27 +542,35 @@ impl<'a> TransformBox<'a> {
                     let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
                     held = Some(Grip { part, start: begin, from, began: false, moves_pivot, last: *shown });
                 }
+                // Inside the slop the box follows every move of a part whose click means nothing, so it does not jump
+                // when the drag is recognised. Outside (a click applies) and an Alt pivot press (a click sets the
+                // pivot) start at the drag.
+                PressPhase::Held { start, pos, .. } => {
+                    let Some(mut grip) = held else { continue };
+                    if !self.rules.allows(grip.part) || !grip.follows_in_slop() || (!grip.began && pos == start.origin) {
+                        continue;
+                    }
+                    if !grip.began {
+                        cx.begin();
+                        grip.began = true;
+                    }
+                    self.follow(cx, space, snap.as_ref(), &mut grip, pos, mods);
+                    held = Some(grip);
+                }
                 PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => {
                     let Some(mut grip) = held else { continue };
                     if !self.rules.allows(grip.part) {
                         continue;
                     }
-                    if matches!(press.phase, PressPhase::DragStart { .. }) {
+                    if matches!(press.phase, PressPhase::DragStart { .. }) && !grip.began {
                         cx.begin();
                         grip.began = true;
                     }
                     if !grip.began {
                         continue;
                     }
-                    let (next, lines) = self.proposal(space, snap.as_ref(), &grip, pos, mods);
-                    self.report.snapped = lines;
-                    grip.last = next;
+                    self.follow(cx, space, snap.as_ref(), &mut grip, pos, mods);
                     held = Some(grip);
-                    cx.propose(next);
-                    let rows = self.readout_rows(cx, space, grip.part, &next, &grip.start);
-                    readout(&*cx, pos, &rows);
-                    let cursor = self.cursor(&CursorLook { space, screen: &on_screen(&space.view, &next), style }, grip.part, pos, mods, true);
-                    cx.cursor(cursor, CursorPriority::Drag);
                 }
                 PressPhase::Release { start, click, .. } => {
                     // A double click inside applies, whether or not the first press of the release was seen.
@@ -576,6 +591,20 @@ impl<'a> TransformBox<'a> {
             }
         }
         *cx.press_slot::<Grip>() = held;
+    }
+
+    /// One step of a begun grip with the pointer at `pos`: the proposal and its snap lines, the readout and the drag
+    /// cursor.
+    fn follow(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, snap: Option<&Snap>, grip: &mut Grip, pos: Pos2, mods: Mods) {
+        let style = cx.style;
+        let (next, lines) = self.proposal(space, snap, grip, pos, mods);
+        self.report.snapped = lines;
+        grip.last = next;
+        cx.propose(next);
+        let rows = self.readout_rows(cx, space, grip.part, &next, &grip.start);
+        readout(&*cx, pos, &rows);
+        let cursor = self.cursor(&CursorLook { space, screen: &on_screen(&space.view, &next), style }, grip.part, pos, mods, true);
+        cx.cursor(cursor, CursorPriority::Drag);
     }
 
     /// The session keys: the arrows nudge the picked part (the whole box when no part has focus), Enter applies and

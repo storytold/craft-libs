@@ -370,3 +370,29 @@ fn a_swatch_table_cell_reports_its_colour_selects_on_click_and_shows_its_name() 
     fixture.settle();
     assert!(fixture.texts().iter().any(|run| run.text == "Red"), "the pointer's rest on a cell shows its name");
 }
+
+/// Whether the Info panel over `measure` shows each of the names "A", "L", "L1", "L2".
+fn measure_names(measure: Option<craft_color::ui::InfoMeasure>) -> [bool; 4] {
+    let mut fixture = Fixture::new(move |ui| {
+        let readings = craft_color::ui::InfoReadings::new().measure(measure.clone()).document(Some([640, 480]));
+        let _ = craft_color::ui::InfoPanel::new("Info", &readings).show(ui);
+    });
+    fixture.settle();
+    ["A", "L", "L1", "L2"].map(|name| fixture.by_label(name).is_some())
+}
+
+#[trial]
+fn the_info_panel_shows_the_rulers_measure_while_it_has_one() {
+    use craft_color::ui::InfoMeasure;
+    assert_eq!(measure_names(Some(InfoMeasure::line("-36.9°", "250.00"))), [true, true, false, false], "a ruler: A and L");
+    assert_eq!(measure_names(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))), [true, false, true, true], "a protractor: A, L1 and L2");
+    assert_eq!(measure_names(None), [false; 4], "no ruler, no measure names");
+    let mut fixture = Fixture::new(|ui| {
+        let readings = craft_color::ui::InfoReadings::new().measure(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))).document(Some([640, 480]));
+        let _ = craft_color::ui::InfoPanel::new("Info", &readings).show(ui);
+    });
+    fixture.settle();
+    for value in ["45.0°", "200.00", "141.42"] {
+        assert!(fixture.by_label(value).is_some(), "the protractor's {value} shows");
+    }
+}

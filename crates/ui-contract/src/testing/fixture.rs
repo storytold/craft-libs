@@ -294,6 +294,13 @@ impl Fixture {
         self.set_root(|root| root.scale = scale)
     }
 
+    /// Sets the root app value of type `T` for every following frame, as an app's `FrameInput.root.values` does.
+    pub fn root_value<T: crate::runtime::env::EnvValue>(&mut self, value: T) -> &mut Self {
+        self.set_root(|root| {
+            root.values.set(value);
+        })
+    }
+
     /// The host every following frame is given: its language, catalogs and services.
     pub fn host(&mut self, host: std::sync::Arc<craft_host::Host>) -> &mut Self {
         self.frames.host(host);

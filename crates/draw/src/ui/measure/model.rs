@@ -103,22 +103,6 @@ impl RulerLine {
         }
     }
 
-    /// The part a press at `at` grabs within `reach` document units: the protractor's end first,
-    /// then the end, then the start (PhotoCraft's order); `None` elsewhere.
-    pub fn part_at(&self, at: Point, reach: f64) -> Option<RulerPart> {
-        // pc: crates/ui-egui/src/tools/analysis_ui.rs:250 (the Down branch's match order).
-        let near = |p: Point| p.distance(at) <= reach;
-        if self.protractor.is_some_and(near) {
-            Some(RulerPart::Protractor)
-        } else if near(self.end) {
-            Some(RulerPart::End)
-        } else if near(self.start) {
-            Some(RulerPart::Start)
-        } else {
-            None
-        }
-    }
-
     /// The numbers of the line. The engine's `ruler_info` duplicates them on PhotoCraft's side
     /// (lead call 19); a PhotoCraft test compares the two.
     pub fn reading(&self) -> RulerReading {

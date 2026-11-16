@@ -1,11 +1,14 @@
-//! [`RulerOverlay`]: the end handles of the Ruler line, a canvas control. Its three points are parts in the canvas's
-//! arena, so a press on one stays with the overlay and a press elsewhere reaches the Ruler tool.
+//! [`RulerOverlay`]: the end handles of the Ruler line, a canvas control. Its three points and the line are parts in
+//! the canvas's arena, so a press on one stays with the overlay and a press elsewhere reaches the Ruler tool.
 
 use super::model::{RulerLine, RulerPart};
 use super::words::RulerWords;
 use craft_behavior::geometry::turn_to_45;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
-use craft_behavior::{Granularity, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense};
+use craft_behavior::{
+    Cursor, CursorIcon, CursorPriority, Granularity, HitLevel, HitPriority, HitShape, IconId, Intent, Metrics, NavShape, PaintedCursor, PartKey,
+    PartRef, PointerButton, PointerGlyph, PressPhase, Roving, Sense,
+};
 use craft_theme::{Stateful, States};
 use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space};
 use craft_ui::contract::{
@@ -20,6 +23,8 @@ use egui::{Rect, Vec2};
 
 /// The part of one point of the line: `POINT.at(RulerPart::index)`.
 pub(super) const POINT: PartKey = PartKey::new("point");
+/// The line between the ends, of a ruler without a protractor: `LINE.at(0)`.
+const LINE: PartKey = PartKey::new("line");
 
 /// The style of the Ruler overlay: a cross at each point in the look of the line (a thin line over a thick halo).
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -33,24 +38,79 @@ pub struct RulerOverlayStyle {
     line: Stateful<StyleColor>,
     /// The halo under the cross, so it reads on any image.
     halo: StyleColor,
-    /// A press within this many screen points of a point grabs it.
+    /// A press within this many screen points of a point on either axis grabs it; within as many of the line, the
+    /// line.
     reach: f32,
 }
 
-/// The point a drag in progress moves, kept until the button comes up.
+/// What a drag in progress moves, kept until the button comes up.
 #[derive(Clone, Copy, Default)]
-struct Grab(Option<RulerPart>);
+struct Grab(Option<Grabbed>);
+
+#[derive(Clone, Copy)]
+enum Grabbed {
+    /// One point.
+    Point(RulerPart),
+    /// The whole ruler: the press in document units and the line then.
+    Whole { from: Point, at_press: RulerLine },
+}
+
+/// A part of the overlay.
+#[derive(Clone, Copy, PartialEq)]
+enum Target {
+    Point(RulerPart),
+    Line,
+}
+
+impl Target {
+    fn reference(self) -> PartRef {
+        match self {
+            Target::Point(part) => POINT.at(part.key()),
+            Target::Line => LINE.at(0),
+        }
+    }
+
+    /// What a primary press on the target grabs: the line, and a protractor's vertex, the whole ruler.
+    fn grabs(self, line: RulerLine, from: Point) -> Grabbed {
+        match self {
+            Target::Line => Grabbed::Whole { from, at_press: line },
+            Target::Point(RulerPart::Start) if line.protractor.is_some() => Grabbed::Whole { from, at_press: line },
+            Target::Point(part) => Grabbed::Point(part),
+        }
+    }
+
+    /// Whether an Alt press on the target starts the protractor arm: an end of a plain ruler, or a protractor's far
+    /// end (the vertex moves the whole protractor).
+    fn starts_arm(self, line: RulerLine) -> bool {
+        matches!(self.grabs(line, Point::ZERO), Grabbed::Point(RulerPart::Start | RulerPart::End))
+    }
+}
+
+/// The Ruler's pointer: the arrow with a ruler, or with a protractor where an Alt press starts the protractor arm;
+/// the crosshair while the canvas shows precise cursors.
+pub(super) fn ruler_cursor(precise: bool, protractor: bool) -> Cursor {
+    if precise {
+        return CursorIcon::Crosshair.into();
+    }
+    PaintedCursor::pointer_tool(PointerGlyph::Arrow, IconId::new(if protractor { "protractor" } else { "ruler" })).into()
+}
 
 /// The Ruler line's points as handles: Start, End and, with a protractor, its free end.
 ///
-/// - **Pointer:** a press within the reach of a point grabs it (the protractor's end first, then the end, then the
-///   start); a drag moves it and Shift puts it on the nearest 45° ray about the fixed end (about the vertex for the
-///   protractor's arm), at the pointer's distance from it. Alt-press on an end starts the protractor arm at that
-///   vertex (the ends swap first when the far end was pressed). Escape puts the line back.
+/// - **Pointer:** a press in the square of the reach around a point grabs it (the protractor's end first, then the
+///   end, then the start); a drag moves it and Shift puts it on the nearest 45° ray about the fixed end (about the
+///   vertex for the protractor's arm), at the pointer's distance from it. Alt-press on an end starts the protractor
+///   arm at that vertex (the ends swap first when the far end was pressed). A press within the reach of a plain
+///   ruler's line, or on a protractor's vertex with or without Alt, moves the whole ruler by the drag; a protractor's
+///   arm lines take no press. Escape puts the line back.
+/// - **Cursor:** the Ruler's arrow with a ruler; with a protractor where an Alt press starts the protractor arm; the
+///   crosshair while the canvas shows precise cursors.
 /// - **Keyboard:** the points are one Tab stop; Page Up and Page Down pick a point, the arrows move it 1 unit and
 ///   Shift 10, Delete and Backspace clear the line.
 /// - It paints a cross at each point, in the line's look; the app shows the line and the arm with `StraightLinePreview`
 ///   ([`RulerPass::show_line`](super::RulerPass::show_line)).
+/// - [Read only](Self::read_only), it paints the crosses at rest and takes no press, key or focus: the ruler drawn
+///   under the other tools ([`show_ruler`](super::show_ruler)).
 /// - **AccessKit:** the group's value reads "Length L, angle A°" in the ruler's units; each point is named and valued
 ///   "x, y" in the ruler's units.
 #[derive(Component, craft_ui::contract::Props)]
@@ -59,13 +119,21 @@ pub struct RulerOverlay<'a> {
     #[common]
     common: Common,
     line: Bind<'a, Option<RulerLine>>,
+    /// Whether the overlay only paints: no parts, no Tab stop, no keys.
+    #[prop]
+    read_only: bool,
 }
 
 impl<'a> RulerOverlay<'a> {
     /// An overlay named `label` over the Ruler `line` (document units).
     pub fn new(label: impl Into<Label>, line: Bind<'a, Option<RulerLine>>) -> Self {
-        RulerOverlay { common: Common::new(), line }.label(label)
+        RulerOverlay { common: Common::new(), line, read_only: false }.label(label)
     }
+}
+
+/// `line` moved by `by` as a whole.
+pub(super) fn translated(line: RulerLine, by: DocVec) -> RulerLine {
+    RulerLine { start: line.start + by, end: line.end + by, protractor: line.protractor.map(|arm| arm + by) }
 }
 
 /// The line with the grabbed `part` moved to `to`, Shift on 45° rays about the fixed point: the end for the start, the
@@ -110,59 +178,87 @@ impl Component for RulerOverlay<'_> {
         Some(self.line.reborrow())
     }
 
-    /// The points: drag parts at handle priority in one roving group, in keyboard order.
+    /// The points: drag parts at handle priority in one roving group, in keyboard order; a plain ruler's line: a drag
+    /// part under them.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        if self.read_only {
+            return;
+        }
         let (Some(space), Some(line)) = (canvas_space(&cx.env), cx.value().copied().flatten()) else { return };
         let reach = cx.style.reach;
         let mut any = false;
         for (sub, part) in [(0u8, RulerPart::Start), (1, RulerPart::End), (2, RulerPart::Protractor)] {
             let Some(at) = line.point(part) else { continue };
-            cx.part(POINT.at(part.key()), HitShape::circle(space.view.to_screen(at), reach))
+            let square = Rect::from_center_size(space.view.to_screen(at), Vec2::splat(2.0 * reach));
+            cx.part(POINT.at(part.key()), HitShape::Rect(square))
                 .sense(Sense::DRAG | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, sub))
-                .cursor(craft_behavior::CursorIcon::Crosshair)
                 .focusable();
             any = true;
         }
         if any {
             cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
         }
+        let (a, b) = (space.view.to_screen(line.start), space.view.to_screen(line.end));
+        let along = b - a;
+        if line.protractor.is_none() && along.length() > 0.0 {
+            let across = along.normalized().rot90() * reach;
+            cx.part(LINE.at(0), HitShape::Polygon(vec![a + across, b + across, b - across, a - across]))
+                .sense(Sense::DRAG)
+                .priority(HitPriority::new(HitLevel::Edge, 0));
+        }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if self.read_only {
+            return;
+        }
         let (Some(space), Some(line)) = (canvas_space(&cx.env), cx.value().copied().flatten()) else { return };
-        for part in [RulerPart::Protractor, RulerPart::End, RulerPart::Start] {
-            let Some(result) = cx.part_if_declared(POINT.at(part.key())) else { continue };
+        let targets = [Target::Point(RulerPart::Protractor), Target::Point(RulerPart::End), Target::Point(RulerPart::Start), Target::Line];
+        for target in targets {
+            let Some(result) = cx.part_if_declared(target.reference()) else { continue };
             let press = result.press;
+            let running = cx.press_slot::<Grab>().is_some_and(|grab| grab.0.is_some());
+            if result.hovered && !press.phase.is_press() && !running {
+                let arm = press.mods.alt && target.starts_arm(line);
+                cx.cursor(ruler_cursor(space.precise(), arm), CursorPriority::Part);
+            }
+            // The line the grab gives with the pointer at `pos`.
+            let at = |grabbed: Grabbed, base: RulerLine, pos: egui::Pos2| match grabbed {
+                Grabbed::Point(part) => moved(base, part, space.view.to_doc(pos), press.mods.shift),
+                Grabbed::Whole { from, at_press } => translated(at_press, space.view.to_doc(pos) - from),
+            };
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
-                    cx.press_slot::<Grab>().replace(Grab(Some(part)));
+                    cx.press_slot::<Grab>().replace(Grab(Some(target.grabs(line, space.view.to_doc(start.origin)))));
                 }
                 PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
-                    let grabbed = cx.press_slot::<Grab>().get_or_insert(Grab(Some(part))).0.unwrap_or(part);
-                    let (base, grabbed) = if press.mods.alt && grabbed != RulerPart::Protractor {
+                    let pressed = target.grabs(line, space.view.to_doc(start.origin));
+                    let grabbed = cx.press_slot::<Grab>().get_or_insert(Grab(Some(pressed))).0.unwrap_or(pressed);
+                    let (base, grabbed) = match grabbed {
                         // Alt at an end starts the protractor arm at that vertex; the far end swaps in first.
-                        let mut base = line;
-                        if grabbed == RulerPart::End {
-                            std::mem::swap(&mut base.start, &mut base.end);
+                        Grabbed::Point(part @ (RulerPart::Start | RulerPart::End)) if press.mods.alt => {
+                            let mut base = line;
+                            if part == RulerPart::End {
+                                std::mem::swap(&mut base.start, &mut base.end);
+                            }
+                            (base.with_protractor(space.view.to_doc(pos)), Grabbed::Point(RulerPart::Protractor))
                         }
-                        (base.with_protractor(space.view.to_doc(pos)), RulerPart::Protractor)
-                    } else {
-                        (line, grabbed)
+                        grabbed => (line, grabbed),
                     };
                     cx.press_slot::<Grab>().replace(Grab(Some(grabbed)));
                     cx.begin();
-                    cx.propose(Some(moved(base, grabbed, space.view.to_doc(pos), press.mods.shift)));
+                    cx.propose(Some(at(grabbed, base, pos)));
                 }
                 PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
-                    if let Some(grabbed) = cx.press_slot::<Grab>().map(|grab| grab.0).flatten() {
-                        cx.propose(Some(moved(line, grabbed, space.view.to_doc(pos), press.mods.shift)));
+                    if let Some(grabbed) = cx.press_slot::<Grab>().and_then(|grab| grab.0) {
+                        cx.propose(Some(at(grabbed, line, pos)));
                     }
                 }
                 PressPhase::Release { start, pos, click, .. } if start.button == PointerButton::Primary => {
                     let grab = cx.press_slot::<Grab>().take();
                     if let Some(grabbed) = grab.and_then(|grab| grab.0).filter(|_| !click) {
-                        cx.propose(Some(moved(line, grabbed, space.view.to_doc(pos), press.mods.shift)));
+                        cx.propose(Some(at(grabbed, line, pos)));
                         cx.commit();
                     }
                 }
@@ -211,6 +307,9 @@ impl Component for RulerOverlay<'_> {
         let units = cx.env.units();
         let rulers = space.rulers();
         access.value(reading_text(&line, &space, &units, &words));
+        if self.read_only {
+            return;
+        }
         for (part, name) in [(RulerPart::Start, &words.start), (RulerPart::End, &words.end), (RulerPart::Protractor, &words.protractor)] {
             let Some(at) = line.point(part) else { continue };
             let value = format!("{}, {}", rulers.x.format_value(&units, at.x, 0.0), rulers.y.format_value(&units, at.y, 0.0));
