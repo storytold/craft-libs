@@ -224,7 +224,7 @@ impl Opened {
     }
 }
 
-/// Photoshop's Brush Preset picker: a closed field showing the current preset's tip with the brush size under it, which opens
+/// Photoshop's Brush Preset picker: a compact chip (`PickerField::Chip`) showing the current preset's tip with the brush size under it, which opens
 /// a popover over [`PresetPicker`].
 ///
 /// - **Head.** While [`BrushPickerValues::tip`] is set, [`TipEllipse`] (angle and roundness) at the start; beside it
@@ -459,7 +459,7 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                 });
             };
             let mut picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), rows, Bind::bound(&mut browser))
-                .field(PickerField::Thumbnail)
+                .field(PickerField::Chip)
                 .caption(env.units().number(values.diameter.round(), 0..=0))
                 .cell_shape(CellShape::Square)
                 .view(if parts.tip_only() { PresetView::Grid } else { PresetView::List })

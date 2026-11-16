@@ -38,6 +38,18 @@ pub struct SelectFaceStyle {
     field: FieldStyle,
 }
 
+/// How a select face is sized.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FaceKind {
+    /// A field: the field's height and padding, a thumbnail at `size.thumb.sm`.
+    #[default]
+    Field,
+    /// A chip on a bar's line: a thumbnail at `size.icon.sm` over its caption and the chevron beside them, with the
+    /// field's padding at the start and end only.
+    Chip,
+}
+
 /// The closed box of a picker: `text` elided to the room left of a trailing chevron. The box is as wide as the text
 /// and the chevron need, at least a field wide; a [fitted](SelectFace::fit) box is at most a field wide and has no
 /// floor; a thumbnail alone takes only its own width. A host shows it as the look of one of its parts with
@@ -68,12 +80,26 @@ pub struct SelectFace<'a> {
     #[style_key]
     #[prop]
     fit: bool,
+    /// How the face is sized: a field, or a chip on a bar's line.
+    #[style_key]
+    #[prop]
+    kind: FaceKind,
 }
 
 impl<'a> SelectFace<'a> {
     /// A face showing `text`, which is also its name.
     pub fn new(text: impl Into<Label>) -> Self {
-        SelectFace { common: Common::new(), placeholder: false, thumb: None, leading: None, thumb_caption: None, name: true, fit: false }.label(text)
+        SelectFace {
+            common: Common::new(),
+            placeholder: false,
+            thumb: None,
+            leading: None,
+            thumb_caption: None,
+            name: true,
+            fit: false,
+            kind: FaceKind::Field,
+        }
+        .label(text)
     }
 
     /// A picture `aspect` times as wide as high before the text; `paint` draws into the picture's rect through the
@@ -122,7 +148,20 @@ impl Component for SelectFace<'_> {
         // A thumbnail alone, and a fitted box, keep the field's padding and height, not the widths a field keeps for
         // its text; `measure` caps a fitted box at the field length.
         let metrics = field.metrics();
-        let metrics = if key.name && !key.fit { metrics } else { metrics.ideal_width(0.0).min_size(Vec2::new(0.0, metrics.min_size.y)) };
+        let chip = key.kind == FaceKind::Chip;
+        let metrics = if key.name && !key.fit && !chip {
+            metrics
+        } else {
+            metrics.ideal_width(0.0).min_size(Vec2::new(0.0, if chip { 0.0 } else { metrics.min_size.y }))
+        };
+        // A chip's thumbnail and caption take the bar's line: no padding above or below them.
+        let metrics = if chip {
+            let mut padding = metrics.padding;
+            (padding.top, padding.bottom) = (0.0, 0.0);
+            metrics.padding(padding)
+        } else {
+            metrics
+        };
         let off = cx.color(cx.tokens.color.text.disabled);
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
         let caption = cx.color(cx.tokens.color.text.muted);
@@ -132,7 +171,7 @@ impl Component for SelectFace<'_> {
             text: TextLook::new(TypeRole::Body, cx.host_ink(ink.clone())),
             placeholder: TextLook::new(TypeRole::Body, cx.host_muted_ink(Stateful::new(muted).off(States::new(muted, muted, muted, off)))),
             chevron: IconLook::new(field.glyph().side, cx.host_ink(ink)),
-            thumb: cx.tokens.size.thumb.sm,
+            thumb: if chip { cx.tokens.size.icon.sm } else { cx.tokens.size.thumb.sm },
             caption: TextLook::new(TypeRole::Caption, cx.host_muted_ink(Stateful::new(caption).off(States::new(caption, caption, caption, off)))),
             caption_gap: cx.tokens.space.gap.tight,
             field,
