@@ -802,6 +802,14 @@ fn an_injected_pen_reading_reaches_the_tool() {
 /// A canvas with the momentary set and `main` as the selected tool, zoomed in, so the document is larger than the
 /// canvas and the Hand has room to pan: returns the fixture, the app's view and the canvas's id.
 fn momentary_canvas(main: Probe) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Id>>) {
+    momentary_canvas_with(main, |_, _| {})
+}
+
+/// `momentary_canvas` with `body` as the canvas's body.
+fn momentary_canvas_with(
+    main: Probe,
+    mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static,
+) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Id>>) {
     let main = RefCell::new(main);
     let (view, canvas) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Id::NULL)));
     let (shown_view, shown_canvas) = (Rc::clone(&view), Rc::clone(&canvas));
@@ -809,7 +817,7 @@ fn momentary_canvas(main: Probe) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<C
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
-        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |_, _| {});
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, &mut body);
         shown_canvas.set(shown.output.response.id);
         let reply = ToolHost::new().momentary(&mut set).run(ui, &shown.output, &mut *main.borrow_mut());
         shown_view.set(Some(reply.view.unwrap_or(current)));
@@ -841,6 +849,46 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
     let calls = log.borrow().clone();
     assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "only the press after the release is the selected tool's: {calls:?}");
     assert!(!calls.iter().any(|call| call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
+}
+
+/// A held Space pans over a session member on the canvas's body: a drag on a crop corner pans the view with the Hand
+/// and leaves the crop as it was; without Space the same drag moves the corner and leaves the view.
+#[trial]
+fn a_held_space_pans_over_a_canvas_control_and_leaves_it_unchanged() {
+    // Around the document's centre, which the zoomed-in view shows.
+    let start = craft_behavior::geometry::CropBox::upright(craft_behavior::kurbo::Rect::new(580.0, 430.0, 620.0, 470.0));
+    let crop = Rc::new(RefCell::new(start.clone()));
+    let shown = Rc::clone(&crop);
+    let log = Log::default();
+    let (mut fixture, view, canvas) = momentary_canvas_with(Probe::new("main", &log), move |ui, body| {
+        let _ = CropOverlay::new("Crop", Bind::bound(&mut *shown.borrow_mut())).show_at(ui, body.rect);
+    });
+    let corner = fixture.by_label("Crop corner, top left").expect("the crop shows its corners").rect.center();
+    let before = view.get().expect("the canvas ran").center;
+    let space = craft_keymap::Key::Space;
+    for input in [
+        ToolInput::hold(space),
+        ToolInput::down(PointerButton::Primary, corner),
+        ToolInput::moved(corner + BY),
+        ToolInput::up(corner + BY),
+        ToolInput::let_go(space),
+    ] {
+        ToolHost::inject(fixture.ctx(), canvas.get(), input);
+    }
+    fixture.run_injected();
+    let panned = view.get().expect("the canvas ran").center;
+    assert_ne!(panned, before, "the press under the held Space pans with the Hand");
+    assert_eq!(*crop.borrow(), start, "the crop stays as it was under the Hand's drag");
+    let calls = log.borrow().clone();
+    assert!(!calls.iter().any(|call| call == "main press" || call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
+
+    let corner = fixture.by_label("Crop corner, top left").expect("the crop shows its corners").rect.center();
+    for input in [ToolInput::down(PointerButton::Primary, corner), ToolInput::moved(corner + BY), ToolInput::up(corner + BY)] {
+        ToolHost::inject(fixture.ctx(), canvas.get(), input);
+    }
+    fixture.run_injected();
+    assert_ne!(*crop.borrow(), start, "without Space the drag moves the corner");
+    assert_eq!(view.get().expect("the canvas ran").center, panned, "the corner's drag leaves the view");
 }
 
 /// A queued Space starts the Hand only where the real key would fire it: with the app's gate refusing the Hand, the
@@ -1117,5 +1165,41 @@ fn a_drag_past_the_canvas_edge_scrolls_the_view_and_a_turned_view_scrolls_on_the
         }
         fixture.frame(vec![pointer::release(Pos2::new(canvas.right() + 25.0, start.y))]);
         assert_eq!(tool.borrow().count(Call::Press), 1, "{:?}", tool.borrow().calls);
+    }
+}
+
+/// A canvas whose app reads the window's intents after the tool host, last in its UI: returns the fixture and how many
+/// Cancels the window took.
+fn window_reading_canvas(tool: impl CanvasTool + 'static) -> (Fixture, Rc<Cell<u32>>) {
+    let tool = RefCell::new(tool);
+    let cancels = Rc::new(Cell::new(0));
+    let seen = Rc::clone(&cancels);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |_, _| {});
+        let _ = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
+        craft_ui::runtime::keys::with_window_intents(ui.ctx(), false, |window| {
+            let took = window.take(craft_behavior::Intent::Cancel);
+            seen.set(seen.get() + u32::from(took));
+            took
+        });
+    });
+    fixture.settle();
+    (fixture, cancels)
+}
+
+/// On a canvas focused by a click, an Escape the tool does not take reaches the window's intents, and one the tool
+/// takes does not.
+#[trial]
+fn a_focused_canvas_leaves_the_cancel_no_tool_took_to_the_window() {
+    for takes in [false, true] {
+        let (mut fixture, cancels) =
+            if takes { window_reading_canvas(Recorder::default()) } else { window_reading_canvas(Probe::new("main", &Log::default())) };
+        let canvas = fixture.by_role(Role::CANVAS).remove(0);
+        fixture.click(&canvas).settle();
+        cancels.set(0);
+        fixture.frame(vec![key_press(Key::Escape, Modifiers::NONE)]).settle();
+        let want = if takes { 0 } else { 1 };
+        assert_eq!(cancels.get(), want, "the window sees the Escape only when the tool leaves it (tool takes it: {takes})");
     }
 }

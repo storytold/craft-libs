@@ -23,9 +23,8 @@ fn icon(name: &'static str) -> Option<SvgIcon> {
     SvgIcon::of(&tokens, Direction::Ltr, 24.0, &IconId::from(std::borrow::Cow::Borrowed(name)), IconSet::default(), Mirror::Auto)
 }
 
-#[expect(clippy::expect_used, reason = "the trials name icons of the built-in set; a missing one fails the trial")]
-fn mask(name: &'static str) -> ColorImage {
-    icon(name).expect("the name resolves").mask(24.0, 1.0)
+fn mask(name: &'static str) -> Option<ColorImage> {
+    icon(name).map(|icon| icon.mask(24.0, 1.0))
 }
 
 #[trial]

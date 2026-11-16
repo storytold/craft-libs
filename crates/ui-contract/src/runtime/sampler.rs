@@ -290,12 +290,14 @@ pub(crate) fn admitted_press(ctx: &Context, at: Pos2) -> bool {
     hole.admits_press(egui::PointerButton::Primary, &modifiers, at)
 }
 
-/// Whether the root `root` may start a press that egui gave no target at `at`: where the canvas answers, only the
-/// armed canvas.
-pub(crate) fn takes_untargeted(ctx: &Context, root: Option<Id>, at: Pos2) -> bool {
+/// Whether the root `root`, shown on `layer`, may start a press at `at`; `untargeted` when egui gave the press no
+/// target. Where the canvas answers, a press with no target is only the armed canvas's. Elsewhere only a root egui's
+/// modal gate lets take input does: egui's hit test still names a widget under a modal layer as the target until the
+/// modal's cover has a rect, so the gate decides, not the target.
+pub(crate) fn root_takes_press(ctx: &Context, root: Option<Id>, layer: Layer, at: Pos2, untargeted: bool) -> bool {
     match hole_of_pass(ctx) {
-        Some(hole) if hole.answers(at) => root == Some(hole.canvas),
-        _ => true,
+        Some(hole) if hole.answers(at) => !untargeted || root == Some(hole.canvas),
+        _ => areas::above_modal_layer(ctx, layer),
     }
 }
 

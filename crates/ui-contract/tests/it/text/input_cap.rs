@@ -143,7 +143,7 @@ fn oversized_text_events_are_cut_before_components_see_them() {
     assert_eq!(composing(&inside), Some((INPUT_TEXT_LIMIT, Some(2..4))), "a range inside the cut stays");
 
     // A paste reaches an app's own focused widget cut too.
-    let field = Id::new("app_field");
+    let field = Id::unique("app_field");
     let pasted = RefCell::new(None);
     let mut frames = Frames::new();
     let mut host = |ui: &mut egui::Ui| {

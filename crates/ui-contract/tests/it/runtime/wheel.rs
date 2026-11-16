@@ -57,7 +57,7 @@ fn a_fractional_ctrl_wheel_is_a_pinch_and_a_whole_notch_stays_a_scroll() {
     for os in [Os::Windows, Os::Linux, Os::Mac] {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let shares = Rc::clone(&seen);
-        let view = Id::new("pinch_view");
+        let view = Id::unique("pinch_view");
         let mut fixture = Fixture::new(move |ui| {
             register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))).vertical(true).zoom(true));
             shares.borrow_mut().extend(take_share(ui.ctx(), view));
@@ -101,9 +101,9 @@ fn a_fractional_ctrl_wheel_is_a_pinch_and_a_whole_notch_stays_a_scroll() {
 
 #[trial]
 fn a_wheel_gesture_ends_for_a_value_control_in_any_wheel_scope_and_not_for_a_scroll_region_or_the_canvas() {
-    let panel = Id::new("gesture_panel");
-    let slider = Id::new("gesture_slider");
-    let canvas = Id::new("gesture_canvas");
+    let panel = Id::unique("gesture_panel");
+    let slider = Id::unique("gesture_slider");
+    let canvas = Id::unique("gesture_canvas");
     let seen: RefCell<Vec<(Id, Wheel)>> = RefCell::new(Vec::new());
     let mut show_frame = |ui: &mut egui::Ui| {
         let ctx = ui.ctx();

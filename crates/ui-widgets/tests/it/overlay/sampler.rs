@@ -364,3 +364,31 @@ fn a_picker_armed_outside_the_dialog_passes_no_press_under_it() {
     assert!(!scene.took(PointerButton::Primary), "the panel's picker passed no press");
     scene.assert_dialog_holds(&frames);
 }
+
+/// A press on the canvas starts there with no dialog, and starts nothing from the first pass a modal dialog shows in:
+/// egui's modal gate leaves the canvas with no press target before the dialog's cover takes the hits.
+#[trial]
+fn a_press_under_a_modal_starts_nothing_on_the_canvas() {
+    let mut frames = Frames::new();
+    let scene = Scene::new(Arm::Nothing);
+    scene.settle(&mut frames, 3);
+    scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
+    assert!(scene.took(PointerButton::Primary) && scene.dragged_canvas(), "with no dialog the press and drag start on the canvas");
+    scene.forget_canvas();
+    scene.open.set(true);
+    while !scene.dialog.shown.get() {
+        scene.frame(&mut frames, vec![]);
+        scene.open.set(false);
+    }
+    let at = CANVAS.center();
+    let press = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    scene.frame(&mut frames, vec![moved(at), press(at, true)]);
+    scene.frame(&mut frames, vec![moved(at + Vec2::new(20.0, 5.0))]);
+    scene.frame(&mut frames, vec![moved(at + Vec2::new(40.0, 10.0))]);
+    scene.frame(&mut frames, vec![press(at + Vec2::new(40.0, 10.0), false)]);
+    scene.settle(&mut frames, 2);
+    assert!(!scene.took(PointerButton::Primary) && !scene.dragged_canvas(), "the press under the dialog started nothing");
+    scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
+    assert!(!scene.took(PointerButton::Primary), "the press stays blocked while the dialog is open");
+    assert!(scene.dialog.shown.get(), "the presses leave the dialog open");
+}

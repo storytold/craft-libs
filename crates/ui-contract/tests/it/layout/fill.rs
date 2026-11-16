@@ -207,8 +207,7 @@ fn in_line() -> [Rect; 3] {
         });
     });
     fixture.room(Vec2::splat(800.0)).settle();
-    let rects = [tall.borrow().rect, held.get(), leaf.borrow().rect];
-    rects
+    [tall.borrow().rect, held.get(), leaf.borrow().rect]
 }
 
 #[trial]

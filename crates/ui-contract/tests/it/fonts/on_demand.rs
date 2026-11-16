@@ -340,7 +340,7 @@ fn the_deflated_defaults_are_eguis_default_faces_and_draw_its_icons() {
         frames.frame(vec![], |_| {});
     }
     for family in [FontId::proportional(14.0), FontId::monospace(14.0)] {
-        for icon in [egui::special_emojis::GITHUB, egui::special_emojis::OS_LINUX] {
+        for icon in [epaint_default_fonts::special_emojis::GITHUB, epaint_default_fonts::special_emojis::OS_LINUX] {
             assert!(frames.ctx.fonts_mut(|f| f.has_glyph(&family, icon)), "{icon} in {:?}", family.family);
         }
     }

@@ -331,12 +331,14 @@ fn background_shape(root: Id, rect: Rect, sense: Sense) -> Shape<Id> {
 
 /// The shapes of last pass in resolution order: the root's own background over its shown rect, which hovers and takes
 /// a press when the root senses one itself, own parts, then members in show order, each member's `over` parts above
-/// the members its body showed, and the own `over` parts at their position among them.
-fn candidates(state: &ArenaState, target: f32) -> Vec<Shape<Id>> {
+/// the members its body showed, and the own `over` parts at their position among them. `members` is false while the
+/// root's host withholds its members (`pointer::withhold_members`).
+fn candidates(state: &ArenaState, members: bool, target: f32) -> Vec<Shape<Id>> {
     let root = state.root.map_or(Id::NULL, |root| root.id);
     let background = state.root.map(|info| background_shape(info.id, info.shown, info.own_sense | Sense::HOVER));
     let mut shapes: Vec<Shape<Id>> = background.into_iter().chain(own_shapes(&state.previous_own, root, target)).collect();
-    for (at, member) in state.previous.iter().enumerate() {
+    let shown = if members { state.previous.as_slice() } else { &[] };
+    for (at, member) in shown.iter().enumerate() {
         shapes.extend(member_shapes(member, member_position(at), target));
         shapes.extend(member_over_shapes(member, target));
     }
@@ -719,8 +721,8 @@ fn press_view(outcome: &Outcome, holds: impl Fn(&Hit) -> bool, clicks: impl Fn(&
 }
 
 /// The resolve rule over last pass's shapes at `point`.
-fn resolve_in(state: &ArenaState, xf: Option<LayerMap>, point: Pos2, kind: ResolveFor, target: f32) -> Option<Hit> {
-    let shapes = candidates(state, target);
+fn resolve_in(state: &ArenaState, members: bool, xf: Option<LayerMap>, point: Pos2, kind: ResolveFor, target: f32) -> Option<Hit> {
+    let shapes = candidates(state, members, target);
     let won = resolve_mapped(&shapes, point, kind, |p| xf.map_or(p, |map| map.to_layer(p)));
     won.map(|winner| Hit { owner: winner.owner, part: winner.part, sense: winner.sense, local: winner.local })
 }
@@ -745,6 +747,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
     // Hover needs the root's layer on top under the pointer, or egui's layer cover (a popup) would be ignored.
     let top = pass_pointer.hover.and_then(|at| areas::layer_at(ctx, at));
     let hover_layer_ok = top.is_some_and(|top| top == layer || Some(top) == body_layer);
+    let members = !pointer::members_withheld(ctx, read.viewport, pass_nr, arena.0);
     let (mut cancelled, mut release_held) = (false, false);
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
         let pos = pos.unwrap_or(Pos2::ZERO);
@@ -759,10 +762,13 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         let mut machine = std::mem::take(&mut state.machine);
         let step = machine.step(input, |at| {
             // The press-target rule: egui's click target decides, its drag target only for a drag-only root; the
-            // root starts a press when that target is its own or there is none.
+            // root starts a press when that target is its own or there is none, and a root whose widgets sense
+            // neither, which egui never names, as where there is none. A root under a modal layer starts none.
+            let root = state.root.map(|root| root.id);
+            let takes = |untargeted| crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted);
             let mine = |id: Option<Id>| match id {
                 Some(id) => state.widgets.contains(&id) || member_widget_of(&state.previous, id),
-                None => crate::runtime::sampler::takes_untargeted(ctx, state.root.map(|root| root.id), at),
+                None => takes(true),
             };
             let targets = pass_pointer.press_targets;
             let allowed = if union_sense.contains(Sense::CLICK) {
@@ -770,20 +776,21 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             } else if union_sense.contains(Sense::DRAG) {
                 mine(targets.drag)
             } else {
-                true
+                mine(None)
             };
             // A root whose own widget is not the click target still starts the press its parts win under it.
-            let allowed = allowed
-                || state
-                    .root
-                    .is_some_and(|own| own.rect.contains(at) && pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own.id));
+            let allowed = takes(false)
+                && (allowed
+                    || state.root.is_some_and(|own| {
+                        own.rect.contains(at) && pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own.id)
+                    }));
             if !enabled || !allowed {
                 return None;
             }
             // egui gives no click target where a drag-only widget is on top (a resize grip over a layer's or a
             // window's edge): a root under it keeps its click there, but a drag is that widget's.
             let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| !mine(Some(id)));
-            resolve_in(state, xf, at, ResolveFor::Press, target)
+            resolve_in(state, members, xf, at, ResolveFor::Press, target)
                 .map(|hit| (hit, if drag_elsewhere { hit.sense.difference(Sense::DRAG) } else { hit.sense }))
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
@@ -791,7 +798,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         let open = machine.target();
         let dragging = step.dragging;
         state.machine = machine;
-        let under = pass_pointer.hover.filter(|_| hover_layer_ok).and_then(|at| resolve_in(state, xf, at, ResolveFor::Hover, target));
+        let under = pass_pointer.hover.filter(|_| hover_layer_ok).and_then(|at| resolve_in(state, members, xf, at, ResolveFor::Hover, target));
         // While a press is open only its target hovers, and only while the pointer is over it or dragging.
         let hover = match open {
             Some(target) if dragging => Some(target),
