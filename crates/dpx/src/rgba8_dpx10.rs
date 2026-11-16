@@ -9,6 +9,14 @@ pub enum Rgba8EncodeError {
     /// The output buffer could not be allocated.
     OutOfMemory,
 }
+/// Reserves the DPX output up front; a failed reservation becomes [`Rgba8EncodeError::OutOfMemory`].
+fn output_buffer(size: usize) -> std::result::Result<Vec<u8>, Rgba8EncodeError> {
+    let mut buf = Vec::new();
+    match buf.try_reserve_exact(size) {
+        Ok(()) => Ok(buf),
+        Err(_) => Err(Rgba8EncodeError::OutOfMemory),
+    }
+}
 fn checked_len(rgba: &[u8], w: u32, h: u32) -> std::result::Result<usize, Rgba8EncodeError> {
     let n = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)).ok_or(Rgba8EncodeError::FrameSize)?;
     if w == 0 || h == 0 || rgba.len() != n {
@@ -86,8 +94,7 @@ pub fn encode_rgba8_dpx10(rgba: &[u8], w: u32, h: u32, creator: &str) -> std::re
     hd[1928] = 0;
     // The caller already holds the frame; reserve the output fallibly so a large export reports
     // an error instead of aborting the process.
-    let mut out = Vec::new();
-    out.try_reserve_exact(size).map_err(|_| Rgba8EncodeError::OutOfMemory)?;
+    let mut out = output_buffer(size)?;
     out.extend_from_slice(&hd);
     let ten = |v: u8| (u32::from(v) << 2) | (u32::from(v) >> 6);
     for &[r, g, b, _] in rgba.as_chunks::<4>().0 {
@@ -106,5 +113,10 @@ mod tests {
         assert_eq!(&bytes[160..169], b"FilmCraft");
         assert_eq!(&bytes[2048..], &((1023u32 << 22) | (514u32 << 2)).to_be_bytes());
         assert_eq!(encode_rgba8_dpx10(&[], 0, 1, ""), Err(Rgba8EncodeError::FrameSize));
+    }
+    #[test]
+    fn output_reservation_failure_maps_to_out_of_memory() {
+        assert!(matches!(output_buffer(usize::MAX), Err(Rgba8EncodeError::OutOfMemory)));
+        assert_eq!(output_buffer(DPX_HEADER).map(|b| b.capacity() >= DPX_HEADER), Ok(true));
     }
 }
