@@ -79,6 +79,8 @@ pub use craft_dwg as dwg;
 pub use craft_dxf as dxf;
 #[cfg(feature = "ecproj-format")]
 pub use craft_ecproj_format as ecproj_format;
+#[cfg(feature = "elf")]
+pub use craft_elf as elf;
 #[cfg(feature = "eps")]
 pub use craft_eps as eps;
 #[cfg(feature = "epub")]
@@ -111,6 +113,8 @@ pub use craft_font_manager as font_manager;
 pub use craft_font_store as font_store;
 #[cfg(feature = "font-subset")]
 pub use craft_font_subset as font_subset;
+#[cfg(feature = "format")]
+pub use craft_format as format;
 #[cfg(feature = "gainmap")]
 pub use craft_gainmap as gainmap;
 #[cfg(feature = "gcode")]
@@ -161,6 +165,8 @@ pub use craft_latex as latex;
 pub use craft_layers as layers;
 #[cfg(feature = "lottie")]
 pub use craft_lottie as lottie;
+#[cfg(feature = "macho")]
+pub use craft_macho as macho;
 #[cfg(feature = "markdown")]
 pub use craft_markdown as markdown;
 #[cfg(feature = "materialx")]
@@ -171,6 +177,8 @@ pub use craft_math as math;
 pub use craft_mcmat as mcmat;
 #[cfg(feature = "mcp")]
 pub use craft_mcp as mcp;
+#[cfg(feature = "mcp-server")]
+pub use craft_mcp_server as mcp_server;
 #[cfg(feature = "media")]
 pub use craft_media as media;
 #[cfg(feature = "menu")]
@@ -207,6 +215,8 @@ pub use craft_pcraft_format as pcraft_format;
 pub use craft_pdf as pdf;
 #[cfg(feature = "pdn")]
 pub use craft_pdn as pdn;
+#[cfg(feature = "pe")]
+pub use craft_pe as pe;
 #[cfg(feature = "penpot")]
 pub use craft_penpot as penpot;
 #[cfg(feature = "pkcs7")]
@@ -261,6 +271,8 @@ pub use craft_silhouette_studio as silhouette_studio;
 pub use craft_sketch as sketch;
 #[cfg(feature = "smime")]
 pub use craft_smime as smime;
+#[cfg(feature = "sniff")]
+pub use craft_sniff as sniff;
 #[cfg(feature = "stencilcraft-document")]
 pub use craft_stencilcraft_document as stencilcraft_document;
 #[cfg(feature = "stencilcraft-format")]
@@ -271,6 +283,8 @@ pub use craft_stream_codecs as stream_codecs;
 pub use craft_svg as svg;
 #[cfg(feature = "table")]
 pub use craft_table as table;
+#[cfg(feature = "tar")]
+pub use craft_tar as tar;
 #[cfg(feature = "tcraft")]
 pub use craft_tcraft as tcraft;
 #[cfg(feature = "text")]

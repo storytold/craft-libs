@@ -11,6 +11,7 @@ pub const NOT_IN_FACADE: &[(&str, &str)] = &[
     ("fonts-build", "a build-script helper; apps call it from build.rs"),
     ("media-testkit", "test support: ffmpeg discovery and fixture locations for the media crates"),
     ("plate-test", "a test harness: reference PDFs and PDF structure checks"),
+    ("render-parity", "test support: compares two renders of a photo against a stated tolerance"),
     ("story-render", "a tool: renders a component's stories to PNG files offscreen"),
     ("ui-bench", "a tool: the release-mode benchmark of the UI library"),
     ("ui-gallery", "a tool: the story gallery application"),
