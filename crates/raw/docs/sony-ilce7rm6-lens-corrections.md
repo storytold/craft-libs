@@ -5,10 +5,13 @@
 Sony cameras record three lens-correction tables in the raw IFD of every ARW: distortion, vignetting and lateral
 chromatic aberration (CA). LightCraft reads them and turns distortion into a DNG `WarpRectilinear` opcode, so it
 reaches the same **Optics ▸ Enable Lens Corrections** (`optics.lens_profile`) as a DNG's embedded warp and Panasonic's
-RW2 distortion data. Lateral CA is parsed and converts to the warp's red and blue planes, but it is **off by default**:
-applied after demosaic it made the render's CA worse (Verification). Vignetting is read but not applied (below). The
-conversion is verified on the **ILCE-7RM6** and, for distortion, the **ILCE-6700** ([ILCE-6700](#ilce-6700)); the
-ILCE-7RM4A has its own conversion, with other conventions
+RW2 distortion data. **Lateral CA is corrected on the raw mosaic, before demosaic** ([Lateral CA before
+demosaic](#lateral-ca-before-demosaic)), for every Bayer ILCE-7RM6 file framed 3:2. Enable Lens Corrections does not
+govern it (it governs distortion only), as Lightroom applies a raw's built-in corrections whatever its profile
+switch says (inferred, as for imported presets' `LensProfileEnable=0`). As the warp's red and blue planes, after
+demosaic, it made the render's CA worse (Verification), so those planes stay off. Vignetting is read but not applied
+(below). The conversion is verified on the **ILCE-7RM6** and, for distortion only, the **ILCE-6700**
+([ILCE-6700](#ilce-6700)); the ILCE-7RM4A has its own conversion, with other conventions
 ([Two conventions](#two-conventions)), and other Sony bodies' tables give no correction until they are verified.
 
 The correction is on by default for new imports, as for any file with embedded lens data (`Photo::camera_defaults`).
@@ -63,8 +66,9 @@ None of this is documented; it was measured against the camera's own JPEGs (meth
   best units scatter from 1.5·10⁶ to 7.2·10⁶ (about ±30 % scene bias: the RawDB landscape and portrait shots of one
   scene, with nearly identical tables, measure 3.4–3.5·10⁶ and 4.5·10⁶). The chosen 3.36·10⁶ is the median of the 20
   cleanest photos: worst 0.399 px on the 15, and the rms raw CA over all 46 measured photos falls from 0.079 to
-  0.052 px. Swapping the halves or an absolute form (`v · norm / U`) is clearly worse. **Not applied by default**
-  (Verification).
+  0.052 px. Swapping the halves or an absolute form (`v · norm / U`) is clearly worse. `g` is a sensor radius, so the
+  table applies to the raw mosaic as it is, with no distortion ([Lateral CA before
+  demosaic](#lateral-ca-before-demosaic)).
 - **Vignetting: not applied.** The camera JPEGs show no vignetting compensation relative to our uncorrected render:
   over the 39 photos whose measurement reaches the corners, the corner/centre ratio JPEG / render has median 0.996
   (p10 0.907, p90 1.087), while the tables would predict a corner gain with median +32 % for `1 + v / 2¹⁴` (+16 %
@@ -82,30 +86,60 @@ None of this is documented; it was measured against the camera's own JPEGs (meth
 (DNG pixel-index units relative to the active area; radius 1 = the farthest active-area corner, `m`):
 
 1. `S` from the distortion table and the zoom `z` (bisection on [0.5, 2], 4097 border radii); the green map is
-   `G(r) = S(r / z)`. Red and blue, when the CA planes are on: `G(r) · (1 + c(G(r)) / 3.36·10⁶)`.
-2. Each map is sampled at `u = i / 64`, i = 0…64 (65 samples of `G(u · m) / m`) and fitted by least squares with
+   `G(r) = S(r / z)`.
+2. The map is sampled at `u = i / 64`, i = 0…64 (65 samples of `G(u · m) / m`) and fitted by least squares with
    DNG's 4-term odd polynomial `u · (k0 + k1 u² + k2 u⁴ + k3 u⁶)` (`vendor::fit_radial_warp`, shared with RW2).
-3. **Fit gate:** a plane is refused when its fit is worse than 0.25 px at a 1440 px long edge at a sample the crop
+3. **Fit gate:** the plane is refused when its fit is worse than 0.25 px at a 1440 px long edge at a sample the crop
    shows: the samples up to the first one at or beyond the crop corner. The lossless files' padded active area
    (10240 × 7168 for a 9984 × 6656 crop) reaches radii that are never shown (`u` up to 0.925 is shown there).
    Over all 54 photos the fit's worst error at all 65 samples was 0.220 px (a lossless file; ARW6 files at most
    0.175 px). Between samples the error is somewhat larger: 0.071 against 0.049 px for the full-frame 16–35 mm
    example in the tests.
-4. **By default one plane, G**, applied to all three channels: `lens_opcodes` calls `warp_opcode(…, lateral_ca:
-   false)`. With `lateral_ca: true` (a code change) the planes are `[R, G, B]`, unless the CA table is absent or
-   malformed, a CA value is implausible (|c| above 2·10⁻³ of the radius, i.e. 6720; the largest value in the 54
-   photos' tables is 1724) or a colour plane fails the gate: then G alone again. The G plane is the same either way.
-   No opcode when the distortion table is absent or all zero (CA alone is never applied: it is relative to green),
-   the zoom has no solution in [0.5, 2] or the G fit fails. A refused table leaves the photo uncorrected rather than
-   wrongly warped.
+4. **One plane, G**, applied to all three channels, always: the warp carries no CA (lateral CA is corrected on the
+   mosaic, below). No opcode when the distortion table is absent or all zero, the zoom has no solution in [0.5, 2],
+   the G fit fails, the frame isn't 3:2 or the file is linear (the downsized lossless M and S sizes). A refused
+   table leaves the photo uncorrected rather than wrongly warped.
 
 The opcode then goes through the same pipeline stage as a DNG's (`crates/pipeline/src/optics.rs`): it rotates with
 the photo (portrait files are covered) and is carried by DNG export, as RW2's is.
 
+## Lateral CA before demosaic
+
+`arw_lens_rm6::lateral_ca` turns the CA table into a `LateralCa` map (`src/lateral_ca.rs`), carried in
+`OpcodeLists::lateral_ca` next to the DNG opcode lists. It is not a DNG opcode and is never written to a DNG. This
+crate only builds the map; the kernel and the stages below are LightCraft's (`lightcraft-raw`), which corrects it.
+
+- **The map** is sensor to sensor and needs no distortion. Where green's image of a point sits at sensor radius `ρ`
+  about the default-crop centre, red's sits at `ρ · (1 + c_R(ρ) / 3.36·10⁶)`, and blue's likewise. The knots are at
+  `i · 399.98` px ([Measured conventions](#measured-conventions)), linear in between, with the last segment extended.
+  Each knot is bounded by `MAX_SCALE` = 2·10⁻³, which is 6720 in table units; the largest value in the 54 photos'
+  tables is 1724. A table with a value beyond the bound, a malformed table or an all-zero one gives no map. The map
+  applies even when the distortion table is absent.
+- **The kernel:** every red (blue) site of the mosaic is resampled from red (blue) sites only, at the position the map
+  gives. It uses a 4 × 4 Catmull-Rom (a = −0.5) on that colour's half-resolution plane, clamped to the [min, max] of
+  the central 2 × 2 samples, so there is no ringing and no new extreme. Green is untouched. A site whose 4 × 4 support
+  holds a clipped or non-finite sample keeps its own value, so a blown highlight never turns into a below-clip value
+  that highlight reconstruction would take for colour.
+- **Where it runs:** LightCraft's `RawImage::normalized()`, right after `OpcodeList2`. Every demosaic (AHD, PPG, bilinear) and AI
+  Denoise therefore see the corrected mosaic. Binned previews and thumbnails bin the mosaic without the map and then
+  resample the binned red and blue with the same kernel (the clip mask stands in for the clip level). No path
+  corrects twice. Only Bayer ILCE-7RM6 files framed 3:2, taken with a lens the map measurably improves ([Limits](#limits)),
+  get the map: linear files (the downsized lossless M and S
+  sizes) and in-camera aspect crops get neither the map nor the distortion warp.
+- **Why there:** the colour-difference demosaic (AHD) borrows green's edges for red and blue, so a full-size render
+  shows only 0.29 × the lens CA measured on the raw mosaic. Applied after demosaic, the table (the earlier design: a
+  warp with three colour planes) therefore overshot. A binned preview averages each colour's own sites, so it showed
+  about twice the CA of a full-size render (0.54–0.60 × the raw CA), and preview and export disagreed. On the mosaic,
+  the table acts on the CA it describes, and every level gets the same correction ([Verification](#verification)).
+- **Engine:** the camera-look colour fit bins its proxies without the map, as it was tuned, so looks don't move.
+  Pooled camera profiles see no lens corrections either. AI Denoise products of ARW photos are keyed apart once, so
+  they are made again from the corrected mosaic.
+
 ## Which bodies get it
 
 Only bodies on one of two allowlists in `arw_lens_rm6.rs` get an opcode: `FULL_FRAME_CROP` (today `ILCE-7RM6`,
-9984 × 6656) and `APSC_BODIES` (today `ILCE-6700`, below). The unit and the knot spacing are verified per body; a body
+9984 × 6656) and `APSC_BODIES` (today `ILCE-6700`, below); only `FULL_FRAME_CROP` bodies get the CA map. The unit and
+the knot spacing are verified per body; a body
 with another sensor size or another unit would be warped wrongly. Other bodies get no correction from this conversion;
 the ILCE-7RM4A gets its own, with other conventions (below). To add a body: collect photos of it shot with distortion
 correction on (several lenses and focal lengths), repeat the camera-JPEG registration below against the uncorrected
@@ -180,8 +214,8 @@ FE 200–600 mm; corrected TIFFs at 24 mm with the FE 24–105 mm). Its conventi
 | Table indexed at | the corrected radius `r_o / z` | the output radius `r_o` |
 | Unit | 15000 | 16384 |
 | Zoom | fill: the largest `S(ρ / z) / ρ` over the border is 1 | `1 / max f` over the border radii |
-| Aspect crops | applied; the zoom for the recorded crop is unverified | refused (native 3:2 only) |
-| Tables | distortion (16 knots; 11 in APS-C); lateral CA parsed, off by default; vignetting read, not applied | distortion, 16 entries only |
+| Aspect crops | refused (3:2 frames only; no warp and no CA map) | refused (native 3:2 only) |
+| Tables | distortion (16 knots; 11 in APS-C); lateral CA on the mosaic before demosaic, always; vignetting read, not applied | distortion, 16 entries only |
 
 `arw::decode` passes both the same active area and crop (the DNG-style default crop, on the ILCE-7RM6 the same as
 Sony's crop tags); their model lists don't overlap, so a photo gets at most one of them: an ILCE-7RM6 this page's
@@ -268,6 +302,12 @@ registration (passes 1 and 2) against the camera JPEG, and R and B against G ins
 128 full-resolution px, ±4 px search; per corner the median radial shift of the 12 nearest blocks). px at a 1440 px
 long edge; aggregates only.
 
+The lateral CA correction before demosaic was verified the same way, with a build that has it, against those
+uncorrected renders. Every photo was rendered with Enable Lens Corrections on at half the JPEG size (Full level: AHD)
+and at 2496 px (Preview level: the mosaic binned 4×; APS-C 2×, then fitted). The uncorrected 2496 px renders come
+from a build without lens corrections, because the CA map no longer follows the switch. On a synthetic sub-pixel
+shift of a render's red plane, the block measurement reads 0.86–1.10 × the shift at both sizes.
+
 **Distortion, photos corrected in camera** (our render with the correction on vs the camera JPEG; budget 0.75 px).
 "Corners + midpoints" is the 2-D displacement at the four corners and four edge midpoints, global translation
 included; "bins" the radial residual over 32 radial bins. A photo counts as measurable as in the method above.
@@ -279,7 +319,8 @@ included; "bins" the radial residual over 32 radial bins. A photo counts as meas
 | FE 200–600 mm F5.6–6.3 G OSS | 6 (3) | 594–600 mm | 0.679 / 0.321 | 0.498 / 0.274 | 7.5–10.8 |
 | **All** | **41 (33)** | | **0.679** / 0.150 (206 points) | 0.503 / 0.109 | 0.6–17.3 |
 
-No photo is over budget; the global translation is at most 0.056 px. The 8 not measurable are black, near-black or
+No photo is over budget in these renders (the re-measure on the CA-corrected renders is below); the global
+translation is at most 0.056 px. The 8 not measurable are black, near-black or
 low-detail frames, or frames whose blocks don't reach 0.7 of the half diagonal. That is one more than in the
 measurement (33 measurable against 34): one 100 mm photo keeps only 255 of the 300 blocks needed when it is matched on
 the corrected render, as block coverage differs slightly between the two renders. The 200–600 mm keeps the systematic
@@ -294,53 +335,110 @@ the model (also for APS-C, barrel, zoom 0.984), not that the APS-C model is righ
 **Portrait photos:** 8 corrected (orientation 6 and 8) within 0.232 px, 6 controls within 0.369 px of the model's
 shift: the warp turns with the photo.
 
-**Lateral CA in the render** (radial R-vs-G and B-vs-G shift, median of the 12 blocks nearest each corner; 43 photos
-with enough detail at all four corners; budget 0.3 px):
+**Lateral CA in the render, Full level** (radial R-vs-G and B-vs-G shift, median of the 12 blocks nearest each
+corner; 43 photos with enough detail at all four corners; budget 0.3 px). *Off*: no CA correction. *Three planes*:
+the earlier design, the table applied after demosaic as the warp's red and blue planes. *Before demosaic*: the
+current correction.
 
-| Lens | Photos | Off: max R / B | Off: rms | On: max R / B | On: rms | Camera JPEG: max / rms |
+| Lens | Photos | Off: max R / B | Off: rms | Three planes: max R / B | Three planes: rms | Before demosaic: max R / B | Before demosaic: rms | Camera JPEG: max / rms |
+|---|---|---|---|---|---|---|---|---|
+| FE 24–70 mm F2.8 GM II | 23 | 0.089 / 0.071 | 0.028 | 0.219 / 0.148 | 0.069 | 0.070 / 0.098 | 0.024 | 0.150 / 0.036 |
+| FE 16–35 mm F2.8 GM II | 12 | 0.125 / 0.054 | 0.041 | 0.030 / 0.051 | 0.020 | 0.058 / 0.056 | 0.025 | 0.058 / 0.016 |
+| FE 100 mm F2.8 Macro GM OSS | 6 | 0.020 / 0.050 | 0.013 | 0.061 / 0.157 | 0.044 | 0.013 / 0.037 | 0.009 | 0.021 / 0.004 |
+| FE 200–600 mm F5.6–6.3 G OSS | 2 | 0.033 / 0.101 | 0.032 | 0.146 / 0.075 | 0.070 | 0.099 / 0.181 | 0.068 | 0.113 / 0.039 |
+| **All** | **43** | 0.125 / 0.101 | 0.032 | 0.219 / 0.157 | 0.052 | 0.099 / **0.181** | **0.026** | 0.150 / 0.028 |
+
+- **The correction lowers the corner CA on three of the four lenses** (all photos: rms 0.032 → 0.026 px). Three
+  planes after demosaic had raised it to 0.052 px.
+- **It doesn't reach the spec's target** of rms ≤ 0.020 / max ≤ 0.08 px.
+- **The 200–600 mm (2 photos) gets worse:** rms 0.032 → 0.068 px. The 0.181 px maximum is one corner of one 600 mm
+  photo. There the raw mosaic shows almost no blue CA (−0.04 to +0.08 px in the outer radial bins), while the table
+  asks for −0.05 to −0.12 px.
+- **Photos:** 7 of the 43 have a corner rms more than 0.005 px above uncorrected (six 24–70 mm, one 200–600 mm).
+- **Radial bins:** the largest radial-bin median is 0.109 px uncorrected, 0.226 px with three planes and 0.100 px
+  corrected.
+- **Against the raw mosaic:** over the 418 radial bins beyond 0.3 of the half diagonal, the corrected render shows
+  0.12 × the lens CA measured on the raw mosaic (correlation 0.60). The bins' rms is 0.012 px, against 0.021 px
+  uncorrected and 0.035 px with the three planes.
+
+All of this is far below one pixel at 1440 px.
+
+**Preview level** (2496 px renders, 26 photos with enough detail at all four corners at that size). Each photo's
+global red and blue translation is removed first. Binning leaves the colour planes offset by a fraction of a binned
+pixel (`binned.rs`; median 0.03 / 0.04 px at 1440 after correction, 0.03 / 0.10 px before), and a corner measurement
+would read that offset as CA of alternating sign:
+
+| Lens | Photos | Off: max R / B | Off: rms | Before demosaic: max R / B | Before demosaic: rms | Full level, same photos: rms |
 |---|---|---|---|---|---|---|
-| FE 24–70 mm F2.8 GM II | 23 | 0.089 / 0.071 | 0.028 | 0.219 / 0.148 | 0.069 | 0.150 / 0.036 |
-| FE 16–35 mm F2.8 GM II | 12 | 0.125 / 0.054 | 0.041 | 0.030 / 0.051 | 0.020 | 0.058 / 0.016 |
-| FE 100 mm F2.8 Macro GM OSS | 6 | 0.020 / 0.050 | 0.013 | 0.061 / 0.157 | 0.044 | 0.021 / 0.004 |
-| FE 200–600 mm F5.6–6.3 G OSS | 2 | 0.033 / 0.101 | 0.032 | 0.146 / 0.075 | 0.070 | 0.113 / 0.039 |
-| **All** | **43** | 0.125 / 0.101 | 0.032 | **0.219** / 0.157 | 0.052 | 0.150 / 0.028 |
+| FE 24–70 mm F2.8 GM II | 11 | 0.121 / 0.398 | 0.097 | 0.034 / 0.053 | 0.026 | 0.023 |
+| FE 16–35 mm F2.8 GM II | 11 | 0.106 / 0.192 | 0.066 | 0.095 / 0.185 | 0.055 | 0.023 |
+| FE 100 mm F2.8 Macro GM OSS | 3 | 0.033 / 0.073 | 0.027 | 0.023 / 0.053 | 0.018 | 0.011 |
+| FE 200–600 mm F5.6–6.3 G OSS | 1 | 0.194 / 0.228 | 0.198 | 0.051 / 0.077 | 0.040 | 0.024 |
+| **All** | **26** | 0.194 / 0.398 | 0.084 | 0.095 / 0.185 | **0.043** | 0.022 |
 
-Within budget everywhere, but **the correction makes the render's own CA larger on average** (rms 0.032 → 0.052 px;
-smaller only for the 16–35 mm). The reason is where it runs: over the radial bins beyond 0.3 of the half diagonal
-(418 bins), our demosaiced render shows only 0.29 × the lens CA measured on the raw CFA (correlation 0.85), while the
-warp after demosaic moves R and B by 0.84 × the table (correlation 0.96). On the raw data the table halves the CA (rms
-0.062 → 0.035 px); applied after a demosaic that already hid most of it, it overshoots (rms 0.021 → 0.035 px over the
-same bins). All of this is far below one pixel at 1440 px.
+- **Uncorrected previews showed about twice the CA of a full-size render:** corner rms 2.5 × that of the uncorrected
+  full-size renders of the same photos, and 0.54 × the raw CA over the radial bins against 0.29 × at full size.
+- **Corrected, both levels show 0.12–0.14 × the raw CA** (preview: 0.13 × with the translation removed, as the
+  table; 0.14 × as measured).
+- **Preview vs full-size render:** on the same photo, the rms over the corners of (preview − full size) exceeds
+  0.05 px on 6 of these 26 photos, the largest 0.100 px; uncorrected, it did on 9, the largest 0.185 px. The six are
+  all APS-C 16–35 mm files, whose uncorrected previews disagreed with the full-size renders by as much. Counting every
+  photo with at least one corner measured at both sizes (sparser, so noisier): 10 of 41 corrected photos exceed
+  0.05 px (largest 0.213, median 0.019 px), against 12 of 36 uncorrected (largest 0.185, median 0.032 px).
+- **With the translation left in,** the corrected preview's corner rms is 0.054 px (0.100 uncorrected).
+- **Spec criterion not met:** it asked for ≤ 0.025 px at the corners and ≤ 0.05 px per photo (see
+  [Limits](#limits)).
 
-**Ruling: the lateral CA planes are off by default.** `lens_opcodes` emits the G plane alone; the conversion stays in
-the code and its unit tests (`warp_opcode(…, lateral_ca: true)`), so it can be turned on once CA is corrected where
-the table applies. **Follow-up:** warp the raw CFA's red and blue sites before demosaic (the table halves the raw CA,
-rms 0.062 → 0.035 px), then turn the planes on and repeat this check. Optics ▸ Remove Chromatic Aberration
-(`optics.remove_ca`, an automatic estimate from the image) remains available for visible fringes. The distortion
-numbers above were measured with the three-plane warp, whose G plane is the one the default emits.
+**Distortion re-measured on the corrected renders:** the G plane is the same opcode.
+- **Per block:** the G displacement against the camera JPEG moves by a median 0.002 px (no photo's median above
+  0.007 px).
+- **Radial bins:** max / rms 0.503 / 0.111 px on the 33 measurable corrected photos, against 0.503 / 0.109 px.
+- **Block flips:** 0.1 % of the blocks (0.4 % on the controls) flip their correlation peak by more than 0.1 px
+  between the two renders. One such flip moves a corner point of a 200–600 mm photo from 0.679 to 1.243 px (over
+  the 0.75 px budget by this point measure; per block the G plane moves 0.002 px, so this is the correlation flip,
+  not the geometry); that photo has 3 measured points from 305 blocks.
+
+**Ruling: lateral CA is corrected on the mosaic before demosaic, always.** This holds for verified bodies; Enable
+Lens Corrections governs distortion only. The three-plane branch of `warp_opcode` is deleted: the warp carries the G
+plane only. Optics ▸ Remove Chromatic Aberration (`optics.remove_ca`, an automatic estimate from the image) and the
+manual CA sliders still work after demosaic and now see only the residual. The distortion numbers above were
+measured with the three-plane warp, whose G plane is the one emitted today.
 
 **Fit gate margins** (worst of R, G and B at the gated samples; gate 0.25 px): the 4 lossless files 0.160 px (margin
 0.090; 0.220 px at all 65 samples, the padded radii never shown), the 46 full-frame ARW6 files 0.175 px (margin 0.075),
 the 4 APS-C ARW6 files 0.035 px. The largest CA value in the 54 tables is 1724 (FE 24–70 mm), a quarter of the 6720
-bound. So every photo passes: with the CA planes on (the verification renders) each got the three-plane warp, and the
-corrected and uncorrected renders differ on all 54; by default each gets the one-plane distortion warp.
+bound. So every photo passes (these are the three planes' numbers; the G plane alone is within them), and the
+corrected and uncorrected renders differ on all 54.
 
 ## Performance
 
-`LIGHTCRAFT_PROFILE=1` renders of the full-frame lossless file and the full-frame Compressed HQ file (corpus
-`arw-sony-ilce7rm6-ff-land-lossless.arw`, `arw6-sony-ilce7rm6-ff-land-hq.arw`), on a 4-core laptop shared with other
-builds (so absolute times are high); the fastest of 3–5 runs. The warp runs in the `sample` stage:
+**Decode, where the CA map runs.** LightCraft's `render_bench` (`ONLY=source N=9`, `crates/engine/examples/render_bench.rs`) times
+`normalized()` and the 4× binned Preview decode with and without the map. These are the minimum of 9 runs on a 4-core
+laptop with nothing else running:
 
-| Render | Off | One plane (the default; measured with manual Distortion 1) | Three planes (CA planes on) |
+| File (mosaic) | Full decode, `normalized()`: without → with the map | Map cost per 24 MP | Preview decode (binned ×4, 2496 × 1664): without → with |
 |---|---|---|---|
-| Full size 9984 × 6656, lossless | 267 ms | — | 3098 ms |
-| Full size 9984 × 6656, Compressed HQ | 403 ms | 1187 ms | 4014 ms |
-| 1920 px long edge (2496 × 1664 source), Compressed HQ | 23.7 ms | 45.4 ms | 112.0 ms |
+| Full-frame lossless (10240 × 7168) | 98 → 424 ms wall (363 → 1532 ms CPU) | +106 ms wall (+382 ms CPU) | 41 → 101 ms wall (152 → 377 ms CPU) |
+| Full-frame Compressed HQ (10016 × 6672) | 113 → 420 ms wall (397 → 1472 ms CPU) | +110 ms wall (+386 ms CPU) | 48 → 107 ms wall (173 → 409 ms CPU) |
 
-The default one-plane warp takes the sample stage from 24 to 45 ms at 1920 px (inferred from the manual Distortion
-run: the same single-plane path, one plane for all three channels). The three colour planes cost about 2.5–3× that,
-as for an RW2 or DNG with three planes (the same path): the price of turning the CA planes on. The stage cache keys
-the resampled source by the source, framing and output size, so tone, colour and exposure drags don't re-run it.
+- **Full size:** the map adds about 0.31–0.33 s to these 67–73 MP decodes. AHD alone takes 2.2 s, and a full-size
+  render end to end takes 9.5–9.8 s (`LIGHTCRAFT_PROFILE=1`, fastest of 3; the `develop` stage 2.65–3.0 s).
+- **Preview:** the map adds about 60 ms wall (224–235 ms CPU).
+- **Budgets:** +0.15 s per 24 MP for a full decode, and +80 ms wall (about 300 ms CPU) for a Preview decode on 4 cores.
+  The Preview budget was first 30 ms, which a 4 × 4 cubic kernel can't reach.
+
+**Rendering is unchanged.** The `sample` stage warps with the one G plane it used before, from the same opcode, so
+tone, colour and exposure drags re-run nothing new. The stage cache keys the resampled source by the source, framing
+and output size.
+
+| Render (Compressed HQ, fastest of 3) | Off | One plane, manual Distortion 1 | One plane, embedded (the default) | Three planes (the earlier CA design) |
+|---|---|---|---|---|
+| Full size 9984 × 6656 | 403 ms | 1187 ms | 1109 ms | 4014 ms |
+| 1920 px long edge (2496 × 1664 source) | 22.1 ms | 41.6 ms | 56.7 ms | 112.0 ms |
+
+Both three-plane numbers and the full-size Off and manual numbers come from the earlier verification, on a machine
+shared with other builds; the rest are from this round. The three planes, had they been turned on, would have cost
+about 55 ms more per 1920 px render and about 2.9 s more per full-size render (numbers from different runs).
 
 ## Limits
 
@@ -357,19 +455,37 @@ the resampled source by the source, framing and output size, so tone, colour and
   #2801 (the camera JPEG doesn't compensate vignetting, as on the ILCE-7RM6).
 - **APS-C distortion is unverified in camera on the ILCE-7RM6:** no APS-C photo with distortion correction on was available; the APS-C
   knot spacing is verified on CA only, and the APS-C zoom follows the full-frame rule.
-- **Aspect-ratio crops** (in-camera 4:3, 16:9, 1:1) were not measured; the correction uses the crop the file records.
+- **Aspect-ratio crops** (in-camera 4:3, 16:9, 1:1) were not measured, so they get no correction: neither the
+  distortion warp nor the CA map. Neither do linear (downsized lossless M and S) files, which have no mosaic.
 - **One distortion unit for every lens.** Fitted per lens the unit is 14826 (24–70 mm, 23 photos, very consistent),
   15659 (200–600 mm, 3 photos) and 16017 (100 mm, tiny tables); with the single 15000 the 200–600 mm keeps a systematic
   residual of up to 0.59 px (within budget, above the method's 0.03 px noise floor). Something lens-dependent is not
   captured; per-lens units would need per-lens verification.
-- **Lateral CA off by default.** Its unit is provisional (above), and a warp after demosaic, as for RW2 and DNG,
-  overshoots: our demosaic already hides about 70 % of the lens CA, and with the planes on the rms corner CA rose
-  from 0.032 to 0.052 px (Verification). Correcting CA before demosaic is the follow-up.
+- **Lateral CA: the unit is still provisional** (above). With it, the corrected render beats the uncorrected one on
+  three lenses but not on the 200–600 mm (2 photos; [Verification](#verification)). A per-lens unit would need more
+  photos per lens. Since the map is applied whatever Lens Corrections says, it is limited to those three lenses
+  (`CA_IMPROVES` in `arw_lens_rm6.rs`: FE 24–70 mm F2.8 GM II, FE 16–35 mm F2.8 GM II, FE 100 mm F2.8 Macro GM OSS, by
+  Exif `LensModel`). The 200–600 mm, any lens not measured, and a file without a lens name get no map; their distortion
+  warp is unchanged.
+- **Lateral CA beside blown highlights stays uncorrected:** a site whose support holds a clipped sample keeps its
+  value. Sites within a few pixels of the mosaic's edge, whose source lies beyond it, repeat the edge sample; on
+  ILCE-7RM6 files they lie outside the default crop (inset 8–16 px).
+- **Previews:** binning keeps the red and blue planes offset by a fraction of a binned pixel, as before (median
+  0.03 / 0.04 px at 1440 after correction). On the APS-C 16–35 mm files, a preview and a full-size render still
+  differ by up to 0.1 px at a corner, as they did uncorrected (the cause is not known).
+- **Enable Lens Corrections governs distortion only.** Lateral CA is always corrected for this body's Bayer files
+  framed 3:2.
+- **DNG export, Photo → Convert to DNG and import's Copy as DNG carry distortion only.** The warp goes into
+  `OpcodeList3`, as for RW2, and a DNG reader applies it like any embedded lens correction. No DNG opcode resamples
+  the CFA before demosaic, so the CA correction is lost. Three-plane CFA DNGs from other converters stay corrected
+  after demosaic. Converting their warp into a map before demosaic is a follow-up.
 - **Vignetting not applied** (above).
-- **DNG export** carries the warp in `OpcodeList3`, as for RW2: a DNG reader applies it like any embedded lens
-  correction.
-- **Existing imports** need Photo → Reload from Disk to pick up the lens data.
-- The camera-JPEG colour fit still matches its pairs without the correction (docs/camera-preview-colour.md).
+- **Existing imports** need Photo → Reload from Disk to pick up the distortion data. They get the CA correction
+  without it, because the map comes from the file at decode (the render cache refreshes). Smart previews built
+  before this change keep the uncorrected CA while the original is offline. AI Denoise results of ARW photos are
+  made again once.
+- The camera-JPEG colour fit still matches its pairs without the corrections (distortion and CA;
+  docs/camera-preview-colour.md).
 
 ## Sources
 
