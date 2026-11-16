@@ -24,7 +24,24 @@ pub struct Document {
     pub too_deep: bool,
     /// The space segments, transforms, bounds and stroke widths are given in.
     pub coordinates: Coordinates,
+    /// Group effects the scene flags ([`GroupFeatures`]) but doesn't carry, counted.
+    pub omitted: Omitted,
     source: Option<Box<usvg::Tree>>,
+}
+
+/// How many groups have an effect the scene doesn't carry: an app that draws only the scene
+/// draws them without it, and can say so. Elements usvg itself leaves out (animation, scripts…)
+/// are listed by [`super::Preflight::unsupported_elements`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Omitted {
+    /// Groups with `filter`.
+    pub filters: usize,
+    /// Groups with `clip-path`.
+    pub clip_paths: usize,
+    /// Groups with `mask`.
+    pub masks: usize,
+    /// Groups with a `mix-blend-mode` other than normal.
+    pub blends: usize,
 }
 
 /// Where a scene's geometry is given.
@@ -49,6 +66,7 @@ impl PartialEq for Document {
             && self.images == other.images
             && self.too_deep == other.too_deep
             && self.coordinates == other.coordinates
+            && self.omitted == other.omitted
     }
 }
 
@@ -400,6 +418,11 @@ impl Convert<'_> {
                     }
                     let children = self.group(child, depth + 1, &source_path);
                     if !children.is_empty() {
+                        let omitted = &mut self.doc.omitted;
+                        omitted.filters += usize::from(!child.filters().is_empty());
+                        omitted.clip_paths += usize::from(child.clip_path().is_some());
+                        omitted.masks += usize::from(child.mask().is_some());
+                        omitted.blends += usize::from(child.blend_mode() != usvg::BlendMode::Normal);
                         let bounds = if self.local { child.layer_bounding_box().to_rect() } else { child.abs_layer_bounding_box().to_rect() };
                         result.push(Node::Group {
                             children,

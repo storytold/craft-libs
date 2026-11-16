@@ -276,3 +276,40 @@ fn a_pattern_that_refers_to_itself_ends() {
         }
     }
 }
+
+#[test]
+fn group_effects_the_scene_leaves_out_are_counted() {
+    let tree = tree(
+        r##"<defs><filter id="f"><feGaussianBlur stdDeviation="2"/></filter><clipPath id="c"><rect width="5" height="5"/></clipPath>
+        <mask id="m"><rect width="5" height="5" fill="#fff"/></mask></defs>
+        <g filter="url(#f)"><rect width="10" height="10"/></g>
+        <g clip-path="url(#c)"><rect width="10" height="10"/></g>
+        <g clip-path="url(#c)" mask="url(#m)"><rect width="10" height="10"/></g>
+        <g style="mix-blend-mode: multiply"><rect width="10" height="10"/></g>
+        <g opacity="0.5"><rect width="10" height="10"/></g>"##,
+    );
+    for document in [Document::from_tree(&tree, 64), Document::from_tree_local(&tree, 64)] {
+        assert_eq!(document.omitted, Omitted { filters: 1, clip_paths: 2, masks: 1, blends: 1 });
+    }
+    assert_eq!(Document::from_tree(&self::tree(r#"<rect width="1" height="1"/>"#), 64).omitted, Omitted::default());
+}
+
+#[test]
+fn elements_usvg_leaves_out_are_listed() {
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:html="http://www.w3.org/1999/xhtml" width="10" height="10">
+        <rect width="10" height="10"><animate attributeName="x" to="5" dur="1s"/><set attributeName="y" to="1"/></rect>
+        <animateTransform attributeName="transform" type="rotate" to="90" dur="1s"/>
+        <script>void 0</script><foreignObject width="5" height="5"><html:div/></foreignObject>
+        <g><animate attributeName="opacity" to="0" dur="1s"/></g>
+    </svg>"##;
+    let checked = crate::tree::preflight(svg, &Limits::default()).unwrap();
+    assert_eq!(
+        checked.unsupported_elements(),
+        vec![("animate", 2), ("animateTransform", 1), ("foreignObject", 1), ("script", 1), ("set", 1)],
+        "the XHTML div is not an SVG element"
+    );
+    // The same checked XML still parses.
+    assert!(checked.parse(&usvg::Options::default()).is_ok());
+    let plain = crate::tree::preflight(r#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>"#, &Limits::default()).unwrap();
+    assert!(plain.unsupported_elements().is_empty());
+}
