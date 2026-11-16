@@ -2,7 +2,8 @@
 //! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, reopening under the same key, the
 //! request slots, disabled options and the remembered values a row refuses.
 
-use craft_ui::contract::{Bind, Role, SaveKey};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, Outcome as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft_ui::patterns::presets::PresetRow;
@@ -436,6 +437,51 @@ fn alt_reset_sets_the_reset_to_values_and_keeps_the_other_keys() {
     assert_eq!(values.borrow().number("radius"), Some(50.0), "Reset sets the reset_to value");
     assert_eq!(values.borrow().bool("smooth"), Some(true), "Reset keeps a key reset_to lacks");
     assert!(fixture.by_label("Blur").is_some(), "Reset keeps the dialog open");
+}
+
+/// A blur dialog that previews, over `canvas`, whose pane centres on clicks when `centres`.
+fn locating(canvas: egui::Id, centres: bool) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static {
+    move |fields| blur(fields).previews(true).canvas(canvas).click_centres(centres)
+}
+
+// The image under a dialog whose preview pane centres on clicks is the pane's locator: a primary press on the canvas
+// passes the modal layer while the pane shows. Before the pane has a picture, or with a pane that does not centre on
+// clicks, the press stays blocked.
+#[trial]
+fn a_preview_that_centres_on_clicks_passes_a_press_on_the_canvas_under_it() {
+    let (host, canvas, presses) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(None)), Rc::new(Cell::new(0)));
+    let (shown, seen, counted) = (Rc::clone(&host), Rc::clone(&canvas), Rc::clone(&presses));
+    let mut fixture = Fixture::new(move |ui| {
+        let surface = Button::new("Canvas").show(ui);
+        seen.set(Some((surface.response().id, surface.response().rect.center())));
+        if clicked(&surface) {
+            counted.set(counted.get() + 1);
+        }
+        shown.borrow_mut().run(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 900.0));
+    fixture.settle();
+    let (id, at) = canvas.get().expect("the canvas showed");
+    let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
+    // The modal layer takes the canvas out of the access tree: the press goes to the canvas's point.
+    let press = |fixture: &mut Fixture| {
+        fixture.click_at(at).settle();
+    };
+
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), locating(id, true)));
+    fixture.idle(4);
+    press(&mut fixture);
+    assert_eq!(presses.get(), 0, "no pane yet: the modal layer blocks the press");
+    on_dialog(&host, |dialog| dialog.set_preview(Some(picture)));
+    fixture.idle(4);
+    press(&mut fixture);
+    assert_eq!(presses.get(), 1, "with the pane shown the press reaches the canvas");
+
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), locating(id, false)));
+    on_dialog(&host, |dialog| dialog.set_preview(Some(picture)));
+    fixture.idle(4);
+    press(&mut fixture);
+    assert_eq!(presses.get(), 1, "a pane that does not centre on clicks leaves the press blocked");
 }
 
 /// A dialog with one colour row.

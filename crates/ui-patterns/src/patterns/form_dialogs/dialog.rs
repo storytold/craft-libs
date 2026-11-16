@@ -12,7 +12,7 @@ use super::preview::{PreviewPane, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
 
-use crate::contract::{Bind, BodyCx, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
+use crate::contract::{Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
 
 use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id};
 
@@ -202,11 +202,14 @@ pub struct ParamDialog<'a> {
     #[prop]
     preview: Option<SizedTexture>,
     /// Whether a click on the preview centres it on the point clicked (`PreviewPane::click_centres`); a dialog whose
-    /// preview clicks pick a colour turns it off. The default is true.
+    /// preview clicks pick a colour turns it off. The default is true. While it is on and the pane shows, a primary
+    /// press on the dialog's [`canvas`](ParamDialog::canvas) passes the modal layer too: the image is the pane's
+    /// locator.
     #[prop]
     click_centres: bool,
     /// The canvas the rows' droppers sample (`ParamRows::canvas`). While the dialog shows, its view stays usable under
-    /// the modal layer (`Sampler::keep_view_open`).
+    /// the modal layer (`Sampler::keep_view_open`), and while its preview pane centres on clicks a primary press on it
+    /// passes (`Sampler::pass_canvas_gesture`): the app centres the pane on the point under it.
     #[prop]
     canvas: Option<egui::Id>,
     /// Extra footer buttons after OK and Cancel (Color Table's Load… and Save…), each an id and a label. They keep the
@@ -524,6 +527,11 @@ impl<'a> ParamDialog<'a> {
             }
             if let Some(canvas) = canvas {
                 cx.keep_view_open(canvas);
+            }
+            // The canvas shows the picture the pane does: while a click on the pane centres it, a press on the image is
+            // the pane's locator press, which the app answers with `HostedParamDialog::centre_preview`.
+            if let Some(canvas) = canvas.filter(|_| click_centres && preview.is_some()) {
+                cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
             }
             // A measuring run closes nothing: the real run of the same pass makes the close.
             if finish_held && !crate::runtime::measure::active(ui.ctx()) {
