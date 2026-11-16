@@ -1129,6 +1129,14 @@ mod native {
         if doc.version < acadrust::DxfVersion::AC1024 {
             return;
         }
+        // Only a style missing a row needs anything below: a drawing without one is left as it is,
+        // its table entries' handles included (the writer gives those their own in due course).
+        let missing = |s: &acadrust::objects::TableStyle, name: &str| !s.modern_overrides.iter().any(|(_, o)| o.name.eq_ignore_ascii_case(name));
+        let wanted =
+            doc.objects.values().any(|o| matches!(o, ObjectType::TableStyle(s) if ["_TITLE", "_HEADER", "_DATA"].iter().any(|n| missing(s, n))));
+        if !wanted {
+            return;
+        }
         // The writer gives text styles read without a handle (R12, HANDLING 0) one before it looks
         // rows up; do it first so a row finds its style by name here as it would there.
         doc.assign_table_entry_handles();
@@ -1204,14 +1212,15 @@ mod native {
             let rank = |name: &str| ["_TITLE", "_HEADER", "_DATA"].iter().position(|r| r.eq_ignore_ascii_case(name)).unwrap_or(3);
             let rows =
                 [(1, 1, "_TITLE", 0x8000, &s.title_row_style), (2, 1, "_HEADER", 0, &s.header_row_style), (3, 2, "_DATA", 0, &s.data_row_style)];
-            for (i, &(id, style_type, name, merge_flags, row)) in rows.iter().enumerate() {
+            // Each style holds at most two numbers (its key and its id), so one of the 2 * len + 1
+            // numbers from 101 is always free; a set, kept up to date as rows go in, keeps the
+            // search linear in the styles.
+            let mut held: std::collections::HashSet<i32> = s.modern_overrides.iter().flat_map(|(k, o)| [*k, o.id]).collect();
+            for &(id, style_type, name, merge_flags, row) in &rows {
                 let styles = &s.modern_overrides;
                 if styles.iter().any(|(_, o)| o.name.eq_ignore_ascii_case(name)) {
                     continue;
                 }
-                // Each style holds at most two numbers (its key and its id), so one of the 2 * len + 1
-                // numbers from 101 is always free; a set keeps the search linear in the styles.
-                let held: std::collections::HashSet<i32> = styles.iter().flat_map(|(k, o)| [*k, o.id]).collect();
                 let id = if held.contains(&id) {
                     // The lowest id above 100 nothing holds.
                     let span = held.len().saturating_add(1);
@@ -1220,8 +1229,9 @@ mod native {
                 } else {
                     id
                 };
-                let at = styles.iter().rposition(|(_, o)| rank(&o.name) < i).map_or(0, |j| j + 1);
+                let at = styles.iter().rposition(|(_, o)| rank(&o.name) < rank(name)).map_or(0, |j| j + 1);
                 let row = row_style(row, id, style_type, name, merge_flags);
+                held.insert(id);
                 s.modern_overrides.insert(at, (id, row));
             }
         }
@@ -1582,18 +1592,16 @@ mod native {
             use acadrust::objects::{NamedTableCellStyle, ObjectType};
             let mut doc = acadrust::CadDocument::new();
             doc.version = acadrust::DxfVersion::AC1032;
-            table_style_row_margins(&mut doc);
             let mut styles = 0;
             for o in doc.objects.values_mut() {
                 let ObjectType::TableStyle(s) = o else { continue };
                 s.horizontal_margin = 1.0;
                 s.vertical_margin = 0.25;
-                s.modern_overrides.retain(|(_, row)| row.name == "_DATA");
-                // Under a key lower than the rows that go before it.
-                for (k, row) in &mut s.modern_overrides {
-                    *k = 0;
-                    row.cell_style.horizontal_margin = 9.0;
-                }
+                // A _DATA row of its own, seeded here rather than taken from the default style,
+                // under a key lower than the rows that go before it.
+                let mut data = NamedTableCellStyle { id: 3, name: "_DATA".into(), ..NamedTableCellStyle::default() };
+                data.cell_style.horizontal_margin = 9.0;
+                s.modern_overrides = vec![(0, data)];
                 let custom = NamedTableCellStyle { id: 101, name: "Highlight".into(), ..NamedTableCellStyle::default() };
                 s.modern_overrides.push((101, custom));
                 styles += 1;
@@ -1614,6 +1622,100 @@ mod native {
                     }
                 }
             }
+        }
+
+        /// A drawing none of whose styles needs a row keeps its table entries' handles as they
+        /// are: the writer gives them their own later, in its own order (review on #2921).
+        #[test]
+        fn a_drawing_needing_no_rows_keeps_its_unnumbered_entries() {
+            use acadrust::objects::ObjectType;
+            let layer_handle = |doc: &acadrust::CadDocument| doc.layers.get("NoHandle").map(|l| l.handle);
+            for no_styles in [true, false] {
+                let mut doc = acadrust::CadDocument::new();
+                doc.version = acadrust::DxfVersion::AC1032;
+                if no_styles {
+                    doc.objects.retain(|_, o| !matches!(o, ObjectType::TableStyle(_)));
+                } else {
+                    table_style_row_margins(&mut doc);
+                }
+                assert!(doc.layers.add(acadrust::tables::Layer::new("NoHandle")).is_ok());
+                assert!(layer_handle(&doc).is_some_and(|h| h.is_null()));
+                table_style_row_margins(&mut doc);
+                assert!(layer_handle(&doc).is_some_and(|h| h.is_null()), "no_styles {no_styles}: the layer was numbered");
+            }
+            // A style that does need rows still gets the entries numbered, for the text style lookup.
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = acadrust::DxfVersion::AC1032;
+            assert!(doc.layers.add(acadrust::tables::Layer::new("NoHandle")).is_ok());
+            table_style_row_margins(&mut doc);
+            assert!(layer_handle(&doc).is_some_and(|h| !h.is_null()));
+        }
+
+        /// The DWG as the writer makes it from `doc`, read back.
+        fn through_dwg(doc: &acadrust::CadDocument) -> acadrust::CadDocument {
+            let dwg = acadrust::DwgWriter::write_to_vec(doc).expect("the DWG writes");
+            acadrust::DwgReader::from_stream(std::io::Cursor::new(&dwg)).read().expect("the DWG reads")
+        }
+
+        /// A row whose text style names nothing is written with the Standard style, not a null
+        /// handle: the writer resolves a row built as a finished cell style the same way (review
+        /// on #2921, finding 1).
+        #[test]
+        fn a_row_with_an_unknown_text_style_is_written_with_standard() {
+            use acadrust::objects::ObjectType;
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = acadrust::DxfVersion::AC1032;
+            for o in doc.objects.values_mut() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                s.data_row_style.text_style_name = "NoSuchStyle".into();
+                s.data_row_style.text_style_handle = None;
+            }
+            table_style_row_margins(&mut doc);
+            let back = through_dwg(&doc);
+            let standard = back.text_styles.get("Standard").map(|t| t.handle);
+            assert!(standard.is_some_and(|h| !h.is_null()));
+            let mut rows = 0;
+            for o in back.objects.values() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                for (_, row) in s.modern_overrides.iter().filter(|(_, r)| r.name == "_DATA") {
+                    assert_eq!(Some(row.cell_style.content_format.text_style), standard);
+                    rows += 1;
+                }
+            }
+            assert!(rows > 0);
+        }
+
+        /// A row a style carries already is the drawing's own: one with no margin override
+        /// inherits the style's base cell style, which carries the style's margins, and stays
+        /// as it is (review on #2921, finding 3).
+        #[test]
+        fn a_row_without_a_margin_override_inherits_the_style_margins() {
+            use acadrust::objects::{NamedTableCellStyle, ObjectType};
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = acadrust::DxfVersion::AC1032;
+            for o in doc.objects.values_mut() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                s.horizontal_margin = 1.0;
+                s.vertical_margin = 0.25;
+                let title = NamedTableCellStyle { id: 1, style_type: 1, name: "_TITLE".into(), ..NamedTableCellStyle::default() };
+                assert_eq!(title.cell_style.margin_override_flags, 0);
+                s.modern_overrides = vec![(1, title)];
+            }
+            table_style_row_margins(&mut doc);
+            let back = through_dwg(&doc);
+            let mut styles = 0;
+            for o in back.objects.values() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                let base = s
+                    .modern_style
+                    .as_ref()
+                    .map(|b| (b.cell_style.margin_override_flags, b.cell_style.horizontal_margin, b.cell_style.vertical_margin));
+                assert_eq!(base, Some((1, 1.0, 0.25)), "the base cell style carries the margins");
+                let flags: Vec<_> = s.modern_overrides.iter().map(|(_, r)| (r.name.as_str(), r.cell_style.margin_override_flags)).collect();
+                assert_eq!(flags, [("_TITLE", 0), ("_HEADER", 1), ("_DATA", 1)]);
+                styles += 1;
+            }
+            assert!(styles > 0);
         }
 
         /// `(key, id, name)` of each cell style a table style ends with when it starts with `start`.
@@ -2235,6 +2337,64 @@ mod tests {
             }
             assert_eq!(checked, 3 * styles, "{version}: rows checked");
         }
+    }
+
+    /// A 2010+ DWG written from a DXF whose table styles carry the rows' values, and the DXF it
+    /// reads back as: the style's margins and the rows' values survive both ways, and the rows
+    /// added for the DWG (which a DWG 2010+ keeps in the style, not as a CELLSTYLEMAP) don't add
+    /// cell style entries to the DXF (review on #2921).
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn table_style_survives_dxf_to_dwg_to_dxf() {
+        use acadrust::objects::ObjectType;
+        let rows = style_rows();
+        let head = "  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  0\nENDSEC\n  0\nEOF\n";
+        let mut doc = acadrust::DxfReader::from_reader(std::io::Cursor::new(head.as_bytes().to_vec())).unwrap().read().unwrap();
+        let mut styles = 0;
+        for o in doc.objects.values_mut() {
+            let ObjectType::TableStyle(s) = o else { continue };
+            give_style_rows(s, &rows);
+            styles += 1;
+        }
+        assert!(styles > 0, "the drawing has no table style");
+        let dxf = acadrust::DxfWriter::new(&doc).write_to_vec().unwrap();
+        let dwg = dxf_to_dwg_as(&dxf, "AC1032").unwrap();
+        let out = dwg_to_dxf(&dwg).unwrap();
+        let text = String::from_utf8_lossy(&out);
+        assert_eq!(text.matches("CELLSTYLEMAP").count(), String::from_utf8_lossy(&dxf).matches("CELLSTYLEMAP").count(), "cell style maps");
+        for name in ["_TITLE", "_HEADER", "_DATA"] {
+            assert_eq!(text.matches(name).count(), String::from_utf8_lossy(&dxf).matches(name).count(), "{name} entries");
+        }
+        // Read back, the style has the margins and the rows' values, as before.
+        let back = acadrust::DxfReader::from_reader(std::io::Cursor::new(out)).unwrap().read().unwrap();
+        let mut checked = 0;
+        for o in back.objects.values() {
+            let ObjectType::TableStyle(s) = o else { continue };
+            assert_eq!((s.horizontal_margin, s.vertical_margin), (1.0, 0.25), "{}", s.name);
+            for r in &rows {
+                let row = match r.name {
+                    "_TITLE" => &s.title_row_style,
+                    "_HEADER" => &s.header_row_style,
+                    _ => &s.data_row_style,
+                };
+                let got: Vec<_> = [
+                    &row.top_border,
+                    &row.horizontal_inside_border,
+                    &row.bottom_border,
+                    &row.left_border,
+                    &row.vertical_inside_border,
+                    &row.right_border,
+                ]
+                .iter()
+                .map(|b| b.is_invisible)
+                .collect();
+                let want: Vec<_> = r.edges.iter().map(|e| e.1).collect();
+                assert_eq!(got, want, "{} {}: edges hidden", s.name, r.name);
+                assert_eq!(row.text_height, r.height, "{} {}: height", s.name, r.name);
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, styles);
     }
 
     #[test]
