@@ -1,3 +1,4 @@
+pub mod app_catalog;
 //! # craft-guide
 //!
 //! Interactive onboarding, step-by-step feature walkthroughs, spotlight overlays,
