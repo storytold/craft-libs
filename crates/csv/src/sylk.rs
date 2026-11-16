@@ -355,7 +355,9 @@ fn decode_escapes(text: &str) -> String {
         };
         if let Some(&(_, mark, pairs)) = ISO6937_DIACRITICS.iter().find(|(d, _, _)| *d == code) {
             // The letter it goes on: precomposed where Unicode has the pair, else letter and mark.
-            let Some(base) = ahead.next() else {
+            // The base is an ordinary character: another escape (or any control character) after a
+            // diacritic leaves this escape as written, and the next one is decoded on its own.
+            let Some(base) = ahead.next().filter(|b| !b.is_control()) else {
                 out.push(c);
                 continue;
             };

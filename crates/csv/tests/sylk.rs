@@ -123,7 +123,7 @@ fn decodes_excels_character_escapes_in_text() {
     let file = "ID;PWXL;N;E\r\nC;Y1;X1;K\"Gr\u{1b}NHo\u{1b}N{e f\u{1b}NHur K\u{1b}NHoln\"\r\nC;Y2;X1;K\"Plain ASCII 123\"\r\n\
         C;Y3;X1;K\"\u{1b}NBe \u{1b}NAa \u{1b}NCa \u{1b}NKc \u{1b}NOs \u{1b}NMo \u{1b}NJa \u{1b}NDn\"\r\n\
         C;Y4;X1;K\"\u{1b}NAa \u{1b}NAZ\"\r\nC;Y5;X1;K\"\u{1b}Nq \u{1b}NyStra\u{1b}N{e \u{1b}Na\u{1b}Ni\"\r\n\
-        C;Y6;X1;K\"\u{1b}NHq \u{1b}N\u{1b}NHo end\u{1b}N\"\r\nC;Y7;X1;K\"\u{1b}N\u{7f} \u{1b}NL \u{1b}X\"\r\nE\r\n";
+        C;Y6;X1;K\"\u{1b}NHq \u{1b}N\u{1b}NHo end\u{1b}N\"\r\nC;Y7;X1;K\"\u{1b}N\u{7f} \u{1b}NL \u{1b}X\"\r\nC;Y8;X1;K\"\u{1b}NH\u{1b}NHo \u{1b}NB\tx\"\r\nE\r\n";
     let sh = read(file.as_bytes()).unwrap();
     let value = |a: &str| sh.cells.get(&at(a)).map(|c| c.value.clone()).unwrap_or_default();
     let text = |s: &str| Value::Text(s.into());
@@ -139,4 +139,7 @@ fn decodes_excels_character_escapes_in_text() {
     assert_eq!(value("A6"), text("q\u{308} \u{1b}Nö end\u{1b}N"));
     // Codes ISO 6937 doesn't define (0xFF, 0xCC) and an `ESC` without `N` stay as written.
     assert_eq!(value("A7"), text("\u{1b}N\u{7f} \u{1b}NL \u{1b}X"));
+    // A diacritic followed by another escape (or a control character) is kept as written, and the
+    // next escape still decodes.
+    assert_eq!(value("A8"), text("\u{1b}NHö \u{1b}NB\tx"));
 }
