@@ -578,13 +578,14 @@ impl<T: Copy> PressMachine<T> {
                         released = Some((open.target, open.start, up, open.dragging, click));
                         self.open = None;
                     }
-                    // A middle or secondary press captures for a drag (a canvas pan, a drag with the secondary button) and
-                    // never clicks or starts over an open press; a primary press does not replace one of them. A target
-                    // that senses `MIDDLE_CLICK` also takes a middle press that can click (a tab closes on it), and one
-                    // that senses `CONTEXT_CLICK` takes a secondary press, which a click-only target would not capture.
+                    // An open press keeps the pointer until its button comes up: no press starts over it, of its own
+                    // button (a repeated Down, as a window never sends one) or another. Its moves and its release still
+                    // reach it when a modal opened over its target since. A middle or secondary press captures for a
+                    // drag (a canvas pan, a drag with the secondary button) and never clicks. A target that senses
+                    // `MIDDLE_CLICK` also takes a middle press that can click (a tab closes on it), and one that senses
+                    // `CONTEXT_CLICK` takes a secondary press, which a click-only target would not capture.
                     let capture_only = button != PointerButton::Primary;
-                    let over_other = self.open.is_some_and(|open| capture_only || open.start.button != button);
-                    if !matches!(button, PointerButton::Primary | PointerButton::Middle | PointerButton::Secondary) || over_other {
+                    if !matches!(button, PointerButton::Primary | PointerButton::Middle | PointerButton::Secondary) || self.open.is_some() {
                         continue;
                     }
                     self.open = pick(at)
@@ -709,6 +710,32 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// A press of the held button, where nothing takes a press (a modal opened over the drag's target), leaves the open
+    /// press its drag, and the release ends that press from its own start. Replacing it would end the drag with no
+    /// release, and its owner would never see the button come up.
+    #[test]
+    fn a_press_of_the_held_button_leaves_the_open_drag_its_moves_and_release() {
+        let first = pos2(0.0, 0.0);
+        let mut machine = PressMachine::new();
+        let mut step = |events: &[PointerEvent]| {
+            machine.step(PassInput::new(events, SLOP, first, true), |at| (at == first).then_some((1u8, Sense::DRAG)))
+        };
+        step(&[press(0.0, 1.0)]);
+        step(&[PointerEvent::Moved { at: pos2(40.0, 0.0), sample: None }]);
+        let repeated = step(&[press(50.0, 1.2)]);
+        assert_eq!(repeated.target, Some(1), "the open press keeps its target");
+        assert!(matches!(repeated.phase, Some(PressPhase::Drag { start, .. }) if start.origin == first), "{:?}", repeated.phase);
+        let moved = step(&[PointerEvent::Moved { at: pos2(60.0, 0.0), sample: None }]);
+        assert!(matches!(moved.phase, Some(PressPhase::Drag { pos, .. }) if pos == pos2(60.0, 0.0)), "{:?}", moved.phase);
+        let up = step(&[PointerEvent::released(pos2(60.0, 0.0))]);
+        assert!(
+            matches!(up.phase, Some(PressPhase::Release { start, pos, .. }) if start.origin == first && pos == pos2(60.0, 0.0)),
+            "{:?}",
+            up.phase
+        );
+        assert!(machine.target().is_none(), "the release ends the press");
     }
 
     #[test]

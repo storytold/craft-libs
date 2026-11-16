@@ -527,7 +527,8 @@ pub(crate) fn inject_release(ctx: &Context, viewport: ViewportId, at: Option<Pos
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum InjectedPointer {
-    /// `button` goes down at `at`, after a move there when the injected pointer is elsewhere.
+    /// `button` goes down at `at`, after a move there when the injected pointer is elsewhere. A button injected input
+    /// holds already queues nothing.
     #[non_exhaustive]
     Down {
         /// The button.
@@ -585,6 +586,10 @@ pub(crate) fn inject_pointer(ctx: &Context, viewport: ViewportId, step: Injected
             let (Some(pressed_button), Some(at)) = (egui_button(button), finite(at)) else { return };
             let mods = platform_modifiers(ctx, mods);
             queue(ctx, viewport, |request| {
+                // A window never sends a press of a button that is down already.
+                if request.held.buttons.contains(&pressed_button) {
+                    return;
+                }
                 request.move_to(at, mods, pen);
                 request.step(mods, [self::button(at, pressed_button, true, mods)]).pen = pen;
             });
