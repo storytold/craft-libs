@@ -228,7 +228,8 @@ impl NotesEditor<'_> {
             }
             EditorInput::DeleteSurrounding { before, after, unit, .. } => {
                 let byte = |at: usize| plain.char_indices().nth(at).map_or(plain.len(), |(byte, _)| byte);
-                let (before, after) = (unit.chars_before(before, &plain[..byte(selected.start)]), unit.chars_after(after, &plain[byte(selected.end)..]));
+                let (before, after) =
+                    (unit.chars_before(before, &plain[..byte(selected.start)]), unit.chars_after(after, &plain[byte(selected.end)..]));
                 let (from, to) = (selected.start.saturating_sub(before), (selected.end + after).min(chars));
                 if from == selected.start && to == selected.end {
                     return false;

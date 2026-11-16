@@ -810,7 +810,8 @@ impl<'a> BezierOverlay<'a> {
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     self.report.pressed_empty = true;
-                    *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false, tool: self.tool });
+                    *cx.press_slot::<Held>() =
+                        Some(Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false, tool: self.tool });
                 }
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                     let first = matches!(press.phase, PressPhase::DragStart { .. });

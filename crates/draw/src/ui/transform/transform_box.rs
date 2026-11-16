@@ -5,8 +5,8 @@
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine};
 use craft_behavior::geometry::quad::{self, BoxAllow, BoxDrag, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
+use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
     Axis, CancelReason, CanvasView, Cursor, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor,
@@ -1052,7 +1052,17 @@ fn bounds_of(quad: &[Point; 4]) -> DocRect {
 /// `reach` document units, else `p`.
 fn box_point_pull(state: &BoxState, p: Point, reach: f64) -> Point {
     let q = &state.quad;
-    let points = [q[0], q[1], q[2], q[3], q[0].midpoint(q[1]), q[1].midpoint(q[2]), q[2].midpoint(q[3]), q[3].midpoint(q[0]), q[0].midpoint(q[2]).midpoint(q[1].midpoint(q[3]))];
+    let points = [
+        q[0],
+        q[1],
+        q[2],
+        q[3],
+        q[0].midpoint(q[1]),
+        q[1].midpoint(q[2]),
+        q[2].midpoint(q[3]),
+        q[3].midpoint(q[0]),
+        q[0].midpoint(q[2]).midpoint(q[1].midpoint(q[3])),
+    ];
     points.into_iter().map(|a| (a.distance(p), a)).filter(|(d, _)| *d <= reach).min_by(|a, b| a.0.total_cmp(&b.0)).map_or(p, |(_, a)| a)
 }
 

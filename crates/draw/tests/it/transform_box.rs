@@ -860,10 +860,8 @@ fn a_distort_corner_snaps_to_guides_only_and_claims_no_line_it_stops_short_of() 
     let mut h = harness(BoxState::from_rect(RECT), |config| {
         config.snap = true;
         config.rules = BoxRules::in_mode(TransformMode::Distort);
-        config.targets = vec![
-            SnapTarget::new(craft_behavior::Axis::Y, 250.0, SnapKind::Guide),
-            SnapTarget::new(craft_behavior::Axis::X, 180.0, SnapKind::Guide),
-        ];
+        config.targets =
+            vec![SnapTarget::new(craft_behavior::Axis::Y, 250.0, SnapKind::Guide), SnapTarget::new(craft_behavior::Axis::X, 180.0, SnapKind::Guide)];
     });
     let from = h.screen(Point::new(100.0, 80.0));
     frame(&mut h, vec![pointer::moved(from)]);

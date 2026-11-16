@@ -721,9 +721,8 @@ mod tests {
     fn a_press_of_the_held_button_leaves_the_open_drag_its_moves_and_release() {
         let first = pos2(0.0, 0.0);
         let mut machine = PressMachine::new();
-        let mut step = |events: &[PointerEvent]| {
-            machine.step(PassInput::new(events, SLOP, first, true), |at| (at == first).then_some((1u8, Sense::DRAG)))
-        };
+        let mut step =
+            |events: &[PointerEvent]| machine.step(PassInput::new(events, SLOP, first, true), |at| (at == first).then_some((1u8, Sense::DRAG)));
         step(&[press(0.0, 1.0)]);
         step(&[PointerEvent::Moved { at: pos2(40.0, 0.0), sample: None }]);
         let repeated = step(&[press(50.0, 1.2)]);
