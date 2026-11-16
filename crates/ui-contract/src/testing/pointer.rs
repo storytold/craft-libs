@@ -34,6 +34,17 @@ pub fn wheel(dy: f32) -> Event {
     fixture::wheel_event(dy)
 }
 
+/// A trackpad scroll of `dy` points at the pointer: fingers on the pad, as macOS reports them.
+pub fn trackpad(dy: f32) -> Event {
+    Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Trackpad,
+    }
+}
+
 /// A mouse wheel turning `dy` lines at the pointer.
 pub fn wheel_lines(dy: f32) -> Event {
     fixture::wheel_lines_event(dy)

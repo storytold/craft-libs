@@ -13,6 +13,7 @@ use crate::chord::foreign::{Flavor, ForeignError};
 use crate::chord::{Mods, Trigger};
 use crate::import::{ForeignEntry, ForeignKey, ForeignSet};
 use crate::keymap::{CommandKind, Keymap};
+use craft_xml::{Doctype, Event, Limits, Options};
 
 /// A set is a few tens of kilobytes; a larger file is not one and is not parsed.
 // pc: crates/engine/src/kys.rs:26 `MAX_BYTES`.
@@ -26,9 +27,10 @@ pub const ID_ATTRIBUTE: &str = "craft-id";
 /// The attribute PhotoCraft wrote its command ids under; read like [`ID_ATTRIBUTE`].
 const PHOTOCRAFT_ID_ATTRIBUTE: &str = "pc-id";
 
-/// Deepest element nesting read. roxmltree recurses once per level, so a few thousand nested tags
-/// overflow a thread's stack, an abort nothing can catch.
-const MAX_DEPTH: usize = 64;
+/// Deepest element nesting read. The reader keeps no stack per level, so this only bounds the
+/// work a crafted file can ask for.
+// pc: crates/engine/src/kys.rs (craft-xml `max_depth: 512`).
+const MAX_DEPTH: usize = 512;
 
 const ROOT: &str = "photoshop-keyboard-shortcuts";
 
@@ -65,51 +67,20 @@ fn filename_to_name(f: &str) -> &str {
     rest.split_once('=').map_or(rest, |(_, n)| n).trim()
 }
 
-/// The index after the `>` that closes the tag opening at `at`, skipping a `>` inside a quoted
-/// attribute value; the end of `bytes` when the tag never closes.
-fn tag_end(bytes: &[u8], at: usize) -> usize {
-    let mut quote = None;
-    for (i, &c) in bytes.iter().enumerate().skip(at + 1) {
-        match (quote, c) {
-            (None, b'"' | b'\'') => quote = Some(c),
-            (Some(q), c) if c == q => quote = None,
-            (None, b'>') => return i + 1,
-            _ => {}
-        }
-    }
-    bytes.len()
+/// A `command` or `tool` row as read, before the file's flavour is known.
+struct Row {
+    tool: bool,
+    name: Option<String>,
+    id: Option<String>,
+    /// The 1-based line of the row's start tag.
+    line: usize,
+    /// A command's `<shortcut>` texts; a tool's own text.
+    keys: Vec<String>,
 }
 
-/// Whether `text` nests elements deeper than [`MAX_DEPTH`], counted without building a tree.
-fn too_deep(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let (mut depth, mut at) = (0usize, 0usize);
-    while let Some(open) = bytes.get(at..).and_then(|b| b.iter().position(|&c| c == b'<')) {
-        at += open;
-        let rest = bytes.get(at + 1..).unwrap_or_default();
-        let skip_to = |end: &[u8]| rest.windows(end.len()).position(|w| w == end).map_or(bytes.len(), |p| at + 1 + p + end.len());
-        at = match rest.first() {
-            Some(b'!') if rest.starts_with(b"!--") => skip_to(b"-->"),
-            Some(b'!') if rest.starts_with(b"![CDATA[") => skip_to(b"]]>"),
-            Some(b'!' | b'?') => skip_to(b">"),
-            Some(b'/') => {
-                depth = depth.saturating_sub(1);
-                skip_to(b">")
-            }
-            _ => {
-                let end = tag_end(bytes, at);
-                let tag = bytes.get(at..end).unwrap_or_default();
-                if !tag.ends_with(b"/>") {
-                    depth += 1;
-                    if depth > MAX_DEPTH {
-                        return true;
-                    }
-                }
-                end
-            }
-        };
-    }
-    false
+/// The trimmed value of the attribute `name`, when it has one that is not blank.
+fn attribute(attrs: &[(String, String)], name: &str) -> Option<String> {
+    attrs.iter().find(|(key, _)| key == name).map(|(_, value)| value.trim()).filter(|value| !value.is_empty()).map(str::to_string)
 }
 
 /// Reads a `.kys` or `Keyboard Shortcuts.psp`: the set's name (from the root's `filename`,
@@ -117,55 +88,100 @@ fn too_deep(text: &str) -> bool {
 /// command row with a name (its keys in the file's flavour, an id from [`ID_ATTRIBUTE`] or
 /// `pc-id` as the entry's [`ForeignEntry::id`] when present), and the `<tool>` rows as tool
 /// entries (a tool key with modifiers is read as an unsupported-modifier error, so [`crate::plan`] reports it unreadable and binds nothing). Rows without a name are skipped; rows without a shortcut stay, with no keys.
+/// A file that is not well-formed, declares a document type or nests deeper than [`MAX_DEPTH`]
+/// is not a set; each entry carries the line its row starts on, for the import report.
 // pc: crates/engine/src/kys.rs:66 `parse`, :54 `filename_to_name`, :128 `to_ours`.
 pub fn read(text: &str) -> Result<ForeignSet, KysError> {
     if text.len() > MAX_BYTES {
         return Err(KysError::TooLarge);
     }
     let text = text.trim_start_matches('\u{feff}');
-    if too_deep(text) {
-        return Err(KysError::NotASet(format!("elements are nested more than {MAX_DEPTH} levels deep")));
+    let options = Options { limits: Limits { max_depth: MAX_DEPTH, ..Limits::DEFAULT }, doctype: Doctype::Reject, strict: true, ..Options::default() };
+    let mut events = options.events(text.as_bytes());
+    let not_a_set = |e: craft_xml::Error| KysError::NotASet(e.to_string());
+    let (mut depth, mut rooted, mut set_name) = (0_usize, false, None);
+    let mut rows: Vec<Row> = Vec::new();
+    // The row being read (at depth 2), and the text of the row's own content or of its `<shortcut>` (depth 3).
+    let (mut row, mut shortcut, mut own_text): (Option<Row>, Option<String>, String) = (None, None, String::new());
+    // Lines are counted once over the text, up to each row's start.
+    let (mut counted, mut line) = (0_usize, 1_usize);
+    while let Some(event) = events.next().map_err(not_a_set)? {
+        match event {
+            Event::Start { name, attrs } => {
+                depth += 1;
+                match depth {
+                    1 => {
+                        if name != ROOT {
+                            return Err(KysError::NotASet(format!("no <{ROOT}> root")));
+                        }
+                        rooted = true;
+                        set_name = attrs.iter().find(|(key, _)| key == "filename").map(|(_, value)| filename_to_name(value).to_string());
+                    }
+                    2 if name == "command" || name == "tool" => {
+                        let at = events.span().start;
+                        line += text.as_bytes().get(counted..at).unwrap_or_default().iter().filter(|&&b| b == b'\n').count();
+                        counted = counted.max(at);
+                        let id = [ID_ATTRIBUTE, PHOTOCRAFT_ID_ATTRIBUTE].iter().find_map(|key| attribute(&attrs, key));
+                        row = Some(Row { tool: name == "tool", name: attribute(&attrs, "name"), id, line, keys: Vec::new() });
+                        own_text.clear();
+                    }
+                    3 if name == "shortcut" && row.as_ref().is_some_and(|row| !row.tool) => shortcut = Some(String::new()),
+                    _ => {}
+                }
+            }
+            Event::Text(part) | Event::CData(part) => match (depth, shortcut.as_mut()) {
+                (3, Some(key)) => key.push_str(&part),
+                (2, _) if row.is_some() => own_text.push_str(&part),
+                _ => {}
+            },
+            Event::End { .. } => {
+                match depth {
+                    3 => {
+                        if let (Some(key), Some(row)) = (shortcut.take(), row.as_mut()) {
+                            let key = key.trim();
+                            if !key.is_empty() {
+                                row.keys.push(key.to_string());
+                            }
+                        }
+                    }
+                    2 => {
+                        if let Some(mut done) = row.take() {
+                            let key = own_text.trim();
+                            if done.tool && !key.is_empty() {
+                                done.keys.push(key.to_string());
+                            }
+                            rows.push(done);
+                        }
+                    }
+                    _ => {}
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
     }
-    let doc = roxmltree::Document::parse(text).map_err(|e| KysError::NotASet(e.to_string()))?;
-    let root = doc.root_element();
-    if root.tag_name().name() != ROOT {
+    if !rooted {
         return Err(KysError::NotASet(format!("no <{ROOT}> root")));
     }
-    let rows: Vec<roxmltree::Node> = root.children().filter(roxmltree::Node::is_element).collect();
-    let shortcuts = |node: roxmltree::Node| -> Vec<String> {
-        match node.tag_name().name() {
-            "command" => node
-                .children()
-                .filter(|n| n.is_element() && n.tag_name().name() == "shortcut")
-                .filter_map(|n| n.text().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string))
-                .collect(),
-            _ => node.text().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string).into_iter().collect(),
-        }
-    };
-    let flavor = Flavor::detect(rows.iter().filter(|n| n.tag_name().name() == "command").flat_map(|n| shortcuts(*n)));
+    let flavor = Flavor::detect(rows.iter().filter(|row| !row.tool).flat_map(|row| row.keys.iter().cloned()));
     let mut commands = Vec::new();
     let mut tools = Vec::new();
-    for node in rows {
-        let tool = match node.tag_name().name() {
-            "command" => false,
-            "tool" => true,
-            _ => continue,
-        };
-        let Some(name) = node.attribute("name").map(str::trim).filter(|n| !n.is_empty()) else { continue };
-        let mut entry = ForeignEntry::new(None, [name]).at_line(doc.text_pos_at(node.range().start).row as usize);
-        if let Some(id) = [ID_ATTRIBUTE, PHOTOCRAFT_ID_ATTRIBUTE].iter().find_map(|a| node.attribute(*a).map(str::trim).filter(|i| !i.is_empty())) {
+    for row in rows {
+        let Some(name) = row.name else { continue };
+        let mut entry = ForeignEntry::new(None, [name.as_str()]).at_line(row.line);
+        if let Some(id) = &row.id {
             entry = entry.with_id(id);
         }
-        for key in shortcuts(node) {
-            let mut key = ForeignKey::read(None, &key, flavor);
+        for key in &row.keys {
+            let mut key = ForeignKey::read(None, key, flavor);
             // Photoshop's tool shortcuts are single keys: one with modifiers is reported as
             // unreadable and binds nothing, and the tool keeps the key it has.
-            if tool && key.trigger.as_ref().is_ok_and(|t| !t.chord.mods.is_none() || t.double) {
+            if row.tool && key.trigger.as_ref().is_ok_and(|t| !t.chord.mods.is_none() || t.double) {
                 key.trigger = Err(ForeignError::UnsupportedModifier(key.text.clone()));
             }
             entry = entry.with_key(key);
         }
-        if tool {
+        if row.tool {
             tools.push(entry.tool());
         } else {
             commands.push(entry);
@@ -173,7 +189,7 @@ pub fn read(text: &str) -> Result<ForeignSet, KysError> {
     }
     commands.extend(tools);
     let set = ForeignSet::new(commands);
-    Ok(match root.attribute("filename").map(filename_to_name).filter(|n| !n.is_empty()) {
+    Ok(match set_name.filter(|name| !name.is_empty()) {
         Some(name) => set.with_name(name),
         None => set,
     })

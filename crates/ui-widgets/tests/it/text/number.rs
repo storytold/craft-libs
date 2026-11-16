@@ -449,6 +449,85 @@ fn a_typed_value_past_the_range_commits_the_end_and_reports_it_once() {
     assert_eq!(alerts.borrow().len(), 3, "a value in range, keys, the wheel and a scrub report nothing: {:?}", alerts.borrow());
 }
 
+/// A draft that is no number owes no range alert, though "150" was typed over the field before it: text over it,
+/// text and the key that leaves in one pass. A number typed again after the refused text owes the alert again. In
+/// every case the field holds a value in its range.
+#[trial]
+fn a_draft_that_is_no_number_owes_no_range_alert() {
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::input::text;
+    use craft_ui::text::RangeAlert;
+    use std::rc::Rc;
+
+    /// Types "150" over the field without leaving it, then runs `then`; returns the alerts and the value after.
+    fn after_150(then: &dyn Fn(&mut Fixture, &dyn Fn(&mut Fixture, &str))) -> (usize, Option<f64>) {
+        let value = Rc::new(Cell::new(Some(50.0)));
+        let alerts: Rc<RefCell<Vec<RangeAlert>>> = Rc::default();
+        let (held, seen) = (value.clone(), alerts.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let mut now = held.get();
+            let out = NumberField::new("Amount", Bind::bound(&mut now)).id_salt("amount").range(0.0..=100.0).commit_decimals(0).show(ui);
+            held.set(now);
+            seen.borrow_mut().extend(out.out_of_range.clone());
+            // Where Tab takes the focus, so the field commits.
+            NumberField::new("Other", Bind::bound(&mut Some(1.0))).id_salt("other").show(ui);
+        });
+        fixture.settle();
+        let amount = fixture.by_label("Amount").expect("the field");
+        let type_over = |fixture: &mut Fixture, typed: &str| {
+            fixture.click(&amount).settle();
+            fixture.key(Key::A, Modifiers::COMMAND).type_text(typed);
+        };
+        type_over(&mut fixture, "150");
+        then(&mut fixture, &type_over);
+        fixture.settle();
+        let count = alerts.borrow().len();
+        (count, value.get())
+    }
+
+    let tab = |fixture: &mut Fixture| {
+        fixture.key(Key::Tab, Modifiers::NONE);
+    };
+    let cases: [(&str, &dyn Fn(&mut Fixture, &dyn Fn(&mut Fixture, &str)), usize); 4] = [
+        (
+            "text typed over it, then Tab",
+            &|fixture: &mut Fixture, type_over: &dyn Fn(&mut Fixture, &str)| {
+                type_over(fixture, "abc");
+                tab(fixture);
+            },
+            0,
+        ),
+        (
+            "text, then the number again, then Tab",
+            &|fixture: &mut Fixture, type_over: &dyn Fn(&mut Fixture, &str)| {
+                type_over(fixture, "abc");
+                type_over(fixture, "150");
+                tab(fixture);
+            },
+            1,
+        ),
+        (
+            "Select All, text and Enter in one pass",
+            &|fixture: &mut Fixture, _: &dyn Fn(&mut Fixture, &str)| {
+                fixture.frame(vec![key_press(Key::A, Modifiers::COMMAND), text("abc"), key_press(Key::Enter, Modifiers::NONE)]);
+            },
+            0,
+        ),
+        (
+            "Select All, text and Tab in one pass",
+            &|fixture: &mut Fixture, _: &dyn Fn(&mut Fixture, &str)| {
+                fixture.frame(vec![key_press(Key::A, Modifiers::COMMAND), text("abc"), key_press(Key::Tab, Modifiers::NONE)]);
+            },
+            0,
+        ),
+    ];
+    for (case, then, owed) in cases {
+        let (alerts, value) = after_150(then);
+        assert_eq!(alerts, owed, "{case}: the range alerts reported");
+        assert!(value.is_some_and(|value| (0.0..=100.0).contains(&value)), "{case}: the field holds a value in its range: {value:?}");
+    }
+}
+
 /// The name of an edit event's step.
 fn step_name<V>(event: &craft_behavior::EditEvent<V>) -> &'static str {
     use craft_behavior::EditEvent;

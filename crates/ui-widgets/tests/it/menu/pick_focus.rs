@@ -335,3 +335,47 @@ fn cut_from_the_help_search_fields_edit_menu_cuts_the_search_text() {
     assert!(rig.fixture.by_label("About").is_some(), "the pick closes only the edit menu: Help stays open");
     assert_eq!(rig.fixture.focused_stop().map(|(id, _)| id), held, "focus is back in the search field");
 }
+
+/// A menu opened from the bar while a text field (the zoom field) holds focus takes the letters and arrows: Down moves
+/// in the menu and a letter picks the row it marks, while the field's text stays as it was; the pick gives focus back
+/// to the field.
+#[trial]
+fn an_open_menu_takes_letters_and_arrows_from_a_focused_text_field() {
+    let text = Rc::new(RefCell::new("100%".to_owned()));
+    let (field, zoomed) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(0_u32)));
+    let shown = (text.clone(), field.clone(), zoomed.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let (text, field, zoomed) = &shown;
+        let titles = vec![MenuTitle::new("&Edit", |ui| {
+            if MenuItem::new("&Zoom").show(ui).ran {
+                zoomed.set(zoomed.get() + 1);
+            }
+            MenuItem::new("&Undo").show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        let mut held = text.borrow_mut();
+        field.set(Some(TextField::new("Zoom level", Bind::bound(&mut *held)).show(ui).response.id));
+    });
+    fixture.settle();
+    let name = fixture.by_label("Zoom level").expect("the text field");
+    fixture.click(&name);
+    fixture.settle();
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), field.get(), "the field holds focus");
+
+    let edit = fixture.by_label("Edit").expect("the Edit title");
+    fixture.click(&edit);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_some(), "Edit is open");
+    fixture.key(egui::Key::ArrowDown, egui::Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_some(), "Down keeps the menu open");
+    assert_ne!(fixture.focused_stop().map(|(id, _)| id), field.get(), "Down moves in the menu, not in the field");
+    assert_eq!(*text.borrow(), "100%", "the field's text stays");
+
+    fixture.type_text("z");
+    fixture.settle();
+    assert_eq!(zoomed.get(), 1, "the letter picks the row it marks");
+    assert!(fixture.by_label("Undo").is_none(), "and closes the menu");
+    assert_eq!(*text.borrow(), "100%", "the letter does not reach the field");
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), field.get(), "focus is back in the field");
+}

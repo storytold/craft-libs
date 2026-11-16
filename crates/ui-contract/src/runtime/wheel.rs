@@ -8,7 +8,7 @@ use crate::runtime::frame::PerViewport;
 use crate::runtime::pointer;
 use crate::runtime::sampler;
 use craft_behavior::wheel::split;
-use craft_behavior::{GESTURE_GAP, PointerButton, PointerEvent, Wheel, WheelFocus, WheelGesture, WheelPhase, WheelTaker, WheelUnit};
+use craft_behavior::{GESTURE_GAP, PointerButton, PointerEvent, Wheel, WheelFocus, WheelGesture, WheelPhase, WheelSource, WheelTaker, WheelUnit};
 use craft_keymap::Mods;
 use egui::{Context, Id, Pos2, Rect, Vec2};
 
@@ -97,7 +97,8 @@ pub(crate) fn begin(ctx: &Context) {
         if let (Some(frame), Some(at)) = (&frame, hover)
             && !blocked
         {
-            let (scroll, unit, phase, mods) = wheel_in.unwrap_or((Vec2::ZERO, WheelUnit::Point, WheelPhase::Move, frame.mods));
+            let (scroll, unit, phase, mods, source) =
+                wheel_in.unwrap_or((Vec2::ZERO, WheelUnit::Point, WheelPhase::Move, frame.mods, WheelSource::Unknown));
             let (touch_zoom, touch_rotation) = frame.multi_touch.map_or((1.0, 0.0), |touch| (touch.zoom, touch.rotation));
             // egui's zoom delta is the fingers' factor while they are down, and otherwise the trackpad pinch with the
             // zoom-modifier wheel: the share's zoom is what is left once the fingers' factor is divided out.
@@ -107,6 +108,7 @@ pub(crate) fn begin(ctx: &Context) {
             let moves = scroll != Vec2::ZERO || zoom != 1.0 || touch_zoom != 1.0 || frame.rotation != 0.0 || touch_rotation != 0.0;
             if moves || device_end {
                 let share = Wheel::new(scroll, mods, unit, phase)
+                    .source(source)
                     .zoom(zoom)
                     .touch_zoom(touch_zoom)
                     .rotation(frame.rotation)

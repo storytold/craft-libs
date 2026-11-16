@@ -100,3 +100,48 @@ fn set_export_import_round_trip() {
     plain.click("Undo");
     assert!(plain.shared.borrow().km.overrides().is_empty());
 }
+
+/// Switching away from a set with unsaved edits asks to save them first, and the set row waits while the question is
+/// open: Cancel keeps the set and its edits, Don't Save switches and leaves the set as stored, Save stores the edits
+/// and switches. An unmodified set switches with no question.
+#[trial]
+fn switching_away_from_a_modified_set_asks_to_save_first() {
+    let mut profiles = profiles_with(&["Mine", "Other"]);
+    profiles.select("Mine", &builtins()).expect("Mine exists");
+    let mut rig = Rig::mac_with_sets(profiles);
+    let stored = |rig: &Rig| {
+        let shared = rig.shared.borrow();
+        shared.sets.as_ref().and_then(|(profiles, _)| profiles.sets().get("Mine").cloned()).expect("Mine is stored")
+    };
+    let question = "Save changes to “Mine”?";
+    let edit = |rig: &mut Rig| {
+        rig.click("Save: ⌘S");
+        rig.press(Modifiers::NONE, Key::F2);
+        assert_eq!(rig.bindings("file.save"), ["F2"]);
+    };
+
+    edit(&mut rig);
+    rig.choose("Set:", "Other");
+    assert!(rig.has(question), "a switch away from unsaved edits asks first");
+    let select = rig.control("Set:", Role::COMBO_BOX);
+    assert!(rig.fixture.tree().is_disabled_key(select.node), "the set row waits while the question is open");
+    rig.click("Cancel");
+    assert!(rig.is_open() && !rig.has(question), "Cancel answers the question and keeps the dialog");
+    assert_eq!(rig.active_set().as_deref(), Some("Mine"));
+    assert_eq!(rig.bindings("file.save"), ["F2"], "Cancel keeps the edits");
+
+    rig.choose("Set:", "Other");
+    rig.answer("Don't Save");
+    assert_eq!(rig.active_set().as_deref(), Some("Other"));
+    assert!(stored(&rig).is_empty(), "Don't Save leaves Mine as stored");
+
+    rig.choose("Set:", "Mine");
+    assert!(!rig.has("Save changes to “Other”?"), "an unmodified set switches with no question");
+    assert_eq!(rig.active_set().as_deref(), Some("Mine"));
+    edit(&mut rig);
+    rig.choose("Set:", "Other");
+    rig.answer("Save");
+    assert_eq!(rig.active_set().as_deref(), Some("Other"));
+    assert!(!stored(&rig).is_empty(), "Save stores the edits in Mine");
+    assert_ne!(rig.bindings("file.save"), ["F2"], "Other has its own shortcuts");
+}
