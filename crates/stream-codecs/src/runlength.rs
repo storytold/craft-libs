@@ -141,7 +141,7 @@ mod tests {
             for row in [vec![7; n], (0..n).map(|i| (i % 251) as u8).collect()] {
                 let mut encoded = Vec::new();
                 encode_packbits_into(&row, &mut encoded);
-                assert_eq!(decode(&encoded, n).unwrap(), row);
+                assert_eq!(decode(&encoded, n).map_err(|failure| failure.error).unwrap(), row);
             }
         }
     }
