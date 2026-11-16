@@ -333,7 +333,8 @@ pub(super) fn with_common_as_read(
         _ => Some(d.to_string()),
     };
     // A style of WordCraft's own derives from (or is followed by) the file's style a style was
-    // read from, not an unread namesake of it ([`read_names`]).
+    // read from, under the file's name ([`file_names`]): not WordCraft's copy of it, nor an
+    // unread namesake.
     let fresh = |k: &str, d: &str| {
         let family = if k.ends_with("|text") { "|text" } else { "" };
         renamed(d, &|attr, v| (attr != "style:name").then(|| read.get(&format!("{v}{family}")).cloned()).flatten())
@@ -413,6 +414,22 @@ pub(super) fn rewritten_defs(
             })
         });
         out.insert(key.clone(), def);
+    }
+    out
+}
+
+/// The file's names for the styles the import read under another name than WordCraft writes them
+/// under (`ours`): by that name with its family's key suffix (`BaseStyle`, `BaseStyle|text`),
+/// unescaped, the first the import read into it where several were.
+pub(super) fn file_names(ids: &BTreeMap<String, String>, ours: &dyn Fn(&str) -> String) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (key, id) in ids {
+        let Some(rest) = key.strip_prefix("common:") else { continue };
+        let (name, family) = rest.strip_suffix("|text").map_or((rest, ""), |n| (n, "|text"));
+        let mine = format!("{}{family}", ours(id));
+        if mine != rest {
+            out.entry(mine).or_insert_with(|| name.to_string());
+        }
     }
     out
 }

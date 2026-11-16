@@ -493,6 +493,30 @@ fn a_new_style_based_on_one_beside_an_unused_namesake_derives_from_it() {
     assert_eq!(got, 9.0, "{saved}\n{}", content_of(&bytes));
 }
 
+/// A style made after reading (`NewChild`), based on a file's style WordCraft names otherwise
+/// (`Base_20_Style`, WordCraft's `BaseStyle`), derives from the file's style, with what WordCraft
+/// doesn't model of it.
+#[test]
+fn a_new_style_based_on_a_renamed_one_derives_from_the_files() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Base_20_Style" style:display-name="Base Style" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties style:writing-mode="tb-rl"/><style:text-properties fo:font-size="30pt"/></style:style>"#;
+    let mut d = opened(s, &["Base_20_Style"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    let mut child = d.styles.get(&id).unwrap().clone();
+    (child.id, child.name, child.based_on, child.next) = ("NewChild".into(), "NewChild".into(), Some(id.clone()), None);
+    (child.para, child.chr) = Default::default();
+    Arc::make_mut(&mut d.styles).upsert(child);
+    d.restyle(&id, Some("NewChild".to_string()));
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let new = saved.split("<style:style ").find(|t| t.starts_with(r#"style:name="NewChild""#)).and_then(|t| t.split('>').next());
+    assert!(new.is_some_and(|n| n.contains(r#"style:parent-style-name="Base_20_Style""#)), "{saved}");
+    assert!(def_named(&saved, "Base_20_Style").is_some_and(|d| d.contains(r#"style:writing-mode="tb-rl""#)), "as read: {saved}");
+    let back = import(&bytes).unwrap();
+    let got = back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size;
+    assert_eq!(got, 30.0, "{saved}");
+}
+
 /// The same for a character style: edited text's automatic style derives from the file's
 /// character style it was read with (`My_20_Accent`), not an unused namesake (`MyAccent`).
 #[test]
