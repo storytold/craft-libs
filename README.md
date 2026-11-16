@@ -61,6 +61,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   of compositions, layers, properties, keyframes, effects, masks, shapes, text and footage.
   Clean room, from EffectCraft. Mapping onto an app's document stays in the app.
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
+- [`craft-pe`](crates/pe/src/lib.rs): PE/COFF headers (`.exe`, `.dll`, `.sys`, `.efi`) from untrusted bytes, from Craft Anything: the COFF header, PE32/PE32+ optional header with its data directories bounded by the header's real size, the section table, RVA-to-file mapping and the decoded Rich header.
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
 - [`craft-pdn`](crates/pdn/README.md): Paint.NET documents (`.pdn`, PDN3), read: the layer list, blend modes and chunked gzip pixel blocks, with a data-only MS-NRBF (.NET binary serialization) reader. From PhotoCraft.
@@ -386,7 +387,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   text-format crates read into and write from. WordCraft's model without its editing code.
 - [`craft-xlsx`](crates/xlsx/README.md): Excel workbooks (`.xlsx`, `.xlsm`, SpreadsheetML, transitional and strict) and binary workbooks (`.xlsb`) on `craft-opc`: the workbook part, shared strings, the styles tables and worksheet rows streamed one at a time, with limits on the package, the XML and the binary records.
 - [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
-- [`craft-pe`](crates/pe/src/lib.rs): PE/COFF headers (`.exe`, `.dll`, `.sys`, `.efi`) from untrusted bytes, from Craft Anything: the COFF header, PE32/PE32+ optional header with its data directories bounded by the header's real size, the section table, RVA-to-file mapping and the decoded Rich header.
+- [`craft-sniff`](crates/sniff/src/lib.rs): what a file is from its first bytes: one dependency-free, wasm-safe signature table naming the format, its media type, extension and family for images, audio, video, 3D models, archives, compressed streams, executables and databases. Identifies only; parsing stays with each format's reader.
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
   loading the file, and plane access. Bounded on hostile input.

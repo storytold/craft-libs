@@ -2146,6 +2146,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
@@ -2736,6 +2744,10 @@ dependencies = [
  "x509-cert 0.3.0",
  "zeroize",
 ]
+
+[[package]]
+name = "craft-sniff"
+version = "0.1.0"
 
 [[package]]
 name = "craft-stencilcraft-document"
