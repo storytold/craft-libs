@@ -1,9 +1,13 @@
 //! The Add Anchor Point, Delete Anchor Point, Auto Add/Delete and Curvature tools of [`BezierOverlay`](super::BezierOverlay):
 //! which parts each tool takes a press on, what a click reports and what the hover mark shows.
 
+use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
 use craft_keymap::Mods;
+use craft_ui::primitives::ToolIcon;
+use egui::Vec2;
 
 use super::{AnchorDelete, BezierHit, BezierTool, PathSelection, Report};
+use crate::ui::pen::tool::ICON_BOX;
 
 impl BezierTool {
     /// The tool a press acts as: [`BezierTool::AddAnchor`] and [`BezierTool::DeleteAnchor`] swap while ⌥ is held;
@@ -126,6 +130,24 @@ pub(super) fn hover_mark(tool: BezierTool, hit: BezierHit, mods: Mods, selection
         }
     };
     marked.then_some(hit)
+}
+
+/// The cursor over `hit`, a part the tool takes, with `mods` held; `precise` is the canvas's precise cursor
+/// ([`CanvasSpace::precise`](craft_ui::canvas::CanvasSpace::precise)). Add Anchor shows the pen with "+" over a
+/// segment a click splits and the arrow over an anchor, the crosshair when precise. Under ⌥ (Delete Anchor) and ⌘ the
+/// cursor stays the host tool's, as it does off the parts.
+pub(super) fn hover_cursor(tool: BezierTool, hit: BezierHit, mods: Mods, precise: bool) -> Option<Cursor> {
+    // pc: crates/ui-egui/src/canvas/tool_cursor.rs, crates/ui-egui/src/tools/anchor_tools.rs (#12729).
+    if tool.acting(mods) != BezierTool::AddAnchor || mods.cmd {
+        return None;
+    }
+    let cursor = match hit {
+        _ if precise => PaintedCursor::Crosshair,
+        // The pen's tip is the bottom left corner of the icon's box.
+        BezierHit::Segment { .. } => PaintedCursor::tool(ToolIcon::Pen.icon(), Vec2::Y * ICON_BOX, Some(CursorBadge::Add)),
+        BezierHit::Anchor { .. } | BezierHit::Handle { .. } => PaintedCursor::arrow(false),
+    };
+    Some(Cursor::Painted(cursor))
 }
 
 /// `t` clamped to the range the Curvature tool inserts at.

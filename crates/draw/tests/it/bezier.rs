@@ -159,6 +159,8 @@ struct State {
     flip: bool,
     /// The canvas shows a document and keeps the view it reports, so page keys move it.
     pans: bool,
+    /// The canvas's precise cursors (Preferences > Cursors > Other Cursors).
+    precise: bool,
     view: Option<CanvasView>,
     id: Id,
     seen: Vec<Seen>,
@@ -222,6 +224,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         rotation: 0.0,
         flip: false,
         pans,
+        precise: false,
         view: None,
         id: Id::NULL,
         seen: Vec::new(),
@@ -249,7 +252,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         st.view = Some(view);
         let selection = st.selection.clone();
         let canvas_id = ui.scope_id().with("document canvas");
-        let canvas = Canvas::new("Document").id(canvas_id).view(view);
+        let canvas = Canvas::new("Document").id(canvas_id).view(view).precise_cursors(st.precise);
         let canvas = if st.pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
         let canvas = canvas.show(ui, |ui, body| {
             // The guides lie under the paths: a stack position hides the levels of the ones below it.
@@ -688,4 +691,34 @@ fn an_alt_drag_on_a_segment_drags_a_copy_of_its_subpath() {
     let st = h.state.borrow();
     assert!(matches!(st.changes.last(), Some(PathEdit::MoveAnchors { path: 2, anchors, .. }) if anchors.len() == 4), "{:?}", st.changes);
     assert_eq!(st.paths[0].subpaths.len(), 2);
+}
+
+// Add Anchor's cursor says what a click does (#13292): the pen with "+" over a segment a click splits, the arrow over
+// an anchor; under ⌘ the cursor is the host tool's; the canvas's precise cursor makes it the crosshair.
+#[trial]
+fn add_anchor_shows_the_pen_with_plus_over_a_segment_and_the_arrow_over_an_anchor() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
+    let cursor_at = |h: &mut Harness, at: Point, mods: egui::Modifiers| {
+        let at = h.screen(at);
+        h.fixture.hold(mods);
+        h.fixture.frame(vec![pointer::moved(at)]);
+        h.fixture.frame(Vec::new());
+        h.fixture.hold(egui::Modifiers::NONE);
+        craft_ui::runtime::cursor::current(h.fixture.ctx())
+    };
+    let pen_plus = |cursor: &Option<Cursor>| matches!(cursor, Some(Cursor::Painted(PaintedCursor::Tool { badge: Some(CursorBadge::Add), .. })));
+    let (segment, anchor) = (p(110.0, 60.0), p(160.0, 60.0));
+
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::AddAnchor);
+    let over_segment = cursor_at(&mut h, segment, egui::Modifiers::NONE);
+    assert!(pen_plus(&over_segment), "{over_segment:?}");
+    assert_eq!(cursor_at(&mut h, anchor, egui::Modifiers::NONE), Some(Cursor::Painted(PaintedCursor::arrow(false))));
+    let with_cmd = cursor_at(&mut h, segment, egui::Modifiers::COMMAND);
+    assert!(!pen_plus(&with_cmd), "{with_cmd:?}");
+
+    h.update(|st| st.precise = true);
+    for at in [segment, anchor] {
+        assert_eq!(cursor_at(&mut h, at, egui::Modifiers::NONE), Some(Cursor::Painted(PaintedCursor::Crosshair)), "{at:?}");
+    }
 }

@@ -14,7 +14,7 @@ mod words;
 use craft_behavior::geometry::{SelectionOperation, axis_or_diagonal};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
-    Axis, CanvasView, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape, PartKey, PartRef,
+    Axis, CanvasView, CursorPriority, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape, PartKey, PartRef,
     PointerButton, PressPhase, PressStart, Roving, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
@@ -67,7 +67,8 @@ pub enum BezierTool {
     Anchors,
     /// Add Anchor Point: a press on a segment inserts an anchor at the hit's `t` ([`PathEdit::InsertAnchor`]); a drag
     /// moves the new anchor, which is selected; ⌥ makes it Delete Anchor Point. Hover: the segment mark with the
-    /// anchor a click adds ([`HitMark`]).
+    /// anchor a click adds ([`HitMark`]) and the pen with "+"; over an anchor the arrow; the crosshair under the
+    /// canvas's precise cursor ([`CanvasSpace::precise`]).
     AddAnchor,
     /// Delete Anchor Point: a click on an anchor reports [`delete`](BezierOutput::delete) of that anchor; ⌥ makes it
     /// Add Anchor Point, except that a ⌥ click on an anchor selects its whole subpath. Hover: the anchor mark.
@@ -792,6 +793,9 @@ impl<'a> BezierOverlay<'a> {
         if let Some((_, hit, mods)) = hovered {
             self.report.hover = Some(hit);
             self.hover_mark = tools::hover_mark(self.tool, hit, mods, self.selection);
+            if let Some(cursor) = tools::hover_cursor(self.tool, hit, mods, space.precise()) {
+                cx.cursor(cursor, CursorPriority::Part);
+            }
         }
     }
 
