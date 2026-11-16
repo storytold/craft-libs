@@ -445,6 +445,45 @@ fn an_unused_style_named_as_wordcraft_names_an_edited_one_keeps_its_definition()
     as_read(&saved);
 }
 
+/// A paragraph written from the model names the file's style it was read with (`My_20_Custom`),
+/// not a style of the file's that WordCraft's name for it would land on (`MyCustom`, unused).
+#[test]
+fn an_edited_paragraph_keeps_its_styles_file_name_beside_an_unused_namesake() {
+    use std::sync::Arc;
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    for (edit_style, size) in [(false, 9.0), (true, 21.0)] {
+        let mut d = opened(s, &["My_20_Custom"]);
+        let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+        if edit_style {
+            Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+        }
+        d.insert_text(&Pos::body(0, 0), "New ", &Default::default()).unwrap();
+        let bytes = export(&d).unwrap();
+        let c = content_of(&bytes);
+        assert!(c.contains("New Text"), "{c}");
+        assert!(!c.contains(r#"style-name="MyCustom""#), "{c}");
+        let back = import(&bytes).unwrap();
+        let got = back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size;
+        assert_eq!(got, size, "edited style {edit_style}: {c}\n{}", styles_of(&bytes));
+    }
+}
+
+/// The same for a character style: edited text's automatic style derives from the file's
+/// character style it was read with (`My_20_Accent`), not an unused namesake (`MyAccent`).
+#[test]
+fn edited_text_keeps_its_character_styles_file_name_beside_an_unused_namesake() {
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Accent" style:family="text"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyAccent" style:family="text"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>One <text:span text:style-name="My_20_Accent">two</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    d.insert_text(&Pos::body(0, 0), "New ", &Default::default()).unwrap();
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains("New One"), "{c}");
+    assert!(c.contains(r#"style:parent-style-name="My_20_Accent""#) && !c.contains(r#"="MyAccent""#), "{c}");
+}
+
 /// An edited style the file names as WordCraft does (`Eigen`), whose parent WordCraft names
 /// otherwise (`Base_20_Style`, WordCraft's `BaseStyle`), still derives from the file's parent.
 #[test]
