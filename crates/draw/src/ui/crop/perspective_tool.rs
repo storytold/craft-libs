@@ -130,11 +130,6 @@ fn boxed(anchor: Point, to: Point) -> PerspectiveQuad {
     (x1 > x0 && y1 > y0).then_some([Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)])
 }
 
-/// Whether `q` is convex whichever way it is wound: the preview of corners clicked in any order.
-fn convex(q: &[Point; 4]) -> bool {
-    is_valid(q) || is_valid(&[q[0], q[3], q[2], q[1]])
-}
-
 /// What the host hands the perspective crop pass each frame.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
@@ -271,7 +266,7 @@ impl CanvasTool for PerspectiveCropPass<'_> {
             _ => None,
         };
         if let Some(quad) = preview {
-            let ok = clicks.len() == 2 || convex(&quad);
+            let ok = clicks.len() == 2 || is_valid(&quad);
             if ok && self.input.show_grid {
                 let grid = grid_color(style);
                 for [a, b] in grid_lines(view, &quad, grid_step(style)) {
