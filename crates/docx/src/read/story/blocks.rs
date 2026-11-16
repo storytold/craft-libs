@@ -337,6 +337,18 @@ impl Reader<'_> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
             table.props = self.pc.tblpr(p);
+            // Sides `w:tblCellMar` leaves out keep the style's margins; without a style, Word's
+            // 0.08" left and right, or none in a file with no default table style.
+            if let Some(m) = p.child("w:tblCellMar") {
+                let base = table
+                    .props
+                    .style
+                    .as_deref()
+                    .and_then(|id| self.doc.styles.table_style(id))
+                    .and_then(|st| st.parts.cell_margins)
+                    .unwrap_or(if self.no_default_table_style { [0.0; 4] } else { crate::read::props::WORD_CELL_MARGINS });
+                table.props.cell_margins = Some(crate::read::props::margins_over(m, base));
+            }
             if let Some(ch) = p.child("w:tblPrChange") {
                 let mut old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
                 // Rejecting the change brings back these properties: with the same margins.
