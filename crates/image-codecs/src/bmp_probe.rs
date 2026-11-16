@@ -1,5 +1,18 @@
 //! Header-only BMP dimensions and pixel-data coverage, without allocating a canvas.
 
+/// Recognize a BMP file header with a supported DIB header kind.
+///
+/// This is a format-routing check, not full validation: dimensions and pixel data may still
+/// be invalid. Unlike the broad signature detector, it requires the minimum 26-byte core
+/// header and a known DIB size, preserving callers that reject arbitrary `BM` prefixes.
+pub fn is_supported_header(b: &[u8]) -> bool {
+    if b.len() >= 26 && b.starts_with(b"BM") {
+        let dib = u32::from_le_bytes([b[14], b[15], b[16], b[17]]);
+        return matches!(dib, 12 | 16 | 40 | 52 | 56 | 64 | 108 | 124);
+    }
+    false
+}
+
 /// Coverage of the declared pixel array. Row byte counts include row padding; RLE coverage
 /// counts the pixels drawn by commands and may be smaller than the canvas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
