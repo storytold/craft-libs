@@ -222,23 +222,22 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
         out.push_str("</colgroup>\n");
     }
     let nrows = t.rows.len();
-    let cell_at_grid = |r: usize, target_g: usize| -> Option<usize> {
-        let row = t.rows.get(r)?;
-        let mut x = 0usize;
-        for (ci, c) in row.iter().enumerate() {
-            if x == target_g {
-                return Some(ci);
-            }
-            if x > target_g {
-                return None;
-            }
-            x = x.saturating_add(c.colspan.clamp(1, 63) as usize);
-        }
-        None
-    };
-
-    let grid_col =
-        |r: usize, ci: usize| -> usize { t.rows.get(r).map_or(0, |row| row.iter().take(ci).map(|c| c.colspan.clamp(1, 63) as usize).sum()) };
+    let grid_cols: Vec<Vec<usize>> = t
+        .rows
+        .iter()
+        .map(|row| {
+            let mut x = 0usize;
+            row.iter()
+                .map(|c| {
+                    let start = x;
+                    x = x.saturating_add(c.colspan.clamp(1, 63) as usize);
+                    start
+                })
+                .collect()
+        })
+        .collect();
+    let cell_at_grid = |r: usize, target_g: usize| -> Option<usize> { grid_cols.get(r)?.binary_search(&target_g).ok() };
+    let grid_col = |r: usize, ci: usize| -> usize { grid_cols.get(r).and_then(|row| row.get(ci)).copied().unwrap_or(0) };
 
     let mut is_covered: Vec<Vec<bool>> = t.rows.iter().map(|r| vec![false; r.len()]).collect();
     let mut rowspans: Vec<Vec<u32>> = t.rows.iter().map(|r| r.iter().map(|c| c.rowspan.clamp(1, 1000)).collect()).collect();
