@@ -885,4 +885,5 @@ fn strict_geometry_validates_the_colors_index_alias() {
     let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
     assert!(document(with("0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_ok());
     assert!(document(with("\"bad\",0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
+    assert!(document(with("0.5").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err(), "a fractional index");
 }

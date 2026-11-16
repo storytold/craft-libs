@@ -23,6 +23,8 @@ pub struct Package<'a> {
     zip: craft_zip::Archive<'a>,
     limits: PackageLimits,
     name: String,
+    /// Textures read so far by name: a texture several materials share is read, and charged, once.
+    textures: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl<'a> Package<'a> {
@@ -34,7 +36,7 @@ impl<'a> Package<'a> {
             .find(|n| n.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("fbx")))
             .map(|n| n.into_owned())
             .ok_or_else(|| malformed(KIND, "the package contains no FBX file"))?;
-        Ok(Self { zip, limits, name })
+        Ok(Self { zip, limits, name, textures: std::collections::HashMap::new() })
     }
 
     pub fn model(&mut self) -> Result<Vec<u8>> {
@@ -51,7 +53,16 @@ impl<'a> Package<'a> {
 
     /// Resolve candidate names within the package; outside paths are never read.
     pub fn texture(&mut self, paths: &[&str]) -> Option<Vec<u8>> {
-        paths.iter().filter_map(|p| below(p)).find_map(|name| self.zip.read(&name, self.limits.max_texture_bytes).ok().flatten())
+        for name in paths.iter().filter_map(|p| below(p)) {
+            if let Some(data) = self.textures.get(&name) {
+                return Some(data.clone());
+            }
+            if let Some(data) = self.zip.read(&name, self.limits.max_texture_bytes).ok().flatten() {
+                self.textures.insert(name, data.clone());
+                return Some(data);
+            }
+        }
+        None
     }
 }
 
@@ -90,6 +101,7 @@ pub fn write(
     let mut by_name = std::collections::HashMap::<String, usize>::new();
     let mut too_many = false;
     let mut missing = Vec::new();
+    let mut missing_seen = std::collections::HashSet::<String>::new();
     let mut total = bytes.len() as u64;
     let mut exceeded = total > package_limits.max_total_bytes || total > package_limits.max_model_bytes;
     doc.diffuse_materials(limits, &mut |paths| {
@@ -119,7 +131,7 @@ pub fn write(
                 return Some(data);
             }
         }
-        if let Some(first) = paths.first().filter(|p| !missing.iter().any(|m| m == **p)) {
+        if let Some(first) = paths.first().filter(|p| missing_seen.insert((**p).to_string())) {
             missing.push((*first).to_string());
         }
         None
@@ -232,5 +244,19 @@ mod tests {
         let (bytes, missing) = write(&doc, "a.fbx", MODEL, &limits, one, &mut |_| None).unwrap();
         assert!(bytes.is_none());
         assert_eq!(missing, vec!["tex/a.png".to_string()]);
+    }
+
+    #[test]
+    fn a_shared_texture_is_read_and_charged_once() {
+        let limits = Limits::default();
+        let doc = read_document(MODEL, &limits).unwrap();
+        let (bytes, _) = write(&doc, "asset.fbx", MODEL, &limits, bounds(), &mut |_| Some(b"image".to_vec())).unwrap();
+        let bytes = bytes.unwrap();
+        // room for the model and one read of the texture
+        let tight = PackageLimits { max_total_bytes: MODEL.len() as u64 + 5, ..bounds() };
+        let mut package = Package::open(&bytes, tight).unwrap();
+        package.model().unwrap();
+        assert_eq!(package.texture(&["tex/a.png"]), Some(b"image".to_vec()));
+        assert_eq!(package.texture(&["tex/a.png"]), Some(b"image".to_vec()), "served from the cache");
     }
 }

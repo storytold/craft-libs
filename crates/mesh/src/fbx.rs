@@ -1412,7 +1412,8 @@ impl<'a> Build<'a, '_> {
                 ("LayerElementColor", &["Colors", "ColorIndex", "ColorsIndex"][..]),
             ] {
                 if let Some(layer) = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0))
-                    && names.iter().filter_map(|n| layer.child(n)).any(|r| !valid(r, false))
+                    // index arrays and material ids are integers; the data arrays are floats
+                    && names.iter().filter_map(|n| layer.child(n).map(|r| (r, n.ends_with("Index") || *n == "Materials"))).any(|(r, integers)| !valid(r, integers))
                 {
                     return Err(malformed(KIND, "mesh array contains a non-numeric or non-finite value"));
                 }
