@@ -235,6 +235,8 @@ aep = ["dep:craft-aep"]
 affinity = ["dep:craft-affinity"]
 affinity-synth = ["affinity", "craft-affinity/synth"]
 
+ai-agents = ["dep:craft-ai-agents"]
+
 ai-core = ["dep:craft-ai-core"]
 
 anicraft-format = ["dep:craft-anicraft-format"]

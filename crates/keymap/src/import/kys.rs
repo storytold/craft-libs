@@ -88,7 +88,7 @@ fn attribute(attrs: &[(String, String)], name: &str) -> Option<String> {
 /// command row with a name (its keys in the file's flavour, an id from [`ID_ATTRIBUTE`] or
 /// `pc-id` as the entry's [`ForeignEntry::id`] when present), and the `<tool>` rows as tool
 /// entries (a tool key with modifiers is read as an unsupported-modifier error, so [`crate::plan`] reports it unreadable and binds nothing). Rows without a name are skipped; rows without a shortcut stay, with no keys.
-/// A file that is not well-formed, declares a document type or nests deeper than [`MAX_DEPTH`]
+/// A file that is not well-formed, declares a document type or nests deeper than 512 elements
 /// is not a set; each entry carries the line its row starts on, for the import report.
 // pc: crates/engine/src/kys.rs:66 `parse`, :54 `filename_to_name`, :128 `to_ours`.
 pub fn read(text: &str) -> Result<ForeignSet, KysError> {
