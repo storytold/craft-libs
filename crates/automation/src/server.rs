@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::control::{ControlRequest, REPLY_DEADLINE};
 use crate::protocol::write_reply;
 use crate::security::{
-    AUTH_DEADLINE, AuthDeadlineStream, ConnectionLimiter, LineRead, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply, configure_stream,
+    AUTH_DEADLINE, AuthDeadlineStream, AuthStep, ConnectionLimiter, LineRead, MAX_CONNECTIONS, MAX_REQUEST_BYTES, ServerHandshake, configure_stream,
     read_bounded_line, repeat_auth_reply,
 };
 
@@ -63,8 +63,8 @@ pub fn start_with_deadline(
     Ok((rx, addr))
 }
 
-/// Serve one connection: it must complete `auth` within `auth_deadline` of connecting, however
-/// much it sends meanwhile; after that only the idle timeout applies.
+/// Serve one connection: it must authenticate ([`ServerHandshake`]) within `auth_deadline` of
+/// connecting, however much it sends meanwhile; after that only the idle timeout applies.
 fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, host: &WindowHost, auth_deadline: Duration) {
     if configure_stream(&stream).is_err() {
         return;
@@ -73,6 +73,7 @@ fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, host: &Win
     let mut reader = BufReader::new(AuthDeadlineStream::new(read, auth_deadline));
     let mut out = stream;
     let mut line = String::new();
+    let mut handshake = ServerHandshake::new();
     let mut authenticated = false;
     loop {
         match read_bounded_line(&mut reader, &mut line) {
@@ -91,12 +92,12 @@ fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, host: &Win
             Ok(LineRead::Line) => {}
         }
         if !authenticated {
-            let (reply, ok) = authentication_reply(&line, token);
-            authenticated = ok;
-            if ok && reader.get_mut().authenticated().is_err() {
+            let (reply, step) = handshake.reply(&line, token);
+            authenticated = step == AuthStep::Authenticated;
+            if authenticated && reader.get_mut().authenticated().is_err() {
                 break;
             }
-            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() || !authenticated {
+            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() || step == AuthStep::Rejected {
                 break;
             }
             continue;

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use craft_automation::client::ControlClient;
 use craft_automation::control::{ControlChannel, ControlRequest, Reply, expired_error, result_reply, timeout_error};
-use craft_automation::security::MAX_REQUEST_BYTES;
+use craft_automation::security::{CHALLENGE_METHOD, MAX_REQUEST_BYTES, ProofRole, generate_nonce, handshake_proof, proof_matches};
 use craft_automation::server;
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
@@ -137,6 +137,33 @@ fn an_over_long_request_is_refused_and_closes_the_connection() {
     assert!(reply["error"].as_str().expect("an error").starts_with("request exceeds"), "{reply}");
     assert!(read_json(&mut reader).is_none(), "the connection is closed");
     assert!(rx.try_recv().is_err());
+}
+
+/// A connection that authenticates with the challenge handshake learns the server holds the token, never sends it,
+/// and then has its requests dispatched.
+#[trial]
+fn a_challenge_authenticated_connection_is_served() {
+    let (rx, addr) = server::start(0, TOKEN.into(), host()).expect("started");
+    let handler = std::thread::spawn(move || {
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("a request");
+        assert_eq!(req.method, "test.ping");
+        req.reply.send(json!({"ok": true, "result": "pong"})).expect("replied");
+    });
+    let mut stream = TcpStream::connect(addr).expect("connected");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+    let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+    let client_nonce = generate_nonce().expect("a nonce");
+    writeln!(stream, "{}", json!({"id": 1, "method": CHALLENGE_METHOD, "params": {"clientNonce": client_nonce}})).expect("written");
+    let challenge = read_json(&mut reader).expect("a reply");
+    let server_nonce = challenge["result"]["serverNonce"].as_str().expect("a server nonce").to_owned();
+    let server_proof = challenge["result"]["serverProof"].as_str().expect("a server proof");
+    assert!(proof_matches(TOKEN, ProofRole::Server, &client_nonce, &server_nonce, server_proof), "{challenge}");
+    let proof = handshake_proof(TOKEN, ProofRole::Client, &client_nonce, &server_nonce).expect("a proof");
+    writeln!(stream, "{}", json!({"id": 2, "method": "auth", "params": {"proof": proof}})).expect("written");
+    assert_eq!(read_json(&mut reader).expect("a reply")["result"]["authenticated"], true);
+    writeln!(stream, "{}", json!({"id": 3, "method": "test.ping"})).expect("written");
+    assert_eq!(read_json(&mut reader).expect("a reply"), json!({"id": 3, "ok": true, "result": "pong"}));
+    handler.join().expect("handler ran");
 }
 
 /// Sends one state of a states file and saves its capture as `<label>-<id>.png`: the client sample of
