@@ -1,7 +1,9 @@
 //! `FullWindowCanvas`: the canvas region of a full-window dialog, and `RasterOverlay`, a further image drawn over it.
 
 use super::view::FullWindowView;
-use crate::canvas::{Canvas, CanvasTool, HandTool, Momentary, NavigationOptions, PixelRect, RasterDisplay, RasterSource, ToolHost, ToolHostResponse};
+use crate::canvas::{
+    Canvas, CanvasTool, HandTool, Momentary, NavigationOptions, PixelRect, RasterDisplay, RasterSource, ToolHost, ToolHostResponse, tool_pass,
+};
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::DialogWords;
 use crate::layout_components::Stack;
@@ -211,11 +213,36 @@ impl<'a> FullWindowCanvas<'a> {
             // side column) sizes from its other content instead of taking the whole room the canvas is offered.
             let rect = ui.available_rect_before_wrap();
             let shown = given.settled(rect, size, ppp);
+            // What the tool host did; none in a measuring run, where it does not run.
+            let mut hosted = None;
             let canvas = Canvas::new(label.clone()).view(shown.view()).document(shown.size()).navigation(navigation).outer_view_commands().show_at(
                 ui,
                 rect,
                 |ui, body| {
-                    let mut image = RasterDisplay::new(label.clone(), source).outlined();
+                    if let Some(controls) = controls.as_mut() {
+                        controls(ui, body.rect);
+                    }
+                    // The tool runs after the controls, which take a press first, and before the image and overlays,
+                    // which show what it did with this pass's input. The body runs for the measuring pass and again
+                    // for the real one, so the tool is reborrowed on each run.
+                    if let Some(pass) = tool_pass(&body.env) {
+                        let key = global("craft-ui full-window canvas tools", pass.id);
+                        hosted = Some(with_session(&ui.ctx().clone(), key, |slot: &mut KeptTools| {
+                            let momentary = slot.momentary.get_or_insert_with(|| Momentary::new(navigation));
+                            momentary.set_options(navigation);
+                            let host = ToolHost::new().momentary(momentary);
+                            match tool.as_deref_mut() {
+                                Some(tool) => host.run(ui, &pass, tool),
+                                None => {
+                                    let hand = slot.hand.get_or_insert_with(|| HandTool::new(navigation));
+                                    hand.options = navigation;
+                                    host.run(ui, &pass, hand)
+                                }
+                            }
+                        }));
+                    }
+                    // The image and its overlays paint in the canvas's picture slot, under the controls and the tool.
+                    let mut image = RasterDisplay::new(label.clone(), source).outlined().picture();
                     if let Some(checker) = checkerboard {
                         image = image.checkerboard(checker);
                     }
@@ -226,7 +253,7 @@ impl<'a> FullWindowCanvas<'a> {
                             Some(tinted) => tinted,
                             None => overlay.source,
                         };
-                        let mut display = RasterDisplay::new(Label::Empty, source).id_salt(("overlay", n));
+                        let mut display = RasterDisplay::new(Label::Empty, source).id_salt(("overlay", n)).picture();
                         if let Some((frame, cells, placed)) = overlay.mapping {
                             display = display.mapped(frame, cells);
                             if let Some(placed) = placed {
@@ -235,30 +262,12 @@ impl<'a> FullWindowCanvas<'a> {
                         }
                         display.show_at(ui, body.rect);
                     }
-                    if let Some(controls) = controls.as_mut() {
-                        controls(ui, body.rect);
-                    }
                 },
             );
             let output = canvas.output;
-            // The body runs for the measuring pass and again for the real one. The tool is reborrowed on each run; the
-            // host delivers no input in the measuring run.
-            let key = global("craft-ui full-window canvas tools", output.response.id);
-            let hosted = with_session(&ui.ctx().clone(), key, |slot: &mut KeptTools| {
-                let momentary = slot.momentary.get_or_insert_with(|| Momentary::new(navigation));
-                momentary.set_options(navigation);
-                let host = ToolHost::new().momentary(momentary);
-                match tool.as_deref_mut() {
-                    Some(tool) => host.run(ui, &output, tool),
-                    None => {
-                        let hand = slot.hand.get_or_insert_with(|| HandTool::new(navigation));
-                        hand.options = navigation;
-                        host.run(ui, &output, hand)
-                    }
-                }
-            });
+            let hosted: ToolHostResponse = hosted.unwrap_or_default();
             // The host's view is the tool's, else the canvas's own (the wheel, a middle-button pan, the clamp).
-            let next = shown.took(hosted.view.unwrap_or_else(|| shown.view()));
+            let next = shown.took(hosted.view.or(output.view).unwrap_or_else(|| shown.view()));
             if next != given && measure::effect(&ui.ctx().clone(), "full-window canvas view write") {
                 let event = EditEvent::set(Mixed::Same(given), next, name.clone(), None);
                 let _ = bind.write(cx, &event);

@@ -8,6 +8,7 @@ use craft_keymap::Mods;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
     NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, canvas_space,
+    tool_pass,
 };
 use craft_ui::contract::{Bind, Lazy, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
@@ -213,9 +214,14 @@ fn scroll_canvas<T: CanvasTool + 'static>(tool: Rc<RefCell<T>>, rotation: f64) -
             start.rotation = rotation;
             start
         });
-        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room.shrink(40.0), |_, _| {});
-        let reply = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
-        let mut next = reply.view.unwrap_or(current);
+        let mut reply = None;
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room.shrink(40.0), |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        let reply = reply.unwrap_or_default();
+        let mut next = reply.view.or(shown.output.view).unwrap_or(current);
         if let Some(step) = reply.scroll
             && Autoscroll::scroll(&mut next, step, DOCUMENT).is_some()
         {
@@ -343,7 +349,16 @@ fn crowded_canvas(crowd: Crowd) -> CanvasRig<Rect> {
             (area, None)
         };
         shown_canvas.set(first);
-        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, first, |_, _| {});
+        let mut reply = None;
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, first, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let mut host = ToolHost::new();
+                if crowd == Crowd::MomentaryHand {
+                    host = host.momentary(&mut momentary);
+                }
+                reply = Some(host.run(ui, &pass, &mut tool));
+            }
+        });
         if let Some(second) = second {
             Canvas::new("Other").document(DOCUMENT).view(CanvasView::new(second, Point::new(600.0, 450.0), 4.0)).show_at(ui, second, |_, _| {});
         }
@@ -353,12 +368,8 @@ fn crowded_canvas(crowd: Crowd) -> CanvasRig<Rect> {
                 Text::new("Modal").show(ui);
             });
         }
-        let mut host = ToolHost::new();
-        if crowd == Crowd::MomentaryHand {
-            host = host.momentary(&mut momentary);
-        }
-        let reply = host.run(ui, &shown.output, &mut tool);
-        let mut next = reply.view.unwrap_or(current);
+        let reply = reply.unwrap_or_default();
+        let mut next = reply.view.or(shown.output.view).unwrap_or(current);
         if let Some(step) = reply.scroll
             && Autoscroll::scroll(&mut next, step, DOCUMENT).is_some()
         {
@@ -555,17 +566,22 @@ impl Rig {
             if let Some(snap) = &snap {
                 shown = shown.snap(snap.clone());
             }
-            let shown = shown.show(ui, |_, _| {});
+            let mut reply = None;
+            let shown = shown.show(ui, |ui, body| {
+                if let Some(pass) = tool_pass(&body.env) {
+                    let (mut command, mut alt) = (shown_command.borrow_mut(), shown_alt.borrow_mut());
+                    let mut host = ToolHost::new()
+                        .stand_in(StandInKey::Command, &mut *command)
+                        .stand_in(StandInKey::Alt, &mut *alt)
+                        .smart_guide_color(setup.smart_color);
+                    if let Some(momentary) = setup.momentary.as_mut() {
+                        host = host.momentary(momentary);
+                    }
+                    reply = Some(host.run(ui, &pass, &mut *shown_main.borrow_mut()));
+                }
+            });
             shown_canvas.set(shown.output.response.id);
-            let (mut command, mut alt) = (shown_command.borrow_mut(), shown_alt.borrow_mut());
-            let mut host = ToolHost::new()
-                .stand_in(StandInKey::Command, &mut *command)
-                .stand_in(StandInKey::Alt, &mut *alt)
-                .smart_guide_color(setup.smart_color);
-            if let Some(momentary) = setup.momentary.as_mut() {
-                host = host.momentary(momentary);
-            }
-            let reply = host.run(ui, &shown.output, &mut *shown_main.borrow_mut());
+            let reply = reply.unwrap_or_default();
             shown_contexts.borrow_mut().extend(reply.context);
             shown_snapped.borrow_mut().extend(reply.snapped.iter().copied());
             if setup.rerun.replace(false) && frame::discardable(ui.ctx()) {
@@ -785,9 +801,12 @@ fn an_injected_pen_reading_reaches_the_tool() {
     let shown_canvas = Rc::clone(&canvas);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
-        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |_, _| {});
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *shown_probe.borrow_mut());
+            }
+        });
         shown_canvas.set(shown.output.response.id);
-        let _ = ToolHost::new().run(ui, &shown.output, &mut *shown_probe.borrow_mut());
     });
     fixture.settle();
     let at = fixture.by_role(Role::CANVAS)[0].rect.center();
@@ -852,9 +871,12 @@ fn a_stroke_runs_no_settled_panel_beside_the_canvas_and_one_pass_per_move() {
         });
         in_region(ui, document, |ui| {
             let view = CanvasView::new(document, Point::new(600.0, 450.0), 1.0);
-            let shown = Canvas::new("Document").document(DOCUMENT).view(view).show(ui, |_, _| {});
+            let shown = Canvas::new("Document").document(DOCUMENT).view(view).show(ui, |ui, body| {
+                if let Some(pass) = tool_pass(&body.env) {
+                    let _ = ToolHost::new().run(ui, &pass, &mut *shown_painter.borrow_mut());
+                }
+            });
             shown_canvas.set(shown.output.response.id);
-            let _ = ToolHost::new().run(ui, &shown.output, &mut *shown_painter.borrow_mut());
         });
     });
     fixture.settle();
@@ -895,10 +917,16 @@ fn momentary_canvas_with(main: Probe, mut body: impl FnMut(&mut egui::Ui, &mut c
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
-        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, &mut body);
+        let mut reply = None;
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |ui, cx| {
+            body(ui, cx);
+            if let Some(pass) = tool_pass(&cx.env) {
+                reply = Some(ToolHost::new().momentary(&mut set).run(ui, &pass, &mut *main.borrow_mut()));
+            }
+        });
         shown_canvas.set(shown.output.response.id);
-        let reply = ToolHost::new().momentary(&mut set).run(ui, &shown.output, &mut *main.borrow_mut());
-        shown_view.set(Some(reply.view.unwrap_or(current)));
+        let reply = reply.unwrap_or_default();
+        shown_view.set(Some(reply.view.or(shown.output.view).unwrap_or(current)));
     });
     fixture.settle();
     (fixture, view, canvas)
@@ -1002,7 +1030,12 @@ fn kept_canvas<T: CanvasTool + 'static>(tool: Rc<RefCell<T>>) -> CanvasRig<Rect>
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 1.0));
-        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room, |_, _| {});
+        let mut reply = None;
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
         shown_rect.set(room);
         let id = shown.output.response.id;
         let mut open = true;
@@ -1010,8 +1043,8 @@ fn kept_canvas<T: CanvasTool + 'static>(tool: Rc<RefCell<T>>) -> CanvasRig<Rect>
             cx.keep_view_open(id);
             Text::new("Pick").show(ui);
         });
-        let reply = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
-        shown_view.set(Some(reply.view.unwrap_or(current)));
+        let reply = reply.unwrap_or_default();
+        shown_view.set(Some(reply.view.or(shown.output.view).unwrap_or(current)));
     });
     fixture.settle();
     (fixture, view, rect)
@@ -1202,6 +1235,7 @@ fn menu_canvas(momentary: bool, bars: bool) -> MenuRig {
         let room = ui.available_rect_before_wrap();
         let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
         shown_rect.set(room);
+        let mut reply = None;
         let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room, |ui, body| {
             if bars {
                 let mut bar_view = current;
@@ -1212,14 +1246,17 @@ fn menu_canvas(momentary: bool, bars: bool) -> MenuRig {
                 )
                 .show_at(ui, body.rect);
             }
+            if let Some(pass) = tool_pass(&body.env) {
+                let mut host = ToolHost::new();
+                if momentary {
+                    host = host.momentary(&mut set);
+                }
+                reply = Some(host.run(ui, &pass, &mut hand));
+            }
         });
-        let mut host = ToolHost::new();
-        if momentary {
-            host = host.momentary(&mut set);
-        }
-        let reply = host.run(ui, &shown.output, &mut hand);
+        let reply = reply.unwrap_or_default();
         shown_contexts.borrow_mut().extend(reply.context);
-        shown_view.set(Some(reply.view.unwrap_or(current)));
+        shown_view.set(Some(reply.view.or(shown.output.view).unwrap_or(current)));
     });
     fixture.settle();
     (fixture, contexts, view, rect)
@@ -1254,8 +1291,11 @@ fn window_reading_canvas(tool: impl CanvasTool + 'static) -> (Fixture, Rc<Cell<u
     let seen = Rc::clone(&cancels);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
-        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |_, _| {});
-        let _ = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut());
+            }
+        });
         craft_ui::runtime::keys::with_window_intents(ui.ctx(), false, |window| {
             let took = window.take(craft_behavior::Intent::Cancel);
             seen.set(seen.get() + u32::from(took));
@@ -1316,10 +1356,12 @@ fn the_tool_and_the_canvas_controls_read_one_precise_cursor_from_the_canvas() {
         let (tool_seen, body_seen) = (Rc::clone(&tool), Rc::clone(&body));
         let mut fixture = Fixture::new(move |ui| {
             let view = CanvasView::new(ui.available_rect_before_wrap(), Point::new(600.0, 450.0), 1.0);
-            let canvas = Canvas::new("Document").document(DOCUMENT).view(view).precise_cursors(preference).show(ui, |_, cx| {
+            let _ = Canvas::new("Document").document(DOCUMENT).view(view).precise_cursors(preference).show(ui, |ui, cx| {
                 body_seen.set(canvas_space(&cx.env).map(|space| space.precise()));
+                if let Some(pass) = tool_pass(&cx.env) {
+                    let _ = ToolHost::new().run(ui, &pass, &mut PreciseProbe(Rc::clone(&tool_seen)));
+                }
             });
-            let _ = ToolHost::new().run(ui, &canvas.output, &mut PreciseProbe(Rc::clone(&tool_seen)));
         });
         let ctx = fixture.ctx().clone();
         for caps_lock in [false, true] {
@@ -1366,8 +1408,13 @@ fn readout_during_a_drag(hud: bool, shown: Option<bool>) -> (bool, bool) {
     let tool = RefCell::new(Measuring { hud });
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
-        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |_, _| {});
-        let reply = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
+        let mut reply = None;
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        let reply = reply.unwrap_or_default();
         seen.set(reply.readout.is_some_and(|readout| readout.rows.iter().any(|(_, value)| value == "123 px")));
     });
     if let Some(shown) = shown {
@@ -1394,4 +1441,63 @@ fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
         "Show Transformation Values off: nothing paints, the rows are still reported"
     );
     assert_eq!(readout_during_a_drag(true, Some(false)), (true, true), "a hud paints with Show Transformation Values off");
+}
+
+/// A tool that keeps the points of its gesture: the press and every drag.
+#[derive(Default)]
+struct Trail {
+    points: Vec<Pos2>,
+}
+
+impl CanvasTool for Trail {
+    fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.points.push(pointer.pos);
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.points.push(pointer.pos);
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("a test tool")
+    }
+}
+
+/// Input, tool, picture: the host runs in the canvas's body before the picture, so with one pass a frame the picture
+/// of each frame already holds that frame's press and moves.
+#[trial]
+fn the_picture_of_a_pass_shows_that_passes_press_and_moves() {
+    let tool = Rc::new(RefCell::new(Trail::default()));
+    // How many of the tool's points the picture of the last pass drew.
+    let drawn = Rc::new(Cell::new(0_usize));
+    let (held, picture) = (Rc::clone(&tool), Rc::clone(&drawn));
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = Canvas::new("Document").document(DOCUMENT).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *held.borrow_mut());
+            }
+            picture.set(held.borrow().points.len());
+        });
+    });
+    fixture.settle();
+    fixture.ctx().options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    let mut frames = vec![vec![pointer::press(centre)]];
+    frames.extend((1..=4).map(|step| vec![pointer::moved(centre + BY * (step as f32 / 4.0))]));
+    for events in frames {
+        let before = tool.borrow().points.len();
+        fixture.frame(events);
+        assert_eq!(fixture.passes(), 1, "one pass a frame");
+        let points = tool.borrow().points.len();
+        assert!(points > before, "the frame's press or move reached the tool ({before} -> {points})");
+        assert_eq!(drawn.get(), points, "the picture of the frame holds every point the tool took in it");
+    }
 }

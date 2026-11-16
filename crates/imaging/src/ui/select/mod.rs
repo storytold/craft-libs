@@ -16,7 +16,12 @@
 //! let probe = DocSelection { doc: &doc };                  // the app's SelectionProbe
 //! self.lasso.operation(bar.operation);                     // the options bar's mode
 //! let mut pass = self.lasso.pass(&probe);
-//! let _ = ToolHost::new().run(ui, &canvas, &mut pass);
+//! let _ = Canvas::new("Document").show(ui, |ui, body| {
+//!     // After the canvas controls, before the picture.
+//!     if let Some(canvas) = tool_pass(&body.env) {
+//!         let _ = ToolHost::new().run(ui, &canvas, &mut pass);
+//!     }
+//! });
 //! for event in self.lasso.take_events() {
 //!     match event {
 //!         SelectEvent::Commit { shape, operation } => app.run_select(shape, operation), // one undo step

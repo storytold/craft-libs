@@ -8,7 +8,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::{Point, Size};
 use craft_draw::ui::crop::{CropDocKey, PerspectiveCropEvent, PerspectiveCropTool, PerspectiveInput, grid_lines, grid_steps, is_valid};
-use craft_ui::canvas::{Canvas, ToolHost};
+use craft_ui::canvas::{Canvas, ToolHost, tool_pass};
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::access::Role;
 use craft_ui::testing::{Fixture, trial};
@@ -41,11 +41,13 @@ impl Rig {
             let view = CanvasView::new(room, Point::new(200.0, 150.0), 1.0);
             let input = PerspectiveInput { document: active.get(), ..Default::default() };
             let mut pass = tool.pass(input);
-            let canvas = Canvas::new("Document").document(SIZE).view(view).show(ui, |ui, body| {
+            let _ = Canvas::new("Document").document(SIZE).view(view).show(ui, |ui, body| {
                 let output = pass.show_quad(ui, body.rect);
                 applied.set(applied.get() || output.apply);
+                if let Some(canvas) = tool_pass(&body.env) {
+                    let _ = ToolHost::new().run(ui, &canvas, &mut pass);
+                }
             });
-            let _ = ToolHost::new().run(ui, &canvas.output, &mut pass);
         });
         fixture.settle();
         Rig { fixture, tool, document, apply }

@@ -1,8 +1,11 @@
 //! `ToolHost` (8.3): maps a canvas's background press, hover and keys to the calls of a [`CanvasTool`].
 //!
-//! The host runs after `Canvas::show`, with the [`CanvasOutput`] the canvas returned:
+//! The host runs in the canvas's body, on the [`ToolPass`] the canvas published there ([`tool_pass`]). Within one pass
+//! the order is input, tool, picture: the canvas settles its view and press before its body runs, the body shows its
+//! canvas controls, then runs the host, then shows the picture, so the picture shows what this pass's press and moves
+//! did without a second pass.
 //!
-//! 1. `CanvasOutput::press` is the press the arena's winner left for the background: a press on a canvas control
+//! 1. `ToolPass::press` is the press the arena's winner left for the background: a press on a canvas control
 //!    part never reaches the tool. One pass carries one phase; a click inside one pass reaches the tool as `press` then
 //!    `release`, and a press that moved past slop before it came up as `press`, `drag` and `release`: the tool decides
 //!    a drag from whether `drag` was called.
@@ -24,8 +27,8 @@
 //!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`] and the pass's
 //!    [`ToolHostResponse::scroll`]; the app moves its view by it with [`Autoscroll::scroll`].
 //!
-//! The host keeps its state under the canvas's id (`CanvasOutput::response.id`), so two canvases never share a
-//! gesture, and hands the tool the canvas's view from the output ([`ToolContext::space`]). A tool changes the view
+//! The host keeps its state under the canvas's id ([`ToolPass::id`]), so two canvases never share a
+//! gesture, and hands the tool the canvas's view from the pass ([`ToolContext::space`]). A tool changes the view
 //! with [`ToolContext::set_view`]; the host keeps it inside the document as the canvas does (Overscroll off) and
 //! reports the last one in [`ToolHostResponse::view`]. A view set with [`ToolContext::ease_view`] eases in the
 //! canvas's one zoom ease, which the canvas shows from its next pass. `run` also paints the tool's readout;
@@ -65,12 +68,17 @@
 //!
 //! ```no_run
 //! # extern crate craft_ui_canvas as craft_ui;
-//! use craft_ui::canvas::{Canvas, CanvasTool, Momentary, ToolHost};
+//! use craft_ui::canvas::{Canvas, CanvasTool, Momentary, ToolHost, tool_pass};
 //! use craft_ui::contract::ShowContainer as _;
 //! # fn demo(ui: &mut egui::Ui, canvas: Canvas, tool: &mut dyn CanvasTool, momentary: &mut Momentary, view: &mut craft_behavior::CanvasView) {
-//! let shown = canvas.show(ui, |_, _| {});
-//! let reply = ToolHost::new().momentary(momentary).run(ui, &shown.output, tool);
-//! if let Some(next) = reply.view { *view = next; }
+//! let mut reply = None;
+//! let _ = canvas.show(ui, |ui, body| {
+//!     // The canvas controls first, then the host, then the picture.
+//!     if let Some(pass) = tool_pass(&body.env) {
+//!         reply = Some(ToolHost::new().momentary(&mut *momentary).run(ui, &pass, &mut *tool));
+//!     }
+//! });
+//! if let Some(next) = reply.and_then(|reply| reply.view) { *view = next; }
 //! # }
 //! ```
 
@@ -80,7 +88,7 @@ use super::navigate::Autoscroll;
 use super::readout::{paint_readout, shown as readouts_shown};
 use super::tool::{CanvasTool, March, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRequests};
 use super::zoom_motion::{self, Steer};
-use super::{CanvasOutput, CanvasSpace, Snap, context_click};
+use super::{CanvasSpace, Snap, ToolPass, context_click};
 use crate::canvas_controls::paint_lines;
 use crate::canvas_controls::{SmartGuides, SmartLine};
 use crate::contract::{Component, Meta as _};
@@ -88,7 +96,7 @@ use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord};
 use crate::runtime::access::{self, Name, Role, SubDecl, SubNode};
 use crate::runtime::commands;
 use crate::runtime::edit::next_gesture_id;
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::{AppValues, Env, EnvValue, EnvView, Label};
 use crate::runtime::memory::{global, with_session};
 use crate::runtime::overlay::{self, OpenFilter};
 use crate::runtime::pointer::{self, PointerFrame};
@@ -244,7 +252,7 @@ pub struct ToolHostResponse {
     /// automation.
     pub readout: Option<ToolReadout>,
     /// The view a tool set with [`ToolContext::set_view`] this pass (the last one, inside the document with Overscroll
-    /// off), else the canvas's own ([`CanvasOutput::view`]): the one view the app copies into its own. A view that
+    /// off), else the canvas's own ([`ToolPass::view`]): the one view the app copies into its own. A view that
     /// eases is its target; the canvas shows the way there.
     pub view: Option<CanvasView>,
     /// The snap lines of this pass from `snap_rect` and `add_snapped`.
@@ -379,7 +387,28 @@ fn keys_down(ctx: &Context, holds: &[Key]) -> Vec<Key> {
     down
 }
 
-/// The on-canvas tool host. Built each pass, shown once with the canvas's output and the tool.
+/// The tool input a canvas publishes to its body.
+#[derive(Clone, PartialEq)]
+struct InToolPass(Option<ToolPass>);
+
+impl EnvValue for InToolPass {
+    fn root() -> Self {
+        InToolPass(None)
+    }
+}
+
+/// Publishes the canvas's tool input of this pass (none in a measuring run) to its body.
+pub(super) fn publish(values: &mut AppValues, pass: Option<ToolPass>) {
+    values.set(InToolPass(pass));
+}
+
+/// The tool input of the innermost `Canvas` around the body, for [`ToolHost::run`]; `None` outside a canvas and in a
+/// measuring run, where no host runs.
+pub fn tool_pass(env: &EnvView<'_>) -> Option<ToolPass> {
+    env.get::<InToolPass>().0
+}
+
+/// The on-canvas tool host. Built each pass, run once in the canvas's body with the canvas's pass and the tool.
 #[derive(Default)]
 pub struct ToolHost<'m> {
     disabled: bool,
@@ -434,16 +463,26 @@ impl<'m> ToolHost<'m> {
 
     /// Delivers the pass's pointer and key events to `tool`, paints it over the canvas, and paints the readout it
     /// asked for beside the pointer.
-    pub fn run(self, ui: &Ui, canvas: &CanvasOutput, tool: &mut dyn CanvasTool) -> ToolHostResponse {
-        let ToolHost { disabled, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color } = self;
+    ///
+    /// The host runs in the canvas's body on the [`ToolPass`] the canvas published there ([`tool_pass`]): after the
+    /// body's canvas controls, so their parts take a press first and their reports of this pass reach the tool, and
+    /// before the body's picture, so the picture shows what this pass's press and moves did. There is none in a
+    /// measuring run, so the host and what the app does with its response never run in one.
+    ///
+    /// Transitional: a [`CanvasOutput`](super::CanvasOutput) is accepted for the callers that still run the host
+    /// after the canvas; their picture shows the tool's input a pass late. The form goes once the last caller has
+    /// moved into its body. In a measuring run that form returns the canvas's own view and nothing else.
+    pub fn run(self, ui: &Ui, pass: &impl AsRef<ToolPass>, tool: &mut dyn CanvasTool) -> ToolHostResponse {
+        let canvas = pass.as_ref();
         let ctx = ui.ctx().clone();
+        if measure::active(&ctx) {
+            return ToolHostResponse { view: canvas.view, ..ToolHostResponse::default() };
+        }
+        let ToolHost { disabled, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color } = self;
         let env = Env::of(ui);
-        let key = state_id(canvas.response.id);
-        // A measuring run delivers no input: the tool is drawn and sized from the state the last real run left, and
-        // the momentary commands and cancelled view wait for the real run.
-        let measuring = measure::active(&ctx);
+        let key = state_id(canvas.id);
         let mut state = with_session(&ctx, key, |slot: &mut HostState| slot.clone());
-        let cancelled_view = if measuring { None } else { state.cancelled_view.take() };
+        let cancelled_view = state.cancelled_view.take();
         let space = canvas.space;
         let viewport = WindowHost::of(&ctx).current();
         // The keys injected input holds with no key event are down for the pass, and run their momentary command
@@ -451,20 +490,15 @@ impl<'m> ToolHost<'m> {
         let holds = WindowHost::of(&ctx).injected_holds(viewport);
         let down = keys_down(&ctx, &holds);
         let caps = lock_keys::caps_lock(&ctx);
-        let rect = canvas.response.rect;
+        let rect = canvas.rect;
         let input = pointer::frame(&ctx);
-        let fired = std::iter::from_fn(|| {
-            if measuring {
-                return None;
-            }
-            commands::take_around::<MomentaryCommands>(&ctx, canvas.response.id, env.view().command_chain())
-        });
+        let fired = std::iter::from_fn(|| commands::take_around::<MomentaryCommands>(&ctx, canvas.id, env.view().command_chain()));
         let momentary_tool = match momentary.as_deref_mut() {
             Some(momentary) => {
                 for (command, event) in fired {
                     momentary.fired(command, event.phase);
                 }
-                let injected = held_momentary(&ctx, canvas.response.id, env.view().command_chain(), &holds, input.mods);
+                let injected = held_momentary(&ctx, canvas.id, env.view().command_chain(), &holds, input.mods);
                 momentary.tool_holding(injected, input.mods, state.gesture.is_some())
             }
             None => {
@@ -476,13 +510,11 @@ impl<'m> ToolHost<'m> {
             let pass = run_as(momentary.as_deref_mut(), momentary_tool, &mut *tool);
             (pass.view_only(), pass.takes(PointerButton::Primary, input.mods))
         };
-        if !measuring && view_only {
-            sampler::pass_tool_gesture(&ctx, canvas.response.id, CanvasGesture::PRIMARY);
+        if view_only {
+            sampler::pass_tool_gesture(&ctx, canvas.id, CanvasGesture::PRIMARY);
         }
         // A momentary tool takes the next press anywhere on the canvas, over the session members on its body.
-        if !measuring {
-            pointer::withhold_members(&ctx, canvas.response.id, momentary_tool.is_some());
-        }
+        pointer::withhold_members(&ctx, canvas.id, momentary_tool.is_some());
         // With no gesture and no momentary tool, a held stand-in key makes the stand-in the tool of hover, cursor and
         // paint while the selected tool does not take a primary press.
         let lent = if state.gesture.is_none() && momentary_tool.is_none() && !takes_primary {
@@ -521,30 +553,26 @@ impl<'m> ToolHost<'m> {
             ending: None,
             hover_scrolls: false,
         };
-        if !measuring {
-            run.call(None, |tool, cx| tool.each_pass(cx));
-            run.hover_scrolls = run.pick_as(None).autoscrolls_on_hover();
-            run.lent = lent;
-            run.glide();
-            if disabled {
-                run.cancel(CancelReason::Dismissed);
-                run.state.spent |= canvas.press.phase.is_press();
-            } else {
-                run.phase(&canvas.press, &input);
-                run.hover_outside(canvas.response.id, &canvas.press, &input);
-                run.keys(&ctx, canvas.response.id, env.direction.is_rtl());
-                run.menu_key();
-            }
+        run.call(None, |tool, cx| tool.each_pass(cx));
+        run.hover_scrolls = run.pick_as(None).autoscrolls_on_hover();
+        run.lent = lent;
+        run.glide();
+        if disabled {
+            run.cancel(CancelReason::Dismissed);
+            run.state.spent |= canvas.press.phase.is_press();
+        } else {
+            run.phase(&canvas.press, &input);
+            run.hover_outside(canvas.id, &canvas.press, &input);
+            run.keys(&ctx, canvas.id, env.direction.is_rtl());
+            run.menu_key();
         }
         let Run { mut response, requests, momentary: momentary_tool, .. } = run;
         let before = space.map(|space| space.target());
-        if !measuring {
-            if let Some(past) = response.past_edge {
-                let step = frame_step(input.time - state.time.unwrap_or(input.time));
-                response.scroll = Some(Autoscroll::step(past, step as f32));
-            }
-            state.time = Some(input.time);
+        if let Some(past) = response.past_edge {
+            let step = frame_step(input.time - state.time.unwrap_or(input.time));
+            response.scroll = Some(Autoscroll::step(past, step as f32));
         }
+        state.time = Some(input.time);
         if response.view.is_none() {
             response.view = cancelled_view;
         }
@@ -559,7 +587,7 @@ impl<'m> ToolHost<'m> {
                 (Some(ease), Some(drawn)) => Steer::Ease { from: drawn.view, anchor: ease.anchor },
                 _ => Steer::Stop,
             };
-            zoom_motion::steer(&ctx, canvas.response.id, steer);
+            zoom_motion::steer(&ctx, canvas.id, steer);
         }
         // The canvas's own view, when no tool moved the view: the app copies one view from the host.
         if response.view.is_none() {
@@ -622,10 +650,10 @@ impl<'m> ToolHost<'m> {
             frame::request_own_repaint(&ctx);
         }
         for chord in claimed_chords(state.claims) {
-            keys::claim(&ctx, canvas.response.id, chord);
+            keys::claim(&ctx, canvas.id, chord);
         }
         if !state.claims.keyboard && state.gesture.is_some() {
-            keys::claim(&ctx, canvas.response.id, Chord::new(Mods::NONE, Key::Space));
+            keys::claim(&ctx, canvas.id, Chord::new(Mods::NONE, Key::Space));
         }
         state.rect = Some(rect);
         state.space = space;
@@ -634,7 +662,7 @@ impl<'m> ToolHost<'m> {
         response
     }
 
-    /// Hands an automation input for the canvas `canvas` (`CanvasOutput::response.id`) to the window host's injected
+    /// Hands an automation input for the canvas `canvas` ([`ToolPass::id`]) to the window host's injected
     /// input of the viewport the canvas last ran in, behind the input injected before it; it runs one step per pass.
     /// A press, move or release is the pointer's own event with the pen's reading, so it reaches the tool through the
     /// canvas's press as a hand's would. A key is held from the pass of its [`ToolInput::hold`] to the pass of its
@@ -729,8 +757,8 @@ const TOOL_ANCHOR: PartKey = PartKey::new("tool anchor");
 /// graphics object over the drawing's bounds (no size at the canvas centre without bounds), and a child object of no
 /// size at each anchor, clamped to the canvas. The object declares Increment and Decrement while the tool claims the
 /// nudges. The ids derive from the canvas id, so they stay the same from pass to pass.
-fn report_access(ctx: &Context, canvas: &CanvasOutput, rect: Rect, tool: &ToolAccess, nudges: bool) {
-    let owner = canvas.response.id;
+fn report_access(ctx: &Context, canvas: &ToolPass, rect: Rect, tool: &ToolAccess, nudges: bool) {
+    let owner = canvas.id;
     let to_screen = |point: kurbo::Point| canvas.space.map(|space| space.view.to_screen(point));
     let bounds = tool.bounds.and_then(|bounds| {
         let corners = [(bounds.x0, bounds.y0), (bounds.x1, bounds.y0), (bounds.x1, bounds.y1), (bounds.x0, bounds.y1)];

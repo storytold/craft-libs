@@ -1,7 +1,7 @@
 //! `ToolFixture` (22.4, the tool row): drives a [`CanvasTool`] on a [`Canvas`] through press, drag, release and
 //! Escape, and checks what every tool owes the canvas.
 
-use crate::canvas::{Canvas, CanvasTool, Snap, ToolHost, ToolPath};
+use crate::canvas::{Canvas, CanvasTool, Snap, ToolHost, ToolPath, tool_pass};
 use crate::contract::{BodyCx, Props as _, ShowContainer as _};
 use crate::runtime::access::Role;
 use crate::testing::{Fixture, Target, pointer};
@@ -91,12 +91,16 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
             if let Some(snap) = &snap {
                 shown_canvas = shown_canvas.snap(snap.clone());
             }
-            let canvas = shown_canvas.show(ui, &mut body);
+            let canvas = shown_canvas.show(ui, |ui, body_cx| {
+                body(ui, body_cx);
+                if let Some(pass) = tool_pass(&body_cx.env) {
+                    let reply = ToolHost::new().enabled(on.get()).run(ui, &pass, &mut *shown.borrow_mut());
+                    if let Some(phase) = reply.gesture {
+                        seen.borrow_mut().push(phase);
+                    }
+                }
+            });
             id.set(canvas.output.response.id);
-            let reply = ToolHost::new().enabled(on.get()).run(ui, &canvas.output, &mut *shown.borrow_mut());
-            if let Some(phase) = reply.gesture {
-                seen.borrow_mut().push(phase);
-            }
         });
         fixture.settle();
         ToolFixture { fixture, tool, label, gestures, canvas, enabled }

@@ -4,7 +4,9 @@ use craft_behavior::CanvasView;
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Vec2 as DocVec;
 use craft_behavior::kurbo::{Point, Rect, Size};
-use craft_ui::canvas::{Canvas, CanvasTool, HandTool, LayerBounds, NavigationOptions, RotateViewTool, ToolHost, ViewCommands, ViewTarget, ZoomTool};
+use craft_ui::canvas::{
+    Canvas, CanvasTool, HandTool, LayerBounds, NavigationOptions, RotateViewTool, ToolHost, ViewCommands, ViewTarget, ZoomTool, tool_pass,
+};
 use craft_ui::contract::{Bind, ShowContainer as _};
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{self, FireSource};
@@ -41,12 +43,17 @@ impl Rig {
         let mut fixture = Fixture::new(move |ui| {
             let room = ui.available_rect_before_wrap();
             let current = shown_view.get().unwrap_or_else(|| start(room));
-            let shown = Canvas::new("Document").document(ViewTarget::from(DOCUMENT)).navigation(navigation).view(current).show(ui, |_, _| {});
-            let reply = ToolHost::new().run(ui, &shown.output, &mut *shown_tool.borrow_mut());
+            let mut reply = None;
+            let shown = Canvas::new("Document").document(ViewTarget::from(DOCUMENT)).navigation(navigation).view(current).show(ui, |ui, body| {
+                if let Some(pass) = tool_pass(&body.env) {
+                    reply = Some(ToolHost::new().run(ui, &pass, &mut *shown_tool.borrow_mut()));
+                }
+            });
+            let reply = reply.unwrap_or_default();
             if let Some(pan) = reply.pan {
                 shown_pans.borrow_mut().push((pan.delta, pan.scroll_all));
             }
-            shown_view.set(Some(reply.view.unwrap_or(current)));
+            shown_view.set(Some(reply.view.or(shown.output.view).unwrap_or(current)));
         });
         fixture.ctx().set_pixels_per_point(ppp);
         fixture.settle();

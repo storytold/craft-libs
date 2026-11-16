@@ -11,7 +11,7 @@ use craft_color::ui::{
 };
 use craft_keymap::Mods;
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
-use craft_ui::canvas::{Canvas, CanvasTool, ToolAction, ToolContext, ToolHost, ToolInput, ToolPath, ToolPointer};
+use craft_ui::canvas::{Canvas, CanvasTool, ToolAction, ToolContext, ToolHost, ToolInput, ToolPath, ToolPointer, tool_pass};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::overlay::CloseReason;
@@ -301,10 +301,13 @@ fn color_hud_picks_at_an_injected_move() {
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let view = CanvasView::new(room, Point::new(300.0, 200.0), 1.0);
-        let shown = Canvas::new("Document").document(Size::new(600.0, 400.0)).view(view).show(ui, |_, _| {});
+        let shown = Canvas::new("Document").document(Size::new(600.0, 400.0)).view(view).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut tool);
+            }
+        });
         let id = shown.output.response.id;
         shown_canvas.set(id);
-        let _ = ToolHost::new().run(ui, &shown.output, &mut tool);
         let Some(at) = tool.open else { return };
         let out = ColorHud::new("Color HUD", at, Bind::given(c.get())).start(start).held(ToolHost::in_gesture(ui.ctx(), id)).show(ui);
         for event in out.events {
