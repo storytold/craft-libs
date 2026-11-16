@@ -1,4 +1,11 @@
 //! Bounded DNG processing and camera metadata, before application rendering.
+//!
+//! This is the [`crate::dng_lines`] companion on the same `craft_tiff::classic` IFDs. The full
+//! reader's `dng::color_data` works on `craft_tiff::Tiff` and returns the values it will render
+//! with (raw IFD first, implausible or singular values dropped, `BaselineExposureOffset` added).
+//! This reader returns the tags as written, IFD 0 first, and fails on a value outside the file,
+//! so a damaged file does not silently lose its white balance. For a well-formed file both read the
+//! same matrices and neutral (see `tests/it/dng_metadata.rs`).
 use crate::dng_lines::{self, Error, PHOTOMETRIC_CFA, Result};
 use craft_tiff::classic::{Entry, Ifd, Tiff, tags};
 type M3 = [[f64; 3]; 3];
