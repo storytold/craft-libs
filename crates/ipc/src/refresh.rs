@@ -203,7 +203,15 @@ fn open_if_present(path: &Path) -> Result<Option<File>, LinkError> {
     match crate::fsopen::open_read(path, true) {
         Ok(file) => Ok(Some(file)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(LinkError::Io(format!("{}: {err}", path.display()))),
+        // Windows cannot open a directory for reading while Unix can, so `stat` would never
+        // run there and callers would see an OS-specific Io instead. Classify a path that
+        // exists but is not a regular file here, so both platforms report Invalid.
+        Err(err) => match std::fs::metadata(path) {
+            Ok(meta) if !meta.is_file() => {
+                Err(LinkError::Invalid(format!("{} is not a regular file", path.display())))
+            }
+            _ => Err(LinkError::Io(format!("{}: {err}", path.display()))),
+        },
     }
 }
 
