@@ -2729,6 +2729,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sniff"
+version = "0.1.0"
+
+[[package]]
 name = "craft-stencilcraft-document"
 version = "0.1.0"
 dependencies = [
