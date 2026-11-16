@@ -331,7 +331,6 @@ pub(crate) struct TipText<'a> {
 }
 
 impl TipText<'static> {
-    #[cfg(feature = "testing")]
     fn sample() -> Self {
         TipText { common: Common::default(), text: "Hides the layer" }
     }

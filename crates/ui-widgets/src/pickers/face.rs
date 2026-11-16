@@ -84,7 +84,6 @@ impl<'a> SelectFace<'a> {
         self
     }
 
-    #[cfg(feature = "testing")]
     fn sample() -> SelectFace<'static> {
         SelectFace::new("Multiply")
     }

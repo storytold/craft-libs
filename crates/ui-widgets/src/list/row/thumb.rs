@@ -160,7 +160,6 @@ pub(crate) struct RowThumb<'a> {
 }
 
 impl RowThumb<'static> {
-    #[cfg(feature = "testing")]
     fn sample() -> Self {
         RowThumb::new(Box::new(|_, _| {}))
     }

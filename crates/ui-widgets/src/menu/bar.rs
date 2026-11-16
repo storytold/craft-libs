@@ -80,7 +80,6 @@ impl TitleFace {
         TitleFace { common: Common::new(), lit, mnemonic }.label(label)
     }
 
-    #[cfg(feature = "testing")]
     fn sample() -> Self {
         TitleFace::new("Title", false, None)
     }

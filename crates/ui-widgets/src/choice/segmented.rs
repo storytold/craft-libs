@@ -175,7 +175,6 @@ struct Segment {
 }
 
 impl Segment {
-    #[cfg(feature = "testing")]
     fn sample() -> Self {
         Segment::new(Label::from("Segment"), None)
     }

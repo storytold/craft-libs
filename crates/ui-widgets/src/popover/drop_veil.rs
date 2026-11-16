@@ -42,7 +42,6 @@ struct VeilCard {
 }
 
 impl VeilCard {
-    #[cfg(feature = "testing")]
     fn sample() -> Self {
         VeilCard::new("Drop files here")
     }

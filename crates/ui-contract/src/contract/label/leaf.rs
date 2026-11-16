@@ -107,7 +107,6 @@ impl LabelLeaf {
         if self.trailing.x > 0.0 { gap + self.trailing.x } else { 0.0 }
     }
 
-    #[cfg(feature = "testing")]
     fn sample() -> Self {
         LabelLeaf::new(Label::from("Opacity"), 0.0)
     }

@@ -867,7 +867,6 @@ struct HeaderText {
 }
 
 impl HeaderText {
-    #[cfg(feature = "testing")]
     fn sample() -> Self {
         HeaderText { node: true, ..HeaderText::new(Label::from("Name"), 0.0, Some(false)) }
     }
