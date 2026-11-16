@@ -1115,6 +1115,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     }));
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
     w.reserved = std::sync::Arc::new(kept.map(|k| k.files.keys().cloned().collect()).unwrap_or_default());
+    let ours = |id: &str| super::writer::odf_name(id);
+    w.read_names = std::sync::Arc::new(kept.map(|k| super::kept::read_names(&k.defs, &k.style_ids, &ours)).unwrap_or_default());
     w.groups_whole = whole_groups(&flow.blocks);
     // The file's master pages are written as read: what was kept may start them.
     // The file's own page definitions stay, with what a change of page setup changes in them.
@@ -1239,6 +1241,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
     hw.reserved = std::sync::Arc::clone(&w.reserved);
+    hw.read_names = std::sync::Arc::clone(&w.read_names);
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();

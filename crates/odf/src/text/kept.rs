@@ -408,6 +408,29 @@ pub(super) fn rewritten_defs(
     out
 }
 
+/// The file's names for the styles the import read whose name as WordCraft writes them (`ours`)
+/// is a style of the file's the import didn't read (`MyCustom` beside `My_20_Custom`): by that
+/// name with its family's key suffix (`MyCustom`, `MyCustom|text`), escaped. That namesake keeps
+/// its own definition ([`rewritten_defs`]), so markup written from the model names the file's
+/// style the text was read with instead.
+pub(super) fn read_names(
+    defs: &BTreeMap<String, Arc<str>>,
+    ids: &BTreeMap<String, String>,
+    ours: &dyn Fn(&str) -> String,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (key, id) in ids {
+        let Some(rest) = key.strip_prefix("common:") else { continue };
+        let (name, family) = rest.strip_suffix("|text").map_or((rest, ""), |n| (n, "|text"));
+        let mine = format!("{}{family}", ours(id));
+        let namesake = format!("common:{mine}");
+        if mine != rest && defs.contains_key(&namesake) && !ids.contains_key(&namesake) {
+            out.entry(mine).or_insert_with(|| super::writer::x(name));
+        }
+    }
+    out
+}
+
 /// `def` (markup WordCraft wrote) with the values of its `style:name`, `style:parent-style-name`
 /// and `style:next-style-name` attributes that `to` gives another name for (by attribute and
 /// value) renamed to that, escaped. One pass: WordCraft writes these names unescaped (they are
