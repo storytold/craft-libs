@@ -305,6 +305,25 @@ fn a_control_space_at_a_line_end_adds_no_second_space() {
 }
 
 #[test]
+fn blanks_after_a_control_space_add_no_second_space() {
+    // TeX skips the blanks after `\ ` and after `\` and a tab, but they were read as a space of
+    // their own, so text taken as written had two spaces.
+    for cs in ["\\ ", "\\\t"] {
+        assert_eq!(tokenize(&format!("a{cs} \tb")), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}\n  two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}   two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[one{cs}  two] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{cs:?}");
+        // A blank line after it still ends the paragraph.
+        assert_eq!(
+            texts(&format!("\\begin{{document}}first{cs}\n\nsecond\\end{{document}}")),
+            vec!["first".to_string(), "second".to_string()],
+            "{cs:?}"
+        );
+    }
+}
+
+#[test]
 fn a_control_space_in_an_item_label_is_a_space() {
     // The optional argument kept a control symbol as written, so the label read `one\ two`.
     for src in ["one\\ two", "one\\\ttwo", "one\\\ntwo"] {

@@ -151,8 +151,14 @@ impl Lexer<'_> {
                         }
                         let Some(sym) = self.bump() else { break };
                         match sym {
-                            // `\^^I`, likewise.
-                            '\t' => self.out.push(Tok::Cmd(" ".to_string())),
+                            // `\ ` and `\^^I` (a tab) are control spaces too. TeX skips the blanks
+                            // after them, but a blank line after one still ends the paragraph.
+                            ' ' | '\t' => {
+                                self.out.push(Tok::Cmd(" ".to_string()));
+                                if self.blanks() >= 2 {
+                                    self.out.push(Tok::Par);
+                                }
+                            }
                             '(' => {
                                 let m = self.until("\\)");
                                 self.out.push(Tok::Math(m, false));
