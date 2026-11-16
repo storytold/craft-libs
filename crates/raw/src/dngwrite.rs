@@ -173,6 +173,11 @@ pub struct DngImage<'a> {
     pub cinema: &'a crate::CinemaTags,
     /// Optional application-supplied UniqueCameraModel fallback when make/model are absent.
     pub unknown_camera_model: Option<&'a str>,
+    /// Whether `data` has already been mapped through `linearization_table` (see
+    /// [`RawImage::linearized`]).
+    pub linearized: bool,
+    /// A LinearizationTable still to be applied by the reader; written only when `linearized` is false.
+    pub linearization_table: Option<&'a [u16]>,
 }
 
 impl<'a> From<&'a RawImage> for DngImage<'a> {
@@ -197,6 +202,8 @@ impl<'a> From<&'a RawImage> for DngImage<'a> {
             unique_model: raw.camera.unique_model.as_deref(),
             cinema: &raw.cinema,
             unknown_camera_model: None,
+            linearized: raw.linearized,
+            linearization_table: raw.linearization_table.as_deref(),
         }
     }
 }
@@ -338,7 +345,7 @@ fn write_image(raw: &DngImage<'_>, opts: &DngWriteOptions, lossy: Option<LossyTi
     // with the samples. Once the samples have been mapped, writing the tag would apply it twice
     // on the next read of a file without list 1.
     if !raw.linearized
-        && let Some(table) = raw.linearization_table.as_deref().filter(|t| !t.is_empty())
+        && let Some(table) = raw.linearization_table.filter(|t| !t.is_empty())
     {
         ifd.set(t::LINEARIZATION_TABLE, Value::Short(table.to_vec()));
     }
