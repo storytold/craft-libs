@@ -595,6 +595,55 @@ fn extreme_raw_orders_are_normalized_once_across_body_and_headers() {
             header.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
         assert_eq!(body, [1, u32::MAX - 1]);
         assert_eq!(head, [u32::MAX, u32::MAX]);
-        d = import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
+        d = import(&export(&d).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn kept_stacking_markup_remaps_without_losing_unknown_attributes() {
+    for raw in ["4294967294", "4294967295"] {
+        let kept = format!(
+            r#"<text:p strange="retain &amp; &#x61;"><draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index = '{raw}' strange="untouched"/></text:p>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text>{kept}</office:text></office:body></office:document-content>"#
+        );
+        let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+        let extra = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p><draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in"/></text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut added = import(&zip_of(&[("content.xml", extra.as_bytes())])).unwrap();
+        added.objects_mut(&|o| o.frame().is_some(), &mut |o| o.float_mut().unwrap().z = 0);
+        d.body.extend(added.body);
+        for pass in 0..3 {
+            let bytes = export(&d).unwrap();
+            let xml = crate::text::tests::entry(&bytes, "content.xml");
+            let expected = kept.replace(raw, "4294967293");
+            assert!(xml.contains(&expected), "kept XML lost or order not remapped, {raw}, pass {pass}: {xml}");
+            d = import(&bytes).unwrap();
+            let orders: Vec<u32> =
+                d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+            assert_eq!(orders, [u32::MAX - 1, u32::MAX], "{raw}, pass {pass}");
+        }
+    }
+}
+
+#[test]
+fn retained_unknown_orders_participate_in_the_export_gap() {
+    let kept = r#"<text:p strange="preserve"><alien draw:z-index='4294967293' keep="yes"/><draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="4294967294"/></text:p>"#;
+    let content =
+        format!(r#"<office:document-content {NS_T} {NS_D}><office:body><office:text>{kept}</office:text></office:body></office:document-content>"#);
+    let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+    let mut extra = d.body[0].as_para().unwrap().clone();
+    extra.objects[0].float_mut().unwrap().z = 0;
+    d.body.push(craft_wordmodel::para_block(extra));
+    for pass in 0..3 {
+        let bytes = export(&d).unwrap();
+        let xml = crate::text::tests::entry(&bytes, "content.xml");
+        assert!(xml.contains("<alien draw:z-index='4294967292' keep=\"yes\"/>"), "pass {pass}: {xml}");
+        d = import(&bytes).unwrap();
+        let orders: Vec<u32> =
+            d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        assert_eq!(orders, [u32::MAX - 1, u32::MAX]);
     }
 }

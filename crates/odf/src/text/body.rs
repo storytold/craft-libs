@@ -35,7 +35,6 @@ type Frame =
     (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>, Option<craft_wordmodel::chart::ChartSpec>, Option<model::OdfObject>);
 
 pub(super) struct Body<'a> {
-    pub(super) file_orders: craft_wordmodel::para::FileOrders,
     styles: &'a Styles,
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
     /// The package's entry names and its manifest's media types, for embedded objects.
@@ -220,7 +219,6 @@ impl<'a> Body<'a> {
     pub(super) fn new(styles: &'a Styles, pages: &'a Pages, zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Self {
         let page = pages.first.clone().unwrap_or_default();
         Body {
-            file_orders: Default::default(),
             styles,
             zip,
             entries: &[],
@@ -1166,25 +1164,6 @@ impl Body<'_> {
     }
 
     fn start(&mut self, q: &str, a: &Attrs) {
-        // Keep all existing attribute readers unchanged. Only the occupied upper tail
-        // is adjusted, before any frame/group/note reader can saturate its one-more z.
-        let adjusted = a
-            .iter()
-            .enumerate()
-            .find(|(_, (name, _))| name == "draw:z-index")
-            .and_then(|(i, (_, value))| value.trim().parse::<u32>().ok().map(|raw| (i, raw)))
-            .and_then(|(i, raw)| {
-                let mapped = self.file_orders.file_order(raw);
-                (mapped != raw).then_some((i, mapped))
-            });
-        let mut normalized;
-        let a = if let Some((i, mapped)) = adjusted {
-            normalized = a.clone();
-            normalized[i].1 = mapped.to_string();
-            &normalized
-        } else {
-            a
-        };
         self.depth += 1;
         if q == "office:text" {
             self.in_text = true;

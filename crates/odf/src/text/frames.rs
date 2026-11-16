@@ -443,18 +443,17 @@ pub(super) fn z_of(a: &Attrs) -> u32 {
     get(a, "draw:z-index").and_then(|v| v.trim().parse::<u32>().ok()).map_or(0, |z| z.saturating_add(1))
 }
 
-/// Export orders leave room for the one-more representation used on import.
-/// At the upper boundary, remove an unused model order rather than saturating.
+/// Raw export orders. The package writer normalizes their upper boundary once,
+/// after adding all retained markup, leaving room for one-more model orders.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Stacking {
     unset: u32,
-    gap: Option<u32>,
 }
 
 /// A stored order stays below every unset order; equal stored orders remain equal.
 pub(crate) fn z_index(float: Option<&Float>, stacking: Stacking) -> u32 {
     match float.map(|f| f.z) {
-        Some(z) if z > 0 => z - 1 - u32::from(stacking.gap.is_some_and(|gap| z > gap)),
+        Some(z) if z > 0 => z - 1,
         _ => stacking.unset,
     }
 }
@@ -463,25 +462,21 @@ pub(crate) fn z_index(float: Option<&Float>, stacking: Stacking) -> u32 {
 pub(crate) fn stacking(doc: &craft_wordmodel::Document) -> Result<Stacking, String> {
     use craft_wordmodel::para::{GroupChild, InlineObject};
     use std::collections::BTreeSet;
-    fn members(children: &[GroupChild], depth: usize, orders: &mut BTreeSet<u32>, unset: &mut bool) {
+    fn members(children: &[GroupChild], depth: usize, orders: &mut BTreeSet<u32>) {
         for c in children {
             if let Some((_, _, f)) = c.obj.frame()
                 && f.z > 0
             {
                 orders.insert(f.z);
             }
-            if let Some((_, _, f)) = c.obj.frame() {
-                *unset |= f.z == 0;
-            }
             if let InlineObject::Group { children, .. } = &c.obj
                 && depth < craft_flow::MAX_GROUP_DEPTH
             {
-                members(children, depth + 1, orders, unset);
+                members(children, depth + 1, orders);
             }
         }
     }
-    let (mut orders, unset_count) = doc.stacking_orders();
-    let mut unset = unset_count > 0;
+    let (mut orders, _) = doc.stacking_orders();
     for blocks in std::iter::once(&doc.body).chain(doc.parts.values().map(|p| &p.blocks)) {
         for b in blocks {
             craft_wordmodel::walk::each_para(b, 0, &mut |p| {
@@ -491,30 +486,16 @@ pub(crate) fn stacking(doc: &craft_wordmodel::Document) -> Result<Stacking, Stri
                     {
                         orders.insert(f.z);
                     }
-                    if let Some((_, _, f)) = o.frame() {
-                        unset |= f.z == 0;
-                    }
                     if let InlineObject::Group { children, .. } = o {
-                        members(children, 0, &mut orders, &mut unset);
+                        members(children, 0, &mut orders);
                     }
                 }
             });
         }
     }
-    let top = orders.last().copied().unwrap_or(0);
-    if top < u32::MAX || !unset {
-        return Ok(Stacking { unset: top, gap: None });
-    }
-    // Find a missing positive value in linear time in the number of distinct orders,
-    // not the numeric range. This needs no second map and preserves relative order.
-    let mut gap = 1u32;
-    for z in orders {
-        if z != gap {
-            break;
-        }
-        gap = gap.checked_add(1).ok_or("too many distinct ODF stacking orders")?;
-    }
-    Ok(Stacking { unset: top - 1, gap: Some(gap) })
+    // Final content/styles normalization includes retained XML, not just modeled frames.
+    // Keep the distinct raw MAX slot here; the package writer removes an unused slot once.
+    Ok(Stacking { unset: orders.last().copied().unwrap_or(0) })
 }
 
 /// How far a frame `h` points tall in line with the text is raised from standing on the

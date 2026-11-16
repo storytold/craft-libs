@@ -1257,10 +1257,16 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         None => styles,
     };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
+    // Choose the gap from everything actually written, including unknown retained
+    // drawings and master pages. Remapping modeled frames alone can alias an order
+    // present only in retained XML. Values are spliced without reserializing XML.
+    let orders = super::frames::read_orders(content.as_bytes(), Some(styles.as_bytes()))?;
+    let content = super::xml::remap_orders(content.as_bytes(), |raw| orders.file_order(raw))?;
+    let styles = super::xml::remap_orders(styles.as_bytes(), |raw| orders.file_order(raw))?;
     // The manifest lists every file already: the writer adds the files only.
     for (name, data) in [
-        ("content.xml", content.as_bytes()),
-        ("styles.xml", styles.as_bytes()),
+        ("content.xml", content.as_ref()),
+        ("styles.xml", styles.as_ref()),
         ("meta.xml", meta.as_bytes()),
         ("settings.xml", settings_xml(doc).as_bytes()),
     ] {
