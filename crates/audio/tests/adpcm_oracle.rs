@@ -127,6 +127,30 @@ fn damaged_input_is_an_error_or_decodes_never_panics() {
 }
 
 #[test]
+fn huge_layouts_and_big_jumps_are_handled() {
+    // block sizes whose sample counts do not fit in a usize
+    assert_eq!(ima::samples_per_block(usize::MAX - 3, 1), None);
+    assert_eq!(ms::samples_per_block(usize::MAX, 1), None);
+    assert!(ima::encode(&[], 1, usize::MAX - 3).is_err());
+    assert!(ms::encode(&[], 1, usize::MAX).is_err());
+    // a Flash stream's header holds the step index in six bits: a jump from silence to full scale
+    // still decodes to what the encoder's own state says
+    for bits in [2u32, 3, 4, 5] {
+        let x = [0i16, 32767, -32768, 0, 0];
+        let y = swf::decode(&swf::encode(&x, 1, bits).unwrap(), 1).unwrap();
+        // the stream has no length: up to seven padding bits can read as one more code
+        assert!((x.len()..=x.len() + 3).contains(&y.len()), "{bits} bits: {} samples", y.len());
+        assert!(y[1] > 0 && y[2] < y[1], "{bits} bits: {y:?}");
+    }
+    // padding bits at the end of a stream are not a code: no incomplete stereo frame
+    for bits in [2u32, 3, 4, 5] {
+        let y = swf::decode(&swf::encode(&[0, 0, 5, -5, 9, 9], 2, bits).unwrap(), 2).unwrap();
+        assert_eq!(y.len() % 2, 0, "{bits} bits: {y:?}");
+        assert!((6..=8).contains(&y.len()), "{bits} bits: {} samples", y.len());
+    }
+}
+
+#[test]
 fn partial_final_blocks_are_handled() {
     let x = signal(1, 1000);
     // IMA: 256-byte blocks hold 505 samples; 1000 samples is two blocks, the second padded

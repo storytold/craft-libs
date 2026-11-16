@@ -14,6 +14,9 @@ use super::{Error, Result, clip16};
 /// The seven coefficient pairs `(c1, c2)` every Microsoft ADPCM stream uses.
 pub const COEFFICIENTS: [(i32, i32); 7] = [(256, 0), (512, -256), (0, 0), (192, 64), (240, 0), (460, -208), (392, -232)];
 /// How the step moves with the code's unsigned value (the index is the 4-bit pattern).
+/// The largest step. The reference keeps it in 16 bits and no real stream gets near this bound; it
+/// keeps every product in range however long a damaged block runs.
+const MAX_DELTA: i32 = 1 << 24;
 const ADAPT: [i32; 16] = [230, 230, 230, 230, 307, 409, 512, 614, 768, 614, 512, 409, 307, 230, 230, 230];
 
 #[derive(Clone, Copy)]
@@ -34,7 +37,7 @@ impl State {
         self.s1 = sample;
         let adapt = i64::from(ADAPT.get(usize::from(nibble)).copied().unwrap_or(256));
         let new_delta = (adapt * i64::from(self.delta)) >> 8;
-        self.delta = (new_delta.min(i32::MAX as i64) as i32).max(16);
+        self.delta = (new_delta.min(i64::from(MAX_DELTA)) as i32).max(16);
         sample as i16
     }
 
@@ -205,6 +208,19 @@ mod tests {
         assert_eq!(samples_per_block(512, 2), Some(500));
         assert_eq!(samples_per_block(7, 1), None);
         assert_eq!(samples_per_block(100, 3), None);
+    }
+
+    #[test]
+    fn a_long_run_of_large_codes_cannot_overflow() {
+        // a step that starts at its largest 16-bit value and grows with every large code
+        let mut block = vec![0x77u8; 7 + 2000];
+        block[..7].copy_from_slice(&[0, 255, 127, 0, 0, 0, 0]);
+        for b in block.iter_mut().skip(7) {
+            *b = 0x88;
+        }
+        let mut out = Vec::new();
+        decode_block(&block, 1, &mut out).unwrap();
+        assert_eq!(out.len(), 2000 * 2 + 2);
     }
 
     #[test]
