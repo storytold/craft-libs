@@ -120,6 +120,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   pages and version detection, and written back; and `model`, the drawing above the tags (header
   variables, tables, blocks, layouts, entities) and its writer (R12 to 2018), merged from CADCraft's and VectorCraft's readers. Bounded
   on hostile input. Mapping the model onto a document stays in each app.
+- [`craft-deckcraft-format`](crates/deckcraft-format/README.md): the DeckCraft `.deckcraft` package:
+  identity and sniffing, the `presentation.json` envelope with the presentation as a type
+  parameter, NaN-safe JSON and the reader for older files with `null` numbers, member names and
+  compression, and bounded, budgeted member reads. The presentation model and its mapping stay in DeckCraft.
 - [`craft-dwg`](crates/dwg/README.md): bounded byte-level DWG↔DXF conversion with diagnostics,
   capped output and an optional child-process worker; the `acadrust` dependency remains isolated
   behind bytes and is unavailable on wasm32 and FreeBSD/aarch64.
@@ -172,6 +176,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
+  (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
+  unread and written back into a list. The workbook model and what follows a read stay in GridCraft.
 - [`craft-hdr`](crates/hdr/src/lib.rs): Radiance HDR (RGBE) picture reader, from FilmCraft: flat,
   old and new run-length scan lines and all eight axis orders, to linear float RGB. Scan lines are
   validated before the picture is allocated.
@@ -380,6 +387,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   text-format crates read into and write from. WordCraft's model without its editing code.
 - [`craft-xlsx`](crates/xlsx/README.md): Excel workbooks (`.xlsx`, `.xlsm`, SpreadsheetML, transitional and strict) and binary workbooks (`.xlsb`) on `craft-opc`: the workbook part, shared strings, the styles tables and worksheet rows streamed one at a time, with limits on the package, the XML and the binary records.
 - [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
+- [`craft-sniff`](crates/sniff/src/lib.rs): what a file is from its first bytes: one dependency-free, wasm-safe signature table naming the format, its media type, extension and family for images, audio, video, 3D models, archives, compressed streams, executables and databases. Identifies only; parsing stays with each format's reader.
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
   loading the file, and plane access. Bounded on hostile input.

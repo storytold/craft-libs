@@ -23,13 +23,17 @@ struct ReadmeExamples;
 
 mod archive;
 mod guard;
+mod metadata_reader;
 pub mod preflight;
+mod seekable;
 mod write;
 
 pub use archive::{Archive, Limits};
 pub use guard::check_entry_count;
 #[cfg(any(test, feature = "test-support"))]
 pub use guard::zip64_entry_count_sample;
+pub use metadata_reader::{Indexing, MetadataReader};
+pub use seekable::{InspectError, inspect_seekable};
 pub use write::{Compression, Writer};
 
 /// The payload of a ZIP's first entry when it is a stored file named `mimetype` of at most 256

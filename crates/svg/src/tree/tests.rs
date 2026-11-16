@@ -292,7 +292,7 @@ mod resource_limit_usage {
                 assert_eq!(svgz::inflate(&data, cap).unwrap().len(), cap, "raw bytes fit exactly");
                 assert_eq!(svgz::text(&data, cap).unwrap().len(), decoded.len(), "decoding itself succeeds");
                 let limits = Limits { bytes: cap, embedded_bytes: decoded.len(), ..shallow() };
-                assert!(matches!(checked(&decoded, &limits), Err(Error::Text(svgz::Error::TooLarge(n))) if n == cap));
+                assert!(matches!(preflight(&decoded, &limits), Err(Error::Text(svgz::Error::TooLarge(n))) if n == cap));
                 let image = data_image(&data);
                 let (found, usage) = resolved(&svg(&image), limits, 1);
                 assert!(found.is_empty(), "{encoding}, gzip {gzip}");
@@ -312,7 +312,7 @@ mod resource_limit_usage {
             let decoded = svgz::decode(&raw).unwrap();
             let limits = Limits { bytes: decoded.len(), embedded_bytes: raw.len(), ..shallow() };
             assert!(decoded.len() > limits.embedded_bytes);
-            checked(&decoded, &limits).unwrap(); // The independent per-image cap allows this complete XML.
+            preflight(&decoded, &limits).unwrap(); // The independent per-image cap allows this complete XML.
             for gzip in [false, true] {
                 let data = if gzip { svgz::compress(&raw) } else { raw.clone() };
                 assert_eq!(svgz::inflate(&data, limits.embedded_bytes).unwrap().len(), raw.len());
@@ -491,4 +491,197 @@ mod draw_checks {
         let refusal = check(&clips(16), GIB).unwrap_err();
         assert!(!refusal.memory && refusal.message.contains("clip-paths"), "{refusal:?}");
     }
+}
+
+mod invalid_image_accounting {
+    use super::*;
+
+    fn usage(body: &str, limits: Limits) -> (Vec<bool>, ImageUsage) {
+        let text = svg(body);
+        let resolver = ImageResolver::new(limits);
+        resolver.check_document(&text).unwrap();
+        let options = usvg::Options { image_href_resolver: resolver.resolver(), ..Default::default() };
+        let tree = parse_text(&text, &limits, &options).unwrap();
+        let mut found = Vec::new();
+        images(tree.root(), &mut found);
+        (found, resolver.usage())
+    }
+
+    fn png() -> Vec<u8> {
+        use craft_image_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType, encode};
+        let image = Image::new(1, 1, ChannelLayout::Rgba, SampleType::U8).unwrap();
+        encode(&image, Format::Png, &EncodeOptions::default()).unwrap()
+    }
+
+    fn image(data: &[u8]) -> String {
+        let encoded: String = data.iter().map(|b| format!("%{b:02X}")).collect();
+        format!(r#"<image width="1" height="1" xlink:href="data:image/png,{encoded}"/>"#)
+    }
+
+    #[test]
+    fn malformed_base64_is_counted_before_usvg_discards_it() {
+        let bad = r#"<image width="1" height="1" xlink:href="data:image/png;base64,A"/>"#;
+        let (found, report) = usage(bad, shallow());
+        assert!(found.is_empty());
+        assert_eq!(report.invalid_raster_images, 1);
+        let (found, report) = usage(&embed(&svg(bad)), shallow());
+        assert_eq!(found, [true]);
+        assert_eq!(report.invalid_raster_images, 1);
+    }
+
+    #[test]
+    fn malformed_data_url_without_comma_is_counted() {
+        for href in ["data:image/png;base64", " data:image/png;base64", "da&#x9;ta:image/png;base64", "da&#xA;ta:image/png;base64"] {
+            let bad = format!(r#"<image width="1" height="1" xlink:href="{href}"/>"#);
+            let (found, report) = usage(&bad, shallow());
+            assert!(found.is_empty(), "{href}");
+            assert_eq!(report.invalid_raster_images, 1, "{href}");
+            let (found, report) = usage(&embed(&svg(&bad)), shallow());
+            assert_eq!(found, [true], "{href}");
+            assert_eq!(report.invalid_raster_images, 1, "{href}");
+        }
+    }
+
+    #[test]
+    fn failed_decode_forgets_address_but_preserves_spent_budget() {
+        let valid = png();
+        let idat = valid.windows(4).position(|b| b == b"IDAT").unwrap();
+        let invalid = Arc::new(valid[..idat + 4].to_vec());
+        let pointer = Arc::as_ptr(&invalid) as usize;
+        let limits = Limits { embedded_raster_pixels: 3, ..shallow() };
+        let resolver = ImageResolver::new(limits);
+        let used = &resolver.used;
+        let format = craft_image_codecs::Format::Png;
+        assert!(raster_image(used, &limits, invalid, format).is_none());
+        assert!(!used.raster_data.lock().unwrap().contains(&pointer));
+        assert_eq!(resolver.usage().raster_pixels, 1);
+        let first_data = Arc::new(valid.clone());
+        let first = raster_image(used, &limits, first_data.clone(), format).unwrap();
+        assert_eq!(resolver.usage().raster_pixels, 2);
+        let repeated = raster_image(used, &limits, first_data, format).unwrap();
+        assert_eq!(resolver.usage().raster_pixels, 2);
+        let second = raster_image(used, &limits, Arc::new(valid.clone()), format).unwrap();
+        assert_eq!(resolver.usage().raster_pixels, 3);
+        assert!(raster_image(used, &limits, Arc::new(valid), format).is_none());
+        assert_eq!(resolver.usage().raster_limit_images, 1);
+        drop((first, repeated, second));
+    }
+
+    #[test]
+    fn corrupt_pixels_do_not_pass_a_valid_header_probe() {
+        let valid = png();
+        let (found, report) = usage(&image(&valid), shallow());
+        assert_eq!(found, [false]);
+        assert_eq!(report.invalid_raster_images, 0);
+        let idat = valid.windows(4).position(|b| b == b"IDAT").unwrap();
+        let corrupt = &valid[..idat + 4];
+        assert_eq!(craft_image_codecs::probe_allocation_size(corrupt).unwrap(), (1, 1));
+        let (found, report) = usage(&image(corrupt), shallow());
+        assert!(found.is_empty());
+        assert_eq!(report.invalid_raster_images, 1);
+        let (found, report) = usage(&image(&valid), Limits { embedded_raster_pixels: 0, ..shallow() });
+        assert!(found.is_empty());
+        assert_eq!(report.raster_limit_images, 1);
+    }
+}
+
+#[test]
+fn preflight_keeps_source_depth_and_parses_the_checked_tree() {
+    let text = svg("<g><rect width='1' height='1'/></g>");
+    let checked = preflight(&text, &Limits::default()).unwrap();
+    // svg and g are open; the self-closing rect opens no level.
+    assert_eq!(checked.depth(), 2);
+    let tree = checked.parse(&options()).unwrap();
+    assert_eq!(tree.size().width(), 10.0);
+    assert!(matches!(preflight(&svg(&groups(30)), &shallow()), Err(Error::TooDeep(24))));
+}
+
+#[test]
+fn preflight_matches_parse_text_refusals() {
+    for text in ["<svg", "<svg xmlns='http://www.w3.org/2000/svg'><g></svg>"] {
+        assert!(matches!(preflight(text, &Limits::default()), Err(Error::Xml(_))));
+        assert!(matches!(parse_text(text, &Limits::default(), &options()), Err(Error::Xml(_))));
+    }
+}
+
+#[test]
+fn rewrite_root_viewport_wraps_the_root_and_keeps_the_preamble() {
+    let source = concat!(
+        "<?xml version='1.0'?>\n<!DOCTYPE svg [<!ENTITY w '4'>]>\n",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 2 1'>",
+        "<rect width='&w;' height='1'/></svg>"
+    );
+    let out = rewrite_root_viewport(source, Viewport { width: 40.0, height: 30.0 }, &Limits::default(), 4096).unwrap();
+    assert!(out.starts_with("<?xml version='1.0'?>\n<!DOCTYPE svg [<!ENTITY w '4'>]>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"30\" viewBox=\"0 0 20 10\" preserveAspectRatio=\"none\"><svg "));
+    assert!(out.ends_with("</svg></svg>"));
+    let tree = parse_text(&out, &Limits::default(), &options()).unwrap();
+    assert_eq!((tree.size().width(), tree.size().height()), (40.0, 30.0));
+}
+
+#[test]
+fn rewrite_root_viewport_reads_points_and_pixels() {
+    let points = rewrite_root_viewport(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='72pt' height='36pt'/>",
+        Viewport { width: 1.0, height: 1.0 },
+        &Limits::default(),
+        4096,
+    )
+    .unwrap();
+    assert!(points.contains("viewBox=\"0 0 96 48\""));
+    let pixels = rewrite_root_viewport(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='12px' height='8'/>",
+        Viewport { width: 1.0, height: 1.0 },
+        &Limits::default(),
+        4096,
+    )
+    .unwrap();
+    assert!(pixels.contains("viewBox=\"0 0 12 8\""));
+}
+
+#[test]
+fn rewrite_root_viewport_refusals() {
+    let limits = Limits::default();
+    let one = Viewport { width: 1.0, height: 1.0 };
+    let sized = "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/>";
+    for target in [
+        Viewport { width: f64::NAN, height: 1.0 },
+        Viewport { width: 1.0, height: f64::INFINITY },
+        Viewport { width: 0.0, height: 1.0 },
+        Viewport { width: 1.0, height: -2.0 },
+    ] {
+        assert!(matches!(rewrite_root_viewport(sized, target, &limits, 4096), Err(Error::Viewport(_))));
+    }
+    assert!(matches!(rewrite_root_viewport("<html width='10' height='10'/>", one, &limits, 4096), Err(Error::Viewport(_))));
+    for source in [
+        "<svg xmlns='http://www.w3.org/2000/svg'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='50%' height='10'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='10mm' height='10'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='0' height='10'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='1e400' height='10'/>",
+    ] {
+        assert!(matches!(rewrite_root_viewport(source, one, &limits, 4096), Err(Error::Viewport(_))), "{source}");
+    }
+    assert!(matches!(rewrite_root_viewport("<svg", one, &limits, 4096), Err(Error::Xml(_))));
+    let fits = rewrite_root_viewport(sized, one, &limits, 4096).unwrap();
+    assert_eq!(rewrite_root_viewport(sized, one, &limits, fits.len()).unwrap(), fits);
+    assert!(matches!(rewrite_root_viewport(sized, one, &limits, fits.len() - 1), Err(Error::OutputTooLarge(n)) if n == fits.len() - 1));
+}
+
+#[test]
+fn rewrite_root_viewport_output_stays_within_the_limits() {
+    let limits = shallow();
+    let one = Viewport { width: 1.0, height: 1.0 };
+    let mut refused_at_the_limit = false;
+    for n in 0..limits.depth {
+        let source = svg(&groups(n));
+        if preflight(&source, &limits).is_err() {
+            break;
+        }
+        match rewrite_root_viewport(&source, one, &limits, 1 << 20) {
+            Ok(out) => assert!(parse_text(&out, &limits, &options()).is_ok(), "{n} groups"),
+            Err(Error::TooDeep(_)) => refused_at_the_limit = true,
+            Err(e) => panic!("{n} groups: {e:?}"),
+        }
+    }
+    assert!(refused_at_the_limit, "a source at the depth limit is refused, not wrapped past it");
 }
