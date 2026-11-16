@@ -619,7 +619,7 @@ impl<'m> ToolHost<'m> {
             }
         }
         if requests.repaint {
-            frame::request_repaint(&ctx);
+            frame::request_own_repaint(&ctx);
         }
         for chord in claimed_chords(state.claims) {
             keys::claim(&ctx, canvas.response.id, chord);
@@ -694,7 +694,7 @@ impl<'m> ToolHost<'m> {
         tool.cancel(reason, &mut cx);
         if let Some(view) = cx.take_requests().view {
             with_session(ctx, state_id(canvas), |state: &mut HostState| state.cancelled_view = Some(view));
-            frame::request_repaint(ctx);
+            frame::request_own_repaint(ctx);
         }
         true
     }

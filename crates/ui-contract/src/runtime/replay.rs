@@ -74,7 +74,8 @@ pub(crate) struct Record {
     pub(crate) facts: Facts,
 }
 
-fn recording(ctx: &Context) -> bool {
+/// Whether a record is open around the running code.
+pub(crate) fn recording(ctx: &Context) -> bool {
     OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| !recorder.open.is_empty())
 }
 
