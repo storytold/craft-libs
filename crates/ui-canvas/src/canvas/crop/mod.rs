@@ -163,6 +163,10 @@ pub struct CropOverlay<'a> {
     /// middle of the canvas.
     #[prop(flag)]
     auto_center: bool,
+    /// The crop fills what the turned image leaves uncovered (Content-Aware Fill), so an image-mode turn leaves the
+    /// frame as it was at the press instead of moving or shrinking it inside the bounds.
+    #[prop(flag)]
+    fills_uncovered: bool,
     /// Nothing is painted and a press anywhere on the canvas draws a new frame.
     #[prop(flag)]
     hidden: bool,
@@ -185,6 +189,7 @@ impl<'a> CropOverlay<'a> {
             bounds: None,
             image_mode: false,
             auto_center: false,
+            fills_uncovered: false,
             hidden: false,
             report: Report::default(),
         }
@@ -199,6 +204,7 @@ impl<'a> CropOverlay<'a> {
             turn_step: self.turn_step,
             image: self.image_mode,
             auto_center: self.auto_center,
+            fills_uncovered: self.fills_uncovered,
             snap: canvas_snap(env),
             os: env.shell().os,
         }

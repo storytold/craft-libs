@@ -265,6 +265,9 @@ impl CropTool {
         if settings.delete_pixels {
             overlay = overlay.bounds(document.canvas());
         }
+        if settings.fill == CropFill::ContentAware {
+            overlay = overlay.fills_uncovered();
+        }
         if settings.image_mode() {
             overlay = overlay.image_mode();
         }
