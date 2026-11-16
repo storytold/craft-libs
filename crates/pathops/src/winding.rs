@@ -325,9 +325,13 @@ fn bounds(v: [f64; 4]) -> (f64, f64) {
 
 /// One coordinate of the curve with control values `v` at `t`, added in the order [`CubicBez::eval`] adds them.
 fn bernstein(v: [f64; 4], t: f64) -> f64 {
-    let [v0, v1, v2, v3] = v;
+    // Past 1e300 the sums overflow where the curve does not (a handle of 1e308 beside another: 1.5e308 and 0.5e308 are 2e308): the same sums on a
+    // quarter of the values, which scale exactly (every operation does, so the result is the same to the bit as when it is made at once, where
+    // that is a number), and the quarter back, which a point of the curve (inside the box of its control points) cannot overflow.
+    let k = if v.iter().any(|x| x.abs() > 1e300) { 0.25 } else { 1.0 };
+    let [v0, v1, v2, v3] = v.map(|x| x * k);
     let mt = 1.0 - t;
-    v0 * (mt * mt * mt) + (v1 * (mt * mt * 3.0) + (v2 * (mt * 3.0) + v3 * t) * t) * t
+    (v0 * (mt * mt * mt) + (v1 * (mt * mt * 3.0) + (v2 * (mt * 3.0) + v3 * t) * t) * t) / k
 }
 
 #[cfg(test)]
@@ -752,6 +756,20 @@ mod tests {
                 assert_eq!(bits(scaled), bits(unit), "({a}, {b}, {c}) times 2^{k}");
             }
         }
+    }
+
+    /// A curve whose handles are 1e308 out (the sums of the Bernstein form, 1.5e308 and 0.5e308, overflow though the curve does not: its x at the
+    /// middle is 5e307) winds the points beside it as the same curve at a hundredth of the size does: a point to the right of the crossing at height
+    /// 1.5 is wound -1 (a rising curve), and the sum overflowed to a crossing that is nowhere.
+    #[test]
+    fn a_cubic_with_handles_at_the_top_of_the_range_winds_as_a_smaller_one_does() {
+        let segment = |s: f64| PathSeg::Cubic(CubicBez::new((0.0, 0.0), (0.0, 1.0), (s, 2.0), (s, 3.0)));
+        let big = 1e308;
+        for (x, y) in [(0.75, 1.5), (0.6, 1.4), (0.4, 1.6), (0.95, 2.5), (0.05, 0.4), (0.3, 1.5), (0.99, 0.5)] {
+            let small = segment_winding(segment(0.01 * big), Point::new(x * 0.01 * big, y));
+            assert_eq!(segment_winding(segment(big), Point::new(x * big, y)), small, "({x}, {y})");
+        }
+        assert_eq!(segment_winding(segment(big), Point::new(0.75 * big, 1.5)), -1);
     }
 
     /// Where the coordinates are past 2^1021 the products of the line's equation overflow though the line's own steps do not (the slope 1.5
