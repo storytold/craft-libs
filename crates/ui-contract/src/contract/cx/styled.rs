@@ -6,7 +6,7 @@ use crate::contract::Component;
 use crate::primitives::PartResult;
 use crate::runtime::focus::{self};
 use crate::style::{Ink, Mix, StateSet, Stateful};
-use craft_behavior::PartRef;
+use craft_behavior::{PartKey, PartRef};
 use craft_theme::Flags;
 
 /// The resolved look (chapter 4); every method reads step 12's output.
@@ -57,6 +57,13 @@ impl CxCore<'_> {
     /// active part of the focused component.
     pub fn part_state(&self, part: PartRef) -> StateSet {
         self.part_state_lit(part, false)
+    }
+
+    /// The state set of the scroll bar `bar` (`PartsCx::scroll`): its thumb's, hovered while the pointer is anywhere
+    /// on the bar or the bar's track is pressed, so the bar shows at its full thickness then.
+    pub fn scroll_bar_state(&self, bar: PartKey) -> StateSet {
+        let on_bar = self.part_if_declared(bar).is_some_and(|track| track.hovered || track.pressed());
+        self.part_state_lit(bar.at(super::THUMB), on_bar)
     }
 
     /// The state set of `part`, hovered as well when `lit`: a part the pointer is not over that a press at the pointer

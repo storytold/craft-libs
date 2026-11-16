@@ -62,7 +62,7 @@ pub use container::InBar;
 pub use container::InMenu;
 pub use container::{
     BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
-    Mount, Notch, POPUP_PAD, Pad, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
+    Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
 };
 pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
 #[doc(hidden)]

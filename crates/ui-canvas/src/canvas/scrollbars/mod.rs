@@ -1,5 +1,6 @@
-//! `CanvasScrollbars`: the scroll bars of a canvas, as Photoshop's document window has them (20.6): a horizontal bar
-//! along the bottom of the view and a vertical one along the right, always shown. The thumb is the visible fraction of
+//! `CanvasScrollbars`: the scroll bars of a canvas (20.6): a horizontal bar along the bottom of the view and a vertical
+//! one along the right, always shown, in the floating look every scroll area has (`ScrollBarLook`): a thin line at rest
+//! over the view's edge, the whole bar under the pointer. The thumb is the visible fraction of
 //! the scrollable extent (the document, plus wherever the view has been scrolled past it); drag it to scroll, or press
 //! the track to page by one screenful. With overscroll on, a document smaller than the window can also be scrolled from
 //! one edge of the window to the other. With overscroll off the app clamps the view before it draws
@@ -16,15 +17,14 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
     Role, Styled as _, THUMB, WordSetCx as _,
 };
-use crate::primitives::PaintShape;
 use crate::runtime::access::Numeric;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleCx};
+use crate::style::{ComponentStyle, ScrollBarLook, StyleCx};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase};
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use egui::{Pos2, Rect, Response, Vec2};
 use std::ops::{Deref, Range};
 
 const HORIZONTAL: PartKey = PartKey::new("horizontal");
@@ -242,7 +242,7 @@ impl Component for CanvasScrollbars<'_> {
     type Output = CanvasScrollbarsOutput;
 
     fn style(cx: &StyleCx<'_>, _: CanvasScrollbarsStyleKey) -> ScrollbarsStyle {
-        ScrollbarsStyle { metrics: Metrics::new(), look: cx.scroll_bar(ScrollBarKind::Docked) }
+        ScrollbarsStyle { metrics: Metrics::new(), look: cx.scroll_bar() }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -287,14 +287,8 @@ impl Component for CanvasScrollbars<'_> {
         let style = cx.style;
         let bars = self.bars(&view, cx.rect, style.look.thickness);
         let draw = ui.draw();
-        if let (Some(h), Some(v)) = (&bars.horizontal, &bars.vertical) {
-            draw.fill(
-                &PaintShape::Rect(Rect::from_min_max(Pos2::new(v.rect.left(), h.rect.top()), cx.rect.max), CornerRadius::ZERO),
-                cx.resolve(&style.look.track),
-            );
-        }
         for (key, axis, bar) in bars.each() {
-            draw.scroll_bar(&style.look, bar.rect, axis, cx.flow.is_rtl(), &bar.span, &cx.part_state(thumb_of(key)));
+            draw.scroll_bar(&style.look, bar.rect, axis, cx.flow.is_rtl(), &bar.span, &cx.scroll_bar_state(key));
         }
     }
 

@@ -4,10 +4,11 @@ use super::flyout::{FlyoutButton, SlotEdit};
 use super::words::RailWords;
 use crate::buttons::IconButton;
 use crate::contract::{
-    Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, HeaderRegion, NoValue, Outcome, Pad, PaneEdge, Props as _, Role,
-    Scroll, Show as _, ShowContainer as _, Sizing, WordSetCx as _, clicked,
+    Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, HeaderRegion, LeastWidth, NoValue, Outcome, Pad, PadEdges, PaneEdge,
+    Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, WordSetCx as _, clicked,
 };
 use crate::contract::{BodyCx, BodyLayout};
+use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
 use crate::runtime::access::Name;
 use crate::runtime::commands::Commands as _;
@@ -104,10 +105,12 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 
 /// The rail of tool slots, as a side panel at one edge of the window: one `FlyoutButton` per visible slot showing the
 /// slot's shown tool, the slot with the current tool toggled on. A click selects the shown tool, a row of the flyout
-/// selects that tool. With two columns the slots fill rows in reading order. A slot that ends a group leaves
-/// `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The column toggle is the header and the
-/// Edit Toolbar button follows the last slot; the host's footer stays in view under the slots, which scroll when the
-/// window is short. The buttons are one roving group: arrow keys move between them by the grid. While the toolbar is
+/// selects that tool. With two columns the slots fill rows in reading order. Each column is `size.rail.width` wide,
+/// the width of the shell's tools slot per column, and the buttons sit centred across the columns with the control
+/// padding above and below. A slot that ends a group leaves `space.gap.inline` after its row; slots within a group sit
+/// `space.gap.tight` apart. The column toggle and the side toggle share the header's one line at the small control
+/// size; the Edit Toolbar button follows the last slot; the host's footer stays in view under the slots, which scroll
+/// when the window is short, and its buttons show the rail's glyphs. The buttons are one roving group: arrow keys move between them by the grid. While the toolbar is
 /// edited the buttons are dragged and take drops, and report the drop in the output.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, probe(ToolRail<'static, u8>))]
@@ -154,9 +157,9 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
         let props = ContainerProps::new()
             .surface(SurfaceKind::Chrome)
             .pad(Pad::Control)
+            .pad_edges(PadEdges::Block)
             .sizing(Sizing::Content)
             .layout(BodyLayout::stack())
-            .body_gap(Gap::Inline)
             .child_size(ControlSize::Md)
             .child_glyphs(GlyphRole::ToolRail)
             .scroll(Scroll::vertical())
@@ -201,7 +204,8 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// when the window is short.
     pub fn show_rail(mut self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
         let columns = self.column_count();
-        self.props = self.props.roving(Roving::new(NavShape::wrapped_grid(columns)));
+        let wide = u8::try_from(columns).ok().and_then(NonZeroU8::new).unwrap_or(NonZeroU8::MIN);
+        self.props = self.props.roving(Roving::new(NavShape::wrapped_grid(columns))).least_width(LeastWidth::Rail(wide));
         if self.column_toggle.is_some() || self.side_toggle.is_some() {
             self.props = self.props.header(HeaderRegion::new());
         }
@@ -217,50 +221,55 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             let cells = visible.len() + usize::from(edit_label.is_some());
             let enabled = |tool: &RailTool<T>| cx.resolve_command(tool.command.clone()).is_some_and(|resolved| resolved.enabled);
             let at: Vec<usize> = visible.iter().map(|(index, _)| *index).collect();
-            for group in row_groups(slots, &at, cells, columns) {
-                Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-                    for &first in &group {
-                        Row::new().gap(Gap::Tight).show(ui, |ui, _| {
-                            for k in first..(first + columns).min(cells) {
-                                match visible.get(k) {
-                                    Some((index, tools)) => {
-                                        let slot = &slots[*index];
-                                        let owned: Vec<RailTool<T>> = tools.iter().map(|tool| (*tool).clone()).collect();
-                                        let Some(shown) = shown_tool(current, slot.id, tools, last_used, enabled) else { continue };
-                                        let selected = tools.iter().any(|tool| tool.id == *current);
-                                        let mut button = FlyoutButton::new(&owned, &shown.id)
-                                            .id_salt(("slot", slot.id))
-                                            .selected(selected)
-                                            .enabled(tools.iter().any(|tool| enabled(tool)))
-                                            .opens(opens);
-                                        if editing {
-                                            button = button.edit(SlotEdit::new(slot.id, *index, slot.tools.len(), columns == 1));
-                                        }
-                                        let out = button.show(ui);
-                                        if out.select.is_some() {
-                                            collected.select = out.select;
-                                        }
-                                        if out.double_clicked {
-                                            collected.double_clicked = Some(shown.id.clone());
-                                        }
-                                        if out.opened {
-                                            collected.flyout = Some(slot.id);
-                                        }
-                                        if out.dropped.is_some() {
-                                            collected.dropped = out.dropped;
+            // The grid of buttons sits at the centre of the rail's columns.
+            Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                Stack::new().gap(Gap::Inline).show(ui, |ui, _| {
+                    for group in row_groups(slots, &at, cells, columns) {
+                        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                            for &first in &group {
+                                Row::new().gap(Gap::Tight).show(ui, |ui, _| {
+                                    for k in first..(first + columns).min(cells) {
+                                        match visible.get(k) {
+                                            Some((index, tools)) => {
+                                                let slot = &slots[*index];
+                                                let owned: Vec<RailTool<T>> = tools.iter().map(|tool| (*tool).clone()).collect();
+                                                let Some(shown) = shown_tool(current, slot.id, tools, last_used, enabled) else { continue };
+                                                let selected = tools.iter().any(|tool| tool.id == *current);
+                                                let mut button = FlyoutButton::new(&owned, &shown.id)
+                                                    .id_salt(("slot", slot.id))
+                                                    .selected(selected)
+                                                    .enabled(tools.iter().any(|tool| enabled(tool)))
+                                                    .opens(opens);
+                                                if editing {
+                                                    button = button.edit(SlotEdit::new(slot.id, *index, slot.tools.len(), columns == 1));
+                                                }
+                                                let out = button.show(ui);
+                                                if out.select.is_some() {
+                                                    collected.select = out.select;
+                                                }
+                                                if out.double_clicked {
+                                                    collected.double_clicked = Some(shown.id.clone());
+                                                }
+                                                if out.opened {
+                                                    collected.flyout = Some(slot.id);
+                                                }
+                                                if out.dropped.is_some() {
+                                                    collected.dropped = out.dropped;
+                                                }
+                                            }
+                                            None => {
+                                                let label = edit_label.clone().unwrap_or(Label::Empty);
+                                                let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
+                                                collected.edit_toolbar = Some(more.response);
+                                            }
                                         }
                                     }
-                                    None => {
-                                        let label = edit_label.clone().unwrap_or(Label::Empty);
-                                        let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
-                                        collected.edit_toolbar = Some(more.response);
-                                    }
-                                }
+                                });
                             }
                         });
                     }
                 });
-            }
+            });
         });
         ToolRailOutput {
             select: collected.select,
@@ -313,21 +322,28 @@ impl<T: Value + 'static> Component for ToolRail<'_, T> {
 }
 
 impl<T: Value + 'static> Container for ToolRail<'_, T> {
-    /// The column toggle and the side toggle.
+    /// The column toggle and the side toggle, side by side on one line at the small control size with the control
+    /// glyph: two of them touch to fit one rail column.
     fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
         let (columns, rtl) = (self.column_count(), Env::of(ui).direction.is_rtl());
         let at_left = !self.at_end() != rtl;
-        if let Some(label) = self.column_toggle.clone() {
-            let icon = crate::collapse::chevrons(column_toggle_points_right(columns, at_left));
-            let toggle = IconButton::new(icon).id_salt("column-toggle").label(label).show(ui);
-            self.toggled |= clicked(&toggle);
-        }
-        if let Some(label) = self.side_toggle.clone() {
-            // The icon shows the edge the rail moves to.
-            let icon = IconId::new(if at_left { "panel_right" } else { "panel_left" });
-            let toggle = IconButton::new(icon).id_salt("side-toggle").label(label).show(ui);
-            self.side_toggled |= clicked(&toggle);
-        }
+        let (column_toggle, side_toggle) = (self.column_toggle.clone(), self.side_toggle.clone());
+        let (mut toggled, mut side_toggled) = (false, false);
+        Row::new().fill_width().align(RowAlign::Center).gap(Gap::None).show(ui, |ui, _| {
+            if let Some(label) = column_toggle.clone() {
+                let icon = crate::collapse::chevrons(column_toggle_points_right(columns, at_left));
+                let toggle = IconButton::new(icon).id_salt("column-toggle").label(label).size(ControlSize::Sm).glyphs(GlyphRole::Control).show(ui);
+                toggled |= clicked(&toggle);
+            }
+            if let Some(label) = side_toggle.clone() {
+                // The icon shows the edge the rail moves to.
+                let icon = IconId::new(if at_left { "panel_right" } else { "panel_left" });
+                let toggle = IconButton::new(icon).id_salt("side-toggle").label(label).size(ControlSize::Sm).glyphs(GlyphRole::Control).show(ui);
+                side_toggled |= clicked(&toggle);
+            }
+        });
+        self.toggled |= toggled;
+        self.side_toggled |= side_toggled;
     }
 
     /// The host's footer.

@@ -24,7 +24,7 @@ fn shown(windows: &mut Frames, mode: &mut ScreenMode, events: Vec<Event>) -> (us
     windows.frame(events, |ui| {
         let out = AppShell::new(WindowKey::main())
             .screen_mode(Bind::bound(&mut *mode))
-            .tools(PaneEdge::Start, true, |ui, _, _: &mut ()| {
+            .tools(PaneEdge::Start, 1, true, |ui, _, _: &mut ()| {
                 Text::new("Tools").show(ui);
             })
             .options_bar(false, |ui, _, _: &mut ()| {

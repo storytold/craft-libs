@@ -21,7 +21,7 @@ use crate::runtime::env::WheelScope;
 use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
-use crate::style::{ComponentStyle as _, ScrollBarKind, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
+use crate::style::{ComponentStyle as _, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{
     Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
 };
@@ -279,7 +279,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn geometry(&mut self, _: &C, mcx: &crate::contract::MeasureCx<'_, C>, (_, content): (Rect, Rect), rtl: bool) -> Option<Rc<dyn std::any::Any>> {
         let view = self.below_header(content);
-        let clear = self.clear_of_bar(view, scroll_bar_look(mcx.tokens, ScrollBarKind::Overlay).thickness, rtl);
+        let clear = self.clear_of_bar(view, scroll_bar_look(mcx.tokens).thickness, rtl);
         let offset = ScrollPos { x: self.offset_x, y: self.offset.clamp(0.0, self.max_offset(view.height())) };
         let mut layout = self.layout.take()?;
         Arc::make_mut(&mut layout).set_view(view.size(), offset);
@@ -297,7 +297,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             return;
         }
         let view = self.below_header(pcx.content_rect);
-        let track = bar_track(view, scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness, pcx.flow.is_rtl());
+        let track = bar_track(view, scroll_bar_look(pcx.tokens).thickness, pcx.flow.is_rtl());
         let content = f64::from(self.content.y).max(f64::from(view.height()));
         self.offset = self.offset.clamp(0.0, self.max_offset(view.height()));
         let span = ScrollSpan::new(0.0..content, self.offset..self.offset + f64::from(view.height()));
@@ -753,7 +753,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             Env::restore(&ctx, installed);
         }
         if self.scrolls {
-            let look = scroll_bar_look(&env.tokens, ScrollBarKind::Overlay);
+            let look = scroll_bar_look(&env.tokens);
             // The rows blend into the surface they sit on.
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
             let hidden = HiddenContent::new(self.content, rect.size(), Vec2::new(self.offset_x as f32, self.offset as f32), rtl);
@@ -762,9 +762,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let track = bar_track(rect, look.thickness, rtl);
                 let content = f64::from(self.content.y);
                 let span = ScrollSpan::new(0.0..content, self.offset..self.offset + f64::from(rect.height()));
-                let result = cx.core.results.get(&(SCROLL, Some(crate::contract::cx::THUMB))).cloned().unwrap_or(crate::primitives::PartResult::IDLE);
-                let state = crate::contract::steps::part_state(&result, cx.core.looks_enabled(), None);
-                ui.painter().extend(ScrollBar::shapes(&look, track, Axis::Y, rtl, &span, &state, ui.ctx().pixels_per_point()));
+                let state = cx.core.scroll_bar_state(SCROLL);
+                ui.painter().extend(ScrollBar::shapes(&look, track, Axis::Y, rtl, &span, &state));
             }
         }
         self.layout = Some(layout);

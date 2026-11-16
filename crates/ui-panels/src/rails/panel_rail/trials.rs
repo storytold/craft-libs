@@ -110,3 +110,33 @@ fn the_rails_show_their_buttons_icons_in_their_glyph_roles() {
     assert_eq!(panel.side, alone.side, "a panel rail icon keeps the control glyph");
     assert!(panel.color.off.rest != alone.color.off.rest, "a panel rail icon rests quieter than a lone one");
 }
+
+/// A tool rail is as wide as its columns and centres its buttons across them, so no button reaches past the rail's
+/// edge; its two header toggles share one line inside it.
+#[trial]
+fn a_tool_rail_centres_its_buttons_in_its_columns_and_keeps_its_toggles_on_one_line() {
+    use crate::rails::{LastUsed, ToolRail, ToolSlot};
+    use std::num::NonZeroU8;
+    for columns in [1_u8, 2] {
+        let mut fixture = Fixture::new(move |ui| {
+            let slots = vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[1])), ToolSlot::new(2, tools(&[3]))];
+            ToolRail::new("Tools", &slots, &0, &LastUsed::default())
+                .columns(NonZeroU8::new(columns).unwrap_or(NonZeroU8::MIN))
+                .column_toggle("Toolbar")
+                .side_toggle("Move Toolbar")
+                .show_rail(ui, |_, _| {});
+        });
+        fixture.settle();
+        let rail = rect(&fixture, "Tools");
+        for label in ["Move", "Brush", "Eraser", "Toolbar", "Move Toolbar"] {
+            let shown = rect(&fixture, label);
+            assert!(rail.contains_rect(shown), "{columns} columns: {label} lies inside the rail: {shown:?} in {rail:?}");
+        }
+        let (first, last) = (rect(&fixture, "Move"), rect(&fixture, if columns == 1 { "Move" } else { "Brush" }));
+        let grid = first.union(last);
+        assert!((grid.center().x - rail.center().x).abs() < 0.5, "{columns} columns: the buttons are centred: {grid:?} in {rail:?}");
+        let (toggle, side) = (rect(&fixture, "Toolbar"), rect(&fixture, "Move Toolbar"));
+        assert!((toggle.center().y - side.center().y).abs() < 0.5, "the toggles share a line: {toggle:?} and {side:?}");
+        assert!(above(toggle, first), "the toggles are above the buttons");
+    }
+}

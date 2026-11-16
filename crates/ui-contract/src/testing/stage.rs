@@ -2,7 +2,9 @@
 
 use crate::contract::PaneEdge;
 use crate::layout::flow_room;
+use crate::primitives::{RectSide, Rule};
 use crate::runtime::env::Env;
+use crate::style::{RuleKind, rule_look};
 use egui::{Rect, Ui};
 
 /// Allocates the stage of a story of a canvas control or a root that fills both axes, and returns its rect: the width
@@ -37,11 +39,14 @@ pub fn stage_width(ui: &Ui) -> f32 {
 }
 
 /// Runs `story` as the content of an edge pane at `edge`, as a rail or panel docked at that edge of an app window
-/// shows: a container that draws a divider along its pane's inner edge (`ContainerProps::edge_rule`) draws it.
+/// shows: with the divider the pane draws along its inner edge (`ContainerProps::edge_rule`), here along the edge of
+/// what the story drew.
 pub fn in_edge_pane<R>(ui: &mut Ui, edge: PaneEdge, story: impl FnOnce(&mut Ui) -> R) -> R {
-    let ctx = ui.ctx().clone();
-    let installed = Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.pane_edge = Some(edge)));
-    let out = story(ui);
-    Env::restore(&ctx, installed);
-    out
+    let shown = ui.scope(story);
+    let env = Env::of(ui);
+    if let Some(side) = RectSide::toward_centre(edge, env.direction.is_rtl()) {
+        let rule = rule_look(&env.tokens, RuleKind::Divider);
+        ui.painter().extend(Rule::edge(&rule, shown.response.rect, side, ui.ctx().pixels_per_point()));
+    }
+    shown.inner
 }

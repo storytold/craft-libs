@@ -1,7 +1,7 @@
 //! `ScrollBar`: the track and thumb of a scroll part, with state.
 
-use super::rule::{RectSide, Rule};
-use crate::style::{ScrollBarKind, ScrollBarLook, StateSet};
+use super::rule::RectSide;
+use crate::style::{ScrollBarLook, StateSet};
 use craft_behavior::{Axis, ScrollSpan};
 use egui::{Color32, CornerRadius, Direction, Rect, Shape, Vec2, pos2};
 
@@ -84,29 +84,29 @@ impl ScrollBar {
         .collect()
     }
 
-    /// The shapes of the bar in `track` along `axis` for `span`, in `state`: the track, a docked bar's rule along the
-    /// side facing the view (its top for a horizontal bar, its left for a vertical one), and the fully round thumb.
-    pub fn shapes(
-        look: &ScrollBarLook,
-        track: Rect,
-        axis: Axis,
-        rtl: bool,
-        span: &ScrollSpan,
-        state: &StateSet,
-        pixels_per_point: f32,
-    ) -> Vec<Shape> {
-        let thumb = Self::thumb(look.min_thumb, track, axis, rtl, span).shrink(look.inset);
+    /// The shapes of the bar in `track` along `axis` for `span`, in `state` (the bar's: hovered while the pointer is
+    /// anywhere on it): the track and the fully round thumb. At rest the thumb is `look.rest` thick along the track's
+    /// outer edge (its bottom, or its end side in the reading direction) and the track is clear; hovered or pressed
+    /// the thumb fills the track's thickness.
+    pub fn shapes(look: &ScrollBarLook, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan, state: &StateSet) -> Vec<Shape> {
+        let full = Self::thumb(look.min_thumb, track, axis, rtl, span);
+        let lit = matches!(state.state, craft_theme::State::Hover | craft_theme::State::Pressed);
+        let thumb = if lit { full } else { Self::resting(full, look.rest, axis, rtl) };
         let round = |rect: Rect| CornerRadius::from(rect.width().min(rect.height()) / 2.0);
-        let track_round = match look.kind {
-            ScrollBarKind::Overlay => round(thumb),
-            ScrollBarKind::Docked => CornerRadius::ZERO,
-        };
-        let mut shapes = vec![Shape::rect_filled(track, track_round, state.resolve(&look.track).egui())];
-        if let Some(edge) = &look.edge {
-            let side = if axis == Axis::X { RectSide::Top } else { RectSide::Left };
-            shapes.extend(Rule::edge(edge, track, side, pixels_per_point));
+        vec![
+            Shape::rect_filled(track, round(full), state.resolve(&look.track).egui()),
+            Shape::rect_filled(thumb, round(thumb), state.resolve(&look.thumb).egui()),
+        ]
+    }
+
+    /// The resting thumb: `rest` thick along the outer edge of the full thumb `full`.
+    fn resting(full: Rect, rest: f32, axis: Axis, rtl: bool) -> Rect {
+        let side = if axis == Axis::X { RectSide::Bottom } else { RectSide::end(rtl) };
+        let rest = rest.min(if axis == Axis::X { full.height() } else { full.width() });
+        match side {
+            RectSide::Bottom => Rect::from_min_max(pos2(full.min.x, full.max.y - rest), full.max),
+            RectSide::Left => Rect::from_min_max(full.min, pos2(full.min.x + rest, full.max.y)),
+            _ => Rect::from_min_max(pos2(full.max.x - rest, full.min.y), full.max),
         }
-        shapes.push(Shape::rect_filled(thumb, round(thumb), state.resolve(&look.thumb).egui()));
-        shapes
     }
 }

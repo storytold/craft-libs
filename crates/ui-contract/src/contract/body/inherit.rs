@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use super::reorder::REORDER_SCOPE;
-use crate::contract::{Container, ContainerProps, Cx, DragBand, Mount, PaneEdge, Scroll, Sizing};
+use crate::contract::{Container, ContainerProps, Cx, DragBand, Mount, Scroll, Sizing};
 use crate::runtime::commands::{self, CommandSet as _, WindowCommand};
 use crate::runtime::env::{AppValues, ArenaId, Scoped, ScrollOwner};
 use crate::style::{ComponentStyle as _, SurfaceKind};
@@ -104,11 +104,6 @@ impl BodyHooks<'_> {
             scoped.arena = Some(ArenaId::new(id));
         }
         scoped.transform = props.transform;
-        match &props.mount {
-            Mount::Pane(pane) if pane.edge != PaneEdge::Center => scoped.pane_edge = Some(pane.edge),
-            Mount::Inline => {}
-            _ => scoped.pane_edge = None,
-        }
         scoped.content_column = content_column;
         scoped.given_column = !content_column && matches!(props.layout, crate::layout::BodyLayout::Stack);
         scoped.row_room = None;

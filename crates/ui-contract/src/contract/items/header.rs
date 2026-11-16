@@ -20,7 +20,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::words::HeaderWords;
-use crate::style::{ComponentStyle, ResizeLineLook, ScrollBarKind, StateSet, StyleColor, StyleCx, TypeRole, resize_line_look, scroll_bar_look};
+use crate::style::{ComponentStyle, ResizeLineLook, StateSet, StyleColor, StyleCx, TypeRole, resize_line_look, scroll_bar_look};
 use craft_behavior::grid::resolve_columns;
 use craft_behavior::{
     Axis, ColumnKey, ColumnWidth, CursorIcon, DropOperation, Flow, HitLevel, HitPriority, IconId, Insets, Intent, Metrics, NavMove, NavShape,
@@ -380,7 +380,7 @@ impl Header {
         let area = pcx.content_rect;
         let view = Rect::from_min_size(area.min, Vec2::new(area.width(), self.height));
         self.view = Some(view);
-        let grip = scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness;
+        let grip = scroll_bar_look(pcx.tokens).thickness;
         let rtl = pcx.flow.is_rtl();
         let widths = self.widths(area.width());
         let wide = widths.iter().sum::<f32>().max(area.width());

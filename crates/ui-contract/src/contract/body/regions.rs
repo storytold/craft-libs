@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use crate::contract::cx::BodyCx;
-use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PaneEdge, Sizing};
+use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PadEdges, Sizing};
 use crate::layout::{ColumnGroup, Columns, Reached};
 use crate::primitives::{RectSide, Rule};
 use crate::runtime::access::{self};
@@ -46,6 +46,15 @@ pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
         Pad::Regular => pads.regular,
         Pad::Roomy => pads.roomy,
         _ => 0.0,
+    }
+}
+
+/// A container's padding on each side along each axis: its tier on the edges its props name, none on the others.
+pub(super) fn pad_vec(tokens: &UiTokens, props: &ContainerProps) -> Vec2 {
+    let pad = pad_of(tokens, props.pad);
+    match props.pad_edges {
+        PadEdges::All => Vec2::splat(pad),
+        PadEdges::Block => Vec2::new(0.0, pad),
     }
 }
 
@@ -172,18 +181,11 @@ impl RegionFrame<'_> {
     }
 }
 
-/// The divider along the inner edge of the edge pane that encloses a container with `edge_rule`, inside `rect`: the
-/// edge toward the window's centre, mirrored for a start or end pane under right-to-left.
+/// The divider along the inner edge of an edge pane with `edge_rule`, inside `rect`: the edge toward the window's
+/// centre (`RectSide::toward_centre`).
 pub(super) fn paint_edge_rule(ui: &mut Ui, props: &ContainerProps, env: &Env, rect: Rect) {
-    let Some(edge) = env.pane_edge.filter(|_| props.edge_rule) else { return };
-    let rtl = env.direction.is_rtl();
-    let side = match edge {
-        PaneEdge::Start => RectSide::end(rtl),
-        PaneEdge::End => RectSide::start(rtl),
-        PaneEdge::Top => RectSide::Bottom,
-        PaneEdge::Bottom => RectSide::Top,
-        PaneEdge::Center => return,
-    };
+    let Mount::Pane(pane) = &props.mount else { return };
+    let Some(side) = RectSide::toward_centre(pane.edge, env.direction.is_rtl()).filter(|_| props.edge_rule) else { return };
     let rule = rule_look(&env.tokens, RuleKind::Divider);
     ui.painter().extend(Rule::edge(&rule, rect, side, ui.ctx().pixels_per_point()));
 }
@@ -347,7 +349,7 @@ impl<'b> BodyHooks<'b> {
 
     /// The regions inside `inner` (the rect minus padding and the padding tier), placed from `sizes`. A header with a
     /// band spreads over the `bleed` the padding leaves around `inner` at the top and the sides.
-    pub(super) fn regions(&self, props: &ContainerProps, inner: Rect, bleed: f32, room: Vec2, rtl: bool, sizes: RegionSizes) -> Regions {
+    pub(super) fn regions(&self, props: &ContainerProps, inner: Rect, bleed: Vec2, room: Vec2, rtl: bool, sizes: RegionSizes) -> Regions {
         let inline = props.header.is_some_and(|header| header.inline);
         let (in_end, full) = (footer_in_end(props), end_full_height(props));
         let header_h = if props.header.is_some() { sizes.header.unwrap_or(Vec2::ZERO).y } else { 0.0 };
@@ -456,7 +458,7 @@ impl<'b> BodyHooks<'b> {
             _ => band(footer_top, footer_top + footer_h),
         };
         let header = if props.header.is_some_and(|header| header.fill.is_some()) {
-            Rect::from_min_max(header.min - Vec2::splat(bleed), Pos2::new(header.max.x + bleed, header.max.y - bleed))
+            Rect::from_min_max(header.min - bleed, Pos2::new(header.max.x + bleed.x, header.max.y - bleed.y))
         } else {
             header
         };

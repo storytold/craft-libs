@@ -11,7 +11,7 @@ use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, EditEvent, Granularity, Intent, Metrics, Mixed, NavMove, PartKey, Sense, Wheel};
 use craft_ui::contract::{
     Access, Bind, BindMut, CommandSet, Commands as _, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Focus as _, Name,
-    Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Sizing, THUMB, WordSetCx as _,
+    Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Sizing, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::access::Numeric;
@@ -19,7 +19,7 @@ use craft_ui::runtime::commands::CommandState;
 use craft_ui::runtime::env::{AppValues, EnvValue, EnvView, Label};
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::motion::{Animate as _, spec};
-use craft_ui::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, ScrollBarLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response};
 use std::cell::Cell;
 use std::ops::Deref;
@@ -447,7 +447,7 @@ impl Component for TimelineView<'_> {
     fn style(cx: &StyleCx<'_>, _: TimelineViewStyleKey) -> TimelineViewStyle {
         TimelineViewStyle {
             metrics: Metrics::new(),
-            look: cx.scroll_bar(ScrollBarKind::Docked),
+            look: cx.scroll_bar(),
             playhead: cx.color(cx.tokens.color.accent.solid),
             snap: cx.color(cx.tokens.color.overlay.line),
             marquee_fill: cx.color(cx.tokens.color.accent.soft),
@@ -545,7 +545,7 @@ impl Component for TimelineView<'_> {
         let style = cx.style;
         let track = self.bar(cx.rect, cx.flow, style);
         let span = self.span(&view, width);
-        ui.draw().scroll_bar(&style.look, track, Axis::X, cx.flow.is_rtl(), &span, &cx.part_state(BAR.at(THUMB)));
+        ui.draw().scroll_bar(&style.look, track, Axis::X, cx.flow.is_rtl(), &span, &cx.scroll_bar_state(BAR));
     }
 
     /// The lines and the marquee over the panes, after the body has reported them.

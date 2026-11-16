@@ -32,6 +32,19 @@ impl RectSide {
     pub const fn end(rtl: bool) -> RectSide {
         if rtl { RectSide::Left } else { RectSide::Right }
     }
+
+    /// The side of a pane at `edge` that faces the window's centre, mirrored for a start or end pane under
+    /// right-to-left; none for the centre.
+    pub const fn toward_centre(edge: crate::contract::PaneEdge, rtl: bool) -> Option<RectSide> {
+        use crate::contract::PaneEdge;
+        match edge {
+            PaneEdge::Start => Some(RectSide::end(rtl)),
+            PaneEdge::End => Some(RectSide::start(rtl)),
+            PaneEdge::Top => Some(RectSide::Bottom),
+            PaneEdge::Bottom => Some(RectSide::Top),
+            PaneEdge::Center => None,
+        }
+    }
 }
 
 impl Rule {

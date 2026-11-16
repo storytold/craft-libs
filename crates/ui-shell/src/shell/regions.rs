@@ -45,7 +45,8 @@ impl SlotSize {
 }
 
 /// One bar or rail of the skeleton: its key, whether it shows, whether it shows in a reveal, its size and its AccessKit
-/// name. The slot's body draws its own surface and edge.
+/// name. The shell paints the chrome surface over the whole slot and a divider along its edge toward the body; the
+/// title slot's bar paints its own.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Slot {

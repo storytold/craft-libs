@@ -184,3 +184,43 @@ fn ant_edges_are_whole_device_pixels_at_a_fractional_scale() {
         assert!(lower.contains(&(s - width)), "the dash at {s} continues {width} pixels earlier one row down: {lower:?}");
     }
 }
+
+/// Every scroll bar rests as a thin line along its track's outer edge and shows its thumb across the whole track under
+/// the pointer, at the same place along the bar.
+#[trial]
+fn a_resting_scroll_bar_is_a_thin_line_at_its_outer_edge_that_widens_under_the_pointer() {
+    use craft_behavior::{Axis, ScrollSpan};
+    use craft_theme::{Contrast, ControlSize, Mode, Variant};
+    use craft_ui::primitives::ScrollBar;
+    use craft_ui::style::{Flags, State, StateMix, StateSet};
+    use egui::{Rect, Shape};
+
+    let tokens = craft_ui::testing::style::tokens(Mode::Dark, Contrast::Standard);
+    let look = craft_ui::testing::style::with_cx(&egui::Context::default(), &tokens, Variant::SECONDARY, ControlSize::Md, |cx| cx.scroll_bar());
+    let span = ScrollSpan::new(0.0..400.0, 100.0..300.0);
+    for (axis, rtl) in [(Axis::Y, false), (Axis::Y, true), (Axis::X, false)] {
+        let track = match axis {
+            Axis::X => Rect::from_min_max(pos2(0.0, 100.0), pos2(200.0, 100.0 + look.thickness)),
+            _ => Rect::from_min_max(pos2(100.0, 0.0), pos2(100.0 + look.thickness, 200.0)),
+        };
+        let thumb = |state: State| {
+            let shapes = ScrollBar::shapes(&look, track, axis, rtl, &span, &StateSet::new(state, Flags::empty(), StateMix::REST));
+            match shapes.last() {
+                Some(Shape::Rect(shape)) => shape.rect,
+                other => panic!("the thumb is a rect: {other:?}"),
+            }
+        };
+        let (rest, hover) = (thumb(State::Rest), thumb(State::Hover));
+        let across = |rect: Rect| if axis == Axis::X { rect.height() } else { rect.width() };
+        assert!(across(rest) < across(hover), "{axis:?}: the resting thumb is thinner: {rest:?} and {hover:?}");
+        assert!((across(hover) - across(track)).abs() < EPS, "{axis:?}: under the pointer the thumb fills the track");
+        let outer = match (axis, rtl) {
+            (Axis::X, _) => (rest.bottom() - track.bottom()).abs(),
+            (_, true) => (rest.left() - track.left()).abs(),
+            _ => (rest.right() - track.right()).abs(),
+        };
+        assert!(outer < EPS, "{axis:?} rtl {rtl}: the resting line lies along the outer edge: {rest:?} in {track:?}");
+        let along = |rect: Rect| if axis == Axis::X { rect.x_range() } else { rect.y_range() };
+        assert_eq!(along(rest), along(hover), "{axis:?}: the thumb keeps its place along the bar");
+    }
+}

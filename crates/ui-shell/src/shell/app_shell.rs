@@ -98,11 +98,12 @@ pub struct ShellRegion {
 }
 
 impl ShellRegion {
-    /// The whole content of the window: its edges resize the window where the app draws the frame. It paints no
-    /// surface of its own: the parts the shell places paint theirs, and a gap between them (a dock's gutter) shows the
-    /// window's clear colour.
+    /// The whole content of the window: its edges resize the window where the app draws the frame. It paints the
+    /// background surface under everything the shell places, so a gap between parts (a dock's gutter, the room beside
+    /// the document tabs) shows the background, never the platform's clear colour.
     pub fn window() -> Self {
-        let props = ContainerProps::new().mount(Mount::window(Resize::GRIPS)).command_scope(ScreenModeCommands::SCOPE);
+        let props =
+            ContainerProps::new().mount(Mount::window(Resize::GRIPS)).surface(SurfaceKind::Background).command_scope(ScreenModeCommands::SCOPE);
         ShellRegion { common: Common::new(), props, shell: None, senses_surface: false }
     }
 
@@ -124,6 +125,15 @@ impl ShellRegion {
     pub fn pane(pane: ShellPane) -> Self {
         let props = ContainerProps::new().mount(Mount::Pane(pane)).focus(FocusPolicy::PANE);
         ShellRegion { common: Common::new(), props, shell: None, senses_surface: false }
+    }
+
+    /// A bar or rail pane at an edge of the window: it paints the chrome surface over the whole pane and a divider
+    /// along its inner edge. A bar or rail inside that is smaller than the pane leaves no band of the backdrop, and the
+    /// pane meets the body at the rule.
+    pub fn chrome(pane: ShellPane) -> Self {
+        let mut region = Self::pane(pane);
+        region.props = region.props.surface(SurfaceKind::Chrome).edge_rule(true);
+        region
     }
 }
 
@@ -357,10 +367,11 @@ impl<'a, S> AppShell<'a, S> {
         self
     }
 
-    /// The tool rail, a slot keyed `"tools"` at `edge` (the reading start or end) that reveals in body-only mode. It
-    /// is the Tools region on either edge.
-    pub fn tools(mut self, edge: PaneEdge, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        let slot = Slot::new(keys::TOOLS).visible(visible).reveal();
+    /// The tool rail, a slot keyed `"tools"` at `edge` (the reading start or end) that reveals in body-only mode, as
+    /// wide as the rail's `columns` (1 or 2, the count the host gives its `ToolRail`). It is the Tools region on either
+    /// edge.
+    pub fn tools(mut self, edge: PaneEdge, columns: usize, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        let slot = Slot::new(keys::TOOLS).columns(columns).visible(visible).reveal();
         self.slots.push(Placed { slot, edge, title: false, named: Some(|words| words.tools.clone()), add: Box::new(add) });
         self
     }
@@ -522,14 +533,13 @@ impl<'a, S> AppShell<'a, S> {
                         let extent = placed.extent(&tokens);
                         let Placed { slot, edge, named, add, title, .. } = placed;
                         let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(rect_of(slot.key()));
-                        let mut region = ShellRegion::pane(pane).id_salt(("slot", slot.key()));
-                        // A bar is as high as its content and the slot as high as its token, so the slot paints the bar's
-                        // surface under it, and the bar sits at the slot's centre line: no band of the backdrop shows
-                        // between the bar and the body.
+                        // Every slot but the title is a chrome pane: it paints the surface under its bar or rail and
+                        // the rule toward the body. The title bar paints its own.
+                        let region = if *title { ShellRegion::pane(pane) } else { ShellRegion::chrome(pane) };
+                        let mut region = region.id_salt(("slot", slot.key()));
+                        // A bar is as high as its content and the slot as high as its token, so the bar sits at the
+                        // slot's centre line.
                         let centred = !*title && matches!(edge, PaneEdge::Top | PaneEdge::Bottom);
-                        if centred {
-                            region = region.surface(SurfaceKind::Chrome);
-                        }
                         if let Some(label) = slot.name().cloned().or_else(|| named.map(|name| name(&words))) {
                             region = region.label(label);
                         }
@@ -544,7 +554,7 @@ impl<'a, S> AppShell<'a, S> {
                 };
                 show_slots(ui, false, app);
                 // Only a body-only shell paints behind its body (the scrim). Otherwise the body paints what it shows, and the gaps
-                // between its parts (the dock's gutters) are the window's own clear colour.
+                // between its parts (the dock's gutters) show the window's background.
                 let pane = ShellPane::new("body");
                 let pane = if content_room.is_some() { pane.at_content_height(regions.body) } else { pane.at(regions.body) };
                 let mut center = ShellRegion::pane(pane).label(body_label.clone());
