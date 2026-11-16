@@ -322,6 +322,40 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Whether the first frame header of `b` samples its first component below the largest
+/// horizontal or vertical sampling factor of the frame. zune-jpeg 0.5 sizes its upsampler's
+/// scratch row from the first component and asserts on some such frames (jpeg-encoder writes
+/// CMYK that way: C, M and Y at 1×1, K larger). `false` when no frame header can be read.
+fn first_component_subsampled(b: &[u8]) -> bool {
+    if b.get(..2) != Some(&[0xFF, 0xD8]) {
+        return false;
+    }
+    let mut i = 2;
+    while let (Some(&0xFF), Some(&m)) = (b.get(i), b.get(i + 1)) {
+        match m {
+            0xFF => i += 1,
+            0x01 | 0xD0..=0xD8 => i += 2,
+            0xD9 | 0xDA => return false,
+            _ => {
+                let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
+                if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+                    let Some(seg) = b.get(i + 4..i + 2 + len.max(2)) else { return false };
+                    let n = usize::from(seg.get(5).copied().unwrap_or(0));
+                    let factors: Vec<(u8, u8)> = (0..n).filter_map(|c| seg.get(6 + c * 3 + 1)).map(|f| (f >> 4, f & 0x0F)).collect();
+                    let (Some(&(h0, v0)), Some(hmax), Some(vmax)) =
+                        (factors.first(), factors.iter().map(|f| f.0).max(), factors.iter().map(|f| f.1).max())
+                    else {
+                        return false;
+                    };
+                    return h0 < hmax || v0 < vmax;
+                }
+                i += 2 + len;
+            }
+        }
+    }
+    false
+}
+
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
 /// (SOF9–SOF11), lossless (SOF3), or a DCT frame whose precision isn't 8 bits (#4934, #5003).
 /// This includes 12-bit progressive Huffman (SOF2), which `craft-jpeg` supports.
@@ -413,6 +447,15 @@ fn decode_whole(bytes: &[u8], limits: &Limits, meta: JpegMeta, end: DataEnd, sca
     Ok(img)
 }
 
+/// The stored size and EXIF block [`decode`] would find, from the marker segments before the
+/// first scan: the first frame header's size, checked against `limits`, and the APP1 EXIF block.
+pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
+    let meta = scan_metadata(bytes);
+    let (w, h, _) = meta.frame.ok_or_else(|| err("no frame header before the image data"))?;
+    limits.check_size(w, h)?;
+    Ok((w, h, meta.exif))
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (end, scan_bytes) = data_end(bytes);
     if end == DataEnd::Empty {
@@ -422,7 +465,8 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     if let Some((w, h, nc)) = meta.frame {
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
     }
-    if uses_craft_jpeg(bytes) {
+    // Where a panic aborts (wasm32), the frames zune-jpeg may panic on can't be caught below.
+    if uses_craft_jpeg(bytes) || (cfg!(panic = "abort") && first_component_subsampled(bytes)) {
         return decode_whole(bytes, limits, meta, end, scan_bytes);
     }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(65535).set_max_height(65535);
@@ -1018,6 +1062,25 @@ mod tests {
 
     fn twelve_bit(v: f32) -> u16 {
         (v * 65535.0 / 4095.0).round() as u16
+    }
+
+    #[test]
+    fn first_component_subsampling() {
+        let sof = |comps: &[(u8, u8)]| {
+            let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
+            for (i, &(h, v)) in comps.iter().enumerate() {
+                s.extend([i as u8 + 1, (h << 4) | v, 0]);
+            }
+            s
+        };
+        assert!(first_component_subsampled(&sof(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
+        assert!(first_component_subsampled(&sof(&[(1, 2), (1, 2), (2, 1)])));
+        assert!(!first_component_subsampled(&sof(&[(2, 2), (1, 1), (1, 1)])));
+        assert!(!first_component_subsampled(&sof(&[(1, 1); 4])));
+        assert!(!first_component_subsampled(&sof(&[])));
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]));
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 20, 8]));
+        assert!(!first_component_subsampled(b"not a jpeg"));
     }
 
     #[test]
