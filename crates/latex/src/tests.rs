@@ -286,6 +286,15 @@ fn a_second_optional_argument_is_not_text() {
 }
 
 #[test]
+fn an_optional_argument_after_a_space_is_not_text() {
+    // A space before the `[` kept the whole argument as text.
+    for src in ["\\begin{figure} [h]x\\end{figure}", "\\begin{minipage} [t]{3cm}x\\end{minipage}"] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["x".to_string()], "{src}");
+    }
+    assert_eq!(texts("a\\\\ [2pt]b"), ["a\nb"]);
+}
+
+#[test]
 fn a_definition_with_a_default_argument_shows_nothing() {
     // `[2][x]`: the default was left over as text, and the definition's body with it.
     assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2][x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);

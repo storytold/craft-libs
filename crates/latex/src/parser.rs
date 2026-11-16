@@ -248,7 +248,9 @@ impl<'a> Parser<'a> {
                 self.pos = save;
                 return None;
             };
-            let Some(body) = s.strip_prefix('[') else {
+            // LaTeX skips spaces before an optional argument, and in `\\begin{figure} [h]` the
+            // space and the `[` share one text token.
+            let Some(body) = s.trim_start().strip_prefix('[') else {
                 self.pos = save;
                 return None;
             };
