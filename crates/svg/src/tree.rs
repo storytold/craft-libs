@@ -34,6 +34,7 @@ use crate::{guard, svgz};
 
 pub mod document;
 pub mod draw;
+pub mod primitive;
 
 /// What one import may use. The defaults suit a desktop app that parses on a thread with a
 /// large stack (see the module text).
@@ -173,11 +174,48 @@ impl Preflight<'_> {
         self.depth
     }
 
+    /// The SVG elements in the document that the parsed tree leaves out, by name and count,
+    /// sorted by name: animation, scripts, embedded HTML and media, and text when this build
+    /// converts no text (neither `tree-text` nor `tree-render`). For an import's "not imported" notes.
+    pub fn unsupported_elements(&self) -> Vec<(&'static str, usize)> {
+        const SVG_NS: &str = "http://www.w3.org/2000/svg";
+        let mut counts: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
+        for node in self.xml.descendants().filter(roxmltree::Node::is_element) {
+            if !matches!(node.tag_name().namespace(), None | Some(SVG_NS)) {
+                continue;
+            }
+            if let Some(name) = UNSUPPORTED.iter().copied().find(|name| *name == node.tag_name().name()) {
+                *counts.entry(name).or_default() += 1;
+            }
+        }
+        counts.into_iter().collect()
+    }
+
     /// Converts this already-checked XML into the configured usvg tree.
     pub fn parse(self, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
         usvg::Tree::from_xmltree(&self.xml, options).map_err(|e| Error::Parse(e.to_string()))
     }
 }
+
+/// Elements the parsed tree never holds: usvg reads static content only, and text needs fonts.
+const UNSUPPORTED: &[&str] = &[
+    "animate",
+    "animateColor",
+    "animateMotion",
+    "animateTransform",
+    "audio",
+    "canvas",
+    "discard",
+    "foreignObject",
+    "iframe",
+    "script",
+    "set",
+    // usvg converts text when built with its `text` feature: `tree-text`, or `tree-render`
+    // through resvg.
+    #[cfg(not(any(feature = "tree-text", feature = "tree-render")))]
+    "text",
+    "video",
+];
 
 /// Checks already-decoded SVG text once, retaining the parsed XML for both depth policy and tree conversion.
 pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Error> {

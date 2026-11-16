@@ -237,6 +237,11 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   the EXIF and XMP resolution are rewritten to the image's (`export_exif`, `export_xmp`): the
   RATIONAL values in place, ResolutionUnit set to 2, an entry that can't be rewritten removed
   from IFD0 without moving any other data. IFD1 (the thumbnail's) is left as it is.
+* **Resolution without decoding** (module `resolution_probe`): `file_resolution(bytes)` reads
+  the pixels per inch a JPEG, PNG, WebP, BMP or classic TIFF records from its headers alone, for
+  placing a picture at its physical size before (or without) decoding it. JPEG, PNG, WebP and
+  TIFF answer as `decode` would; BMP reads the info header's pixels per metre. Values outside
+  1–100 000 ppi count as none.
 * **JPEG**
   * 8-bit only. Neither decoder backend supports 12-bit.
   * A file cut off inside its image data decodes leniently (a baseline JPEG's missing rows come
