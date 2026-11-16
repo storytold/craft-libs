@@ -704,6 +704,16 @@ impl<'a> BezierOverlay<'a> {
         }
     }
 
+    /// A one-shot `edit` of `paths` that is reported even when it changes nothing: a Convert Point click on an anchor
+    /// that already is a corner is still the click's edit, and the host decides what it makes of it (a live shape
+    /// becomes a path, the click is a History step).
+    fn set_always(&mut self, cx: &mut Cx<'_, Self>, paths: &[EditPath], edit: PathEdit) {
+        let mut next = paths.to_vec();
+        edit.apply_all(&mut next);
+        cx.set(next);
+        self.report.change = Some(edit);
+    }
+
     /// The selection a marquee over `rect` makes with `mods`: the anchors inside it on the frontmost path that has
     /// any, combined with the selection as ⇧, ⌥ and ⇧⌥ say (Photoshop's add, subtract and intersect).
     fn marquee_selection(&self, paths: &[EditPath], rect: DocRect, mods: Mods) -> Option<PathSelection> {
@@ -879,7 +889,7 @@ impl<'a> BezierOverlay<'a> {
             return;
         }
         match held.target {
-            Target::Convert { path, knot } => self.set(cx, &held.start, PathEdit::Convert { path, knot, out: None }),
+            Target::Convert { path, knot } => self.set_always(cx, &held.start, PathEdit::Convert { path, knot, out: None }),
             Target::Toggle { path, knot } => self.set(cx, &held.start, PathEdit::ToggleCurvature { path, knot }),
             Target::CurvatureInsert { path, segment, t, .. } => {
                 self.set(cx, &held.start, PathEdit::InsertCurvature { path, segment, t, by: Vec2::ZERO });
