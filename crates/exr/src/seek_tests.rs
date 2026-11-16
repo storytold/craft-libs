@@ -1086,6 +1086,7 @@ fn valid_dwa_files_pass_the_guard() {
         ] {
             let bytes = dwa_file(compression, size, names, tiles);
             let index = indexed(&bytes);
+            assert_eq!(index.check_blocks(), Ok(()));
             let channels = channels_of(&index, 0);
             let read = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&channels, usize::MAX), &never);
             assert_eq!(read.map(|r| r.planes).ok(), Some(oracle(&bytes, 0, 0.0)), "{compression:?} {size:?} {names:?} tiles {tiles}");
@@ -1098,4 +1099,107 @@ fn valid_dwa_files_pass_the_guard() {
             }
         }
     }
+}
+
+/// A source that panics when anything at or past `chunks` (where the chunks start) is read: a
+/// read that a check should have refused fails fast instead of allocating.
+struct NoChunks<'a> {
+    inner: Cursor<&'a [u8]>,
+    chunks: u64,
+}
+
+impl Read for NoChunks<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        assert!(self.inner.position() < self.chunks, "a chunk was read");
+        self.inner.read(buf)
+    }
+}
+
+impl Seek for NoChunks<'_> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+#[test]
+fn a_tiny_chunk_declaring_a_gigabyte_block_is_refused_before_it_is_read() {
+    // A 1 × 1 file whose data window is patched to 2^30 - 2 pixels wide: one row of one f32
+    // channel is a 4 GiB block over a chunk of a few dozen bytes. Within an app's 8 GiB budget
+    // the block cap allows it; the bytes can't hold it.
+    let limits = Limits { max_ratio: Limits::default().max_ratio, ..Limits::none() };
+    for compression in [Compression::PIZ, Compression::DWAB(None), Compression::ZIP16] {
+        let mut bytes = file(vec![layer(None, (0, 0), (1, 1), &["R"], false, compression)], (1, 1));
+        patch_box(&mut bytes, "dataWindow", [0, 0, (1 << 30) - 3, 0]);
+        let index = Index::build(&mut Cursor::new(&bytes[..]), &limits, &never).unwrap();
+        let chunk = index.chunks(0).next().unwrap();
+        assert!(chunk.len < 200 && chunk.width == (1 << 30) - 2, "{chunk:?}");
+        let got = index.check_blocks();
+        assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("can hold")), "{compression:?}: {got:?}");
+        let mut source = NoChunks { inner: Cursor::new(&bytes[..]), chunks: chunk.offset };
+        let got = read_planes(&mut source, &index, &Request::new(&[(0, 0)], 8 << 30), &never);
+        assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("can hold")), "{compression:?}: {got:?}");
+    }
+}
+
+#[test]
+fn black_frames_that_compress_extremely_well_still_read() {
+    // 4096 × 256 × 4 half channels of zero in DWAB (one 8 MiB block) and of f32 in ZIP16.
+    use exr::prelude::f16;
+    let (w, h) = (4096usize, 256usize);
+    for (compression, half) in [(Compression::DWAB(None), true), (Compression::ZIP16, false)] {
+        let list: Vec<AnyChannel<FlatSamples>> = ["R", "G", "B", "A"]
+            .iter()
+            .map(|n| AnyChannel::new(*n, if half { FlatSamples::F16(vec![f16::ZERO; w * h]) } else { FlatSamples::F32(vec![0.0; w * h]) }))
+            .collect();
+        let encoding = Encoding { compression, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
+        let bytes = file(vec![Layer::new((w, h), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (w, h));
+        let index = indexed(&bytes);
+        let smallest = index.chunks(0).map(|c| c.len).min().unwrap();
+        assert_eq!(index.check_blocks(), Ok(()), "{compression:?}, chunks from {smallest} bytes");
+        let channels = channels_of(&index, 0);
+        let read = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&channels, usize::MAX), &never).unwrap();
+        assert!(read.planes.iter().all(|p| p.len() == w * h && p.iter().all(|v| *v == 0.0)), "{compression:?}");
+    }
+}
+
+#[test]
+fn the_ratio_bound_allows_a_mebibyte_more_and_four_times_as_much_for_dwa() {
+    use exr::prelude::f16;
+    let build = |bytes: &[u8], max_ratio| Index::build(&mut Cursor::new(bytes), &Limits { max_ratio, ..Limits::default() }, &never).unwrap();
+    // A black ZIP16 block of 512 × 16 f32 RGBA is 128 KiB over a few hundred bytes: refused at
+    // one byte per byte but for the 1 MiB every chunk is allowed besides.
+    let zip = file(vec![layer(None, (0, 0), (512, 16), &["R", "G", "B", "A"], false, Compression::ZIP16)], (512, 16));
+    let list: Vec<AnyChannel<FlatSamples>> =
+        ["R", "G", "B", "A"].iter().map(|n| AnyChannel::new(*n, FlatSamples::F32(vec![0.0; 512 * 16]))).collect();
+    let encoding = Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
+    let black = file(vec![Layer::new((512, 16), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (512, 16));
+    for bytes in [&zip, &black] {
+        let index = build(bytes, 1);
+        assert!(index.chunks(0).all(|c| c.len < 128 << 10));
+        assert_eq!(index.check_blocks(), Ok(()));
+    }
+    // A black DWAB block of 4096 × 256 half RGBA (8 MiB): with a ratio that lets its bytes hold
+    // between a quarter of the block and the block (less the 1 MiB), only the fourfold DWA
+    // allowance admits it.
+    let list: Vec<AnyChannel<FlatSamples>> =
+        ["R", "G", "B", "A"].iter().map(|n| AnyChannel::new(*n, FlatSamples::F16(vec![f16::ZERO; 4096 * 256]))).collect();
+    let encoding = Encoding { compression: Compression::DWAB(None), blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
+    let dwab = file(vec![Layer::new((4096, 256), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (4096, 256));
+    let len = indexed(&dwab).chunks(0).next().unwrap().len;
+    let ratio = (5u64 << 20) / len; // len × ratio ≈ 5 MiB: 8 MiB > that + 1 MiB, but ≤ 4 × that + 1 MiB
+    let index = build(&dwab, ratio);
+    assert_eq!(index.check_blocks(), Ok(()), "{len}-byte chunk, ratio {ratio}");
+    assert!(matches!(build(&dwab, ratio / 8).check_blocks(), Err(Error::LimitExceeded(_))));
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn memory_the_system_cannot_give_is_out_of_memory_not_a_limit() {
+    // A display window of (2^30 - 2)^2 pixels: one f32 plane is 4 EiB, which no system maps, so
+    // the reservation fails at once (nothing is touched).
+    let mut bytes = file(vec![layer(None, (0, 0), (1, 1), &["R"], false, Compression::ZIP1)], (1, 1));
+    patch_box(&mut bytes, "displayWindow", [0, 0, (1 << 30) - 3, (1 << 30) - 3]);
+    let index = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never).unwrap();
+    let got = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], usize::MAX), &never);
+    assert!(matches!(got, Err(Error::OutOfMemory(_))), "{got:?}");
 }

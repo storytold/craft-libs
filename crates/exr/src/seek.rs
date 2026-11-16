@@ -70,9 +70,13 @@ pub enum Error {
     #[error("unsupported OpenEXR compression: {0}")]
     UnsupportedCompression(String),
     /// The file declares more than [`Limits`] (or this module's own bounds) allow, or the request
-    /// needs more than [`Request::max_bytes`] (or than the system can give).
+    /// needs more than [`Request::max_bytes`]: a lasting refusal of this file or request.
     #[error("OpenEXR exceeds a limit: {0}")]
     LimitExceeded(String),
+    /// The system could not give memory the read needed (within its limits) just now: another
+    /// attempt, with more memory free, may succeed.
+    #[error("OpenEXR: out of memory: {0}")]
+    OutOfMemory(String),
     /// The source failed just now (a seek or read error other than the file ending early):
     /// another attempt may succeed.
     #[error("OpenEXR: cannot read: {0}")]
@@ -198,13 +202,18 @@ pub struct Index {
     layout: Vec<PartLayout>,
     display: Window,
     len: u64,
+    /// [`Limits::max_ratio`] at build: how many bytes one byte of a chunk may decompress to.
+    max_ratio: u64,
 }
 
 impl Index {
     /// Reads the headers and offset tables of the file in `source` and checks them against
-    /// `limits` (the window and pixel limits; `max_bytes` and `max_ratio` bound what the whole
-    /// file may decode to in [`crate::decode`] and play no part here, a read is bounded by
-    /// [`Request::max_bytes`]). Nothing is sized by pixels. `cancel` is polled while reading.
+    /// `limits`: the window and pixel limits. `max_bytes` bounds what the whole file may decode
+    /// to in [`crate::decode`] and plays no part here (a read is bounded by
+    /// [`Request::max_bytes`]); `max_ratio` is kept in the index, and a read refuses a chunk whose
+    /// block is more than its bytes can decompress to (see [`Index::check_blocks`]). Nothing is
+    /// sized by pixels.
+    /// `cancel` is polled while reading.
     /// The display window and every data window are held to `limits.max_pixels`; see
     /// [`Index::build_with_display_limit`] to hold the display window to its own bound.
     pub fn build<R: Read + Seek + ?Sized>(source: &mut R, limits: &Limits, cancel: &dyn Fn() -> bool) -> Result<Index> {
@@ -261,7 +270,7 @@ impl Index {
             info.deep = h.deep;
         }
         let display = parts.first().map_or(Window { x: 0, y: 0, width: 0, height: 0 }, |p| p.display_window);
-        Ok(Index { meta, parts, layout, display, len })
+        Ok(Index { meta, parts, layout, display, len, max_ratio: limits.max_ratio })
     }
 
     /// Every part's header facts: channels (in the order a request's `(part, channel)` pairs
@@ -289,6 +298,37 @@ impl Index {
             width: c.cols,
             height: c.rows,
         })
+    }
+
+    /// Checks every chunk of the full-resolution level of every flat part against what its bytes
+    /// can decompress to (see [`Index::build`]'s `max_ratio`), from the index alone: an app can
+    /// refuse a file before another decoder allocates by its headers. A read makes the same check
+    /// for the chunks it needs, and also holds each block to its own byte limit.
+    pub fn check_blocks(&self) -> Result<()> {
+        for (pi, part) in self.layout.iter().enumerate() {
+            let Some(header) = self.meta.headers.get(pi).filter(|h| !h.deep) else { continue };
+            for c in &part.chunks {
+                self.check_ratio(pi, header, part, c)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses chunk `c` of part `pi` when its decompressed block is more than its bytes can hold:
+    /// at most `max_ratio` bytes per byte (four times that for DWA, whose RLE and zlib stages
+    /// together reach about 132 000 : 1), plus 1 MiB. A hostile header can declare a block of
+    /// gigabytes over a chunk of a few bytes, and the decompressors allocate the whole block first.
+    fn check_ratio(&self, pi: usize, header: &Header, part: &PartLayout, c: &ChunkRef) -> Result<()> {
+        let block = (c.cols as u64).saturating_mul(c.rows as u64).saturating_mul(part.pixel_bytes as u64);
+        let ratio = if crate::dwa_guard::is_dwa(header.compression) { self.max_ratio.saturating_mul(4) } else { self.max_ratio };
+        let most = c.len.checked_mul(ratio).and_then(|b| b.checked_add(1 << 20)).unwrap_or(u64::MAX);
+        if block > most {
+            return Err(Error::LimitExceeded(format!(
+                "a block of part {pi} decompresses to {block} bytes, more than its {}-byte chunk can hold ({most})",
+                c.len
+            )));
+        }
+        Ok(())
     }
 
     /// The file's length when it was indexed.
@@ -347,7 +387,7 @@ fn read_headers<R: Read + ?Sized>(r: &mut R, cancel: &dyn Fn() -> bool) -> Resul
             let end =
                 prefix.len().checked_add(n).filter(|end| *end <= META_BYTES).ok_or_else(|| Error::LimitExceeded("headers over 8 MiB".into()))?;
             let begin = prefix.len();
-            prefix.try_reserve_exact(n).map_err(|_| Error::LimitExceeded("header allocation".into()))?;
+            prefix.try_reserve_exact(n).map_err(|_| Error::OutOfMemory("header allocation".into()))?;
             prefix.resize(end, 0);
             for bytes in prefix.get_mut(begin..).ok_or_else(|| malformed("attribute size"))?.chunks_mut(64 << 10) {
                 if cancel() {
@@ -466,11 +506,11 @@ fn read_tables<R: Read + Seek + ?Sized>(r: &mut R, meta: &MetaData, headers_end:
     }
     r.seek(SeekFrom::Start(headers_end)).map_err(io)?;
     let mut tables = Vec::new();
-    tables.try_reserve_exact(meta.headers.len()).map_err(|_| Error::LimitExceeded("offset table allocation".into()))?;
+    tables.try_reserve_exact(meta.headers.len()).map_err(|_| Error::OutOfMemory("offset table allocation".into()))?;
     let mut buf = vec![0u8; 8 * 8192];
     for h in &meta.headers {
         let mut table: Vec<u64> = Vec::new();
-        table.try_reserve_exact(h.chunk_count).map_err(|_| Error::LimitExceeded("offset table allocation".into()))?;
+        table.try_reserve_exact(h.chunk_count).map_err(|_| Error::OutOfMemory("offset table allocation".into()))?;
         let mut left = h.chunk_count;
         while left > 0 {
             if cancel() {
@@ -496,7 +536,7 @@ fn read_tables<R: Read + Seek + ?Sized>(r: &mut R, meta: &MetaData, headers_end:
 /// table of every level mode (scan lines, single-level tiles, mip and rip maps), its blocks row by
 /// row and left to right.
 fn layout_of(meta: &MetaData, tables: &[Vec<u64>], chunks_start: u64, len: u64) -> Result<Vec<PartLayout>> {
-    let allocation = |_| Error::LimitExceeded("chunk layout allocation".into());
+    let allocation = |_| Error::OutOfMemory("chunk layout allocation".into());
     let first = meta.headers.first().ok_or_else(|| malformed("missing header"))?;
     let display = first.shared_attributes.display_window;
     let mut starts: Vec<u64> = Vec::new();
@@ -795,6 +835,9 @@ fn read_into<R: Read + Seek + ?Sized>(
             if c.len == 0 {
                 return Err(malformed("a chunk offset outside the chunk area of the file"));
             }
+            if let Some(header) = index.meta.headers.get(pi) {
+                index.check_ratio(pi, header, part, c)?;
+            }
             let pixels = (c.cols as u64).saturating_mul(c.rows as u64);
             let block = pixels.saturating_mul(part.pixel_bytes as u64);
             if block > most_block {
@@ -804,7 +847,7 @@ fn read_into<R: Read + Seek + ?Sized>(
                 )));
             }
             let cost = block.saturating_add(pixels.saturating_mul(requested as u64).saturating_mul(4));
-            jobs.try_reserve(1).map_err(|_| Error::LimitExceeded("chunk list allocation".into()))?;
+            jobs.try_reserve(1).map_err(|_| Error::OutOfMemory("chunk list allocation".into()))?;
             jobs.push(Planned { part: pi, offset: c.offset, len: c.len, chunk: *c, cost });
         }
     }
@@ -924,7 +967,7 @@ fn next_result(results: &Receiver<(usize, Decoded)>, cancel: &dyn Fn() -> bool) 
 /// at the request's level (also when [`Request::rows`] selects only some rows: the other rows
 /// keep the fill value), filled with [`Request::fill`] where nothing was read. The planes are
 /// reserved up front and count against [`Request::max_bytes`] (an allocation the system refuses
-/// is [`Error::LimitExceeded`], not an abort), so the cost is known before the first chunk is
+/// is [`Error::OutOfMemory`], not an abort), so the cost is known before the first chunk is
 /// read.
 pub fn read_planes<R: Read + Seek + ?Sized>(source: &mut R, index: &Index, request: &Request, cancel: &dyn Fn() -> bool) -> Result<Planes> {
     let (w, h) = (index.display.width as usize, index.display.height as usize);
@@ -935,10 +978,10 @@ pub fn read_planes<R: Read + Seek + ?Sized>(source: &mut R, index: &Index, reque
         return Err(Error::LimitExceeded(format!("{w}×{h} channels need {need} bytes, more than the {} the read may use", request.max_bytes)));
     }
     let mut planes: Vec<Vec<f32>> = Vec::new();
-    planes.try_reserve_exact(request.channels.len()).map_err(|_| Error::LimitExceeded("plane list allocation".into()))?;
+    planes.try_reserve_exact(request.channels.len()).map_err(|_| Error::OutOfMemory("plane list allocation".into()))?;
     for slot in 0..request.channels.len() {
         let mut plane: Vec<f32> = Vec::new();
-        plane.try_reserve_exact(n).map_err(|_| Error::LimitExceeded(format!("{need} bytes of planes: the system can't give that memory")))?;
+        plane.try_reserve_exact(n).map_err(|_| Error::OutOfMemory(format!("{need} bytes of planes: the system can't give that memory now")))?;
         plane.resize(n, request.fill.get(slot).copied().unwrap_or(0.0));
         planes.push(plane);
     }
@@ -1089,7 +1132,7 @@ fn read_piece<R: Read + Seek + ?Sized>(source: &mut R, piece: &[Planned], pos: &
     let total = piece.iter().map(|j| j.len).fold(0u64, u64::saturating_add);
     let mut data = Vec::new();
     data.try_reserve_exact(usize::try_from(total).map_err(|_| malformed("chunk size"))?)
-        .map_err(|_| Error::LimitExceeded("chunk allocation".into()))?;
+        .map_err(|_| Error::OutOfMemory("chunk allocation".into()))?;
     if *pos != Some(start) {
         source.seek(SeekFrom::Start(start)).map_err(io)?;
     }
@@ -1097,7 +1140,7 @@ fn read_piece<R: Read + Seek + ?Sized>(source: &mut R, piece: &[Planned], pos: &
     *pos = Some(start.saturating_add(data.len() as u64));
     stats.bytes = stats.bytes.saturating_add(data.len() as u64);
     let mut chunks = Vec::new();
-    chunks.try_reserve_exact(piece.len()).map_err(|_| Error::LimitExceeded("chunk allocation".into()))?;
+    chunks.try_reserve_exact(piece.len()).map_err(|_| Error::OutOfMemory("chunk allocation".into()))?;
     for job in piece {
         let a = usize::try_from(job.offset.saturating_sub(start)).unwrap_or(usize::MAX).min(data.len());
         let b = usize::try_from(job.len).map_or(data.len(), |l| a.saturating_add(l)).min(data.len());
