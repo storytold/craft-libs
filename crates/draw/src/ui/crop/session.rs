@@ -483,7 +483,7 @@ impl CropSession {
 
     /// The first frame edit from the hidden overlay, a ratio or size change or a Straighten press:
     /// the default frame shows again.
-    pub fn show(&mut self) {
+    pub fn show_frame(&mut self) {
         self.dismissed = None;
     }
 
