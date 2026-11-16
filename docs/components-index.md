@@ -147,7 +147,7 @@ Grouped by gallery level, then shape, then name.
 | `ModalDragStrip` | Body | `craft_ui_panels::dialog::modal` | The chrome a modal dialog puts over a drag area of the window it covers, so that the window still moves by it |
 | `PaneFrame` | Body | `craft_ui_patterns::patterns::dock::panes` | A docked pane: a shell pane on one edge of the area, with a title row and a scrolling body |
 | `Panel` | Body | `craft_ui_panels::sections::panel` | A panel of a workspace: scrolling body, optional footer, optional title row |
-| `PanelRail` | Body | `craft_ui_panels::rails::panel_rail` | The rail of icons that open panels, as a side panel at one edge of the window, with a rule along the edge that faces the canvas (the inner edge of its pane) |
+| `PanelRail` | Body | `craft_ui_panels::rails::panel_rail` | The rail of icons that open panels, as a side panel at one edge of the window; the pane it sits in draws the rule along the edge that faces the canvas |
 | `Popover` | Body | `craft_ui_widgets::popover::anchored` | A non-modal popup that hangs from the control that opened it and holds the app's body (a colour picker, a stroke editor, a settings form) |
 | `PopupList` | Body | `craft_ui_widgets::popover::popup_list` | A list popup under a field the app owns (a combo, a history picker) |
 | `SplitArea` | Body | `craft_ui_panels::docking` | The docked tree of a layout, with a handle between neighbouring groups |
@@ -157,7 +157,7 @@ Grouped by gallery level, then shape, then name.
 | `AboutDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::about` | Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button |
 | `Alert` | Pattern | `craft_ui_panels::dialog::alert` | A modal notice with one OK button: a prompt whose only answer is OK, which OK, Enter, Escape and the close action all give |
 | `AlignBar` | Pattern | `craft_ui_widgets::bars::align` | The two sections of four align and distribute buttons, then the menu button, shown as children of a `Bar` |
-| `BarHome` | Pattern | `craft_ui_widgets::bars::lead` | The Home button at the start of an options bar: a toggle with the home icon, then a rule |
+| `BarHome` | Pattern | `craft_ui_widgets::bars::lead` | The Home button at the start of an options bar: a toggle with the home icon at the standard control size, as tall as a bar's tool icons, then a rule |
 | `BarTool` | Pattern | `craft_ui_widgets::bars::lead` | The active tool's icon at the start of an options bar, after Home: the icon, the dropdown arrow that tells it has a menu, then a rule |
 | `CanvasSize` | Pattern | `craft_ui_patterns::patterns::form_dialogs::sizing::canvas` | Canvas Size: the current size, the new width and height with a unit each (no chain: the sides are independent), the Relative box, the 3 by 3 anchor and the colour that fills a larger canvas |
 | `CommandPalette` | Pattern | `craft_ui_patterns::patterns::panels::palette` | A search over the app's commands in a centred modal box: a search field over the matching commands |
@@ -198,6 +198,7 @@ Grouped by gallery level, then shape, then name.
 | `ParamRows` | Pattern | `craft_ui_patterns::patterns::form_dialogs::rows` | The rows of a parameter list: a group of one labelled field per visible [`Param`], the control chosen by its [`ParamKind`], in a panel the host lays out or inside a dialog |
 | `PasswordDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::password` | A question with a lock icon, the message, the masked field and the buttons |
 | `PathRow` | Pattern | `craft_ui_patterns::patterns::form_dialogs::path_row` | A text field with the path, taking the row's room, and a Browse button after it, for a row whose enclosing `Field` shows the label |
+| `PathSetting` | Pattern | `craft_ui_patterns::patterns::preferences::path_setting` | A path setting for a custom row or page of Preferences ([`CustomSettings`](super::CustomSettings)): the label, then a text field with the path and a Browse… button, over the draft value at `key` |
 | `PdfExportDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::pdf_export` | File > Save as PDF: a preset row, Standard and Compatibility, and a list of sections (General, Compression, Marks and Bleeds, Output, Advanced, Security and Summary) beside the shown section |
 | `PreferencesWindow` | Pattern | `craft_ui_patterns::patterns::preferences::window` | The preferences window: a search field over a page list and the shown page, with OK, Cancel and Apply under them |
 | `PresetBrowser` | Pattern | `craft_ui_patterns::patterns::presets::browser` | A library of named presets shown as thumbnails |
