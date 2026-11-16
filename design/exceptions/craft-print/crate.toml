@@ -1,1 +1,17 @@
 config_version = 1
+
+[[exception]]
+name = "print-marks-geometry"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/print/src/ui/dialog.rs"
+reason = "Printer's marks are page geometry in points, not UI sizes."
+count = 4
+
+[[exception]]
+name = "print-story-page-sizes"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/print/src/ui/stories.rs"
+reason = "Page and paper sizes are document points, story data."
+count = 4

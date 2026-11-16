@@ -183,6 +183,7 @@ fn paint_slices(painter: &ContentPainterCx<'_>, view: CanvasTransform, picture: 
         let number = slice.number.to_string();
         painter.with_draw(|draw| {
             let run = TextRun::new(number.as_str()).role(TypeRole::Caption);
+            // design: allow[literal-size/vec2](the slice number sits a fixed 2 points inside the slice outline over the image preview)
             let corner = rect.left_top() + Vec2::splat(2.0);
             let layout = draw.layout(&run, f32::INFINITY);
             draw.galley(corner, &layout);

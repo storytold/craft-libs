@@ -1,1 +1,9 @@
 config_version = 1
+
+[[exception]]
+name = "slice-number-inset"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/ui-patterns/src/patterns/form_dialogs/save_for_web/panes.rs"
+reason = "The slice number sits a fixed 2 points inside the slice outline drawn over the image preview, which scales with the image, not the interface."
+count = 1
