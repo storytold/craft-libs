@@ -140,3 +140,49 @@ fn a_map_entry_the_app_removes_is_removed_from_the_file() {
     let (last, _) = open_keyed(tmp.path());
     assert!(last.get().shortcuts.is_empty(), "{}", read_config(tmp.path()));
 }
+
+/// Options for a `Prefs` store in `dir`, importing `legacy.txt` (its text is the language) when there is no
+/// `config.toml`.
+fn read_options(dir: &Path) -> OpenOptions<Prefs> {
+    fn parse(bytes: &[u8]) -> Result<(Prefs, Vec<craft_settings::SectionError>), String> {
+        let mut prefs = Prefs::default();
+        prefs.general.language = String::from_utf8(bytes.to_vec()).map_err(|e| e.to_string())?;
+        Ok((prefs, Vec::new()))
+    }
+    let legacy = craft_settings::LegacyFile { path: dir.join("legacy.txt"), parse };
+    OpenOptions::new(Location::Dir(dir.to_path_buf())).probe(empty_probe()).legacy(vec![legacy])
+}
+
+#[test]
+fn a_read_sees_what_a_store_wrote_and_touches_nothing_on_disk() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // A folder that does not exist reads as defaults and is not created.
+    let missing = tmp.path().join("missing");
+    let (prefs, _) = SettingsStore::<Prefs>::read(&read_options(&missing));
+    assert_eq!(prefs, Prefs::default());
+    assert!(!missing.exists(), "a read creates no folder");
+
+    // With no config.toml the legacy file is imported in memory only.
+    std::fs::write(tmp.path().join("legacy.txt"), "nl").unwrap();
+    let (prefs, _) = SettingsStore::<Prefs>::read(&read_options(tmp.path()));
+    assert_eq!(prefs.general.language, "nl");
+    assert!(!config_path(tmp.path()).exists(), "a read writes no config.toml");
+
+    // What an opened store saved is what a read sees, ahead of the legacy file.
+    let (mut store, _) = SettingsStore::open_with(read_options(tmp.path()));
+    store.update(|p| p.general.language = "de".into());
+    store.flush().unwrap();
+    let (prefs, _) = SettingsStore::<Prefs>::read(&read_options(tmp.path()));
+    assert_eq!(prefs.general.language, "de");
+
+    // A damaged config.toml reads as defaults and stays where it is, unchanged.
+    let broken = "schema_version = 2\n[general\nlanguage = \"fr\"\n";
+    write_config(tmp.path(), broken);
+    let (prefs, report) = SettingsStore::<Prefs>::read(&read_options(tmp.path()));
+    assert_eq!(prefs.general.language, Prefs::default().general.language);
+    assert!(report.broken_moved_to.is_none());
+    assert_eq!(read_config(tmp.path()), broken, "a read never moves or rewrites the file");
+    let moved = std::fs::read_dir(tmp.path()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("config.broken-"));
+    assert!(!moved, "nothing is moved aside");
+}

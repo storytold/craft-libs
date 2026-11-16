@@ -134,6 +134,24 @@ pub fn resolve(app_id: &str, portable: &Portable, location: &Location, probe: &P
 /// folder (`Photocraft` on macOS and Windows) keeps them. The `<APP>_CONFIG_DIR` variable still
 /// comes from `app_id`.
 pub fn resolve_named(app_id: &str, folder: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
+    resolve_checked(app_id, folder, portable, location, probe, ensure_writable)
+}
+
+/// [`resolve_named`] without touching the disk: a portable folder is taken as found, without creating it or
+/// checking that it is writable. For [`SettingsStore::read`](crate::SettingsStore::read), which writes nothing.
+pub(crate) fn resolve_unprobed(app_id: &str, folder: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
+    resolve_checked(app_id, folder, portable, location, probe, |_| Ok(()))
+}
+
+/// The folder rules, with `writable` deciding whether a portable folder is used.
+fn resolve_checked(
+    app_id: &str,
+    folder: &str,
+    portable: &Portable,
+    location: &Location,
+    probe: &Probe,
+    writable: impl Fn(&Path) -> std::io::Result<()>,
+) -> Resolved {
     match location {
         Location::Dir(dir) => return Resolved::new(Some(dir.clone()), Rule::Override),
         Location::Memory => return Resolved::new(None, Rule::Memory),
@@ -148,7 +166,7 @@ pub fn resolve_named(app_id: &str, folder: &str, portable: &Portable, location: 
     }
     let mut warning = None;
     if let Some((marker, dir)) = probe.exe_dir.as_deref().and_then(|d| portable_dir(d, portable)) {
-        match ensure_writable(&dir) {
+        match writable(&dir) {
             Ok(()) => return Resolved::new(Some(dir), Rule::Portable),
             Err(e) => {
                 let instead = match &probe.platform_config_dir {

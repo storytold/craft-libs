@@ -29,6 +29,15 @@ pub const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// Longest wait between retries.
 pub const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
+/// What a load does with a `config.toml` that is not TOML.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Damaged {
+    /// Move it aside, so the next save starts a good file (an opened store).
+    MoveAside,
+    /// Leave it where it is (a read).
+    Leave,
+}
+
 /// How to open a store.
 pub struct OpenOptions<T> {
     /// Where the settings live.
@@ -136,35 +145,7 @@ impl<T: Settings> SettingsStore<T> {
     pub fn open_with(options: OpenOptions<T>) -> (Self, LoadReport) {
         let portable = Portable { markers: T::PORTABLE_MARKERS, dir: T::PORTABLE_DIR };
         let resolved = paths::resolve_named(T::APP_ID, T::FOLDER_NAME, &portable, &options.location, &options.probe);
-        let path = resolved.dir.as_ref().map(|d| d.join(CONFIG_FILE));
-        let mut report = LoadReport {
-            dir: resolved.dir.clone(),
-            rule: resolved.rule.to_string(),
-            warning: resolved.warning.clone(),
-            source: Source::Defaults,
-            broken_moved_to: None,
-            section_errors: Vec::new(),
-            migrated_from: None,
-            read_only: None,
-        };
-        let mut store = Self {
-            dir: resolved.dir,
-            path,
-            doc: document::new_document(T::SCHEMA_VERSION),
-            base: default_document::<T>(),
-            files: options.files,
-            value: T::default(),
-            read_only: None,
-            dirty: false,
-            written: false,
-            last_change: None,
-            debounce: options.debounce,
-            failures: 0,
-            retry_at: None,
-            seen_text: None,
-            moved_aside: Vec::new(),
-            merged_change: false,
-        };
+        let (mut store, mut report) = Self::unloaded(resolved, options.files, options.debounce);
 
         let (Some(dir), Some(path)) = (store.dir.clone(), store.path.clone()) else {
             return (store, report);
@@ -179,19 +160,56 @@ impl<T: Settings> SettingsStore<T> {
             store.set_read_only(&mut report, ReadOnlyReason::DirNotWritable(e));
             return (store, report);
         }
+        store.load(&path, &options.legacy, Damaged::MoveAside, &mut report);
+        (store, report)
+    }
 
-        match store.files.read(&path) {
-            Ok(Some(text)) => store.load_text(&path, &text, &mut report),
-            Ok(None) => {
-                if let Some((value, errors, from)) = migrate::import_legacy(&options.legacy) {
-                    store.value = value;
-                    store.dirty = true;
-                    report.source = Source::Legacy(from);
-                    report.section_errors = errors;
-                }
-            }
-            Err(e) => store.set_read_only(&mut report, ReadOnlyReason::Unreadable(e)),
+    /// The settings [`open_with`](Self::open_with) would load from `options`, read without opening a store: for a
+    /// second process, or a read before the application's store opens. It takes the same load path, and touches
+    /// nothing on disk: no folder is created, none is checked for writing (a portable folder is taken as found), a
+    /// damaged `config.toml` reads as defaults and stays where it is, and with no `config.toml` the legacy files are
+    /// imported in memory only.
+    pub fn read(options: &OpenOptions<T>) -> (T, LoadReport) {
+        let portable = Portable { markers: T::PORTABLE_MARKERS, dir: T::PORTABLE_DIR };
+        let resolved = paths::resolve_unprobed(T::APP_ID, T::FOLDER_NAME, &portable, &options.location, &options.probe);
+        let (mut store, mut report) = Self::unloaded(resolved, options.files.clone(), options.debounce);
+        if let Some(path) = store.path.clone() {
+            store.load(&path, &options.legacy, Damaged::Leave, &mut report);
         }
+        (std::mem::take(&mut store.value), report)
+    }
+
+    /// A store at `resolved` holding the defaults, before anything is read.
+    fn unloaded(resolved: paths::Resolved, files: Arc<dyn SettingsFiles>, debounce: Duration) -> (Self, LoadReport) {
+        let path = resolved.dir.as_ref().map(|d| d.join(CONFIG_FILE));
+        let report = LoadReport {
+            dir: resolved.dir.clone(),
+            rule: resolved.rule.to_string(),
+            warning: resolved.warning.clone(),
+            source: Source::Defaults,
+            broken_moved_to: None,
+            section_errors: Vec::new(),
+            migrated_from: None,
+            read_only: None,
+        };
+        let store = Self {
+            dir: resolved.dir,
+            path,
+            doc: document::new_document(T::SCHEMA_VERSION),
+            base: default_document::<T>(),
+            files,
+            value: T::default(),
+            read_only: None,
+            dirty: false,
+            written: false,
+            last_change: None,
+            debounce,
+            failures: 0,
+            retry_at: None,
+            seen_text: None,
+            moved_aside: Vec::new(),
+            merged_change: false,
+        };
         (store, report)
     }
 
@@ -343,13 +361,32 @@ impl<T: Settings> SettingsStore<T> {
         }
     }
 
-    fn load_text(&mut self, path: &Path, text: &str, report: &mut LoadReport) {
+    /// Loads `config.toml` at `path`, or with none the first of the `legacy` files that imports. An imported or
+    /// upgraded value marks the store dirty, so an opened store saves it.
+    fn load(&mut self, path: &Path, legacy: &[LegacyFile<T>], damaged: Damaged, report: &mut LoadReport) {
+        match self.files.read(path) {
+            Ok(Some(text)) => self.load_text(path, &text, damaged, report),
+            Ok(None) => {
+                if let Some((value, errors, from)) = migrate::import_legacy(legacy) {
+                    self.value = value;
+                    self.dirty = true;
+                    report.source = Source::Legacy(from);
+                    report.section_errors = errors;
+                }
+            }
+            Err(e) => self.set_read_only(report, ReadOnlyReason::Unreadable(e)),
+        }
+    }
+
+    fn load_text(&mut self, path: &Path, text: &str, damaged: Damaged, report: &mut LoadReport) {
         let mut doc = match document::parse(text) {
             Ok(doc) => doc,
             Err(_) => {
-                match self.files.move_aside(path) {
-                    Ok(moved) => report.broken_moved_to = Some(moved),
-                    Err(e) => self.set_read_only(report, ReadOnlyReason::CannotMoveAside(e)),
+                if damaged == Damaged::MoveAside {
+                    match self.files.move_aside(path) {
+                        Ok(moved) => report.broken_moved_to = Some(moved),
+                        Err(e) => self.set_read_only(report, ReadOnlyReason::CannotMoveAside(e)),
+                    }
                 }
                 return;
             }
