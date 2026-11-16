@@ -331,6 +331,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "astc-decode"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6058e6202e20b7fa445692ec4b77ca8eb02508091fcd479ea753d9f60e376b"
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1446,6 +1452,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-control-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "subtle",
+]
+
+[[package]]
 name = "craft-crs"
 version = "0.1.0"
 dependencies = [
@@ -1478,6 +1492,17 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+]
+
+[[package]]
+name = "craft-deckcraft-format"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -1661,6 +1686,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-fcproj-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-fig"
 version = "0.1.0"
 dependencies = [
@@ -1751,6 +1785,7 @@ name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "kurbo 0.13.1",
  "skrifa 0.47.0",
  "thiserror 2.0.21",
  "windows-registry",
@@ -1869,6 +1904,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-http-url"
+version = "0.1.0"
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 dependencies = [
@@ -1918,6 +1957,7 @@ dependencies = [
  "craft-jpeg",
  "craft-media-testkit",
  "craft-metadata",
+ "craft-tiff",
  "craft-video",
  "crc32fast",
  "exr",
@@ -2747,6 +2787,8 @@ dependencies = [
 name = "craft-texture"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "dds",
  "rayon",
  "thiserror 2.0.21",
 ]
@@ -3290,6 +3332,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd2735a791158376708f9347fe8faba9667589d82427ef3aed6794a8981de3d9"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "dds"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e917a58e17b27d2f15626c490754ccced7f46592dc5b5f39a3013b89cba5f068"
+dependencies = [
+ "astc-decode",
+ "bitflags 2.13.2",
+ "glam",
+ "resize",
+ "zerocopy",
 ]
 
 [[package]]
@@ -4539,6 +4594,12 @@ dependencies = [
  "log",
  "xml-rs",
 ]
+
+[[package]]
+name = "glam"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
 
 [[package]]
 name = "glifo"
@@ -8128,6 +8189,15 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "resize"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71725ecd5e0197b54fe859055b108688472ab6a358f8fbe5cee4a556b1b5bfea"
+dependencies = [
+ "rgb",
 ]
 
 [[package]]

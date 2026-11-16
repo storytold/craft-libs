@@ -29,8 +29,8 @@
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
-//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder), [`qoa`]
-//!   (`qoa-decode`, `qoa-encode`: whole QOA files).
+//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
+//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files).
 //!
 //! The shared types below build with no features.
 
@@ -76,6 +76,11 @@ pub mod wav_markers;
 ))]
 mod write;
 
+/// PCM WAVE and AIFF wrappers for interchange essence.
+#[cfg(feature = "pcm-encode")]
+pub mod essence_pcm;
+/// Interleaved PCM packet decoding.
+pub mod pcm_interleaved;
 /// Range-backed PCM WAVE access and a 16-bit PCM writer.
 pub mod wav_range;
 #[cfg(feature = "vorbis-encode")]
@@ -100,10 +105,15 @@ pub use write::{OGG_BITRATES, OggVorbisOptions, encode_ogg, encode_ogg_vorbis, q
 /// assert!(file.len() < 48_000 * 2 * 2 / 2); // well under half of 16-bit PCM
 /// # Ok::<(), craft_audio::flac::Error>(())
 /// ```
-#[cfg(feature = "flac-encode")]
+#[cfg(any(feature = "flac-encode", feature = "flac-decode"))]
 pub mod flac {
+    #[cfg(feature = "flac-decode")]
+    pub use crate::flac_decode::{DEFAULT_MAX_VALUES, DecodeError, Decoded, Decoder, Frame, StreamInfo, decode, decode_with_limit};
+    #[cfg(feature = "flac-encode")]
     pub use crate::write::flac::encoder::{Encoder, EncoderConfig, Error, STREAMINFO_OFFSET};
 }
+#[cfg(feature = "flac-decode")]
+mod flac_decode;
 
 pub use buffer::AudioBuffer;
 /// The craft-media this crate is built with, for its containers: using it rather than a separate

@@ -33,8 +33,9 @@ pub mod orientation;
 pub mod png_probe;
 pub mod resolution;
 pub mod source_settings;
+pub mod tiff_probe;
 pub mod web;
-pub use crate::allocation::probe_allocation_size;
+pub use crate::allocation::{probe_allocation_size, probe_stored_size};
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
@@ -66,6 +67,8 @@ pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
+#[cfg(feature = "sgi")]
+use crate::codecs::sgi;
 use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
@@ -105,6 +108,16 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::Sgi => {
+            #[cfg(feature = "sgi")]
+            {
+                sgi::decode(bytes, l)
+            }
+            #[cfg(not(feature = "sgi"))]
+            {
+                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
+            }
+        }
         Format::JpegLs => jpegls::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
@@ -117,6 +130,14 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::decode(format, bytes, l),
     }?;
     finish_format(format, bytes, img, opts)
+}
+
+/// Decode AVIF pixels and report their original AV1 bit depth (8, 10 or 12).
+/// The returned image may use a wider sample type, particularly for linear HDR.
+#[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+pub fn decode_avif_with_depth(bytes: &[u8], opts: &DecodeOptions) -> Result<(Image, u8), CodecError> {
+    let (image, depth) = codecs::avif_decode::decode_with_depth(bytes, &opts.limits, opts.keep_orientation)?;
+    Ok((finish_format(Format::Avif, bytes, image, opts)?, depth))
 }
 
 /// What [`decode_as_with`] does with a PNG decoded in steps by [`PngDecodeRows`] (`img` is its
@@ -472,6 +493,16 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
         Format::Iff => iff::encode(image, plan),
+        Format::Sgi => {
+            #[cfg(feature = "sgi")]
+            {
+                sgi::encode(image, plan)
+            }
+            #[cfg(not(feature = "sgi"))]
+            {
+                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
+            }
+        }
         Format::JpegLs => jpegls::encode(image, plan),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
