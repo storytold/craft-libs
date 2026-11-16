@@ -90,10 +90,18 @@ pub fn parse(text: &str) -> Result<Document> {
                 }
             } else if cmd_lower.starts_with("shift") || cmd_lower.starts_with('s') {
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
-                if parts.len() >= 2
-                    && let Some(ms) = parse_time(parts[1], time_res)
-                {
-                    shift_ms = ms;
+                if parts.len() >= 2 {
+                    let s_val = parts[1].trim();
+                    let (neg, s_raw) = if let Some(stripped) = s_val.strip_prefix('-') {
+                        (true, stripped)
+                    } else if let Some(stripped) = s_val.strip_prefix('+') {
+                        (false, stripped)
+                    } else {
+                        (false, s_val)
+                    };
+                    if let Some(ms) = parse_time(s_raw, time_res) {
+                        shift_ms = if neg { -ms } else { ms };
+                    }
                 }
             }
             continue;
@@ -216,6 +224,15 @@ mod tests {
         let doc = parse(jss).expect("parse");
         assert_eq!(doc.cues.len(), 1);
         assert_eq!(doc.cues[0].text, "Bracketed style text");
+    }
+
+    #[test]
+    fn negative_shift_under_one_hour() {
+        let jss = "#TimeRes 100\n#Shift -0:00:01.00\n0:00:02.00 0:00:04.00 D0 Shifted line\n";
+        let doc = parse(jss).expect("parse");
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].start, ms_to_tick(1000));
+        assert_eq!(doc.cues[0].end, ms_to_tick(3000));
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! RealText documents encapsulate timed text inside a `<window>` container with `<time begin="…" [end="…"]/>`
 //! markers. Inside each caption block, `<br/>` and `<br>` represent line breaks.
 
-use crate::text::{escape_markup, last_cue_end, ms_to_tick, plain_text, tick_to_ms};
+use crate::text::{escape_markup, last_cue_end, ms_to_tick, plain_lines, plain_text, tick_to_ms};
 use crate::{Cue, Document, Error, Result};
 
 /// Parse a RealText timestamp string into milliseconds.
@@ -82,10 +82,26 @@ fn attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
     None
 }
 
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.is_empty() {
+        return Some(0);
+    }
+    let haystack_bytes = haystack.as_bytes();
+    if haystack_bytes.len() < needle_bytes.len() {
+        return None;
+    }
+    haystack_bytes.windows(needle_bytes.len()).position(|window| window.iter().zip(needle_bytes).all(|(&h, &n)| h.eq_ignore_ascii_case(&n)))
+}
+
 /// Check if text is a RealText file.
 pub(crate) fn is_realtext(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("<window") || lower.contains("<time")
+    let trimmed = text.trim_start();
+    let lower_prefix: String = trimmed.chars().take(100).flat_map(|c| c.to_lowercase()).collect();
+    if lower_prefix.starts_with("<window") {
+        return true;
+    }
+    find_case_insensitive(text, "<window").is_some() && find_case_insensitive(text, "<time").is_some()
 }
 
 pub fn parse(text: &str) -> Result<Document> {
@@ -103,7 +119,7 @@ pub fn parse(text: &str) -> Result<Document> {
     let mut raw_cues: Vec<RawCue> = Vec::new();
     let mut search_pos = 0;
 
-    while let Some(time_idx) = text[search_pos..].to_ascii_lowercase().find("<time") {
+    while let Some(time_idx) = find_case_insensitive(&text[search_pos..], "<time") {
         let actual_idx = search_pos + time_idx;
         let tag_end = match text[actual_idx..].find('>') {
             Some(end) => actual_idx + end + 1,
@@ -118,7 +134,7 @@ pub fn parse(text: &str) -> Result<Document> {
             // Text runs from tag_end to next '<time' or '</window>' or EOF
             let remaining = &text[tag_end..];
             let body_end =
-                remaining.to_ascii_lowercase().find("<time").or_else(|| remaining.to_ascii_lowercase().find("</window>")).unwrap_or(remaining.len());
+                find_case_insensitive(remaining, "<time").or_else(|| find_case_insensitive(remaining, "</window>")).unwrap_or(remaining.len());
 
             let body = &text[tag_end..tag_end + body_end];
             raw_cues.push(RawCue { begin: begin_ms, end, body });
@@ -165,8 +181,11 @@ pub fn write(doc: &Document) -> String {
 
     for c in &doc.cues {
         let start_ms = tick_to_ms(c.start);
-        let end_ms = tick_to_ms(c.end);
-        let lines: Vec<String> = c.text.lines().map(|l| escape_markup(l.trim())).filter(|l| !l.is_empty()).collect();
+        let mut end_ms = tick_to_ms(c.end);
+        if (end_ms / 10) <= (start_ms / 10) {
+            end_ms = start_ms.saturating_add(10);
+        }
+        let lines: Vec<String> = plain_lines(&c.text).into_iter().map(|l| escape_markup(&l)).filter(|l| !l.is_empty()).collect();
 
         if !lines.is_empty() {
             let body = lines.join("<br/>");
@@ -208,5 +227,21 @@ mod tests {
         assert_eq!(parse_time("00:02.50"), Some(2500));
         assert_eq!(parse_time("01:02.500"), Some(62500));
         assert_eq!(parse_time("01:02:03.40"), Some(3723400));
+    }
+
+    #[test]
+    fn does_not_misidentify_embedded_window_in_pjs() {
+        let pjs = "10,50,\"Use <window> here\"\n";
+        assert!(!is_realtext(pjs));
+    }
+
+    #[test]
+    fn short_cue_quantization_roundtrip() {
+        let mut doc = Document::default();
+        doc.cues.push(Cue { start: ms_to_tick(1000), end: ms_to_tick(1001), text: "Short".into(), ..Default::default() });
+        let written = write(&doc);
+        let parsed = parse(&written).expect("parse short cue document");
+        assert_eq!(parsed.cues.len(), 1);
+        assert_eq!(parsed.cues[0].text, "Short");
     }
 }

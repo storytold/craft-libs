@@ -40,7 +40,8 @@ pub fn parse(text: &str) -> Result<Document> {
         for l in raw.split('|') {
             let trimmed = l.trim();
             if !trimmed.is_empty() {
-                lines.push(escape_markup(trimmed));
+                let unquoted = trimmed.replace("\"\"", "\"");
+                lines.push(escape_markup(&unquoted));
             }
         }
         let start = ms_to_tick(start_ds.saturating_mul(100));
@@ -79,15 +80,16 @@ mod tests {
 
     #[test]
     fn parse_and_write_roundtrip() {
-        let pjs = "10,50,\"First line\"\n60,120,\"Second line|with break\"\n";
+        let pjs = "10,50,\"First line\"\n60,120,\"Second line|with break\"\n130,150,\"Say \"\"Hi\"\"\"\n";
         let doc = parse(pjs).expect("parse");
-        assert_eq!(doc.cues.len(), 2);
+        assert_eq!(doc.cues.len(), 3);
         assert_eq!(doc.cues[0].start, ms_to_tick(1000));
         assert_eq!(doc.cues[0].end, ms_to_tick(5000));
         assert_eq!(doc.cues[0].text, "First line");
         assert_eq!(doc.cues[1].start, ms_to_tick(6000));
         assert_eq!(doc.cues[1].end, ms_to_tick(12000));
         assert_eq!(doc.cues[1].text, "Second line\nwith break");
+        assert_eq!(doc.cues[2].text, "Say \"Hi\"");
 
         let written = write(&doc);
         assert_eq!(written, pjs);
