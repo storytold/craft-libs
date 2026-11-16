@@ -157,9 +157,11 @@ const CARGO_CACHE_MARKER: &str = "CACHEDIR.TAG";
 /// `build.build-dir` set, `.rustc_info.json` and those subdirectories live elsewhere and the
 /// profile directory has only Cargo's `.cargo-lock` file, which is accepted too.
 /// `CACHEDIR.TAG` alone isn't Cargo-specific (the same signature marks any cache directory), so
-/// it only corroborates that profile layout.
+/// it only corroborates that profile layout. Extracted nextest archives retain their
+/// `nextest/binaries-metadata.json` inventory rather than Cargo cache files; those are
+/// also build trees, even when the archive is unpacked outside its original target directory.
 fn is_development_build(exe: &Path, opted_in: bool) -> bool {
-    !opted_in && exe.ancestors().skip(1).any(is_cargo_build_dir)
+    !opted_in && exe.ancestors().skip(1).any(|dir| is_cargo_build_dir(dir) || is_nextest_binary(dir, exe))
 }
 
 /// Whether `dir` is a Cargo target root (by its rustc-info cache marker) or a profile output
@@ -180,6 +182,35 @@ fn is_cargo_build_dir(dir: &Path) -> bool {
         return true;
     }
     profile_parent.parent().is_some_and(|root| root.join(CARGO_CACHE_MARKER).is_file())
+}
+
+// An archive inventory identifies only its listed binaries, not every installation below
+// its extraction directory. Bound the metadata read and refuse symlink markers.
+fn is_nextest_binary(root: &Path, exe: &Path) -> bool {
+    use std::io::Read;
+    const LIMIT: u64 = 1024 * 1024;
+    let marker = root.join("nextest/binaries-metadata.json");
+    let Ok(metadata) = std::fs::symlink_metadata(&marker) else { return false };
+    if !metadata.file_type().is_file() || metadata.len() > LIMIT {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(&marker) else { return false };
+    let mut bytes = Vec::new();
+    if file.take(LIMIT + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > LIMIT {
+        return false;
+    }
+    let Ok(inventory) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return false };
+    let Some(build) = inventory.get("rust-build-meta") else { return false };
+    let Some(target) = build.get("target-directory").and_then(|v| v.as_str()) else { return false };
+    let original = build.get("build-directory").and_then(|v| v.as_str()).unwrap_or(target);
+    let Some(binaries) = inventory.get("rust-binaries").and_then(|v| v.as_object()) else { return false };
+    binaries.values().any(|binary| {
+        let Some(path) = binary.get("binary-path").and_then(|v| v.as_str()) else { return false };
+        let Ok(relative) = Path::new(path).strip_prefix(original) else { return false };
+        !relative.as_os_str().is_empty()
+            && relative.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+            && root.join(relative) == exe
+    })
 }
 
 /// Whether this installed copy can update itself. [`release_installs`] says whether a given
@@ -768,8 +799,16 @@ impl std::fmt::Debug for Restart {
     }
 }
 
-/// [`update`] without starting the helper: the caller starts the returned [`Restart`] when the
-/// app's exit is certain. On macOS and Linux the update is in place when this returns.
+/// Options for an explicitly opted-in background update. Other platforms keep their existing
+/// installation behaviour; permission prompts are never suppressed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UpdateOptions {
+    /// Hide progress for a per-user Windows MSI. Machine installs retain their permission UI.
+    pub quiet_msi: bool,
+}
+
+/// [`update`] without starting the helper: start the returned [`Restart`] when exit is certain.
+/// On macOS and Linux the update is already in place when this returns.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_update(
     app: &App,
@@ -783,6 +822,27 @@ pub fn prepare_update(
     last: &dyn Fn() -> Result<(), String>,
     running_version: Option<&str>,
 ) -> Result<Restart, String> {
+    prepare_update_with_options(app, install, release, platform, http, paths, stop, phase, last, running_version, UpdateOptions::default())
+}
+
+/// Like [`prepare_update`], with an explicit choice of Windows Installer progress UI.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_update_with_options(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+    options: UpdateOptions,
+) -> Result<Restart, String> {
+    // The option only changes Windows MSI helpers.
+    #[cfg(not(windows))]
+    let _ = options;
     let cur_v = running_version.and_then(|v| current_version(app, v));
     if let (Some(rel_v), Some(cur_v)) = (release.version.as_ref(), cur_v.as_ref())
         && !version::offers_update(rel_v, cur_v)
@@ -855,7 +915,7 @@ pub fn prepare_update(
                 relaunch_flatpak_after_exit(app)
             }
             #[cfg(windows)]
-            Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file)?),
+            Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file, options.quiet_msi)?),
             #[cfg(windows)]
             Install::Portable(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
@@ -1354,6 +1414,8 @@ pub const FINISH_FLAG: &str = "--finish-update";
 enum Finish {
     /// Run the new MSI, which reinstalls into the same folder.
     Msi(PathBuf),
+    /// Per-user MSI with no installer progress window.
+    QuietMsi(PathBuf),
     /// Unpack the new portable zip into `tmp` and copy it over the launcher's folder.
     Portable { zip: PathBuf, tmp: PathBuf },
 }
@@ -1365,6 +1427,7 @@ fn helper_args(pid: u32, exe: &Path, finish: &Finish) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![FINISH_FLAG.into(), pid.to_string().into(), exe.into()];
     match finish {
         Finish::Msi(msi) => args.extend(["msi".into(), msi.into()]),
+        Finish::QuietMsi(msi) => args.extend(["msi-quiet".into(), msi.into()]),
         Finish::Portable { zip, tmp } => args.extend(["portable".into(), zip.into(), tmp.into()]),
     }
     args
@@ -1380,6 +1443,7 @@ fn parse_helper_args(args: &[OsString]) -> Option<(u32, PathBuf, Finish)> {
     let pid = pid.to_str()?.parse().ok()?;
     let finish = match step {
         [kind, msi] if kind == "msi" => Finish::Msi(msi.into()),
+        [kind, msi] if kind == "msi-quiet" => Finish::QuietMsi(msi.into()),
         [kind, zip, tmp] if kind == "portable" => Finish::Portable { zip: zip.into(), tmp: tmp.into() },
         _ => return None,
     };
@@ -1387,8 +1451,8 @@ fn parse_helper_args(args: &[OsString]) -> Option<(u32, PathBuf, Finish)> {
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-fn msi_finish(file: &Path) -> Result<Finish, String> {
-    install::msi_path(file).map(Finish::Msi)
+fn msi_finish(file: &Path, quiet: bool) -> Result<Finish, String> {
+    install::msi_path(file).map(|file| if quiet { Finish::QuietMsi(file) } else { Finish::Msi(file) })
 }
 
 /// The cache folder the update helper is copied into.
@@ -1442,8 +1506,8 @@ pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
         return Some(Err(e));
     }
     // Read before the step: the update may move or replace the old exe.
-    let registered =
-        matches!(step, Finish::Msi(_)) && matches!(crate::msi_copy::windows::find(app, &exe), Some(crate::msi_copy::MsiCopy::Registered { .. }));
+    let registered = matches!(step, Finish::Msi(_) | Finish::QuietMsi(_))
+        && matches!(crate::msi_copy::windows::find(app, &exe), Some(crate::msi_copy::MsiCopy::Registered { .. }));
     let wait = |pid| process::wait_for_exit(pid, std::time::Duration::from_secs(60));
     let start = |exe: &Path| {
         signed_like(app, &me, exe)
@@ -1667,7 +1731,7 @@ fn check_helper(app: &App, me: &Path, paths: &Paths, exe: &Path, step: &Finish) 
     let downloads = canonical(&paths.downloads())?;
     let in_downloads = |file: &Path| canonical(file).map(|f| f.parent() == Some(downloads.as_path()));
     let allowed = match (detect(app, &exe), step) {
-        (Some(Install::Msi(installed)), Finish::Msi(msi)) => installed == exe && in_downloads(msi)?,
+        (Some(Install::Msi(installed)), Finish::Msi(msi) | Finish::QuietMsi(msi)) => installed == exe && in_downloads(msi)?,
         (Some(Install::Portable(installed) | Install::Standalone(installed)), Finish::Portable { zip, tmp }) => {
             installed == exe
                 && in_downloads(zip)?
@@ -1701,8 +1765,11 @@ fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Fin
     let waited = wait(pid);
     let result = if waited {
         match step {
-            Finish::Msi(msi) => {
-                signed_like(app, reference, msi).and_then(|()| msi_step(app, exe)).and_then(|step| crate::msi_migrate::windows::run(msi, &step))
+            Finish::Msi(msi) | Finish::QuietMsi(msi) => {
+                let quiet = matches!(step, Finish::QuietMsi(_));
+                signed_like(app, reference, msi)
+                    .and_then(|()| msi_step(app, exe))
+                    .and_then(|step| crate::msi_migrate::windows::run_with_ui(msi, &step, quiet))
             }
             Finish::Portable { zip, tmp } => match (exe.parent(), exe.file_name()) {
                 (Some(dir), Some(executable)) => crate::portable::unpack_over(zip, tmp, dir, executable, &|file| {
@@ -1716,7 +1783,7 @@ fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Fin
         Err(format!("{} was still running after a minute, so the update wasn't installed", app.name))
     };
     match step {
-        Finish::Msi(msi) => {
+        Finish::Msi(msi) | Finish::QuietMsi(msi) => {
             let _ = std::fs::remove_file(msi);
         }
         // `unpack_over` removes the staging folder, unless it holds files it couldn't put back.
@@ -2525,13 +2592,13 @@ mod tests {
         std::fs::write(&file, b"test package").unwrap();
         let link = dir.path().join("cached.msi");
         std::os::unix::fs::symlink(&file, &link).unwrap();
-        assert_eq!(msi_finish(&link).unwrap(), Finish::Msi(file.canonicalize().unwrap()));
+        assert_eq!(msi_finish(&link, false).unwrap(), Finish::Msi(file.canonicalize().unwrap()));
     }
 
     #[test]
     fn a_missing_msi_cannot_schedule_a_self_update() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(msi_finish(&dir.path().join("missing.msi")).is_err());
+        assert!(msi_finish(&dir.path().join("missing.msi"), false).is_err());
     }
 
     /// The helper reads back exactly what the launcher passed it, paths with spaces and
@@ -2542,7 +2609,8 @@ mod tests {
         let msi = Finish::Msi(PathBuf::from(r"C:\Users\O'Brien\AppData\Local\ArtCraft Launcher\cache\artcraft-launcher-0.7.0-windows-x64.msi"));
         let portable =
             Finish::Portable { zip: PathBuf::from(r"D:\Tools\x 1.zip"), tmp: PathBuf::from(r"D:\Tools\ArtCraftLauncherData\cache\launcher-update") };
-        for finish in [msi, portable] {
+        let quiet = Finish::QuietMsi(PathBuf::from(r"C:\Updates\a b.msi"));
+        for finish in [msi, quiet, portable] {
             let args = helper_args(4242, exe, &finish);
             assert_eq!(args.first().map(OsString::as_os_str), Some(std::ffi::OsStr::new(FINISH_FLAG)));
             assert_eq!(parse_helper_args(&args), Some((4242, exe.to_path_buf(), finish)));
@@ -3746,6 +3814,42 @@ mod tests {
         ] {
             let exe = cargo_build_tree(dir.path(), "builds/egui037-craft-libs", exe);
             assert!(is_development_build(&exe, false), "{}", exe.display());
+        }
+    }
+
+    #[test]
+    fn nextest_archive_binaries_do_not_update_themselves() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("relocated-artifacts");
+        let exe = root.join("debug/build/artcraft-launcher-native/hash/out/artcraft_launcher_native-hash");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "ELF").unwrap();
+        let metadata = root.join("nextest/binaries-metadata.json");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        // Names alone are not evidence of a Cargo build tree.
+        assert!(!is_development_build(&exe, false));
+        std::fs::write(&metadata, "{}").unwrap();
+        assert!(!is_development_build(&exe, false), "empty inventory is not evidence");
+        let inventory = serde_json::json!({
+            "rust-build-meta": {"target-directory": "/original/target"},
+            "rust-binaries": {"launcher": {"binary-path": "/original/target/debug/build/artcraft-launcher-native/hash/out/artcraft_launcher_native-hash"}}
+        });
+        std::fs::write(&metadata, inventory.to_string()).unwrap();
+        assert!(is_development_build(&exe, false));
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(!is_development_build(&exe, true), "explicit developer opt-in remains available");
+        let installed = root.join("bin/artcraft-launcher");
+        assert!(!is_development_build(&installed, false), "an unlisted descendant installation is not a test binary");
+        std::fs::remove_file(&metadata).unwrap();
+        std::fs::create_dir(&metadata).unwrap();
+        assert!(!is_development_build(&exe, false), "metadata must be a file");
+        #[cfg(unix)]
+        {
+            std::fs::remove_dir(&metadata).unwrap();
+            let external = dir.path().join("inventory.json");
+            std::fs::write(&external, inventory.to_string()).unwrap();
+            std::os::unix::fs::symlink(external, &metadata).unwrap();
+            assert!(!is_development_build(&exe, false), "symlink inventory is not evidence");
         }
     }
 

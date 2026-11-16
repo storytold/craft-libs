@@ -12,6 +12,7 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
 - `coverage`: ink coverage at a pixel and over a page, total area coverage (TAC) per pixel,
   and the pixels and regions over a TAC limit.
 - `composite`: an sRGB preview of chosen plates.
+- `output`: the chosen plates as they print, in an output profile (a printer's RGB, gray or CMYK).
 - `cms`: process color conversion into a CMYK printing condition through craft-cms.
 - `marks`: printer's marks for a page with a slug. `Marks::new(trim, bleed, &MarkOptions)` lays
   out crop marks, bleed marks (when the bleed passes the trim), a registration target on each
@@ -56,6 +57,24 @@ let black = p.tint(InkId::process(Process::Black), 10, 10);
 let gold = p.inks.lookup("Gold").and_then(|id| p.tint(id, 10, 10));
 ```
 
+At print resolution, separate in bands. Each band holds every ink for a run of rows, at most
+`MAX_PLATE_PIXELS`, so memory stays bounded however high the resolution:
+
+```rust
+use std::ops::ControlFlow;
+use craft_prepress::{plates_in_bands, Options};
+
+plates_in_bands(&pdf, 0, 600.0, &Options::default(), |band| {
+    // band.plates is page-wide and band.plates.height rows tall, from row band.top.
+    ControlFlow::Continue(())
+})?;
+```
+
+Each band renders the page again once per ink, so time grows with the number of bands: a
+Letter page at 900 dpi makes 19 bands. Across the page the renderer's side limit
+(`craft_pdf::raster::MAX_SIDE`, 8192 pixels) still applies, about 960 dpi on Letter or A4; down
+the page it doesn't.
+
 The plates are the PDF as printed, so a preview built on them shows what the writer produced,
 not what the document model intended.
 
@@ -89,7 +108,8 @@ separate as they are.
 | Constant | Value | Why |
 |---|---|---|
 | `MAX_SPOT_INKS` | 32 spot inks per page | A `DeviceN` space has at most 32 colorants, and each plate costs a render and a byte per pixel. Further spots are listed in `Plates::unseparated`. |
-| `MAX_PLATE_PIXELS` | 4 MP per plate (2000 × 2000) | A page with many inks stays within a few hundred megabytes. The resolution is lowered to fit; `Plates::dpi` reports the one used. |
+| `MAX_PLATE_PIXELS` | 4 MP per plate (2000 × 2000) | A page with many inks stays within a few hundred megabytes. `plates` lowers the resolution to fit, and `plates_in_bands` makes bands this size; `Plates::dpi` reports the one used. |
+| `MAX_BANDED_PIXELS` | 256 MP per plate of a page separated in bands | Bounds the pixels a banded page adds up to; the resolution is lowered to fit. It does not bound the band count: a very thin, tall page makes one band per 8192 rows. |
 
 The renderer's side limit (`craft_pdf::raster::MAX_SIDE`) also lowers the resolution.
 
@@ -137,6 +157,33 @@ let mut rgb = p.composite(&enabled, &cms);
 let over = p.above(300.0, &enabled);
 over.paint(&mut rgb, [255, 0, 255]); // TAC warning
 let worst = over.regions().first().copied();
+```
+
+## Composite in an output profile
+
+`Plates::composite_to(enabled, &output)` returns the enabled inks in an output profile, for a
+print or a proof. `Output::new(press, output, intent, bpc)` takes the press's CMYK profile
+(`CmsConversion::profile`) and a gray, RGB or CMYK output profile:
+
+- the process plates convert from the press straight to the output (CMYK to PCS to output),
+  not through sRGB, at `intent`, with black point compensation when `bpc`. Relative
+  colorimetric with `bpc` prints the press's paper as the output's paper and its black as the
+  output's black; absolute colorimetric keeps the press paper's tint;
+- each enabled spot plate combines over them, as in the preview, with its appearance converted
+  into the output: a multiply in a gray or RGB output, a multiply of the complements in a CMYK
+  output, so inks add.
+
+A CMYK output re-separates through its own tables, so a black-only press colour comes back as
+the output's black generation, as it would on that printer.
+
+```rust
+use craft_cms::{Intent, Profile};
+use craft_prepress::{CmsConversion, Output};
+
+let press = CmsConversion::fogra39();
+let printer = Profile::parse(&printer_icc)?;
+let output = Output::new(press.profile(), &printer, Intent::RelativeColorimetric, true)?;
+let bytes = p.composite_to(&[], &output); // output.channels() bytes per pixel
 ```
 
 ## Ink manager

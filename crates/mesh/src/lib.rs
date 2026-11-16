@@ -170,6 +170,8 @@ pub struct Part {
     pub material: Option<usize>,
     /// OBJ smoothing group; 0 is off.
     pub smoothing: u32,
+    /// This glTF primitive supplies tangents for its positions.
+    pub has_tangents: bool,
     /// Corners of each face, in order. Empty means every face is a triangle.
     pub face_sizes: Vec<u32>,
     /// The corners of all faces, one face after another.
@@ -214,6 +216,9 @@ pub struct Mesh {
     pub name: String,
     pub positions: Vec<[f64; 3]>,
     pub normals: Vec<[f64; 3]>,
+    /// Authored glTF tangents `[x, y, z, handedness]`, aligned with `positions`; empty when no
+    /// primitive supplies tangents. A part's [`Part::has_tangents`] distinguishes absent values.
+    pub tangents: Vec<[f64; 4]>,
     /// UV sets; every set has the same length and is indexed by [`Corner::uv`].
     pub uv_sets: Vec<Vec<[f32; 2]>>,
     /// RGBA per position (same length as `positions`), or empty.
@@ -255,10 +260,15 @@ impl Mesh {
         if self.uv_sets.iter().any(|s| s.len() != uvs) {
             return bad("UV sets differ in length");
         }
-        for (what, len) in [("colours", self.colors.len()), ("joints", self.joints.len()), ("weights", self.weights.len())] {
+        for (what, len) in
+            [("colours", self.colors.len()), ("tangents", self.tangents.len()), ("joints", self.joints.len()), ("weights", self.weights.len())]
+        {
             if len != 0 && len != self.positions.len() {
                 return bad(&format!("{what} do not match the positions"));
             }
+        }
+        if self.parts.iter().any(|p| p.has_tangents) && self.tangents.len() != self.positions.len() {
+            return bad("a part names tangents but the tangent array does not match the positions");
         }
         for p in &self.parts {
             let total = if p.face_sizes.is_empty() {
@@ -611,6 +621,9 @@ pub struct Scene {
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
     pub images: Vec<Image>,
+    /// Texture and sampler entries in the file, including ones no material uses. Their image
+    /// index and wrap modes are format properties; UV sets belong to each material slot.
+    pub texture_variants: Vec<TextureRef>,
     /// Every format fills this: a format without a hierarchy gets one root node per mesh.
     pub nodes: Vec<Node>,
     /// The top-level nodes.
@@ -673,6 +686,9 @@ impl Scene {
             if slots.iter().flatten().any(|t| t.image >= self.images.len()) {
                 return bad(format!("material `{}` names an image that does not exist", m.name));
             }
+        }
+        if self.texture_variants.iter().any(|t| t.image >= self.images.len()) {
+            return bad("a texture names an image that does not exist".into());
         }
         let n = self.nodes.len();
         for node in &self.nodes {

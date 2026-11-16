@@ -587,6 +587,9 @@ fn system_profiles() {
             }
         }
     }
+    if seen == 0 {
+        eprintln!("skipped: no system ICC profiles found");
+    }
     eprintln!("parsed {seen} system profiles");
 }
 
@@ -614,12 +617,18 @@ fn oracle_moxcms_rgb() {
 fn oracle_moxcms_system_cmyk() {
     use moxcms::{ColorProfile, Layout, RenderingIntent, TransformOptions as MoxOpts};
     let path = "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc";
-    let Ok(bytes) = std::fs::read(path) else { return };
+    let Ok(bytes) = std::fs::read(path) else {
+        eprintln!("skipped: {path} not found");
+        return;
+    };
     let ours_p = Profile::parse(&bytes).unwrap();
     let theirs_p = ColorProfile::new_from_slice(&bytes).unwrap();
     let s = ColorProfile::new_from_slice(&srgb().to_bytes()).unwrap();
     let opts = MoxOpts { rendering_intent: RenderingIntent::RelativeColorimetric, ..Default::default() };
-    let Ok(mt) = theirs_p.create_transform_8bit(Layout::Rgba, &s, Layout::Rgb, opts) else { return };
+    let Ok(mt) = theirs_p.create_transform_8bit(Layout::Rgba, &s, Layout::Rgb, opts) else {
+        eprintln!("skipped: moxcms cannot build a transform from {path}");
+        return;
+    };
     let src: Vec<u8> = (0..2048u32).flat_map(|i| [(i * 37 % 256) as u8, (i * 91 % 256) as u8, (i * 13 % 256) as u8, (i * 57 % 256) as u8]).collect();
     let mut theirs = vec![0u8; 2048 * 3];
     mt.transform(&src, &mut theirs).unwrap();

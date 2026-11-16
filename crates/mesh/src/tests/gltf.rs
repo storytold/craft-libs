@@ -106,6 +106,24 @@ fn glb_quad_with_a_node_tree_and_a_material() {
     assert!((p[0] - -9.0).abs() < 1e-9 && (p[1] - 2.0).abs() < 1e-9 && p[2].abs() < 1e-9, "{p:?}");
 }
 
+#[test]
+fn gltf_preserves_authored_tangents_on_the_mesh_positions() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let tangent = [1.0, 0.0, 0.0, -1.0].repeat(3);
+    let t = b.f32s(&tangent, "VEC4", 4);
+    let i = b.u16s(&[0, 1, 2]);
+    let scene = parse(&b.glb(json!({
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": p, "TANGENT": t }, "indices": i }] }]
+    })))
+    .unwrap();
+
+    scene.validate().unwrap();
+    let mesh = scene.meshes.first().unwrap();
+    assert_eq!(mesh.tangents, vec![[1.0, 0.0, 0.0, -1.0]; 3]);
+    assert!(mesh.parts.first().unwrap().has_tangents);
+}
+
 fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -174,6 +192,30 @@ fn embedded_and_external_resources() {
     let (doc, _) = gltf_text(&format!("data:;base64,{}", base64(&bin)), "data:image/png;base64,!!!");
     assert_eq!(parse(&doc).unwrap().images[0].data, None);
     assert!(parse(&gltf_text("data:;base64,!!!", "x.png").0).is_err());
+}
+
+#[test]
+fn texture_and_sampler_inventory_includes_unreferenced_entries() {
+    let doc = serde_json::to_vec(&json!({
+        "asset": {"version": "2.0"},
+        "images": [{"uri": "image.png"}],
+        "samplers": [{"wrapS": 33071, "wrapT": 33648}],
+        "textures": [
+            {"source": 0, "sampler": 0},
+            {"source": 0}
+        ]
+    }))
+    .unwrap();
+    let scene = read(&doc, &Limits::default(), &mut |_| Some(vec![])).unwrap();
+    assert_eq!(
+        scene.texture_variants,
+        [TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Clamp, Wrap::Mirror] }, TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Repeat; 2] },]
+    );
+    assert!(scene.validate().is_ok());
+
+    let mut invalid = scene;
+    invalid.texture_variants[0].image = invalid.images.len();
+    assert!(matches!(invalid.validate(), Err(Error::Malformed(_))));
 }
 
 #[test]

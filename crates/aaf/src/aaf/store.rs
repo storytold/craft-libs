@@ -377,6 +377,7 @@ const MAX_PATH_BYTES: usize = 64 << 20;
 /// Parse the object tree of an AAF compound file (the root object).
 pub(crate) fn read(bytes: &[u8]) -> Result<Obj, String> {
     let cf = CompoundFile::open(bytes).map_err(|e| e.to_string())?;
+    cf.validate_root_chain().map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
     if let Ok(rp) = cf.read_path("referenced properties")
         && rp.len() >= 7
@@ -460,11 +461,13 @@ impl R<'_> {
         if at > props.len() {
             return Err(bad("truncated property index"));
         }
+        // A properties stream can name tens of thousands of ids: do not rescan all earlier ids.
+        let mut seen = std::collections::HashSet::with_capacity(n);
         for i in 0..n {
             let (Some(pid), Some(sf), Some(len)) = (rd_u16(&props, 4 + i * 6), rd_u16(&props, 6 + i * 6), rd_u16(&props, 8 + i * 6)) else {
                 return Err(bad("truncated property index"));
             };
-            if o.props.iter().any(|(previous, _)| *previous == pid) {
+            if !seen.insert(pid) {
                 return Err(bad("duplicate property id"));
             }
             let v = props.get(at..at + len as usize).ok_or_else(|| bad("truncated property value"))?;

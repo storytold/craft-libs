@@ -11,7 +11,7 @@ mapping a SYLK sheet onto a document are the caller's work.
 | Function | What it does |
 |---|---|
 | `decode_text(bytes)` | UTF-8 and UTF-16 byte order marks; without one, valid UTF-8 is kept; other bytes are Windows-1256 when they read as Arabic, else Windows-1252 |
-| `sniff_delimiter(text, quote)` | comma, semicolon or tab: the one with the most consistent count per line over the first 20 non-blank lines, outside quotes |
+| `sniff_delimiter(text, quote)` | comma, semicolon or tab: the one with the most consistent field count over the first 20 non-blank records in a 64 KiB sample; quote boundaries must be coherent, and ties prefer tab, comma, then semicolon |
 | `parse_records(text, delim, quote, max_fields, on_record)` | records of fields, one callback per record (return `false` to stop); CR, LF and CRLF line ends; quoted fields with doubled quotes and line breaks; a quote in the middle of a field is text |
 | `records(text, delim, quote, max_records, max_fields)` | the same, collected |
 | `push_field(out, field, delim)`, `field_len(field, delim)` | one field as written, quoted only when it holds the delimiter, a quote or a line break; its exact length, to enforce a size cap before writing |

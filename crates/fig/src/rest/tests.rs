@@ -419,6 +419,46 @@ fn the_fixture_maps_onto_the_rest_shape() {
 }
 
 #[test]
+fn a_complete_board_sticky_maps_to_a_native_board_item() {
+    let record = |id: u64, mut fields: Vec<(&'static str, Kv<'static>)>| {
+        fields.push(("guidPath", o(vec![("guids", arr(vec![o(vec![("sessionID", u(40_000_000)), ("localID", u(id))])]))])));
+        o(fields)
+    };
+    let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 0.75, 0.25)]))]);
+    let note = record(
+        1,
+        vec![
+            ("textData", o(vec![("characters", s("Board note"))])),
+            ("fontSize", f(18.0)),
+            ("fontName", o(vec![("family", s("Synthetic Sans")), ("style", s("Regular"))])),
+            ("fillPaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+        ],
+    );
+    let bounds = |id, w, h, x, y| record(id, vec![("size", xy(w, h)), ("transform", at(x, y))]);
+    let sticky = node(
+        2,
+        Some((1, "!")),
+        "STICKY",
+        "Sticky",
+        vec![
+            ("size", xy(240.0, 240.0)),
+            ("nodeGenerationData", o(vec![("overrides", arr(vec![background, note]))])),
+            (
+                "derivedImmutableFrameData",
+                o(vec![("version", u(1)), ("overrides", arr(vec![bounds(0, 240.0, 240.0, 0.0, 0.0), bounds(1, 200.0, 160.0, 20.0, 20.0)]))]),
+            ),
+        ],
+    );
+    let msg =
+        o(vec![("nodeChanges", arr(vec![node(0, None, "DOCUMENT", "Doc", vec![]), node(1, Some((0, "!")), "CANVAS", "Page", vec![]), sticky]))]);
+    let out = to_rest(&msg, "Board", &Options { board: true, ..Options::default() });
+    let item = &out.json["document"]["children"][0]["children"][0];
+    assert_eq!(item["board"]["type"], "sticky");
+    assert_eq!(item["children"][0]["characters"], "Board note");
+    assert!(!out.warnings.iter().any(|w| w.contains("sticky layers import as frames")), "{:?}", out.warnings);
+}
+
+#[test]
 fn the_result_reads_as_the_typed_model() {
     let msg = message();
     let out = mapped(&msg);

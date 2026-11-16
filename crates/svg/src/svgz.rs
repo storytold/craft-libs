@@ -21,8 +21,8 @@ pub enum Error {
     Corrupt(String),
     /// The gzip stream holds gzip data again. A reader that unpacks what it is handed would
     /// unpack that second layer with no limit, so it is refused here.
-    #[error("the compressed SVG holds another compressed file, not a document")]
-    Nested,
+    #[error("the compressed SVG holds another compressed file, not UTF-8 SVG text ({0} decoded bytes)")]
+    Nested(usize),
     /// The text is not valid in its encoding.
     #[error("the SVG is not UTF-8, UTF-16 or ISO 8859-1")]
     Encoding,
@@ -44,13 +44,15 @@ pub fn inflate(bytes: &[u8], limit: usize) -> Result<Cow<'_, [u8]>, Error> {
         let kept = out.len();
         let room = u64::try_from(limit.saturating_sub(kept)).unwrap_or(u64::MAX).saturating_add(1);
         let mut member = flate2::bufread::GzDecoder::new(rest);
+        // A valid header identifies a member even if its body or trailer is damaged.
+        let recognized = member.header().is_some();
         let read = member.by_ref().take(room).read_to_end(&mut out);
         if out.len() > limit {
             return Err(Error::TooLarge(limit));
         }
         match read {
             Ok(_) => {}
-            Err(e) if first => return Err(Error::Corrupt(e.to_string())),
+            Err(e) if first || recognized => return Err(Error::Corrupt(e.to_string())),
             // Trailing bytes that only start like a member: not part of the file.
             Err(_) => {
                 out.truncate(kept);
@@ -66,7 +68,7 @@ pub fn inflate(bytes: &[u8], limit: usize) -> Result<Cow<'_, [u8]>, Error> {
         first = false;
     }
     if is_svgz(&out) {
-        return Err(Error::Nested);
+        return Err(Error::Nested(out.len()));
     }
     Ok(Cow::Owned(out))
 }
@@ -161,6 +163,7 @@ mod tests {
         let mut two = compress(a.as_bytes());
         two.extend(compress(b.as_bytes()));
         assert_eq!(text(&two, MB).as_deref(), Ok(SVG));
+        assert_eq!(text(&two, SVG.len()).as_deref(), Ok(SVG));
         // The limit counts every member.
         assert_eq!(inflate(&two, SVG.len() - 1), Err(Error::TooLarge(SVG.len() - 1)));
         let mut padded = compress(SVG.as_bytes());
@@ -173,11 +176,31 @@ mod tests {
     }
 
     #[test]
+    fn damaged_later_members_are_errors() {
+        let mut first = compress(b"<svg><line/>");
+        let second = compress(b"<line/></svg>");
+
+        let mut bad_crc = second.clone();
+        let crc = bad_crc.len() - 8;
+        bad_crc[crc] ^= 1;
+        first.extend_from_slice(&bad_crc);
+        assert!(matches!(inflate(&first, MB), Err(Error::Corrupt(_))));
+        assert!(matches!(inflate(&first, b"<svg><line/><line/></svg>".len()), Err(Error::Corrupt(_))));
+
+        let mut truncated = compress(b"<svg><line/>");
+        truncated.extend_from_slice(&second[..second.len() - 4]);
+        assert!(matches!(inflate(&truncated, MB), Err(Error::Corrupt(_))));
+        let mut truncated_body = compress(b"<svg><line/>");
+        truncated_body.extend_from_slice(&second[..10]);
+        assert!(matches!(inflate(&truncated_body, MB), Err(Error::Corrupt(_))));
+    }
+
+    #[test]
     fn damaged_and_nested_streams_are_errors() {
         let z = compress(SVG.as_bytes());
         assert!(matches!(inflate(z.get(..z.len() / 2).unwrap_or_default(), MB), Err(Error::Corrupt(_))));
         assert!(matches!(inflate(&[0x1f, 0x8b, 0xff], MB), Err(Error::Corrupt(_))));
-        assert_eq!(inflate(&compress(&z), MB), Err(Error::Nested));
+        assert_eq!(inflate(&compress(&z), MB), Err(Error::Nested(z.len())));
     }
 
     #[test]

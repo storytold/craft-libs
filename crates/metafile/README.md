@@ -53,14 +53,14 @@ decoder is where the size, pixel and work limits have to be enforced.
 | Group | Records |
 |---|---|
 | Headers | Placeable header, memory and disk metafile headers. |
-| Mapping | `SETMAPMODE`, `SETWINDOWORG`, `SETWINDOWEXT`, `SETVIEWPORTORG`, `SETVIEWPORTEXT`, all map modes (text, metric, isotropic, anisotropic). A placeable file is played into its box the way Office plays it. |
+| Mapping | `SETMAPMODE`, `SETWINDOWORG`, `SETWINDOWEXT`, `SETVIEWPORTORG`, `SETVIEWPORTEXT`, `OFFSETWINDOWORG`, `OFFSETVIEWPORTORG`, `SCALEWINDOWEXT`, `SCALEVIEWPORTEXT`, all map modes (text, metric, isotropic, anisotropic). A placeable file is played into its box the way Office plays it. |
 | State | `SAVEDC`, `RESTOREDC`, `SETPOLYFILLMODE`, `SETROP2`, `SETBKMODE`, `SETBKCOLOR`, `SETTEXTCOLOR`, `SETTEXTALIGN`. |
 | Objects | `CREATEPENINDIRECT` (style, cap and join bits), `CREATEBRUSHINDIRECT` (solid, null, hatched), `DIBCREATEPATTERNBRUSH`, `CREATEFONTINDIRECT`, `SELECTOBJECT`, `DELETEOBJECT`, stock objects. `CREATEPALETTE`, `CREATEPATTERNBRUSH` and `CREATEREGION` take their handle slot. |
 | Drawing | `MOVETO`, `LINETO`, `POLYLINE`, `POLYGON`, `POLYPOLYGON`, `RECTANGLE`, `ROUNDRECT`, `ELLIPSE`, `ARC`, `PIE`, `CHORD`, `PATBLT`. |
 | Bitmaps | `STRETCHDIB`, `DIBSTRETCHBLT`, `DIBBITBLT` (with or without a source). |
 | Text | `EXTTEXTOUT` (rectangle, opaque, clipped, dx), `TEXTOUT`, decoded in the selected font's character set: code pages 1250 to 1258 and 874, Shift_JIS, UHC, GBK and Big5 (a double-byte character takes the advances of both its bytes), and the symbol character set (also the Symbol font under `DEFAULT_CHARSET`), whose codes stay in the private-use area at U+F000. Face names are read in the font's code page. Johab pairs are blanks. |
 | Clipping | `INTERSECTCLIPRECT`, `EXCLUDECLIPRECT`. |
-| Not read | `OFFSETWINDOWORG`, `OFFSETVIEWPORTORG`, `SCALEWINDOWEXT`, `SCALEVIEWPORTEXT`, flood fills, `SETPIXEL`, region records (`FILLREGION`, `FRAMEREGION`, `PAINTREGION`, `INVERTREGION`, `SELECTCLIPREGION`, `OFFSETCLIPRGN`), the device-dependent `BITBLT`, `STRETCHBLT` and `SETDIBTODEV`. They are counted in `skipped_records`. |
+| Not read | Flood fills, `SETPIXEL`, region records (`FILLREGION`, `FRAMEREGION`, `PAINTREGION`, `INVERTREGION`, `SELECTCLIPREGION`, `OFFSETCLIPRGN`), the device-dependent `BITBLT`, `STRETCHBLT` and `SETDIBTODEV`. They are counted in `skipped_records`. |
 
 ### EMF (MS-EMF)
 

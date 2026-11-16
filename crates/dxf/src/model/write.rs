@@ -1478,6 +1478,13 @@ const MODEL: &str = "*Model_Space";
 const PAPER: &str = "*Paper_Space";
 
 impl Drawing<'_> {
+    /// Set `$LUNITS` without making callers construct low-level group tags.
+    pub fn with_linear_units(mut self, units: i64) -> Self {
+        self.header.retain(|(name, _)| !name.eq_ignore_ascii_case("$LUNITS"));
+        self.header.push(("$LUNITS".into(), vec![Tag::i(70, units)]));
+        self
+    }
+
     /// The whole file as tags, ending with `0 EOF`, and how many entities were left out
     /// ([`EntityKind::Other`], and a MULTILEADER before 2007 or an ACAD_TABLE before 2004, which it has no groups for: pass
     /// those in `raw_entities`).

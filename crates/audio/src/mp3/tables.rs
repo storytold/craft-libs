@@ -4,12 +4,16 @@ use std::sync::OnceLock;
 
 /// Layer III bit rates in kbit/s by `bitrate_index` 1-14 (§2.4.2.3); index 0 (free format) and
 /// 15 (forbidden) are never written.
+#[cfg(feature = "mp3-encode")]
 pub(crate) const BITRATES_MPEG1: [u32; 14] = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
 /// Layer III bit rates of the lower sampling frequencies (ISO/IEC 13818-3 §2.4.2.3).
+#[cfg(feature = "mp3-encode")]
 pub(crate) const BITRATES_LSF: [u32; 14] = [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
 
 /// Sampling frequencies by `sampling_frequency` (0-2) of MPEG-1 and of MPEG-2 LSF.
+#[cfg(feature = "mp3-encode")]
 pub(crate) const RATES_MPEG1: [u32; 3] = [44_100, 48_000, 32_000];
+#[cfg(feature = "mp3-encode")]
 pub(crate) const RATES_LSF: [u32; 3] = [22_050, 24_000, 16_000];
 
 /// Long-block scalefactor band boundaries (Table 3-B.8 of 11172-3; Table B.2 of 13818-3), by
@@ -31,11 +35,13 @@ pub(crate) const SLEN: [(u32, u32); 16] =
 
 /// Scalefactor bands per partition for long blocks without intensity stereo when MPEG-2
 /// `scalefac_compress` < 400 (13818-3 §2.4.3.2, `nr_of_sfb_block[0][0]`).
+#[cfg(feature = "mp3-encode")]
 pub(crate) const LSF_PARTITIONS: [usize; 4] = [6, 5, 5, 5];
 
 /// Coefficients `D[0..=256]` of the synthesis window (Table 3-B.3), in units of 2⁻¹⁶: the table's
 /// nine-decimal values are exact multiples of 1/65536. The analysis window of Table 3-C.1 is the
 /// same prototype divided by 32: `C[i] = D[i] / 32`.
+#[cfg(feature = "mp3-encode")]
 const WINDOW_HALF: [i32; 257] = [
     0, -1, -1, -1, -1, -1, -1, -2, -2, -2, -2, -3, -3, -4, -4, -5, //
     -5, -6, -7, -7, -8, -9, -10, -11, -13, -14, -16, -17, -19, -21, -24, -26, //
@@ -59,6 +65,7 @@ const WINDOW_HALF: [i32; 257] = [
 /// The 512 synthesis window coefficients `D[i]` (Table 3-B.3). The table stores the symmetric
 /// prototype `h[i] = h[512 - i]` with every other block of 64 negated, so for `i > 256`
 /// `D[i] = -D[512 - i]`, except at multiples of 64 where both halves share the block parity.
+#[cfg(feature = "mp3-encode")]
 pub(crate) fn synthesis_window() -> &'static [f32; 512] {
     static W: OnceLock<[f32; 512]> = OnceLock::new();
     W.get_or_init(|| {
@@ -72,6 +79,7 @@ pub(crate) fn synthesis_window() -> &'static [f32; 512] {
 }
 
 /// The analysis window `C[i]` (Table 3-C.1): `D[i] / 32`.
+#[cfg(feature = "mp3-encode")]
 pub(crate) fn analysis_window() -> &'static [f32; 512] {
     static C: OnceLock<[f32; 512]> = OnceLock::new();
     C.get_or_init(|| {
@@ -83,6 +91,7 @@ pub(crate) fn analysis_window() -> &'static [f32; 512] {
 
 /// The analysis matrixing coefficients `M[i][k] = cos((2i + 1)(k - 16)π / 64)` (Annex C.1.3),
 /// `i` in `0..32`, `k` in `0..64`.
+#[cfg(feature = "mp3-encode")]
 pub(crate) fn analysis_matrix() -> &'static [[f32; 64]; 32] {
     static M: OnceLock<[[f32; 64]; 32]> = OnceLock::new();
     M.get_or_init(|| {
@@ -119,6 +128,7 @@ pub(crate) fn pow43() -> &'static [f32] {
 
 /// The absolute threshold of hearing in dB SPL at `f` Hz (Terhardt's approximation, as in the
 /// psychoacoustic models of 11172-3 Annex D).
+#[cfg(feature = "mp3-encode")]
 pub(crate) fn ath_db(f: f64) -> f64 {
     let k = (f.max(20.0)) / 1000.0;
     3.64 * k.powf(-0.8) - 6.5 * (-0.6 * (k - 3.3) * (k - 3.3)).exp() + 0.001 * k.powi(4)
