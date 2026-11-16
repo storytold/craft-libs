@@ -184,6 +184,110 @@ impl StudioDirector {
     /// Translates a natural language creative request into multi-app execution steps.
 
     /// Dispatches financial model, asset budgeting and spreadsheet formulas to GridCraft.
+
+    /// Autonomous Image Generation from Scratch:
+    /// Constructs a full visual scene using native PhotoCraft, VectorCraft, and CADCraft commands.
+    /// Breaks down the prompt into:
+    /// 1. Background geometry & horizon line (CADCraft)
+    /// 2. Foreground vector shapes & subjects (VectorCraft)
+    /// 3. Shading, lighting pass, texture layers, and atmosphere (PhotoCraft)
+    pub fn generate_image_from_scratch(&mut self, prompt: &str, width: u32, height: u32, aspect_ratio: &str) -> Vec<AppCommandDispatch> {
+        vec![
+            AppCommandDispatch {
+                target_app: "cadcraft".into(),
+                tool_name: "generate_perspective_grid".into(),
+                parameters: serde_json::json!({
+                    "aspect_ratio": aspect_ratio,
+                    "horizon_y": 0.38,
+                    "focal_length_mm": 35.0,
+                    "vanishing_points": 2
+                }),
+                order: 1,
+            },
+            AppCommandDispatch {
+                target_app: "vectorcraft".into(),
+                tool_name: "draw_subject_contours".into(),
+                parameters: serde_json::json!({
+                    "prompt": prompt,
+                    "vector_precision": "high",
+                    "anchor_nodes": 64
+                }),
+                order: 2,
+            },
+            AppCommandDispatch {
+                target_app: "photocraft".into(),
+                tool_name: "synthesize_diffuse_and_lighting".into(),
+                parameters: serde_json::json!({
+                    "width": width,
+                    "height": height,
+                    "passes": ["diffuse", "ambient_occlusion", "specular_highlights", "atmospheric_haze"],
+                    "light_source_angle_deg": 45.0,
+                    "color_grading": "cinematic_natural"
+                }),
+                order: 3,
+            },
+            AppCommandDispatch {
+                target_app: "photocraft".into(),
+                tool_name: "apply_texture_and_post".into(),
+                parameters: serde_json::json!({
+                    "grain": 0.02,
+                    "chromatic_aberration": 0.005,
+                    "export_format": "png"
+                }),
+                order: 4,
+            },
+        ]
+    }
+
+    /// Autonomous Video Editing & Post-Production:
+    /// Edits raw video clips, applies pacing cuts, transitions, sound effects, and color grading.
+    pub fn edit_video_sequence(&mut self, clip_ids: Vec<String>, target_duration_secs: f32, music_bpm: f32, style: &str) -> Vec<AppCommandDispatch> {
+        let cut_frequency = 60.0 / music_bpm; // Beat-synchronized cutting
+        vec![
+            AppCommandDispatch {
+                target_app: "filmcraft".into(),
+                tool_name: "import_and_align_to_beats".into(),
+                parameters: serde_json::json!({
+                    "clips": clip_ids,
+                    "target_duration": target_duration_secs,
+                    "beat_interval_secs": cut_frequency,
+                    "cut_style": style
+                }),
+                order: 1,
+            },
+            AppCommandDispatch {
+                target_app: "soundcraft".into(),
+                tool_name: "mix_audio_ducking_and_sfx".into(),
+                parameters: serde_json::json!({
+                    "dialogue_ducking_db": -6.0,
+                    "mastering_lufs": -14.0,
+                    "dynamic_range": "cinematic"
+                }),
+                order: 2,
+            },
+            AppCommandDispatch {
+                target_app: "effectcraft".into(),
+                tool_name: "apply_motion_graphics_and_transitions".into(),
+                parameters: serde_json::json!({
+                    "transition": "optical_flow_cross_dissolve",
+                    "motion_blur": true,
+                    "color_lookup_lut": "film_rec709_kodak2383"
+                }),
+                order: 3,
+            },
+            AppCommandDispatch {
+                target_app: "filmcraft".into(),
+                tool_name: "render_final_master".into(),
+                parameters: serde_json::json!({
+                    "codec": "prores_422_hq",
+                    "resolution": "4K_UHD",
+                    "fps": 24.0
+                }),
+                order: 4,
+            },
+        ]
+    }
+
     pub fn plan_financial_and_asset_budgeting(&mut self, project_title: &str, asset_count: usize) -> AppCommandDispatch {
         AppCommandDispatch {
             target_app: "gridcraft".into(),
@@ -324,5 +428,21 @@ mod tests {
         let design_dispatch = director.plan_publication_artbook("The Journey Artbook", 64);
         assert_eq!(design_dispatch.target_app, "designcraft");
         assert_eq!(design_dispatch.tool_name, "create_master_page_document");
+
+        // Test Image Generation from scratch
+        let image_pipeline = director.generate_image_from_scratch("A golden sunset over a peaceful lake", 3840, 2160, "16:9");
+        assert_eq!(image_pipeline.len(), 4);
+        assert_eq!(image_pipeline[0].target_app, "cadcraft");
+        assert_eq!(image_pipeline[1].target_app, "vectorcraft");
+        assert_eq!(image_pipeline[2].target_app, "photocraft");
+        assert_eq!(image_pipeline[3].target_app, "photocraft");
+
+        // Test Autonomous Video Editing
+        let video_pipeline = director.edit_video_sequence(vec!["take_1.mp4".into(), "take_2.mp4".into()], 12.0, 120.0, "dynamic_action");
+        assert_eq!(video_pipeline.len(), 4);
+        assert_eq!(video_pipeline[0].target_app, "filmcraft");
+        assert_eq!(video_pipeline[1].target_app, "soundcraft");
+        assert_eq!(video_pipeline[2].target_app, "effectcraft");
+        assert_eq!(video_pipeline[3].target_app, "filmcraft");
     }
 }
