@@ -165,7 +165,7 @@ impl CanvasSpace {
 
     /// The slot the canvas reserved this pass, `None` before its paint step ran or outside a canvas: a display that
     /// paints under the controls paints in place without one.
-    pub(crate) fn picture_slot(&self) -> Option<PaintSlot> {
+    pub fn picture_slot(&self) -> Option<PaintSlot> {
         self.picture
     }
 

@@ -29,7 +29,7 @@ use craft_behavior::kurbo::Point;
 use craft_behavior::{CanvasView, Input, Metrics};
 use craft_ui::canvas::canvas_space;
 use craft_ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
-use craft_ui::primitives::ContentPainterCx;
+use craft_ui::primitives::{ContentPainterCx, PaintSlot};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::epaint::Vertex;
@@ -122,6 +122,10 @@ pub struct TransformPreview<'a> {
     /// The pointer is down: the styled composite uses the drag budget.
     #[prop]
     dragging: bool,
+    /// The preview paints in the canvas's picture slot, under every canvas control of the body (the grid and guides
+    /// draw over the moving pixels), when the canvas space carries a slot; otherwise it paints in place.
+    #[prop(flag, name = "picture")]
+    under_controls: bool,
     /// How long a styled rebuild may take; PhotoCraft's times by default.
     #[prop]
     styled_budget: StyledBudget,
@@ -140,6 +144,7 @@ impl<'a> TransformPreview<'a> {
             display: None,
             styled: None,
             dragging: false,
+            under_controls: false,
             styled_budget: StyledBudget::default(),
         }
         .label(label)
@@ -180,6 +185,7 @@ impl Component for TransformPreview<'_> {
         let view = space.view;
         let painter = ui.content_painter(cx);
         let ctx = painter.painter.ctx().clone();
+        let first = (self.under_controls && space.picture_slot().is_some()).then(|| PaintSlot::reserve(&painter.painter));
         let device = space.pixels_per_point;
         let zoom = view.zoom as f32 * device;
         let scale = map.source_scale(self.textures.size());
@@ -210,6 +216,9 @@ impl Component for TransformPreview<'_> {
             let Some((texture, uv)) = self.textures.pick(&ctx, choice, self.display) else { return };
             let mesh = map.build(view.zoom * f64::from(device), uv);
             add_mesh(&painter, mesh, texture, tint, self.clip, &view);
+        }
+        if let Some(first) = first {
+            space.paint_picture(&ctx, first.take_after(&ctx));
         }
     }
 
