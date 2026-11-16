@@ -12,7 +12,7 @@ use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, 
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
 use crate::primitives::{Draw, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
-use crate::style::{Flags, Ink, StateMix, StateSet, StyleColor};
+use crate::style::{Flags, GlyphRole, Ink, StateMix, StateSet, StyleColor};
 use craft_behavior::{Flow, IconId, Mixed, PartRef};
 use craft_theme::ControlSize;
 use egui::{CornerRadius, Pos2, Rect, Vec2};
@@ -59,7 +59,7 @@ impl ListRow<'_> {
                             icon.color.get_or_insert(cx.resolve(&cx.style.trailing_icon.color));
                             ui.draw().icon(shape, &icon);
                         }
-                        TrailingFace::Icon(icon) => ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled)),
+                        TrailingFace::Icon(icon) => ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled).glyphs(GlyphRole::PanelRail)),
                         TrailingFace::Disclosure { open } => ui.face(key, Disclosure::new(Bind::given(*open)).node(false).enabled(*enabled)),
                         TrailingFace::Strong(text) => {
                             ui.draw().text(*slot, &trailing_run(text, true));
