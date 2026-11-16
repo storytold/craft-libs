@@ -3,7 +3,7 @@
 //! Drive a running Craft app from tests, agents and the CLI, and record and play actions.
 //!
 //! [`actions`] and [`ui::actions`] build on every target: the recorded-action list, its player
-//! and the Actions panel. The rest is desktop only.
+//! and the Actions panel; so do the agent settings in [`agents`]. The rest is desktop only.
 //!
 //! A transport thread ([`server`], or a channel in tests) turns each JSON line into a
 //! [`control::ControlRequest`]; the UI thread drains them between frames through
@@ -17,6 +17,7 @@
 #![warn(missing_docs)]
 
 pub mod actions;
+pub mod agents;
 #[cfg(feature = "ui")]
 pub mod ui;
 

@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod actions;
+mod agents;
 mod control;
 mod dialogs;
 mod screenshot;
