@@ -231,14 +231,15 @@ fn the_outline_fails_the_sweeps_check_on_linux_in_a_debug_build() {
     assert!(segments_of([&three]).is_some_and(|s| s.len() > GATE_PIECES), "the copies are over the gate of the meter");
 }
 
-/// Every function that sweeps and says why it refuses gives a refusal for an input whose sweep panics, and never a panic: the outline, and three
-/// of it, which the meter sweeps by itself first (it is over the gate), so that the panic is the dry sweep's before it is the topology's. Where
-/// the sweep of the input panics here, a function whose first sweep is of that input alone says `Degenerate`; where it does not, a function is
-/// free to make the input.
+/// Every function that sweeps and says why it refuses gives a refusal for an input whose sweep panics, and never a panic: the outline; three of
+/// it, which the meter sweeps by itself first (it is over the gate), so that the panic is the dry sweep's before it is the topology's; and the
+/// outline moved in its last place, whose sweep the planar map's frame makes panic and the topology's does not. Where the sweep of the input
+/// panics here, a function whose first sweep is of that input alone says `Degenerate`; where it does not, a function is free to make the input.
 #[test]
 fn every_function_that_sweeps_refuses_in_words_a_sweep_that_panics_and_never_panics() {
     let p = outline();
-    for (what, path) in [("the outline", p.clone()), ("three of it", three_times(&p))] {
+    for (what, path) in [("the outline", p.clone()), ("three of it", three_times(&p)), ("the outline moved in its last place", outline_in_the_map())]
+    {
         let panics = sweep_panics(&path);
         for (name, alone, got) in refusals(&path) {
             assert!(matches!(got, Ok(()) | Err(PathOpsError::Degenerate)), "{what}: {name} gave {got:?}");
@@ -246,6 +247,22 @@ fn every_function_that_sweeps_refuses_in_words_a_sweep_that_panics_and_never_pan
                 assert_eq!(got, Err(PathOpsError::Degenerate), "{what}: {name} for an input whose sweep panics");
             }
         }
+    }
+}
+
+/// The planar map's sweep fails the check for a variant of the outline that the topology's passes (on Linux, as above): the map that `live_paint`
+/// gives is none, and the shape builder says `Degenerate`.
+#[test]
+fn the_planar_maps_sweep_is_guarded_as_the_topologys_is() {
+    let moved = outline_in_the_map();
+    let shapes = [Shape::new(moved.clone(), NZ, 0)];
+    let (faces, edges) = live_paint(&shapes);
+    let shaped = try_shape_builder(&shapes, true).map(drop);
+    assert!(matches!(shaped, Ok(()) | Err(PathOpsError::Degenerate)), "{shaped:?}");
+    if fails_on_linux() {
+        assert!(!sweep_panics(&moved), "the topology's sweep passes it");
+        assert!(faces.is_empty() && edges.is_empty(), "the map is none where its sweep panics");
+        assert_eq!(shaped, Err(PathOpsError::Degenerate));
     }
 }
 
@@ -302,4 +319,35 @@ fn a_stroke_whose_outline_fails_the_check_is_refused_in_words_and_never_panics()
     if fails_on_linux() {
         assert_eq!(got.map(drop), Err(PathOpsError::Degenerate));
     }
+}
+
+/// `path` with every coordinate moved by up to `ulps` units in the last place (each by a hash of its place and of `seed`).
+fn nudged(path: &BezPath, seed: u64, ulps: i64) -> BezPath {
+    use crate::testutil::hash01;
+    let mut n = 0u64;
+    let mut moved = |x: f64| {
+        n += 1;
+        let by = ((hash01(n, seed) * (2 * ulps + 1) as f64) as i64) - ulps;
+        x + by as f64 * x.abs() * f64::EPSILON
+    };
+    let mut at = |p: Point| Point::new(moved(p.x), moved(p.y));
+    let mut out = BezPath::new();
+    for el in path.elements() {
+        out.push(match *el {
+            kurbo::PathEl::MoveTo(p) => kurbo::PathEl::MoveTo(at(p)),
+            kurbo::PathEl::LineTo(p) => kurbo::PathEl::LineTo(at(p)),
+            kurbo::PathEl::QuadTo(a, b) => kurbo::PathEl::QuadTo(at(a), at(b)),
+            kurbo::PathEl::CurveTo(a, b, c) => kurbo::PathEl::CurveTo(at(a), at(b), at(c)),
+            kurbo::PathEl::ClosePath => kurbo::PathEl::ClosePath,
+        });
+    }
+    out
+}
+
+/// [`outline`] with its coordinates moved by up to one unit in the last place, as the 188th of the 300 seeds of a hash moves them. The check is
+/// hair-trigger: of the outline and its 299 variants it fails in the topology's sweep for 3 (the outline and two of the variants) and in the
+/// planar map's sweep for 1 (this one, which the topology's passes). The map is the one of `live_paint`, the shape builder and the faces of an
+/// Outline, and is swept in another frame (the closed subpaths are written again, and snapped).
+fn outline_in_the_map() -> BezPath {
+    nudged(&outline(), 188, 1)
 }
