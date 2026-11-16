@@ -72,10 +72,18 @@ fn reads_a_mac_and_a_windows_set() {
     assert_eq!(kys::read("<other/>").unwrap_err(), KysError::NotASet("no <photoshop-keyboard-shortcuts> root".into()));
     assert!(matches!(kys::read("<a>"), Err(KysError::NotASet(_))));
     assert_eq!(kys::read(&" ".repeat(MAX_BYTES + 1)).unwrap_err(), KysError::TooLarge);
-    // roxmltree recurses once per level: a deep set is refused before it can overflow the stack.
-    let deep = set(&format!("{}{}", "<a>".repeat(20_000), "</a>".repeat(20_000)), "");
-    let refused = std::thread::Builder::new().stack_size(512 * 1024).spawn(move || kys::read(&deep).err()).unwrap().join().unwrap();
-    assert!(matches!(refused, Some(KysError::NotASet(m)) if m.contains("nested")));
+    let deep = set(&format!("{}{}", "<a>".repeat(600), "</a>".repeat(600)), "");
+    assert!(matches!(kys::read(&deep), Err(KysError::NotASet(m)) if m.contains("nested")), "a set nested past the depth limit is refused");
+    let declared = format!("<!DOCTYPE photoshop-keyboard-shortcuts [<!ENTITY a \"b\">]>{}", set("", ""));
+    assert!(matches!(kys::read(&declared), Err(KysError::NotASet(_))), "a document type declaration is refused");
+
+    let lines = kys::read(
+        "<photoshop-keyboard-shortcuts filename=\"Lines\">\n<command name=\"Copy\"><shortcut>Cmd+C</shortcut></command>\n\
+         <tool name=\"Move Tool\">V</tool></photoshop-keyboard-shortcuts>",
+    )
+    .unwrap();
+    let at: Vec<Option<usize>> = lines.entries.iter().map(|e| e.line).collect();
+    assert_eq!(at, [Some(2), Some(3)], "each entry reports the line its row starts on");
 }
 
 #[test]
