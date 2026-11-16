@@ -1,14 +1,14 @@
 //! The size dialogs `ImageSize` and `CanvasSize`: the rows, the readouts and the dialog around them that the two share,
 //! and the `Resample` and `CanvasExtension` choices.
 
-use super::{FormDialog, ResetFooter, ResetPick};
-use crate::notices::{Notice, NoticeLayout};
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
+use super::{FormDialog, ResetFooter, ResetPick};
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogResult, FieldRefusal};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
+use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::UnitSelect;
 use crate::runtime::env::{Env, Label, UnitKind, Units};
 use crate::runtime::overlay::CloseReason;
