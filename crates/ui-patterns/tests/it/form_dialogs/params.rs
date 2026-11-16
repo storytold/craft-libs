@@ -3,9 +3,9 @@
 
 use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
 use craft_ui::patterns::presets::PresetRow;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::value_drag::SliderScale;
 use egui::{Key, Modifiers, Vec2};
@@ -211,4 +211,34 @@ fn a_pattern_row_picks_its_pattern() {
     fixture.click(&group);
     fixture.idle(3);
     assert_eq!(held().as_deref(), Some("sand"), "a group header writes nothing");
+}
+
+/// Rows that follow one unit choice show the same base value in the chosen unit and store the base value; a typed
+/// zero on a row with no lower bound reaches the value.
+#[trial]
+fn rows_in_a_shared_unit_follow_the_units_row() {
+    let units =
+        || vec![NumberUnit::new("cm", UnitKind::Centimetres, "Centimeters", 72.0 / 2.54), NumberUnit::new("in", UnitKind::Inches, "Inches", 72.0)];
+    let choice = ParamKind::choice(vec![("cm".into(), "Centimeters".into()), ("in".into(), "Inches".into())], Some("cm".into()));
+    let params = vec![
+        Param::new("units", "Units", choice),
+        Param::number_in_units("width", "Width", 72.0, 1.0, 2, "units", units()),
+        Param::number_in_units("height", "Height", 144.0, 1.0, 2, "units", units()),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    let enter = |fixture: &mut Fixture, label: &str, text: &str| {
+        let field = fixture.by_label(label).expect("the number row");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(text).key(Key::Enter, Modifiers::NONE).settle();
+    };
+    enter(&mut fixture, "Width", "2.54");
+    assert!((values.borrow().number("width").unwrap() - 72.0).abs() < 1e-6, "2.54 cm is 72 points");
+    values.borrow_mut().set("units", FieldValue::Text("in".into()));
+    fixture.settle();
+    assert_eq!(values.borrow().number("height"), Some(144.0), "the unit change keeps the stored value");
+    enter(&mut fixture, "Height", "3");
+    assert!((values.borrow().number("height").unwrap() - 216.0).abs() < 1e-6, "3 in is 216 points");
+    enter(&mut fixture, "Width", "0");
+    assert_eq!(values.borrow().number("width"), Some(0.0), "a typed zero reaches the value");
 }

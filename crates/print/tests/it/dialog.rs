@@ -4,9 +4,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::EditEvent;
-use craft_print::ui::{PrintDialog, PrintSheet, Printer, Settings};
+use craft_print::ui::{HostedPrint, PrintDialog, PrintSheet, Printer, Settings, State};
 use craft_ui::contract::Bind;
-use craft_ui::patterns::form_dialogs::DialogFields;
+use craft_ui::dialog::StackDialog as _;
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue};
 use craft_ui::primitives::TextureCache;
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -50,6 +51,7 @@ fn rig(paper: Vec2) -> (Fixture, Log) {
 /// One drag gesture on a sheet of `paper` points: the preview scale differs with the paper.
 fn check(paper: Vec2) {
     let (mut fixture, log) = rig(paper);
+    assert!(fixture.by_label("Print preview image").is_some(), "the preview is named as production names it");
     let image = fixture.by_label("Image box").expect("the image box is in the access tree");
     let scale = image.rect.width() / IMAGE_SIZE.x;
     let from = image.center();
@@ -84,4 +86,18 @@ fn check(paper: Vec2) {
 fn the_image_box_drag_reports_the_new_position() {
     check(vec2(612.0, 792.0));
     check(vec2(306.0, 396.0));
+}
+
+/// The listing of the dialog's values carries what the app's `json_form` adds, over the settings keys.
+#[trial]
+fn the_json_form_adds_to_the_listing() {
+    let fields = DialogFields::from_pairs([("paper", FieldValue::Text("custom".into())), ("paperWidth", FieldValue::Number(432.0))]);
+    let dialog = HostedPrint::new(State::default(), fields, Vec::new()).json_form(|fields, map| {
+        if fields.text("paper") == Some("custom") {
+            map.insert("paper".to_owned(), serde_json::json!([fields.number("paperWidth"), 792.0]));
+        }
+    });
+    let listed = dialog.json_fields().expect("a listing");
+    assert_eq!(listed["paper"], serde_json::json!([432.0, 792.0]));
+    assert!(listed.get("copies").is_some(), "the settings keys stay");
 }

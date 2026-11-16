@@ -30,7 +30,7 @@ craft_ui::words! {
         title: "printDialog.title" = "Print Settings";
         print: "printDialog.print" = "Print";
         done: "printDialog.done" = "Done";
-        preview: "printDialog.preview" = "Print preview";
+        preview: "printDialog.preview" = "Print preview image";
         image_box: "printDialog.imageBox" = "Image box";
     }
 }
@@ -492,12 +492,34 @@ pub struct HostedPrint {
     moves: Vec<EditEvent<egui::Pos2>>,
     refresh: bool,
     requests: HostRequests,
+    json_form: Option<Box<JsonForm>>,
 }
+
+/// Adds the app's own keys to the automation listing of the sections' values.
+type JsonForm = dyn Fn(&DialogFields, &mut serde_json::Map<String, serde_json::Value>) + Send;
 
 impl HostedPrint {
     /// The dialog over `state`, the sections' `fields` and the `sections`.
     pub fn new(state: State, fields: DialogFields, sections: Vec<PrintSection>) -> Self {
-        HostedPrint { id: dialog_id("print"), state, fields, sections, sheet: None, moves: Vec::new(), refresh: true, requests: HostRequests::new() }
+        HostedPrint {
+            id: dialog_id("print"),
+            state,
+            fields,
+            sections,
+            sheet: None,
+            moves: Vec::new(),
+            refresh: true,
+            requests: HostRequests::new(),
+            json_form: None,
+        }
+    }
+
+    /// Lists keys the sections' values do not show as they are: `form` gets the values and the listing, and may replace or
+    /// add entries (a custom paper as `[width, height]`). It runs after the `Settings` keys are added.
+    #[must_use]
+    pub fn json_form(mut self, form: impl Fn(&DialogFields, &mut serde_json::Map<String, serde_json::Value>) + Send + 'static) -> Self {
+        self.json_form = Some(Box::new(form));
+        self
     }
 
     /// Whether the app should send a printer list: once on the first pass and on each Refresh. It answers once: a
@@ -621,6 +643,9 @@ impl StackDialog for HostedPrint {
         map.insert("copies".to_owned(), settings.copies.into());
         map.insert("duplex".to_owned(), duplex_json(settings.duplex));
         map.insert("grayscale".to_owned(), settings.grayscale.into());
+        if let Some(form) = &self.json_form {
+            form(&self.fields, &mut map);
+        }
         Some(serde_json::Value::Object(map))
     }
 

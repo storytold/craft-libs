@@ -474,6 +474,8 @@ pub(crate) struct UnitChoices {
     /// The field key the chosen unit's id is stored under.
     key: String,
     initial: usize,
+    /// The unit id is the value of another row (a choice row), not of a menu of this row.
+    shared: bool,
 }
 
 /// The value that holds `paths`: a list of text, the shape a [`Param::files`] row keeps its files in.
@@ -679,7 +681,24 @@ impl Param {
     pub fn number_with_units(key: impl Into<String>, label: impl Into<Label>, base: f64, step: f64, decimals: u32, units: Vec<NumberUnit>) -> Self {
         let key = key.into();
         let mut param = Self::number(key.clone(), label, base, step, decimals);
-        param.options.get_or_insert_default().units = Some(UnitChoices { units, key: format!("{key}.unit"), initial: 0 });
+        param.options.get_or_insert_default().units = Some(UnitChoices { units, key: format!("{key}.unit"), initial: 0, shared: false });
+        param
+    }
+
+    /// A number row shown in the unit another row chooses: `units_key` is the key of a choice row whose options are the
+    /// ids of `units`, so several number rows follow one menu. The value and its conversion are those of
+    /// [`Param::number_with_units`]; the row draws no unit menu of its own and stores no unit key.
+    pub fn number_in_units(
+        key: impl Into<String>,
+        label: impl Into<Label>,
+        base: f64,
+        step: f64,
+        decimals: u32,
+        units_key: impl Into<String>,
+        units: Vec<NumberUnit>,
+    ) -> Self {
+        let mut param = Self::number(key, label, base, step, decimals);
+        param.options.get_or_insert_default().units = Some(UnitChoices { units, key: units_key.into(), initial: 0, shared: true });
         param
     }
 
@@ -697,7 +716,7 @@ impl Param {
 
     /// The key a [`Param::number_with_units`] row stores its chosen unit's id under: `"{key}.unit"`.
     pub fn unit_key(&self) -> Option<&str> {
-        self.options.as_deref()?.units.as_ref().map(|units| units.key.as_str())
+        self.options.as_deref()?.units.as_ref().filter(|units| !units.shared).map(|units| units.key.as_str())
     }
 
     /// The row is shown only while `fields[key]` equals `value`, as [`enabled_when`](Param::enabled_when) enables it;
@@ -863,7 +882,7 @@ impl Param {
             };
         }
         match (self.options.as_deref().and_then(|o| o.units.as_ref()), value) {
-            (Some(units), FieldValue::Text(id)) => units.key == key && units.units.iter().any(|u| &u.id == id),
+            (Some(units), FieldValue::Text(id)) => !units.shared && units.key == key && units.units.iter().any(|u| &u.id == id),
             _ => false,
         }
     }
@@ -960,6 +979,11 @@ impl UnitChoices {
         &self.units
     }
 
+    /// Whether another row chooses the unit.
+    pub(crate) fn is_shared(&self) -> bool {
+        self.shared
+    }
+
     /// The key the chosen unit's id is stored under.
     pub(crate) fn key(&self) -> &str {
         &self.key
@@ -1012,7 +1036,7 @@ pub(crate) fn fill_defaults(params: &[Param], fields: &mut DialogFields) {
         {
             fields.set(param.key.as_str(), value);
         }
-        if let Some(units) = param.options.as_deref().and_then(|o| o.units())
+        if let Some(units) = param.options.as_deref().and_then(|o| o.units()).filter(|units| !units.is_shared())
             && !fields.contains(units.key())
             && let Some(unit) = units.list().get(units.initial())
         {

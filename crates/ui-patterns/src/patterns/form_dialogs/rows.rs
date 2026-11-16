@@ -427,7 +427,7 @@ impl<'p> Pass<'p> {
 
     /// A number row with a unit menu: the field shows the base value in the chosen unit.
     fn with_units(&mut self, ui: &mut Ui, line: &Line<'_>) {
-        let ParamKind::Number { min, max, .. } = &line.param.kind else { return };
+        let ParamKind::Number { min, max, step, decimals, .. } = &line.param.kind else { return };
         let option = line.param.option();
         let Some(choices) = option.units() else { return };
         let base = self.work.number(line.key).unwrap_or(0.0);
@@ -437,6 +437,20 @@ impl<'p> Pass<'p> {
         let range = bounds(min.map(|m| m / factor), max.map(|m| m / factor));
         let entries: Vec<Entry<UnitKind>> = choices.list().iter().map(|unit| Entry::new(unit.kind, unit.label.clone())).collect();
         let unit_name = self.words.unit.clone();
+        if choices.is_shared() {
+            line.show(ui, |ui| {
+                let mut field = number_field(self.units, line.name.clone(), Some(base / factor), *decimals, Some(chosen.kind))
+                    .step(*step / factor)
+                    .id_salt("field");
+                if let Some(range) = range.clone() {
+                    field = field.range(range);
+                }
+                if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
+                    self.work.set(line.key, FieldValue::Number(v * factor));
+                }
+            });
+            return;
+        }
         line.show(ui, |ui| {
             let mut field = UnitSelect::new(line.name.clone(), Bind::given(Some(base / factor)), Bind::given(chosen.kind), &entries)
                 .unit_label(unit_name.clone())
