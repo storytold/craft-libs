@@ -835,7 +835,7 @@ fn cancelled(stop: &Stop) -> impl Fn() -> bool + '_ {
 
 /// For a running helper command: only CANCELLED ends it. PAUSED lets the current command finish
 /// (callers check `stop` before starting the next one).
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 fn kill_on_cancel(stop: &Stop) -> impl Fn() -> Result<(), String> + '_ {
     || if cancelled(stop)() { Err(crate::protocol::CANCELLED.into()) } else { Ok(()) }
 }
@@ -4180,7 +4180,15 @@ esac
         }
 
         fn found_at(bundle: &Path) -> Installed {
-            Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None }
+            Installed {
+                version: None,
+                source: InstallSource::MacApp,
+                location: bundle.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+                installation: None,
+            }
         }
 
         /// What [`check`] says when `codesign` fails with `failure`.
@@ -4440,7 +4448,15 @@ esac
             let dir = tempfile::tempdir().unwrap();
             let apps = dir.path().join("Applications");
             let current = bundle(&apps, "0.5.0");
-            let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
+            let existing = Installed {
+                version: None,
+                source: InstallSource::MacApp,
+                location: current.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+                installation: None,
+            };
             let paths = Paths::under(dir.path());
             let image = dmg(dir.path(), "0.6.0");
 

@@ -878,7 +878,15 @@ pub fn prepare_update_with_options(
         match install {
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
-                let existing = Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None };
+                let existing = Installed {
+                    version: None,
+                    source: InstallSource::MacApp,
+                    location: bundle.display().to_string(),
+                    package: None,
+                    externally_managed: false,
+                    origin: None,
+                    installation: None,
+                };
                 let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
                 let placed =
                     install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
