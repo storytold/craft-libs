@@ -532,17 +532,16 @@ fn attach_sections(doc: &mut Document, paras: &mut [table::ParaOut], sects: &[se
         props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
         props
     };
-    for (si, sec) in sects.iter().enumerate() {
-        let is_final = si + 1 == sects.len() || sec.end_cp >= ccp_text;
-        if is_final {
-            continue; // the last section, below
-        }
+    // The final section is the first that reaches the end of the main text (in a malformed
+    // PlcfSed, sections after it are ignored), else the last one.
+    let final_si = sects.iter().position(|s| s.end_cp >= ccp_text).unwrap_or(sects.len().saturating_sub(1));
+    for (si, sec) in sects.iter().enumerate().take(final_si) {
         if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
             p.para.section = Some(Box::new(with_parts(si, &sec.props)));
         }
     }
-    if let Some(last) = sects.last() {
-        doc.last_section = with_parts(sects.len() - 1, &last.props);
+    if let Some(last) = sects.get(final_si) {
+        doc.last_section = with_parts(final_si, &last.props);
     }
 }
 
