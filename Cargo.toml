@@ -63,6 +63,7 @@ craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
 craft-eps = { path = "crates/eps" }
+craft-elf = { path = "crates/elf" }
 craft-file-formats = { path = "crates/file-formats" }
 craft-file-import = { path = "crates/file-import" }
 vectorcraft-doc = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
@@ -174,7 +175,7 @@ craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
 craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
-craft-elf = { path = "crates/elf" }
+craft-sniff = { path = "crates/sniff" }
 craft-epub = { path = "crates/epub" }
 craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }

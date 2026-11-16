@@ -108,6 +108,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
   (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
+- [`craft-elf`](crates/elf/src/lib.rs): ELF program headers and dynamic section entries from untrusted bytes, from Craft Anything: 32- or 64-bit in either byte order, bounded counts and overflow-checked offsets, virtual-address-to-file mapping through `PT_LOAD`, and segment, permission and dynamic tag names.
 - [`craft-eps`](crates/eps/README.md): Encapsulated PostScript files as a container: the binary
   preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
   the EPSI preview bitmap, ASCII85 data, and telling EPS, PostScript and Illustrator files
@@ -386,7 +387,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   text-format crates read into and write from. WordCraft's model without its editing code.
 - [`craft-xlsx`](crates/xlsx/README.md): Excel workbooks (`.xlsx`, `.xlsm`, SpreadsheetML, transitional and strict) and binary workbooks (`.xlsb`) on `craft-opc`: the workbook part, shared strings, the styles tables and worksheet rows streamed one at a time, with limits on the package, the XML and the binary records.
 - [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
-- [`craft-elf`](crates/elf/src/lib.rs): ELF program headers and dynamic section entries from untrusted bytes, from Craft Anything: 32- or 64-bit in either byte order, bounded counts and overflow-checked offsets, virtual-address-to-file mapping through `PT_LOAD`, and segment, permission and dynamic tag names.
+- [`craft-sniff`](crates/sniff/src/lib.rs): what a file is from its first bytes: one dependency-free, wasm-safe signature table naming the format, its media type, extension and family for images, audio, video, 3D models, archives, compressed streams, executables and databases. Identifies only; parsing stays with each format's reader.
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
   loading the file, and plane access. Bounded on hostile input.

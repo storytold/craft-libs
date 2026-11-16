@@ -886,6 +886,106 @@ fn inconsistent_count_table_errors() {
     assert!(matches!(decode_deep_exr(&bytes, &Limits::none()), Err(CodecError::Malformed(_))));
 }
 
+/// A two-part file made from the single-part deep file `deep` and a 1×1 flat scan-line part,
+/// the deep part first when `deep_first`: each header gains `name` and `chunkCount`, the
+/// version field the multipart bit, and each chunk its part number. The offset tables follow
+/// the headers in header order, then the chunks. Returns the file, where the first table
+/// starts, where the second table starts and where the last table ends.
+fn two_part(deep: &[u8], deep_first: bool) -> (Vec<u8>, usize, usize, usize) {
+    let end = header_end_of(deep);
+    let first = u64::from_le_bytes(deep[end..end + 8].try_into().expect("8")) as usize;
+    let offsets: Vec<usize> =
+        (0..(first - end) / 8).map(|i| u64::from_le_bytes(deep[end + 8 * i..end + 8 * i + 8].try_into().expect("8")) as usize).collect();
+    let deep_chunks: Vec<&[u8]> = offsets.iter().enumerate().map(|(i, &o)| &deep[o..offsets.get(i + 1).copied().unwrap_or(deep.len())]).collect();
+
+    let mut deep_header = deep[8..end - 1].to_vec();
+    attr(&mut deep_header, "name", "string", b"deep");
+    attr(&mut deep_header, "chunkCount", "int", &(deep_chunks.len() as i32).to_le_bytes());
+    let mut flat_header = Vec::new();
+    let mut chlist = b"R\0".to_vec();
+    chlist.extend_from_slice(&1i32.to_le_bytes()); // half
+    chlist.extend_from_slice(&[0u8; 4]); // pLinear, reserved
+    chlist.extend_from_slice(&1i32.to_le_bytes());
+    chlist.extend_from_slice(&1i32.to_le_bytes());
+    chlist.push(0);
+    attr(&mut flat_header, "channels", "chlist", &chlist);
+    attr(&mut flat_header, "compression", "compression", &[0]);
+    let dw: Vec<u8> = [0i32; 4].iter().flat_map(|v| v.to_le_bytes()).collect();
+    attr(&mut flat_header, "dataWindow", "box2i", &dw);
+    attr(&mut flat_header, "displayWindow", "box2i", &dw);
+    attr(&mut flat_header, "lineOrder", "lineOrder", &[0]);
+    attr(&mut flat_header, "pixelAspectRatio", "float", &1f32.to_le_bytes());
+    attr(&mut flat_header, "screenWindowCenter", "v2f", &[0f32.to_le_bytes(), 0f32.to_le_bytes()].concat());
+    attr(&mut flat_header, "screenWindowWidth", "float", &1f32.to_le_bytes());
+    attr(&mut flat_header, "name", "string", b"flat");
+    attr(&mut flat_header, "type", "string", b"scanlineimage");
+    attr(&mut flat_header, "chunkCount", "int", &1i32.to_le_bytes());
+    // The flat part's one chunk: y, the data size, one half sample.
+    let mut flat_chunk = 0i32.to_le_bytes().to_vec();
+    flat_chunk.extend_from_slice(&2i32.to_le_bytes());
+    flat_chunk.extend_from_slice(&f16::from_f32(0.5).to_le_bytes());
+    let flat_chunks: Vec<&[u8]> = vec![&flat_chunk];
+
+    let parts: [(&[u8], &[&[u8]]); 2] = if deep_first {
+        [(&deep_header, &deep_chunks), (&flat_header, &flat_chunks)]
+    } else {
+        [(&flat_header, &flat_chunks), (&deep_header, &deep_chunks)]
+    };
+    let mut out = deep[..4].to_vec();
+    out.extend_from_slice(&(2u32 | 0x800 | 0x1000).to_le_bytes());
+    for (header, _) in &parts {
+        out.extend_from_slice(header);
+        out.push(0); // end of this header
+    }
+    out.push(0); // end of the headers
+    let first_table = out.len();
+    let second_table = first_table + parts[0].1.len() * 8;
+    let tables_end = second_table + parts[1].1.len() * 8;
+    let mut pos = tables_end;
+    for (_, chunks) in &parts {
+        for c in chunks.iter() {
+            out.extend_from_slice(&(pos as u64).to_le_bytes());
+            pos += 4 + c.len();
+        }
+    }
+    for (part, (_, chunks)) in parts.iter().enumerate() {
+        for c in chunks.iter() {
+            out.extend_from_slice(&(part as i32).to_le_bytes());
+            out.extend_from_slice(c);
+        }
+    }
+    (out, first_table, second_table, tables_end)
+}
+
+/// The deep part of a two-part file decodes as the single-part file does, first or second.
+/// Its chunks start after every part's offset table: a chunk offset into the other part's
+/// table, or one byte before the end of the last table, is refused as table data, and a file
+/// that ends inside the last table is refused even when the deep part's own table is whole.
+#[test]
+fn multipart_deep_chunks_start_after_every_offset_table() {
+    let single = gen_deep(4, 4, &RGBAZ, 0, None, COUNTS_ONE, &sample_rgba);
+    let want = decode_deep_exr(&single, &Limits::none()).expect("single part");
+    for deep_first in [true, false] {
+        let (bytes, ..) = two_part(&single, deep_first);
+        let deep = decode_deep_exr(&bytes, &Limits::none()).expect("two parts");
+        assert_eq!(deep.counts, want.counts);
+        assert_eq!(deep.channel("Z").expect("Z").samples, want.channel("Z").expect("Z").samples);
+    }
+
+    let refused = |bytes: &[u8], what: &str| match decode_deep_exr(bytes, &Limits::none()) {
+        Err(e @ CodecError::Malformed(_)) => assert!(e.to_string().contains(what), "{e}"),
+        Err(e) => panic!("{e}, want an error about {what}"),
+        Ok(_) => panic!("decoded, want an error about {what}"),
+    };
+    let (bytes, first_table, second_table, tables_end) = two_part(&single, true);
+    for off in [second_table, tables_end - 1] {
+        let mut into_table = bytes.clone();
+        into_table[first_table..first_table + 8].copy_from_slice(&(off as u64).to_le_bytes());
+        refused(&into_table, "outside the chunk area");
+    }
+    refused(&bytes[..tables_end - 4], "past the end of the file");
+}
+
 /// `gen_deep` for a cropped render: the data window sits at `(dwx, dwy)` inside a larger
 /// display window of `sw × sh` (the stage the renderer composed onto). Scanline chunk Y
 /// coordinates are absolute display rows, so they carry the data-window offset.
