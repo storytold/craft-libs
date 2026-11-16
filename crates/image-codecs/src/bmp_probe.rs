@@ -155,4 +155,23 @@ mod tests {
         let nibble = bmp(2, &[0, 3, 0x12, 0x30, 0, 1]);
         assert_eq!(coverage(&nibble, 4, 2).pixels, 3);
     }
+    #[test]
+    fn supported_header_recognition_preserves_length_signature_and_dib_rules() {
+        let mut b = [0_u8; 26];
+        b[..2].copy_from_slice(b"BM");
+        for dib in [12_u32, 16, 40, 52, 56, 64, 108, 124] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert!(is_supported_header(&b), "DIB {dib}");
+            for n in 0..26 {
+                assert!(!is_supported_header(&b[..n]), "prefix {n}");
+            }
+        }
+        for dib in [0_u32, 13, 39, 41, 125, u32::MAX] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert!(!is_supported_header(&b), "DIB {dib}");
+        }
+        b[14..18].copy_from_slice(&40_u32.to_le_bytes());
+        b[0] = b'X';
+        assert!(!is_supported_header(&b));
+    }
 }
