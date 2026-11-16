@@ -89,6 +89,7 @@ pub enum SampleSign {
 
 /// The points the user sampled, in document pixels, and the order they were made in.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ColorSamples {
     /// The added samples.
     pub add: Vec<[f64; 2]>,

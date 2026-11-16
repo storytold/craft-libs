@@ -46,11 +46,19 @@ pub struct InstallSpec {
 
 /// The modifiers the mouse wheel zooms and scrolls sideways with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WheelModifiers {
     /// Held with the wheel, the wheel zooms.
     pub zoom: egui::Modifiers,
     /// Held with the wheel, a vertical wheel scrolls sideways.
     pub sideways: egui::Modifiers,
+}
+
+impl WheelModifiers {
+    /// The wheel zooms with `zoom` held and scrolls sideways with `sideways` held.
+    pub const fn new(zoom: egui::Modifiers, sideways: egui::Modifiers) -> Self {
+        Self { zoom, sideways }
+    }
 }
 
 impl Default for WheelModifiers {

@@ -73,12 +73,20 @@ pub enum ArtboardBarTarget<'a> {
     /// The selected board.
     Board(&'a ArtboardItem),
     /// No board is selected: the size and background the next board gets.
+    #[non_exhaustive]
     Next {
         /// The size of the next board.
         size: Size,
         /// Its background.
         background: ArtboardBackground,
     },
+}
+
+impl ArtboardBarTarget<'_> {
+    /// No board is selected: the `size` and `background` the next board gets.
+    pub const fn next(size: Size, background: ArtboardBackground) -> Self {
+        ArtboardBarTarget::Next { size, background }
+    }
 }
 
 impl<'a> ArtboardBar<'a> {

@@ -23,6 +23,7 @@ use crate::security::{
 /// A running control server. Dropping it stops accepting connections and returns once the port is
 /// free, so a restart on the same port binds it again at once; connections already open end at their
 /// next request, once the app has dropped the request channel.
+#[non_exhaustive]
 pub struct Listening {
     /// The bound address (with port 0, the port the system picked); the one a client needs.
     pub addr: SocketAddr,

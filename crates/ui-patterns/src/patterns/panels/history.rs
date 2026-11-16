@@ -32,6 +32,7 @@ const THUMB_POINTS: f32 = 32.0;
 
 /// What a history row stands for: a named snapshot or a state of the undo stack, by number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HistoryKey {
     /// The snapshot with this number.
     Snapshot(u64),
@@ -85,6 +86,7 @@ impl HistoryRow {
 
 /// Which buttons the history footer shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HistoryFooter {
     /// The Delete button.
     pub delete: bool,
@@ -92,6 +94,26 @@ pub struct HistoryFooter {
     pub new_snapshot: bool,
     /// The New Document button.
     pub new_document: bool,
+}
+
+impl HistoryFooter {
+    /// This footer with the Delete button shown when `shown`.
+    pub const fn delete(mut self, shown: bool) -> Self {
+        self.delete = shown;
+        self
+    }
+
+    /// This footer with the New Snapshot button shown when `shown`.
+    pub const fn new_snapshot(mut self, shown: bool) -> Self {
+        self.new_snapshot = shown;
+        self
+    }
+
+    /// This footer with the New Document button shown when `shown`.
+    pub const fn new_document(mut self, shown: bool) -> Self {
+        self.new_document = shown;
+        self
+    }
 }
 
 /// What the user did in the history panel.
@@ -103,6 +125,7 @@ pub enum HistoryEvent {
     /// The user set the row as the source of the history brush.
     SetSource(HistoryKey),
     /// The user renamed a snapshot.
+    #[non_exhaustive]
     Rename {
         /// The snapshot's number.
         snapshot: u64,
@@ -112,6 +135,7 @@ pub enum HistoryEvent {
     /// The user deleted the row, or the picked one when `None`.
     Delete(Option<HistoryKey>),
     /// The user asked for a new snapshot; `mods` were held.
+    #[non_exhaustive]
     NewSnapshot {
         /// The modifiers held with the press.
         mods: Mods,
@@ -121,6 +145,7 @@ pub enum HistoryEvent {
 }
 
 /// What [`HistoryPanel`] reports.
+#[non_exhaustive]
 pub struct HistoryPanelOutput {
     /// The panel's response.
     pub response: Response,

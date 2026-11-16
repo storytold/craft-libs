@@ -21,6 +21,7 @@ pub struct ScreenModeButton {
 
 /// What a [`ScreenModeButton`] reports.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ScreenModeButtonOutput {
     /// The button's response.
     pub response: Response,

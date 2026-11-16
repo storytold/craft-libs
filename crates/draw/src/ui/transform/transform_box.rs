@@ -186,6 +186,7 @@ pub enum ApplyBy {
     /// A double click inside the box.
     DoubleClick,
     /// A click outside the box, at `at` in document units.
+    #[non_exhaustive]
     ClickOutside {
         /// Where the click landed.
         at: Point,
@@ -415,10 +416,10 @@ impl<'a> TransformBox<'a> {
         let (to, lines) = match (snap, grabbed) {
             (Some(snap), Some(grabbed)) => {
                 let off = grip.from - grabbed;
-                let (at, lines) = snap.point(to - off, mods, GestureSnap { reads_control, ..GestureSnap::default() });
+                let (at, lines) = snap.point(to - off, mods, GestureSnap::default().reads_control(reads_control));
                 (at + off, lines)
             }
-            (Some(snap), None) => snap.point(to, mods, GestureSnap { reads_control, ..GestureSnap::default() }),
+            (Some(snap), None) => snap.point(to, mods, GestureSnap::default().reads_control(reads_control)),
             (None, _) => (to, Vec::new()),
         };
         let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, mods, &self.rules);

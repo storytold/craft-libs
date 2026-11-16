@@ -53,6 +53,7 @@ craft_ui::words! {
 
 /// A colour in 8-bit sRGB and CMYK percent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InfoColor {
     /// The colour in 8-bit sRGB.
     pub rgb: [u8; 3],
@@ -61,6 +62,11 @@ pub struct InfoColor {
 }
 
 impl InfoColor {
+    /// The colour with the given 8-bit sRGB and CMYK percent values, as an app already holds them.
+    pub const fn from_parts(rgb: [u8; 3], cmyk: [u8; 4]) -> Self {
+        InfoColor { rgb, cmyk }
+    }
+
     /// `color` through the document's CMYK converter: the one sRGB-and-CMYK conversion, which `SamplerReadout::new` builds
     /// its `rgb` and `cmyk` through. A channel that is not finite reads as 0 and the rest is clamped.
     pub fn new(color: Srgba, cmyk: &CmykConverter) -> Self {
@@ -75,6 +81,7 @@ impl InfoColor {
 #[non_exhaustive]
 pub enum InfoMeasure {
     /// A plain ruler: its angle and length.
+    #[non_exhaustive]
     Line {
         /// The angle.
         angle: Label,
@@ -82,6 +89,7 @@ pub enum InfoMeasure {
         length: Label,
     },
     /// A protractor: the angle between its arms and the arms' lengths.
+    #[non_exhaustive]
     Protractor {
         /// The angle between the arms.
         angle: Label,

@@ -26,6 +26,7 @@ use std::sync::Arc;
 /// Where the task bar sits: pinned or following its anchor, and where the user moved it. The one owner of the bar's
 /// place; the serde shape is PhotoCraft's, so saved preferences load unchanged, and a non-finite `at` counts as unset.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct TaskBarPlace {
     /// The bar keeps its place instead of following the anchor.
     #[serde(default)]
@@ -36,6 +37,11 @@ pub struct TaskBarPlace {
 }
 
 impl TaskBarPlace {
+    /// A place that is pinned or follows the anchor, with the top left corner `at` once moved.
+    pub const fn new(pinned: bool, at: Option<[f32; 2]>) -> Self {
+        Self { pinned, at }
+    }
+
     /// The bar's top left in `area` while it has a place; `None` while it follows its anchor. A non-finite `at`
     /// counts as unset.
     fn placed_in(&self, area: Rect) -> Option<Pos2> {

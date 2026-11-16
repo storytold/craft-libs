@@ -101,6 +101,7 @@ impl Thumbnail {
 /// One layer of a backdrop: where it lies, its reduced picture and the colour that stands in for a missing one.
 /// Later layers cover earlier ones.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct BackdropLayer<'a> {
     /// Where the layer lies.
     pub rect: Rect,
@@ -108,6 +109,13 @@ pub struct BackdropLayer<'a> {
     pub thumbnail: Option<&'a Thumbnail>,
     /// The colour of the layer without a thumbnail (opaque RGB).
     pub fallback: Color32,
+}
+
+impl<'a> BackdropLayer<'a> {
+    /// The layer over `rect` showing `thumbnail`, or `fallback` where it has none.
+    pub const fn new(rect: Rect, thumbnail: Option<&'a Thumbnail>, fallback: Color32) -> Self {
+        Self { rect, thumbnail, fallback }
+    }
 }
 
 /// The blurred composition of `layers` over `background` for `area`: an opaque image of cells about four points

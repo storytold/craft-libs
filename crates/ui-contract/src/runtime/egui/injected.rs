@@ -528,6 +528,7 @@ pub(crate) fn inject_release(ctx: &Context, viewport: ViewportId, at: Option<Pos
 #[non_exhaustive]
 pub enum InjectedPointer {
     /// `button` goes down at `at`, after a move there when the injected pointer is elsewhere.
+    #[non_exhaustive]
     Down {
         /// The button.
         button: PointerButton,
@@ -539,6 +540,7 @@ pub enum InjectedPointer {
         pen: Option<PointerSample>,
     },
     /// The pointer moves to `at`; a button held by injected input drags.
+    #[non_exhaustive]
     Move {
         /// The pointer.
         at: Pos2,
@@ -549,12 +551,30 @@ pub enum InjectedPointer {
     },
     /// Every button injected input holds comes up at `at`, after a move there; the modifiers go with them when no
     /// button or key stays down. Nothing held queues nothing.
+    #[non_exhaustive]
     Up {
         /// The pointer.
         at: Pos2,
         /// The modifiers held.
         mods: Mods,
     },
+}
+
+impl InjectedPointer {
+    /// `button` goes down at `at` with `mods` held and the pen's reading `pen`.
+    pub const fn down(button: PointerButton, at: Pos2, mods: Mods, pen: Option<PointerSample>) -> Self {
+        InjectedPointer::Down { button, at, mods, pen }
+    }
+
+    /// The pointer moves to `at` with `mods` held and the pen's reading `pen`.
+    pub const fn move_to(at: Pos2, mods: Mods, pen: Option<PointerSample>) -> Self {
+        InjectedPointer::Move { at, mods, pen }
+    }
+
+    /// Every injected button comes up at `at` with `mods` held.
+    pub const fn up(at: Pos2, mods: Mods) -> Self {
+        InjectedPointer::Up { at, mods }
+    }
 }
 
 /// Queues `step` for `viewport`, one pass per event. A button egui has no counterpart, or a non-finite point of a

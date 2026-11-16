@@ -66,7 +66,7 @@ fn an_untouched_resolution_outside_the_range_is_not_reported_as_changed() {
 }
 
 /// The 180 pt / 12 pt column size of the Units preference.
-const COLUMNS: ColumnSize = ColumnSize { width: 180.0, gutter: 12.0 };
+const COLUMNS: ColumnSize = ColumnSize::new(180.0, 12.0);
 
 fn close(actual: f64, expected: f64) -> bool {
     (actual - expected).abs() < 1e-9
@@ -117,9 +117,9 @@ fn relative_columns() {
 /// A degenerate or negative column size falls back to 180 pt / 12 pt, a negative gutter counts as none.
 fn degenerate_column_sizes() {
     let degenerate = [
-        ColumnSize { width: 0.0, gutter: f64::NAN },
-        ColumnSize { width: f64::NAN, gutter: f64::INFINITY },
-        ColumnSize { width: -5.0, gutter: f64::NAN },
+        ColumnSize::new(0.0, f64::NAN),
+        ColumnSize::new(f64::NAN, f64::INFINITY),
+        ColumnSize::new(-5.0, f64::NAN),
     ];
     for column_size in degenerate {
         let mut size = document().column_size(column_size);
@@ -128,7 +128,7 @@ fn degenerate_column_sizes() {
         assert_eq!(pixels(&size).0, 372, "{column_size:?} converts as 180 pt / 12 pt");
         assert!(size.width().is_finite());
     }
-    let mut no_gutter = document().column_size(ColumnSize { width: 100.0, gutter: -4.0 });
+    let mut no_gutter = document().column_size(ColumnSize::new(100.0, -4.0));
     assert!(no_gutter.set_width_unit(UnitKind::Columns));
     no_gutter.set_width(2.0);
     assert_eq!(pixels(&no_gutter).0, 200, "a negative gutter counts as none");

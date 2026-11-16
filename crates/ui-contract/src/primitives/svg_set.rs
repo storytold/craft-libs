@@ -10,6 +10,7 @@ include!(concat!(env!("OUT_DIR"), "/icons.rs"));
 
 /// An app's own icon set: SVG documents drawn beside the built-in catalog in every `IconSet`.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct AppIcons {
     /// The set's name, for the log line that refuses a clashing registration.
     pub name: &'static str,
@@ -17,6 +18,13 @@ pub struct AppIcons {
     pub stroke_width: Option<f32>,
     /// Each icon's name and SVG document.
     pub icons: &'static [(&'static str, &'static [u8])],
+}
+
+impl AppIcons {
+    /// The set `name` of `icons`, each an icon name and its SVG document, drawn with `stroke_width` when it is `Some`.
+    pub const fn new(name: &'static str, stroke_width: Option<f32>, icons: &'static [(&'static str, &'static [u8])]) -> Self {
+        Self { name, stroke_width, icons }
+    }
 }
 
 /// Registers `set` in the process-wide list beside the built-in catalog; runs before the first pass.

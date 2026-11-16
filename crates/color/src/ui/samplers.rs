@@ -283,11 +283,13 @@ impl Component for ColorSamplerMarks<'_> {
 #[non_exhaustive]
 pub enum SamplerEvent {
     /// A point was placed at `at`.
+    #[non_exhaustive]
     Add {
         /// Where, in document pixels.
         at: [f64; 2],
     },
     /// Point `index` was moved to `to`.
+    #[non_exhaustive]
     Move {
         /// The point's index.
         index: usize,
@@ -295,15 +297,34 @@ pub enum SamplerEvent {
         to: [f64; 2],
     },
     /// Point `index` was removed.
+    #[non_exhaustive]
     Remove {
         /// The point's index.
         index: usize,
     },
 }
 
+impl SamplerEvent {
+    /// A point placed at `at`.
+    pub fn add(at: [f64; 2]) -> Self {
+        SamplerEvent::Add { at }
+    }
+
+    /// Point `index` moved to `to`.
+    pub fn moved(index: usize, to: [f64; 2]) -> Self {
+        SamplerEvent::Move { index, to }
+    }
+
+    /// Point `index` removed.
+    pub fn removed(index: usize) -> Self {
+        SamplerEvent::Remove { index }
+    }
+}
+
 /// A point the tool carries: point `index` draws at `at`, or with `index: None` the next number draws at `at` while
 /// below [`MAX_SAMPLERS`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SamplerCarry {
     /// The point carried; `None` for a new one.
     pub index: Option<usize>,

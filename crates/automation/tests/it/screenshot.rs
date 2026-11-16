@@ -39,7 +39,9 @@ fn admit_for(
     now: Instant,
 ) -> Result<Receiver<ControlResponse>, String> {
     let (tx, rx) = channel();
-    captures.admit(ScreenshotRequest { token, path: None, viewport, reply: tx, document, settle_ms: 0.0 }, now).map(|()| rx).map_err(|(_, e)| e)
+    let mut request = ScreenshotRequest::new(token, viewport, tx);
+    request.document = document;
+    captures.admit(request, now).map(|()| rx).map_err(|(_, e)| e)
 }
 
 fn admit(captures: &mut Captures, token: u64, now: Instant) -> Result<Receiver<ControlResponse>, String> {

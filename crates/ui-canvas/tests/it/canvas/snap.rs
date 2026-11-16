@@ -95,7 +95,7 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::CTRL), 103.0);
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::CMD), 100.0);
     assert_eq!(
-        snap.point(NEAR, Mods::CTRL, GestureSnap { reads_control: true, ..GestureSnap::default() }).0,
+        snap.point(NEAR, Mods::CTRL, GestureSnap::default().reads_control(true)).0,
         Point::new(100.0, 200.0),
         "a gesture that reads Control keeps snapping"
     );

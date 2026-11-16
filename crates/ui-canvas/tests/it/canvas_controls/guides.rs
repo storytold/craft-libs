@@ -110,7 +110,7 @@ fn the_running_guide_reading_follows_the_drag_and_goes_when_it_ends() {
     });
     let canvas = fixture.canvas_id();
     let reading = |fixture: &mut ToolFixture<Recorder>| running(fixture.fixture().ctx(), canvas);
-    let vertical = |position: f64| Some(GuideReading { along: Axis::Y, position });
+    let vertical = |position: f64| Some(GuideReading::new(Axis::Y, position));
     assert_eq!(reading(&mut fixture), None, "no drag, no reading");
 
     fixture.fixture().frame(vec![pointer::moved(pos2(200.0, 300.0))]);

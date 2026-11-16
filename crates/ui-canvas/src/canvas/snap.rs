@@ -24,11 +24,26 @@ pub struct Snap {
 
 /// The gesture's snap options in one argument: whether the gesture reads Control itself, and a kind filter.
 #[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
 pub struct GestureSnap {
     /// Whether the gesture reads the Control key itself, so Control does not suspend snapping.
     pub reads_control: bool,
     /// The kinds of target the gesture snaps to (Distort corners skip layer edges and centres).
     pub kinds: craft_behavior::geometry::SnapKinds,
+}
+
+impl GestureSnap {
+    /// These options with the gesture reading Control itself when `reads_control`.
+    pub fn reads_control(mut self, reads_control: bool) -> Self {
+        self.reads_control = reads_control;
+        self
+    }
+
+    /// These options snapping to `kinds`.
+    pub fn kinds(mut self, kinds: craft_behavior::geometry::SnapKinds) -> Self {
+        self.kinds = kinds;
+        self
+    }
 }
 
 impl Snap {

@@ -36,6 +36,7 @@ pub enum EditPhase {
 
 /// What an adjustment editor shares with its dialog for one pass: the context, the canvas, the dialog's own picker,
 /// channel and clipping state, and the editor's edit phase.
+#[non_exhaustive]
 pub struct AdjustDialogCx<'a> {
     /// Where the editor is shown.
     pub context: AdjustContext,
@@ -51,6 +52,19 @@ pub struct AdjustDialogCx<'a> {
     pub clipping: &'a mut Option<LevelsClip>,
     /// The editor's edit phase and its gesture this pass.
     pub edit: Option<(EditPhase, GestureId)>,
+}
+
+impl<'a> AdjustDialogCx<'a> {
+    /// The context for an editor shown in `context` over the dialog's own `picker`, `channel` and `clipping` state, with
+    /// no canvas, no curve point to select and no edit phase; the fields set the rest.
+    pub fn new(
+        context: AdjustContext,
+        picker: &'a mut Option<TonePicker>,
+        channel: &'a mut usize,
+        clipping: &'a mut Option<LevelsClip>,
+    ) -> Self {
+        Self { context, canvas: None, picker, channel, select_point: None, clipping, edit: None }
+    }
 }
 
 /// The clipping display as automation names it: `"shadows"`, `"highlights"` or null (`LevelsClip` has no serde).

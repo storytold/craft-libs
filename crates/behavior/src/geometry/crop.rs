@@ -33,6 +33,7 @@ const TURN_GRID_MAX: usize = 4096;
 
 /// What a resize holds about the frame's proportions.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum AspectHold {
     /// No proportion held.
     Free,

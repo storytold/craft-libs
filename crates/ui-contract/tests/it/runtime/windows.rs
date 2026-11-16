@@ -452,7 +452,7 @@ fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
     host.inject_click(ViewportId::ROOT, nan, PointerButton::Primary, 1, Mods::NONE, false);
     host.inject_move(ViewportId::ROOT, Pos2::new(f32::INFINITY, 0.0), Mods::NONE, 0.0);
     host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), Mods::NONE);
-    host.inject_pointer(ViewportId::ROOT, InjectedPointer::Down { button: PointerButton::Primary, at: nan, mods: Mods::NONE, pen: None });
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Primary, nan, Mods::NONE, None));
     frames(6);
     assert_eq!(presses.get(), 0, "no non-finite press reaches egui");
     assert!(!down.get(), "nothing is held");
@@ -460,7 +460,7 @@ fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
     host.inject_click(ViewportId::ROOT, Pos2::new(40.0, 40.0), PointerButton::Primary, 1, Mods::NONE, true);
     frames(4);
     assert!(down.get(), "the finite press is held");
-    host.inject_pointer(ViewportId::ROOT, InjectedPointer::Up { at: nan, mods: Mods::NONE });
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::up(nan, Mods::NONE));
     frames(4);
     assert!(!down.get(), "a release at a non-finite point lets the button go");
     assert_eq!(presses.get(), 1);

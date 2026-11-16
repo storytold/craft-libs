@@ -274,7 +274,7 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     fixture.click(&row).settle();
     assert!(edits.borrow().is_empty(), "a click selects and uses, it edits nothing: {:?}", edits.borrow());
     fixture.key(Key::Delete, Modifiers::NONE).settle();
-    assert_eq!(*edits.borrow(), [SwatchEdit::Delete { swatch: "Red".to_owned() }], "one resolved edit, once");
+    assert_eq!(*edits.borrow(), [SwatchEdit::delete("Red".to_owned())], "one resolved edit, once");
 
     let (mut fixture, edits) = swatches_rig(groups.clone());
     let row = fixture.by_label("Red, #ff0000").expect("the Red swatch");
@@ -292,7 +292,7 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     let made = SwatchesMenu::run_command(&groups, &mut state, SwatchesCommand::NewSwatch, RED, &Default::default());
     assert_eq!(
         made.edit,
-        Some(SwatchEdit::Add { group: Some("Basics".to_owned()), name: "Color Swatch 2".to_owned(), color: red }),
+        Some(SwatchEdit::add(Some("Basics".to_owned()), "Color Swatch 2".to_owned(), red)),
         "the next free number, in the selected swatch's group, with the foreground"
     );
     assert_eq!(state.rename, Some(SwatchKey::Swatch("Color Swatch 2".to_owned())), "the new swatch opens for renaming");
