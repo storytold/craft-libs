@@ -8,7 +8,7 @@ use craft_behavior::kurbo::Point;
 use craft_behavior::{CancelReason, Cursor, EditEvent, GestureId, Mixed};
 use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::StraightLinePreview;
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, Props as _, Show as _};
 use craft_ui::primitives::Draw;
 use egui::{Rect, Ui};
 use std::sync::Arc;
