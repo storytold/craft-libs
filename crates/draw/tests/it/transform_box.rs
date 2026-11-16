@@ -135,10 +135,14 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
     for target in &shown_config.borrow().targets {
         targets.add(*target);
     }
-    let snap = Snap::new(Arc::new(targets), SnapOptions::default());
+    let targets = Arc::new(targets);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let config = shown_config.borrow().clone();
+        // A box on the pixel grid alone has the grid through a snap that snaps to nothing.
+        let mut options = SnapOptions::default();
+        options.on = config.snap;
+        let snap = Snap::new(Arc::clone(&targets), options).whole_pixels(config.pixel_grid);
         let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0)
             .rotation(config.rotation)
             .flip_x(config.flip);
@@ -149,8 +153,8 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         };
         let canvas_id = ui.scope_id().with("document canvas");
         let mut canvas = Canvas::new("Document").id(canvas_id).view(view);
-        if config.snap {
-            canvas = canvas.snap(snap.clone());
+        if config.snap || config.pixel_grid {
+            canvas = canvas.snap(snap);
         }
         if let Some(ruler) = config.rulers {
             canvas = canvas.rulers(ruler, ruler, Point::ZERO);
@@ -170,8 +174,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .inside_moves(config.inside_moves)
                     .reference_point(config.reference_point)
                     .centre_mark(config.centre_mark)
-            }
-            .pixel_grid(config.pixel_grid);
+            };
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
             }
@@ -534,6 +537,7 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
         (Point::new(RECT.x1 - 3.0, 150.0), "just inside a side's middle"),
         (Point::new(RECT.x1 + 60.0, 150.0), "past the reach"),
         (Point::new(RECT.x1 + 60.0, RECT.y1 + 60.0), "past a corner, where the box would rotate"),
+        (Point::new(RECT.x1 + 30.0, RECT.y1 + 30.0), "diagonally off a corner, within the reach of each side's line but not of the corner"),
     ];
     for (at, what) in untaken {
         let before = session.borrow().quad();
@@ -552,6 +556,11 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
         after[0].x > before[0].x + 1.0 && after[0].y > before[0].y + 1.0 && (size(after) - size(before)).abs() < 1e-6,
         "the box moves and keeps its size: {before:?} -> {after:?}"
     );
+
+    // Within the reach of a corner, off both sides' ends: the round corner holds it.
+    let corner = session.borrow().quad()[2];
+    let (at_press, _) = drag(Point::new(corner.x + 20.0, corner.y + 20.0), Point::new(corner.x + 40.0, corner.y + 30.0));
+    assert_eq!(at_press, Some(BoxPart::Inside), "a press within the reach of a corner moves the box");
 }
 
 /// The snap lines of a session box drag reach the tool host through `TransformTool`, as the crop frame's do: the host
@@ -679,6 +688,73 @@ fn a_live_line_takes_a_press_only_at_its_ends_and_an_end_drag_scales_from_the_ot
         hover(&mut h, side);
         assert_eq!(h.host.borrow().hovered, None, "the square on the side at {side:?} takes no press");
     }
+}
+
+/// A press on the rotate band at any corner keeps rotating when the box it began on hands the drag to a box that
+/// takes the whole outside (the Move tool's controls opening Free Transform): both declare the outside near corner
+/// `i` under one part.
+#[trial]
+fn a_band_press_at_any_corner_rotates_after_the_hand_off_to_the_whole_outside() {
+    for corner in 0..4usize {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.zone = RotateZone::Band;
+            config.inside_moves = false;
+            config.reference_point = false;
+        });
+        let quad = h.state().quad;
+        let centre = quad[0].midpoint(quad[2]);
+        let out = (quad[corner] - centre).normalize() * 14.0;
+        let start = h.screen(quad[corner] + out);
+        frame(&mut h, vec![pointer::moved(start)]);
+        frame(&mut h, vec![pointer::press(start)]);
+        {
+            let mut config = h.config.borrow_mut();
+            config.zone = RotateZone::Outside;
+            config.inside_moves = true;
+            config.reference_point = true;
+        }
+        let turn = by(-(start.y - h.screen(centre).y), start.x - h.screen(centre).x).normalized() * 30.0;
+        frame(&mut h, vec![pointer::moved(start + turn * 0.5)]);
+        frame(&mut h, vec![pointer::moved(start + turn)]);
+        frame(&mut h, vec![pointer::release(start + turn)]);
+        frame(&mut h, Vec::new());
+        let turned = h.state().quad;
+        assert!((turned[1].y - turned[0].y).abs() > 1.0, "corner {corner}: the box turns after the hand-off: {turned:?}");
+        assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit), "corner {corner}");
+    }
+}
+
+/// A border zone rotates only near the box's sides; further out the press is the box's and does nothing.
+#[trial]
+fn a_border_zone_rotates_only_within_its_reach_of_the_sides() {
+    let press_and_turn = |h: &mut Harness, start: Pos2| {
+        let centre = h.screen(RECT.center());
+        let turn = by(-(start.y - centre.y), start.x - centre.x).normalized() * 30.0;
+        frame(h, vec![pointer::moved(start)]);
+        frame(h, vec![pointer::press(start)]);
+        frame(h, vec![pointer::moved(start + turn * 0.5)]);
+        frame(h, vec![pointer::moved(start + turn)]);
+        frame(h, vec![pointer::release(start + turn)]);
+        frame(h, Vec::new());
+    };
+    let side = |h: &Harness| h.screen(Point::new(RECT.x1, RECT.center().y));
+
+    let mut near = harness(BoxState::from_rect(RECT), |config| config.zone = RotateZone::border(28.0));
+    let start = side(&near) + by(14.0, 0.0);
+    press_and_turn(&mut near, start);
+    let turned = near.state().quad;
+    assert!((turned[1].y - turned[0].y).abs() > 1.0, "a press within the reach turns the box: {turned:?}");
+    assert_eq!(near.host.borrow().events.last(), Some(&Seen::Commit));
+
+    let mut far = harness(BoxState::from_rect(RECT), |config| config.zone = RotateZone::border(28.0));
+    let start = side(&far) + by(60.0, 0.0);
+    press_and_turn(&mut far, start);
+    assert!(far.host.borrow().events.is_empty(), "a press past the reach turns nothing: {:?}", far.host.borrow().events);
+    assert_eq!(far.state(), BoxState::from_rect(RECT));
+    frame(&mut far, vec![pointer::press(start)]);
+    frame(&mut far, vec![pointer::release(start)]);
+    frame(&mut far, Vec::new());
+    assert_eq!(far.host.borrow().applied, 0, "a click past the reach applies nothing");
 }
 
 /// A level line's ends stand for the side handles they point to.

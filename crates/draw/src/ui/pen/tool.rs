@@ -444,7 +444,8 @@ impl PenTool {
     // ---- presses ----
 
     /// The press at `pos` with the Pen: Auto Add/Delete, the draft's own parts, a resumed path or a new anchor.
-    fn press_pen(&mut self, pos: Pos2, mods: Mods, view: &CanvasView, reach: f32) -> ToolAction {
+    /// A press at screen point `pos`; `at` is its document point as the canvas snaps it, where a new anchor goes.
+    fn press_pen(&mut self, pos: Pos2, at: Point, mods: Mods, view: &CanvasView, reach: f32) -> ToolAction {
         let mut draft = self.shown.clone();
         // Auto Add/Delete takes the press whole: one Update, no drag, nothing added.
         if let Some(edit) = self.auto_edit(&draft, pos, mods, view, reach) {
@@ -482,7 +483,7 @@ impl PenTool {
         let at = if kind == Kind::Close { 0 } else { n.saturating_sub(1) };
         let in_ctrl = match kind {
             Kind::Pull => {
-                let mut p = view.to_doc(pos);
+                let mut p = at;
                 if mods.shift && n > 0 {
                     p = turn_to_45(draft.knots[n - 1].anchor, p);
                 }
@@ -502,16 +503,16 @@ impl PenTool {
         ToolAction::Claimed
     }
 
-    /// One sample of a press the tool owns: past the click slop the held part follows the pointer. With `space`
+    /// One sample of a press the tool owns at screen point `pos`, `to` its document point as the canvas snaps it: past
+    /// the click slop the held part follows `to`. With `space`
     /// held past the slop the pulled anchor and its handles move by the pointer's travel since the last sample
     /// instead, so a sample that repeats a position (a second pass of a frame) moves nothing.
-    fn track(&mut self, pos: Pos2, mods: Mods, view: &CanvasView, slop: f32, space: bool) {
+    fn track(&mut self, pos: Pos2, to: Point, mods: Mods, view: &CanvasView, slop: f32, space: bool) {
         let Some(mut drag) = self.drag.take() else { return };
         let was_moved = drag.moved;
         drag.moved |= pos.distance(drag.origin) > slop;
         if drag.moved {
             let mut draft = self.shown.clone();
-            let to = view.to_doc(pos);
             match drag.kind {
                 Kind::Move(index) => {
                     if let Some(k) = draft.knots.get_mut(index) {
@@ -527,7 +528,7 @@ impl PenTool {
                     let at = if kind == Kind::Close { 0 } else { draft.knots.len().saturating_sub(1) };
                     if let Some(k) = draft.knots.get_mut(at) {
                         if space && was_moved {
-                            let by = to - view.to_doc(drag.last);
+                            let by = view.to_doc(pos) - view.to_doc(drag.last);
                             k.anchor += by;
                             k.in_ctrl += by;
                             k.out_ctrl += by;
@@ -599,21 +600,25 @@ impl CanvasTool for PenTool {
             return ToolAction::Ignored;
         }
         let reach = reach(cx);
+        // A new anchor goes where the canvas snaps the pointer (View > Snap To and the pixel grid).
+        let at = cx.snap(space.view.to_doc(pointer.pos));
         match self.mode {
-            PenMode::Pen => self.press_pen(pointer.pos, pointer.mods, &space.view, reach),
-            PenMode::Curvature => self.press_curve(pointer, &space.view, reach),
+            PenMode::Pen => self.press_pen(pointer.pos, at, pointer.mods, &space.view, reach),
+            PenMode::Curvature => self.press_curve(pointer, at, &space.view, reach),
         }
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         if let Some(space) = cx.space() {
-            self.track(pointer.pos, pointer.mods, &space.view, cx.slop, cx.held(Key::Space));
+            let to = cx.snap(space.view.to_doc(pointer.pos));
+            self.track(pointer.pos, to, pointer.mods, &space.view, cx.slop, cx.held(Key::Space));
         }
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         if let Some(space) = cx.space() {
-            self.track(pointer.pos, pointer.mods, &space.view, cx.slop, cx.held(Key::Space));
+            let to = cx.snap(space.view.to_doc(pointer.pos));
+            self.track(pointer.pos, to, pointer.mods, &space.view, cx.slop, cx.held(Key::Space));
         }
         let Some(drag) = self.drag.take() else { return };
         if drag.kind == Kind::Close {

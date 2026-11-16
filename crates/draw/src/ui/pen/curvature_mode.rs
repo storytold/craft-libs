@@ -5,7 +5,7 @@ use super::PenTool;
 use super::bezier::{EditSubpath, Knot};
 use super::tool::{Drag, Kind, PenEnd, PenEvent, PenStyle, paint_anchors, paint_close_cue, paint_path};
 use craft_behavior::CanvasView;
-use craft_behavior::kurbo::BezPath;
+use craft_behavior::kurbo::{BezPath, Point};
 use craft_ui::canvas::{ToolAction, ToolContext, ToolPointer};
 use craft_ui::primitives::{Dashes, Draw, StrokeWidth};
 use egui::Pos2;
@@ -25,7 +25,7 @@ impl PenTool {
     ///   [`kept`](PenTool::kept) knots' handles;
     /// - the second click of a double click on an anchor toggles it between smooth and corner and reflows; on empty
     ///   canvas the first click's anchor is under it, so a double click places a corner point.
-    pub(super) fn press_curve(&mut self, pointer: &ToolPointer, view: &CanvasView, reach: f32) -> ToolAction {
+    pub(super) fn press_curve(&mut self, pointer: &ToolPointer, at: Point, view: &CanvasView, reach: f32) -> ToolAction {
         let mut draft = self.shown.clone();
         let n = draft.knots.len();
         let under = draft
@@ -69,7 +69,7 @@ impl PenTool {
                 i
             }
             None => {
-                draft.knots.push(Knot { smooth: true, ..Knot::corner(view.to_doc(pointer.pos)) });
+                draft.knots.push(Knot { smooth: true, ..Knot::corner(at) });
                 n
             }
         };

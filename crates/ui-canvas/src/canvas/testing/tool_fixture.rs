@@ -84,7 +84,9 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
         let enabled = Rc::new(Cell::new(true));
         let (shown, seen, id, on) = (Rc::clone(&tool), Rc::clone(&gestures), Rc::clone(&canvas), Rc::clone(&enabled));
         let mut fixture = Fixture::new(move |ui| {
-            let mut shown_canvas = Canvas::new(label).id(canvas_id(label)).document(DOCUMENT);
+            // The tool's claims for the pass, asked before the canvas shows, as an app does.
+            let regions = shown.borrow().regions();
+            let mut shown_canvas = Canvas::new(label).id(canvas_id(label)).document(DOCUMENT).tool_regions(regions);
             if let Some(view) = &view {
                 shown_canvas = shown_canvas.view(view(ui.available_rect_before_wrap()));
             }

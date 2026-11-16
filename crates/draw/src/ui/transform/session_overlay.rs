@@ -17,8 +17,8 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{AsIdSalt, Id, IdSalt, Rect, Ui};
 
 use super::{
-    ApplyBy, TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformReach, TransformSession, TransformSettings,
-    TransformWarp,
+    ApplyBy, RotateZone, TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformReach, TransformSession,
+    TransformSettings, TransformWarp,
 };
 
 /// What the overlay reported this pass.
@@ -64,10 +64,10 @@ pub struct TransformOverlay<'a, W> {
     session: &'a TransformSession<W>,
     settings: &'a TransformSettings,
     rules: Option<BoxRules>,
-    pixel_grid: bool,
     mods: Option<Mods>,
     menu_rows: &'a [Entry<String>],
     reach: TransformReach,
+    rotate_zone: RotateZone,
     id: IdSource,
 }
 
@@ -79,10 +79,10 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             session,
             settings,
             rules: None,
-            pixel_grid: false,
             mods: None,
             menu_rows: &[],
             reach: TransformReach::Box,
+            rotate_zone: RotateZone::Outside,
             id: IdSource::Auto,
         }
     }
@@ -119,19 +119,19 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         self
     }
 
+    /// Where a press outside the box rotates it: anywhere outside (the default, Free Transform), or only near its
+    /// sides ([`RotateZone::Border`]).
+    #[must_use]
+    pub fn rotate_zone(mut self, zone: RotateZone) -> Self {
+        self.rotate_zone = zone;
+        self
+    }
+
     /// The app's own box rules in place of [`TransformSession::box_rules`]: a 45° rotate step, a Move tool's rules.
     /// The session's mode and what it allows still win.
     #[must_use]
     pub fn rules(mut self, rules: BoxRules) -> Self {
         self.rules = Some(rules);
-        self
-    }
-
-    /// Rounds dragged boxes to whole document units (Snap Transforms to Pixel Grid; the app's rule for shape layers
-    /// and paths).
-    #[must_use]
-    pub fn pixel_grid(mut self, on: bool) -> Self {
-        self.pixel_grid = on;
         self
     }
 
@@ -157,8 +157,8 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         let mut tbox = TransformBox::new(self.label.clone(), Bind::given(*session.state()), session.rect(), session.skew_v())
             .rules(rules)
             .reference_point(session.reference_point())
-            .pixel_grid(self.pixel_grid)
             .reach(self.reach)
+            .rotate_zone(self.rotate_zone)
             .id_source(self.id);
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);
