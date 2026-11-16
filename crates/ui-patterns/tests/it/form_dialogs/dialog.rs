@@ -5,10 +5,11 @@
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Outcome as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::testing::relations::{above, left_of};
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Key, Modifiers, TextureId, Vec2, vec2};
@@ -72,6 +73,38 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
     assert_eq!(seen.get(), (true, true), "held: the preview stays on and the pane compares");
     fixture.release(&preview).settle();
     assert_eq!(seen.get(), (false, false), "the release turns the preview off");
+}
+
+/// The rects of the radius slider, its number field, the Preview box and OK in a previewing blur dialog laid out as
+/// `layout`.
+fn laid_out(layout: ParamLayout) -> [egui::Rect; 4] {
+    let mut fixture = Fixture::new(move |ui| {
+        let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
+        ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(picture).layout(layout).show(ui);
+    });
+    fixture.settle();
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the radius row has a slider");
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the radius row has a number field");
+    let preview = fixture
+        .by_role(Role::CHECK_BOX)
+        .into_iter()
+        .find(|target| fixture.tree().name_of(target.node) == Some("Preview"))
+        .expect("the footer has the Preview box");
+    let ok = fixture.by_label("OK").expect("the footer has OK");
+    [slider.rect, field.rect, preview.rect, ok.rect]
+}
+
+// Stacked puts each slider under its number field and the buttons across the foot, the Preview box before them;
+// Below stands the buttons beside the body.
+#[trial]
+fn the_stacked_layout_stacks_sliders_and_puts_the_buttons_across_the_foot() {
+    let [slider, field, preview, ok] = laid_out(ParamLayout::Stacked);
+    assert!(above(field, slider), "the number field stands over the slider");
+    assert!(above(slider, ok) && above(slider, preview), "the footer is under the rows");
+    assert!(left_of(preview, ok), "the Preview box comes before OK on the footer line");
+    let [slider, _, preview, ok] = laid_out(ParamLayout::Below);
+    assert!(left_of(slider, ok), "the buttons stand beside the body");
+    assert!(above(ok, preview), "the Preview box is under the buttons");
 }
 
 /// The notes and whether the dialog answered OK after typing "a", Enter, "b" in a Notes row of `lines` lines.
