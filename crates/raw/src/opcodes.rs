@@ -212,12 +212,16 @@ pub fn wr2_factor(k: &[f64; WR2_LEN], reciprocal: bool, r: f64) -> Option<f64> {
     f.is_finite().then_some(f)
 }
 
-/// The three opcode lists of a DNG raw IFD.
+/// The three opcode lists of a DNG raw IFD, and a lateral CA map a vendor decoder found.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpcodeLists {
     pub list1: Vec<Opcode>,
     pub list2: Vec<Opcode>,
     pub list3: Vec<Opcode>,
+    /// Lateral chromatic aberration to correct on the mosaic before demosaic (after list 2; see
+    /// [`crate::lateral_ca`]). Not a DNG list: never written to a DNG, and a DNG never fills it.
+    #[serde(default)]
+    pub lateral_ca: Option<crate::LateralCa>,
 }
 
 struct Rd<'a> {

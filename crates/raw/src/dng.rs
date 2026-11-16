@@ -475,8 +475,12 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
 /// table unapplied (`linearized` is false) and available on the image.
 fn linearization_and_opcodes(pixels: &Ifd, raw: &Ifd, data: &mut RawData) -> (bool, Option<Vec<u16>>, crate::OpcodeLists) {
     let opcode_list = |tag| raw.bytes(tag).map(opcodes::parse_list).unwrap_or_default();
-    let opcodes =
-        crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
+    let opcodes = crate::OpcodeLists {
+        list1: opcode_list(t::OPCODE_LIST_1),
+        list2: opcode_list(t::OPCODE_LIST_2),
+        list3: opcode_list(t::OPCODE_LIST_3),
+        lateral_ca: None,
+    };
     let linearization_table = if matches!(data, RawData::U16(_)) {
         pixels.u64s(t::LINEARIZATION_TABLE).filter(|t| !t.is_empty()).map(|table| table.iter().map(|&x| x.min(65535) as u16).collect::<Vec<u16>>())
     } else {
