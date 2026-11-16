@@ -6,6 +6,17 @@ use crate::units::tw_i16;
 use craft_wordmodel::props::PropChange;
 use std::sync::Arc;
 
+fn numbering_level_index(value: Option<&str>) -> Option<usize> {
+    match value {
+        None => Some(0),
+        Some(value) => int(value).filter(|level| (0..=8).contains(level)).map(|level| level as usize),
+    }
+}
+
+fn style_is_default(style: &El) -> bool {
+    style.attr("w:default").is_some_and(|value| !matches!(value.trim(), "0" | "false" | "off" | "False" | "FALSE"))
+}
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -53,6 +64,20 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
 }
 
 impl Reader<'_> {
+    /// Whether a style's kept (last) definition is a default table style.
+    fn has_default_table_style(&self, root: &El) -> bool {
+        let mut defaults: Vec<String> = Vec::new();
+        for s in root.children("w:style").take(10_000) {
+            let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) else { continue };
+            let id = self.pc.style_id(raw_id);
+            defaults.retain(|d| *d != id);
+            if s.attr("w:type") == Some("table") && style_is_default(s) {
+                defaults.push(id);
+            }
+        }
+        !defaults.is_empty()
+    }
+
     pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;
@@ -61,9 +86,7 @@ impl Reader<'_> {
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
-            && let Some(def) = root
-                .children("w:style")
-                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
+            && let Some(def) = root.children("w:style").find(|s| s.attr("w:type") == Some("paragraph") && style_is_default(s))
             && let Some(id) = def.attr("w:styleId")
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
@@ -87,6 +110,7 @@ impl Reader<'_> {
             }
         }
         let mut sheet = StyleSheet::empty();
+        let mut normal_is_default = None;
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
         if let Some(dd) = root.child("w:docDefaults") {
             if let Some(r) = dd.child("w:rPrDefault").and_then(|d| d.child("w:rPr")) {
@@ -114,6 +138,13 @@ impl Reader<'_> {
                 "numbering" => StyleKind::Numbering,
                 _ => StyleKind::Paragraph,
             };
+            if kind == StyleKind::Paragraph && id == "Normal" {
+                // Word treats the built-in Normal style as the paragraph default when the file
+                // doesn't nominate another style. Keep that fact for an explicitly declared
+                // Normal; the gallery later synthesizes a visually identical Normal when the
+                // file did not declare one, and that synthetic style is not source provenance.
+                normal_is_default = Some(s.attr("w:default").is_none());
+            }
             let name = s.child_val("w:name").map(ui_style_name).unwrap_or_else(|| id.clone());
             let r = |n: &str| s.child_val(n).filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v));
             let mut st = Style {
@@ -129,7 +160,7 @@ impl Reader<'_> {
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
-                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
+                default: style_is_default(s)
                     && !matches!(
                         (kind, id.as_str()),
                         (StyleKind::Paragraph, "Normal")
@@ -192,6 +223,7 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
+        self.no_default_table_style = !self.has_default_table_style(&root);
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
         let fixed: Vec<Option<craft_wordmodel::props::NumRef>> = sheet
@@ -207,6 +239,12 @@ impl Reader<'_> {
             .collect();
         for (s, n) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
+        }
+        if !sheet.styles.iter().any(|style| style.kind == StyleKind::Paragraph && style.default)
+            && normal_is_default == Some(true)
+            && let Some(normal) = sheet.styles.iter_mut().find(|style| style.kind == StyleKind::Paragraph && style.id == "Normal")
+        {
+            normal.default = true;
         }
         let old_fixed: Vec<Option<Option<craft_wordmodel::props::NumRef>>> = sheet
             .styles
@@ -319,11 +357,11 @@ impl Reader<'_> {
         for a in root.children("w:abstractNum").take(10_000) {
             let Some(id) = a.attr("w:abstractNumId").and_then(u32_of) else { continue };
             let mut levels: Vec<Level> = (0..9).map(default_level).collect();
+            let mut explicit_levels = [false; 9];
             for l in a.children("w:lvl") {
-                let i = l.attr("w:ilvl").and_then(u32_of).unwrap_or(0) as usize;
-                if let Some(slot) = levels.get_mut(i) {
-                    *slot = self.level(l, i);
-                }
+                let Some(i) = numbering_level_index(l.attr("w:ilvl")) else { continue };
+                levels[i] = self.level(l, i);
+                explicit_levels[i] = true;
             }
             if let Some(link) = a.child_val("w:numStyleLink") {
                 links.push((id, link.to_string()));
@@ -333,6 +371,7 @@ impl Reader<'_> {
                 id,
                 name: a.child_val("w:name").map(str::to_string),
                 levels,
+                explicit_levels: Some(explicit_levels),
                 nsid: a.child_val("w:nsid").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 tmpl: a.child_val("w:tmpl").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 multi_level_type: a
@@ -347,7 +386,9 @@ impl Reader<'_> {
             let (Some(id), Some(abs)) = (n.attr("w:numId").and_then(u32_of), n.child_val("w:abstractNumId").and_then(u32_of)) else { continue };
             let (mut start_overrides, mut level_overrides) = (Vec::new(), Vec::new());
             for o in n.children("w:lvlOverride").take(9) {
-                let lvl = o.attr("w:ilvl").and_then(u32_of).unwrap_or(0).min(8) as u8;
+                let Some(raw_level) = o.attr("w:ilvl") else { continue };
+                let Some(lvl) = numbering_level_index(Some(raw_level)) else { continue };
+                let lvl = lvl as u8;
                 if let Some(s) = o.child_val("w:startOverride").and_then(u32_of) {
                     start_overrides.push((lvl, s));
                 } else if let Some(s) = o.child("w:lvl").and_then(|l| l.child_val("w:start")).and_then(u32_of) {
@@ -364,9 +405,13 @@ impl Reader<'_> {
         for (aid, style) in links {
             let num = self.doc.styles.get(&self.pc.style_id(&style)).and_then(|s| s.para.numbering).map(|n| n.num);
             let src = num.and_then(|n| nums.iter().find(|x: &&Num| x.id == n)).map(|x| x.abstract_id);
-            let levels = src.filter(|s| *s != aid).and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s)).map(|a| a.levels.clone());
-            if let (Some(levels), Some(a)) = (levels, abstracts.iter_mut().find(|a| a.id == aid)) {
+            let source = src
+                .filter(|s| *s != aid)
+                .and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s))
+                .map(|a| (a.levels.clone(), a.explicit_levels));
+            if let (Some((levels, explicit_levels)), Some(a)) = (source, abstracts.iter_mut().find(|a| a.id == aid)) {
                 a.levels = levels;
+                a.explicit_levels = explicit_levels;
             }
         }
         Arc::make_mut(&mut self.doc.numbering).abstracts = abstracts;

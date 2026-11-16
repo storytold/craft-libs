@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::props::{
-    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+    Align, Border, Borders, CharProps, Highlight, Kashida, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
 };
 use crate::styles::{StyleKind, StyleSheet};
 
@@ -66,6 +66,11 @@ pub struct ResolvedChar {
     pub rtl: bool,
     /// The whole run uses the complex-script properties (`w:cs`).
     pub cs: bool,
+    /// The run says it is not complex script (`w:cs w:val="0"`): its Thai, Indic, Arabic or
+    /// Hebrew characters take its other font, size, bold and italic, as Word draws them in a run
+    /// that isn't complex script or right to left.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cs_off: bool,
     /// Complex-script font, size, bold and italic (Arabic, Persian, Hebrew… text).
     pub font_cs: String,
     /// East Asian font (Chinese, Japanese and Korean text), when one is set.
@@ -115,6 +120,7 @@ impl ResolvedChar {
             lang: c.lang.clone(),
             rtl: c.rtl.unwrap_or(false),
             cs: c.cs.unwrap_or(false),
+            cs_off: c.cs == Some(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
             size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
@@ -133,9 +139,11 @@ impl ResolvedChar {
     pub fn kerned(&self) -> bool {
         self.kern > 0.0 && self.size >= self.kern
     }
-    /// Does a character of this run use the complex-script properties?
+    /// Does a character of this run use the complex-script properties? Every character of a
+    /// right-to-left or complex-script run does; otherwise a complex-script character does,
+    /// unless the run says it is not complex script.
     pub fn uses_complex(&self, c: char) -> bool {
-        self.rtl || self.cs || crate::bidi::is_complex_script(c)
+        self.rtl || self.cs || (!self.cs_off && crate::bidi::is_complex_script(c))
     }
     /// The size glyphs are drawn and measured at. Word sets superscript and subscript text at
     /// 0.65 of the run's size rounded to the half point, a font size the format can store
@@ -165,6 +173,9 @@ fn default_adjust_right_indent() -> bool {
 pub struct ResolvedPara {
     pub style: String,
     pub align: Align,
+    /// Kashida length when `align` is Justify; ignored for other alignments.
+    #[serde(default)]
+    pub kashida: Kashida,
     pub indent_left: f32,
     pub indent_right: f32,
     pub indent_first: f32,
@@ -260,6 +271,7 @@ impl ResolvedPara {
         ResolvedPara {
             style: style.to_string(),
             align: p.align.unwrap_or_default(),
+            kashida: p.kashida.unwrap_or_default(),
             indent_left: clampi(p.indent_left),
             indent_right: clampi(p.indent_right),
             indent_first: clampi(p.indent_first),
@@ -625,5 +637,34 @@ mod tests {
         let back: ResolvedPara = serde_json::from_value(v).unwrap();
         assert_eq!(back.padding, [0.0; 4]);
         assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
+    }
+
+    /// A style's kashida length is inherited, and a direct `both` / `justify` cancels it.
+    #[test]
+    fn kashida_length_follows_the_style_chain_and_direct_formatting() {
+        use crate::styles::{Style, StyleKind};
+        let mut styles = StyleSheet::builtin();
+        styles.upsert(Style {
+            id: "Body".into(),
+            name: "Body".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Normal".into()),
+            para: ParaProps { align: Some(Align::Justify), kashida: Some(Kashida::Short), ..Default::default() },
+            ..Default::default()
+        });
+        let inherited = styles.resolve_para(&ParaProps { style: Some("Body".into()), ..Default::default() });
+        assert_eq!(inherited.align, Align::Justify);
+        assert_eq!(inherited.kashida, Kashida::Short);
+
+        let cleared = styles.resolve_para(&ParaProps {
+            style: Some("Body".into()),
+            align: Some(Align::Justify),
+            kashida: Some(Kashida::None),
+            ..Default::default()
+        });
+        assert_eq!(cleared.kashida, Kashida::None);
+
+        let longer = styles.resolve_para(&ParaProps { style: Some("Body".into()), kashida: Some(Kashida::Long), ..Default::default() });
+        assert_eq!(longer.kashida, Kashida::Long);
     }
 }

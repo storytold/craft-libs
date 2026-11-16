@@ -29,6 +29,32 @@ fn reads_stored_and_deflated_entries() {
 }
 
 #[test]
+fn xfl_package_root_prefers_root_then_selects_one_top_level_folder() {
+    let root = zip(&[("DOMDocument.xml", b"<DOMDocument/>", true), ("Walk/DOMDocument.xml", b"<DOMDocument/>", true)]);
+    let archive = Archive::open(&root).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Document);
+
+    let folder = zip(&[("Walk/DOMDocument.xml", b"<DOMDocument/>", true), ("Walk/LIBRARY/Clip.xml", b"<DOMSymbolItem/>", true)]);
+    let archive = Archive::open(&folder).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Folder("Walk"));
+}
+
+#[test]
+fn xfl_package_root_reports_sorted_candidates_and_ignores_metadata_and_nested_paths() {
+    let multiple = zip(&[
+        ("Zebra/DOMDocument.xml", b"<DOMDocument/>", true),
+        ("Apple/DOMDocument.xml", b"<DOMDocument/>", true),
+        ("__MACOSX/DOMDocument.xml", b"not a project", true),
+    ]);
+    let archive = Archive::open(&multiple).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Multiple(vec!["Apple", "Zebra"]));
+
+    let nested = zip(&[("One/Two/DOMDocument.xml", b"<DOMDocument/>", true), ("__MACOSX/One/DOMDocument.xml", b"metadata", true)]);
+    let archive = Archive::open(&nested).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Missing);
+}
+
+#[test]
 fn the_checksum_matches_the_published_check_value() {
     assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     assert_eq!(crc32(b""), 0);

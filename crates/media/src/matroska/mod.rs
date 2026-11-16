@@ -22,6 +22,7 @@ mod mux;
 #[cfg(test)]
 mod synthetic_tests;
 mod track;
+mod vp9_features;
 
 pub use crate::source::{ByteSource, ReadSeekSource};
 pub use codec::Codec;
@@ -32,6 +33,7 @@ pub use meta::{
 };
 pub use mux::{LacingMode, MkvWriter, MuxOptions, TrackSpec};
 pub use track::{AudioInfo, Color, ContentEncoding, MasteringMetadata, Projection, Sample, Track, TrackKind, VideoInfo};
+pub use vp9_features::{Vp9Features, vp9_features};
 
 /// Element IDs used by the demuxer (marker bits included), for callers inspecting raw elements.
 pub mod element_ids {

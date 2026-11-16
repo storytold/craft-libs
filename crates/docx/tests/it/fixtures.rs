@@ -2309,6 +2309,50 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.revisions, d.revisions);
 }
 
+#[test]
+fn numbering_change_without_active_list_roundtrips() {
+    let body = r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:date="2026-10-01T00:00:00Z" w:original="%1:1:0:."/></w:numPr></w:pPr><w:r><w:t>Removed</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert!(p[0].props.numbering.is_none());
+    let nc = p[0].props.num_change.as_deref().expect("numberingChange read back");
+    assert_eq!(nc.original, "%1:1:0:.");
+
+    let bytes = craft_docx::write(&d).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:numPr><w:numberingChange w:id="#), "{xml}");
+    assert!(xml.contains(r#"w:original="%1:1:0:."/></w:numPr>"#), "{xml}");
+
+    let again = craft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert!(ap[0].props.numbering.is_none());
+    let anc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(anc.original, "%1:1:0:.");
+}
+
+#[test]
+fn numbering_change_original_preserves_long_values_within_bound() {
+    let long_orig = "%1:1:0:.".repeat(64); // 512 chars, well past the old 256-char cap
+    assert!(long_orig.len() > 256 && long_orig.len() < 4096);
+    let over_cap = "x".repeat(5000);
+    let body = format!(
+        r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:original="{long_orig}"/></w:numPr></w:pPr><w:r><w:t>Long</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:numberingChange w:id="2" w:author="Alice" w:original="{over_cap}"/></w:numPr></w:pPr><w:r><w:t>Bounded</w:t></w:r></w:p>"#
+    );
+    let d = read_body(&body);
+    let p = paras(&d);
+    assert_eq!(p[0].props.num_change.as_deref().map(|n| n.original.as_str()), Some(long_orig.as_str()));
+    assert_eq!(p[1].props.num_change.as_deref().map(|n| n.original.chars().count()), Some(4096));
+
+    let bytes = craft_docx::write(&d).unwrap();
+    let again = craft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert_eq!(ap[0].props.num_change.as_deref().map(|n| n.original.as_str()), Some(long_orig.as_str()));
+}
+
 /// A package with `styles`, a theme (accent1 4472C4, accent2 ED7D31, major font "Major Face") and,
 /// when given, `settings`.
 fn themed_docx(body: &str, styles: &str, settings: Option<&str>) -> Document {
@@ -2795,6 +2839,39 @@ fn rounded_rectangle_corners_are_read_and_saved() {
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     assert!(xml.contains(r#"<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 3565"/></a:avLst></a:prstGeom>"#), "{xml}");
     assert_eq!(corners(&craft_docx::read(&bytes).unwrap()), expected);
+}
+
+/// A `frame` preset (a letterhead's page border) is a frame, not a filled rectangle: its border
+/// width is its `adj1`, read, capped and written back as the same preset.
+#[test]
+fn frame_presets_keep_their_hole_and_border_width() {
+    let geom =
+        |av: &str| format!(r#"<a:prstGeom prst="frame"><a:avLst>{av}</a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="E3AB48"/></a:solidFill>"#);
+    let gd = |fmla: &str| format!(r#"<a:gd name="adj1" fmla="{fmla}"/>"#);
+    let body = [geom(&gd("val 2604")), geom(""), geom(&gd("val 90000")), geom(r#"<a:gd name="adj" fmla="val 100"/>"#)]
+        .iter()
+        .map(|sppr| anchored_wsp("Frame", 2540000, 1270000, sppr, "", "<wps:cNvSpPr/>"))
+        .collect::<String>();
+    let frames = |d: &Document| -> Vec<(ShapeKind, Option<u32>)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Shape { kind, extra, .. } => Some((*kind, extra.corner)),
+                _ => None,
+            })
+            .collect()
+    };
+    let f = ShapeKind::Frame;
+    let expected = vec![(f, Some(2604)), (f, None), (f, Some(50_000)), (f, None)];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(frames(&d), expected);
+    let bytes = craft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:prstGeom prst="frame"><a:avLst><a:gd name="adj1" fmla="val 2604"/></a:avLst></a:prstGeom>"#), "{xml}");
+    assert_eq!(frames(&craft_docx::read(&bytes).unwrap()), expected);
 }
 
 /// #611: legacy VML lines and rectangles (documents without DrawingML).
