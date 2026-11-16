@@ -13,7 +13,7 @@ pub type Migration = fn(Value) -> Result<Value, String>;
 /// edit a shipped one.
 pub const MIGRATIONS: &[Migration] = &[
     v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9, v9_to_v10, v10_to_v11, v11_to_v12, v12_to_v13, v13_to_v14,
-    v14_to_v15, v15_to_v16, v16_to_v17,
+    v14_to_v15, v15_to_v16, v16_to_v17, v17_to_v18,
 ];
 
 /// The schema version this build writes (and the newest it reads).
@@ -252,6 +252,14 @@ fn v16_to_v17(doc: Value) -> Result<Value, String> {
     Ok(doc)
 }
 
+/// v17 → v18: camera raw Source Settings on media items (`Interpretation::raw`: white balance,
+/// exposure, highlights, demosaic quality and output colour space of DNG / CinemaDNG footage;
+/// absent = as the file says). Existing data needs no change; older builds must refuse such
+/// projects instead of silently dropping the settings when saving.
+fn v17_to_v18(doc: Value) -> Result<Value, String> {
+    Ok(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,10 +270,10 @@ mod tests {
         let bare = json!({"version": 2, "items": {}, "root": {}, "extra": [1, 2]});
         assert_eq!(detect_version(&bare).unwrap(), 1);
         let migrated = migrate_with(MIGRATIONS, bare, 1).unwrap();
-        assert_eq!(migrated["schema_version"], 17);
+        assert_eq!(migrated["schema_version"], 18);
         assert_eq!(migrated["project"]["extra"], json!([1, 2]));
         assert_eq!(migrated["generator"], "FilmCraft (schema v1)");
-        assert_eq!(detect_bytes(serde_json::to_string(&migrated).unwrap().as_bytes()).unwrap(), 17);
+        assert_eq!(detect_bytes(serde_json::to_string(&migrated).unwrap().as_bytes()).unwrap(), 18);
         let parsed: EnvelopeIn<Value> = serde_json::from_value(migrated).unwrap();
         assert!(parsed.view.is_none());
         assert_eq!(parsed.project["extra"], json!([1, 2]));
@@ -286,10 +294,27 @@ mod tests {
         assert_eq!(version, 1);
         assert_eq!(file.project["name"], "Cut");
     }
+    /// Schema 18 (camera raw Source Settings): a v17 project upgrades with its data untouched, and a
+    /// v18 project with `interpret.raw` settings is read rather than refused as too new.
+    #[test]
+    fn v17_upgrades_and_v18_raw_settings_are_read() {
+        let item = json!({"Media": {"interpret": {"par": [1, 1]}}});
+        let v17 = json!({"format": FORMAT_ID, "schema_version": 17, "project": {"items": {"1": {"kind": item}}, "root": {}}});
+        let up = migrate_with(MIGRATIONS, v17.clone(), 17).unwrap();
+        assert_eq!(up["schema_version"], 18);
+        assert_eq!(up["project"], v17["project"]);
+        let raw = json!({"white_balance": {"Custom": {"temperature": 3200.0, "tint": 12.5}}, "exposure": -0.75});
+        let mut v18 = up;
+        v18["project"]["items"]["1"]["kind"]["Media"]["interpret"]["raw"] = raw.clone();
+        let bytes = serde_json::to_vec(&v18).unwrap();
+        let (file, version): (EnvelopeIn<Value>, _) = decode(&bytes).unwrap();
+        assert_eq!(version, 18);
+        assert_eq!(file.project["items"]["1"]["kind"]["Media"]["interpret"]["raw"], raw);
+    }
     #[test]
     fn rejects_wrong_future_and_damaged_envelopes() {
         assert!(matches!(detect_bytes(br#"{"format":"other","schema_version":1}"#), Err(FormatError::NotAProject(_))));
-        assert!(matches!(detect_bytes(br#"{"schema_version":18}"#), Err(FormatError::TooNew { found: 18, supported: 17 })));
+        assert!(matches!(detect_bytes(br#"{"schema_version":19}"#), Err(FormatError::TooNew { found: 19, supported: 18 })));
         assert!(matches!(detect_bytes(br#"{"schema_version":0}"#), Err(FormatError::TooOld { found: 0, oldest: 1 })));
         assert!(matches!(detect_bytes(b"{"), Err(FormatError::Corrupt(_))));
         assert!(matches!(migrate_with(MIGRATIONS, json!([]), 1), Err(FormatError::Migration { from: 1, .. })));
