@@ -1,6 +1,7 @@
 pub(crate) mod avif;
 #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
 pub(crate) mod avif_decode;
+pub(crate) mod bmp;
 pub(crate) mod dds;
 pub(crate) mod dds_bc;
 pub(crate) mod deep_exr;
@@ -22,6 +23,8 @@ pub(crate) mod png;
 pub(crate) mod pnm;
 #[cfg(feature = "sgi")]
 pub(crate) mod sgi;
+#[cfg(feature = "sunraster")]
+pub(crate) mod sunraster;
 pub(crate) mod tga;
 pub(crate) mod tiff;
 pub(crate) mod tiff_exif;

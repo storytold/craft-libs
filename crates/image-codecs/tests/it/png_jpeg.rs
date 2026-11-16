@@ -759,3 +759,38 @@ fn bounded_png_stream_preserves_late_exif_across_metadata_yields() {
     assert_eq!(extras.orientation, 6);
     assert_eq!(extras.meta.text.len(), 150);
 }
+
+/// zune-jpeg 0.5 asserts on some subsampled CMYK frames whose first component isn't the largest
+/// (jpeg-encoder writes C, M and Y at 1×1 and K larger); craft-jpeg reads those instead, and they
+/// decode to the inks they were written with. The others of these files read as before.
+#[test]
+fn cmyk_frames_zune_jpeg_panics_on_decode() {
+    use jpeg_encoder::{ColorType, Encoder, SamplingFactor as S};
+    let mut seen = 0;
+    for (s, progressive) in
+        [(S::F_2_2, true), (S::R_4_2_0, true), (S::F_4_1, false), (S::F_4_2, false), (S::F_2_4, false), (S::R_4_1_1, false), (S::R_4_1_0, false)]
+    {
+        for (w, h) in [(1u16, 1u16), (9, 1), (1, 9), (17, 13), (40, 40)] {
+            let inks: Vec<u8> = (0..usize::from(w) * usize::from(h)).flat_map(|_| [30u8, 90, 150, 210]).collect();
+            let mut out = Vec::new();
+            let mut e = Encoder::new(&mut out, 100);
+            e.set_sampling_factor(s);
+            e.set_progressive(progressive);
+            e.encode(&inks, w, h, ColorType::Cmyk).unwrap();
+            let zune = std::panic::catch_unwind(|| {
+                let mut d = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&out[..]));
+                d.decode().is_ok()
+            });
+            if zune.is_ok() {
+                // Read or refused by zune-jpeg as before; no panic either way.
+                let _ = decode(&out);
+                continue;
+            }
+            seen += 1;
+            let img = decode(&out).unwrap_or_else(|e| panic!("{s:?} {w}x{h}: {e}"));
+            assert_eq!((img.dimensions(), img.layout()), ((u32::from(w), u32::from(h)), ChannelLayout::Cmyk));
+            assert!(img.data().iter().zip(&inks).all(|(a, b)| a.abs_diff(*b) <= 3), "{s:?} progressive {progressive} {w}x{h}");
+        }
+    }
+    assert!(seen >= 10, "zune-jpeg panicked on {seen} of them");
+}
