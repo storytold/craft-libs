@@ -120,6 +120,9 @@ pub(crate) struct Writer<'d> {
     /// Stored stacking orders written as other `relativeHeight`s (see [`stacking`]); empty: each
     /// as its own.
     zmap: BTreeMap<u32, u32>,
+    /// The `relativeHeight` the last `wp:anchor` was written with, which a shape's VML fallback
+    /// gives as its `z-index`.
+    anchor_z: u32,
     /// Note part id → file note id, in first-reference order.
     footnotes: Vec<u32>,
     endnotes: Vec<u32>,

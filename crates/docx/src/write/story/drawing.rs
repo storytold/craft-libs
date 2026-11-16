@@ -273,6 +273,7 @@ impl Writer<'_> {
                 self.z = self.z.saturating_add(1);
                 self.z
             };
+            self.anchor_z = z;
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",
