@@ -37,6 +37,14 @@ craft_ui::words! {
         pos_y: "info.posY" = "Y";
         w: "info.w" = "W";
         h: "info.h" = "H";
+        /// The Ruler tool's angle.
+        angle: "info.angle" = "A";
+        /// A plain ruler's length.
+        length: "info.length" = "L";
+        /// A protractor's first arm.
+        length1: "info.length1" = "L1";
+        /// A protractor's second arm.
+        length2: "info.length2" = "L2";
         /// The document size template.
         document: template "info.document" = "Doc: {width} x {height}";
         no_document: "info.noDocument" = "No document";
@@ -62,6 +70,40 @@ impl InfoColor {
     }
 }
 
+/// The Ruler tool's measure, its values as the app formats them in the ruler's unit.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum InfoMeasure {
+    /// A plain ruler: its angle and length.
+    Line {
+        /// The angle.
+        angle: Label,
+        /// The length.
+        length: Label,
+    },
+    /// A protractor: the angle between its arms and the arms' lengths.
+    Protractor {
+        /// The angle between the arms.
+        angle: Label,
+        /// The first arm's length.
+        first: Label,
+        /// The second arm's length.
+        second: Label,
+    },
+}
+
+impl InfoMeasure {
+    /// A plain ruler's measure.
+    pub fn line(angle: impl Into<Label>, length: impl Into<Label>) -> Self {
+        InfoMeasure::Line { angle: angle.into(), length: length.into() }
+    }
+
+    /// A protractor's measure.
+    pub fn protractor(angle: impl Into<Label>, first: impl Into<Label>, second: impl Into<Label>) -> Self {
+        InfoMeasure::Protractor { angle: angle.into(), first: first.into(), second: second.into() }
+    }
+}
+
 /// What the Info panel shows.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]
@@ -72,6 +114,8 @@ pub struct InfoReadings<'a> {
     pub position: Option<[Label; 2]>,
     /// The selection's extent.
     pub extent: Option<[Label; 2]>,
+    /// The Ruler tool's measure, while it has a ruler.
+    pub measure: Option<InfoMeasure>,
     /// The document's size; `None` is the no-document state.
     pub document: Option<[u32; 2]>,
     /// The colour samplers' readouts with their position labels.
@@ -105,6 +149,13 @@ impl<'a> InfoReadings<'a> {
         self
     }
 
+    /// Sets the Ruler tool's measure.
+    #[must_use]
+    pub fn measure(mut self, measure: Option<InfoMeasure>) -> Self {
+        self.measure = measure;
+        self
+    }
+
     /// Sets the document size.
     #[must_use]
     pub fn document(mut self, document: Option<[u32; 2]>) -> Self {
@@ -120,7 +171,8 @@ impl<'a> InfoReadings<'a> {
     }
 }
 
-/// A read-only grid: RGB beside CMYK, X/Y beside W/H, the document size, then one row group per sampler; a dash for a
+/// A read-only grid: RGB beside CMYK, the Ruler tool's measure (the angle A beside the length L, or a protractor's arms
+/// L1 and L2 stacked beside it), X/Y beside W/H, the document size, then one row group per sampler; a dash for a
 /// missing value; `document: None` shows "No document" as a centred notice in place of the grid.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]
@@ -194,6 +246,16 @@ impl<'a> InfoPanel<'a> {
                 for (at, cmyk_name) in cmyk_names.iter().enumerate() {
                     let rgb = rgb_names.get(at).map(|rgb_name| (rgb_name.clone(), number(readings.color.map(|color| color.rgb[at]))));
                     lines.push([rgb, Some((cmyk_name.clone(), number(readings.color.map(|color| color.cmyk[at]))))]);
+                }
+                match &readings.measure {
+                    Some(InfoMeasure::Line { angle, length }) => {
+                        lines.push([Some((name(&words.angle), Some(angle.clone()))), Some((name(&words.length), Some(length.clone())))]);
+                    }
+                    Some(InfoMeasure::Protractor { angle, first, second }) => {
+                        lines.push([Some((name(&words.angle), Some(angle.clone()))), Some((name(&words.length1), Some(first.clone())))]);
+                        lines.push([None, Some((name(&words.length2), Some(second.clone())))]);
+                    }
+                    None => {}
                 }
                 let (position, extent) = (readings.position.as_ref(), readings.extent.as_ref());
                 let axes = [(name(&words.x), name(&words.w)), (name(&words.pos_y), name(&words.h))];

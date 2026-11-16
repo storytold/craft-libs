@@ -58,7 +58,7 @@ pub use harmony::{
 };
 pub use hex::{HexPair, HexPairField, PairCodec};
 pub use hud::{ColorHud, ColorHudOutput};
-pub use info::{InfoColor, InfoPanel, InfoReadings, InfoWords};
+pub use info::{InfoColor, InfoMeasure, InfoPanel, InfoReadings, InfoWords};
 pub use lut_picker::{LutChoice, LutPicker, LutPickerOutput, LutWords};
 pub use paint_chip::{
     FillKind, GradientPreview, ImagePreview, Paint, PaintChip, PaintChipOutput, PaintEditor, PaintLink, PaintLinkKind, PaintList, PaintListEvent,
