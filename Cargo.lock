@@ -2146,6 +2146,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
