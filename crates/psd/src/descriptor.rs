@@ -300,6 +300,15 @@ impl Descriptor {
         Ok(d)
     }
 
+    /// Parses a descriptor at the start of `data`, returning it and the number of bytes consumed
+    /// (trailing data is allowed). Mid-stream reads of layer effects, fill and adjustment
+    /// descriptors use this; [`from_bytes`] still requires the slice to be fully consumed.
+    pub fn parse_prefix(data: &[u8]) -> Result<(Self, usize)> {
+        let mut r = Reader::new(data);
+        let d = Self::read(&mut r)?;
+        Ok((d, r.pos()))
+    }
+
     /// Serializes the descriptor.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = Vec::new();
@@ -703,6 +712,18 @@ mod tests {
         let b = v.to_bytes();
         assert_eq!(&b[..4], &[0, 0, 0, 16]);
         assert_eq!(VersionedDescriptor::from_bytes(&b).unwrap(), v);
+    }
+
+    #[test]
+    fn parse_prefix() {
+        let d = sample();
+        let mut b = d.to_bytes();
+        let n = b.len();
+        b.extend_from_slice(&[1, 2, 3]);
+        let (p, used) = Descriptor::parse_prefix(&b).unwrap();
+        assert_eq!(p, d);
+        assert_eq!(used, n);
+        assert!(Descriptor::from_bytes(&b).is_err(), "from_bytes still refuses trailing bytes");
     }
 
     #[test]

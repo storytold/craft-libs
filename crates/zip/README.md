@@ -79,3 +79,13 @@ bytes and charges repeated reads against twice that number. Call `Indexing::fini
 returned handle after the ZIP index has been parsed to permit normal streaming payload reads.
 The caller must still enforce entry-count, declared-size and overlap limits: the wrapper only
 bounds metadata reads and does not validate the archive.
+
+## Lenient reading (feature `lenient`)
+
+`craft_zip::lenient` reads an archive from its raw bytes without the `zip` crate, for inspectors
+(Craft Anything) that must list and describe damaged, prepended, split or oddly encoded archives
+instead of refusing them. Only the central directory is trusted for the listing; entry reads are
+bounded, checked against the declared size and CRC-32, and decode stored and DEFLATE entries, plus
+bzip2 (`lenient-bzip2`), ZIP LZMA and XZ (`lenient-lzma`) and Zstandard (`lenient-zstd`).
+`lenient::file::read_named_entry` reads one entry from a seekable file without loading the
+archive. With `serde`, the listing types are `Serialize`.

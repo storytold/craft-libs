@@ -13,7 +13,10 @@ workspace = true
 [features]
 corpus = []
 default = []
+# Opt in to threaded AVIF encoding without enabling AVIF (or assembly) by itself.
+threads = ["ravif?/threading", "rav1e?/threading"]
 sgi = []
+sunraster = []
 avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 heif = ["dep:craft-heif"]
 # AVIF decode: craft-video's clean-room pure-Rust AV1 decoder. Native targets only (on wasm32 a

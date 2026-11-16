@@ -20,23 +20,84 @@ const MAX_NESTING: u32 = 16;
 /// The longest entity name a reference is looked for with ([`references`]).
 const MAX_NAME: usize = 256;
 
+/// The longest prefix of `s` of at most `max` bytes that ends on a character boundary.
+/// Unlike `s.get(..s.len().min(max)).unwrap_or(s)`, a mid-character cut does not
+/// fall back to the rest of the string.
+fn bounded_prefix(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// A char-bounded prefix of `rest` longer than [`MAX_NAME`], used when the bounded
+/// window found no whitespace and `rest` itself is overlong.
+fn overlong_name_key<'a>(rest: &'a str, window: &'a str) -> &'a str {
+    if window.len() > MAX_NAME {
+        return window;
+    }
+    let mut end = (MAX_NAME + 1).min(rest.len());
+    while end < rest.len() && !rest.is_char_boundary(end) {
+        end += 1;
+    }
+    rest.get(..end).filter(|key| key.len() > MAX_NAME).unwrap_or(window)
+}
+
 /// The internal general entities declared in `svg`: name → every value declared for it. Text that
-/// only looks like a declaration (in a comment, or in another entity's value) is kept too: the
-/// largest value counts, so it can only make the estimate larger.
+/// only looks like a declaration in another entity's value is kept too: the largest value counts,
+/// so it can only make the estimate larger. Comments and CDATA are skipped, so markers there are
+/// not treated as declarations.
 fn declared(svg: &str) -> HashMap<&str, Vec<&str>> {
     let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (at, _) in svg.match_indices("<!ENTITY") {
-        let rest = svg.get(at + "<!ENTITY".len()..).unwrap_or("").trim_start();
-        // A parameter entity (`%`) isn't referenced as `&name;`.
-        if rest.starts_with('%') {
+    let mut i = 0;
+    while let Some(rel) = svg.get(i..).and_then(|s| s.find('<')) {
+        let at = i + rel;
+        let after = svg.get(at + 1..).unwrap_or("");
+        if let Some(body) = after.strip_prefix("!--") {
+            i = match body.find("-->") {
+                Some(n) => at + 1 + 3 + n + 3,
+                None => svg.len(),
+            };
             continue;
         }
-        let Some(end) = rest.find(char::is_whitespace) else { continue };
-        let (name, rest) = rest.split_at(end);
-        let rest = rest.trim_start();
-        let Some(quote) = rest.chars().next().filter(|q| matches!(q, '"' | '\'')) else { continue };
-        let Some(value) = rest.get(1..).and_then(|r| r.split_once(quote)).map(|(v, _)| v) else { continue };
-        map.entry(name).or_default().push(value);
+        if let Some(body) = after.strip_prefix("![CDATA[") {
+            i = match body.find("]]>") {
+                Some(n) => at + 1 + 8 + n + 3,
+                None => svg.len(),
+            };
+            continue;
+        }
+        if let Some(rest) = after.strip_prefix("!ENTITY") {
+            let rest = rest.trim_start();
+            // A parameter entity (`%`) isn't referenced as `&name;`.
+            if rest.starts_with('%') {
+                i = at + 1;
+                continue;
+            }
+            // Bound the name scan: a comment full of `<!ENTITYx` with no spaces must not
+            // search the rest of the file for whitespace after every marker. Floor the
+            // cut to a character boundary; never fall back to the whole suffix.
+            let window = bounded_prefix(rest, MAX_NAME + 1);
+            if let Some(end) = window.find(char::is_whitespace) {
+                let (name, rest) = rest.split_at(end);
+                let rest = rest.trim_start();
+                if let Some(quote) = rest.chars().next().filter(|q| matches!(q, '"' | '\''))
+                    && let Some(value) = rest.get(1..).and_then(|r| r.split_once(quote)).map(|(v, _)| v)
+                {
+                    map.entry(name).or_default().push(value);
+                }
+            } else if rest.len() > MAX_NAME {
+                // A name longer than MAX_NAME cannot be referenced, but it must still be
+                // recorded so `entities_expand_past` can refuse the document. If the
+                // MAX_NAME+1 cut split a character, extend to the next boundary so the
+                // recorded key is still longer than MAX_NAME.
+                map.entry(overlong_name_key(rest, window)).or_default().push("");
+            }
+            i = at + 1;
+            continue;
+        }
+        i = at + 1;
     }
     map
 }
@@ -99,7 +160,8 @@ pub fn entities_expand_past(svg: &str, most: usize) -> bool {
 /// an entity becomes elements where it is referenced, so what the text shows of the tree is not
 /// what a reader builds; drawing apps declare entities for namespace names only. A caller may
 /// refuse these outright instead of counting them ([`prescan`] counts them ten times). Text that
-/// only looks like a declaration (in a comment) counts too. `&#60;` is text, not markup.
+/// only looks like a declaration in another entity's value counts too; comments are skipped.
+/// `&#60;` is text, not markup.
 pub fn entity_holds_markup(svg: &str) -> bool {
     declared(svg).values().flatten().any(|value| value.contains('<'))
 }
@@ -394,6 +456,38 @@ mod tests {
         let long = "n".repeat(MAX_NAME + 1);
         let long_name = format!("<!DOCTYPE svg [<!ENTITY {long} \"x\">]><svg id=\"&{long};\"/>");
         assert!(expansion_too_large(&long_name));
+    }
+
+    #[test]
+    fn entity_markers_in_a_comment_are_scanned_in_linear_time() {
+        // 100,000 `<!ENTITYx` markers with no whitespace: the old scan searched the rest of
+        // the file after every marker. Skipping comments and bounding the name makes this
+        // linear, and none of the markers is a declaration.
+        let markers = "<!ENTITYx".repeat(100_000);
+        let svg = format!("<svg><!--{markers}--></svg>");
+        assert!(!entities_expand_past(&svg, MAX_ENTITY_EXPANSION));
+    }
+
+    #[test]
+    fn a_multibyte_cut_does_not_scan_the_rest_of_the_suffix() {
+        // The MAX_NAME+1 window ends in the middle of `é`. Falling back to the whole
+        // suffix would walk every following `x` looking for whitespace. Inside an
+        // entity value the marker is still counted (same conservative rule as other
+        // declarations in values), and because the name is overlong the document is
+        // refused — but the scan stays linear.
+        let mid = format!("{}é{}", "x".repeat(MAX_NAME), "x".repeat(200_000));
+        let in_value = format!("<!DOCTYPE svg [<!ENTITY c \"<!ENTITY{mid}\">]><svg/>");
+        assert!(entities_expand_past(&in_value, MAX_ENTITY_EXPANSION));
+        // The recorded overlong key must stay a short prefix, not the whole suffix
+        // the old unwrap_or(rest) fallback would have stored.
+        assert!(declared(&in_value).keys().all(|name| name.len() <= MAX_NAME + 4));
+        // A short multibyte name is still read as a normal declaration.
+        let short = "<!DOCTYPE svg [<!ENTITY é \"x\">]><svg id=\"&é;\"/>";
+        assert!(!entities_expand_past(short, MAX_ENTITY_EXPANSION));
+        // An overlong name that straddles the window is still refused.
+        let long = format!("{}é", "n".repeat(MAX_NAME));
+        let long_name = format!("<!DOCTYPE svg [<!ENTITY {long} \"x\">]><svg id=\"&{long};\"/>");
+        assert!(entities_expand_past(&long_name, MAX_ENTITY_EXPANSION));
     }
 
     fn svg(body: &str) -> String {
