@@ -139,6 +139,22 @@ fn a_shift_line_snaps_to_the_axis_or_the_diagonal_and_commits_what_it_proposed()
     assert_eq!(shapes.proposed(), shapes.committed());
 }
 
+/// ⇧ squares the box from the drag's shorter side, ⇧⌥ from the press as the centre; an Ellipse becomes a circle.
+#[trial]
+fn shift_squares_the_box_from_the_shorter_side() {
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Rectangle));
+    shapes.drag(PRESS, PRESS + Vec2::new(60.0, 20.0), Modifiers::SHIFT);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 120.0, 120.0)), "the square takes the shorter side at the press");
+
+    shapes.forget();
+    shapes.drag(PRESS, PRESS + Vec2::new(-60.0, 20.0), Modifiers::SHIFT | Modifiers::ALT);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(80.0, 80.0, 120.0, 120.0)), "⇧⌥ centres the square on the press");
+
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Ellipse));
+    shapes.drag(PRESS, PRESS + Vec2::new(20.0, 60.0), Modifiers::SHIFT);
+    assert_eq!(shapes.committed(), Some(ShapeGeometry::Ellipse { rect: Rect::new(100.0, 100.0, 120.0, 120.0) }), "a circle of the shorter side");
+}
+
 #[trial]
 fn the_shape_tool_owes_the_canvas_what_every_tool_owes() {
     ToolFixture::with_view("Shape", tool(ShapeKind::Rectangle), room_view, |_, _| {}).check();

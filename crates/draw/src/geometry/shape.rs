@@ -155,16 +155,16 @@ impl ShapeGeometry {
 /// The box a drag from `start` to `end` draws, in whole pixels, or `None` when a side is under
 /// [`MIN_SIDE`].
 ///
-/// - `square` (⇧): both sides take the larger absolute extent, each keeping its direction.
+/// - `square` (⇧): both sides take the drag's shorter extent, each keeping its direction.
 /// - `from_centre` (⌥): `start` is the centre; the box is twice the extent.
 /// - The top left and the size round to whole pixels, as PhotoCraft rounds `[x, y, w, h]`.
 pub fn box_drag(start: Point, end: Point, square: bool, from_centre: bool) -> Option<Rect> {
-    // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:63-72 (⇧: `m = w.abs().max(h.abs())` with the
-    // signs kept; ⌥: origin `start - (w, h)`, size doubled; `[x0.min(x0 + w).round(), …,
+    // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs `drag_box` (⇧: `m = w.abs().min(h.abs())` with the
+    // signs kept, #13222; ⌥: origin `start - (w, h)`, size doubled), `shape_geometry` (`[x0.min(x0 + w).round(), …,
     // w.abs().round(), …]`; `rect[2] < 1.0 || rect[3] < 1.0` draws nothing).
     let (mut w, mut h) = (end.x - start.x, end.y - start.y);
     if square {
-        let m = w.abs().max(h.abs());
+        let m = w.abs().min(h.abs());
         (w, h) = (m * sign(w), m * sign(h));
     }
     let (x0, y0) = if from_centre { (start.x - w, start.y - h) } else { (start.x, start.y) };
