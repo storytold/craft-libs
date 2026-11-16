@@ -269,6 +269,42 @@ mod tests {
         }
     }
     #[test]
+    fn recovery_prefix_preserves_text_and_ignores_damaged_tail() {
+        let mut t = sample();
+        t.text = t.text.with("Txt ", D::Text(UnicodeString::new_nul("Hello\r\nWorld\r")));
+        let mut bytes = write_tysh(&t).unwrap();
+        let (_, n) = VersionedDescriptor::parse_prefix(&bytes[52..]).unwrap();
+        bytes.truncate(52 + n);
+        bytes.extend_from_slice(b"broken warp");
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some(("Hello\r\nWorld\r".into(), t.transform)));
+    }
+
+    #[test]
+    fn recovery_prefix_needs_only_complete_fixed_header() {
+        let bytes = write_tysh(&sample()).unwrap();
+        for cut in 0..52 {
+            assert!(parse_tysh_text_prefix(&bytes[..cut]).is_none(), "{cut}");
+        }
+        for cut in 52..56 {
+            assert_eq!(parse_tysh_text_prefix(&bytes[..cut]), Some((String::new(), sample().transform)));
+        }
+        let mut unsupported = bytes.clone();
+        unsupported[52..56].copy_from_slice(&99u32.to_be_bytes());
+        assert_eq!(parse_tysh_text_prefix(&unsupported), Some((String::new(), sample().transform)));
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some((String::new(), sample().transform)));
+    }
+
+    #[test]
+    fn recovery_prefix_retains_geometry_but_is_not_render_validation() {
+        let mut bytes = write_tysh(&sample()).unwrap();
+        bytes[2..10].copy_from_slice(&f64::NAN.to_be_bytes());
+        let (_, transform) = parse_tysh_text_prefix(&bytes).unwrap();
+        assert!(transform[0].is_nan());
+        assert!(!transform_is_safe(&transform));
+        assert!(parse_tysh(&bytes).is_none());
+    }
+
+    #[test]
     fn roundtrip_preserves_descriptors_transform_and_bounds() {
         let t = sample();
         let b = write_tysh(&t).unwrap();
