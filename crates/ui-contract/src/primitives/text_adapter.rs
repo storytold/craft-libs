@@ -419,8 +419,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         filter,
         char_limit: input.options.limit,
         preedit: preedit.clone(),
-        rtl: input.rtl,
-        align: input.options.align,
+        // Resolve the same logical placement as text::free_room_before at this layer: the low-level editor
+        // receives only egui's physical alignment, not a dependency on the text primitives.
+        align: match (input.options.align, input.rtl) {
+            (HAlign::Center, _) => egui::Align2::CENTER_CENTER,
+            (HAlign::Start, true) | (HAlign::End, false) => egui::Align2::RIGHT_CENTER,
+            (HAlign::Start, false) | (HAlign::End, true) => egui::Align2::LEFT_CENTER,
+        },
         caret_visible: input.caret_visible,
         underline: input.underline,
         galley: None,
@@ -534,8 +539,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             filter: egui_focus::event_filter(keep, false),
             char_limit: None,
             preedit: None,
-            rtl: false,
-            align: HAlign::Start,
+            align: egui::Align2::LEFT_TOP,
             caret_visible: false,
             underline: 0.0,
             galley: Some(layout.galley.clone()),

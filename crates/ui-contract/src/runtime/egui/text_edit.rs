@@ -1,6 +1,5 @@
 //! Building `TextEdit` and its state: the one caller of egui's text editing.
 
-use crate::primitives::HAlign;
 use craft_theme::TypeRole;
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
 use egui::text_edit::TextEditState;
@@ -31,9 +30,8 @@ pub(crate) struct Edit<'a> {
     pub char_limit: Option<usize>,
     /// The bytes of `text` that are IME preedit, underlined.
     pub preedit: Option<Range<usize>>,
-    pub rtl: bool,
-    /// Where the text sits in the rect, relative to the interface's reading direction.
-    pub align: HAlign,
+    /// Physical placement resolved by the text adapter, which owns the logical reading direction.
+    pub align: egui::Align2,
     /// Whether the caret is drawn in this pass.
     pub caret_visible: bool,
     /// The width of the preedit underline.
@@ -80,7 +78,6 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         filter,
         char_limit,
         preedit,
-        rtl,
         align,
         caret_visible,
         underline,
@@ -189,14 +186,9 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .event_filter(filter)
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
-                    // A laid-out galley sits at the rect's corner. Other text follows the same logical placement
-                    // rule as primitives::text::free_room_before, with the row centred vertically.
-                    .align(match (align, rtl) {
-                        _ if galley.is_some() => egui::Align2::LEFT_TOP,
-                        (HAlign::Center, _) => egui::Align2::CENTER_CENTER,
-                        (HAlign::Start, true) | (HAlign::End, false) => egui::Align2::RIGHT_CENTER,
-                        (HAlign::Start, false) | (HAlign::End, true) => egui::Align2::LEFT_CENTER,
-                    });
+                    // A pre-laid galley sits at the rect's corner. Other text uses the physical placement
+                    // the adapter resolved, without the runtime depending on its higher-level text types.
+                    .align(if galley.is_some() { egui::Align2::LEFT_TOP } else { align });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);
                 }
