@@ -43,3 +43,68 @@ pub fn first_image_compression(bytes: &[u8]) -> Option<u16> {
     }
     Some(found.unwrap_or(1))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ByteOrder;
+
+    fn fixture(order: ByteOrder, entries: &[(u16, u16, u32, u32)]) -> Vec<u8> {
+        let mut bytes = match order {
+            ByteOrder::Little => b"II*\0".to_vec(),
+            ByteOrder::Big => b"MM\0*".to_vec(),
+        };
+        order.put_u32(&mut bytes, 8);
+        order.put_u16(&mut bytes, u16::try_from(entries.len()).unwrap());
+        for &(tag, ty, count, value) in entries {
+            order.put_u16(&mut bytes, tag);
+            order.put_u16(&mut bytes, ty);
+            order.put_u32(&mut bytes, count);
+            if ty == 3 {
+                order.put_u16(&mut bytes, u16::try_from(value).unwrap());
+                order.put_u16(&mut bytes, 0);
+            } else {
+                order.put_u32(&mut bytes, value);
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn both_byte_orders_and_scalar_types() {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            assert_eq!(first_image_compression(&fixture(order, &[])), Some(1));
+            for ty in [3, 4] {
+                for value in [1, 5, 6, 7, 32773] {
+                    let bytes = fixture(order, &[(259, ty, 1, value)]);
+                    assert_eq!(first_image_compression(&bytes), u16::try_from(value).ok());
+                    // Every prefix missing a required byte is refused; SHORT padding and
+                    // the next-IFD pointer are intentionally unnecessary for this probe.
+                    let needed = if ty == 3 { 20 } else { 22 };
+                    for end in 0..needed {
+                        assert_eq!(first_image_compression(&bytes[..end]), None);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ambiguous_compression_is_refused() {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            for pair in [(1, 7), (7, 1), (1, 1)] {
+                assert_eq!(first_image_compression(&fixture(order, &[(259, 3, 1, pair.0), (259, 3, 1, pair.1)])), None);
+            }
+            for entry in [(259, 3, 0, 1), (259, 3, 2, 1), (259, 1, 1, 1), (259, 4, 1, 65536)] {
+                assert_eq!(first_image_compression(&fixture(order, &[entry])), None);
+            }
+            // Unrelated values are not decoded or allocated, including unknown types.
+            assert_eq!(first_image_compression(&fixture(order, &[(999, 65535, u32::MAX, u32::MAX)])), Some(1));
+            let mut absent = fixture(order, &[(999, 4, 1, 0)]);
+            absent.truncate(12); // Only the unrelated tag is needed, matching Word's probe.
+            assert_eq!(first_image_compression(&absent), Some(1));
+        }
+        assert_eq!(first_image_compression(b"II+\0\x08\0\0\0"), None);
+        assert_eq!(first_image_compression(b"II*\0\xff\xff\xff\xff"), None);
+    }
+}
