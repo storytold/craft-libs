@@ -1,7 +1,7 @@
 //! The input hook's key steps (H3): what it strips from each raw key event and records.
 
 use super::route::layout_of;
-use super::{AltTrack, Batch, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, current, with};
+use super::{AltTrack, Batch, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
 use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
 use crate::runtime::env::Env;
@@ -105,19 +105,18 @@ impl Strip<'_> {
             }
             KeyEvent::Text(text) => {
                 alt.other_key = true;
-                if let Some(LastPress { input, pressed, claimed }) = batch.last_press.take() {
-                    if let Some(physical) = input.physical.filter(|_| !alt.right) {
-                        batch.learned.push((physical, input.mods, text.clone()));
+                let mut claimed = false;
+                if let Some(last) = batch.last_press.take() {
+                    if let Some(physical) = last.input.physical.filter(|_| !alt.right) {
+                        batch.learned.push((physical, last.input.mods, text.clone()));
                     }
-                    if claimed {
-                        // The claim took the press, and with it what the press typed: no field gets the character.
-                        return false;
-                    }
-                    if let Some(press) = pressed.and_then(|at| batch.presses.get_mut(at)) {
+                    claimed = last.claimed;
+                    if let Some(press) = last.pressed.and_then(|at| batch.presses.get_mut(at)) {
                         press.text = Some(batch.texts.len());
                     }
                 }
-                batch.texts.push(text);
+                // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
+                batch.texts.push(Typed { text, claimed });
                 true
             }
             KeyEvent::Clip { command, text } if (self.edits)(command) => {

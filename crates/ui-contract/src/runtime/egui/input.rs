@@ -43,10 +43,10 @@ pub(crate) fn hold_back_presses(input: &mut RawInput, frame: u64, held: &mut Hel
     !held.events.is_empty()
 }
 
-/// Takes key presses out of the running pass's input: `places` counts the input's key presses, in order. Each press
-/// goes with its release when that is in the input too; otherwise its key is no longer down. Returns, for each
-/// place, whether the release is still to come.
-pub(crate) fn withdraw_presses(ctx: &Context, places: &[usize]) -> Vec<bool> {
+/// Takes key presses and texts out of the running pass's input: `places` counts the input's key presses, in order,
+/// and `texts` its text events. Each press goes with its release when that is in the input too; otherwise its key is
+/// no longer down. Returns, for each place, whether the release is still to come.
+pub(crate) fn withdraw(ctx: &Context, places: &[usize], texts: &[usize]) -> Vec<bool> {
     ctx.input_mut(|input| {
         let presses: Vec<(usize, egui::Key)> = input
             .events
@@ -58,6 +58,10 @@ pub(crate) fn withdraw_presses(ctx: &Context, places: &[usize]) -> Vec<bool> {
             })
             .collect();
         let mut gone = vec![false; input.events.len()];
+        let text_events = input.events.iter().enumerate().filter(|(_, event)| matches!(event, Event::Text(_))).map(|(at, _)| at);
+        for (nth, at) in text_events.enumerate() {
+            gone[at] |= texts.contains(&nth);
+        }
         let mut open = Vec::with_capacity(places.len());
         for (at, key) in places.iter().filter_map(|place| presses.get(*place).copied()) {
             gone[at] = true;

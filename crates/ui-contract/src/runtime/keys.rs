@@ -123,7 +123,8 @@ struct Batch {
     shortcuts: Vec<Shortcut>,
     /// The text of the paste the focused component takes.
     paste: Option<String>,
-    texts: Vec<String>,
+    /// Every text event of the pass, in order: its place here is its place among the text events in egui's input.
+    texts: Vec<Typed>,
     clips: Vec<EditCommand>,
     access: Vec<Action>,
     escapes: usize,
@@ -142,6 +143,13 @@ struct Batch {
     tabs: Vec<TabPress>,
     /// A lone Alt in a field that holds drafts was refused: the input hook calls `frame::refuse`.
     refused: bool,
+}
+
+/// One text event of the pass.
+struct Typed {
+    text: String,
+    /// A claim took the press that typed it: the text is the claim's too, so it reaches no field.
+    claimed: bool,
 }
 
 /// A key press a following text event may belong to.
