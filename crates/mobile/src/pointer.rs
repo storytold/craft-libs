@@ -6,6 +6,9 @@
 //! there: a new edit, which also emptied the redo history before a three-finger-tap redo could run.
 //! A finger that moves past [`SLOP`] or lifts presses at once, so strokes and taps on controls aren't
 //! delayed in practice. A stylus is never held: it is never a gesture.
+//!
+//! A gesture's fingers move the pointer to the first finger without pressing it (egui starts a
+//! pinch, pan or rotation only once its pointer has a position), and it leaves with the last one.
 
 use std::time::{Duration, Instant};
 
@@ -40,13 +43,15 @@ pub(crate) struct TouchPointer {
 impl TouchPointer {
     /// The pointer events this touch stands for. `immediate` for a stylus: no hold.
     pub(crate) fn touch(&mut self, t: Touch, now: Instant, immediate: bool) -> Vec<Event> {
-        let events = self.pointer_events(t, now, immediate);
+        let mut events = self.pointer_events(t, now, immediate);
         match t.phase {
             TouchPhase::Start => self.down += 1,
             TouchPhase::End | TouchPhase::Cancel => {
                 self.down = self.down.saturating_sub(1);
-                if self.down == 0 {
+                if self.down == 0 && self.gesture {
                     self.gesture = false;
+                    // The gesture's hovering pointer leaves with its last finger, as a finger's does.
+                    events.push(Event::PointerGone);
                 }
             }
             TouchPhase::Move => {}
@@ -60,10 +65,12 @@ impl TouchPointer {
                 if self.gesture {
                     return Vec::new();
                 }
-                if self.held.take().is_some() {
+                if let Some(first) = self.held.take() {
                     self.gesture = true;
-                    // A second finger: the touches are a gesture, and nothing presses.
-                    return Vec::new();
+                    // A second finger: the touches are a gesture, and nothing presses. egui begins
+                    // a pinch or pan only once its pointer has a position, so the pointer hovers
+                    // where the first finger landed.
+                    return vec![Event::PointerMoved(first.pos)];
                 }
                 if self.driving.is_some() {
                     return Vec::new();
@@ -177,6 +184,22 @@ mod tests {
         }
         assert!(presses(&all).is_empty(), "{all:?}");
         assert!(!p.touching());
+    }
+
+    /// egui starts a pinch or pan only once its pointer has a position, so a gesture's fingers move
+    /// the pointer to the first finger without pressing, and it leaves when they have all lifted.
+    #[test]
+    fn a_gesture_moves_the_pointer_to_its_first_finger_without_pressing() {
+        let (mut p, t0) = (TouchPointer::default(), Instant::now());
+        assert_eq!(p.touch(t(1, TouchPhase::Start, 10.0), t0, false), Vec::<Event>::new());
+        let second = p.touch(t(2, TouchPhase::Start, 50.0), t0 + Duration::from_millis(20), false);
+        assert_eq!(second, [Event::PointerMoved(Pos2::new(10.0, 0.0))]);
+        let mut during = p.touch(t(1, TouchPhase::Move, 0.0), t0 + Duration::from_millis(30), false);
+        during.extend(p.touch(t(2, TouchPhase::Move, 90.0), t0 + Duration::from_millis(30), false));
+        during.extend(p.tick(t0 + Duration::from_millis(200)));
+        assert!(presses(&during).is_empty(), "{during:?}");
+        assert_eq!(p.touch(t(1, TouchPhase::End, 0.0), t0 + Duration::from_millis(300), false), Vec::<Event>::new());
+        assert_eq!(p.touch(t(2, TouchPhase::End, 90.0), t0 + Duration::from_millis(300), false), [Event::PointerGone], "nothing stays hovered");
     }
 
     #[test]

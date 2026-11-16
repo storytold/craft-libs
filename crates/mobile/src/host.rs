@@ -673,6 +673,39 @@ mod tests {
         drop(pending);
     }
 
+    /// Found in a `TextureCraft` spike: two fingers never orbited or zoomed, because egui begins a
+    /// multi-touch gesture only once its pointer has a position, and a gesture's fingers gave it none.
+    #[test]
+    fn two_fingers_pinch_in_egui() {
+        let (ctx, mut pointer, t0) = (egui::Context::default(), TouchPointer::default(), Instant::now());
+        let mut zoom = Vec::new();
+        let frames: [&[(u64, TouchPhase, f32)]; 5] = [
+            &[(1, TouchPhase::Start, 100.0)],
+            &[(2, TouchPhase::Start, 200.0)],
+            &[(1, TouchPhase::Move, 90.0), (2, TouchPhase::Move, 210.0)],
+            &[(1, TouchPhase::Move, 80.0), (2, TouchPhase::Move, 220.0)],
+            &[(1, TouchPhase::Move, 70.0), (2, TouchPhase::Move, 230.0)],
+        ];
+        for (i, touches) in (0_u32..).zip(frames) {
+            let now = t0 + Duration::from_millis(10) * i;
+            let mut events = pointer.tick(now);
+            for &(id, phase, x) in touches {
+                let t = Touch { id, phase, pos: Pos2::new(x, 100.0), force: 0.0 };
+                events.push(touch_event(t));
+                events.extend(pointer.touch(t, now, false));
+            }
+            let raw = RawInput { time: Some(f64::from(i) / 100.0), events, ..RawInput::default() };
+            let mut output = ctx.run_ui(raw, |ui| {
+                zoom.push(ui.input(|input| (input.multi_touch().is_some(), input.zoom_delta(), input.pointer.any_down())));
+            });
+            // Nothing draws here: egui checks that its texture changes were taken.
+            output.textures_delta.clear();
+        }
+        assert!(zoom.iter().all(|&(_, _, down)| !down), "nothing presses during the gesture: {zoom:?}");
+        let pinching: Vec<f32> = zoom.iter().filter(|&&(active, _, _)| active).map(|&(_, delta, _)| delta).collect();
+        assert!(pinching.iter().any(|&delta| delta > 1.0), "spreading fingers zoom in: {zoom:?}");
+    }
+
     /// Off screen nothing draws (no GPU work in the background); a busy app still runs.
     #[test]
     fn only_an_app_on_screen_draws_and_only_a_busy_one_runs_off_screen() {
