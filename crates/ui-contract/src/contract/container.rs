@@ -674,6 +674,9 @@ pub struct ContainerProps {
     pub pad: Pad,
     /// How the size follows the content.
     pub sizing: Sizing,
+    /// Among the members of a bar (`InBar`) the container takes its content width, whatever `sizing` says: a field
+    /// fills the width of a form and fits its content in a bar. Setting `sizing` clears it.
+    pub content_in_bar: bool,
     /// The height the body offers its children in flow, in place of the flow's (unbounded in a scrolling body): the
     /// most a child takes. Every child takes its content height, a child that fills or scrolls at most this height,
     /// as a scrolling list is as tall as its rows until they outgrow the room. A host that shows content of either
@@ -759,6 +762,7 @@ impl ContainerProps {
             && self.surface == other.surface
             && self.pad == other.pad
             && self.sizing == other.sizing
+            && self.content_in_bar == other.content_in_bar
             && self.room_height == other.room_height
             && self.layout == other.layout
             && self.header == other.header
@@ -787,6 +791,7 @@ impl ContainerProps {
             surface: None,
             pad: Pad::None,
             sizing: Sizing::Content,
+            content_in_bar: false,
             room_height: None,
             layout: BodyLayout::Stack,
             header: None,
@@ -841,6 +846,13 @@ impl ContainerProps {
     /// How the size follows the content.
     pub const fn sizing(mut self, sizing: Sizing) -> Self {
         self.sizing = sizing;
+        self.content_in_bar = false;
+        self
+    }
+
+    /// Takes the content width among the members of a bar ([`content_in_bar`](Self::content_in_bar)).
+    pub const fn content_in_bar(mut self) -> Self {
+        self.content_in_bar = true;
         self
     }
 

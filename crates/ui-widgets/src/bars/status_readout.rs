@@ -3,7 +3,7 @@
 
 use super::words::BarWords;
 use crate::buttons::IconButton;
-use crate::contract::{Bind, Entry, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use crate::contract::{Bind, Entry, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel};
 use crate::display::{Elide, Text};
 use crate::form::Field;
 use crate::layout_components::Row;
@@ -213,7 +213,6 @@ impl<'a> StatusReadout<'a> {
             let glyph = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("zoom_in")))).scrub(true);
             let field = Field::new(words.readout_zoom.clone())
                 .side(glyph)
-                .sizing(Sizing::Content)
                 .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).show(ui));
             let field = field.inner.map(|zoom| {
                 invalid_zoom = zoom.invalid_zoom;

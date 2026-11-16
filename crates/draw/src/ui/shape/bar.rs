@@ -7,7 +7,7 @@ use craft_behavior::EditEvent;
 use craft_color::ui::{PaintChip, PaintChipOutput, ScreenPickGesture};
 use craft_theme::Srgba;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft_ui::contract::{Bind, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -125,13 +125,12 @@ impl<'a> ShapeBar<'a> {
                 let fill = Field::new(words.fill_color.clone())
                     .id_salt("fill")
                     .side(hidden)
-                    .sizing(Sizing::Content)
                     .show(ui, |ui, _| pass.chip(ui, ShapePaint::Fill));
                 if let Some(out) = fill.inner {
                     pass.take_chip(ShapePaint::Fill, out);
                 }
                 let stroke =
-                    Field::new(words.stroke.clone()).id_salt("stroke").sizing(Sizing::Content).show(ui, |ui, _| pass.chip(ui, ShapePaint::Stroke));
+                    Field::new(words.stroke.clone()).id_salt("stroke").show(ui, |ui, _| pass.chip(ui, ShapePaint::Stroke));
                 if let Some(out) = stroke.inner {
                     pass.take_chip(ShapePaint::Stroke, out);
                 }
@@ -164,7 +163,6 @@ impl<'a> ShapeBar<'a> {
                 let (events, alert) = Field::new(cell.caption.clone())
                     .id_salt(cell.key)
                     .side(side)
-                    .sizing(Sizing::Content)
                     .show(ui, |ui, _| cell.show(ui))
                     .inner
                     .unwrap_or_default();

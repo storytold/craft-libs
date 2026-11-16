@@ -8,7 +8,7 @@ use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{Checkbox, Swatch};
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger, clicked,
+    Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Trigger, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
@@ -355,7 +355,7 @@ impl<M: Value> Pass<'_, M> {
         // once in a pass and only the run that reads the input reports its events, so every run's events are collected.
         let collected: RefCell<EditEvents<f64>> = RefCell::new(EditEvents::new());
         let _ =
-            Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").sizing(Sizing::Content).enabled(enabled).show(
+            Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").enabled(enabled).show(
                 ui,
                 |ui, _| {
                     for event in BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone() {
@@ -372,7 +372,7 @@ impl<M: Value> Pass<'_, M> {
         // The body may run more than once in a pass and only the run that reads the input reports its events, so every
         // run's events and alert are collected.
         let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
-        let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).sizing(Sizing::Content).enabled(enabled).show(
+        let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).enabled(enabled).show(
             ui,
             |ui, _| {
                 let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
@@ -417,7 +417,6 @@ impl<M: Value> Pass<'_, M> {
         let current = self.values.mode.clone();
         let pick = Field::new(caption.clone())
             .id_salt("mode")
-            .sizing(Sizing::Content)
             .show(ui, |ui, _| Select::new(caption.clone(), Bind::given(current.clone()), entries).show(ui).value().cloned())
             .inner
             .flatten();
@@ -437,7 +436,6 @@ impl<M: Value> Pass<'_, M> {
         let current = *mode;
         let pick = Field::new(words.mode.clone())
             .id_salt("mode")
-            .sizing(Sizing::Content)
             .show(ui, |ui, _| Select::new(words.mode.clone(), Bind::given(current), &entries).show(ui).value().copied())
             .inner
             .flatten();
@@ -499,7 +497,6 @@ impl<M: Value> Pass<'_, M> {
         let pick = Field::new(words.combination.clone())
             .side(SideLabel::new().kind(LabelKind::Hidden))
             .id_salt("mixer-combination")
-            .sizing(Sizing::Content)
             .show(ui, |ui, _| Select::new(words.combination.clone(), Bind::given(shown), &entries).show(ui).value().copied())
             .inner
             .flatten();

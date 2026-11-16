@@ -10,7 +10,7 @@ use craft_behavior::{EditEvent, EditEvents, IconId, NumberCodec};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, Gap, LabelKind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
+    Bind, BodyCx, Entry, Gap, LabelKind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
@@ -179,7 +179,7 @@ impl<'a> CropBar<'a> {
                 settings.clear();
                 report.ratio = Some(CropRatioChange { editing: false });
             }
-            Field::new(words.angle.clone()).id_salt("angle").sizing(Sizing::Content).enabled(angle.is_some()).show(ui, |ui, _| {
+            Field::new(words.angle.clone()).id_salt("angle").enabled(angle.is_some()).show(ui, |ui, _| {
                 let field = NumberField::new(words.angle.clone(), Bind::given(angle)).unit_kind(UnitKind::Degrees).range(-180.0..=180.0).show(ui);
                 if let Some(turned) = field.value().copied().flatten() {
                     report.angle = Some(turned);
@@ -192,7 +192,7 @@ impl<'a> CropBar<'a> {
             Checkbox::new(Bind::bound(&mut settings.delete_pixels)).label(words.delete_pixels.clone()).show(ui);
             let background = if settings.delete_pixels { words.fill_background.clone() } else { words.fill_transparent.clone() };
             let fills = [Entry::new(CropFill::Background, background), Entry::new(CropFill::ContentAware, words.fill_content_aware.clone())];
-            Field::new(words.fill_name.clone()).id_salt("fill").sizing(Sizing::Content).show(ui, |ui, _| {
+            Field::new(words.fill_name.clone()).id_salt("fill").show(ui, |ui, _| {
                 let pick = Select::new(words.fill_name.clone(), Bind::given(settings.fill), &fills).show(ui);
                 if let Some(fill) = pick.value().copied() {
                     settings.fill = fill;
@@ -285,7 +285,7 @@ fn ratio_field(
     let current = shown.get(side).copied().unwrap_or(0.0);
     let salt = if side == 0 { "ratio-width" } else { "ratio-height" };
     let mut events = EditEvents::new();
-    Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt(salt).sizing(Sizing::Content).show(ui, |ui, _| {
+    Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt(salt).show(ui, |ui, _| {
         let codec = NumberCodec::new(units.reader(None), RATIO_DECIMALS);
         let field = NumberField::new(caption.clone(), Bind::given((current > 0.0).then_some(current)))
             .codec(codec)

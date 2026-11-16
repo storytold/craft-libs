@@ -7,7 +7,7 @@ use egui::{Response, Ui};
 use craft_behavior::EditEvents;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft_ui::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
@@ -130,7 +130,7 @@ impl<'a> VanishingPointBar<'a> {
 /// One captioned number cell: the edit of `value`, if the user made one this pass.
 fn number(ui: &mut Ui, key: &'static str, caption: &Label, value: f64, range: RangeInclusive<f64>, kind: UnitKind) -> EditEvents<f64> {
     let mut edited = EditEvents::new();
-    Field::new(caption.clone()).id_salt(key).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
+    Field::new(caption.clone()).id_salt(key).side(SideLabel::new().scrub(true)).show(ui, |ui, _| {
         let out = NumberField::new(caption.clone(), Bind::given(Some(value))).range(range.clone()).unit_kind(kind).scrub_by_label().show(ui);
         edited = out.edit.events.map(|v| v.unwrap_or(value));
     });

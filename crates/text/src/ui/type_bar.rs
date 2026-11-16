@@ -6,7 +6,7 @@ use craft_theme::Srgba;
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::choice::Swatch;
 use craft_ui::contract::{
-    Bind, Entry, FieldLayout, Gap, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
+    Bind, Entry, FieldLayout, Gap, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
@@ -192,7 +192,7 @@ impl<'a> TypeBar<'a> {
             let (event, _) = lengths.row(ui, size);
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));
 
-            let method = Field::new(option_words.anti_alias.clone()).side(hidden_side()).sizing(Sizing::Content).show(ui, |ui, _| {
+            let method = Field::new(option_words.anti_alias.clone()).side(hidden_side()).show(ui, |ui, _| {
                 Select::new(option_words.anti_alias.clone(), Bind::given(mixed(anti_alias)), &method_entries).placeholder("—").show(ui).events
             });
             edits.extend(method.inner.unwrap_or_default().map(TypeBarChange::AntiAlias));
@@ -207,7 +207,6 @@ impl<'a> TypeBar<'a> {
             let side = SideLabel::new().kind(LabelKind::Hidden).layout(FieldLayout::Beside);
             let well = Field::new(character_words.text_color.clone())
                 .side(side)
-                .sizing(Sizing::Content)
                 .show(ui, |ui, _| Swatch::new(character_words.text_color.clone(), color).picker(COLOR_KEY).show(ui).pick_color);
             if let Some(request) = well.inner.flatten() {
                 requests.request_color(request);

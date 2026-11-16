@@ -118,12 +118,14 @@ impl<'b> BodyHooks<'b> {
     /// The axes the container is given where `env` is its parent's: a rect it is shown at gives both; an inline
     /// container that fills an axis takes the room only where its parent was given that axis.
     ///
+    /// A container that fits its content in a bar (`ContainerProps::content_in_bar`) is not given the width there.
     /// A fill-width container whose body is a row, shown on the line of a row given its height, is given that height
     /// too: the line is a fixed cross extent, and the container fills it (a bar in a shell slot).
     pub(super) fn given_axes(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> (bool, bool) {
         let sizing = self.sizing(props);
         let fills_line = sizing == Sizing::FillWidth && unwrapped_row(props) && env.row_line.is_some();
-        let (x, y) = (sizing != Sizing::Content, sizing == Sizing::Fill || fills_line);
+        let fits_bar = props.content_in_bar && env.values.get::<crate::contract::InBar>().0;
+        let (x, y) = (sizing != Sizing::Content && !fits_bar, sizing == Sizing::Fill || fills_line);
         match (at, &props.mount) {
             (ShowAt::Rect(_), _) => (true, true),
             (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && !env.content.1),

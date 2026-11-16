@@ -500,6 +500,7 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         quote! {
             fn set_sizing(&mut self, sizing: #k::contract::Sizing, _: #k::contract::Internal) {
                 self.#field.sizing = sizing;
+                self.#field.content_in_bar = false;
             }
         }
     });
