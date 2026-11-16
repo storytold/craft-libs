@@ -418,6 +418,51 @@ fn an_unused_style_sharing_an_edited_ones_id_keeps_its_definition() {
     assert!(theirs.contains(r#"fo:font-size="30pt""#) && theirs.contains("#ff0000"), "as read: {theirs}");
 }
 
+/// A style nothing in the file uses, named as WordCraft names a used one (`MyCustom` beside
+/// `My_20_Custom`, which WordCraft has as `MyCustom`), keeps its definition when the used one is
+/// edited or deleted.
+#[test]
+fn an_unused_style_named_as_wordcraft_names_an_edited_one_keeps_its_definition() {
+    use std::sync::Arc;
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    let as_read = |saved: &str| {
+        let theirs = def_named(saved, "MyCustom").unwrap_or_else(|| panic!("{saved}"));
+        assert!(theirs.contains(r#"fo:font-size="30pt""#) && theirs.contains("#ff0000"), "as read: {theirs}");
+    };
+
+    let mut d = opened(s, &["My_20_Custom"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    assert!(def_named(&saved, "My_20_Custom").is_some_and(|d| d.contains(r#"fo:font-size="21pt""#)), "{saved}");
+    as_read(&saved);
+
+    let mut d = opened(s, &["My_20_Custom"]);
+    Arc::make_mut(&mut d.styles).remove(&id);
+    d.restyle(&id, None);
+    let saved = styles_of(&export(&d).unwrap());
+    assert!(def_named(&saved, "My_20_Custom").is_none(), "{saved}");
+    as_read(&saved);
+}
+
+/// An edited style the file names as WordCraft does (`Eigen`), whose parent WordCraft names
+/// otherwise (`Base_20_Style`, WordCraft's `BaseStyle`), still derives from the file's parent.
+#[test]
+fn an_edited_style_under_its_own_name_keeps_its_parents_file_name() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Base_20_Style" style:display-name="Base Style" style:family="paragraph" style:parent-style-name="Standard" style:class="text"><style:paragraph-properties style:writing-mode="tb-rl"/><style:text-properties fo:font-size="30pt"/></style:style><style:style style:name="Eigen" style:family="paragraph" style:parent-style-name="Base_20_Style"/>"#;
+    let mut d = opened(s, &["Eigen"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.italic = Some(true);
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let mine = def_named(&saved, "Eigen").unwrap_or_else(|| panic!("{saved}"));
+    assert!(mine.contains(r#"style:parent-style-name="Base_20_Style""#), "{mine}");
+    assert!(def_named(&saved, "Base_20_Style").is_some_and(|d| d.contains(r#"style:writing-mode="tb-rl""#)), "as read: {saved}");
+    let back = import(&bytes).unwrap();
+    assert_eq!(back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size, 30.0, "inherited");
+}
+
 /// A character style WordCraft read under another id (`AccentChar`, as a paragraph style has
 /// `Accent`), edited, is written under the file's name: the text written as read names that.
 #[test]

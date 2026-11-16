@@ -332,17 +332,17 @@ pub(super) fn with_common_as_read(
     })
 }
 
-/// What becomes of the file's styles (`defs`) that `changed` touches but `styles` (the part being
-/// written) doesn't have under the file's key, by those keys: WordCraft's definition from `now`
-/// (all it would write) under the file's names, or `None` for a style it no longer has. `ids`
-/// gives the style id the import read a file's style into ([`KeptXml::style_ids`]), `ours` the
-/// name WordCraft writes an id under: paragraphs written as read name the file's. A style the
-/// import didn't read is WordCraft's only under its own name, so another of the file's styles
-/// WordCraft would have under the same id (`Base_20_Style` beside `BaseStyle`) is left alone.
+/// What becomes of the file's styles (`defs`) that `changed` touches, by their keys: WordCraft's
+/// definition from `now` (all it would write) under the file's names, its parent and next style
+/// included, or `None` for a style it no longer has. `ids` gives the style id the import read a
+/// file's style into ([`KeptXml::style_ids`]), `ours` the name WordCraft writes an id under:
+/// paragraphs written as read name the file's. A style the import didn't read is WordCraft's only
+/// under its own name, so another of the file's styles WordCraft would have under the same id
+/// (`Base_20_Style` beside `BaseStyle`) is left alone, as is one the import didn't read named as
+/// WordCraft names one it did (`MyCustom` beside `My_20_Custom`).
 ///
 /// [`KeptXml::style_ids`]: craft_wordmodel::kept::KeptXml::style_ids
 pub(super) fn rewritten_defs(
-    styles: &str,
     now: &str,
     defs: &BTreeMap<String, Arc<str>>,
     changed: &BTreeSet<String>,
@@ -377,16 +377,25 @@ pub(super) fn rewritten_defs(
         };
         styles_of.push((key, name, family, mine));
     }
+    // The names WordCraft writes the styles the import read under, by family: one of the file's
+    // styles the import didn't read but named so (`MyCustom` beside `My_20_Custom`) isn't theirs.
+    let read: HashSet<(&str, &str)> =
+        styles_of.iter().filter(|(key, ..)| ids.contains_key(*key)).map(|(_, _, family, mine)| (*family, mine.as_str())).collect();
     let (kids, _) = children(now, "office:styles", "common");
     let kids: HashMap<String, (usize, usize)> = kids.into_iter().collect();
-    let (written, _) = children(styles, "office:styles", "common");
-    let written: HashSet<String> = written.into_iter().map(|(k, _)| k).collect();
     let mut out = BTreeMap::new();
-    for (key, name, family, mine) in styles_of {
+    for (key, name, family, mine) in &styles_of {
+        let (key, name, family) = (*key, name, *family);
+        let read_so = !ids.contains_key(key) && read.contains(&(family, mine.as_str()));
         let mine = format!("common:{mine}{family}");
-        if !changed.contains(&mine) || (mine == *key && written.contains(key)) {
+        if !changed.contains(&mine) {
             continue;
         }
+        if read_so {
+            out.insert(key.clone(), defs.get(key).map(|d| d.to_string()));
+            continue;
+        }
+        // Rewritten even under its own name: its parent or next style may have another.
         let def = kids.get(&mine).and_then(|(a, b)| now.get(*a..*b)).map(|d| {
             renamed(d, &|attr, v| match attr {
                 // Two of the file's names can be one of WordCraft's: a style keeps its own.
