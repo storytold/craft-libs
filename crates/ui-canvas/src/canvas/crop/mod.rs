@@ -378,7 +378,8 @@ impl CropOverlay<'_> {
         if cx.intents().take(Intent::Submit) {
             self.report.apply = true;
         }
-        if cx.intents().take(Intent::Cancel) {
+        // Escape discards a started crop; the untouched default frame has nothing to discard and leaves it to the window.
+        if self.started(None) && cx.intents().take(Intent::Cancel) {
             self.report.discard = true;
         }
         // A hidden frame is not shown to move.
