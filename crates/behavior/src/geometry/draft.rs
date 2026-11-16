@@ -268,6 +268,22 @@ impl OutlineDraft {
         Some(DraftEvent::Changed)
     }
 
+    /// The pointer moved to `at` with the button down while the reposition key is held: the whole outline moves by the
+    /// pointer's step since its last sample instead of growing, and the rubber band's free end follows. Returns
+    /// [`DraftEvent::Changed`] when the outline moved.
+    pub fn move_to(&mut self, at: DraftPoint) -> Option<DraftEvent> {
+        if !self.down || !self.is_open() || !at.at.x.is_finite() || !at.at.y.is_finite() {
+            return None;
+        }
+        let last = self.cursor.or_else(|| self.points.last().copied())?;
+        let by = at.at - last;
+        for point in &mut self.points {
+            *point += by;
+        }
+        self.cursor = Some(at.at);
+        Some(DraftEvent::Changed)
+    }
+
     /// Where a new point of `at` goes: with ⇧, on the horizontal, vertical or 45° line through the previous point
     /// ([`polygon_step`]), for a Mixed draft's every point and a Polygonal vertex placed without ⌥; `at` itself
     /// otherwise, and for the first point.
