@@ -518,3 +518,54 @@ fn a_press_in_the_move_reach_moves_the_box_and_a_handle_still_scales() {
     let scaled = session.borrow().quad();
     assert!(size(scaled) > size(after) + 1.0, "a corner drag scales: {after:?} -> {scaled:?}");
 }
+
+/// The snap lines of a session box drag reach the tool host through `TransformTool`, as the crop frame's do: the host
+/// reports them while a snapped corner drag runs and none once it ends.
+#[trial]
+fn the_session_boxs_snap_lines_reach_the_tool_host() {
+    use craft_draw::ui::transform::TransformTool;
+    use craft_ui::canvas::ToolHost;
+    let session = Rc::new(RefCell::new(TransformSession::<()>::new(RECT)));
+    let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
+    let lines = Rc::new(RefCell::new(Vec::new()));
+    let (shown_session, shown_view, shown_lines) = (Rc::clone(&session), Rc::clone(&view), Rc::clone(&lines));
+    let mut targets = SnapTargets::new();
+    for x in SNAP_XS {
+        targets.add(SnapTarget::new(craft_behavior::Axis::Y, x, SnapKind::Guide));
+    }
+    let snap = Snap::new(Arc::new(targets), SnapOptions::default());
+    let settings = TransformSettings::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+        *shown_view.borrow_mut() = at;
+        let canvas = Canvas::new("Document").view(at).snap(snap.clone()).show(ui, |ui, body| {
+            let session = shown_session.borrow();
+            TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect)
+        });
+        let Some(shown) = canvas.inner else { return };
+        let response = {
+            let session = shown_session.borrow();
+            let mut tool = TransformTool::new(&session, shown.snapped);
+            ToolHost::new().run(ui, &canvas.output, &mut tool)
+        };
+        shown_lines.borrow_mut().push(response.snapped.len());
+        let mut session = shown_session.borrow_mut();
+        for edit in shown.edits {
+            session.apply(edit, 0.0);
+        }
+    });
+    fixture.settle();
+    let from = view.borrow().to_screen(Point::new(300.0, 220.0));
+    let mut step = |events: Vec<egui::Event>| {
+        lines.borrow_mut().clear();
+        fixture.frame(events);
+        lines.borrow().iter().copied().max().unwrap_or(0)
+    };
+    step(vec![pointer::moved(from)]);
+    step(vec![pointer::press(from)]);
+    step(vec![pointer::moved(from + by(4.0, 0.0))]);
+    assert!(step(vec![pointer::moved(from + by(7.0, 0.0))]) > 0, "the corner snapped to x 310: the host reports the line");
+    step(vec![pointer::release(from + by(7.0, 0.0))]);
+    assert_eq!(step(Vec::new()), 0, "the lines end with the drag");
+}

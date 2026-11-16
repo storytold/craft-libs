@@ -5,6 +5,7 @@
 mod stories;
 
 use craft_behavior::CancelReason;
+use craft_behavior::geometry::SnapLine;
 use craft_behavior::geometry::quad::{BoxPart, BoxRules};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
@@ -32,7 +33,7 @@ pub struct TransformOverlayOutput<W> {
     /// The keyboard's picked part while the box has focus.
     pub picked: Option<BoxPart>,
     /// The snap lines of the point being dragged, from the box.
-    pub snapped: Vec<craft_behavior::geometry::SnapLine>,
+    pub snapped: Vec<SnapLine>,
     /// The value of the app's menu row that was picked.
     pub menu_row: Option<String>,
 }
@@ -192,17 +193,20 @@ fn splice_rows(mut entries: Vec<Entry<TransformChoice>>, rows: &[Entry<String>])
 
 /// The canvas tool while a session is open. Presses are the box's parts', so the tool ignores them. In the Box phase
 /// the box holds the canvas's keys (Enter, Escape and the arrows reach it first, `KeyUse::session`); in the Warp
-/// phase, where no box is shown, Enter applies and Escape discards through the tool.
+/// phase, where no box is shown, Enter applies and Escape discards through the tool. The snap lines the overlay
+/// reported in this pass's canvas body reach the host through the tool, which draws and reports them.
 pub struct TransformTool<'a, W> {
     session: &'a TransformSession<W>,
+    snapped: Vec<SnapLine>,
     apply: bool,
     discard: bool,
 }
 
 impl<'a, W: TransformWarp> TransformTool<'a, W> {
-    /// The tool of `session`.
-    pub fn new(session: &'a TransformSession<W>) -> Self {
-        Self { session, apply: false, discard: false }
+    /// The tool of `session` for this pass. `snapped` is what [`TransformOverlay::show_at`] reported in this pass's
+    /// canvas body ([`TransformOverlayOutput::snapped`]); empty when the body showed no box (the Warp phase).
+    pub fn new(session: &'a TransformSession<W>, snapped: Vec<SnapLine>) -> Self {
+        Self { session, snapped, apply: false, discard: false }
     }
 
     /// What the keys asked for since the last call: whether to apply the session and whether to discard it.
@@ -212,6 +216,10 @@ impl<'a, W: TransformWarp> TransformTool<'a, W> {
 }
 
 impl<W: TransformWarp> CanvasTool for TransformTool<'_, W> {
+    fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
+        cx.add_snapped(self.snapped.iter().cloned());
+    }
+
     fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
         ToolAction::Ignored
     }

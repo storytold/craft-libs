@@ -126,7 +126,8 @@ fn run_session(ui: &mut Ui, data: &mut StoryData, with_rows: bool) -> StoryOutpu
         body,
         |run| {
             let (applied, kept) = (run.document, run.tool);
-            let mut tool = TransformTool::new(&kept.session);
+            let snapped = run.shown.as_ref().map(|shown| shown.snapped.clone()).unwrap_or_default();
+            let mut tool = TransformTool::new(&kept.session, snapped);
             let _ = run.host.run(&mut tool);
             let (key_apply, key_discard) = tool.take_keys();
             let (edits, apply, discard) = match run.shown {
