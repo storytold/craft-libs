@@ -21,22 +21,56 @@ const MAX_NESTING: u32 = 16;
 const MAX_NAME: usize = 256;
 
 /// The internal general entities declared in `svg`: name → every value declared for it. Text that
-/// only looks like a declaration (in a comment, or in another entity's value) is kept too: the
-/// largest value counts, so it can only make the estimate larger.
+/// only looks like a declaration in another entity's value is kept too: the largest value counts,
+/// so it can only make the estimate larger. Comments and CDATA are skipped, so markers there are
+/// not treated as declarations.
 fn declared(svg: &str) -> HashMap<&str, Vec<&str>> {
     let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (at, _) in svg.match_indices("<!ENTITY") {
-        let rest = svg.get(at + "<!ENTITY".len()..).unwrap_or("").trim_start();
-        // A parameter entity (`%`) isn't referenced as `&name;`.
-        if rest.starts_with('%') {
+    let mut i = 0;
+    while let Some(rel) = svg.get(i..).and_then(|s| s.find('<')) {
+        let at = i + rel;
+        let after = svg.get(at + 1..).unwrap_or("");
+        if let Some(body) = after.strip_prefix("!--") {
+            i = match body.find("-->") {
+                Some(n) => at + 1 + 3 + n + 3,
+                None => svg.len(),
+            };
             continue;
         }
-        let Some(end) = rest.find(char::is_whitespace) else { continue };
-        let (name, rest) = rest.split_at(end);
-        let rest = rest.trim_start();
-        let Some(quote) = rest.chars().next().filter(|q| matches!(q, '"' | '\'')) else { continue };
-        let Some(value) = rest.get(1..).and_then(|r| r.split_once(quote)).map(|(v, _)| v) else { continue };
-        map.entry(name).or_default().push(value);
+        if let Some(body) = after.strip_prefix("![CDATA[") {
+            i = match body.find("]]>") {
+                Some(n) => at + 1 + 8 + n + 3,
+                None => svg.len(),
+            };
+            continue;
+        }
+        if let Some(rest) = after.strip_prefix("!ENTITY") {
+            let rest = rest.trim_start();
+            // A parameter entity (`%`) isn't referenced as `&name;`.
+            if rest.starts_with('%') {
+                i = at + 1;
+                continue;
+            }
+            // Bound the name scan: a comment full of `<!ENTITYx` with no spaces must not
+            // search the rest of the file for whitespace after every marker.
+            let window = rest.get(..rest.len().min(MAX_NAME + 1)).unwrap_or(rest);
+            if let Some(end) = window.find(char::is_whitespace) {
+                let (name, rest) = rest.split_at(end);
+                let rest = rest.trim_start();
+                if let Some(quote) = rest.chars().next().filter(|q| matches!(q, '"' | '\''))
+                    && let Some(value) = rest.get(1..).and_then(|r| r.split_once(quote)).map(|(v, _)| v)
+                {
+                    map.entry(name).or_default().push(value);
+                }
+            } else if rest.len() > MAX_NAME {
+                // A name longer than MAX_NAME cannot be referenced, but it must still be
+                // recorded so `entities_expand_past` can refuse the document.
+                map.entry(window).or_default().push("");
+            }
+            i = at + 1;
+            continue;
+        }
+        i = at + 1;
     }
     map
 }
@@ -99,7 +133,8 @@ pub fn entities_expand_past(svg: &str, most: usize) -> bool {
 /// an entity becomes elements where it is referenced, so what the text shows of the tree is not
 /// what a reader builds; drawing apps declare entities for namespace names only. A caller may
 /// refuse these outright instead of counting them ([`prescan`] counts them ten times). Text that
-/// only looks like a declaration (in a comment) counts too. `&#60;` is text, not markup.
+/// only looks like a declaration in another entity's value counts too; comments are skipped.
+/// `&#60;` is text, not markup.
 pub fn entity_holds_markup(svg: &str) -> bool {
     declared(svg).values().flatten().any(|value| value.contains('<'))
 }
@@ -394,6 +429,16 @@ mod tests {
         let long = "n".repeat(MAX_NAME + 1);
         let long_name = format!("<!DOCTYPE svg [<!ENTITY {long} \"x\">]><svg id=\"&{long};\"/>");
         assert!(expansion_too_large(&long_name));
+    }
+
+    #[test]
+    fn entity_markers_in_a_comment_are_scanned_in_linear_time() {
+        // 100,000 `<!ENTITYx` markers with no whitespace: the old scan searched the rest of
+        // the file after every marker. Skipping comments and bounding the name makes this
+        // linear, and none of the markers is a declaration.
+        let markers = "<!ENTITYx".repeat(100_000);
+        let svg = format!("<svg><!--{markers}--></svg>");
+        assert!(!entities_expand_past(&svg, MAX_ENTITY_EXPANSION));
     }
 
     fn svg(body: &str) -> String {

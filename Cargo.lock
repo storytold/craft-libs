@@ -1647,6 +1647,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-elf"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-eps"
 version = "0.1.0"
 dependencies = [
@@ -2101,6 +2110,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-macho"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-markdown"
 version = "0.1.0"
 dependencies = [
@@ -2400,6 +2418,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pe"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
@@ -2632,6 +2659,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-render-parity"
+version = "0.1.0"
+dependencies = [
+ "craft-cms",
+]
+
+[[package]]
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
@@ -2799,6 +2833,13 @@ version = "0.1.0"
 dependencies = [
  "craft-svg",
  "kurbo 0.13.1",
+]
+
+[[package]]
+name = "craft-tar"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
