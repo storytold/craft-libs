@@ -9,7 +9,7 @@ mod shield;
 mod stories;
 
 use super::words::CanvasWords;
-use super::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_snap, canvas_space, readout};
+use super::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_snap, canvas_space, context_click, readout};
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, WordSetCx as _,
@@ -98,6 +98,7 @@ struct Report {
     sizing: Option<(f64, f64)>,
     scrolls_at: Option<Pos2>,
     straighten_ended: bool,
+    context: Option<(Pos2, Mods)>,
 }
 
 /// What a pass leaves for the next and for paint.
@@ -384,7 +385,8 @@ impl CropOverlay<'_> {
         if cx.intents().take(Intent::Submit) {
             self.report.apply = true;
         }
-        if cx.intents().take(Intent::Cancel) {
+        // Escape discards a started crop; the untouched default frame has nothing to discard and leaves it to the window.
+        if self.started(None) && cx.intents().take(Intent::Cancel) {
             self.report.discard = true;
         }
         // A hidden frame is not shown to move.
@@ -456,6 +458,9 @@ pub struct CropOverlayOutput {
     pub scrolls_at: Option<Pos2>,
     /// True in the pass a Straighten press is released or cancelled, whatever its length.
     pub straighten_ended: bool,
+    /// Where a secondary press on the overlay was released and the modifiers held then, for the host's context menu.
+    /// The overlay's parts take the secondary press, so the canvas behind never sees it.
+    pub context: Option<(Pos2, Mods)>,
 }
 
 impl Outcome for CropOverlayOutput {
@@ -514,7 +519,7 @@ impl Component for CropOverlay<'_> {
         let frame = self.shown(cx.value(), &view);
         if self.straighten {
             cx.part(STRAIGHTEN, HitShape::Rect(rect))
-                .sense(Sense::DRAG)
+                .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
                 .priority(HitPriority::new(HitLevel::Handle, u8::MAX))
                 .cursor(CursorIcon::Crosshair)
                 .pointer_only("the options bar's angle field sets the straightened angle");
@@ -522,7 +527,7 @@ impl Component for CropOverlay<'_> {
         if self.hidden {
             // No frame to grab: the whole canvas is the default frame's inside, where a press draws a new frame.
             cx.part(FRAME.at(BoxPart::Inside.index()), HitShape::Rect(rect))
-                .sense(Sense::DRAG)
+                .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
                 .priority(HitPriority::BODY)
                 .cursor(CursorIcon::Crosshair)
                 .pointer_only("the options bar's size fields set the frame while it is hidden");
@@ -537,7 +542,7 @@ impl Component for CropOverlay<'_> {
         let reach = cx.style.reach.min(lu.min(lv) / 4.0);
         let body = if self.default_frame { CursorIcon::Crosshair } else { CursorIcon::Move };
         cx.part(FRAME.at(BoxPart::Inside.index()), HitShape::Polygon(q.to_vec()))
-            .sense(Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS)
+            .sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS)
             .priority(HitPriority::BODY)
             .cursor(body)
             .focusable()
@@ -546,7 +551,7 @@ impl Component for CropOverlay<'_> {
             let part = BoxPart::Corner(i);
             let mut declared = cx
                 .part(FRAME.at(part.index()), HitShape::circle(q[usize::from(i)], reach))
-                .sense(Sense::DRAG | Sense::TAKE_FOCUS)
+                .sense(Sense::DRAG | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .focusable();
             if let Some(direction) = frame.part_direction(part) {
@@ -561,7 +566,7 @@ impl Component for CropOverlay<'_> {
             let strip = vec![a + across, b + across, b - across, a - across];
             let mut declared = cx
                 .part(FRAME.at(part.index()), HitShape::Polygon(strip))
-                .sense(Sense::DRAG | Sense::TAKE_FOCUS)
+                .sense(Sense::DRAG | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Edge, 0))
                 .focusable();
             if let Some(direction) = frame.part_direction(part) {
@@ -570,7 +575,7 @@ impl Component for CropOverlay<'_> {
             let _ = declared;
         }
         cx.part(TURN, HitShape::Rect(rect))
-            .sense(Sense::DRAG)
+            .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
             .priority(HitPriority::new(HitLevel::Background, u8::MAX))
             .pointer_only("the options bar's angle field sets the frame's angle");
         cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
@@ -614,6 +619,9 @@ impl Component for CropOverlay<'_> {
                 // The press phases reach only the pass that has the frame's input, so a second pass of the frame
                 // reports no Straighten end and finishes no drag a second time.
                 PressPhase::Release { start, click, .. } => {
+                    if let Some(at) = context_click(&press) {
+                        self.report.context = Some((at, press.mods));
+                    }
                     self.report.straighten_ended |= grab == Grab::Line && start.button == PointerButton::Primary;
                     if !click && let Some(drag) = live.drag.take() {
                         self.finish(cx, &space, drag);
@@ -687,8 +695,21 @@ impl Component for CropOverlay<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CropOverlayOutput {
         let picked = cx.active_part().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
-        let Report { apply, discard, straightened, view, snapped, hovered, dragging, nudged, turning, sizing, scrolls_at, straighten_ended } =
-            self.report;
+        let Report {
+            apply,
+            discard,
+            straightened,
+            view,
+            snapped,
+            hovered,
+            dragging,
+            nudged,
+            turning,
+            sizing,
+            scrolls_at,
+            straighten_ended,
+            context,
+        } = self.report;
         CropOverlayOutput {
             edit: cx.edit_response(),
             apply,
@@ -704,6 +725,7 @@ impl Component for CropOverlay<'_> {
             sizing,
             scrolls_at,
             straighten_ended,
+            context,
         }
     }
 }

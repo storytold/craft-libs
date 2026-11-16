@@ -1047,17 +1047,19 @@ pub fn take_around<S: CommandSet>(ctx: &Context, at: Id, around: &CommandChain) 
 /// The command of set `S` that `chord` runs at `at` (a canvas that is an instance of a scope itself) inside `around`:
 /// the lookup for a key that automation holds, so it starts what the real key starts. The key is matched as the key
 /// stage matches a press with `at` in focus (the viewport's layout, the keymap's scopes, panel fallthrough), on its
-/// own since a held key completes no double press; the command goes where `take_around` takes it from and runs only
+/// own since a held key completes no double press, and not while the focused component keeps the keys for typing;
+/// the command goes where `take_around` takes it from and runs only
 /// when it is enabled there, the gate included.
 #[doc(hidden)]
 pub fn bound_around<S: CommandSet>(ctx: &Context, at: Id, around: &CommandChain, chord: &Chord) -> Option<S> {
     let layout = keys::layout_of(ctx);
+    let typing = focus::typing(ctx, pass::current_viewport(ctx));
     let (command, instance) = with(ctx, |board| {
         let mut chain: Vec<Id> = around.ids().collect();
         if !chain.contains(&at) {
             chain.push(at);
         }
-        let hit = board.key_scopes(&chain)?.press(&layout, &chord_input(chord), false, None)?;
+        let hit = board.key_scopes(&chain)?.press(&layout, &chord_input(chord), typing, None)?;
         S::from_ref(&hit.command)?;
         Some((hit.command, board.instance_around(at, around, S::SCOPE.name())))
     })?;

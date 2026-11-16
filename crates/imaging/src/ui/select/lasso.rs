@@ -2,7 +2,7 @@
 
 use craft_behavior::geometry::{ConstrainStyle, DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
 use craft_behavior::{CancelReason, Cursor, PaintedCursor, PointerButton};
-use craft_keymap::Mods;
+use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth, ToolIcon};
 use egui::{Pos2, Vec2};
@@ -341,7 +341,8 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
             }
             return;
         }
-        let event = tool.draft.drag(sample(pointer, &place));
+        // Space held moves the outline being drawn by the pointer's step instead of adding points to it.
+        let event = if cx.held(Key::Space) { tool.draft.move_to(sample(pointer, &place)) } else { tool.draft.drag(sample(pointer, &place)) };
         apply(event, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report);
     }
 
@@ -354,6 +355,9 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         if let Some(inside) = tool.inside.take() {
             tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect)));
             return;
+        }
+        if cx.held(Key::Space) {
+            tool.draft.move_to(sample(pointer, &place));
         }
         let event = tool.draft.release(sample(pointer, &place));
         if event == Some(DraftEvent::Cancelled) {

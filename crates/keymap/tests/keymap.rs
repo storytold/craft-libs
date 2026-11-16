@@ -1,7 +1,8 @@
 //! Integration tests of craft-keymap: keymap.
 
 use craft_keymap::{
-    Active, Binding, Chord, CommandDef, CommandRef, DropReason, Keymap, Lookup, MAX_COMMANDS, Overrides, Platform, Problem, Scope, Scopes,
+    Active, Binding, Chord, CommandDef, CommandRef, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods, Overrides, Platform,
+    Press, Problem, Scope, Scopes,
 };
 use serde_json::json;
 
@@ -170,4 +171,27 @@ fn hostile_overrides_load_without_panic_and_report_problems() {
         assert!(o.is_empty(), "{text}");
         assert_eq!(o.load_notes(), [Problem::Dropped { key: String::new(), reason: DropReason::NotAList }], "{text}");
     }
+}
+
+/// A command that opts in to the Alt variant runs on its bound chord with Alt added, wherever its key is rebound to,
+/// unless a binding owns the Alt chord itself.
+#[test]
+fn the_alt_variant_follows_the_commands_key_and_yields_to_a_bound_alt_chord() {
+    let alt = |key: Key, cmd: bool, shift: bool| KeyInput::new(Mods { cmd, ctrl: false, alt: true, shift }).with_physical(key);
+    let hit = |km: &Keymap, input: &KeyInput| {
+        let press = Press { input, repeat: false, now: 0.0, active: &Active::NONE, outer: &[] };
+        Matcher::new().press(&Layout::new(), km, &press)
+    };
+    let new_layer = || app("layer.new.layer", &["F2"]).with_alt_variant();
+    let km = Keymap::new(vec![new_layer()], Scopes::new(), Platform::Mac);
+    let found = hit(&km, &alt(Key::F2, false, false)).expect("Alt+F2 runs the command bound to F2");
+    assert_eq!((found.command, found.alt_variant), (cmd("layer.new.layer"), true));
+
+    let owner = app("layer.new.copy", &["Alt+F2"]);
+    let km = Keymap::new(vec![new_layer(), owner], Scopes::new(), Platform::Mac);
+    let found = hit(&km, &alt(Key::F2, false, false)).expect("Alt+F2 is bound");
+    assert_eq!((found.command, found.alt_variant), (cmd("layer.new.copy"), false), "the bound Alt chord runs its own command");
+
+    let km = Keymap::new(vec![app("layer.new.layer", &["F2"])], Scopes::new(), Platform::Mac);
+    assert!(hit(&km, &alt(Key::F2, false, false)).is_none(), "a command that did not opt in has no Alt variant");
 }

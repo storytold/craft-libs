@@ -97,6 +97,15 @@ pub struct CropShown {
     events: Vec<CropEvent>,
     snapped: Vec<SnapLine>,
     scrolls_at: Option<Pos2>,
+    context: Option<(Pos2, Mods)>,
+}
+
+impl CropShown {
+    /// Where a secondary press on the frame's overlay was released, with the modifiers held, taken once: the host opens
+    /// its canvas menu there, as it does for a secondary press the canvas's own tool refuses.
+    pub fn take_context(&mut self) -> Option<(Pos2, Mods)> {
+        self.context.take()
+    }
 }
 
 /// What a pass of the tool reports, from [`CropToolPass::finish`]. The state the app reads after
@@ -236,7 +245,7 @@ impl CropTool {
     /// reported in this pass's canvas body; `None` when the body showed no frame. Its events come first in the
     /// pass's output, and the host takes its snap lines and scroll request.
     pub fn pass<'a>(&'a mut self, input: CropInput<'a>, shown: Option<CropShown>) -> CropToolPass<'a> {
-        let CropShown { events, snapped, scrolls_at } = shown.unwrap_or_default();
+        let CropShown { events, snapped, scrolls_at, .. } = shown.unwrap_or_default();
         CropToolPass { tool: self, input, output: CropOutput { events, snapped }, scrolls_at }
     }
 
@@ -294,8 +303,8 @@ impl CropTool {
     /// second pass of the frame reads its own overlay output and never repeats an edit, a Straighten line or a
     /// scroll request.
     fn take(&mut self, shown: CropOverlayOutput, input: &CropInput<'_>, units: &Units, time: f64) -> CropShown {
-        let CropOverlayOutput { edit, apply, discard, straightened, straighten_ended, view, snapped, dragging, nudged, scrolls_at, .. } = shown;
-        let mut out = CropShown { events: Vec::new(), snapped, scrolls_at };
+        let CropOverlayOutput { edit, apply, discard, straightened, straighten_ended, view, snapped, dragging, nudged, scrolls_at, context, .. } = shown;
+        let mut out = CropShown { events: Vec::new(), snapped, scrolls_at, context };
         self.dragging = dragging;
         if let Some(view) = view {
             self.view = Some(view);

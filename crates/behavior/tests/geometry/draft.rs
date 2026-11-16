@@ -83,3 +83,19 @@ fn shift_holds_a_freehand_drag_to_one_line() {
     assert!(points.iter().all(|p| p.y == 60.0), "the drag stays on the horizontal line through its start: {points:?}");
     assert_eq!(points.last().map(|p| p.x), Some(100.0), "and follows the pointer along it");
 }
+
+#[test]
+fn moving_a_freehand_outline_shifts_every_point_by_the_pointers_step() {
+    let mut draft = OutlineDraft::new(DraftKind::Freehand, REACH);
+    draft.press(at(50.0, 50.0, 1.0), true);
+    draft.drag(at(120.0, 50.0, 1.0));
+    draft.drag(at(120.0, 100.0, 1.0));
+    assert_eq!(draft.move_to(at(170.0, 130.0, 1.0)), Some(DraftEvent::Changed));
+    assert_eq!(draft.points(), [Point::new(100.0, 80.0), Point::new(170.0, 80.0), Point::new(170.0, 130.0)]);
+    // Drawing goes on from the moved end.
+    draft.drag(at(180.0, 130.0, 1.0));
+    assert_eq!(draft.points().len(), 4);
+    // With the button up nothing moves.
+    draft.release(at(180.0, 130.0, 1.0));
+    assert_eq!(draft.move_to(at(0.0, 0.0, 1.0)), None);
+}
