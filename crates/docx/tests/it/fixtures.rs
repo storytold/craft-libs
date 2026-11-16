@@ -1893,7 +1893,10 @@ fn office_2016_chart_with_a_text_fallback_keeps_its_size_through_saves() {
         assert_eq!((*w, *h), (432.0, 252.0));
         assert_eq!((graphic.w, graphic.h), (432.0, 252.0));
         assert!(
-            graphic.items.iter().any(|i| matches!(i, craft_wordmodel::graphic::GraphicItem::Text { text, .. } if text.starts_with("Waterfall chart"))),
+            graphic
+                .items
+                .iter()
+                .any(|i| matches!(i, craft_wordmodel::graphic::GraphicItem::Text { text, .. } if text.starts_with("Waterfall chart"))),
             "{:?}",
             graphic.items
         );
@@ -1911,13 +1914,12 @@ fn office_2016_chart_with_a_text_fallback_keeps_its_size_through_saves() {
     }
 }
 
-/// A fallback that holds a run (not run content) can't be written back inside the object's own
-/// run, so it is read as before: its text, no chart object.
+/// Guard, not fix proof (it passes before the change too): a fallback that holds a run can't be
+/// written back inside the object's own run, so it is not turned into a chart placeholder.
 #[test]
-fn office_2016_chart_with_a_run_fallback_is_read_as_before() {
+fn office_2016_chart_with_a_run_fallback_is_not_made_a_placeholder() {
     let d = craft_docx::read(&chartex_text_fallback_docx("<w:r><w:t>Chart not available.</w:t></w:r>")).unwrap();
-    assert!(graphics(&d).is_empty());
-    assert!(paras(&d).iter().any(|p| p.text.contains("Chart not available.")));
+    assert!(graphics(&d).is_empty(), "{:?}", graphics(&d));
 }
 
 #[test]

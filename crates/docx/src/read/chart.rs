@@ -150,15 +150,12 @@ pub(crate) fn chartex_items(space: Option<&El>, w: f32, h: f32) -> Vec<GraphicIt
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return out;
     }
-    out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill: Some(Rgb::WHITE), stroke: Some(AXIS), stroke_width: 0.75 });
+    out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill: None, stroke: Some(AXIS), stroke_width: 0.75 });
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     let chart = space.and_then(|s| s.child("cx:chart"));
     let title = chart.and_then(|c| c.child("cx:title")).and_then(|t| {
-        let mut s = String::new();
-        t.find_all("a:t").for_each(|r| s.push_str(&r.text()));
-        if s.is_empty() {
-            s = t.find("cx:v").map(|v| v.text().into_owned()).unwrap_or_default();
-        }
+        // Rich text keeps its runs together ("Sales " + "funnel"); a text-data title is one value.
+        let s = t.find("cx:rich").or_else(|| t.find("cx:v")).map(|e| e.deep_text()).unwrap_or_default();
         let s = label(s.trim());
         (!s.is_empty()).then_some(s)
     });
