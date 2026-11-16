@@ -99,12 +99,16 @@ pub fn write(
             if let Some(data) = by_name.get(&name).and_then(|&i| files.get(i)).map(|(_, d)| d.clone()) {
                 return Some(data);
             }
-            // the model is an entry too; stop resolving once another texture could not fit
-            if too_many || files.len() as u64 + 1 >= package_limits.max_entries {
-                too_many = true;
+            // once a resolved texture has not fit, the package fails: stop calling the resolver
+            if too_many {
                 return None;
             }
             if let Some(data) = found(path).filter(|d| d.len() as u64 <= package_limits.max_texture_bytes) {
+                // the model is an entry too; only a texture that resolves needs a new entry
+                if files.len() as u64 + 1 >= package_limits.max_entries {
+                    too_many = true;
+                    return None;
+                }
                 total = total.saturating_add(data.len() as u64);
                 if total > package_limits.max_total_bytes {
                     exceeded = true;
@@ -123,11 +127,11 @@ pub fn write(
     if exceeded {
         return Err(too_large(KIND, "the FBX and its textures exceed the package limit"));
     }
-    if files.is_empty() {
-        return Ok((None, missing));
-    }
     if too_many {
         return Err(too_large(KIND, "too many package entries"));
+    }
+    if files.is_empty() {
+        return Ok((None, missing));
     }
     let leaf = file_name.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("mesh.fbx");
     // the package is found by its `.fbx` entry, so the model always carries that extension
@@ -214,6 +218,19 @@ mod tests {
             Some(b"image".to_vec())
         });
         assert!(matches!(result, Err(Error::TooLarge(_))));
-        assert!(calls < bounds().max_entries as usize, "{calls} resolver calls past the entry limit");
+        assert!(calls <= bounds().max_entries as usize, "{calls} resolver calls past the entry limit");
+    }
+
+    #[test]
+    fn the_entry_limit_counts_only_textures_that_resolve() {
+        let limits = Limits::default();
+        let doc = read_document(MODEL, &limits).unwrap();
+        // the model alone fills a one-entry package, so a resolved texture cannot fit
+        let one = PackageLimits { max_entries: 1, ..bounds() };
+        assert!(matches!(write(&doc, "a.fbx", MODEL, &limits, one, &mut |_| Some(b"image".to_vec())), Err(Error::TooLarge(_))));
+        // an unresolved texture adds no entry, so it is reported missing rather than overflowing
+        let (bytes, missing) = write(&doc, "a.fbx", MODEL, &limits, one, &mut |_| None).unwrap();
+        assert!(bytes.is_none());
+        assert_eq!(missing, vec!["tex/a.png".to_string()]);
     }
 }
