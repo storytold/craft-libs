@@ -19,6 +19,9 @@ heic-rs = { version = "=0.1.4", default-features = false, features = ["std"], op
 heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "parallel"], optional = true }
 rayon = { workspace = true, optional = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+
 [features]
 default = ["decode"]
 # The decoder (probe, decode, decode_thumbnail, read_metadata): heic-rs for the container and HEVC.

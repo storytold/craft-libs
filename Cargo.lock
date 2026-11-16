@@ -1909,6 +1909,7 @@ name = "craft-heif"
 version = "0.1.0"
 dependencies = [
  "heic-rs",
+ "proptest",
  "rayon",
 ]
 
