@@ -82,6 +82,23 @@ pub enum RotateZone {
     Band,
 }
 
+/// What of the box takes the pointer and the keys ([`TransformOverlay::reach`](super::TransformOverlay::reach)).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum TransformReach {
+    /// The whole box: its handles, sides, inside and outside, drawn, with its keys and its menu (Free Transform).
+    #[default]
+    Box,
+    /// Only the move reach: a plain press within `points` screen points outside the frame moves the box. No handle,
+    /// side, inside or outside takes a press, the box takes no key and has no menu, and it is drawn only while its
+    /// drag runs. PhotoCraft's type box while typing with no modifier held: a press on the text is the editor's, one
+    /// further out the tool's.
+    MoveOnly {
+        /// The reach outside the frame, in screen points.
+        points: f32,
+    },
+}
+
 /// The box drawn as a live line's controls ([`TransformBox::line`]), in document units: a square at each end of the
 /// segment and the round widget at its middle, with no frame. `outline`, for a line with an arrowhead, is the box
 /// aligned with the segment that holds the arrowheads, drawn with a square at the middle of each side.
@@ -200,6 +217,7 @@ struct Report {
     discard: bool,
     hovered: Option<BoxPart>,
     picked: Option<BoxPart>,
+    held: Option<BoxPart>,
     snapped: Vec<SnapLine>,
 }
 
@@ -313,10 +331,10 @@ pub struct TransformBox<'a> {
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
     #[prop]
     line: Option<LineLook>,
-    /// A plain press within `points` screen points outside the frame moves the box (0: off). Crate-private: the
-    /// public entry is `TransformOverlay::move_reach`.
-    #[prop(quantity = "press reach outside the frame, in screen points", vis = "pub(crate)")]
-    move_reach: f32,
+    /// What of the box takes the pointer and the keys: the whole box, or only the move reach outside the frame.
+    /// Crate-private: the public entry is `TransformOverlay::reach`.
+    #[prop(vis = "pub(crate)")]
+    reach: TransformReach,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
     pivot_held: bool,
     /// Whether this pass holds a drag that began, so a live line's box shows as it scales.
@@ -343,7 +361,7 @@ impl<'a> TransformBox<'a> {
             session_arrows: true,
             centre_mark: false,
             line: None,
-            move_reach: 0.0,
+            reach: TransformReach::Box,
             pivot_held: false,
             dragging: false,
             report: Report::default(),
@@ -363,19 +381,31 @@ impl<'a> TransformBox<'a> {
         Self::new(label, state, start, 0.0).rules(rules).reference_point(false).inside_moves(false).rotate_zone(RotateZone::Band)
     }
 
-    /// Whether the middle of the box is a move part: the reference point is hidden, so it does not take that place.
-    fn declares_centre(&self) -> bool {
-        !self.reference_point && self.inside_moves && self.rules.allows(BoxPart::Inside)
+    /// The width of the move strips outside the frame when the box offers only them; `None` for the whole box.
+    fn move_only(&self) -> Option<f32> {
+        match self.reach {
+            TransformReach::MoveOnly { points } => Some(points),
+            TransformReach::Box => None,
+        }
     }
 
-    /// Whether the strips outside the frame are move parts.
-    fn declares_ring(&self) -> bool {
-        self.move_reach > 0.0 && self.rules.allows(BoxPart::Inside)
+    /// Whether the middle of the box is a move part: the reference point is hidden, so it does not take that place.
+    fn declares_centre(&self) -> bool {
+        self.move_only().is_none() && !self.reference_point && self.inside_moves && self.rules.allows(BoxPart::Inside)
+    }
+
+    /// The width of the strips outside the frame, when they are move parts.
+    fn ring_reach(&self) -> Option<f32> {
+        self.move_only().filter(|&points| points > 0.0 && self.rules.allows(BoxPart::Inside))
     }
 
     /// The parts the keyboard walks, in order. A box whose inside does not move has no inside part, so a press or drag
-    /// over its body reaches what lies beneath (a type editor under a paragraph frame).
+    /// over its body reaches what lies beneath (a type editor under a paragraph frame). A box that offers only its
+    /// move reach has none.
     fn keyboard_parts(&self) -> Vec<BoxPart> {
+        if self.move_only().is_some() {
+            return Vec::new();
+        }
         if let Some(line) = &self.line {
             return line.ends().map(|(part, _)| part).filter(|&part| self.rules.allows(part)).collect();
         }
@@ -531,9 +561,13 @@ impl<'a> TransformBox<'a> {
     }
 
     /// The parts that take a press, with the box part each stands for. Mirrors what [`parts`](Component::parts)
-    /// declares: the keyboard parts, a segment per allowed edge, the centre and the move strips where declared, and the
-    /// outside.
+    /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside; or only the
+    /// move strips.
     fn pointer_parts(&self) -> Vec<(PartRef, BoxPart)> {
+        if self.move_only().is_some() {
+            let sides = if self.ring_reach().is_some() { 0..4 } else { 0..0 };
+            return sides.map(|side| (MOVE_RING.at(side), BoxPart::Inside)).collect();
+        }
         let mut parts: Vec<_> = self.keyboard_parts().into_iter().map(|part| (BOX.at(part.index()), part)).collect();
         if self.line.is_some() {
             return parts;
@@ -541,9 +575,6 @@ impl<'a> TransformBox<'a> {
         parts.extend((0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))).map(|k| (EDGE.at(u64::from(k)), BoxPart::Edge(k))));
         if self.declares_centre() {
             parts.push((CENTRE.at(0), BoxPart::Inside));
-        }
-        if self.declares_ring() {
-            parts.extend((0..4).map(|side| (MOVE_RING.at(side), BoxPart::Inside)));
         }
         parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
         parts
@@ -569,7 +600,8 @@ impl<'a> TransformBox<'a> {
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let from = space.view.to_doc(start.origin);
-                    let moves_pivot = mods.alt && matches!(part, BoxPart::Inside | BoxPart::Outside);
+                    // The move reach only moves: an Alt press there is a move too.
+                    let moves_pivot = mods.alt && self.move_only().is_none() && matches!(part, BoxPart::Inside | BoxPart::Outside);
                     let follows = follows_in_slop(part);
                     let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
                     held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, pressed: *shown, last: *shown });
@@ -605,7 +637,7 @@ impl<'a> TransformBox<'a> {
                 }
                 PressPhase::Release { start, click, .. } => {
                     // A double click inside applies, whether or not the first press of the release was seen.
-                    if click && start.clicks >= 2 && start.button == PointerButton::Primary && part == BoxPart::Inside {
+                    if click && start.clicks >= 2 && start.button == PointerButton::Primary && part == BoxPart::Inside && self.move_only().is_none() {
                         self.report.apply = Some(ApplyBy::DoubleClick);
                     }
                     let Some(grip) = held.take() else { continue };
@@ -713,6 +745,18 @@ fn paint_frame(draw: &Draw<'_>, style: &TransformBoxStyle, corners: [Pos2; 4]) {
     draw.stroke(&outline, StrokeWidth::Medium, style.line);
 }
 
+/// The move strips along the sides of the box whose corners are `quad` on the screen, each `points` wide outside it.
+fn declare_ring(cx: &mut PartsCx<'_, TransformBox<'_>>, quad: &[Pos2; 4], points: f32) {
+    let outer = quad::outset(quad, points);
+    for side in 0..4usize {
+        let next = (side + 1) % 4;
+        cx.part(MOVE_RING.at(side as u64), HitShape::Polygon(vec![quad[side], quad[next], outer[next], outer[side]]))
+            .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
+            .priority(HitPriority::new(HitLevel::Body, RING_SUB))
+            .pointer_only(MOVE_BY_KEY);
+    }
+}
+
 /// The reference point's glyph centred at `centre`: a circle crossed by two arms, over its halo. The one glyph of the
 /// reference point and of the centre mark.
 fn paint_centre_glyph(draw: &Draw<'_>, centre: Pos2, style: &TransformBoxStyle) {
@@ -802,6 +846,12 @@ impl Component for TransformBox<'_> {
         let style = cx.style;
         let screen = on_screen(&space.view, &state);
         let quad: [Pos2; 4] = screen.quad.map(pos);
+        if self.move_only().is_some() {
+            if let Some(points) = self.ring_reach() {
+                declare_ring(cx, &quad, points);
+            }
+            return;
+        }
         let mut any = false;
         for part in self.keyboard_parts() {
             let (shape, sense, priority, focus) = match part {
@@ -848,16 +898,6 @@ impl Component for TransformBox<'_> {
                 .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                 .pointer_only(MOVE_BY_KEY);
         }
-        if self.declares_ring() {
-            let outer = quad::outset(&quad, self.move_reach);
-            for side in 0..4usize {
-                let next = (side + 1) % 4;
-                cx.part(MOVE_RING.at(side as u64), HitShape::Polygon(vec![quad[side], quad[next], outer[next], outer[side]]))
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
-                    .priority(HitPriority::new(HitLevel::Body, RING_SUB))
-                    .pointer_only(MOVE_BY_KEY);
-            }
-        }
         if any {
             cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
         }
@@ -886,13 +926,20 @@ impl Component for TransformBox<'_> {
         self.run_pointer(cx, &space, &shown);
         self.pivot_held = cx.press_slot::<Grip>().is_some_and(|grip| grip.part == BoxPart::Pivot);
         self.dragging = cx.press_slot::<Grip>().is_some_and(|grip| grip.began);
+        self.report.held = cx.press_slot::<Grip>().map(|grip| grip.part);
         let pressing = held || cx.press_slot::<Grip>().is_some();
-        self.run_keys(cx, &space, &shown, pressing);
+        if self.move_only().is_none() {
+            self.run_keys(cx, &space, &shown, pressing);
+        }
     }
 
     /// The frame and its handles, with the centre mark under the handles; or, for a live line not being dragged, the
-    /// line's controls. The reference point over both.
+    /// line's controls. The reference point over both. A box that offers only its move reach is drawn only while its
+    /// drag runs.
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.move_only().is_some() && !self.dragging {
+            return;
+        }
         let (Some(space), Some(state)) = (canvas_space(&cx.env), cx.value()) else { return };
         let screen = on_screen(&space.view, state);
         let style = cx.style;
@@ -937,8 +984,8 @@ impl Component for TransformBox<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TransformBoxOutput {
-        let Report { apply, discard, hovered, picked, snapped } = self.report;
-        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, snapped }
+        let Report { apply, discard, hovered, picked, held, snapped } = self.report;
+        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped }
     }
 }
 
@@ -957,6 +1004,8 @@ pub struct TransformBoxOutput {
     pub picked: Option<BoxPart>,
     /// The part a press at the pointer would take; `None` where it is the tool's.
     pub hovered: Option<BoxPart>,
+    /// The part the open press holds, from the press to its release or cancel, before and during its drag.
+    pub held: Option<BoxPart>,
     /// The snap lines of the point being dragged, for the host's one drawing site.
     pub snapped: Vec<craft_behavior::geometry::SnapLine>,
 }

@@ -5,7 +5,9 @@ use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule, Tra
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
-use craft_draw::ui::transform::{LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformSession, TransformSettings};
+use craft_draw::ui::transform::{
+    LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformReach, TransformSession, TransformSettings,
+};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{Canvas, RulerText, Snap};
 use craft_ui::canvas::{Guide, GuideKey};
@@ -483,58 +485,73 @@ fn the_whole_enlarged_overflow_handle_grabs_in_a_turned_view_and_a_short_box_kee
     assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(2)), "the bottom middle handle of a short box");
 }
 
+/// An overlay that offers only its move reach (the type tool's, 38 points): a press in the strip outside the frame is
+/// held from the press and its drag moves the box; a press inside the frame, beside a handle or past the reach is
+/// not the box's, so nothing is held and the box stays where it is.
 #[trial]
-fn a_press_in_the_move_reach_moves_the_box_and_a_handle_still_scales() {
-    // The overlay's own zone is `RotateZone::Outside`; the band's order against the ring is not reachable from here
-    // (`TransformBox::move_reach` is crate-private). The reach is the type tool's (38 points): a side's segment takes a
-    // press up to half the hit target (at most 16 points) from it, and the ring the rest of the reach.
+fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
     let session = Rc::new(RefCell::new(TransformSession::<()>::new(RECT)));
     let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
-    let (shown_session, shown_view) = (Rc::clone(&session), Rc::clone(&view));
+    let held = Rc::new(RefCell::new(Vec::new()));
+    let (shown_session, shown_view, shown_held) = (Rc::clone(&session), Rc::clone(&view), Rc::clone(&held));
     let settings = TransformSettings::default();
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
         *shown_view.borrow_mut() = at;
-        let edits = Canvas::new("Document").view(at).show(ui, |ui, body| {
+        let shown = Canvas::new("Document").view(at).show(ui, |ui, body| {
             let session = shown_session.borrow();
-            TransformOverlay::new("Free Transform", &session, &settings).move_reach(38.0).show_at(ui, body.rect).edits
+            TransformOverlay::new("Type transform", &session, &settings).reach(TransformReach::MoveOnly { points: 38.0 }).show_at(ui, body.rect)
         });
+        let Some(out) = shown.inner else { return };
+        shown_held.borrow_mut().push(out.held);
         let mut session = shown_session.borrow_mut();
-        for edit in edits.inner.unwrap_or_default() {
+        for edit in out.edits {
             let edit: TransformEdit<()> = edit;
             session.apply(edit, 0.0);
         }
     });
     fixture.settle();
     let screen = |p: Point| view.borrow().to_screen(p);
+    // Each pass's held part, from the press through the drag to the frame after the release.
     let mut drag = |from: Point, to: Point| {
         let (start, end) = (screen(from), screen(to));
         fixture.frame(vec![pointer::moved(start)]);
+        held.borrow_mut().clear();
         fixture.frame(vec![pointer::press(start)]);
+        let at_press = held.borrow().last().copied().flatten();
         fixture.frame(vec![pointer::moved(start + (end - start) * 0.5)]);
         fixture.frame(vec![pointer::moved(end)]);
         fixture.frame(vec![pointer::release(end)]);
         fixture.frame(Vec::new());
+        let ever = held.borrow().iter().any(Option::is_some);
+        (at_press, ever)
     };
-    let size = |quad: [Point; 4]| (quad[1] - quad[0]).hypot() * (quad[3] - quad[0]).hypot();
 
-    // 24 points outside the right side, past the side's segment and away from its handles: the box moves and keeps its
-    // size.
+    let untaken = [
+        (Point::new(200.0, 150.0), "the inside"),
+        (Point::new(RECT.x1 - 3.0, RECT.y1 - 3.0), "just inside a corner, where a handle would be"),
+        (Point::new(RECT.x1 - 3.0, 150.0), "just inside a side's middle"),
+        (Point::new(RECT.x1 + 60.0, 150.0), "past the reach"),
+        (Point::new(RECT.x1 + 60.0, RECT.y1 + 60.0), "past a corner, where the box would rotate"),
+    ];
+    for (at, what) in untaken {
+        let before = session.borrow().quad();
+        let (at_press, ever) = drag(at, Point::new(at.x + 30.0, at.y + 20.0));
+        assert!(at_press.is_none() && !ever, "{what}: the box holds no press");
+        assert_eq!(session.borrow().quad(), before, "{what}: the box stays");
+    }
+
+    // 24 points outside the right side: held from the press, and the drag translates the box.
+    let size = |quad: [Point; 4]| (quad[1] - quad[0]).hypot() * (quad[3] - quad[0]).hypot();
     let before = session.borrow().quad();
-    drag(Point::new(324.0, 100.0), Point::new(354.0, 120.0));
+    let (at_press, _) = drag(Point::new(RECT.x1 + 24.0, 150.0), Point::new(RECT.x1 + 54.0, 170.0));
+    assert_eq!(at_press, Some(BoxPart::Inside), "the press in reach is held as a move before any movement");
     let after = session.borrow().quad();
     assert!(
-        ((after[0].x - before[0].x) - 30.0).abs() < 1e-6 && ((after[0].y - before[0].y) - 20.0).abs() < 1e-6,
-        "the box translates: {before:?} -> {after:?}"
+        after[0].x > before[0].x + 1.0 && after[0].y > before[0].y + 1.0 && (size(after) - size(before)).abs() < 1e-6,
+        "the box moves and keeps its size: {before:?} -> {after:?}"
     );
-    assert!((size(after) - size(before)).abs() < 1e-6, "the move keeps the size");
-
-    // A corner handle inside the same reach still scales.
-    let corner = after[2];
-    drag(corner, Point::new(corner.x + 40.0, corner.y + 28.0));
-    let scaled = session.borrow().quad();
-    assert!(size(scaled) > size(after) + 1.0, "a corner drag scales: {after:?} -> {scaled:?}");
 }
 
 /// The snap lines of a session box drag reach the tool host through `TransformTool`, as the crop frame's do: the host

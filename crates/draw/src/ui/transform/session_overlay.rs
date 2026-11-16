@@ -17,7 +17,8 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{AsIdSalt, Id, IdSalt, Rect, Ui};
 
 use super::{
-    ApplyBy, TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformSession, TransformSettings, TransformWarp,
+    ApplyBy, TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformReach, TransformSession, TransformSettings,
+    TransformWarp,
 };
 
 /// What the overlay reported this pass.
@@ -32,6 +33,9 @@ pub struct TransformOverlayOutput<W> {
     pub discard: bool,
     /// The keyboard's picked part while the box has focus.
     pub picked: Option<BoxPart>,
+    /// The part the box's open press holds, from the press to its release or cancel: a host that keeps state for a
+    /// press (a capture) starts it at the press, before the drag begins.
+    pub held: Option<BoxPart>,
     /// The snap lines of the point being dragged, from the box.
     pub snapped: Vec<SnapLine>,
     /// The value of the app's menu row that was picked.
@@ -49,6 +53,8 @@ pub struct TransformOverlayOutput<W> {
 ///   [`discard`](TransformOverlayOutput::discard). The app answers them with [`TransformSession::commit`] and
 ///   [`discard`](TransformSession::discard) after the edits.
 /// - A secondary click on the canvas opens the session's mode menu; a pick reports as the edit it stands for.
+/// - [`TransformReach::MoveOnly`] offers only the move reach outside the frame: no handle, side, inside, outside, key
+///   or menu, and the box is drawn only while its drag runs.
 /// - Warp phase: draws nothing, senses nothing and claims nothing; the app's warp widgets own the canvas.
 /// - Keyboard, AccessKit and right-to-left are the box's. Undo and Redo are the app's Edit commands.
 #[derive(craft_ui::contract::Pattern)]
@@ -61,7 +67,7 @@ pub struct TransformOverlay<'a, W> {
     pixel_grid: bool,
     mods: Option<Mods>,
     menu_rows: &'a [Entry<String>],
-    move_reach: f32,
+    reach: TransformReach,
     id: IdSource,
 }
 
@@ -76,7 +82,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             pixel_grid: false,
             mods: None,
             menu_rows: &[],
-            move_reach: 0.0,
+            reach: TransformReach::Box,
             id: IdSource::Auto,
         }
     }
@@ -103,12 +109,13 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         self
     }
 
-    /// While a session is open, a plain press within `points` screen points outside the frame moves the box (0: off),
-    /// unless it hits a handle. The press is the box's own move, so it reaches [`TransformOverlayOutput::edits`] as a
-    /// [`TransformEdit::Box`].
+    /// What of the box takes the pointer and the keys: the whole box (the default), or only the move reach outside
+    /// the frame ([`TransformReach::MoveOnly`]), where a plain press moves the box and reaches
+    /// [`TransformOverlayOutput::edits`] as a [`TransformEdit::Box`]; every other press is the host's, and the box has
+    /// no menu.
     #[must_use]
-    pub fn move_reach(mut self, points: f32) -> Self {
-        self.move_reach = points;
+    pub fn reach(mut self, reach: TransformReach) -> Self {
+        self.reach = reach;
         self
     }
 
@@ -138,7 +145,8 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     /// Shows the box at `rect`, the canvas body's rect (Box phase); in the Warp phase returns an empty output.
     pub fn show_at(self, ui: &mut Ui, rect: Rect) -> TransformOverlayOutput<W> {
         let session = self.session;
-        let mut out = TransformOverlayOutput { edits: Vec::new(), apply: None, discard: false, picked: None, snapped: Vec::new(), menu_row: None };
+        let mut out =
+            TransformOverlayOutput { edits: Vec::new(), apply: None, discard: false, picked: None, held: None, snapped: Vec::new(), menu_row: None };
         if session.phase() == TransformPhase::Warp {
             return out;
         }
@@ -150,10 +158,8 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             .rules(rules)
             .reference_point(session.reference_point())
             .pixel_grid(self.pixel_grid)
+            .reach(self.reach)
             .id_source(self.id);
-        if self.move_reach > 0.0 {
-            tbox = tbox.move_reach(self.move_reach);
-        }
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);
         }
@@ -162,7 +168,11 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         out.apply = shown.apply;
         out.discard = shown.discard;
         out.picked = shown.picked;
+        out.held = shown.held;
         out.snapped = shown.snapped;
+        if self.reach != TransformReach::Box {
+            return out;
+        }
         let words = Env::of(ui).words::<TransformMenuWords>();
         let entries = splice_rows(session.menu(&words), self.menu_rows);
         if let Some(choice) = Menu::context(self.label, &shown.edit.response).pick(ui, &entries).picked {
