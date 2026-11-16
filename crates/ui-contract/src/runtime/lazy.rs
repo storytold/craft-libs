@@ -19,8 +19,8 @@ use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
-use egui::{Context, Id, Layout, Rect, Vec2};
-use std::collections::{HashMap, HashSet};
+use egui::{Context, Id, IdMap, IdSet, Layout, Rect, Vec2};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// The view of the innermost scroll area, as the run that lays its content out sees it: the rect the pass shows,
@@ -161,12 +161,12 @@ struct Changes {
 
 #[derive(Default)]
 pub(crate) struct Store {
-    entries: HashMap<Id, Entry>,
+    entries: IdMap<Entry>,
     changes: Changes,
     /// The last frame each scroll area reached one of its children in.
-    reached: HashMap<Id, u64>,
+    reached: IdMap<u64>,
     /// What the real run that lays a scroll area's content out found, by area, from `begin` to `placed`.
-    placed: HashMap<Id, Placed>,
+    placed: IdMap<Placed>,
     /// The frame the entries were last pruned in.
     pruned: u64,
 }
@@ -196,7 +196,7 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
             store.entries.retain(|_, entry| {
                 entry.touched + 1 >= frame || entry.owner.is_some_and(|owner| reached.get(&owner).is_none_or(|ran| ran + 1 < frame))
             });
-            let owners: HashSet<Id> = store.entries.values().filter_map(|entry| entry.owner).collect();
+            let owners: IdSet = store.entries.values().filter_map(|entry| entry.owner).collect();
             store.reached.retain(|owner, _| owners.contains(owner));
         }
         f(store, pass_nr, frame)

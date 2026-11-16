@@ -12,7 +12,7 @@
 
 use crate::runtime::egui::memory::Service;
 use crate::runtime::frame::{self, PerViewport, Stamped, Stored};
-use egui::Context;
+use egui::{Context, IdSet};
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -137,7 +137,7 @@ pass_state! {
         ids: crate::contract::steps::id::IdPass,
         pass_pointer: Arc<crate::runtime::pointer::PassPointer>,
         overlay_pass: crate::runtime::overlay::Pass,
-        shown_ids: std::collections::HashSet<egui::Id>,
+        shown_ids: IdSet,
     }
 }
 

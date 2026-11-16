@@ -9,13 +9,12 @@ use crate::runtime::pending::{self, Job, Pending};
 use craft_behavior::eviction::owner_due;
 use craft_host::Host;
 use craft_settings::Remembered;
-use egui::{Context, Id, ViewportId};
+use egui::{Context, Id, IdSet, ViewportId};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -246,7 +245,7 @@ pub(crate) fn evict(ctx: &Context) {
     let live = pass::live_viewports(ctx);
     pass_state::with::<Registry, _>(ctx, |reg| {
         let due = |r: &OwnerRecord| owner_due(r.pass, r.at, pass::pass_nr(ctx, r.viewport), now, live.contains(&r.viewport));
-        let dead: HashSet<Id> = reg.owners.iter().filter(|(_, r)| due(r)).map(|(id, _)| *id).collect();
+        let dead: IdSet = reg.owners.iter().filter(|(_, r)| due(r)).map(|(id, _)| *id).collect();
         if dead.is_empty() {
             return;
         }
@@ -457,13 +456,8 @@ impl MemoryStage {
         self.claimed.borrow_mut().push(base);
         let viewport = pass::current_viewport(&self.ctx);
         let pass_nr = pass::pass_nr(&self.ctx, viewport);
-        let duplicate = PerViewport::<Stamped<HashSet<Id>>>::with_pass(
-            &self.ctx,
-            viewport,
-            pass_nr,
-            |claimed, _| claimed.clear(),
-            |claimed| !claimed.insert(base),
-        );
+        let duplicate =
+            PerViewport::<Stamped<IdSet>>::with_pass(&self.ctx, viewport, pass_nr, |claimed, _| claimed.clear(), |claimed| !claimed.insert(base));
         debug_assert!(!duplicate, "an id is the base of two open stages in one pass");
     }
 

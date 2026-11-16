@@ -11,8 +11,7 @@ use crate::runtime::overlay::{self, CloseReason};
 use crate::runtime::pass_state;
 use craft_behavior::Intent;
 use craft_behavior::{EditEvent, Mixed};
-use egui::{Context, Id};
-use std::collections::HashMap;
+use egui::{Context, Id, IdMap};
 
 /// An id and a name; `Copy`, never a snapshot of the open state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,7 +76,7 @@ pub(crate) struct Popups {
     pub(super) anchors: Vec<(Id, PopupShown)>,
     /// The opener that opened each layer with openers, by the layer's first opener: its id and trigger (two
     /// openers on one response differ by trigger) and how it fired.
-    pub(super) opened_by: HashMap<Id, (Id, Trigger, Opening)>,
+    pub(super) opened_by: IdMap<(Id, Trigger, Opening)>,
     /// The popups whose layer is a container running now (`OverlayUi::show_container`), innermost last.
     pub(super) layers: Vec<PopupLayer>,
 }
@@ -159,7 +158,7 @@ pub(crate) fn popup_shown(ctx: &Context, owner: Id) -> bool {
 }
 
 /// Step 10: the open state of every popup `owner` registered, with the closes `request_close` queued applied.
-pub(crate) fn open_map(stage: &mut MemoryStage, owner: Id) -> HashMap<Id, bool> {
+pub(crate) fn open_map(stage: &mut MemoryStage, owner: Id) -> IdMap<bool> {
     let ctx = stage.ctx().clone();
     let popups: Vec<Id> =
         with_popups(&ctx, |popups| popups.registered.iter().filter(|(registered, _)| *registered == owner).map(|(_, popup)| *popup).collect());

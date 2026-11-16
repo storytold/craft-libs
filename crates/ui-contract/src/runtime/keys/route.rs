@@ -12,7 +12,7 @@ use craft_behavior::keys;
 use craft_behavior::{EditCommand, Intent, KeyOwner, MoveMods, NavMove, OwnerClass};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Layout, Mods};
-use egui::{Context, Id, Vec2};
+use egui::{Context, Id, IdMap, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -47,7 +47,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         stage.enter_stale
     });
     let mut routed: HashMap<Option<Id>, Routed> = HashMap::new();
-    let mut activated = HashMap::new();
+    let mut activated = IdMap::default();
     let mut consumed = vec![Taken::No; batch.presses.len()];
     let driven = target.as_ref().and_then(|rec| Driven::of(ctx, rec));
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
@@ -542,7 +542,7 @@ fn apply_press(
     press: &Press,
     route: PressRoute,
     routed: &mut HashMap<Option<Id>, Routed>,
-    activated: &mut HashMap<Id, Id>,
+    activated: &mut IdMap<Id>,
 ) -> Taken {
     let stop = &rec.stop;
     let id = Some(stop.id);
@@ -572,7 +572,7 @@ fn apply_press(
 
 /// `Activate` of a group member goes to the group's root, which reads `activated_member`. A child or part of a
 /// collection row activates itself.
-fn route_activate(ctx: &Context, rec: &StopRec, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut HashMap<Id, Id>) {
+fn route_activate(ctx: &Context, rec: &StopRec, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
     let target = if rec.stop.group.is_some() && !focus::is_row_child(ctx, &rec.stop) {
         activated.insert(rec.stop.root, rec.stop.id);
         rec.stop.root
@@ -595,13 +595,7 @@ fn nudge_of(key: Key, mods: Mods) -> Option<(Vec2, Mods)> {
 }
 
 /// Routes an AccessKit action request to the owner of its target node, whatever the focus (9.2 rule 2).
-fn route_access(
-    ctx: &Context,
-    request: &Action,
-    nodes: &HashMap<u64, Node>,
-    routed: &mut HashMap<Option<Id>, Routed>,
-    activated: &mut HashMap<Id, Id>,
-) {
+fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
     let Some(node) = nodes.get(&request.node()).copied() else { return };
     let owner = Some(node.owner);
     if node.focusable {

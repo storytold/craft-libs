@@ -20,7 +20,7 @@ use craft_behavior::{
 };
 use craft_keymap::Mods;
 use craft_theme::Flags;
-use egui::{Context, Id, Pos2, Rect, Response, Ui, ViewportId};
+use egui::{Context, Id, IdMap, Pos2, Rect, Response, Ui, ViewportId};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -243,7 +243,7 @@ struct ArenaState {
 
 #[derive(Default)]
 pub(crate) struct Arenas {
-    by_root: HashMap<Id, ArenaState>,
+    by_root: IdMap<ArenaState>,
     swept: u64,
     /// The end sweep is registered; the runtime layer below cannot register it at install.
     sweep_registered: bool,

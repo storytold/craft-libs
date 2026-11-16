@@ -8,8 +8,7 @@ use crate::runtime::egui::memory::Service;
 use crate::runtime::keys;
 use crate::runtime::memory::sub;
 use craft_behavior::{AccessRequest, PartKey, PartRef, TextPos};
-use egui::{Context, Id, Rect};
-use std::collections::HashMap;
+use egui::{Context, Id, IdMap, Rect};
 use std::ops::Range;
 
 /// The part key of a run node, indexed in document order.
@@ -58,7 +57,7 @@ struct Entry {
 }
 
 #[derive(Default)]
-struct Tables(HashMap<Id, Vec<Entry>>);
+struct Tables(IdMap<Vec<Entry>>);
 
 pub(crate) fn run_id(owner: Id, line: usize, run: usize) -> Id {
     sub(owner, ("text_run", line, run))

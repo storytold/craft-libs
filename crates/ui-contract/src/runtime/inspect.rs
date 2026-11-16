@@ -8,8 +8,7 @@ use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, measure, pass_state, pointer};
 use craft_behavior::PartRef;
-use egui::{Context, Id, Rect, Ui};
-use std::collections::{HashMap, HashSet};
+use egui::{Context, Id, IdMap, IdSet, Rect, Ui};
 use std::sync::Arc;
 
 /// A rule a component broke that the pipeline reports instead of panicking.
@@ -27,13 +26,13 @@ pub struct Finding {
 
 #[derive(Default)]
 pub(crate) struct Log {
-    steps: HashMap<Id, Vec<&'static str>>,
+    steps: IdMap<Vec<&'static str>>,
     findings: Vec<Finding>,
     canvas_controls: Vec<&'static str>,
     /// The inspected regions open in the running pass, innermost last.
     open: Vec<Open>,
     /// The latest record of each region, and the element its list points at, by the region's key.
-    kept: HashMap<Id, Kept>,
+    kept: IdMap<Kept>,
 }
 
 /// Whether records are kept: in frames a test fixture drives, and inside an inspected region in any build.
@@ -289,7 +288,7 @@ fn edited(ctx: &Context, read: BindKey, editor: Id) {
 fn finish(ctx: &Context, open: Open) -> Recorded {
     let from_screen = areas::layer_to_screen(ctx, open.layer).inverse();
     let to_region = |layer: Layer, rect: Rect| from_screen * (areas::layer_to_screen(ctx, layer) * rect);
-    let ids: HashSet<Id> = open.elements.iter().map(|(element, _)| element.id).collect();
+    let ids: IdSet = open.elements.iter().map(|(element, _)| element.id).collect();
     let mut elements: Vec<Element> = Vec::with_capacity(open.elements.len() + open.parts.len());
     let mut parts = open.parts;
     let labels = open.labels;
@@ -316,7 +315,7 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
     }
     name_from_labels(&mut elements);
     // The sensing core keeps its shapes by root, in no order; a record compares equal to the same region's next one.
-    let place: HashMap<Id, usize> = elements.iter().enumerate().rev().map(|(index, element)| (element.id, index)).collect();
+    let place: IdMap<usize> = elements.iter().enumerate().rev().map(|(index, element)| (element.id, index)).collect();
     hits.sort_by(|a, b| {
         let key = |hit: &HitArea| (place.get(&hit.owner).copied(), hit.rect.min.y, hit.rect.min.x);
         key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
@@ -341,7 +340,7 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
 
 /// Names each node without a name of its own by the nodes of the region that label it, as a screen reader reads it.
 fn name_from_labels(elements: &mut [Element]) {
-    let names: HashMap<Id, String> = elements
+    let names: IdMap<String> = elements
         .iter()
         .filter(|element| element.part.is_none())
         .filter_map(|element| Some((element.id, element.facts.as_ref()?.name.clone()?)))

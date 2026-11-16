@@ -7,9 +7,8 @@ use crate::runtime::frame;
 use crate::runtime::memory::{self, MemoryStage};
 use craft_host::queue::{Cancel, JobQueue, Priority, QueueOptions};
 use craft_host::{Jobs, Wake};
-use egui::{Context, Id, ViewportId};
+use egui::{Context, Id, IdMap, ViewportId};
 use std::any::TypeId;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -199,7 +198,7 @@ type Queue = (Arc<dyn Jobs>, Arc<JobQueue<Id, ()>>);
 #[derive(Default)]
 struct PendingState {
     queue: Option<Queue>,
-    tracked: HashMap<Id, Tracked>,
+    tracked: IdMap<Tracked>,
 }
 
 fn queue_of(ctx: &Context, jobs: &Arc<dyn Jobs>) -> Arc<JobQueue<Id, ()>> {
