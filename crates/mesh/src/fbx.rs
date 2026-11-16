@@ -1436,12 +1436,15 @@ impl<'a> Build<'a, '_> {
         let mut colors_complete = colors.is_some();
         let slots = geom.children_named("LayerElementMaterial").min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0)).and_then(|e| {
             let mapping = e.child("MappingInformationType").and_then(|m| m.str_at(0)).unwrap_or("AllSame");
-            let by_poly = match mapping {
-                "ByPolygon" | "ByPolygonVertex" | "ByVertex" | "ByVertice" | "ByControlPoint" => true,
-                "AllSame" => false,
+            // a polygon goes to one part, so per-corner and per-vertex IDs use its first corner
+            let by = match mapping {
+                "ByPolygon" => Mapping::Polygon,
+                "ByPolygonVertex" => Mapping::PolygonVertex,
+                "ByVertex" | "ByVertice" | "ByControlPoint" => Mapping::Vertex,
+                "AllSame" => Mapping::AllSame,
                 _ => return None,
             };
-            Some((by_poly, e.child("Materials")?.ints()))
+            Some((by, e.child("Materials")?.ints()))
         });
         let (normal_layer, uv_layer) = (normals.as_ref().map(|l| &l.0), uvs.as_ref().map(|l| &l.0));
 
@@ -1451,7 +1454,8 @@ impl<'a> Build<'a, '_> {
         let (mut broken, mut poly) = (false, 0usize);
         let polygon_indices = pvi.ints();
         let index_count = polygon_indices.len();
-        for (pv, raw) in polygon_indices.into_iter().enumerate() {
+        let mut poly_start = 0usize;
+        for (pv, raw) in polygon_indices.iter().copied().enumerate() {
             // The last corner of a polygon is stored as `-index - 1`.
             let (v, last) = if raw < 0 { (!raw, true) } else { (raw, self.strict_geometry && pv + 1 == index_count) };
             match u32::try_from(v).ok().filter(|v| (*v as usize) < original_positions) {
@@ -1512,6 +1516,7 @@ impl<'a> Build<'a, '_> {
                 continue;
             }
             let (corners, p_index, was_broken) = (std::mem::take(&mut face), poly, std::mem::take(&mut broken));
+            let first_pv = std::mem::replace(&mut poly_start, pv + 1);
             poly += 1;
             if was_broken || corners.len() < 3 {
                 self.skipped += 1;
@@ -1522,8 +1527,17 @@ impl<'a> Build<'a, '_> {
                 return Err(too_large(KIND, format!("more than {} triangles", limits.max_triangles)));
             }
             let slot = match &slots {
-                Some((by_poly, ids)) => {
-                    let k = if *by_poly { ids.get(p_index) } else { ids.first() };
+                Some((by, ids)) => {
+                    let k = match by {
+                        Mapping::Polygon => ids.get(p_index),
+                        Mapping::PolygonVertex => ids.get(first_pv),
+                        Mapping::Vertex => polygon_indices
+                            .get(first_pv)
+                            .map(|&r| if r < 0 { !r } else { r })
+                            .and_then(|v| usize::try_from(v).ok())
+                            .and_then(|v| ids.get(v)),
+                        Mapping::AllSame => ids.first(),
+                    };
                     k.and_then(|k| usize::try_from(*k).ok()).and_then(|k| materials.get(k)).copied()
                 }
                 None => materials.first().copied(),

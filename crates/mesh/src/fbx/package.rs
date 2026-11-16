@@ -91,13 +91,13 @@ pub fn write(
     let mut total = bytes.len() as u64;
     let mut exceeded = total > package_limits.max_total_bytes || total > package_limits.max_model_bytes;
     doc.diffuse_materials(limits, &mut |paths| {
-        if let Some((_, data)) = files.iter().find(|(n, _)| paths.iter().any(|p| below(p).as_ref() == Some(n))) {
-            return Some(data.clone());
-        }
+        // candidates in order of preference: an earlier one that exists wins over a later cached one
         for path in paths {
-            if let Some(name) = below(path)
-                && let Some(data) = found(path).filter(|d| d.len() as u64 <= package_limits.max_texture_bytes)
-            {
+            let Some(name) = below(path) else { continue };
+            if let Some((_, data)) = files.iter().find(|(n, _)| *n == name) {
+                return Some(data.clone());
+            }
+            if let Some(data) = found(path).filter(|d| d.len() as u64 <= package_limits.max_texture_bytes) {
                 total = total.saturating_add(data.len() as u64);
                 if total > package_limits.max_total_bytes {
                     exceeded = true;
@@ -152,5 +152,23 @@ mod tests {
         let small = PackageLimits { max_total_bytes: MODEL.len() as u64 + 4, ..bounds() };
         assert!(matches!(write(&doc, "a.fbx", MODEL, &limits, small, &mut |_| Some(b"image".to_vec())), Err(Error::TooLarge(_))));
         assert!(Package::open(&bytes, PackageLimits { max_entries: 1, ..bounds() }).is_err());
+    }
+
+    #[test]
+    fn an_earlier_candidate_wins_over_a_cached_later_one() {
+        let model = b"FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Material: 1, \"Material::A\", \"\" { } Texture: 2, \"Texture::A\", \"\" { RelativeFilename: \"base.png\" } Material: 3, \"Material::B\", \"\" { } Texture: 4, \"Texture::B\", \"\" { RelativeFilename: \"maps/base.png\" FileName: \"C:/art/base.png\" } } Connections: { C: \"OP\",2,1,\"DiffuseColor\" C: \"OP\",4,3,\"DiffuseColor\" }";
+        let limits = Limits::default();
+        let doc = read_document(model, &limits).unwrap();
+        let mut found = |p: &str| match p {
+            "base.png" => Some(b"flat".to_vec()),
+            "maps/base.png" => Some(b"maps".to_vec()),
+            _ => None,
+        };
+        let (bytes, missing) = write(&doc, "asset.fbx", model, &limits, bounds(), &mut found).unwrap();
+        assert!(missing.is_empty());
+        let bytes = bytes.unwrap();
+        let mut package = Package::open(&bytes, bounds()).unwrap();
+        assert_eq!(package.texture(&["maps/base.png"]), Some(b"maps".to_vec()));
+        assert_eq!(package.texture(&["base.png"]), Some(b"flat".to_vec()));
     }
 }

@@ -844,3 +844,32 @@ fn diffuse_materials_preserve_factors_and_texture_candidates() {
     let embedded = document(embedded_text.as_bytes()).diffuse_materials(&Limits::default(), &mut |_| None).unwrap();
     assert_eq!(embedded.iter().find(|m| m.name == "Red").unwrap().image.as_deref(), Some(&b"embedded"[..]));
 }
+
+#[test]
+fn per_corner_and_per_vertex_material_ids_use_each_polygons_first_corner() {
+    let by_corner = ASCII.replace("MappingInformationType: \"ByPolygon\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *2 {\n\t\t\t\ta: 0,1", "MappingInformationType: \"ByPolygonVertex\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *7 {\n\t\t\t\ta: 0,0,0,0,1,1,1");
+    assert_ne!(by_corner, ASCII);
+    let parts = &parse(by_corner.as_bytes()).unwrap().meshes[0].parts;
+    assert_eq!(parts.len(), 2, "the triangle takes material 1 from its first corner");
+    // The triangle starts at control point 4, whose material is 1.
+    let by_vertex = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,4,0,-2").replace(
+        "MappingInformationType: \"ByPolygon\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *2 {\n\t\t\t\ta: 0,1",
+        "MappingInformationType: \"ByControlPoint\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *5 {\n\t\t\t\ta: 0,0,0,0,1",
+    );
+    let scene = parse(by_vertex.as_bytes()).unwrap();
+    assert_eq!(scene.meshes[0].parts.len(), 2);
+    assert!(scene.meshes[0].parts.iter().all(|p| p.material.is_some()));
+}
+
+#[test]
+fn strict_colors_validate_and_read_the_same_layer() {
+    let good = "LayerElementColor: 0 { MappingInformationType: \"AllSame\" ReferenceInformationType: \"Direct\" Colors: 0,1,0,1 }\n";
+    let bad = "LayerElementColor: 1 { MappingInformationType: \"AllSame\" ReferenceInformationType: \"Direct\" Colors: \"bad\",1,0,0,1 }\n";
+    let text = ASCII.replace("LayerElementNormal: 0 {", &format!("{bad} {good} LayerElementNormal: 0 {{"));
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    let scene = document(text.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert!(scene.meshes[0].colors.iter().all(|c| *c == [0.0, 1.0, 0.0, 1.0]));
+    assert!(!scene.meshes[0].colors.is_empty());
+    let only_bad = ASCII.replace("LayerElementNormal: 0 {", &format!("{} LayerElementNormal: 0 {{", bad.replace(": 1 {", ": 0 {")));
+    assert!(document(only_bad.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
+}
