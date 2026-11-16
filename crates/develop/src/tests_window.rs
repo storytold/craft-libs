@@ -567,3 +567,71 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     hdr.light.exposure = 1.5;
     check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
 }
+
+// Given a deep render of a window and a region of it finished alone from the same stage cache (a
+// brush stroke growing between them), the region is those pixels of the whole render, sample for
+// sample: a shown window patched where a stroke went matches the render that follows the stroke.
+#[test]
+fn a_region_finished_alone_is_the_whole_renders_pixels() {
+    use crate::{DeepSamples, OutputSpace, StageCache, render_cached, render_region_cached};
+    use craft_develop_model::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use craft_geom::Point;
+    use std::sync::Arc;
+    let src = Arc::new(noisy_scene());
+    let info = SourceInfo::default();
+    let with = |pts: &[(f64, f64)], auto_mask: bool| DevelopSettings {
+        masks: vec![Mask {
+            components: vec![MaskComponent {
+                name: None,
+                op: MaskOp::Add,
+                invert: false,
+                shape: MaskShape::Brush {
+                    strokes: vec![BrushStroke {
+                        points: pts.iter().map(|p| Point::new(p.0, p.1)).collect(),
+                        size: 0.05,
+                        feather: 50.0,
+                        flow: 100.0,
+                        auto_mask,
+                        ..Default::default()
+                    }],
+                },
+            }],
+            adjust: LocalAdjustments { exposure: 1.0, clarity: 30.0, ..Default::default() },
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let samples = |d: crate::DeepImage| match d.samples {
+        DeepSamples::U16(v) => (d.width, d.height, v),
+        _ => panic!("16-bit samples"),
+    };
+    for (window, auto_mask) in [(None, false), (Some(PixelWindow { x: 200, y: 120, w: 500, h: 380 }), true)] {
+        let req = RenderRequest { space: OutputSpace::ProPhoto, depth: OutputDepth::U16, window, ..RenderRequest::exact(W, H) };
+        let cache = StageCache::default();
+        // the stroke so far rendered, then grown: the region round the new dab finished alone
+        let _ = render_cached(&src, &info, &with(&[(0.3, 0.4), (0.4, 0.42)], auto_mask), &req, &cache);
+        let grown = with(&[(0.3, 0.4), (0.4, 0.42), (0.5, 0.45)], auto_mask);
+        let region = PixelWindow { x: 130, y: 60, w: 210, h: 170 };
+        let (rw, rh, part) = samples(render_region_cached(&src, &info, &grown, &req, &cache, region).unwrap());
+        assert_eq!((rw, rh), (region.w, region.h));
+        let (fw, _, whole) = samples(render_cached(&src, &info, &grown, &req, &StageCache::default()).deep.unwrap());
+        let mut differ = 0;
+        for y in 0..rh {
+            for x in 0..rw * 3 {
+                let (a, b) = (part[y * rw * 3 + x], whole[(region.y + y) * fw * 3 + region.x * 3 + x]);
+                // (an Auto Mask stroke continued from a cached raster matches up to float rounding)
+                if a.abs_diff(b) > u16::from(auto_mask) * 2 {
+                    differ += 1;
+                }
+            }
+        }
+        assert_eq!(differ, 0, "window {window:?}");
+        assert!(render_region_cached(&src, &info, &grown, &req, &cache, PixelWindow { x: 0, y: 0, w: 10_000, h: 1 }).is_none(), "outside the render");
+    }
+    let req8 = RenderRequest { window: None, ..RenderRequest::exact(W, H) };
+    assert!(
+        render_region_cached(&src, &info, &with(&[(0.3, 0.4)], false), &req8, &StageCache::default(), PixelWindow { x: 0, y: 0, w: 4, h: 4 })
+            .is_none(),
+        "8-bit"
+    );
+}

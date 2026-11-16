@@ -450,9 +450,24 @@ pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &So
 
 /// [`finish`] into 16-bit display-encoded or 32-bit float linear samples (output primaries).
 pub(crate) fn finish_deep(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, req: &crate::RenderRequest) -> DeepImage {
+    let all = crate::PixelWindow { x: 0, y: 0, w: p.img.width, h: p.img.height };
+    finish_deep_region(p, s, frame, info, req, all)
+}
+
+/// [`finish_deep`] of `region` of the prepared image only (inside it): the same samples as the
+/// same pixels of the whole, each pixel's finish reading only its own position.
+pub(crate) fn finish_deep_region(
+    p: &Prepared,
+    s: &DevelopSettings,
+    frame: &Frame,
+    info: &SourceInfo,
+    req: &crate::RenderRequest,
+    region: crate::PixelWindow,
+) -> DeepImage {
     use crate::color::transfer::srgb_to_linear;
     let (space, depth, proof) = (req.space, req.depth, req.proof);
     let (w, h) = (p.img.width, p.img.height);
+    let region = region.clamped(w, h);
     let draft = req.quality == crate::Quality::Draft;
     let mut fp = FinishParams::new(FinishParamsInput {
         settings: s,
@@ -468,25 +483,25 @@ pub(crate) fn finish_deep(p: &Prepared, s: &DevelopSettings, frame: &Frame, info
     let trc = fp.out_trc;
     let samples = match depth {
         OutputDepth::F32Linear => {
-            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
+            let v = finish_region(p, &fp, true, region, |_x, _y, e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
             DeepSamples::F32(v.into_flattened())
         }
         OutputDepth::F32Hdr => {
             // the sRGB curve extended past 1 (it is unbounded), so values up to `peak` survive
             let peak = fp.peak;
-            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
+            let v = finish_region(p, &fp, true, region, |_x, _y, e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
             DeepSamples::F32(v.into_flattened())
         }
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-            let v = finish_with(p, &fp, true, |_x, _y, e| match trc {
+            let v = finish_region(p, &fp, true, region, |_x, _y, e| match trc {
                 OutputTrc::Srgb => e.map(q),
                 t => e.map(|v| q(t.encode(srgb_to_linear(v.clamp(0.0, 1.0))))),
             });
             DeepSamples::U16(v.into_flattened())
         }
     };
-    DeepImage { width: w, height: h, space, samples }
+    DeepImage { width: region.w, height: region.h, space, samples }
 }
 
 /// The per-pixel stage: every output pixel's colour in the output primaries, encoded with the sRGB
@@ -498,7 +513,21 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     exact: bool,
     store: impl Fn(usize, usize, [f32; 3]) -> T + Sync + Send,
 ) -> Vec<T> {
-    let (w, h) = (p.img.width, p.img.height);
+    let all = crate::PixelWindow { x: 0, y: 0, w: p.img.width, h: p.img.height };
+    finish_region(p, fp, exact, all, store)
+}
+
+/// [`finish_with`] of `region` of the prepared image (inside it), row by row: each pixel as the
+/// whole image's finish makes it.
+fn finish_region<T: Copy + Default + Send>(
+    p: &Prepared,
+    fp: &FinishParams,
+    exact: bool,
+    region: crate::PixelWindow,
+    store: impl Fn(usize, usize, [f32; 3]) -> T + Sync + Send,
+) -> Vec<T> {
+    let w = p.img.width;
+    let (rx0, ry0, rw) = (region.x, region.y, region.w);
     let p_lut = fp.lut.clone();
     let FinishParams { light, curves, vig, to_out, out_luma, grain, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
@@ -513,11 +542,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let preview_light = if exact { None } else { light.as_ref().and_then(|lo| crate::light_v3::PreviewOps::new(lo, &|v| encode_srgb(srgb, v))) };
     let peak = fp.peak;
     let hdr = peak > 1.0;
-    let mut out = vec![T::default(); w * h];
-    for_rows(&mut out, w, |y, row| {
+    let mut out = vec![T::default(); rw * region.h];
+    for_rows(&mut out, rw, |ry, row| {
+        let y = ry0 + ry;
         // the crystal grain of the whole row at once when its pixels are axis-aligned
-        let crystal_row = crystal_row(fp, y, row.len());
-        for (x, px) in row.iter_mut().enumerate() {
+        let crystal_row = crystal_row(fp, y, w);
+        for (rx, px) in row.iter_mut().enumerate() {
+            let x = rx0 + rx;
             let i = y * w + x;
             let raw = p.img.data[i];
             let local = pixel_local_terms(p, &terms, i);

@@ -743,6 +743,39 @@ pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, 
     render_impl(Src::Shared(src), info, s, req, Some(cache))
 }
 
+/// `region` of the deep render [`render_cached`] makes of `req` (in that render's pixels: a part
+/// of `req.window` when it has one), with the stages before the per-pixel finish taken from (and
+/// kept in) `cache` and only `region` finished: the same samples as those pixels of the whole
+/// render, for the part of a shown render a brush stroke changed. `None` for an 8-bit request
+/// (its dither and display conversion belong to the whole render) or a region outside the render.
+pub fn render_region_cached(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: &StageCache,
+    region: PixelWindow,
+) -> Option<DeepImage> {
+    if req.depth == OutputDepth::U8 || region.w == 0 || region.h == 0 {
+        return None;
+    }
+    let effective = s.effective();
+    let rendition = settings_for(&effective, req);
+    let plan = plan(src, info, &rendition, req);
+    // the render kept is `plan.keep` of what was rendered (spots and Auto Mask strokes read past
+    // a window): the region in the rendered pixels
+    let (kx, ky, kw, kh) = match plan.keep {
+        Some(k) => (k.x, k.y, k.w, k.h),
+        None => (0, 0, plan.w, plan.h),
+    };
+    if region.x.checked_add(region.w)? > kw || region.y.checked_add(region.h)? > kh {
+        return None;
+    }
+    let prep = prepare_stages(&Src::Shared(src), info, &plan, req, Some(cache), &mut |_| {});
+    let at = PixelWindow { x: kx + region.x, y: ky + region.y, ..region };
+    Some(finish::finish_deep_region(&prep, &plan.settings, &plan.frame, info, req, at))
+}
+
 enum Src<'a> {
     Borrowed(&'a Rgb32f),
     Shared(&'a Arc<Rgb32f>),
