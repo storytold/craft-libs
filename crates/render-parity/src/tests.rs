@@ -87,3 +87,14 @@ fn bad_inputs_are_errors_not_panics() {
     let e: Box<dyn std::error::Error> = Box::new(e);
     assert!(e.source().is_none());
 }
+
+#[test]
+fn a_nan_tolerance_fails_every_check() {
+    let rgb = gray_ramp(2, 2);
+    let image = Image::new(2, 2, &rgb).unwrap();
+    let report = compare(&image, &image).unwrap();
+    let nan = Tolerance { max_delta_e: f64::NAN, mean_delta_e: f64::NAN, max_channel: f32::NAN };
+    assert_eq!(report.exceeded(&nan).len(), 3);
+    assert!(!report.within(&nan));
+    assert!(report.within(&Tolerance { max_delta_e: f64::INFINITY, ..Tolerance::BASELINE }));
+}

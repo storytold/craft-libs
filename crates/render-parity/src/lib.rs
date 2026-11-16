@@ -112,7 +112,7 @@ pub struct Report {
 }
 
 impl Report {
-    /// Whether every measure is within `tolerance`.
+    /// Whether every measure is within `tolerance`. A NaN limit is never met.
     pub fn within(&self, tolerance: &Tolerance) -> bool {
         self.exceeded(tolerance).is_empty()
     }
@@ -120,13 +120,13 @@ impl Report {
     /// The measures over `tolerance`, each with its value and limit, for a test failure message.
     pub fn exceeded(&self, tolerance: &Tolerance) -> Vec<String> {
         let mut over = Vec::new();
-        if self.max_delta_e > tolerance.max_delta_e {
+        if exceeds(self.max_delta_e, tolerance.max_delta_e) {
             over.push(format!("max ΔE2000 {:.4} > {}", self.max_delta_e, tolerance.max_delta_e));
         }
-        if self.mean_delta_e > tolerance.mean_delta_e {
+        if exceeds(self.mean_delta_e, tolerance.mean_delta_e) {
             over.push(format!("mean ΔE2000 {:.4} > {}", self.mean_delta_e, tolerance.mean_delta_e));
         }
-        if self.max_channel > tolerance.max_channel {
+        if exceeds(f64::from(self.max_channel), f64::from(tolerance.max_channel)) {
             over.push(format!("max channel difference {:.6} > {}", self.max_channel, tolerance.max_channel));
         }
         over
@@ -177,6 +177,12 @@ pub fn compare(expected: &Image<'_>, actual: &Image<'_>) -> Result<Report, Parit
         report.worst = first_difference(expected, actual);
     }
     Ok(report)
+}
+
+/// Whether `value` exceeds `limit`. A NaN limit (or value) exceeds it: an unordered comparison never
+/// passes, so an invalid tolerance cannot switch a check off.
+fn exceeds(value: f64, limit: f64) -> bool {
+    !matches!(value.partial_cmp(&limit), Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal))
 }
 
 fn finite(px: [f32; 3]) -> Option<[f32; 3]> {
