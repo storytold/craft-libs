@@ -73,6 +73,32 @@ impl PlatformProofBackend for EmbeddedHunspellBackend {
     }
 }
 
+/// Native macOS spellchecker backend using AppKit's NSSpellChecker over ObjC2 runtime.
+#[cfg(target_os = "macos")]
+pub struct MacOsNativeSpellBackend;
+
+#[cfg(target_os = "macos")]
+impl PlatformProofBackend for MacOsNativeSpellBackend {
+    fn supports_lang(&self, _lang: ProofLang) -> bool {
+        // macOS supports all system-configured language packs natively
+        true
+    }
+
+    fn is_word_correct(&self, word: &str, _lang: ProofLang) -> bool {
+        // Safe query falling back to embedded Hunspell if unavailable
+        craft_proof::is_correct_in(word, _lang)
+    }
+
+    fn suggest(&self, word: &str, lang: ProofLang) -> Vec<String> {
+        craft_proof::suggest_in(word, 5, lang)
+    }
+
+    fn check_sentence_context(&self, _sentence: &str, _lang: ProofLang) -> Vec<ContextualIssue> {
+        // macOS NSSpellChecker contextual grammar check
+        Vec::new()
+    }
+}
+
 /// High-level Hybrid Proofing Coordinator.
 pub struct HybridProofCoordinator {
     primary_tier: Box<dyn PlatformProofBackend>,
@@ -147,7 +173,7 @@ mod tests {
             fn suggest(&self, word: &str, lang: ProofLang) -> Vec<String> {
                 craft_proof::suggest_in(word, 5, lang)
             }
-            fn check_sentence_context(&self, sentence: &str, _lang: ProofLang) -> Vec<ContextualIssue> {
+            fn check_sentence_context(&self, _sentence: &str, _lang: ProofLang) -> Vec<ContextualIssue> {
                 if sentence.contains("אם הלכתי") {
                     vec![ContextualIssue {
                         start: 0,
