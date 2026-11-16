@@ -133,8 +133,10 @@ pub struct RulersStyle {
     metrics: Metrics,
     /// The strips' thickness and the corner's side.
     thickness: f32,
-    /// Between a tick and its label.
+    /// Between a tick and its label, and above a horizontal label.
     pad: f32,
+    /// How far a vertical label's next character sits below the one before: the label role's size.
+    pitch: f32,
     fill: StyleColor,
     margin: StyleColor,
     label: TextLook,
@@ -144,9 +146,9 @@ pub struct RulersStyle {
 /// The type role of the tick labels.
 const LABEL_ROLE: TypeRole = TypeRole::Caption;
 
-/// A strip is as thick as its tick labels need, and no thinner than a small icon.
+/// A strip is as thick as its tick labels and the gap above them need, and no thinner than a small icon.
 fn thickness(tokens: &UiTokens) -> f32 {
-    tokens.size.icon.sm.max(tokens.typography.get(LABEL_ROLE).line_height)
+    tokens.size.icon.sm.max(tokens.typography.get(LABEL_ROLE).line_height + tokens.space.gap.tight)
 }
 
 /// The top strip, the left strip and the corner inside `rect`.
@@ -332,6 +334,7 @@ impl Component for Rulers<'_> {
             metrics: Metrics::new(),
             thickness: thickness(cx.tokens),
             pad: cx.tokens.space.gap.tight,
+            pitch: cx.tokens.typography.get(LABEL_ROLE).size,
             fill: cx.color(c.surface.chrome),
             margin: cx.color(c.surface.sunken),
             label: TextLook::new(LABEL_ROLE, Stateful::new(cx.color(c.text.muted))),
@@ -525,7 +528,14 @@ impl Component for Rulers<'_> {
             let ticks = Self::axis_ticks(&text_of(part), &level, strip, part, zero);
             let marks: Vec<Tick> =
                 ticks.iter().map(|(tick, at)| Tick::new(*at - if vertical { strip.top() } else { strip.left() }, tick.rank)).collect();
-            painter.ticks(strip, edge, &marks);
+            // The divider is painted inside the strip's inner edge; the ticks hang from its inner side so they keep their full length.
+            let band = draw.rule_width(RuleKind::Divider);
+            let tick_strip = if vertical {
+                Rect::from_min_max(strip.min, Pos2::new(strip.right() - band, strip.bottom()))
+            } else {
+                Rect::from_min_max(strip.min, Pos2::new(strip.right(), strip.bottom() - band))
+            };
+            painter.ticks(tick_strip, edge, &marks);
             for (tick, at) in ticks.iter().filter(|(tick, _)| tick.rank == TickRank::Major) {
                 let text = text_of(part).tick_label(&numbers, tick.value, tick.step);
                 if vertical {
@@ -537,11 +547,11 @@ impl Component for Rulers<'_> {
                         if shows(strip, Rect::from_min_size(at, layout.size())) {
                             draw.galley(at, &layout);
                         }
-                        y += layout.size().y;
+                        y += style.pitch;
                     }
                 } else {
                     let layout = draw.layout(&TextRun::new(text).role(label.role).color(color), f32::INFINITY);
-                    let at = Pos2::new(at + style.pad, strip.top());
+                    let at = Pos2::new(at + style.pad, strip.top() + style.pad);
                     if shows(strip, Rect::from_min_size(at, layout.size())) {
                         draw.galley(at, &layout);
                     }

@@ -46,3 +46,14 @@ fn labelled_ticks_never_touch_at_any_zoom() {
         }
     }
 }
+
+/// A vertical label stacks its characters one label-role size apart; the longest label the metric rule gives at the
+/// least step (five characters) and its gap to the tick stay inside that step, so neighbouring labels never touch.
+#[trial]
+fn a_five_character_vertical_label_fits_the_least_label_step() {
+    for mode in [craft_theme::Mode::Light, craft_theme::Mode::Dark] {
+        let tokens = craft_ui::testing::style::tokens(mode, craft_theme::Contrast::Standard);
+        let pitch = tokens.typography.get(craft_theme::TypeRole::Caption).size;
+        assert!(5.0 * pitch + tokens.space.gap.tight < LABEL_STEP_MIN, "{mode:?}: five characters at pitch {pitch}");
+    }
+}

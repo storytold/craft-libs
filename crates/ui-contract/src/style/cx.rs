@@ -34,7 +34,7 @@ pub enum GlyphRole {
     Tool,
     /// A tool rail: `size.icon.lg`, resting in `text.muted` and in the variant's ink under the pointer.
     ToolRail,
-    /// A panel rail: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
+    /// A panel rail, or a list row's trailing icon button: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
     PanelRail,
 }
 

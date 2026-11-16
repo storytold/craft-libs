@@ -34,7 +34,7 @@ pub enum TickEdge {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TickRank {
-    /// The shortest, `space.gap.tight`.
+    /// The shortest, `size.ruler.tick.minor`.
     Minor,
     /// Halfway between two major ticks, `size.ruler.tick.mid`.
     Mid,
@@ -535,14 +535,14 @@ pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_
 }
 
 /// The tick marks of `ticks` on one edge of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
-/// `gap.tight` long, mid ones `size.ruler.tick.mid`, major ones across the whole depth of `rect`, beside their labels.
+/// `size.ruler.tick.minor` long, mid ones `size.ruler.tick.mid`, major ones across the whole depth of `rect`, beside their labels.
 pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
     let look = RuleLook { color: rgba_color(tokens.color.text.faint), width: RuleWidth::Points(tokens.stroke.thin) };
     let depth = match edge {
         TickEdge::Bottom | TickEdge::Top => rect.height(),
         TickEdge::Left | TickEdge::Right => rect.width(),
     };
-    let (minor, mid, major) = (tokens.space.gap.tight, tokens.size.ruler.tick.mid, depth);
+    let (minor, mid, major) = (tokens.size.ruler.tick.minor, tokens.size.ruler.tick.mid, depth);
     ticks
         .iter()
         .filter_map(|tick| {

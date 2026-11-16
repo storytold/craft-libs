@@ -199,8 +199,9 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let PaneSizes { least } = pane;
     out.line("size.pane.least", len(*least));
     let RulerSizes { tick } = ruler;
-    let RulerTickSizes { mid } = tick;
+    let RulerTickSizes { mid, minor } = tick;
     out.line("size.ruler.tick.mid", len(*mid));
+    out.line("size.ruler.tick.minor", len(*minor));
     let DockColumnSizes { column } = dock;
     out.line("size.dock.column", len(*column));
     let NoticeSizes { width } = notice;

@@ -98,7 +98,8 @@
       },
       "ruler": {
         "tick": {
-          "mid": 3.0
+          "mid": 6.0,
+          "minor": 3.0
         }
       },
       "scroll_fade": 20.0,

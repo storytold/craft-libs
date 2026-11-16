@@ -4,7 +4,7 @@
 use super::words::BarWords;
 use crate::buttons::IconButton;
 use crate::contract::{Bind, Entry, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel};
-use crate::display::{Elide, Text};
+use crate::display::{Elide, Shade, Text};
 use crate::form::Field;
 use crate::layout_components::Row;
 use crate::runtime::commands::{self, CommandRef};
@@ -228,7 +228,7 @@ impl<'a> StatusReadout<'a> {
             for edit in &events {
                 self.view.reborrow().write(cx, edit);
             }
-            let mut info = Text::new(text.clone()).elide(Elide::End);
+            let mut info = Text::new(text.clone()).shade(Shade::Muted).elide(Elide::End);
             if let Some((_, tip)) = self.tips.iter().find(|(item, _)| *item == self.item) {
                 info = info.tooltip(tip.clone());
             }
