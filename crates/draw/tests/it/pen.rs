@@ -332,6 +332,29 @@ fn a_curvature_resume_keeps_the_carried_knots_and_replace_updates_the_draft() {
     pen.release(at, Modifiers::NONE);
 }
 
+// The carried anchors of a resumed path keep their handles: a double click on one that is not the carried end changes
+// nothing, and a press on one adds an anchor instead of moving it.
+#[trial]
+fn carried_anchors_are_neither_toggled_nor_grabbed() {
+    let mut pen = pen();
+    let carried = EditSubpath::new(
+        vec![Knot::corner(doc(60.0, 60.0)), Knot::smooth(doc(160.0, 60.0), doc(180.0, 40.0)), Knot::corner(doc(160.0, 160.0))],
+        false,
+    );
+    {
+        let mut tool = pen.fixture.tool_mut();
+        tool.mode(PenMode::Curvature);
+        tool.kept(3);
+        tool.draft(Some(PenDraft::Own(&carried)));
+    }
+    pen.fixture.fixture().settle();
+    pen.click_doc(60.0, 60.0);
+    pen.click_doc(60.0, 60.0);
+    let draft = pen.draft();
+    assert_eq!(draft.knots[..3], carried.knots[..], "the carried anchors keep their handles and places");
+    assert!(draft.knots.len() > 3, "a press on a carried anchor adds an anchor");
+}
+
 /// Three clicks of the Curvature Pen far apart give three anchors, each click an `Update`: on its own, and with the
 /// host handing the draft it holds back in before every frame, as an app's per-pass configuration does.
 #[trial]

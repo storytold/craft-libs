@@ -17,7 +17,8 @@ impl PenTool {
     /// - on the first anchor of a draft with 3 or more anchors: closes at once (`closed` set, `Commit`, `Finished`);
     ///   the Pen closes on release instead;
     /// - on another anchor: grabs it; past the click slop it follows the pointer and the draft reflows on every
-    ///   move;
+    ///   move. The first [`kept`](PenTool::kept) anchors are not grabbed: a press on one adds an anchor, and a double
+    ///   click on one does nothing, except on the last of them, the end the draft carries on from;
     /// - elsewhere: a new smooth anchor at the press, which follows the pointer while the button is down. The first
     ///   two anchors give straight segments; from three on the handles follow
     ///   [`carried_handles`](crate::geometry::curvature::carried_handles), which keeps the first
@@ -49,6 +50,12 @@ impl PenTool {
             self.finish(PenEnd::Closed);
             return ToolAction::Done;
         }
+        // The carried anchors keep their handles: a press on one is a press on empty canvas, except a double click on
+        // the carried end, which toggles it, and on another carried anchor, which does nothing.
+        if pointer.clicks == 2 && under.is_some_and(|i| i + 1 < self.kept) {
+            return ToolAction::Done;
+        }
+        let under = under.filter(|&i| i >= self.kept || (i + 1 == self.kept && pointer.clicks == 2));
         let index = match under {
             Some(i) => {
                 if pointer.clicks == 2 {
