@@ -578,7 +578,35 @@ fn lasso_alt_clicks_make_straight_segments_that_retract_and_close() {
 
 // A plain press inside the selection drags the outline instead of drawing.
 
-// A press and release that draw fewer than 3 points (a click, or a two-point drag) deselect.
+// A click outside the selection deselects only when its operation is New: a Shift, Alt or Shift+Alt click, or a plain
+// click with Add on the bar, keeps the selection (#13612). A drag from the same point still selects.
+#[trial]
+fn a_lasso_click_deselects_only_in_new_mode() {
+    let selected = Rect::new(20.0, 20.0, 100.0, 100.0);
+    let shift_alt = Mods { shift: true, alt: true, ..NONE };
+    for (mods, deselects) in [(NONE, true), (Mods::SHIFT, false), (Mods::ALT, false), (shift_alt, false)] {
+        let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+        click(&mut rig, (200.0, 150.0), mods);
+        let expected = if deselects { vec![SelectEvent::Deselect] } else { Vec::new() };
+        assert_eq!(rig.tool_mut().events(), expected, "a click with {mods:?}");
+    }
+
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+    rig.tool_mut().tool().operation(SelectionOperation::Add);
+    click(&mut rig, (200.0, 150.0), NONE);
+    assert!(rig.tool_mut().events().is_empty(), "a plain click with Add on the bar keeps the selection");
+
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+    down(&mut rig, (200.0, 150.0), NONE);
+    for point in [(260.0, 150.0), (260.0, 200.0), (230.0, 220.0)] {
+        drag_to(&mut rig, point, NONE);
+    }
+    up(&mut rig, (200.0, 200.0), NONE);
+    assert!(
+        matches!(rig.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::New, .. }]),
+        "a drag from outside the selection still selects"
+    );
+}
 
 // ---- the Polygonal Lasso ----
 

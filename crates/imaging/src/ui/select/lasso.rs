@@ -340,7 +340,8 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
     }
 
     /// The release closes a freehand outline (`Commit`) unless straight segments are on; a freehand outline of fewer
-    /// than 3 points (a click) is [`SelectEvent::Deselect`]. Ends a selection drag.
+    /// than 3 points (a click) is [`SelectEvent::Deselect`] when its operation is New, and nothing for Add, Subtract
+    /// and Intersect, which keep the selection. Ends a selection drag.
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
@@ -350,7 +351,9 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         }
         let event = tool.draft.release(sample(pointer, &place));
         if event == Some(DraftEvent::Cancelled) {
-            tool.report.push(SelectEvent::Deselect);
+            if tool.operation == SelectionOperation::New {
+                tool.report.push(SelectEvent::Deselect);
+            }
             return;
         }
         apply(event, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report);
