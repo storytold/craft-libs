@@ -29,6 +29,28 @@ pub fn transform_is_safe(t: &[f64; 6]) -> bool {
     t.iter().all(|v| v.is_finite() && v.abs() <= f64::from(i32::MAX))
 }
 
+/// Recovers the text and raw transform of a `TySh` prefix, even if its descriptor is damaged.
+///
+/// This is PhotoCraft's preservation fallback, not a rendering-ready type layer. It keeps
+/// line endings, the trailing paragraph terminator and non-finite transform values verbatim.
+/// Callers must validate geometry before rendering. A complete 52-byte prefix is required;
+/// a missing, unsupported or malformed text descriptor produces empty text. Warp and bounds
+/// are not interpreted. Descriptor parsing retains the shared parser's allocation limits.
+pub fn parse_tysh_text_prefix(data: &[u8]) -> Option<(String, [f64; 6])> {
+    let f = |at: usize| data.get(at..at + 8).map(|b| f64::from_be_bytes(b.try_into().unwrap_or([0; 8])));
+    let mut m = [0.0; 6];
+    for (i, v) in m.iter_mut().enumerate() {
+        *v = f(2 + i * 8)?;
+    }
+    // text version (2) at 50, descriptor version (4) at 52, descriptor at 56.
+    let rest = data.get(52..)?;
+    let text = VersionedDescriptor::parse_prefix(rest).ok().and_then(|(d, _)| match d.descriptor.get("Txt ") {
+        Some(D::Text(t)) => Some(t.to_string_lossy()),
+        _ => None,
+    });
+    Some((text.unwrap_or_default(), m))
+}
+
 /// Parses a `TySh` block.
 pub fn parse_tysh(data: &[u8]) -> Option<TySh> {
     if data.len() > MAX_BYTES {
