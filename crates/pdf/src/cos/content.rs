@@ -204,9 +204,10 @@ impl Iterator for Ops<'_> {
                         #[cfg(test)]
                         tests::RESCANNED.with(|c| c.set(c.get() + read));
                         let number = matches!(b, b'+' | b'-' | b'.') || b.is_ascii_digit();
-                        if number && read > MAX_RETRIED_TOKEN {
-                            // A long unreadable number is skipped whole: retrying from each of its
-                            // bytes would read the rest of it again every time.
+                        if (number && read > MAX_RETRIED_TOKEN) || (lx.too_deep() && read > 0) {
+                            // A long unreadable number, or an operand nested deeper than the
+                            // parser follows, is skipped whole: retrying from each of its bytes
+                            // would read the rest of it again every time.
                             *skipped += read;
                         } else {
                             // Skip the offending byte and carry on.

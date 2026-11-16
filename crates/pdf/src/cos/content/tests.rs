@@ -58,6 +58,29 @@ fn a_long_unreadable_number_is_read_once() {
 }
 
 #[test]
+fn a_long_run_of_unclosed_brackets_is_read_once() {
+    // Every `[` opens an array nested inside the one before, so none of them parses: each is
+    // refused once it passes the depth limit, not after reading to the end of the stream.
+    for open in ["[", "<<"] {
+        let n = 100_000;
+        let src = format!("{} 1 0 0 1 0 0 cm", open.repeat(n));
+        RESCANNED.with(|c| c.set(0));
+        let p = parse(src.as_bytes());
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= 2 * src.len(), "{rescanned} bytes read again for {open} x {n}");
+        assert!(p.skipped >= n, "{} skipped", p.skipped);
+        assert_eq!(p.ops.last().map(|o| o.op.as_slice()), Some(&b"cm"[..]), "{open}");
+    }
+    // A stray `[` before a whole stream of operators still loses only itself.
+    let p = parse(b"[ 1 0 0 1 0 0 cm 0 0 m");
+    assert_eq!(p.ops.last().map(|o| o.op.as_slice()), Some(&b"m"[..]));
+    // An array nested within the limit is still one operand.
+    let deep = format!("{}{} TJ", "[".repeat(100), "]".repeat(100));
+    let p = parse(deep.as_bytes());
+    assert_eq!((p.ops.len(), p.skipped), (1, 0));
+}
+
+#[test]
 fn operators_keep_operands_and_spans() {
     let src = b"q 1 0 0 1 72 720 cm BT /F1 12 Tf (Hello \\(world\\)) Tj [(A) -120 (B)] TJ ET Q";
     let p = parse(src);
