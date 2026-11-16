@@ -2,6 +2,7 @@
 //! Agents page.
 
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -10,8 +11,15 @@ use craft_automation::agents::{
     AgentLink, AgentSettings, AgentSwitch, CONNECTION_FILE, Connection, LinkProblem, PROBE_TIMEOUT, TOKEN_FILE, agents_allowed, probe, read_connection,
     remove_connection, remove_stale_connection, write_connection,
 };
+use craft_automation::agents::AgentLinkStatus;
 use craft_automation::server;
-use craft_host::Wake;
+use craft_automation::ui::agents::AgentsPage;
+use craft_host::{AppInfo, Host, PickId, Picked, ScriptedFiles, Wake};
+use craft_ui::contract::Role;
+use craft_ui::patterns::preferences::SettingsDraft;
+use craft_ui::testing::Fixture;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use craft_ui::testing::trial;
@@ -296,4 +304,90 @@ fn from_launch_reports_the_launch_flags() {
     assert!(!update.stopped && !update.changed && update.requests.is_none());
     assert_eq!(link.status().port, Some(port));
     assert_eq!(serde_json::to_value(link.status()).unwrap(), serde_json::json!({"port": port, "launchFlags": true, "error": null}));
+}
+
+/// The page over a draft, in a fixture whose host is named `"Studio"` and answers picks when the test says.
+struct Page {
+    fixture: Fixture,
+    draft: Rc<RefCell<SettingsDraft>>,
+    files: Arc<ScriptedFiles>,
+    browsing: Rc<Cell<Option<PickId>>>,
+}
+
+fn page(mcp_flag: bool, status: AgentLinkStatus) -> Page {
+    let files = Arc::new(ScriptedFiles::held());
+    let draft = Rc::new(RefCell::new(SettingsDraft::default()));
+    let browsing = Rc::new(Cell::new(None));
+    let (held, issued) = (Rc::clone(&draft), Rc::clone(&browsing));
+    let mut fixture = Fixture::new(move |ui| {
+        let out = AgentsPage::new("integrations", &mut held.borrow_mut(), &status).mcp_flag(mcp_flag).show(ui);
+        if out.browsing.is_some() {
+            issued.set(out.browsing);
+        }
+    });
+    fixture.host(Arc::new(Host::builder(AppInfo { id: "studio", name: "Studio", version: "1.0" }).files(files.clone()).build()));
+    fixture.settle();
+    Page { fixture, draft, files, browsing }
+}
+
+fn shows(fixture: &Fixture, text: &str) -> bool {
+    fixture.by_label(text).is_some()
+}
+
+/// With the flag the page names the launcher's switch, has no switch of its own, and says where the link stands.
+#[trial]
+fn with_the_flag_the_page_points_to_the_launcher() {
+    let intro_part = "ArtCraft Launcher › Settings › AI agents › Let AI agents use Craft apps";
+    let off = page(true, AgentLinkStatus::default());
+    let intro = off.fixture.tree().keys().into_iter().filter_map(|node| off.fixture.tree().name_of(node).map(str::to_owned)).find(|name| name.contains(intro_part));
+    assert!(intro.is_some(), "the intro names the launcher's switch");
+    assert!(shows(&off.fixture, "Off: turn on AI agents in ArtCraft Launcher › Settings › AI agents."));
+    assert!(shows(&off.fixture, "Folder agents can open from") && shows(&off.fixture, "Folder agents can save to"));
+    assert!(!shows(&off.fixture, "Allow Agent Control"), "no switch of its own");
+    assert!(!shows(&off.fixture, "Let AI agents connect (MCP)"));
+
+    let on = page(true, AgentLinkStatus { port: Some(4321), ..AgentLinkStatus::default() });
+    assert!(shows(&on.fixture, "Agents can connect on 127.0.0.1:4321."));
+}
+
+/// Without the flag only the settings the app had before the switch show.
+#[trial]
+fn without_the_flag_only_the_earlier_settings_show() {
+    let legacy = page(false, AgentLinkStatus::default());
+    assert!(shows(&legacy.fixture, "Allow Agent Control") && shows(&legacy.fixture, "Control Port"));
+    assert!(!shows(&legacy.fixture, "Folder agents can open from"));
+    assert!(!shows(&legacy.fixture, "Off: turn on AI agents in ArtCraft Launcher › Settings › AI agents."));
+}
+
+/// Browse on the open-from folder asks the host for a folder; the answer lands in that key of the draft only.
+#[trial]
+fn browse_puts_the_chosen_folder_in_the_draft() {
+    let mut page = page(true, AgentLinkStatus::default());
+    let browse: Vec<_> =
+        page.fixture.by_role(Role::BUTTON).into_iter().filter(|button| page.fixture.tree().name_of(button.node) == Some("Browse…")).collect();
+    assert_eq!(browse.len(), 2, "one Browse per folder");
+    page.fixture.click(&browse[0]);
+    page.fixture.settle();
+    let id = page.browsing.get().expect("Browse filed a pick");
+    assert!(page.files.answer_to(id, Picked::Paths(vec![PathBuf::from("/work/in")])), "the pick is open");
+    page.fixture.idle(3);
+    let draft = page.draft.borrow();
+    assert_eq!(draft.get::<String>("integrations.readRoot").as_deref(), Some("/work/in"));
+    assert_eq!(draft.get::<String>("integrations.writeRoot"), None, "the other folder is untouched");
+}
+
+/// The closed-app choice names the host's app, and a pick writes its saved name.
+#[trial]
+fn the_closed_app_choice_names_the_app() {
+    let mut page = page(true, AgentLinkStatus::default());
+    assert!(shows(&page.fixture, "When Studio is closed"));
+    let field = page.fixture.by_role(Role::COMBO_BOX).first().copied().expect("the choice shows");
+    assert_eq!(page.fixture.tree().value_of(field.node), Some("Open Studio"));
+    page.fixture.click(&field);
+    page.fixture.idle(3);
+    assert!(shows(&page.fixture, "Ask to open Studio"));
+    let headless = page.fixture.by_label("Work without a window").expect("the menu lists the choices");
+    page.fixture.click(&headless);
+    page.fixture.idle(3);
+    assert_eq!(page.draft.borrow().get::<String>("integrations.whenAppClosed").as_deref(), Some("headless"));
 }
