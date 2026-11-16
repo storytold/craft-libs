@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use craft_wordmodel::para::cap_alt;
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, Kashida, LineSpacing, NumRef,
     ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
     TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
@@ -465,7 +465,14 @@ impl PropCtx {
                         _ => {}
                     }
                 }
-                "w:jc" => p.align = k.attr("w:val").map(align),
+                "w:jc" => {
+                    if let Some(v) = k.attr("w:val") {
+                        p.align = Some(align(v));
+                        if let Some(kashida) = Kashida::from_jc(v) {
+                            p.kashida = Some(kashida);
+                        }
+                    }
+                }
                 "w:outlineLvl" => p.outline_level = k.attr("w:val").and_then(u32_of).map(|v| v.min(9) as u8),
                 "w:rPr" => mark = self.rpr(k),
                 _ => {}

@@ -82,6 +82,10 @@ impl Reader<'_> {
             self.read_canvas(sc, c, rels, w, h, float)
         } else if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
+        } else if let Some(lc) = gd.child("lc:lockedCanvas") {
+            // Word 2007's shapes, pictures and text in a drawing: read as the group they are.
+            let g = super::locked_canvas::as_group(lc, &self.doc.settings.theme_colors);
+            self.read_group(sc, &g, rels, w, h, float)?
         } else if direct_shape.is_none() && gd.find("a:blip").is_some() {
             self.read_pic(gd, rels, w, h, alt.clone(), float)?
         } else {
@@ -526,12 +530,17 @@ impl Reader<'_> {
             outline_fill: paint.outline_fill,
             ..ShapeExtra::default()
         };
-        // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56); other presets drawn as
-        // rounded rectangles keep the default.
-        if prst == "roundRect" {
+        // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56), a frame's own border
+        // width (`adj1`); other presets drawn as rounded rectangles keep the default.
+        let adj = match prst {
+            "roundRect" => Some("adj"),
+            "frame" => Some("adj1"),
+            _ => None,
+        };
+        if let Some(adj) = adj {
             extra.corner = sppr
                 .and_then(|s| s.child("a:prstGeom"))
-                .and_then(|g| preset_adj(g, "adj"))
+                .and_then(|g| preset_adj(g, adj))
                 .and_then(|v| u32::try_from(v.clamp(0, i64::from(craft_wordmodel::connector::MAX_CORNER))).ok());
         }
         // Arrowheads: any end type but `none` (ECMA-376 §20.1.10.33) is drawn as a triangle of its
