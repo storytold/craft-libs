@@ -18,7 +18,7 @@
 //! its lower end and not its upper (the crossings at a vertex are counted once), a crossing at the point's own `x` is
 //! to its left, a rising piece counts -1 and a falling one +1, and a line is tested as `kurbo` tests it.
 
-use kurbo::{BezPath, CubicBez, PathSeg, Point};
+use kurbo::{BezPath, CubicBez, PathSeg, Point, QuadBez};
 
 use crate::work::{self, Work};
 
@@ -54,7 +54,7 @@ pub(crate) fn segment_winding(seg: PathSeg, p: Point) -> i32 {
     }
     match seg {
         PathSeg::Line(l) => line_winding(l.p0, l.p1, p),
-        PathSeg::Quad(q) => cubic_winding(&q.raise(), p),
+        PathSeg::Quad(q) => cubic_winding(&raised(q), p),
         PathSeg::Cubic(c) => cubic_winding(&c, p),
     }
 }
@@ -67,6 +67,17 @@ fn has_nan(seg: PathSeg) -> bool {
         PathSeg::Quad(q) => nan(q.p0) || nan(q.p1) || nan(q.p2),
         PathSeg::Cubic(c) => nan(c.p0) || nan(c.p1) || nan(c.p2) || nan(c.p3),
     }
+}
+
+/// `q` as a cubic. `QuadBez::raise` takes the difference of two coordinates before it scales them, and that overflows past 1e300 (from 1e308 to -1e308 it is
+/// infinite, and the controls of the cubic are, and its crossing is at an x that is nowhere): there each control is the mean of the ends it lies between,
+/// which forms no difference. Elsewhere it is `raise` itself, so that the controls are the same to the bit.
+fn raised(q: QuadBez) -> CubicBez {
+    if ![q.p0, q.p1, q.p2].iter().any(|p| p.x.abs() > 1e300 || p.y.abs() > 1e300) {
+        return q.raise();
+    }
+    let mix = |a: Point, b: Point| Point::new(a.x / 3.0 + (2.0 / 3.0) * b.x, a.y / 3.0 + (2.0 / 3.0) * b.y);
+    CubicBez::new(q.p0, mix(q.p0, q.p1), mix(q.p2, q.p1), q.p2)
 }
 
 /// A line's crossing with the ray, as `kurbo` tests it: the end with the smaller `y` is the line's and the other is
@@ -770,6 +781,18 @@ mod tests {
             assert_eq!(segment_winding(segment(big), Point::new(x * big, y)), small, "({x}, {y})");
         }
         assert_eq!(segment_winding(segment(big), Point::new(0.75 * big, 1.5)), -1);
+    }
+
+    /// A quadratic from 1e308 to -1e308 and back is raised to a cubic whose controls are numbers (the difference of its x is 2e308): its crossing
+    /// of the height 1 is at x = 0, so a point to the left of it is wound 0 (the controls were -infinity and the crossing was nowhere), and the other
+    /// points are wound as they are by the same quadratic at unit scale.
+    #[test]
+    fn a_quadratic_at_the_top_of_the_range_is_raised_to_a_cubic_of_numbers() {
+        let quad = |s: f64| PathSeg::Quad(QuadBez::new((s, 0.0), (-s, 1.0), (s, 2.0)));
+        assert_eq!(segment_winding(quad(1e308), Point::new(-1.0, 1.0)), 0);
+        for (x, y) in [(0.25, 1.0), (0.9, 0.5), (-0.5, 1.5), (0.5, 1.9)] {
+            assert_eq!(segment_winding(quad(1e308), Point::new(x * 1e308, y)), segment_winding(quad(1.0), Point::new(x, y)), "({x}, {y})");
+        }
     }
 
     /// Where the coordinates are past 2^1021 the products of the line's equation overflow though the line's own steps do not (the slope 1.5
