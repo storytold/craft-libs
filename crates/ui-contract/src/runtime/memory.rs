@@ -605,6 +605,19 @@ impl MemoryStage {
         }
     }
 
+    /// A read-only copy of the press slot of `id`, as `recall` reads a shown one.
+    pub(crate) fn recall_press<T: Slot>(&self, id: Id) -> Option<T> {
+        let open = self
+            .entries
+            .iter()
+            .find(|entry| entry.key == (PRESS, TypeId::of::<Option<T>>(), id))
+            .and_then(|entry| entry.value.downcast_ref::<Wrapped<PRESS, Option<T>>>());
+        match open {
+            Some(wrapped) => wrapped.0.clone(),
+            None => store::peek_clone::<Wrapped<PRESS, Option<T>>>(&self.ctx, id).and_then(|wrapped| wrapped.0),
+        }
+    }
+
     /// Step 17, after `finish` returned: every slot goes back to context data, and the registry gains a record
     /// for each slot and `Seen` mark it lacks. A slot the stage found in context data is recorded already; a stage
     /// owned by another component than its base records everything it wrote under that owner.

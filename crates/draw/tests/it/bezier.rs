@@ -9,6 +9,7 @@ use craft_draw::ui::{
 use craft_ui::canvas::{Canvas, Guide, ToolHost};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::primitives::cancel_press_of;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Id, Pos2, Vec2 as ScreenVec, vec2};
 use std::cell::RefCell;
@@ -174,8 +175,6 @@ struct State {
     tool_clicks: usize,
     /// The anchor tool the canvas runs under the overlay, if any.
     canvas_tool: Option<PathTool>,
-    /// The host ended what the open press was editing.
-    cancelled: bool,
     /// Passes in which that tool ran a gesture.
     tool_gestures: usize,
 }
@@ -241,7 +240,6 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         lone_selects: 0,
         tool_clicks: 0,
         canvas_tool: None,
-        cancelled: false,
         tool_gestures: 0,
     }));
     let shown = Rc::clone(&state);
@@ -273,7 +271,6 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
                 .handles(st.handles)
                 .anchors(st.anchors)
                 .segment_mark(st.segment_mark)
-                .cancelled(st.cancelled)
                 .show_at(ui, body.rect)
         });
         if canvas.output.click_at().is_some() {
@@ -892,7 +889,24 @@ fn a_press_keeps_the_tool_it_began_under_across_a_tool_switch() {
     assert!(matches!(st.changes.last(), Some(PathEdit::MoveAnchors { path: 1, .. })), "{:?}", st.changes);
 }
 
-// A press the host cancels reports nothing more: no commit, no one-shot edit from its release, and the paths stay.
+// The parts follow the press's tool too: a marquee begun under Direct Selection keeps its part when the host switches
+// to a tool that declares none, and its release selects the anchors it encloses.
+#[trial]
+fn a_tool_switch_mid_press_keeps_the_parts_the_press_began_with() {
+    let mut h = two_paths();
+    let (start, end) = (h.screen(p(30.0, 30.0)), h.screen(p(180.0, 80.0)));
+    h.press_at(start);
+    h.move_to(start + (end - start) * 0.5);
+    h.update(|st| st.tool = BezierTool::Anchors);
+    h.move_to(end);
+    h.release_at(end);
+    let st = h.state.borrow();
+    assert_eq!(st.seen.last(), Some(&Seen::Commit), "{:?}", st.seen);
+    assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1)]));
+}
+
+// A press the host cancels (its target went away) ends as Escape ends one: the gesture is cancelled, its release
+// reports nothing, and the paths stay.
 #[trial]
 fn a_cancelled_press_reports_nothing_on_release() {
     let mut h = two_paths();
@@ -900,8 +914,8 @@ fn a_cancelled_press_reports_nothing_on_release() {
     let anchor = h.screen(p(160.0, 60.0));
     h.press_at(anchor);
     h.move_to(anchor + vec2(FAR * 0.5, FAR * 0.5));
-    h.update(|st| st.cancelled = true);
-    h.update(|st| st.cancelled = false);
+    let overlay = h.state.borrow().id;
+    cancel_press_of(h.fixture.ctx(), overlay);
     h.move_to(anchor + vec2(FAR, FAR));
     h.release_at(anchor + vec2(FAR, FAR));
     let st = h.state.borrow();

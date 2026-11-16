@@ -155,6 +155,8 @@ pub enum PressCancel {
     Disabled,
     /// The owner was not drawn for a pass.
     Removed,
+    /// The host ended what the press acted on (`primitives::cancel_press_of`).
+    Host,
 }
 
 /// One part's press state in one pass.

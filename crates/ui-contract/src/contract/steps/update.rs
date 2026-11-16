@@ -55,6 +55,7 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
             cx.core.press_cancelled().map(|reason| match reason {
                 PressCancel::Escape => CancelReason::Escape,
                 PressCancel::Removed => CancelReason::Removed,
+                PressCancel::Host => CancelReason::HostChanged,
                 _ => CancelReason::Blur,
             })
         };

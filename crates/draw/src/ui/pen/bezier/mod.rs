@@ -14,8 +14,8 @@ mod words;
 use craft_behavior::geometry::{SelectionOperation, axis_or_diagonal};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
-    Axis, CancelReason, CanvasView, CursorPriority, EditCommand, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape,
-    PartKey, PartRef, PointerButton, PressCancel, PressPhase, PressStart, Roving, Sense,
+    Axis, CanvasView, CursorPriority, EditCommand, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape,
+    PartKey, PartRef, PointerButton, PressPhase, PressStart, Roving, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
@@ -257,7 +257,8 @@ struct Held {
     start: Vec<EditPath>,
     /// Past the click slop: the gesture began.
     began: bool,
-    /// The tool the press began under: the press stays that tool's until it ends, whatever the host's tool becomes.
+    /// The tool the press began under: the overlay's parts and handling stay that tool's until the press ends,
+    /// whatever the host's tool becomes.
     tool: BezierTool,
 }
 
@@ -400,10 +401,6 @@ pub struct BezierOverlay<'a> {
     /// thickness replaces the line width (and the selected segment grows by the same amount).
     #[prop]
     path_options: Option<&'a PathOptionsSettings>,
-    /// The host ended what the open press was editing (its target changed): the press is cancelled in this pass and
-    /// reports nothing more.
-    #[prop]
-    cancelled: bool,
     report: Report,
     marquee: Option<DocRect>,
     hover_mark: Option<BezierHit>,
@@ -421,7 +418,6 @@ impl<'a> BezierOverlay<'a> {
             anchors: AnchorsShown::default(),
             segment_mark: SegmentMark::default(),
             path_options: None,
-            cancelled: false,
             report: Report::default(),
             marquee: None,
             hover_mark: None,
@@ -431,6 +427,13 @@ impl<'a> BezierOverlay<'a> {
 
     /// The parts a pass declares for `paths`: the anchors and shown handles inside `rect` grown by `reach`, and the
     /// segments that tool takes and that cross it.
+    /// An open press keeps the tool it began under: the parts and the handling of every pass of the press follow it.
+    fn press_tool(&mut self, held: Option<&Held>) {
+        if let Some(held) = held {
+            self.tool = held.tool;
+        }
+    }
+
     fn scene(&self, paths: &[EditPath], view: &CanvasView, rect: Rect, reach: f32) -> Scene {
         let limited = self.anchors == AnchorsShown::Hidden || paths.iter().map(EditPath::anchor_count).sum::<usize>() > MAX_ANCHORS;
         let mut items = Vec::new();
@@ -755,12 +758,14 @@ impl<'a> BezierOverlay<'a> {
         let snap = canvas_snap(&cx.env);
         let view = &space.view;
         let mut hovered: Option<(u8, BezierHit, Mods)> = None;
+        let mut pressed = false;
         for item in &scene.items {
             if !self.takes(item) {
                 continue;
             }
             let Some(result) = cx.part_if_declared(item.part()) else { continue };
             let (press, hover) = (result.press, result.hover_pos);
+            pressed |= press.phase.is_press();
             if let Some(at) = hover {
                 let rank = match item.kind {
                     Kind::Handle(_) => 2,
@@ -791,8 +796,9 @@ impl<'a> BezierOverlay<'a> {
                     self.drag(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, Some(item), paths, first);
                 }
                 PressPhase::Release { start, pos, click, .. } if start.button == PointerButton::Primary => {
-                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, Some(item), click, paths);
+                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, click, paths);
                 }
+                PressPhase::Cancel { .. } => *cx.press_slot::<Held>() = None,
                 _ => {}
             }
         }
@@ -800,6 +806,7 @@ impl<'a> BezierOverlay<'a> {
             && let Some(result) = cx.part_if_declared(MARQUEE)
         {
             let press = result.press;
+            pressed |= press.phase.is_press();
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     self.report.pressed_empty = true;
@@ -810,10 +817,15 @@ impl<'a> BezierOverlay<'a> {
                     self.drag(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, None, paths, first);
                 }
                 PressPhase::Release { start, pos, click, .. } if start.button == PointerButton::Primary => {
-                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, None, click, paths);
+                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, click, paths);
                 }
+                PressPhase::Cancel { .. } => *cx.press_slot::<Held>() = None,
                 _ => {}
             }
+        }
+        // A press none of the parts carries any more (its part went with the paths) is over for the overlay.
+        if !pressed && cx.press_slot::<Held>().is_some() {
+            *cx.press_slot::<Held>() = None;
         }
         if let Some((_, hit, mods)) = hovered {
             self.report.hover = Some(hit);
@@ -863,23 +875,11 @@ impl<'a> BezierOverlay<'a> {
     }
 
     /// The release of a press at `pos`: a drag commits, a click does what its tool's click does.
-    fn release(&mut self, cx: &mut Cx<'_, Self>, at: Pointing<'_>, item: Option<&Item>, click: bool, paths: &[EditPath]) {
+    fn release(&mut self, cx: &mut Cx<'_, Self>, at: Pointing<'_>, click: bool, paths: &[EditPath]) {
         let Pointing { view, snap, start, pos, mods } = at;
-        let Some(held) = cx.press_slot::<Held>().take().filter(|held| held.origin == start.origin) else {
-            // A press and its drag in one pass: one edit from the press.
-            if !click && let Some(item) = item {
-                let target = self.press_target(item.hit(paths, view, start.origin), start, mods, paths);
-                if let Some(edit) = Self::edit(view, snap, self.tool, &target, start.origin, pos, mods) {
-                    self.set(cx, paths, edit);
-                    match target {
-                        Target::Insert { path, segment, .. } => self.report.select = Some(self.inserted(path, segment)),
-                        Target::Duplicate { path, subpath, .. } => self.report.select = Some(self.copied(paths, path, subpath)),
-                        _ => {}
-                    }
-                }
-            }
-            return;
-        };
+        // A press reports its Down, and its drag start, before its release, and the overlay holds the press from
+        // either: a release with nothing held is of a press the overlay let go (a cancelled one), and does nothing.
+        let Some(held) = cx.press_slot::<Held>().take().filter(|held| held.origin == start.origin) else { return };
         if held.target == Target::Marquee {
             if held.began {
                 if matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
@@ -1157,6 +1157,7 @@ impl Component for BezierOverlay<'_> {
     /// below them all for the marquee. The anchors and handles are one roving group in keyboard order: one Tab stop,
     /// arriving at the first selected anchor. The Page keys, Home and End are the overlay's own moves.
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
+        self.press_tool(cx.press_slot::<Held>().as_ref());
         let Some(space) = canvas_space(&cx.env) else { return };
         let reach = cx.style.reach;
         let Some(scene) = cx.value().map(|paths| self.scene(paths, &space.view, rect, reach)) else { return };
@@ -1194,16 +1195,9 @@ impl Component for BezierOverlay<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
         let Some(paths) = cx.value().cloned() else { return };
-        if let Some(held) = cx.press_slot::<Held>().as_ref() {
-            self.tool = held.tool;
-        }
+        self.press_tool(cx.press_slot::<Held>().as_ref());
         let scene = self.scene(&paths, &space.view, cx.rect, cx.style.reach);
-        if self.cancelled && cx.press_slot::<Held>().take().is_some() {
-            cx.cancel(CancelReason::HostChanged);
-            cx.cancel_press(PressCancel::Disabled);
-        } else {
-            self.run_pointer(cx, &space, &scene, &paths);
-        }
+        self.run_pointer(cx, &space, &scene, &paths);
         self.run_keys(cx, &space, &scene, &paths);
     }
 
