@@ -149,6 +149,9 @@ const OUT_HANDLE: PartKey = PartKey::new("out_handle");
 const SEGMENT: PartKey = PartKey::new("segment");
 /// The part under the whole canvas that a Direct Selection marquee drags from.
 const MARQUEE: PartKey = PartKey::new("marquee");
+/// The part under the whole canvas that takes the presses off the paths under Add and Delete Anchor, whose canvas tool
+/// takes no press: the overlay reports them ([`BezierOutput::pressed_empty`]).
+const EMPTY: PartKey = PartKey::new("empty");
 
 /// Bits of a part index that hold the knot, then the subpath; the path's index takes the rest.
 const KNOT_BITS: u32 = 20;
@@ -254,6 +257,8 @@ enum Target {
 struct Held {
     origin: Pos2,
     target: Target,
+    /// The paths the press began on: every pass of the press declares and handles its parts from them, whatever the
+    /// host binds meanwhile, and its edits apply to them.
     start: Vec<EditPath>,
     /// Past the click slop: the gesture began.
     began: bool,
@@ -811,7 +816,7 @@ impl<'a> BezierOverlay<'a> {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     self.report.pressed_empty = true;
                     *cx.press_slot::<Held>() =
-                        Some(Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false, tool: self.tool });
+                        Some(Held { origin: start.origin, target: Target::Marquee, start: paths.to_vec(), began: false, tool: self.tool });
                 }
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                     let first = matches!(press.phase, PressPhase::DragStart { .. });
@@ -823,6 +828,12 @@ impl<'a> BezierOverlay<'a> {
                 PressPhase::Cancel { .. } => *cx.press_slot::<Held>() = None,
                 _ => {}
             }
+        }
+        if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor)
+            && let Some(result) = cx.part_if_declared(EMPTY)
+            && matches!(result.press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary)
+        {
+            self.report.pressed_empty = true;
         }
         // A press none of the parts carries any more (its part went with the paths) is over for the overlay.
         if !pressed && cx.press_slot::<Held>().is_some() {
@@ -847,7 +858,7 @@ impl<'a> BezierOverlay<'a> {
                 let target = self.press_target(item.hit(paths, view, start.origin), start, mods, paths);
                 Held { origin: start.origin, target, start: paths.to_vec(), began: false, tool: self.tool }
             }
-            (None, None) => Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false, tool: self.tool },
+            (None, None) => Held { origin: start.origin, target: Target::Marquee, start: paths.to_vec(), began: false, tool: self.tool },
         };
         let moves = !matches!(held.target, Target::Nothing | Target::Toggle { .. } | Target::Pick { .. });
         if first && moves {
@@ -1107,7 +1118,8 @@ pub struct BezierOutput {
     /// Delete Anchor): remove these anchors of a path (Delete Anchor Point), `segments` true; a Delete Anchor click
     /// on an anchor reports that one anchor with `segments` false.
     pub delete: Option<AnchorDelete>,
-    /// A press landed on empty canvas, outside every path.
+    /// A press landed on empty canvas, outside every path, under Direct Selection (the press of its marquee), Add
+    /// Anchor or Delete Anchor. Under the other tools the canvas's tool takes such a press.
     pub pressed_empty: bool,
     /// A secondary click on a part of a path, with its screen position, for the host's path menu.
     pub context: Option<(BezierHit, Pos2)>,
@@ -1158,16 +1170,26 @@ impl Component for BezierOverlay<'_> {
     /// below them all for the marquee. The anchors and handles are one roving group in keyboard order: one Tab stop,
     /// arriving at the first selected anchor. The Page keys, Home and End are the overlay's own moves.
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        self.press_tool(cx.press_slot::<Held>().as_ref());
+        let held = cx.press_slot::<Held>();
+        self.press_tool(held.as_ref());
         let Some(space) = canvas_space(&cx.env) else { return };
         let reach = cx.style.reach;
-        let Some(scene) = cx.value().map(|paths| self.scene(paths, &space.view, rect, reach)) else { return };
+        let scene = match &held {
+            Some(held) => self.scene(&held.start, &space.view, rect, reach),
+            None => {
+                let Some(paths) = cx.value() else { return };
+                self.scene(paths, &space.view, rect, reach)
+            }
+        };
         let focusable = self.tool != BezierTool::Anchors;
         if self.tool == BezierTool::Direct && !scene.limited {
             cx.part(MARQUEE, HitShape::Rect(rect))
                 .sense(Sense::DRAG.union(Sense::CLICK).union(Sense::TAKE_FOCUS))
                 .priority(HitPriority::new(HitLevel::Background, 0))
                 .pointer_only("⌘A selects every anchor and the arrows move the selected anchors");
+        }
+        if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor) && !scene.limited {
+            cx.part(EMPTY, HitShape::Rect(rect)).sense(Sense::CLICK).priority(HitPriority::new(HitLevel::Background, 0)).pointer_only("Escape leaves the paths, as a press off them does");
         }
         let arrival = self.selection.path.zip(self.selection.anchors.first().copied());
         for item in &scene.items {
@@ -1195,8 +1217,10 @@ impl Component for BezierOverlay<'_> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
-        let Some(paths) = cx.value().cloned() else { return };
-        self.press_tool(cx.press_slot::<Held>().as_ref());
+        // An open press keeps the paths it began on, as `parts` declared them.
+        let held = cx.press_slot::<Held>().clone();
+        let Some(paths) = held.as_ref().map(|held| held.start.clone()).or_else(|| cx.value().cloned()) else { return };
+        self.press_tool(held.as_ref());
         let scene = self.scene(&paths, &space.view, cx.rect, cx.style.reach);
         self.run_pointer(cx, &space, &scene, &paths);
         self.run_keys(cx, &space, &scene, &paths);

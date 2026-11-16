@@ -910,6 +910,25 @@ fn a_tool_switch_mid_press_keeps_the_parts_the_press_began_with() {
     assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1)]));
 }
 
+// The parts follow the paths the press began on: a host that binds other paths after the press (its tool follows a
+// modifier let go before the drag) leaves the press its part, and the drag commits as an edit of the pressed path.
+#[trial]
+fn a_press_keeps_the_paths_it_began_on_when_the_host_binds_others() {
+    let mut h = two_paths();
+    let anchor = h.screen(p(60.0, 200.0));
+    h.press_at(anchor);
+    h.update(|st| {
+        st.paths.remove(0);
+    });
+    h.move_to(anchor + vec2(FAR * 0.5, FAR * 0.5));
+    h.move_to(anchor + vec2(FAR, FAR));
+    h.release_at(anchor + vec2(FAR, FAR));
+    let st = h.state.borrow();
+    assert_eq!(st.seen.first(), Some(&Seen::Begin), "{:?}", st.seen);
+    assert_eq!(st.seen.last(), Some(&Seen::Commit), "{:?}", st.seen);
+    assert!(matches!(st.changes.last(), Some(PathEdit::MoveAnchors { path: 2, .. })), "{:?}", st.changes);
+}
+
 // A press the host cancels (its target went away) ends as Escape ends one: the gesture is cancelled and its release
 // reports nothing. The cancel restores nothing (the host's state moved under the press), so the paths stay where the
 // drag left them and the drag goes no further.
