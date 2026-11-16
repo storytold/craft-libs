@@ -6,7 +6,7 @@ use craft_theme::Srgba;
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::choice::Swatch;
 use craft_ui::contract::{
-    Bind, Entry, FieldLayout, Gap, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked,
+    Bind, Entry, FieldLayout, Gap, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
@@ -18,7 +18,7 @@ use egui::{Response, Ui};
 
 use crate::ui::character::paragraph::{align_toggles, direction_toggles};
 use crate::ui::character::rows::{
-    LengthRow, Lengths, family_field, hidden_side, mixed, number_change, select_row, size_menu, string_entries, toggle_row,
+    LengthRow, Lengths, family_field, hidden_side, mark, mixed, number_change, select_row, size_menu, string_entries, toggle_row,
 };
 use crate::ui::character::{
     COLOR_KEY, CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords, SIZE_RANGE,
@@ -187,8 +187,9 @@ impl<'a> TypeBar<'a> {
             let style = select_row(ui, &bar_words.style, hidden_side(), mixed(character.style.clone()), &style_entries, CharacterChange::Style);
             edits.extend(style.into_iter().map(|event| event.map(TypeBarChange::Character)));
 
-            let size =
-                LengthRow { label: bar_words.size.clone(), side: hidden_side(), value: character.size, range: SIZE_RANGE, presets: &size_presets };
+            // The size glyph the Character panel's size row shows.
+            let side = mark(GlyphLabel::text("tT"), None, FieldLayout::Inside);
+            let size = LengthRow { label: bar_words.size.clone(), side, value: character.size, range: SIZE_RANGE, presets: &size_presets };
             let (event, _) = lengths.row(ui, size);
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));
 
