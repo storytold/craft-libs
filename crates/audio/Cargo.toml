@@ -45,6 +45,8 @@ opus-decode = []
 qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
 qoa-encode = []
+# ITU-T G.726 ADPCM speech codec (16/24/32/40 kbit/s).
+g726 = []
 opus-encode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
@@ -95,6 +97,10 @@ required-features = ["flac-decode", "flac-encode"]
 [[test]]
 name = "qoa_oracle"
 required-features = ["qoa"]
+
+[[test]]
+name = "g726_oracle"
+required-features = ["g726"]
 
 [[example]]
 name = "info"
