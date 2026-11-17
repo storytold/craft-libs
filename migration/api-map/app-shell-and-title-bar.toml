@@ -216,7 +216,7 @@ name = "CanvasOutput"
 old = "craft_ui::shell::CanvasOutput"
 new = ""
 status = "removed"
-note = "`craft_ui::shell::CanvasPanelOutput { response, rail, tabs, document }`."
+note = "`craft_ui::shell::CanvasPanelOutput { response, tabs, document }`."
 
 [[type]]
 name = "CanvasPanelOutput"
@@ -230,7 +230,7 @@ name = "PanelOptions"
 old = "craft_ui::shell::PanelOptions"
 new = ""
 status = "removed"
-note = "`craft_ui::shell::CanvasPanel`: `rail(label, f)`, `tabs(f)` and `opening(bool)`; the rail and tabs are filled with `rails::PanelRail` and `tabs::DocumentTabs`."
+note = "`craft_ui::shell::CanvasPanel`: `tabs(f)` and `opening(bool)`; the tabs are filled with `tabs::DocumentTabs`."
 
 [[type]]
 name = "CanvasPanel"
@@ -244,7 +244,7 @@ name = "PanelRail"
 old = "craft_ui::shell::PanelRail"
 new = ""
 status = "removed"
-note = "The shell's own rail configuration; use `craft_ui::rails::PanelRail` inside `CanvasPanel::rail`."
+note = "The shell's own rail configuration. A collapsed dock column is the panel rail."
 
 [[type]]
 name = "tab_toggles_chrome"

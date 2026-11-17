@@ -11,21 +11,21 @@
 //! | status                                  |
 //! +-----------------------------------------+
 //!
-//! canvas panel:  +----------------------+------+
-//!                | document tabs        | panel|
-//!                +----------------------+ rail |
-//!                | document             |      |
-//!                +----------------------+------+
+//! canvas panel:  +----------------------+
+//!                | document tabs        |
+//!                +----------------------+
+//!                | document             |
+//!                +----------------------+
 //! ```
 
 #[cfg(feature = "testing")]
 mod stories;
 
-use super::app_shell::{RegionBody, RegionFn, ShellRegion};
+use super::app_shell::{RegionBody, ShellRegion};
 use super::words::ShellWords;
 use crate::contract::{BodyCx, NoValue, Outcome, PaneEdge, Props as _, ShellPane, ShowContainer as _};
 use crate::primitives::{CheckerArea, paint_surround};
-use crate::runtime::env::{BodyMode, Env, Label, ShellEntry};
+use crate::runtime::env::{BodyMode, Env, ShellEntry};
 use crate::style::{SurfaceKind, SurroundLook};
 use egui::{CornerRadius, Rect, Response, Ui};
 
@@ -49,8 +49,6 @@ pub mod slots {
 pub struct CanvasPanelOutput {
     /// The response of the document region.
     pub response: Response,
-    /// The rail's rect, when it showed.
-    pub rail: Option<Rect>,
     /// The tab strip's rect, when it showed.
     pub tabs: Option<Rect>,
     /// The document area.
@@ -67,15 +65,11 @@ impl Outcome for CanvasPanelOutput {
     }
 }
 
-/// The canvas panel of a dock: the panel rail at the end edge, spanning the tabs and the document; then, in what is
-/// left, the document tab strip flush against the document; then the document area, over the canvas surround. Fill the
-/// rail with `rails::PanelRail` and the tab strip with `tabs::DocumentTabs`.
+/// The canvas panel of a dock: the document tab strip flush against the document, then the document area, over the
+/// canvas surround. Fill the tab strip with `tabs::DocumentTabs`.
 ///
 /// - **Tabs.** They show in normal mode when the host says so (`ShellCx::tabs_visible`), or while documents are
-///   [`opening`](CanvasPanel::opening) (a file that is still loading has a tab). Body-only mode shows neither tabs nor
-///   rail, but the rail shows during a reveal that shows the dock.
-/// - **Rail.** It is skipped when the dock is hidden (`ShellCx::dock_visible`, or the panels are hidden with
-///   Shift+Tab).
+///   [`opening`](CanvasPanel::opening) (a file that is still loading has a tab). Body-only mode shows no tabs.
 /// - **Surround.** The document area shows the canvas surround, and a double click on its empty room is
 ///   [`empty_double`](CanvasPanelOutput::empty_double).
 ///
@@ -84,7 +78,6 @@ impl Outcome for CanvasPanelOutput {
 #[must_use = "show the panel with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct CanvasPanel<'a> {
-    rail: Option<(Label, RegionFn<'a>)>,
     /// The document tab strip.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     tabs: Option<RegionBody<'a>>,
@@ -94,34 +87,20 @@ pub struct CanvasPanel<'a> {
 }
 
 impl<'a> CanvasPanel<'a> {
-    /// A panel with no rail and no tab strip.
+    /// A panel with no tab strip.
     pub fn new() -> Self {
-        CanvasPanel { rail: None, tabs: None, opening: false }
-    }
-
-    /// The panel rail, named `label`.
-    pub fn rail(mut self, label: impl Into<Label>, add: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
-        self.rail = Some((label.into(), Box::new(add)));
-        self
+        CanvasPanel { tabs: None, opening: false }
     }
 
     /// Lays the panel out in `ui`, the body of the dock's canvas panel, with `document` in the area left.
     pub fn show(self, ui: &mut Ui, mut document: impl FnMut(&mut Ui, &mut BodyCx<'_>)) -> CanvasPanelOutput {
-        let CanvasPanel { rail, tabs, opening } = self;
+        let CanvasPanel { tabs, opening } = self;
         let env = Env::of(ui);
         let words = env.words::<ShellWords>();
         let shell = env.get::<ShellEntry>().0;
-        let dock = shell.as_ref().is_none_or(|shell| shell.dock_visible());
         let normal = shell.as_ref().is_none_or(|shell| shell.body_mode() == BodyMode::Normal);
         let tabs_shown = shell.as_ref().is_none_or(|shell| shell.tabs_visible()) || (opening && normal);
 
-        let mut rail_rect = None;
-        if let (Some((label, mut add)), true) = (rail, dock) {
-            // One rail column wide, as the shell's rails are.
-            let pane = ShellPane::new("panel_rail").edge(PaneEdge::End).extent(env.tokens.size.rail.width);
-            let out = ShellRegion::chrome(pane).id_salt("panel_rail").label(label).show(ui, |ui, cx| add(ui, cx));
-            rail_rect = Some(out.response.rect);
-        }
         let mut tabs_rect = None;
         if let (Some(mut add), true) = (tabs.map(|RegionBody(add)| add), tabs_shown) {
             // The document tabs sit on the window's background, as tab strips do.
@@ -141,7 +120,7 @@ impl<'a> CanvasPanel<'a> {
                 empty_double |= cx.surface_double_pressed();
                 document(ui, cx);
             });
-        CanvasPanelOutput { document: out.response.rect, response: out.output.response, rail: rail_rect, tabs: tabs_rect, empty_double }
+        CanvasPanelOutput { document: out.response.rect, response: out.output.response, tabs: tabs_rect, empty_double }
     }
 }
 

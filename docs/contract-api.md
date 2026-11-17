@@ -3981,7 +3981,6 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::Room`: re-export of `craft_ui::testing::fixture::Room`.
 - `craft_ui::testing::Target`: re-export of `craft_ui::testing::fixture::Target`.
 - `craft_ui::testing::forget_measurements`: re-export of `craft_ui::runtime::layout_memory::forget_kept`.
-- `craft_ui::testing::in_edge_pane`: `pub fn in_edge_pane<R>(ui: &mut Ui, edge: PaneEdge, story: impl FnOnce(&mut Ui) -> R) -> R`. Runs `story` as the content of an edge pane at `edge`, as a rail or panel docked at that edge of an app window
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.
 - `craft_ui::testing::is_measuring`: re-export of `craft_ui::runtime::measure::active` (defined outside these crates).
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).

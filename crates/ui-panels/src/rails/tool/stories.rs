@@ -3,7 +3,6 @@
 use super::{LastUsed, RailTool, ToolRail, ToolSlot};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
-use std::num::NonZeroU8;
 
 /// The tools of the stories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui_macros::CommandSet)]
@@ -40,29 +39,26 @@ fn slots() -> Vec<ToolSlot<u8>> {
     vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1])), ToolSlot::new(2, tools(&[3])), ToolSlot::new(3, tools(&[4]))]
 }
 
+/// The rail in a room as wide as its grid at `columns` columns: the stage a dock column of that many steps gives it.
 #[story(ToolRail<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let columns = *data.ranged("columns", 1_u8, 1.0..=2.0);
+    let columns = *data.ranged("columns", 1_u8, 1.0..=4.0);
     let hidden =
         data.choice("hidden", Vec::<u8>::new(), &[("None", Vec::new()), ("Pencil", vec![2]), ("Stamp", vec![4]), ("Eraser", vec![3])]).clone();
     let slots = slots();
     let last = LastUsed::default();
-    let out = ToolRail::new("Tools", &slots, &BRUSH, &last)
-        .columns(NonZeroU8::new(columns.max(1)).unwrap_or(NonZeroU8::MIN))
-        .hidden(&hidden)
-        .column_toggle("Toolbar")
-        .side_toggle("Move Toolbar to the Other Side")
-        .edit_toolbar("Edit Toolbar")
-        .show_rail(ui, |_, _| {});
+    let width = ToolRail::<u8>::dock_grid(ui.ctx(), slots.len() + 1).width(u16::from(columns));
+    let out = ui
+        .scope(|ui| {
+            ui.set_max_width(width);
+            ToolRail::new("Tools", &slots, &BRUSH, &last).hidden(&hidden).edit_toolbar("Edit Toolbar").show_rail(ui, |_, _| {})
+        })
+        .inner;
     let note = data.note("note", "Nothing yet".to_owned());
     if let Some(tool) = out.select {
         *note = format!("selected {tool}");
     } else if let Some(tool) = out.double_clicked {
         *note = format!("double clicked {tool}");
-    } else if out.toggle_columns {
-        *note = "toggle columns".to_owned();
-    } else if out.toggle_side {
-        *note = "toggle side".to_owned();
     } else if out.edit_toolbar.as_ref().is_some_and(crate::contract::clicked) {
         *note = "edit toolbar".to_owned();
     }
