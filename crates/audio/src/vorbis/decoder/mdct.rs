@@ -69,8 +69,7 @@ impl Imdct {
 
     fn fft(&self, a: &mut [Cpx]) {
         let h = a.len();
-        for i in 0..h {
-            let j = self.rev[i];
+        for (i, &j) in self.rev.iter().enumerate() {
             if i < j {
                 a.swap(i, j);
             }
