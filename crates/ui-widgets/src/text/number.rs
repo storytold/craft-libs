@@ -43,6 +43,18 @@ const DEFAULT_STEP: f64 = 1.0;
 const VALUES: ColumnKey = ColumnKey::new("number_values");
 const UNITS: ColumnKey = ColumnKey::new("number_units");
 
+/// Where a number field shows its unit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnitPlacement {
+    /// Inside the field, after the number.
+    #[default]
+    Inside,
+    /// After the field, outside its box: the field draws no unit and keeps the unit's spellings for typed text and its
+    /// decimals, and the host draws the unit text beside it (a column of units in a grid of fields).
+    After,
+}
+
 /// The placeholder of a mixed field.
 const BLANK: &str = "\u{2014}";
 
@@ -113,6 +125,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// A unit shown after the number.
     #[prop(into)]
     unit: Option<Label>,
+    /// Whether the unit is drawn inside the field or left to the host to draw after it.
+    #[prop]
+    unit_placement: UnitPlacement,
     /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
     #[prop]
     presets: Option<&'a [Entry<NumberPick>]>,
@@ -184,6 +199,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             step: None,
             stepper: None,
             unit: None,
+            unit_placement: UnitPlacement::Inside,
             presets: None,
             popup_slider: None,
             snap_typed: false,
@@ -238,8 +254,12 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         }
     }
 
-    /// The unit shown after the number: the field's own, else the symbol of its unit kind.
+    /// The unit drawn inside the field after the number: the field's own, else the symbol of its unit kind; none when
+    /// the host draws it after the field.
     fn shown_unit(&self, units: &Units) -> Option<Label> {
+        if self.unit_placement == UnitPlacement::After {
+            return None;
+        }
         self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
     }
 
