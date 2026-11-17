@@ -5,7 +5,9 @@
 //! starts there. Lines are 0-based here (callers add one for display); columns are 0-based UTF-16
 //! code units as the format defines.
 
-use serde_json::Value;
+use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use std::cell::Cell;
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -17,11 +19,14 @@ pub struct Limits {
     pub max_lines: usize,
     /// Deepest section nesting (the format allows one level; we tolerate a few).
     pub max_depth: usize,
+    /// Most `sources`, `sourcesContent`, `names` and ignore-list entries across the whole map,
+    /// counted while the JSON is read, so a map of tiny entries is refused before it is kept.
+    pub max_entries: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_bytes: 64 * 1024 * 1024, max_segments: 4_000_000, max_lines: 1_000_000, max_depth: 8 }
+        Limits { max_bytes: 64 * 1024 * 1024, max_segments: 4_000_000, max_lines: 1_000_000, max_depth: 8, max_entries: 2_000_000 }
     }
 }
 
@@ -67,6 +72,8 @@ pub enum SourceMapError {
     LineAllocationFailed,
     #[error("source map sections nest deeper than {0}")]
     TooDeep(usize),
+    #[error("source map has more than {0} source, content, name and ignore-list entries")]
+    TooManyEntries(usize),
 }
 
 /// One decoded mapping segment.
@@ -216,50 +223,50 @@ pub fn parse(json: &[u8], limits: Limits) -> Result<SourceMap, SourceMapError> {
     }
     // Some servers prefix maps with `)]}'` to defeat XSSI; the format allows skipping that line.
     let body = if json.starts_with(b")]}") { json.iter().position(|b| *b == b'\n').and_then(|p| json.get(p + 1..)).unwrap_or(&[]) } else { json };
-    let v: Value = serde_json::from_slice(body).map_err(|e| SourceMapError::BadJson(e.to_string()))?;
+    let entries = Entries { left: Cell::new(limits.max_entries), exhausted: Cell::new(false) };
+    let mut de = serde_json::Deserializer::from_slice(body);
+    let raw = RawMapSeed(&entries).deserialize(&mut de).and_then(|raw| de.end().map(|()| raw));
+    let raw = match raw {
+        Ok(raw) => raw,
+        Err(_) if entries.exhausted.get() => return Err(SourceMapError::TooManyEntries(limits.max_entries)),
+        Err(e) => return Err(SourceMapError::BadJson(e.to_string())),
+    };
     let mut budget = limits.max_segments;
     let mut line_budget = limits.max_lines;
-    from_value(&v, 0, limits, &mut budget, &mut line_budget)
+    from_raw(raw, 0, limits, &mut budget, &mut line_budget)
 }
 
-fn from_value(v: &Value, depth: usize, limits: Limits, budget: &mut usize, line_budget: &mut usize) -> Result<SourceMap, SourceMapError> {
+fn from_raw(raw: Option<RawMap>, depth: usize, limits: Limits, budget: &mut usize, line_budget: &mut usize) -> Result<SourceMap, SourceMapError> {
     if depth > limits.max_depth {
         return Err(SourceMapError::TooDeep(limits.max_depth));
     }
-    if v.get("version").and_then(Value::as_u64) != Some(3) {
+    let Some(raw) = raw.filter(|raw| raw.version == Some(3)) else {
         return Err(SourceMapError::BadVersion);
-    }
-    let strs = |k: &str| -> Vec<Option<String>> {
-        v.get(k).and_then(Value::as_array).map(|a| a.iter().map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default()
     };
     let mut map = SourceMap {
-        file: v.get("file").and_then(Value::as_str).map(String::from),
-        source_root: v.get("sourceRoot").and_then(Value::as_str).map(String::from),
-        sources: strs("sources"),
-        sources_content: strs("sourcesContent"),
-        names: strs("names").into_iter().map(Option::unwrap_or_default).collect(),
-        ignore_list: v
-            .get("ignoreList")
-            .or_else(|| v.get("x_google_ignoreList"))
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|n| n.as_u64().and_then(|n| u32::try_from(n).ok())).collect())
-            .unwrap_or_default(),
+        file: raw.file,
+        source_root: raw.source_root,
+        sources: raw.sources,
+        sources_content: raw.sources_content,
+        names: raw.names.into_iter().map(Option::unwrap_or_default).collect(),
+        ignore_list: raw.ignore_list.or(raw.google_ignore_list).unwrap_or_default().into_iter().filter_map(|n| n.and_then(|n| u32::try_from(n).ok())).collect(),
         ..Default::default()
     };
-    if let Some(sections) = v.get("sections") {
-        let sections = sections.as_array().ok_or(SourceMapError::BadSections)?;
+    if let Some(sections) = raw.sections {
+        let sections = sections.ok_or(SourceMapError::BadSections)?;
         for section in sections {
-            let offset = |key: &str| section.get("offset")?.get(key)?.as_u64().and_then(|n| u32::try_from(n).ok());
-            let line = offset("line").ok_or(SourceMapError::BadSections)?;
-            let col = offset("column").ok_or(SourceMapError::BadSections)?;
+            let offset = |n: Option<u64>| n.and_then(|n| u32::try_from(n).ok()).ok_or(SourceMapError::BadSections);
+            let (line, col) = section.offset.unwrap_or_default();
+            let line = offset(line)?;
+            let col = offset(col)?;
             if map.sections.last().is_some_and(|(l, c, _)| (*l, *c) > (line, col)) {
                 return Err(SourceMapError::BadSections);
             }
-            let sub = match (section.get("map"), section.get("url")) {
-                (Some(m), None) => from_value(m, depth + 1, limits, budget, line_budget)?,
+            let sub = match (section.map, section.url) {
+                (Some(m), None) => from_raw(m, depth + 1, limits, budget, line_budget)?,
                 // External maps are never fetched here. Retain their start so a lookup
                 // cannot leak through to the previous inline map.
-                (None, Some(Value::String(_))) => SourceMap::default(),
+                (None, Some(true)) => SourceMap::default(),
                 _ => return Err(SourceMapError::BadSections),
             };
             map.segments = map.segments.saturating_add(sub.segments);
@@ -267,9 +274,299 @@ fn from_value(v: &Value, depth: usize, limits: Limits, budget: &mut usize, line_
         }
         return Ok(map);
     }
-    let mappings = v.get("mappings").and_then(Value::as_str).unwrap_or_default();
-    decode_mappings(mappings, &mut map, budget, line_budget, limits.max_lines)?;
+    decode_mappings(raw.mappings.as_deref().unwrap_or_default(), &mut map, budget, line_budget, limits.max_lines)?;
     Ok(map)
+}
+
+/// The entry budget shared by every list in a map and its sections while the JSON is read.
+struct Entries {
+    left: Cell<usize>,
+    exhausted: Cell<bool>,
+}
+
+impl Entries {
+    fn take<E: de::Error>(&self) -> Result<(), E> {
+        let Some(left) = self.left.get().checked_sub(1) else {
+            self.exhausted.set(true);
+            return Err(E::custom("too many source-map entries"));
+        };
+        self.left.set(left);
+        Ok(())
+    }
+}
+
+/// The fields a map is built from, read without keeping anything else. Any JSON value is
+/// accepted where the format expects another kind; it reads as absent, as before.
+#[derive(Default)]
+struct RawMap {
+    version: Option<u64>,
+    file: Option<String>,
+    source_root: Option<String>,
+    sources: Vec<Option<String>>,
+    sources_content: Vec<Option<String>>,
+    names: Vec<Option<String>>,
+    /// Present even when it isn't an array, so `x_google_ignoreList` stays unused then.
+    ignore_list: Option<Vec<Option<u64>>>,
+    google_ignore_list: Option<Vec<Option<u64>>>,
+    mappings: Option<String>,
+    /// `Some(None)`: present but not an array.
+    sections: Option<Option<Vec<RawSection>>>,
+}
+
+#[derive(Default)]
+struct RawSection {
+    offset: Option<(Option<u64>, Option<u64>)>,
+    /// `Some(None)`: present but not an object.
+    map: Option<Option<RawMap>>,
+    /// Whether the URL is a string.
+    url: Option<bool>,
+}
+
+/// Visitor methods that read any other kind of value, without keeping it, as the default.
+macro_rules! skip {
+    ($de:lifetime; bool) => { fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> { Ok(Default::default()) } };
+    ($de:lifetime; i64) => { fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> { Ok(Default::default()) } };
+    ($de:lifetime; u64) => { fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> { Ok(Default::default()) } };
+    ($de:lifetime; f64) => { fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> { Ok(Default::default()) } };
+    ($de:lifetime; str) => { fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> { Ok(Default::default()) } };
+    ($de:lifetime; unit) => { fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(Default::default()) } };
+    ($de:lifetime; seq) => {
+        fn visit_seq<A: SeqAccess<$de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
+            Ok(Default::default())
+        }
+    };
+    ($de:lifetime; map) => {
+        fn visit_map<A: MapAccess<$de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+            Ok(Default::default())
+        }
+    };
+    ($de:lifetime; $($kind:ident),+) => { $(skip!($de; $kind);)+ };
+}
+
+/// A string, or `None` for any other value.
+#[derive(Clone, Copy)]
+struct MaybeStr;
+
+impl<'de> Visitor<'de> for MaybeStr {
+    type Value = Option<String>;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
+        Ok(Some(s.to_owned()))
+    }
+    fn visit_string<E: de::Error>(self, s: String) -> Result<Self::Value, E> {
+        Ok(Some(s))
+    }
+    skip!('de; bool, i64, u64, f64, unit, seq, map);
+}
+
+/// A non-negative integer, or `None` for any other value.
+#[derive(Clone, Copy)]
+struct MaybeU64;
+
+impl<'de> Visitor<'de> for MaybeU64 {
+    type Value = Option<u64>;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_u64<E: de::Error>(self, n: u64) -> Result<Self::Value, E> {
+        Ok(Some(n))
+    }
+    skip!('de; bool, i64, f64, str, unit, seq, map);
+}
+
+/// One value read through `V`, after taking its slot from the entry budget.
+struct Entry<'a, V>(&'a Entries, V);
+
+impl<'de, V: Visitor<'de>> DeserializeSeed<'de> for Entry<'_, V> {
+    type Value = V::Value;
+    fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+        self.0.take()?;
+        d.deserialize_any(self.1)
+    }
+}
+
+/// A list whose entries count against the budget; any other value reads as an empty list.
+struct EntryList<'a, V>(&'a Entries, V);
+
+impl<'de, V: Visitor<'de> + Copy> Visitor<'de> for EntryList<'_, V> {
+    type Value = Vec<V::Value>;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut out = Vec::new();
+        while let Some(value) = seq.next_element_seed(Entry(self.0, self.1))? {
+            out.push(value);
+        }
+        Ok(out)
+    }
+    skip!('de; bool, i64, u64, f64, str, unit, map);
+}
+
+impl<'de, V: Visitor<'de> + Copy> DeserializeSeed<'de> for EntryList<'_, V> {
+    type Value = Vec<V::Value>;
+    fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+/// A map object, or `None` for any other value.
+#[derive(Clone, Copy)]
+struct RawMapSeed<'a>(&'a Entries);
+
+impl<'de> Visitor<'de> for RawMapSeed<'_> {
+    type Value = Option<RawMap>;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut fields: A) -> Result<Self::Value, A::Error> {
+        let mut raw = RawMap::default();
+        // A repeated key replaces the earlier value, as it did when the whole JSON was read.
+        while let Some(key) = fields.next_key::<Field>()? {
+            match key {
+                Field::Version => raw.version = fields.next_value_seed(Any(MaybeU64))?,
+                Field::File => raw.file = fields.next_value_seed(Any(MaybeStr))?,
+                Field::SourceRoot => raw.source_root = fields.next_value_seed(Any(MaybeStr))?,
+                Field::Sources => raw.sources = fields.next_value_seed(EntryList(self.0, MaybeStr))?,
+                Field::SourcesContent => raw.sources_content = fields.next_value_seed(EntryList(self.0, MaybeStr))?,
+                Field::Names => raw.names = fields.next_value_seed(EntryList(self.0, MaybeStr))?,
+                Field::IgnoreList => raw.ignore_list = Some(fields.next_value_seed(EntryList(self.0, MaybeU64))?),
+                Field::GoogleIgnoreList => raw.google_ignore_list = Some(fields.next_value_seed(EntryList(self.0, MaybeU64))?),
+                Field::Mappings => raw.mappings = fields.next_value_seed(Any(MaybeStr))?,
+                Field::Sections => raw.sections = Some(fields.next_value_seed(Any(Sections(self.0)))?),
+                Field::Other => {
+                    fields.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(Some(raw))
+    }
+    skip!('de; bool, i64, u64, f64, str, unit, seq);
+}
+
+impl<'de> DeserializeSeed<'de> for RawMapSeed<'_> {
+    type Value = Option<RawMap>;
+    fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+/// Read any JSON value through `V`.
+struct Any<V>(V);
+
+impl<'de, V: Visitor<'de>> DeserializeSeed<'de> for Any<V> {
+    type Value = V::Value;
+    fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+        d.deserialize_any(self.0)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "camelCase")]
+enum Field {
+    Version,
+    File,
+    SourceRoot,
+    Sources,
+    SourcesContent,
+    Names,
+    IgnoreList,
+    #[serde(rename = "x_google_ignoreList")]
+    GoogleIgnoreList,
+    Mappings,
+    Sections,
+    #[serde(other)]
+    Other,
+}
+
+/// The sections array, or `None` for any other value.
+struct Sections<'a>(&'a Entries);
+
+impl<'de> Visitor<'de> for Sections<'_> {
+    type Value = Option<Vec<RawSection>>;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut out = Vec::new();
+        while let Some(section) = seq.next_element_seed(Any(Section(self.0)))? {
+            out.push(section);
+        }
+        Ok(Some(out))
+    }
+    skip!('de; bool, i64, u64, f64, str, unit, map);
+}
+
+/// One section; any value that isn't an object reads as a section without an offset.
+struct Section<'a>(&'a Entries);
+
+impl<'de> Visitor<'de> for Section<'_> {
+    type Value = RawSection;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut fields: A) -> Result<Self::Value, A::Error> {
+        let mut section = RawSection::default();
+        while let Some(key) = fields.next_key::<SectionField>()? {
+            match key {
+                SectionField::Offset => section.offset = Some(fields.next_value_seed(Any(Offset))?),
+                SectionField::Map => section.map = Some(fields.next_value_seed(RawMapSeed(self.0))?),
+                SectionField::Url => section.url = Some(fields.next_value_seed(Any(MaybeStr))?.is_some()),
+                SectionField::Other => {
+                    fields.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(section)
+    }
+    skip!('de; bool, i64, u64, f64, str, unit, seq);
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "lowercase")]
+enum SectionField {
+    Offset,
+    Map,
+    Url,
+    #[serde(other)]
+    Other,
+}
+
+/// A section offset's line and column; any value that isn't an object has neither.
+struct Offset;
+
+impl<'de> Visitor<'de> for Offset {
+    type Value = (Option<u64>, Option<u64>);
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut fields: A) -> Result<Self::Value, A::Error> {
+        let (mut line, mut column) = (None, None);
+        while let Some(key) = fields.next_key::<OffsetField>()? {
+            match key {
+                OffsetField::Line => line = fields.next_value_seed(Any(MaybeU64))?,
+                OffsetField::Column => column = fields.next_value_seed(Any(MaybeU64))?,
+                OffsetField::Other => {
+                    fields.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok((line, column))
+    }
+    skip!('de; bool, i64, u64, f64, str, unit, seq);
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "lowercase")]
+enum OffsetField {
+    Line,
+    Column,
+    #[serde(other)]
+    Other,
 }
 
 fn b64(c: u8) -> Option<i64> {
