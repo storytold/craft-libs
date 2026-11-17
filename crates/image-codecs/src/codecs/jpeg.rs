@@ -52,6 +52,15 @@ pub(crate) struct JpegMeta {
 /// Unlike general JPEG import it does not fall back to additional JPEG modes,
 /// apply orientation, or retain pixels. The caller supplies the admitted pixel count.
 pub fn validate_jpeg_rgba8(bytes: &[u8], max_pixels: u64) -> Result<(), CodecError> {
+    validate_jpeg_rgba8_with_panic_policy(bytes, max_pixels, cfg!(panic = "abort"))
+}
+
+fn validate_jpeg_rgba8_with_panic_policy(bytes: &[u8], max_pixels: u64, panic_aborts: bool) -> Result<(), CodecError> {
+    // The decoder can assert while upsampling these frames. On abort builds the
+    // unwind guard below cannot turn that assertion into an image omission.
+    if panic_aborts && first_component_subsampled(bytes) {
+        return Err(CodecError::malformed(F, "JPEG first component is subsampled below the frame maximum"));
+    }
     let decode = || {
         let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
         let mut decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), options);
@@ -1103,23 +1112,43 @@ mod tests {
         (v * 65535.0 / 4095.0).round() as u16
     }
 
+    fn progressive_frame_header(comps: &[(u8, u8)]) -> Vec<u8> {
+        let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
+        for (i, &(h, v)) in comps.iter().enumerate() {
+            s.extend([i as u8 + 1, (h << 4) | v, 0]);
+        }
+        s
+    }
+
     #[test]
     fn first_component_subsampling() {
-        let sof = |comps: &[(u8, u8)]| {
-            let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
-            for (i, &(h, v)) in comps.iter().enumerate() {
-                s.extend([i as u8 + 1, (h << 4) | v, 0]);
-            }
-            s
-        };
-        assert!(first_component_subsampled(&sof(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
-        assert!(first_component_subsampled(&sof(&[(1, 2), (1, 2), (2, 1)])));
-        assert!(!first_component_subsampled(&sof(&[(2, 2), (1, 1), (1, 1)])));
-        assert!(!first_component_subsampled(&sof(&[(1, 1); 4])));
-        assert!(!first_component_subsampled(&sof(&[])));
+        assert!(first_component_subsampled(&progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
+        assert!(first_component_subsampled(&progressive_frame_header(&[(1, 2), (1, 2), (2, 1)])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[(2, 2), (1, 1), (1, 1)])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[(1, 1); 4])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[])));
         assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]));
         assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 20, 8]));
         assert!(!first_component_subsampled(b"not a jpeg"));
+    }
+
+    #[test]
+    fn renderer_validation_refuses_unsafe_sampling_under_abort_policy() {
+        // The frame header alone exercises refusal before any pixel decode.
+        let header = progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)]);
+        let refuses_sampling = |result| {
+            matches!(
+                result,
+                Err(CodecError::Malformed { format: Format::Jpeg, message })
+                if message == "JPEG first component is subsampled below the frame maximum"
+            )
+        };
+        assert!(refuses_sampling(validate_jpeg_rgba8_with_panic_policy(&header, 64, true)));
+        assert!(!refuses_sampling(validate_jpeg_rgba8_with_panic_policy(&header, 64, false)));
+
+        let mut ordinary = Vec::new();
+        jpeg_encoder::Encoder::new(&mut ordinary, 90).encode(&[128], 1, 1, jpeg_encoder::ColorType::Luma).unwrap();
+        validate_jpeg_rgba8_with_panic_policy(&ordinary, 1, true).unwrap();
     }
 
     #[test]
