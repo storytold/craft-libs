@@ -12,7 +12,8 @@ DEST=${1:-target/fixtures/affinity}
 mkdir -p "$DEST"
 while IFS=$'\t' read -r sha name _licence url; do
     out="$DEST/$name"
-    if ! echo "$sha  $out" | sha256sum -c --status 2>/dev/null; then
+    if ! echo "$sha  $out" | sha256sum -c --status >/dev/null 2>&1; then
+        mkdir -p "$(dirname "$out")"
         curl -fsSL --proto '=https' --retry 3 -o "$out" "$url"
         echo "$sha  $out" | sha256sum -c --status || { rm -f "$out"; echo "$name: SHA-256 does not match" >&2; exit 1; }
     fi
