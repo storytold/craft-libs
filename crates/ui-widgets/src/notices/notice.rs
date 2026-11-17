@@ -558,9 +558,15 @@ impl Component for Notice<'_> {
                 room.map_or(width, |room| width.min(room))
             }
             (NoticeLayout::Centred, None) => natural.min(cx.style.reading_width),
-            (_, Some(room)) => room,
-            (_, None) => natural,
+            // A row notice takes the room it is given; an unbounded room (a column sized by its content) leaves it at
+            // its natural width.
+            (_, Some(room)) if room.is_finite() => room,
+            (_, _) => natural,
         };
+        if !width.is_finite() || cx.room.is_some_and(|room| !room.is_finite()) {
+            let test = std::thread::current().name().unwrap_or("?").rsplit("::").next().unwrap_or("?").to_owned();
+            eprintln!("DIAG {test}: notice measure room {:?} natural {natural} width {width}", cx.room);
+        }
         Vec2::new(width, self.plan(cx, &texts, self.wrap_width(cx, width)).height)
     }
 
