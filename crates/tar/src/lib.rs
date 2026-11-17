@@ -175,17 +175,32 @@ fn tar_with_name_copy_limit(data: &[u8], max_members: usize, mut name_bytes_left
             break;
         }
         let typeflag = h.get(156).copied().unwrap_or(0);
-        let Some(mut size) = h.get(124..136).and_then(octal) else {
+        // Metadata records keep their own framing. For a member, PAX replaces the
+        // legacy size field entirely, so a valid override does not depend on its contents.
+        let override_size = match typeflag {
+            b'x' | b'g' | b'L' | b'K' => None,
+            _ => pax.size.take().or(pax.global_size),
+        };
+        let Some(size) = override_size.or_else(|| h.get(124..136).and_then(octal)) else {
             out.warnings.push(format!("unreadable size at {pos:#x}"));
             out.length = pos as u64;
             break;
         };
-        if !matches!(typeflag, b'x' | b'g' | b'L' | b'K')
-            && let Some(s) = pax.size.take().or(pax.global_size)
-        {
-            size = s;
+        let mut data_off = pos + BLOCK;
+        let old_gnu_sparse = typeflag == b'S' && h.get(257..265) == Some(b"ustar  \0");
+        if old_gnu_sparse {
+            // Old GNU sparse maps can continue in whole blocks before the stored extents.
+            let mut extended = h.get(482).is_some_and(|&flag| flag != 0);
+            while extended {
+                let Some(block) = r.slice(data_off, BLOCK) else {
+                    out.warnings.push(format!("GNU sparse extension ends early at {data_off:#x}"));
+                    out.length = data.len() as u64;
+                    break 'headers;
+                };
+                extended = block.get(504).is_some_and(|&flag| flag != 0);
+                data_off += BLOCK;
+            }
         }
-        let data_off = pos + BLOCK;
         let Some(next) =
             round_up(size, BLOCK as u64).and_then(|s| u64::try_from(data_off).ok()?.checked_add(s)).and_then(|n| usize::try_from(n).ok())
         else {
@@ -262,7 +277,7 @@ fn tar_with_name_copy_limit(data: &[u8], max_members: usize, mut name_bytes_left
                     .or_else(|| Some(text(h.get(157..257).unwrap_or(&[]))))
                     .filter(|l| !l.is_empty());
                 let mut kind = tar_kind(typeflag, &name);
-                if std::mem::take(&mut pax.sparse) || !pax.global_sparse.is_empty() {
+                if std::mem::take(&mut pax.sparse) || !pax.global_sparse.is_empty() || old_gnu_sparse {
                     kind = MemberKind::Other;
                     out.warnings.push(format!("{name}: GNU sparse reconstruction is unsupported; stored extents are not the complete file"));
                 }
@@ -523,6 +538,8 @@ pub fn cpio_with_checksum(data: &[u8], max_members: usize, checksum: &mut dyn Fn
         }
         if format == "cpio-crc" {
             match h.get(102..110).filter(|field| field.iter().all(u8::is_ascii_hexdigit)).and_then(hex_field).and_then(|n| u32::try_from(n).ok()) {
+                // GNU cpio writes the symlink target without a checksum.
+                Some(0) if kind == MemberKind::Symlink => {}
                 Some(expected) => {
                     if let Some(body) = r.slice(data_off, size) {
                         match checksum(body) {
