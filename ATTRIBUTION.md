@@ -157,7 +157,3 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## HTTP Archive reader
 
 `crates/har` preserves Craft Anything `crates/formats/src/har.rs` from `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Brandon Thomas introduced the typed reader in `f64ae3bf3c8863a982af1304e06de20653803968`; BFlat added UTF-8 BOM compatibility in `cb0bb9d8fa4536ba44ef2c86f5ed759b879cc2d3`. Both source snapshots retain primary author attribution. Shared wiring, explicit byte admission and its tests are subsequent Dylan M. Taylor changes. Redaction and analysis remain app-owned.
-
-## GPU color conversion
-
-`crates/gpu-yuv` comes from StudioCraft `crates/craft-gpu-yuv` at `8d8b6929e37217e0a3095cfc015b79c0e1e8e510` (MIT OR Apache-2.0).
