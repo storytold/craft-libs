@@ -31,5 +31,7 @@ pub mod svgz;
 pub mod tree;
 pub mod write;
 
+/// Prefix-preserving kurbo path compatibility for legacy SVG importers.
+pub mod prefix_path;
 /// Compatibility CSS subset for simple SVG importers.
 pub mod simple_css;

@@ -2,6 +2,7 @@
 //! image generators, comparison metrics.
 #![allow(dead_code)]
 
+pub mod pngsuite;
 pub mod tiffgen;
 
 use craft_image_codecs::*;
