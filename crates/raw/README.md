@@ -33,7 +33,7 @@ The format layer ends where arithmetic on the picture begins.
 |---|---|
 | Recognising containers (`probe`), walking TIFF/IFD structure on `craft-tiff` | Black subtraction, white scaling, cropping to the active area |
 | Decompressing the samples: unpacking, lossless JPEG, lossy JPEG, Deflate, JPEG XL | Demosaicing, binned previews, hot-pixel and highlight handling |
-| A DNG `LinearizationTable` (a storage code, applied so the samples are sensor values) | Raising samples stuck below the stated white level (`lift_clipped_samples`) |
+| A DNG `LinearizationTable` (a storage code, applied so the samples are sensor values; left unapplied when `OpcodeList1` is present, so the develop pipeline can run that list on the stored codes first) | Raising samples stuck below the stated white level (`lift_clipped_samples`) |
 | Black and white levels, CFA layout, active area, default crop, orientation, pixel aspect | The DNG colour model's arithmetic (illuminant interpolation, camera to working space) |
 | Colour tags as data: matrices, calibration illuminants, as-shot neutral / white | White balance, Kelvin scales, spectral or fitted camera colour |
 | Opcode lists parsed and written (`opcodes`), profile tables and gain table maps as data | Applying opcodes (gain maps, warps, bad pixels), profile look tables, tone curves |
