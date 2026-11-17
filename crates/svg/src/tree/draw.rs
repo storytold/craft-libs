@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use usvg::Transform;
 
 #[cfg(feature = "tree-render")]
+pub use resvg;
+#[cfg(feature = "tree-render")]
 pub use resvg::tiny_skia;
 
 /// Filter primitives per filter. A result of every primitive is kept; real filters have 1 to 12
