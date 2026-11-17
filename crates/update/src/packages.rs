@@ -172,7 +172,7 @@ mod tests {
     }
 }
 
-/// Matches the OCI URL from https://getartcraft.com/artcraft-oci.flatpakrepo,
+/// Matches the OCI URL from <https://getartcraft.com/artcraft-oci.flatpakrepo>,
 /// independently of its local remote name (normally `artcraft-oci`).
 pub fn is_artcraft_remote(origin: &str, remotes: &str) -> bool {
     remotes.lines().any(|line| {

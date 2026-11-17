@@ -145,6 +145,8 @@ fn a_local_scene_respects_the_depth_limit() {
     assert!(!Document::from_tree_local(&tree, 64).too_deep);
 }
 
+// The embedded SVG reaches the scene only through the data-URL image resolver.
+#[cfg(feature = "tree")]
 #[test]
 fn an_embedded_svg_in_a_local_scene_is_local_too() {
     use std::io::Write as _;

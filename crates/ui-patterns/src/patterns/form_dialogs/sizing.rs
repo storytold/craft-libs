@@ -213,7 +213,7 @@ pub struct SizingOutput<R> {
     pub closed: Option<CloseReason>,
     /// The answer, the pass the dialog closed as OK.
     pub result: Option<R>,
-    /// The answer OK filed in this pass for the host to judge, from a dialog that holds its OK ([`Hold`]).
+    /// The answer OK filed in this pass for the host to judge, from a dialog that holds its OK.
     pub held: Option<R>,
 }
 

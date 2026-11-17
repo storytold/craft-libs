@@ -12,6 +12,7 @@ use craft_prepress::flatten::write::page_pdf;
 use craft_prepress::flatten::{BlendMode, DisplayList, FillItem, FillRule, FlattenOptions, GroupItem, Item, Paint, flatten};
 use craft_prepress::{CmsConversion, InkColor, InkId, InkSet, Options, Overprint, Plates, Process, plates};
 
+const C: InkId = InkId::process(Process::Cyan);
 const K: InkId = InkId::process(Process::Black);
 
 fn fill(r: Rect, tints: &[(InkId, f32)], overprint: Overprint) -> Item {
