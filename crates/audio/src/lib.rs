@@ -76,6 +76,11 @@ pub mod wav_markers;
 ))]
 mod write;
 
+/// PCM WAVE and AIFF wrappers for interchange essence.
+#[cfg(feature = "pcm-encode")]
+pub mod essence_pcm;
+/// Streaming WAVE and AIFF headers and sample packing.
+pub mod pcm_export;
 /// Interleaved PCM packet decoding.
 pub mod pcm_interleaved;
 /// Range-backed PCM WAVE access and a 16-bit PCM writer.
@@ -767,3 +772,10 @@ mod tests {
         assert!(matches!(e, AudioError::Encode(_)), "{e}");
     }
 }
+
+/// DVD and Blu-ray LPCM packet decoding.
+pub mod lpcm;
+
+/// Non-seeking canonical WAV streaming primitives.
+#[cfg(feature = "pcm-encode")]
+pub mod wav_stream;
