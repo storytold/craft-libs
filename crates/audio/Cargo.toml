@@ -36,17 +36,23 @@ flac-encode = ["craft-media/bitstream"]
 # The pure-Rust Vorbis encoder (`vorbis::encoder`) and Ogg Vorbis files through `encode` and
 # `encode_ogg_vorbis`.
 vorbis-encode = ["craft-media/ogg"]
+# The pure-Rust Vorbis decoder (`vorbis::decoder`), packets and whole Ogg Vorbis files.
+vorbis-decode = ["craft-media/ogg"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
 # The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
 aac-encode = ["craft-media/bitstream", "craft-media/isobmff"]
 opus-decode = []
+# ADPCM (`adpcm`): IMA WAV, Microsoft, Yamaha and Flash (SWF) decoders and encoders.
+adpcm = ["craft-media/bitstream"]
 # QOA (Quite OK Audio) files: decoder and encoder in the `qoa` module, each on its own.
 qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
 qoa-encode = []
 # ITU-T G.722 wideband sub-band ADPCM speech codec (64 kbit/s).
 g722 = []
+# ITU-T G.726 ADPCM speech codec (16/24/32/40 kbit/s).
+g726 = []
 opus-encode = []
 # GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
 gsm = ["gsm-decode", "gsm-encode"]
@@ -112,8 +118,24 @@ name = "mp2_encoder_oracle"
 required-features = ["mpa-encode"]
 
 [[test]]
+name = "adpcm_oracle"
+required-features = ["adpcm"]
+
+[[test]]
 name = "flac_decode"
 required-features = ["flac-decode", "flac-encode"]
+
+[[test]]
+name = "vorbis_decode_oracle"
+required-features = ["vorbis-decode", "vorbis-encode", "decode"]
+
+[[test]]
+name = "vorbis_decode_hostile"
+required-features = ["vorbis-decode", "vorbis-encode"]
+
+[[test]]
+name = "vorbis_decode_synthetic"
+required-features = ["vorbis-decode"]
 
 [[test]]
 name = "gsm_oracle"
@@ -126,6 +148,10 @@ required-features = ["qoa"]
 [[test]]
 name = "g722_oracle"
 required-features = ["g722"]
+
+[[test]]
+name = "g726_oracle"
+required-features = ["g726"]
 
 [[test]]
 name = "sbc_oracle"
