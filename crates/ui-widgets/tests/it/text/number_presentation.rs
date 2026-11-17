@@ -1,6 +1,6 @@
 //! Number-field alignment and type roles agree across measurement, resting paint and editing.
 
-use craft_behavior::Mixed;
+use craft_behavior::{Codec, Mixed, NumberCodec, Reader};
 use craft_i18n::Direction;
 use craft_ui::contract::{Bind, Props as _, Show as _, Sizing};
 use craft_ui::display::Text;
@@ -8,7 +8,7 @@ use craft_ui::primitives::HAlign;
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::style::TypeRole;
 use craft_ui::testing::{Fixture, trial};
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, UnitPlacement};
 use egui::{FontId, Key, Modifiers, Rect, Shape};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -55,7 +55,8 @@ fn edge(run: Rect, field: Rect, align: HAlign, rtl: bool) -> f32 {
 fn alignment_places_values_at_the_reading_edges_and_keeps_units_separate() {
     for direction in [Direction::Ltr, Direction::Rtl] {
         let rtl = direction == Direction::Rtl;
-        for with_unit in [false, true] {
+        for placement in [None, Some(UnitPlacement::Inside), Some(UnitPlacement::After)] {
+            let with_unit = placement == Some(UnitPlacement::Inside);
             let boxes: Rc<RefCell<Vec<Rect>>> = Rc::default();
             let b = boxes.clone();
             let mut fixture = Fixture::new(move |ui| {
@@ -68,8 +69,8 @@ fn alignment_places_values_at_the_reading_edges_and_keeps_units_separate() {
                         if align != HAlign::Center {
                             field = field.align(align);
                         }
-                        if with_unit {
-                            field = field.unit_kind(UnitKind::Percent);
+                        if let Some(placement) = placement {
+                            field = field.unit_kind(UnitKind::Percent).unit_placement(placement);
                         }
                         boxes.push(field.id_salt((at, which)).show(ui).response.rect);
                     }
@@ -96,6 +97,12 @@ fn alignment_places_values_at_the_reading_edges_and_keeps_units_separate() {
                         assert!(gap > 0.0, "the unit stays apart from a {align:?} value under {direction:?}");
                     }
                 }
+            }
+            if placement == Some(UnitPlacement::After) {
+                assert!(
+                    runs.iter().all(|run| run.text != "%" || boxes.iter().all(|field| !field.contains_rect(run.rect))),
+                    "outside units stay outside for every alignment"
+                );
             }
             // Different edge choices must actually move the short value, not all silently centre it.
             let offsets: Vec<_> = [0, 2, 4].into_iter().map(|at| shown(&runs, boxes[at], "5").rect.left() - boxes[at].left()).collect();
@@ -191,6 +198,50 @@ fn a_number_field_measures_and_paints_its_chosen_type_role() {
         rooms.iter().all(|room| (room - rooms[0]).abs() <= 1.0),
         "measurement uses the painted role, leaving the same padding and caret room: {rooms:?}"
     );
+    assert_range_samples_fit();
+}
+
+fn assert_range_samples_fit() {
+    for (range, places, fixed, values) in [
+        (100.0..=111.0, 0, true, vec![100.0, 111.0]),
+        (100.0..=111.0, 1, true, vec![100.0, 111.0, 100.1, 110.9]),
+        (0.0..=100.0, 1, false, vec![0.0, 100.0, 0.1, 99.9]),
+    ] {
+        let codec = NumberCodec::new(Reader::default(), places);
+        let codec = if fixed { codec.fixed() } else { codec };
+        let expected: Vec<_> = values.iter().map(|value| codec.format(&Some(*value))).collect();
+        let boxes: Rc<RefCell<Vec<Rect>>> = Rc::default();
+        let b = boxes.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut boxes = b.borrow_mut();
+            boxes.clear();
+            for (at, value) in values.iter().copied().enumerate() {
+                for ranged in [false, true] {
+                    let mut field = NumberField::new("N", Bind::given(Some(value))).role(TypeRole::Body).sizing(Sizing::Content);
+                    field = if fixed { field.fixed_decimals(places) } else { field.codec(codec.clone()) };
+                    if ranged {
+                        field = field.range(range.clone());
+                    }
+                    boxes.push(field.id_salt((at, ranged)).show(ui).response.rect);
+                }
+            }
+        });
+        fixture.settle();
+        let boxes = boxes.borrow().clone();
+        let runs = painted_runs(&mut fixture);
+        let required = boxes.iter().step_by(2).map(|rect| rect.width()).fold(0.0, f32::max);
+        for (at, text) in expected.iter().enumerate() {
+            shown(&runs, boxes[at * 2], text);
+            shown(&runs, boxes[at * 2 + 1], text);
+            assert!(
+                boxes[at * 2 + 1].width() + 0.5 >= required,
+                "a proportional range fits every bound and inside sample with its padding: {places}, {fixed}, {text}, {boxes:?}"
+            );
+        }
+        if places == 0 {
+            assert!(boxes[0].width() > boxes[2].width() + 1.0, "the fixture really uses unequal-width Body digits for 100 and 111: {boxes:?}");
+        }
+    }
 }
 
 #[trial]

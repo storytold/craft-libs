@@ -412,13 +412,6 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             decimals: self.shown_decimals(),
         }
     }
-
-    /// Measure the value with the same type role and monospace setting as the text adapter. A mono span selects the
-    /// monospace role's font and size; otherwise the configured role is used.
-    fn value_run<'s>(&self, text: &'s str) -> TextRun<'s> {
-        let span = if self.options.mono { Span::new(text).mono() } else { Span::new(text) };
-        TextRun::spans(vec![span]).role(self.options.role)
-    }
 }
 impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     const ROLE: Role = Role::SPIN_BUTTON;
@@ -462,8 +455,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let content = content_sized(cx);
         // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
-        let sample = codec.sample(cx.value().unwrap_or(&blank));
-        let mut text = cx.field_text(&self.value_run(sample.as_ref()));
+        let mut text = codec.samples(cx.value().unwrap_or(&blank)).map(|sample| cx.field_text(&self.value_run(&sample))).fold(Vec2::ZERO, Vec2::max);
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
