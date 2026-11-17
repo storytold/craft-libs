@@ -70,6 +70,7 @@ craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
+craft-ease = { path = "crates/ease" }
 craft-eps = { path = "crates/eps" }
 craft-elf = { path = "crates/elf" }
 craft-file-formats = { path = "crates/file-formats" }

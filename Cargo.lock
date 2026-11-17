@@ -1844,6 +1844,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ease"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-ecproj-format"
 version = "0.1.0"
 dependencies = [
