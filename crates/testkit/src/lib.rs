@@ -20,6 +20,16 @@
 //! keeps a complete file another process published first, and prints the `FIXTURE made`, `cached` and
 //! `skipped` lines that FilmCraft's `cargo xtask fixtures` counts.
 //!
+//! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
+//! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
+//! polls a condition until it holds and fails the test when the limit passes first. Both read an
+//! optional limit variable that the caller names, `CRAFT_TEST_TIMEOUT_SECS` by default.
+//!
+//! [`hostile::mutations`] yields a fixed sequence of damaged copies of a valid seed, on every
+//! target. On targets other than `wasm32`, [`hostile::hammer`] runs a parser on the seed, every
+//! truncation of it and those copies, one after another on a worker thread with a time limit for
+//! each, and fails the test with the case that panicked or did not finish.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -31,9 +41,14 @@
 //! rather than replace, platform integration tests and CI execution.
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod deadline;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fixtures;
 pub mod guards;
+pub mod hostile;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use deadline::{DeadlineLimit, wait_until, with_deadline};
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
 #[cfg(not(target_arch = "wasm32"))]
