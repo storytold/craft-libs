@@ -34,6 +34,7 @@ pub mod model;
 #[cfg(feature = "otio")]
 pub mod otio;
 pub mod path;
+pub mod preflight;
 pub mod rate;
 pub mod report;
 pub mod time;
