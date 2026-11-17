@@ -52,6 +52,63 @@ fn check_form(s: &str) -> Result<(), IdError> {
     Ok(())
 }
 
+/// The form, then the rules for ids users create, which become file names: no reserved `craft.` prefix and no Windows
+/// device name as the first dot-separated part.
+fn check_user(s: &str) -> Result<(), IdError> {
+    check_form(s)?;
+    let first = s.split('.').next().unwrap_or_default();
+    if s.starts_with(RESERVED_PREFIX) {
+        Err(IdError::Reserved)
+    } else if DEVICE_NAMES.iter().any(|d| first.eq_ignore_ascii_case(d)) {
+        Err(IdError::DeviceName)
+    } else {
+        Ok(())
+    }
+}
+
+/// The id of an icon pack a theme names: the same form as a [`ThemeId`]. `craft.` ids are the built-in sets
+/// (`craft.lucide`, `craft.phosphor`, `craft.carbon`, `craft.tabler`); other ids name packs in the suite library.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IconPackId(Arc<str>);
+
+impl IconPackId {
+    /// Checks the form only, as a theme file does: a well-formed id that names no installed pack draws the default
+    /// icons.
+    pub fn parse(s: &str) -> Result<Self, IdError> {
+        check_form(s)?;
+        Ok(IconPackId(Arc::from(s)))
+    }
+
+    /// [`IconPackId::parse`], refusing the reserved `craft.` prefix and Windows device names: for packs users create
+    /// or import, whose ids become file names.
+    pub fn parse_user(s: &str) -> Result<Self, IdError> {
+        check_user(s)?;
+        Ok(IconPackId(Arc::from(s)))
+    }
+
+    /// The id as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// True for the built-in sets' `craft.` ids.
+    pub fn is_builtin(&self) -> bool {
+        self.0.starts_with(RESERVED_PREFIX)
+    }
+}
+
+impl fmt::Debug for IconPackId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl fmt::Display for IconPackId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// An app's stable identity, the key of a theme's per-app overrides: the same form as a
 /// [`ThemeId`], `[a-z0-9][a-z0-9._-]{1,63}`, without the reserved prefix or device-name rules.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -92,15 +149,8 @@ impl ThemeId {
     /// [`ThemeId::parse`], refusing the reserved `craft.` prefix and Windows device names: for
     /// themes users create or import, whose ids become file names.
     pub fn parse_user(s: &str) -> Result<Self, IdError> {
-        let id = Self::parse(s)?;
-        let first = id.0.split('.').next().unwrap_or_default();
-        if id.is_builtin() {
-            Err(IdError::Reserved)
-        } else if DEVICE_NAMES.iter().any(|d| first.eq_ignore_ascii_case(d)) {
-            Err(IdError::DeviceName)
-        } else {
-            Ok(id)
-        }
+        check_user(s)?;
+        Ok(ThemeId(Arc::from(s)))
     }
 
     /// For the crate's own constants, which are valid by construction (a test checks each).

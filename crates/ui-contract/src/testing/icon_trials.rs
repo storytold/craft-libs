@@ -1,10 +1,12 @@
-//! Trials of the app icon registry: the catalog wins a clashing name, the first set keeps a name two sets share.
+//! Trials of the icon lookup: the app icon registry (the catalog wins a clashing name, the first set keeps a name two
+//! sets share) and the set a theme's icon pack picks.
 
-use crate::primitives::{AppIcons, IconSet, Mirror, SvgIcon, icon_names, register_app_icons};
+use crate::primitives::{AppIcons, Mirror, SvgIcon, icon_names, register_app_icons};
+use crate::style::UiTokens;
 use crate::testing::{style, trial};
 use craft_behavior::IconId;
 use craft_i18n::Direction;
-use craft_theme::{Contrast, Mode};
+use craft_theme::{AppSizes, Appearance, Contrast, IconPackId, Mode, Size, TextSize, builtins};
 use egui::ColorImage;
 
 // Built from parts so the workspace scan of icon-id literals does not read them.
@@ -20,7 +22,7 @@ static SECOND_SET: AppIcons = AppIcons { name: "t10-second", stroke_width: None,
 
 fn icon(name: &'static str) -> Option<SvgIcon> {
     let tokens = style::tokens(Mode::Light, Contrast::Standard);
-    SvgIcon::of(&tokens, Direction::Ltr, 24.0, &IconId::from(std::borrow::Cow::Borrowed(name)), IconSet::default(), Mirror::Auto)
+    SvgIcon::of(&tokens, Direction::Ltr, 24.0, &IconId::from(std::borrow::Cow::Borrowed(name)), Mirror::Auto)
 }
 
 fn mask(name: &'static str) -> Option<ColorImage> {
@@ -56,4 +58,26 @@ fn an_app_icon_set_resolves_after_the_catalog_and_the_first_set_keeps_a_shared_n
     register_app_icons(&SECOND_SET);
     assert_eq!((mask(FIRST_NAME), mask(SECOND_NAME), mask(CATALOG_NAME)), (first, second, close));
     assert_eq!(icon_names().len(), catalog);
+}
+
+/// The mask of `name` under the first built-in theme with its icon pack set to `pack`.
+fn mask_under_pack(pack: Option<&str>, name: &'static str) -> Option<ColorImage> {
+    let mut theme = builtins()[0].clone();
+    let pack = pack.map(IconPackId::parse).transpose();
+    assert!(pack.is_ok(), "{pack:?}");
+    theme.icon_pack = pack.unwrap_or_default();
+    let appearance =
+        Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
+    let tokens = UiTokens::of_theme(&theme, appearance, &AppSizes::default());
+    SvgIcon::of(&tokens, Direction::Ltr, 24.0, &IconId::from(std::borrow::Cow::Borrowed(name)), Mirror::Auto).map(|icon| icon.mask(24.0, 1.0))
+}
+
+#[trial]
+fn a_theme_icon_pack_picks_the_set_and_an_unknown_pack_draws_the_default() {
+    let default = mask_under_pack(None, CATALOG_NAME);
+    assert!(default.is_some());
+    // Carbon's close is a fill drawing; Lucide's and Tabler's are the same two strokes.
+    assert_ne!(mask_under_pack(Some("craft.carbon"), CATALOG_NAME), default, "a built-in pack draws its own icon");
+    assert_eq!(mask_under_pack(Some("craft.lucide"), CATALOG_NAME), default, "the default set by name draws the default");
+    assert_eq!(mask_under_pack(Some("user.missing"), CATALOG_NAME), default, "a pack that is not installed draws the default");
 }

@@ -1,7 +1,8 @@
 //! `UiTokens`: the runtime's egui-ready view of one resolved token set.
 
 use crate::fonts::{SEMIBOLD, StackFacts};
-use craft_theme::{Contrast, GroupValues, Size, Tokens, TypeRole};
+use crate::primitives::{IconSet, theme_icons};
+use craft_theme::{AppSizes, Appearance, Contrast, GroupValues, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
 use egui::{CornerRadius, FontFamily, FontId};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 /// One resolved token set with the theme's token-group values and a key of their content. Each theme scope
 /// (mode, contrast, theme, density, text size) resolves its own; equal sets share a key, so the caches keyed by
 /// it hold one entry per distinct set however often a set is rebuilt. The set remembers the contrast and density it
-/// was resolved under, and the key covers both. It derefs to the craft-theme tokens, which
+/// was resolved under and the icon set its theme draws, and the key covers them. It derefs to the craft-theme tokens, which
 /// only `style` reads.
 #[derive(Clone, Debug)]
 pub struct UiTokens {
@@ -18,14 +19,31 @@ pub struct UiTokens {
     groups: Arc<GroupValues>,
     contrast: Contrast,
     density: Size,
+    icons: IconSet,
     key: u64,
 }
 
 impl UiTokens {
-    /// A token set resolved under `contrast` and `density`, with no theme values for token groups.
+    /// A token set resolved under `contrast` and `density`, with no theme values for token groups, drawing the default
+    /// icon set.
     pub fn new(tokens: Arc<Tokens>, contrast: Contrast, density: Size) -> Self {
+        Self::with_icons(tokens, contrast, density, IconSet::default())
+    }
+
+    /// The tokens `theme` resolves to under `appearance` and `sizes`, drawing the icon pack the theme names.
+    pub fn of_theme(theme: &ThemeDef, appearance: Appearance, sizes: &AppSizes) -> Self {
+        let tokens = Arc::new(resolve_sized(theme, appearance, None, sizes).tokens);
+        Self::with_icons(tokens, appearance.contrast, appearance.size, theme_icons(theme.icon_pack.as_ref()))
+    }
+
+    fn with_icons(tokens: Arc<Tokens>, contrast: Contrast, density: Size, icons: IconSet) -> Self {
         let groups = Arc::new(GroupValues::new());
-        UiTokens { key: content_key(&tokens, &groups, contrast, density), tokens, groups, contrast, density }
+        UiTokens { key: content_key(&tokens, &groups, contrast, density, icons), tokens, groups, contrast, density, icons }
+    }
+
+    /// The icon set SVG icons are drawn from.
+    pub(crate) fn icons(&self) -> IconSet {
+        self.icons
     }
 
     /// The contrast setting the set was resolved under.
@@ -94,11 +112,12 @@ impl UiTokens {
 }
 
 /// The key of a token set: the hash of its resolved values, which are all `f32` and so have no `Hash`.
-fn content_key(tokens: &Tokens, groups: &GroupValues, contrast: Contrast, density: Size) -> u64 {
+fn content_key(tokens: &Tokens, groups: &GroupValues, contrast: Contrast, density: Size, icons: IconSet) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{tokens:?}{groups:?}").hash(&mut hasher);
     contrast.hash(&mut hasher);
     density.hash(&mut hasher);
+    icons.hash(&mut hasher);
     hasher.finish()
 }
 

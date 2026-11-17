@@ -3,7 +3,7 @@
 use super::root::{ResolvedRoot, RootEnv};
 use crate::runtime::pass_state;
 use crate::style::UiTokens;
-use craft_theme::{AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins, resolve_sized};
+use craft_theme::{AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins};
 use egui::Context;
 use std::sync::Arc;
 
@@ -82,11 +82,11 @@ fn resolve_inputs(inputs: &TokenInputs) -> Arc<UiTokens> {
         Appearance { mode: inputs.mode, contrast: inputs.contrast, size: inputs.density, text_size: inputs.text_size, reduced_motion: false };
     let themes = builtins();
     if let Some(def) = &inputs.theme_def {
-        return Arc::new(UiTokens::new(Arc::new(resolve_sized(def, appearance, None, &inputs.sizes).tokens), inputs.contrast, inputs.density));
+        return Arc::new(UiTokens::of_theme(def, appearance, &inputs.sizes));
     }
     let theme: &ThemeDef =
         [inputs.theme.as_str(), SUITE_DEFAULT].into_iter().find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id)).unwrap_or(&themes[0]);
-    Arc::new(UiTokens::new(Arc::new(resolve_sized(theme, appearance, None, &inputs.sizes).tokens), inputs.contrast, inputs.density))
+    Arc::new(UiTokens::of_theme(theme, appearance, &inputs.sizes))
 }
 
 /// What the resolved root tokens depend on. The sizes are compared by identity, as `set_input` does.
