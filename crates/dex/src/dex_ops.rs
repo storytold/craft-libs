@@ -384,6 +384,9 @@ fn payload(code: &[u16], pc: usize) -> Option<(Payload, usize)> {
         }
         0x0300 => {
             let width = *code.get(pc + 1)?;
+            if !matches!(width, 1 | 2 | 4 | 8) {
+                return None;
+            }
             let count = u32_at(code, pc + 2)?;
             let bytes = usize::from(width).checked_mul(count as usize)?;
             let units = bytes.checked_add(1)? / 2 + 4;
@@ -513,7 +516,10 @@ pub fn decode_one(code: &[u16], pc: usize) -> Option<Insn> {
             insn.index = Some(u32::from(u(1)) | (u32::from(u(2)) << 16));
         }
         F35c | F45cc => {
-            let count = b4.min(5) as usize;
+            if b4 > 5 {
+                return None;
+            }
+            let count = b4 as usize;
             let g = a4;
             let w = u(2);
             let all = [u32::from(w & 0xf), u32::from((w >> 4) & 0xf), u32::from((w >> 8) & 0xf), u32::from(w >> 12), g];
@@ -525,7 +531,11 @@ pub fn decode_one(code: &[u16], pc: usize) -> Option<Insn> {
         }
         F3rc | F4rcc => {
             let first = u32::from(u(2));
-            insn.regs = (0..aa).map(|i| first.saturating_add(i)).collect();
+            let end = first.checked_add(aa)?;
+            if end > u32::from(u16::MAX) + 1 {
+                return None;
+            }
+            insn.regs = (first..end).collect();
             insn.range = true;
             insn.index = Some(u32::from(u(1)));
             if o.fmt == F4rcc {

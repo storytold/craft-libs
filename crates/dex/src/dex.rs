@@ -148,18 +148,7 @@ pub fn mutf8(r: &Reader<'_>, mut at: usize, max_units: usize) -> (String, usize)
         if b0 == 0 {
             break;
         }
-        let (u, n) = if b0 < 0x80 {
-            (u16::from(b0), 1)
-        } else if b0 & 0xe0 == 0xc0 {
-            let b1 = r.u8(at + 1).unwrap_or(0);
-            ((u16::from(b0 & 0x1f) << 6) | u16::from(b1 & 0x3f), 2)
-        } else if b0 & 0xf0 == 0xe0 {
-            let b1 = r.u8(at + 1).unwrap_or(0);
-            let b2 = r.u8(at + 2).unwrap_or(0);
-            ((u16::from(b0 & 0x0f) << 12) | (u16::from(b1 & 0x3f) << 6) | u16::from(b2 & 0x3f), 3)
-        } else {
-            (0xfffd, 1)
-        };
+        let (u, n) = crate::bytes::mutf8_unit(r.data().get(at..).unwrap_or_default());
         units.push(u);
         at = at.saturating_add(n);
         consumed += n;
@@ -173,6 +162,10 @@ pub fn sleb128(r: &Reader<'_>, off: usize) -> Option<(i64, usize)> {
     let mut shift = 0u32;
     for i in 0..10usize {
         let b = r.u8(off.checked_add(i)?)?;
+        // Only one value bit remains in the tenth byte; the rest must extend its sign.
+        if i == 9 && !matches!(b, 0x00 | 0x7f) {
+            return None;
+        }
         result |= i64::from(b & 0x7f).checked_shl(shift)?;
         shift += 7;
         if b & 0x80 == 0 {
