@@ -316,8 +316,19 @@ pub fn read_preview(bytes: &[u8], preview_entry: &str) -> Option<Vec<u8>> {
 }
 
 /// Read a bounded preview from a seekable file without loading the full bundle into memory.
-pub fn read_preview_from<R: Read + Seek>(reader: R, preview_entry: &str) -> Option<Vec<u8>> {
+///
+/// A file that does not start with a zip local-file header is turned away after four bytes. The zip
+/// reader would otherwise search the whole file for an end-of-directory record it does not have,
+/// which takes seconds for a large non-bundle file (an InDesign document in a recent-files list)
+/// and minutes on a network share.
+pub fn read_preview_from<R: Read + Seek>(mut reader: R, preview_entry: &str) -> Option<Vec<u8>> {
     const PREVIEW_LIMIT: u64 = 4 << 20;
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic).ok()?;
+    if &magic != b"PK\x03\x04" {
+        return None;
+    }
+    reader.seek(std::io::SeekFrom::Start(0)).ok()?;
     let mut zip = zip::ZipArchive::new(reader).ok()?;
     let entry = zip.by_name(preview_entry).ok()?;
     if entry.size() > PREVIEW_LIMIT {
@@ -407,6 +418,41 @@ mod tests {
         assert_eq!(loaded.version, 4);
         assert_eq!(loaded.assets, [("7".to_owned(), payload.to_vec())]);
         assert_eq!(read_preview(&bytes, SPEC.preview_entry).as_deref(), Some(&b"png"[..]));
+    }
+
+    /// Counts the bytes read through it.
+    struct Counting<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: Read> Read for Counting<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: Seek> Seek for Counting<R> {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn preview_from_a_reader_reads_a_bundle() {
+        let bytes = write(br#"{}"#, 4, "Test 0.1", Some(b"png"), &[], &[], SPEC).unwrap();
+        assert_eq!(read_preview_from(Cursor::new(&bytes), SPEC.preview_entry).as_deref(), Some(&b"png"[..]));
+    }
+
+    #[test]
+    fn preview_from_a_non_zip_reads_only_its_signature() {
+        let mut file = Counting { inner: Cursor::new(vec![0x42u8; 1 << 20]), read: 0 };
+        assert_eq!(read_preview_from(&mut file, SPEC.preview_entry), None);
+        assert!(file.read <= 4, "read {} bytes of a file that is not a zip", file.read);
+        let mut empty = Counting { inner: Cursor::new(Vec::new()), read: 0 };
+        assert_eq!(read_preview_from(&mut empty, SPEC.preview_entry), None);
     }
 
     #[test]
