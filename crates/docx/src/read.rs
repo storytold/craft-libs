@@ -70,6 +70,7 @@ const MAX_TEMPLATE_PATH: usize = 32 * 1024;
 
 pub(crate) struct Reader<'p> {
     pkg: &'p Package,
+    file_orders: craft_wordmodel::para::FileOrders,
     pub doc: Document,
     pub pc: PropCtx,
     revs: HashMap<(u8, String, String, Option<String>), u32>,
@@ -167,7 +168,9 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     let rels = pkg.rels(&main);
     let mut doc = Document::new();
     doc.body.clear();
+    let file_orders = pkg.file_orders()?;
     let mut r = Reader {
+        file_orders,
         pkg,
         doc,
         pc: PropCtx::default(),
