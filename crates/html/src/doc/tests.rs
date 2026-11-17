@@ -1117,6 +1117,80 @@ fn html_roundtrip_preserves_fully_covered_row_and_single_column_table() {
     assert_single_col_vmerge_table(tb2);
 }
 
+#[test]
+fn vmerge_validation_requires_matching_spans() {
+    use craft_wordmodel::props::VMerge;
+
+    // 1. Later-row check: row 0 has colspan=2, row 1 has continuation with colspan=1.
+    // Mismatched spans must clear continuation to None and NOT promote row 0 cell to Restart.
+    let ft_mismatched = FTable {
+        rows: vec![
+            vec![Cell { colspan: 2, ..Cell::default() }],
+            vec![Cell { colspan: 1, covered: true, ..Cell::default() }, Cell { colspan: 1, ..Cell::default() }],
+        ],
+        widths: vec![50.0, 50.0],
+        ..Default::default()
+    };
+    let doc = model::to_doc(&Flow { blocks: vec![FBlock::Table(ft_mismatched)], ..Default::default() });
+    let craft_wordmodel::Block::Table(tb) = &*doc.body[0] else { panic!() };
+    assert_eq!(tb.rows[0].cells[0].props.vmerge, VMerge::None, "mismatched span must not promote to Restart");
+    assert_eq!(tb.rows[1].cells[0].props.vmerge, VMerge::None, "mismatched span must clear Continue to None");
+
+    // 2. First-row check: row 0 has continuation with colspan=2, row 1 has continuation with colspan=1.
+    // Mismatched spans must clear row 0 continuation to None, not promote to Restart.
+    let ft_row0_mismatched = FTable {
+        rows: vec![
+            vec![Cell { colspan: 2, covered: true, ..Cell::default() }],
+            vec![Cell { colspan: 1, covered: true, ..Cell::default() }, Cell { colspan: 1, ..Cell::default() }],
+        ],
+        widths: vec![50.0, 50.0],
+        ..Default::default()
+    };
+    let doc0 = model::to_doc(&Flow { blocks: vec![FBlock::Table(ft_row0_mismatched)], ..Default::default() });
+    let craft_wordmodel::Block::Table(tb0) = &*doc0.body[0] else { panic!() };
+    assert_eq!(tb0.rows[0].cells[0].props.vmerge, VMerge::None, "mismatched span in row 0 must clear to None");
+    assert_eq!(tb0.rows[1].cells[0].props.vmerge, VMerge::None, "mismatched span in row 1 must clear to None");
+
+    // 3. Matching spans: row 0 has colspan=2, row 1 has continuation with colspan=2.
+    // Matching spans must promote row 0 to Restart and keep row 1 as Continue.
+    let ft_matching = FTable {
+        rows: vec![vec![Cell { colspan: 2, ..Cell::default() }], vec![Cell { colspan: 2, covered: true, ..Cell::default() }]],
+        widths: vec![50.0, 50.0],
+        ..Default::default()
+    };
+    let doc_m = model::to_doc(&Flow { blocks: vec![FBlock::Table(ft_matching)], ..Default::default() });
+    let craft_wordmodel::Block::Table(tb_m) = &*doc_m.body[0] else { panic!() };
+    assert_eq!(tb_m.rows[0].cells[0].props.vmerge, VMerge::Restart);
+    assert_eq!(tb_m.rows[1].cells[0].props.vmerge, VMerge::Continue);
+}
+
+#[test]
+fn export_table_preserves_first_grid_column_alignment() {
+    let mut doc = craft_wordmodel::Document::default();
+    let mut table = craft_wordmodel::Table::new(2, 3, 240.0);
+    table.grid = vec![40.0, 80.0, 120.0];
+    table.rows[0].cells = vec![craft_wordmodel::Cell::with_text("A"), craft_wordmodel::Cell::with_text("B"), craft_wordmodel::Cell::with_text("C")];
+    table.rows[1].props.grid_before = 1;
+    table.rows[1].cells = vec![craft_wordmodel::Cell::with_text("D"), craft_wordmodel::Cell::with_text("E")];
+    doc.body = vec![std::sync::Arc::new(craft_wordmodel::Block::Table(table))];
+
+    // Flow representation should preserve the leading grid position
+    let flow = model::from_doc(&doc);
+    let FBlock::Table(ft) = &flow.blocks[0] else { panic!() };
+    assert_eq!(ft.rows.len(), 2);
+    assert_eq!(ft.rows[0].len(), 3);
+    assert_eq!(ft.rows[1].len(), 3, "row 1 must have 3 cells (1 leading placeholder + 2 data cells)");
+    assert_eq!(ft.widths, vec![40.0, 80.0, 120.0]);
+
+    // HTML export should emit 3 colgroup cols and preserve cell alignment
+    let html = export(&doc);
+    assert!(html.contains("<col style=\"width:40.00pt\">"), "must contain col 0 width: {html}");
+    assert!(html.contains("<col style=\"width:80.00pt\">"), "must contain col 1 width: {html}");
+    assert!(html.contains("<col style=\"width:120.00pt\">"), "must contain col 2 width: {html}");
+    assert!(html.contains(">D</td>"), "must contain cell D: {html}");
+    assert!(html.contains(">E</td>"), "must contain cell E: {html}");
+}
+
 /// Ensure container elements (such as `div` and `p`) with background colors do not leak
 /// character shading onto their child text runs (#1786).
 #[test]
