@@ -123,3 +123,141 @@ pub(super) fn holds_words(xml: &[u8], from: usize) -> bool {
     }
     true
 }
+
+/// Rewrite only the first interpreted draw:z-index value in each start tag.
+/// Event spans exclude comments/CDATA and retain the reader's first-128-attribute
+/// policy. All bytes outside changed values (including unknown markup) survive.
+pub(super) fn remap_orders(xml: &[u8], map: impl Fn(u32) -> u32) -> Result<std::borrow::Cow<'_, [u8]>, String> {
+    // Callers only remove one unused upper-order slot: unchanged MAX means identity.
+    if map(u32::MAX) == u32::MAX {
+        return Ok(std::borrow::Cow::Borrowed(xml));
+    }
+    let mut out = Vec::new();
+    let mut copied = 0;
+    let mut error = None;
+    events_at(xml, |ev, (start, end)| {
+        if error.is_some() {
+            return;
+        }
+        let Ev::Start(_, attrs) = ev else { return };
+        let Some(raw) = get(&attrs, "draw:z-index").and_then(|s| s.trim().parse::<u32>().ok()) else { return };
+        let mapped = map(raw);
+        if mapped == raw {
+            return;
+        }
+        let Some(tag) = xml.get(start..end) else { return };
+        let Some(range) = order_value(tag) else {
+            error = Some("ODT: cannot locate retained stacking attribute".to_string());
+            return;
+        };
+        let from = start + range.start;
+        let to = start + range.end;
+        // Maps never increase a value; decimal replacement cannot exceed its source bytes.
+        if out.is_empty() && out.try_reserve_exact(xml.len()).is_err() {
+            error = Some("ODT: cannot allocate normalized stacking markup".to_string());
+            return;
+        }
+        out.extend_from_slice(&xml[copied..from]);
+        out.extend_from_slice(mapped.to_string().as_bytes());
+        copied = to;
+    });
+    if let Some(error) = error {
+        return Err(error);
+    }
+    if copied == 0 {
+        return Ok(std::borrow::Cow::Borrowed(xml));
+    }
+    out.extend_from_slice(&xml[copied..]);
+    Ok(std::borrow::Cow::Owned(out))
+}
+
+/// Locate a quoted value in an already parsed start tag, not in arbitrary XML.
+/// Skip entire quoted values so attribute-looking text inside them is untouched.
+fn order_value(tag: &[u8]) -> Option<std::ops::Range<usize>> {
+    let mut i = 1;
+    while i < tag.len() && !tag[i].is_ascii_whitespace() && !matches!(tag[i], b'/' | b'>') {
+        i += 1;
+    }
+    while i < tag.len() {
+        while i < tag.len() && tag[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let begin = i;
+        while i < tag.len() && !tag[i].is_ascii_whitespace() && !matches!(tag[i], b'=' | b'/' | b'>') {
+            i += 1;
+        }
+        let name = tag.get(begin..i)?;
+        if name.is_empty() {
+            // The lenient parser can recover after a stray delimiter before an attribute.
+            i += 1;
+            continue;
+        }
+        while i < tag.len() && tag[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if tag.get(i) != Some(&b'=') {
+            continue;
+        }
+        i += 1;
+        while i < tag.len() && tag[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let quote = *tag.get(i)?;
+        if !matches!(quote, b'\'' | b'"') {
+            while i < tag.len() && !tag[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            continue;
+        }
+        i += 1;
+        let from = i;
+        while i < tag.len() && tag[i] != quote {
+            i += 1;
+        }
+        if i == tag.len() {
+            return None;
+        }
+        if name == b"draw:z-index" {
+            return Some(from..i);
+        }
+        i += 1;
+    }
+    None
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    #[test]
+    fn order_remap_preserves_every_other_byte() {
+        let xml = br#"<p a="draw:z-index='99'"><!-- draw:z-index="99" --><![CDATA[draw:z-index="99"]]><x q='&amp;' draw:z-index = ' 9&#57; ' weird="stay" draw:z-index="88"/><y draw:z-index="bad"/><z draw:z-index="0"/></p>"#;
+        let expected = br#"<p a="draw:z-index='99'"><!-- draw:z-index="99" --><![CDATA[draw:z-index="99"]]><x q='&amp;' draw:z-index = '98' weird="stay" draw:z-index="88"/><y draw:z-index="bad"/><z draw:z-index="0"/></p>"#;
+        assert_eq!(remap_orders(xml, |n| n.saturating_sub(1)).unwrap().as_ref(), expected);
+        assert!(matches!(remap_orders(xml, |n| n).unwrap(), std::borrow::Cow::Borrowed(_)));
+        let late = format!("<x {} draw:z-index='99'/>", (0..128).map(|i| format!("a{i}='x'")).collect::<Vec<_>>().join(" "));
+        assert_eq!(remap_orders(late.as_bytes(), |n| n - 1).unwrap().as_ref(), late.as_bytes());
+        for broken in ["=bad", "x=bad", "x==bad", "x", "x='a' x", "x=\"bad\"", "'odd'", "/odd", "x='a>b'"] {
+            let input = format!("<x {broken} draw:z-index='99'/>");
+            let mut seen = false;
+            events(input.as_bytes(), |e| {
+                if let Ev::Start(_, a) = e {
+                    seen |= get(&a, "draw:z-index") == Some("99");
+                }
+            });
+            if seen {
+                let changed = remap_orders(input.as_bytes(), |n| n - 1).unwrap_or_else(|e| panic!("{input}: {e}"));
+                let mut found = false;
+                events(&changed, |e| {
+                    if let Ev::Start(_, a) = e {
+                        found |= get(&a, "draw:z-index") == Some("98");
+                    }
+                });
+                assert!(found, "{input}");
+            }
+        }
+        // Lenient malformed attributes are skipped just as in the reader.
+        let malformed = b"<x broken draw:z-index='99'/>";
+        assert_eq!(remap_orders(malformed, |n| n - 1).unwrap().as_ref(), b"<x broken draw:z-index='98'/>");
+    }
+}
