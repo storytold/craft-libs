@@ -44,6 +44,11 @@ jobs:
         CRAFT_HOSTILE_DIVISOR=8
         PROPTEST_CASES=64
       setup-command: bash scripts/ci-test-inputs.sh
+      # The PhotoCraft corpora, keyed on the script that pins them: a hit skips the PhotoCraft
+      # checkout and its xtask build (1:51 on Windows).
+      cache-paths: .test-inputs/photocraft/corpus
+      cache-key: photocraft-corpus
+      cache-key-files: scripts/ci-test-inputs.sh
       command: |
         python3 scripts/test-workspace-concurrency.py
         python3 scripts/test-workspace-tests.py
