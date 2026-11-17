@@ -1135,8 +1135,9 @@ const STACKED: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 /// as a probe, every leaf at its least and no column bounded, which gives each column its least, and then once more:
 /// each column keeps at least its least, a `Content` column measuring in the room the others leave at theirs. When
 /// the leasts do not fit beside each other, that last sweep lays the cells out one under another across the room
-/// instead, so no column is cut; a `GridFit::Fixed` grid keeps its columns beside each other at their leasts and
-/// overflows the room. The real run places the cells from the widths, leasts and layout the measuring run recorded.
+/// instead, so no column is cut. A `GridFit::Fixed` grid sweeps its cells once at their own sizes in unbounded room,
+/// whatever the room and the probe, and overflows the room. The real run places the cells from the widths, leasts and
+/// layout the measuring run recorded.
 fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, (columns, fit): (&[ColumnWidth], GridFit), gap: Vec2, mut body: impl FnMut(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
     let rtl = env.direction.is_rtl();
@@ -1169,6 +1170,28 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, (columns, fit): (&[ColumnWidth], 
         let columns = if stacked { STACKED } else { columns };
         let last = measured_tracks(&ctx, false, id, columns.len());
         return child::block(ui, None, layout, |ui| sweep(ui, env, None, columns, &|flow| GridCursor::new(flow, columns, gap, &last)).0).0;
+    }
+    // A fixed grid measures its cells at their own sizes in a room unbounded across, never at their leasts, also inside
+    // a parent's probe for its least: its columns are what its cells take however short the room, so it neither stacks
+    // nor squeezes them, and its least width is its width. The room then clips or scrolls it.
+    if fit == GridFit::Fixed {
+        let natural = env.derive_local(|scoped| {
+            scoped.unbounded.0 = true;
+            scoped.least = false;
+        });
+        let (inner, measured, ..) =
+            child::block(ui, None, layout, |ui| sweep(ui, &natural, None, columns, &|flow| GridCursor::unbounded(flow, columns, gap))).0;
+        eprintln!("DIAG picker fixed grid {id:?} columns {:?} rows {:?}", measured.columns, measured.rows);
+        for (i, width) in measured.columns.iter().enumerate() {
+            found(&ctx, true, column_id(id, i), ui.available_rect_before_wrap().size(), Vec2::new(*width, 0.0));
+        }
+        for (i, height) in measured.rows.iter().enumerate() {
+            found(&ctx, true, row_id(id, i), ui.available_rect_before_wrap().size(), Vec2::new(0.0, *height));
+        }
+        let room = ui.available_rect_before_wrap().size();
+        found(&ctx, true, sub(id, "rows"), room, Vec2::new(measured.rows.len() as f32, 0.0));
+        found(&ctx, true, sub(id, "stacked"), room, Vec2::ZERO);
+        return inner;
     }
     // A measuring run under a body sized from its content gives each fill column the width its cells take, as a
     // content column: the room it would share is not the body's to claim.
@@ -1241,7 +1264,7 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, (columns, fit): (&[ColumnWidth], 
         })
         .collect();
     let gaps = gap.x * columns.len().saturating_sub(1) as f32;
-    let stacked = fit == GridFit::Stack && least.iter().sum::<f32>() + gaps > ui.available_rect_before_wrap().width() + 0.5;
+    let stacked = least.iter().sum::<f32>() + gaps > ui.available_rect_before_wrap().width() + 0.5;
     let (columns, last) = match stacked {
         true => (STACKED, GridMeasure::default()),
         false => (columns, GridMeasure::default().with_least(least.clone())),

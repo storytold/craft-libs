@@ -21,6 +21,7 @@ pub struct FooterSlotStyle {
 /// their order stay the container's. Under no such container the slot takes no room, so a component that offers the
 /// cell shows it whether or not a container fills it.
 #[derive(crate::contract::Component)]
+#[component(sample = FooterSlot::new)]
 pub struct FooterSlot {
     #[common]
     common: Common,

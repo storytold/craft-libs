@@ -74,9 +74,10 @@ impl<'a> Body<'a> {
                 }
             }
         }
-        Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+        // The hex field at the row's start; the rest of the row puts the screen-pick button at its end.
+        Row::new().fill_width().show(ui, |ui, _| {
             Field::new(words.hex.as_str().to_owned()).side(HexField::hash_label()).show(ui, |ui, _| self.hex_field(ui, pass, &words, None, got));
-            self.sample_button(ui, &words, got);
+            Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| self.sample_button(ui, &words, got));
         });
     }
 

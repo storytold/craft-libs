@@ -44,12 +44,14 @@ impl<'a> Body<'a> {
         Row::new().gap(Gap::Section).show(ui, |ui, _| {
             Stack::new().gap(Gap::Item).show(ui, |ui, _| {
                 self.area_and_strip(ui, pass, &visible, AreaShape::Square, got);
-                Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+                // The check box at the row's start; the rest of the row puts the screen-pick button at its end, under the
+                // strip.
+                Row::new().fill_width().show(ui, |ui, _| {
                     let check = Checkbox::new(Bind::given(pass.web)).label(words.only_web_colors.as_str().to_owned()).show(ui);
                     if let Some(on) = check.value() {
                         got.web_pick = Some(*on);
                     }
-                    self.sample_button(ui, &words, got);
+                    Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| self.sample_button(ui, &words, got));
                 });
             });
             self.right_half(ui, pass, &visible, &words, got);
@@ -99,7 +101,7 @@ impl<'a> Body<'a> {
 
     /// One field group: a grid of the radio cell and the channel cell (letter, field, unit), one row per channel of
     /// each of `models`, an empty row between two models, and in the first group the hex row: "#" in the radio column
-    /// and the hex field across the channel cells.
+    /// and the hex field, six digits wide, from the letter column on.
     fn field_group(&self, ui: &mut Ui, pass: &Pass<'a>, models: &[&'a dyn ColorModel], choice: ModelChoice<'_>, hex: bool, got: &mut Collected) {
         Grid::new(TWO_COLUMNS).fit(GridFit::Fixed).gap(Gap::Row).show(ui, |ui, _| {
             for (at, model) in models.iter().enumerate() {
@@ -112,7 +114,8 @@ impl<'a> Body<'a> {
             }
             if hex {
                 Text::new(Label::from(HexField::HASH)).shade(Shade::Muted).show(ui);
-                self.hex_field(ui, pass, choice.words, Some(Sizing::FillWidth), got);
+                // Six digits wide from the letter column on; the content-sized row keeps it from stretching to the cell.
+                Row::new().show(ui, |ui, _| self.hex_field(ui, pass, choice.words, Some(Sizing::Content), got));
             }
         });
     }

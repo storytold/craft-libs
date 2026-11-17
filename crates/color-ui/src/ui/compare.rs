@@ -2,7 +2,7 @@
 
 use craft_behavior::{Metrics, Mixed, Sense};
 use craft_theme::Srgba;
-use craft_ui::choice::Swatch;
+use craft_ui::buttons::Button;
 use craft_ui::contract::{Access, Common, Component, Cx, MeasureCx, Outcome, PaintUi, Props as _, Role};
 use craft_ui::display::{Shade, Text};
 use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun};
@@ -70,8 +70,9 @@ impl Outcome for CompareSwatchOutput {
 ///
 /// - The new half is a picture: AccessKit names the block by its label ("New color") and gives the new colour's hex
 ///   as its value.
-/// - The current half is a colour well named "Restore current color", which is also its tooltip: a click, Enter or
-///   Space on it reports [`restore`](CompareSwatchOutput::restore), and the host sets the current colour again.
+/// - The current half is a button named "Restore current color", which is also its tooltip, its face filled with the
+///   current colour (`Button::tint`): a click, Enter or Space on it reports
+///   [`restore`](CompareSwatchOutput::restore), and the host sets the current colour again.
 #[must_use = "show the block with `show`"]
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct CompareSwatch<'a> {
@@ -163,8 +164,12 @@ impl Component for CompareSwatch<'_> {
         let _ = ui.child("new_caption", above, caption_text(words.new_caption.as_str()));
         ui.draw().swatch_well(new, CornerRadius::ZERO, self.new.same().copied());
         let restore = words.restore.as_str().to_owned();
-        let well = Swatch::new(restore.clone(), self.current).cell().tooltip(restore);
-        self.restore = ui.child("current", current, well).clicked;
+        let button = Button::new(restore.clone()).painted(Label::from("")).tooltip(restore);
+        let button = match self.current {
+            Mixed::Same(color) => button.tint(color.to_rgba()),
+            Mixed::Mixed => button,
+        };
+        self.restore = ui.child("current", current, button).clicked();
         let _ = ui.child("current_caption", under, caption_text(words.current_caption.as_str()));
         ui.draw().stroke(&PaintShape::Rect(block, CornerRadius::ZERO), StrokeWidth::Thin, style.edge);
         // The warnings column: each chip its icon over its swatch, the first level with the block's top.

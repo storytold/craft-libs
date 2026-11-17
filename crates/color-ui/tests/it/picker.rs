@@ -161,12 +161,14 @@ impl FullParts {
     fn of(fixture: &Fixture, warnings: usize) -> FullParts {
         let rect = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the picker shows {label}")).rect;
         let text = |text: &str| fixture.texts().iter().filter(|run| run.text == text).map(|run| run.rect).collect::<Vec<_>>();
-        let strips = fixture.by_role(Role::SLIDER);
-        assert_eq!(strips.len(), 1, "the Full picker's one slider is its strip");
+        let area = rect("Saturation and brightness");
+        // The area's point picker reports its two axes as sliders; the strip is the slider after the area.
+        let strips: Vec<Rect> = fixture.by_role(Role::SLIDER).into_iter().map(|t| t.rect).filter(|r| r.left() >= area.right() - SLACK).collect();
+        assert_eq!(strips.len(), 1, "one slider, the strip, stands after the area: {strips:?}");
         let tips = ["Out of gamut for printing", "Not a web color"];
         FullParts {
-            area: rect("Saturation and brightness"),
-            strip: strips[0].rect,
+            area,
+            strip: strips[0],
             block: rect("New color"),
             current: rect("Restore current color"),
             new_caption: *text("new").first().expect("the new caption"),

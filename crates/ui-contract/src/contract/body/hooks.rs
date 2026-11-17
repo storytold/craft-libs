@@ -803,21 +803,23 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 .with_owner(owner);
             close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, regions.end, None));
         }
-        // A footer the body places is measured before the body, as the end region is, in a content column, so the slot
-        // takes its size; the real run takes that size from the measuring run's record and draws the footer in the
-        // slot after the body.
+        // A footer the body places is measured before the body, as the end region is, in a content column of unbounded
+        // room, so it takes its content's size and the slot takes that; the real run takes the size from the measuring
+        // run's record and draws the footer in the slot after the body, across the slot as across an end column.
         let in_body = footer_in_body(&props);
-        if in_body && !real && is_open {
-            let at = Rect::from_min_size(regions.body.min, Vec2::new(regions.body.width(), f32::INFINITY));
+        let slot_env = in_body.then(|| region_env.derive_local(|scoped| scoped.content_column = true));
+        if let (true, false, Some(slot_env)) = (is_open, real, slot_env.as_ref()) {
+            let at = Rect::from_min_size(regions.body.min, Vec2::INFINITY);
             let mut bcx = BodyCx::new(body_id, env_view, resolved, at, &mut *cx.core.memory, &mut open, gate.as_mut())
                 .with_field_message(field_message.clone())
                 .with_owner(owner);
             let mut footer_ui = frame.region(ui, "footer", at);
-            let installed = Env::install_for(&footer_ui, region_env.derive_local(|scoped| scoped.content_column = true));
+            let installed = Env::install_for(&footer_ui, slot_env.clone());
             comp.footer(&mut footer_ui, &mut bcx);
             Env::restore(&ctx, installed);
             close = close.or(bcx.close_requested());
             self.footer_size = Some(self.region_size(&footer_ui));
+            eprintln!("DIAG picker footer slot {id:?} measured {:?}", self.footer_size);
         }
         let footer_slot =
             in_body.then(|| FooterSlotOf { owner: id, size: if real { self.measured_footer } else { self.footer_size.unwrap_or(Vec2::ZERO) } });
@@ -1148,7 +1150,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             if let (Some(_), Some(view)) = (slot, self.view) {
                 footer_ui.set_clip_rect(view.intersect(footer_ui.clip_rect()));
             }
-            let installed = Env::install_for(&footer_ui, footer_env);
+            let installed = Env::install_for(&footer_ui, slot.and(slot_env).unwrap_or(footer_env));
+            if let Some(slot) = slot {
+                eprintln!("DIAG picker footer slot {id:?} drawn at {slot:?}");
+            }
             comp.footer(&mut footer_ui, &mut bcx);
             Env::restore(&ctx, installed);
             close = close.or(bcx.close_requested());
