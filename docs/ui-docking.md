@@ -67,6 +67,8 @@ A panel body, or code a body calls, changes the workspace during the pass with `
 
 Props: `hide` (`HidePanels::None`, `All` or `Except`), `maximized`, `auto_collapse`, `locked`, and `flyout`, which binds the open flyout to the host's value (the area keeps it otherwise). A hidden panel keeps its place for restore.
 
+A panel in a column collapsed to icons shows in its flyout (`Layout::opens_in_flyout`). The host opens and closes it by writing the `flyout` binding, not the layout: `WindowMenuRows` checks such a panel's row while its flyout is open (`WindowMenuRows::flyout`) and reports a pick in `WindowMenuRowsOutput::flyout`.
+
 `DockAreaOutput` holds the `actions` taken, the bodies' `requested` actions, the `events` for the host, the `focused` and `picked` panels, `edit`, `float_space`, `columns`, the OS `windows` the floating windows showed in (by a panel of each), `window_files`, and `error`: an `InvalidGeometry` when the workspace fails `validate`, in which case the area draws nothing.
 
 The host handles these `DockEvent`s:
@@ -98,6 +100,10 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 ## Rules
 
 - A tab drag carries a `PanelDrag`; a group or column drag carries a `GroupDrag`. Groups and columns register `DockSpot`s in `DockTargets`, and `resolve_drop` maps the spot under the pointer to an `Action`.
+- A column collapsed to icons takes drops as an expanded column does: its edges (a new column beside it, docked only), the seams between its icon groups, the top of the first group and the bottom of the last (a new group above or below), and each icon group's cells (join its tabs). The column's state wins: a panel dropped into a collapsed column shows as an icon, one dropped into an expanded column shows expanded.
+- Nothing goes beside a floating window: its column registers no edge bands, and its groups (`DockGroup::in_window`) take no drop on their start and end sides.
+- A collapsed column's flyouts open on the side `IconicColumn::opens` names: away from a dock's window edge, and towards the room of the float area for a floating window. A floating window keeps to the edge of the float area nearer it; a move keeps the edge it began with, and a collapsed window's move ends with its strip where it was dropped (`WindowColumn::anchored`).
+- A panel that lays its content in a grid (a toolbar) declares it with `PanelSpec::grid` (`DockGrid`: the width at one content column, the width each further column adds, and the most columns). Its column, given steps (`Column::steps`), is a whole number of content columns wide and as tall as the content measures at that width: docked from the top of the dock, content taller than the dock scrolls inside; floating under the title row, at the window's place. A drag of the column's edge, or of a floating window's side, sets the most steps that fit; a drag of a floating window's top or bottom the fewest whose content fits. When the column's panels do not collapse, its double arrow switches between one and two steps. A dock side's total width (`DockSizes::resize_side`) leaves a stepped column's width alone.
 - Ctrl or Cmd held at the release floats the drop. A release over the dragged unit's own group leaves it where it is.
 - A drag ends without a change when another arrangement replaces the workspace it started on: it records the workspace's revision, which `Workspace::replace` and the `WorkspaceSet` switch and reset change. The dock's own edits keep the revision, so they keep the drag.
 - A dock column's last open group fills the column: it takes the height the other groups leave and asks for its `DockHeights::fill`. The other groups keep the height the user gave them, or take their `DockHeights::default`, which shrinks towards `compact` before the filling group gets less than its fill. Groups that ask for no heights share the free height with the filling group.
