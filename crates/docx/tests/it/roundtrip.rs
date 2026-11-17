@@ -79,6 +79,34 @@ fn thai_and_regular_distributed_alignments_remain_distinct() {
     assert_eq!(reopened.styles.get("ThaiStyle").unwrap().para.align, Some(Align::ThaiDistribute));
 }
 
+#[test]
+fn numbering_level_alignments_use_supported_values() {
+    use craft_wordmodel::numbering::{AbstractNum, Level, Num};
+
+    let mut doc = Document::new();
+    let numbering = Arc::make_mut(&mut doc.numbering);
+    numbering.abstracts.push(AbstractNum {
+        id: 1,
+        levels: [Align::Left, Align::Center, Align::Right, Align::Justify, Align::Distribute, Align::ThaiDistribute]
+            .into_iter()
+            .map(|align| Level { align, ..Default::default() })
+            .collect(),
+        ..Default::default()
+    });
+    numbering.nums.push(Num {
+        id: 1,
+        abstract_id: 1,
+        level_overrides: vec![(0, Level { align: Align::ThaiDistribute, ..Default::default() })],
+        ..Default::default()
+    });
+    let bytes = craft_docx::write(&doc).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/numbering.xml").unwrap(), &mut xml).unwrap();
+    let values: Vec<_> = xml.split("<w:lvlJc w:val=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+    assert_eq!(values, ["left", "center", "right", "left", "left", "left", "left"]);
+}
+
 /// A paragraph built from (text, props) runs.
 fn para_runs(runs: &[(&str, CharProps)]) -> Paragraph {
     let mut p = Paragraph::new();
