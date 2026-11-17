@@ -1305,6 +1305,18 @@ mod tests {
     }
 
     #[test]
+    fn fcs_bits_are_masked_in_big_endian_nanosecond_files() {
+        classic_link_word(0x24000001, false, true, 4);
+        classic_link_word(1, false, true, 0);
+    }
+
+    #[test]
+    fn fcs_bits_do_not_change_big_endian_nanosecond_raw_ip() {
+        classic_link_word(0x24000065, false, true, 4);
+        classic_link_word(101, false, true, 0);
+    }
+
+    #[test]
     fn a_one_word_fcs_length_is_masked() {
         classic_link_word(0x14000001, true, false, 2);
     }
