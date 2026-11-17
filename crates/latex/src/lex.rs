@@ -167,6 +167,14 @@ impl Lexer<'_> {
                                 let m = self.until("\\]");
                                 self.out.push(Tok::Math(m, true));
                             }
+                            '\\' => {
+                                // `\\*` breaks the line as `\\` does; the star only forbids a page
+                                // break there.
+                                if self.peek() == Some('*') {
+                                    self.bump();
+                                }
+                                self.out.push(Tok::Cmd(sym.to_string()));
+                            }
                             _ => self.out.push(Tok::Cmd(sym.to_string())),
                         }
                         continue;

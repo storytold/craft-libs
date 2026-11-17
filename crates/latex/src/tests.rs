@@ -494,3 +494,17 @@ fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
     assert_eq!(t.rows.first().map(Vec::len), Some(craft_wordmodel::table::MAX_COLS));
     assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }
+
+#[test]
+fn a_starred_line_break_shows_no_star() {
+    // `\\*` (a line break with no page break after it) left its `*` in the text.
+    for src in ["a\\\\*b", "a\\\\*[3pt]b", "a\\\\b"] {
+        let p = paras(&format!("\\begin{{document}}{src}\\end{{document}}"));
+        assert_eq!(p.len(), 1, "{src}");
+        assert_eq!(p[0].text().replace(['\n', '\u{B}'], "|"), "a|b", "{src}");
+    }
+    let flow = parse("\\begin{document}\\begin{tabular}{ll}a & b \\\\* c & d\\end{tabular}\\end{document}");
+    let Some(FBlock::Table(t)) = flow.blocks.first() else { panic!("{:?}", flow.blocks) };
+    assert_eq!(t.rows.len(), 2, "{t:?}");
+    assert_eq!(t.rows[1].iter().map(|c| c.text().trim().to_string()).collect::<Vec<_>>(), ["c", "d"]);
+}
