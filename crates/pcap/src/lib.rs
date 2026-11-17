@@ -634,22 +634,24 @@ fn transport(proto: u8, p: &[u8], d: &mut Decoded) {
     };
     match proto {
         6 => {
-            let (Some(sp), Some(dp), Some(seq), Some(ack), Some(off), Some(flags), Some(win)) =
-                (r.u16_be(0), r.u16_be(2), r.u32_be(4), r.u32_be(8), r.u8(12), r.u8(13), r.u16_be(14))
-            else {
+            let (Some(sp), Some(dp)) = (r.u16_be(0), r.u16_be(2)) else {
                 d.note = Some("TCP header cut short".into());
                 return;
             };
             d.protocols.push("tcp");
-            let payload = p.get(usize::from(off >> 4) * 4..).unwrap_or(&[]);
+            let (seq, ack, off, flags, win) = (r.u32_be(4), r.u32_be(8), r.u8(12), r.u8(13), r.u16_be(14));
+            if win.is_none() {
+                d.note = Some("TCP header cut short".into());
+            }
+            let payload = off.map_or(&[][..], |off| p.get(usize::from(off >> 4) * 4..).unwrap_or(&[]));
             d.transport = Some(Transport {
                 protocol: "tcp",
                 src_port: Some(sp),
                 dst_port: Some(dp),
-                tcp_flags: Some(tcp_flags(flags)),
-                seq: Some(seq),
-                ack: Some(ack),
-                window: Some(win),
+                tcp_flags: flags.map(tcp_flags),
+                seq,
+                ack,
+                window: win,
                 payload_len: payload.len(),
                 ..empty
             });
@@ -1205,6 +1207,24 @@ pub fn iso8601(ns: u64) -> String {
 mod tests {
     use super::*;
     use craft_anything_testkit::pcap::{dns_query, eth, ipv4_pkt, pcap, pcapng, sample_frames, udp};
+
+    #[test]
+    fn tcp_cut_inside_header_keeps_ports() {
+        // Ports sit in the first 4 bytes; a cut later in the header must not drop them (as UDP).
+        let mut tcp = Vec::new();
+        tcp.extend(41000u16.to_be_bytes());
+        tcp.extend(9000u16.to_be_bytes());
+        tcp.extend([0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x18, 4, 0, 0, 0, 0, 0]);
+        let mut frame = eth(0x0800, &ipv4_pkt(6, [10, 0, 0, 1], [10, 0, 0, 2], &tcp));
+        frame.truncate(14 + 20 + 11);
+        let d = decode(1, &frame);
+        let t = d.transport.unwrap();
+        assert_eq!((t.src_port, t.dst_port), (Some(41000), Some(9000)));
+        assert_eq!(t.seq, Some(1));
+        assert_eq!(t.ack, None);
+        assert_eq!(t.window, None);
+        assert!(d.protocols.contains(&"tcp"));
+    }
 
     /// One-answer DNS response for `example.com` with a TXT answer carrying `rdata`.
     fn txt_response(rdata: &[u8]) -> Vec<u8> {
