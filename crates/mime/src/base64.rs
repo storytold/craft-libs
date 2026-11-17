@@ -8,8 +8,9 @@
 //! counts it; an unpadded one refuses `=`), a length that can be, and the unused bits of the last
 //! symbol zero (so every value has one spelling). A caller that reads mail, where line breaks and
 //! missing padding are everyday, cleans its input first, as it always has; the strictness is what
-//! the signature, key and credential checks want. No input panics, and the output is never longer
-//! than three quarters of the input.
+//! the signature, key and credential checks want. [`Config::decode_optional_padding`] explicitly
+//! permits missing terminal padding without relaxing alphabet, padding placement or unused bits.
+//! No input panics, and the output is never longer than three quarters of the input.
 
 use std::fmt;
 
@@ -108,9 +109,20 @@ impl Config {
 
     /// The bytes of `text`, which must be exactly base64 of this config's kind (see the module).
     pub fn decode(self, text: impl AsRef<[u8]>) -> Result<Vec<u8>, DecodeError> {
-        let text = text.as_ref();
-        let (symbols, pad) = if self.padded {
-            if text.len() % 4 != 0 {
+        self.decode_inner(text.as_ref(), false)
+    }
+
+    /// Decode this alphabet with zero, partial or complete terminal padding, regardless of the
+    /// config's encoding padding. Whitespace, junk, internal/excess padding and nonzero unused
+    /// bits still fail. Use this only when the calling format permits missing padding; [`Self::decode`]
+    /// remains strict for signatures and credentials that require one spelling.
+    pub fn decode_optional_padding(self, text: impl AsRef<[u8]>) -> Result<Vec<u8>, DecodeError> {
+        self.decode_inner(text.as_ref(), true)
+    }
+
+    fn decode_inner(self, text: &[u8], optional_padding: bool) -> Result<Vec<u8>, DecodeError> {
+        let (symbols, pad) = if self.padded || optional_padding {
+            if !optional_padding && !text.len().is_multiple_of(4) {
                 return Err(DecodeError);
             }
             let pad = text.iter().rev().take(2).take_while(|c| **c == b'=').count();
@@ -120,7 +132,8 @@ impl Config {
         };
         // A last group of one symbol holds under eight bits; with padding, `=` fills it to four.
         let rest = symbols.len() % 4;
-        if rest == 1 || (self.padded && pad != (4 - rest) % 4) {
+        let needed = (4 - rest) % 4;
+        if rest == 1 || (optional_padding && pad > needed) || (!optional_padding && self.padded && pad != needed) {
             return Err(DecodeError);
         }
         let mut out = Vec::with_capacity(symbols.len().saturating_mul(3) / 4);
