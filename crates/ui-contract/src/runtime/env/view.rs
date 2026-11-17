@@ -168,7 +168,7 @@ impl<'a> EnvView<'a> {
     }
 
     /// The env this view shows, owned: what the drag preview, which paints after the region it started in, paints with.
-    pub(crate) fn to_env(&self) -> super::Env {
+    pub(crate) fn to_env(self) -> super::Env {
         super::Env { scoped: Arc::new(self.scoped.clone()) }
     }
 
