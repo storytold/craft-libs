@@ -11,8 +11,9 @@
 //! Fixtures are generated into `$CRAFT_MEDIA_FIXTURES_DIR` or `<workspace>/target/fixtures`, one
 //! directory per crate or format, and never committed.
 //!
-//! [`hostile::hammer`] runs a parser over truncations and mutations of a valid input and fails on
-//! a panic or a slow run; `CRAFT_MEDIA_HOSTILE_MULT=10` runs ten times the iterations.
+//! [`hostile::hammer`] runs a parser over every truncation and mutations of a valid input and fails
+//! on a panic or a case that does not finish in time; `CRAFT_MEDIA_HOSTILE_MULT=10` runs ten times
+//! the iterations. It and [`with_deadline`] call `craft_testkit`.
 //!
 //! Failing loudly is what a test helper is for: a wrong `CRAFT_MEDIA_*` setting or an unwritable
 //! fixture directory panics, which fails the test that asked.
@@ -216,35 +217,19 @@ pub fn set_progress(label: &str) {
     eprintln!("PROGRESS: {label}");
 }
 
-/// Run closure with an execution deadline, terminating with a panic if the limit is exceeded.
-#[allow(clippy::panic)]
+/// Run closure with an execution deadline of `secs` seconds, which `CRAFT_TEST_TIMEOUT_SECS`
+/// replaces, through [`craft_testkit::with_deadline`]. Panics when the closure does not finish in
+/// time, when `secs` is zero, or when the variable is not a whole number of seconds above zero.
+#[cfg(not(target_arch = "wasm32"))]
+#[track_caller]
 pub fn with_deadline<F: FnOnce() + Send + 'static>(secs: u64, f: F) {
-    let timeout_secs = std::env::var("CRAFT_TEST_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(secs);
-    with_timeout(timeout_secs, f);
+    with_limit(craft_testkit::DeadlineLimit::new(std::time::Duration::from_secs(secs)), f);
 }
 
-#[allow(clippy::panic)]
-fn with_timeout<F: FnOnce() + Send + 'static>(timeout_secs: u64, f: F) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        f();
-        let _ = tx.send(());
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
-        Ok(()) => {
-            if let Err(payload) = handle.join() {
-                std::panic::resume_unwind(payload);
-            }
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            panic!("test exceeded execution deadline of {timeout_secs} seconds");
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            if let Err(payload) = handle.join() {
-                std::panic::resume_unwind(payload);
-            }
-        }
-    }
+#[cfg(not(target_arch = "wasm32"))]
+#[track_caller]
+fn with_limit<F: FnOnce() + Send + 'static>(limit: craft_testkit::DeadlineLimit<'_>, f: F) {
+    craft_testkit::with_deadline(limit, "the test body", f);
 }
 
 /// Return fixture directory for a crate/category, creating it if needed.
@@ -339,10 +324,31 @@ Encoders:
     }
 
     #[test]
-    #[should_panic(expected = "test exceeded execution deadline")]
+    #[should_panic(expected = "the test body did not finish within 1s")]
     fn with_deadline_times_out() {
-        with_timeout(1, || {
-            std::thread::sleep(std::time::Duration::from_secs(3));
+        let (_keep, rx) = std::sync::mpsc::channel::<()>();
+        let limit = craft_testkit::DeadlineLimit::new(std::time::Duration::from_secs(1)).with_variable("CRAFT_MEDIA_TESTKIT_UNSET_IN_TESTS");
+        with_limit(limit, move || {
+            let _ = rx.recv();
         });
+    }
+
+    #[test]
+    #[should_panic(expected = "the default limit is zero")]
+    fn with_deadline_of_zero_fails() {
+        with_deadline(0, || {});
+    }
+
+    #[test]
+    fn with_deadline_names_a_bad_timeout_variable() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::with_deadline_completes", "--nocapture", "--test-threads=1"])
+            .env("CRAFT_TEST_TIMEOUT_SECS", "soon")
+            .output()
+            .unwrap();
+        let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(printed.contains("running 1 test"), "the child did not run the test:\n{printed}");
+        assert!(!out.status.success(), "the child passed:\n{printed}");
+        assert!(printed.contains(r#"CRAFT_TEST_TIMEOUT_SECS="soon" is not a whole number of seconds"#), "{printed}");
     }
 }

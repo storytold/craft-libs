@@ -6,9 +6,11 @@
 //! that reads one request from standard input and writes one reply to standard output. A file that
 //! kills the worker then costs that one open or save, and every other open drawing stays safe.
 //!
-//! Without a worker (libraries, tests, a build that can't start one) [`decode`] and [`encode_as`]
-//! run in the calling process, as they always did. There's no memory limit on the worker yet: that
-//! takes per-platform system calls, which `unsafe_code = "forbid"` keeps out of this crate.
+//! Without a worker [`decode`] and [`encode_as`] refuse rather than run the conversion in the
+//! calling process, because the third-party code is the part that can end a process.
+//! [`allow_in_process`] is the explicit exception, for input the caller knows is trusted (tests, or
+//! bytes this process produced itself). There's no memory limit on the worker yet: that takes
+//! per-platform system calls, which `unsafe_code = "forbid"` keeps out of this crate.
 //!
 //! A reply comes from a process that just handled a possibly hostile file, so it is parsed as
 //! untrusted input.
@@ -18,6 +20,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::Duration;
 
@@ -38,6 +41,9 @@ const MAX_NOTES_BYTES: u64 = 64 << 20;
 const MAX_DWG_REPLY: u64 = 2 << 30;
 /// Most bytes one request holds: the largest input, whichever the direction, and its header.
 const MAX_REQUEST: u64 = (2 << 30) + 256;
+/// What a conversion says when it has no worker and is not allowed to run here.
+const NO_WORKER: &str = "DWG: no worker is configured, so this file was not converted; \
+     call use_worker or use_own_worker at startup, or allow_in_process for input that is trusted";
 
 struct Worker {
     program: PathBuf,
@@ -45,6 +51,8 @@ struct Worker {
 }
 
 static WORKER: Mutex<Option<Worker>> = Mutex::new(None);
+/// Whether this process may run the conversion itself, set only by [`allow_in_process`].
+static IN_PROCESS: AtomicBool = AtomicBool::new(false);
 
 /// Start `program args` as the worker from now on. `program` must call [`serve_if_asked`].
 pub fn use_worker(program: PathBuf, args: Vec<OsString>) {
@@ -62,12 +70,27 @@ pub fn use_own_worker() {
     }
 }
 
+/// Let [`decode`] and [`encode_as`] run the conversion in this process when no worker is set.
+///
+/// This opts out of the isolation the crate exists for: the third-party code allocates from sizes
+/// a hostile file declares, and a failed allocation ends the process. Call it for input the caller
+/// knows is trusted (tests, or bytes this process produced), never for a file that arrived from
+/// outside.
+pub fn allow_in_process() {
+    IN_PROCESS.store(true, Ordering::Relaxed);
+}
+
+fn in_process_allowed() -> bool {
+    IN_PROCESS.load(Ordering::Relaxed)
+}
+
 /// Serve one request and return the exit code if this process was started as a worker.
 pub fn serve_if_asked() -> Option<i32> {
     (std::env::args_os().nth(1)? == WORKER_ARG).then(|| serve(std::io::stdin().lock(), std::io::stdout().lock()))
 }
 
-/// [`super::dwg_to_dxf_noted`] in the worker, when there is one.
+/// [`super::dwg_to_dxf_noted`] in the worker. With no worker configured this is refused unless
+/// [`allow_in_process`] was called; a configured worker that cannot start is an error.
 pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
     // Before starting a process, and so the same limit holds with or without one.
     if bytes.len() > limits.max_dwg_bytes {
@@ -76,17 +99,19 @@ pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), St
     let reply_limit = (limits.max_dxf_bytes as u64).saturating_add(MAX_NOTES_BYTES);
     match call(&request(DECODE, limits, ""), bytes, reply_limit, "reading this file") {
         Some(reply) => reply?,
-        None => super::dwg_to_dxf_noted(bytes, limits),
+        None if in_process_allowed() => super::dwg_to_dxf_noted(bytes, limits),
+        None => Err(NO_WORKER.to_string()),
     }
 }
 
-/// [`super::dxf_to_dwg_as`] in the worker, when there is one.
+/// [`super::dxf_to_dwg_as`] in the worker. Refused without a worker unless [`allow_in_process`]
+/// was called.
 pub fn encode_as(dxf: &[u8], version: &str) -> Result<Vec<u8>, String> {
     encode_noted(dxf, version).map(|(dwg, _)| dwg)
 }
 
-/// [`super::dxf_to_dwg_noted`] in the worker, when there is one. What the writer left out comes
-/// back as notes of `TYPE<tab>count`.
+/// [`super::dxf_to_dwg_noted`] in the worker. What the writer left out comes back as notes of
+/// `TYPE<tab>count`.
 pub fn encode_noted(dxf: &[u8], version: &str) -> Result<(Vec<u8>, super::Unwritten), String> {
     encode_kept_noted(dxf, version, None)
 }
@@ -103,7 +128,8 @@ pub fn encode_kept_noted(dxf: &[u8], version: &str, kept: Option<&str>) -> Resul
     push_str(&mut header, kept.unwrap_or(""));
     match call(&header, dxf, MAX_DWG_REPLY, "writing this file") {
         Some(reply) => reply?.map(|(dwg, notes)| (dwg, unwritten_from(&notes))),
-        None => encode_here(dxf, version, kept),
+        None if in_process_allowed() => encode_here(dxf, version, kept),
+        None => Err(NO_WORKER.to_string()),
     }
 }
 
@@ -147,8 +173,9 @@ fn push_str(r: &mut Vec<u8>, text: &str) {
 
 type Reply = Result<(Vec<u8>, Vec<String>), String>;
 
-/// Run one request in a worker. `None`: none could be started, so the caller does the work.
-/// `Err`: the worker went wrong, and `doing` says at what, for the user.
+/// Run one request in a worker. `None`: no worker is configured, so the caller decides what to do
+/// (convert here only with [`allow_in_process`], or refuse). `Err`: a configured worker could not
+/// start or went wrong, and `doing` says at what, for the user.
 fn call(header: &[u8], payload: &[u8], reply_limit: u64, doing: &str) -> Option<Result<Reply, String>> {
     let mut command = {
         let worker = WORKER.lock().ok()?;
@@ -167,14 +194,15 @@ fn call(header: &[u8], payload: &[u8], reply_limit: u64, doing: &str) -> Option<
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
+            // A worker is configured but cannot run: never fall back to decoding here.
             log::warn!("DWG worker: can't start it: {e}");
-            return None;
+            return Some(Err(format!("the DWG worker could not start ({e}); nothing else is affected")));
         }
     };
     let (Some(mut to_child), Some(from_child)) = (child.stdin.take(), child.stdout.take()) else {
         let _ = child.kill();
         let _ = child.wait();
-        return None;
+        return Some(Err("the DWG worker could not start (no pipes); nothing else is affected".to_string()));
     };
     let received = std::thread::scope(|scope| {
         // Written beside the read: a worker that replies before it has read everything, or dies,
@@ -365,6 +393,25 @@ mod tests {
             let err = handle(&request).unwrap_err();
             assert_ne!(err, bad, "kept {kept:?}");
         }
+    }
+
+    /// A conversion is refused rather than run here, and a worker that cannot start is an error:
+    /// neither case may turn into decoding a (possibly hostile) file in this process.
+    #[test]
+    fn a_conversion_is_refused_without_a_worker_and_never_falls_back_to_this_process() {
+        // No worker is configured and nothing opted in.
+        assert_eq!(decode(b"AC1032", Limits::DEFAULT).unwrap_err(), NO_WORKER);
+        assert_eq!(encode_as(b"not a dxf", "AC1032").unwrap_err(), NO_WORKER);
+        // Trusted input may run here, and the reader still reports a file it cannot read.
+        allow_in_process();
+        assert!(in_process_allowed());
+        assert!(decode(b"AC1032", Limits::DEFAULT).is_err());
+        assert!(encode_as(b"not a dxf", "AC1032").is_err());
+        // A configured worker that cannot start is an error even after the opt-in: the conversion
+        // never runs here instead.
+        use_worker(PathBuf::from("/nonexistent/craft-dwg-worker"), Vec::new());
+        assert!(decode(b"AC1032", Limits::DEFAULT).unwrap_err().contains("could not start"));
+        assert!(encode_as(b"not a dxf", "AC1032").unwrap_err().contains("could not start"));
     }
 
     #[test]
