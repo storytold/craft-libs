@@ -1176,7 +1176,10 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str, mdns_wire_format: bool)
     d.dns = Some(out);
 }
 
-const METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE"];
+/// HTTP method names are case-sensitive tokens, including extension methods.
+fn http_method(method: &str) -> bool {
+    !method.is_empty() && method.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
 
 /// Remove `user:password@` from an absolute request target.
 pub fn strip_userinfo(target: &str) -> String {
@@ -1209,7 +1212,7 @@ fn tcp_app(p: &[u8], d: &mut Decoded) {
         return;
     }
     if let (Some(m), Some(t), Some(v)) = fields
-        && METHODS.contains(&m)
+        && http_method(m)
         && !t.is_empty()
         && !t.bytes().any(|b| b.is_ascii_control())
         && version(v)
