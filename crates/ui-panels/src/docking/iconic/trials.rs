@@ -358,8 +358,8 @@ fn icon_groups_take_the_drops_of_an_expanded_columns_groups() {
         *seen.borrow_mut() = asked.borrow().iter().map(|at| DockTargets::<u8>::resolve(ui.ctx(), dock, *at).map(|(spot, _)| spot)).collect();
     });
     fixture.room(SCREEN).settle();
-    let icon = |label: &str| fixture.by_label(label).expect("the panel's icon").rect;
-    let (brushes, layers, swatches) = (icon("Brushes"), icon("Layers"), icon("Swatches"));
+    let rect_of = |label: &str| fixture.by_label(label).expect("the panel's icon").rect;
+    let (brushes, layers, swatches) = (rect_of("Brushes"), rect_of("Layers"), rect_of("Swatches"));
     let x = brushes.center().x;
     *probes.borrow_mut() = vec![
         Pos2::new(x, brushes.bottom()),
