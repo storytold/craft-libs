@@ -262,6 +262,10 @@ pub struct ToolHostResponse {
     pub context: Option<ContextRequest>,
     /// The document distance the view centre moved this pass from a `pan_view`, after the Overscroll clamp.
     pub pan: Option<ViewPan>,
+    /// A discrete click of the selected Zoom tool that changed its view. The direction is the
+    /// tool's resolved direction, including Alt. Not a wheel, command, drag, continuous hold,
+    /// momentary/stand-in tool, or a tool the app marked temporary at the press.
+    pub zoom_step: Option<ViewZoomStep>,
 }
 
 /// Where and how the app opens its canvas menu, from [`ToolHostResponse::context`].
@@ -293,6 +297,16 @@ impl ViewPan {
     }
 }
 
+/// A discrete step of the selected Zoom tool, from [`ToolHostResponse::zoom_step`]. The app
+/// may step its other shown document views using their own ladders and centres. This receipt
+/// does not prescribe whether or which peers to synchronize.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ViewZoomStep {
+    /// The resolved direction: true steps out, false steps in.
+    pub out: bool,
+}
+
 /// A key whose hold at a press makes the host run a stand-in tool, from [`ToolHost::stand_in`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -312,6 +326,8 @@ struct Active {
     dragged: bool,
     /// The stand-in the gesture runs with, latched at the press until the gesture ends; `None` is the selected tool.
     stand_in: Option<StandInKey>,
+    /// The app supplied a temporary selected tool at the press (for example a held tool letter).
+    temporary_tool: bool,
 }
 
 /// A secondary press the selected tool refused, or the momentary Hand took: what its menu request carries when the
@@ -412,6 +428,7 @@ pub fn tool_pass(env: &EnvView<'_>) -> Option<ToolPass> {
 #[derive(Default)]
 pub struct ToolHost<'m> {
     disabled: bool,
+    temporary_tool: bool,
     momentary: Option<&'m mut Momentary>,
     command_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
     alt_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
@@ -429,6 +446,15 @@ impl<'m> ToolHost<'m> {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.disabled = !enabled;
+        self
+    }
+
+    /// The app supplied a temporary tool (for example from its spring-loaded tool selection).
+    /// This semantic origin is latched with a press; no key polling or release-time reread is
+    /// needed. It only suppresses selected Zoom click receipts, not the tool's behavior.
+    #[must_use]
+    pub fn temporary_tool(mut self, temporary: bool) -> Self {
+        self.temporary_tool = temporary;
         self
     }
 
@@ -470,7 +496,7 @@ impl<'m> ToolHost<'m> {
     /// measuring run, so the host and what the app does with its response never run in one.
     pub fn run(self, ui: &Ui, pass: &ToolPass, tool: &mut dyn CanvasTool) -> ToolHostResponse {
         let ctx = ui.ctx().clone();
-        let ToolHost { disabled, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color } = self;
+        let ToolHost { disabled, temporary_tool, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color } = self;
         let env = Env::of(ui);
         let key = state_id(pass.id);
         let mut state = with_session(&ctx, key, |slot: &mut HostState| slot.clone());
@@ -522,6 +548,7 @@ impl<'m> ToolHost<'m> {
         };
         let mut run = Run {
             selected: &mut *tool,
+            temporary_tool,
             set: momentary.as_deref_mut(),
             command: command_stand_in.as_deref_mut(),
             alt: alt_stand_in.as_deref_mut(),
@@ -888,6 +915,7 @@ fn cancel_reason(reason: PressCancel) -> CancelReason {
 struct Run<'a, 't> {
     /// The selected tool.
     selected: &'a mut dyn CanvasTool,
+    temporary_tool: bool,
     /// The momentary set: its tool in `momentary` runs in place of the selected one.
     set: Option<&'a mut Momentary>,
     space: Option<CanvasSpace>,
@@ -941,8 +969,12 @@ impl<'a, 't: 'a> Run<'a, 't> {
     }
 
     /// Takes what a call asked for. A view it set is the view the calls after it in the pass start from.
-    fn absorb(&mut self, mut cx: ToolContext<'_>) {
+    fn absorb(&mut self, mut cx: ToolContext<'_>, selected: bool) {
         let asked = cx.take_requests();
+        let temporary = self.state.gesture.map_or(self.temporary_tool, |active| active.temporary_tool);
+        if selected && !temporary {
+            self.response.zoom_step = asked.zoom_step.or(self.response.zoom_step);
+        }
         self.requests.readout = asked.readout.or(self.requests.readout.take());
         self.requests.repaint |= asked.repaint;
         self.requests.hud = asked.hud.or(self.requests.hud.take());
@@ -988,7 +1020,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
     ) -> R {
         let mut cx = self.context(pointer);
         let out = run(self.pick_as(who), &mut cx);
-        self.absorb(cx);
+        self.absorb(cx, who.is_none() && self.momentary.is_none());
         out
     }
 
@@ -1025,7 +1057,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
         let mut cx = self.context(None);
         let Some(hand) = self.set.as_deref_mut().and_then(Momentary::gliding_hand) else { return };
         hand.each_pass(&mut cx);
-        self.absorb(cx);
+        self.absorb(cx, false);
     }
 
     fn report(&mut self, phase: GesturePhase) {
@@ -1062,7 +1094,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
         self.ending = None;
         match action {
             ToolAction::Claimed => {
-                self.state.gesture = Some(Active { id, last: pointer, dragged: false, stand_in: who });
+                self.state.gesture = Some(Active { id, last: pointer, dragged: false, stand_in: who, temporary_tool: self.temporary_tool });
                 if pointer.button == PointerButton::Secondary && who.is_none() && self.momentary == Some(MomentaryTool::Hand) {
                     self.state.secondary = Some(SecondaryPress { mods: pointer.mods, momentary: self.momentary, taken: true });
                 }
@@ -1172,7 +1204,11 @@ impl<'a, 't: 'a> Run<'a, 't> {
     fn end(&mut self, pointer: ToolPointer) {
         if let Some(active) = self.state.gesture.take() {
             self.ending = Some(active.id);
+            // The app may have restored its selection before this release; use the press's origin.
+            let temporary = self.temporary_tool;
+            self.temporary_tool = active.temporary_tool;
             self.call_as(active.stand_in, Some(pointer), |tool, cx| tool.release(&pointer, cx));
+            self.temporary_tool = temporary;
             self.ending = None;
             // The readout a drag asked for in this pass goes with the gesture it measured.
             self.requests.readout = None;
