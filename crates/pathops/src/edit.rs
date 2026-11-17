@@ -1730,6 +1730,29 @@ mod tests {
         assert!(anchor_count(&near) <= 5, "{} anchors", anchor_count(&near));
     }
 
+    /// Only a segment whose four points are one point is dropped before the merges: a cubic that comes back to its start (a loop) and one whose first
+    /// handle is at its start (a retracted handle) are curves, and stay, between segments of no length that go.
+    #[test]
+    fn only_a_segment_of_no_length_is_dropped_and_not_one_that_has_some_of_its_points_one() {
+        use kurbo::Shape;
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.curve_to((6.0, 6.0), (6.0, -6.0), (0.0, 0.0));
+        path.curve_to((0.0, 0.0), (5.0, 40.0), (10.0, 0.0));
+        path.curve_to((10.0, 0.0), (10.0, 0.0), (10.0, 0.0));
+        path.curve_to((10.0, 0.0), (30.0, -30.0), (20.0, 0.0));
+        path.curve_to((20.0, 0.0), (20.0, 0.0), (20.0, 0.0));
+        let out = remove_redundant_points(&path, 1e-3);
+        let (before, after) = (path.bounding_box(), out.bounding_box());
+        for (what, a, b) in
+            [("left", before.x0, after.x0), ("right", before.x1, after.x1), ("bottom", before.y0, after.y0), ("top", before.y1, after.y1)]
+        {
+            assert!((a - b).abs() < 1e-3, "{what}: {a} against {b}");
+        }
+        // The segments that go are those of no length: three curves are left.
+        assert_eq!(out.elements().len(), 4, "{:?}", out.elements());
+    }
+
     /// A circle of radius `r` in `n` cubics, each the standard arc of its angle, from `(r, 0)` round.
     fn cut_circle(n: usize, r: f64) -> BezPath {
         let mut circle = BezPath::new();
