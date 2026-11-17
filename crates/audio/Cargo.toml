@@ -131,3 +131,7 @@ required-features = ["decode"]
 [[example]]
 name = "encode"
 required-features = ["lossless-encode", "aac-encode"]
+
+[[test]]
+name = "dsd_bounds"
+required-features = ["dsd"]

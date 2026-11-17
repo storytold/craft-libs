@@ -53,12 +53,13 @@ pub fn parse_dsdiff_header(bytes: &[u8]) -> Result<(Metadata, usize, usize), Err
     }
 
     let total_file_data = bytes.len().saturating_sub(12);
-    if (form_size as usize) > total_file_data {
+    let form_size = usize::try_from(form_size).map_err(|_| Error::MemoryLimitExceeded)?;
+    if form_size > total_file_data {
         return Err(Error::UnexpectedEof("FRM8 chunk extends beyond file size"));
     }
 
     let mut pos = 16;
-    let end = (12 + form_size as usize).min(bytes.len());
+    let end = 12 + form_size;
 
     let mut sample_rate = None;
     let mut channel_names = Vec::new();
@@ -71,10 +72,11 @@ pub fn parse_dsdiff_header(bytes: &[u8]) -> Result<(Metadata, usize, usize), Err
 
     while pos + 12 <= end {
         let chunk_id: [u8; 4] = bytes[pos..pos + 4].try_into().map_err(|_| Error::UnexpectedEof("chunk ID"))?;
-        let chunk_size = u64::from_be_bytes(bytes[pos + 4..pos + 12].try_into().map_err(|_| Error::UnexpectedEof("chunk size"))?) as usize;
+        let chunk_size = usize::try_from(u64::from_be_bytes(bytes[pos + 4..pos + 12].try_into().map_err(|_| Error::UnexpectedEof("chunk size"))?))
+            .map_err(|_| Error::MemoryLimitExceeded)?;
         pos += 12;
 
-        if pos + chunk_size > end {
+        if chunk_size > end.saturating_sub(pos) {
             return Err(Error::UnexpectedEof("subchunk extends beyond container bounds"));
         }
 
@@ -93,12 +95,13 @@ pub fn parse_dsdiff_header(bytes: &[u8]) -> Result<(Metadata, usize, usize), Err
                 let mut prop_pos = 4;
                 while prop_pos + 12 <= chunk_data.len() {
                     let sub_id: [u8; 4] = chunk_data[prop_pos..prop_pos + 4].try_into().map_err(|_| Error::UnexpectedEof("PROP subchunk ID"))?;
-                    let sub_size = u64::from_be_bytes(
+                    let sub_size = usize::try_from(u64::from_be_bytes(
                         chunk_data[prop_pos + 4..prop_pos + 12].try_into().map_err(|_| Error::UnexpectedEof("PROP subchunk size"))?,
-                    ) as usize;
+                    ))
+                    .map_err(|_| Error::MemoryLimitExceeded)?;
                     prop_pos += 12;
 
-                    if prop_pos + sub_size > chunk_data.len() {
+                    if sub_size > chunk_data.len().saturating_sub(prop_pos) {
                         return Err(Error::UnexpectedEof("PROP subchunk extends beyond bounds"));
                     }
 
@@ -147,11 +150,12 @@ pub fn parse_dsdiff_header(bytes: &[u8]) -> Result<(Metadata, usize, usize), Err
                 let mut diin_pos = 0;
                 while diin_pos + 12 <= chunk_data.len() {
                     let sub_id = &chunk_data[diin_pos..diin_pos + 4];
-                    let sub_size = u64::from_be_bytes(
+                    let sub_size = usize::try_from(u64::from_be_bytes(
                         chunk_data[diin_pos + 4..diin_pos + 12].try_into().map_err(|_| Error::UnexpectedEof("DIIN subchunk size"))?,
-                    ) as usize;
+                    ))
+                    .map_err(|_| Error::MemoryLimitExceeded)?;
                     diin_pos += 12;
-                    if diin_pos + sub_size > chunk_data.len() {
+                    if sub_size > chunk_data.len().saturating_sub(diin_pos) {
                         break;
                     }
                     let sub_data = &chunk_data[diin_pos..diin_pos + sub_size];

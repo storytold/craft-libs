@@ -55,7 +55,7 @@ fn parse_id3v2(bytes: &[u8], offset: usize) -> (Option<String>, Option<String>) 
         }
         let frame_size = u32::from_be_bytes([id3[pos + 4], id3[pos + 5], id3[pos + 6], id3[pos + 7]]) as usize;
         pos += 10;
-        if pos + frame_size > end {
+        if frame_size > end.saturating_sub(pos) {
             break;
         }
 
@@ -124,7 +124,7 @@ pub fn parse_dsf_header(bytes: &[u8]) -> Result<(Metadata, usize, u32), Error> {
         return Err(Error::InvalidHeader("invalid 'fmt ' chunk size (must be at least 52)"));
     }
     let fmt_size = usize::try_from(fmt_chunk_size).map_err(|_| Error::MemoryLimitExceeded)?;
-    if bytes.len() < fmt_offset + fmt_size + 12 {
+    if fmt_size > bytes.len().saturating_sub(fmt_offset + 12) {
         return Err(Error::UnexpectedEof("fmt chunk extends beyond file bounds"));
     }
 
@@ -176,8 +176,8 @@ pub fn parse_dsf_header(bytes: &[u8]) -> Result<(Metadata, usize, u32), Error> {
     }
 
     let payload_offset = data_offset + 12;
-    let payload_size = (data_chunk_size - 12) as usize;
-    if bytes.len() < payload_offset + payload_size {
+    let payload_size = usize::try_from(data_chunk_size - 12).map_err(|_| Error::MemoryLimitExceeded)?;
+    if payload_size > bytes.len().saturating_sub(payload_offset) {
         return Err(Error::UnexpectedEof("data chunk payload extends beyond file bounds"));
     }
 
@@ -198,7 +198,7 @@ pub fn parse_dsf(bytes: &[u8]) -> Result<RawAudio, Error> {
     let block_size = block_size as usize;
     let channels = metadata.channels as usize;
 
-    let target_bytes_per_channel = metadata.sample_count.div_ceil(8) as usize;
+    let target_bytes_per_channel = usize::try_from(metadata.sample_count.div_ceil(8)).map_err(|_| Error::MemoryLimitExceeded)?;
     if target_bytes_per_channel.saturating_mul(channels) > MAX_DECODE_BYTES {
         return Err(Error::MemoryLimitExceeded);
     }

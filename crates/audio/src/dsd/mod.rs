@@ -106,6 +106,10 @@ impl RawAudio {
 
     /// Decimates the raw 1-bit DSD audio to multi-bit PCM `f32` samples with the given factor (8, 16, 32, or 64).
     pub fn to_pcm_with_factor(&self, factor: u32) -> Result<DecodedAudio, Error> {
+        // Validate before iterating: public RawAudio may contain no channels.
+        if !matches!(factor, 8 | 16 | 32 | 64) {
+            return Err(Error::Unsupported("decimation factor must be 8, 16, 32, or 64"));
+        }
         let mut channels = Vec::with_capacity(self.channel_bytes.len());
         for ch_bytes in &self.channel_bytes {
             let pcm = filter::decimate_channel(ch_bytes, self.bit_order, factor)?;

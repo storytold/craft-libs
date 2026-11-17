@@ -1,0 +1,65 @@
+//! Hostile container sizes must return errors, never wrap offsets or panic.
+use craft_audio::dsd::{BitOrder, Error, RawAudio, encode_dsdiff, encode_dsf, read_metadata, read_raw};
+
+#[test]
+fn dsf_untrusted_sizes_are_checked() {
+    let original = encode_dsf(2_822_400, &[&[0x69; 8]], 64, 8).unwrap();
+    for offset in [32, 84] {
+        // fmt and data chunk sizes
+        for size in [u64::MAX, u64::MAX - 31, 1 << 32] {
+            let mut bytes = original.clone();
+            bytes[offset..offset + 8].copy_from_slice(&size.to_le_bytes());
+            assert!(read_metadata(&bytes).is_err());
+            assert!(read_raw(&bytes).is_err());
+        }
+    }
+    let mut bytes = original;
+    bytes[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert_eq!(read_raw(&bytes), Err(Error::MemoryLimitExceeded));
+}
+
+#[test]
+fn dsdiff_untrusted_top_level_and_property_sizes_are_checked() {
+    let original = encode_dsdiff(2_822_400, &[&[0xaa; 8]], 64).unwrap();
+    let prop = original.windows(4).position(|w| w == b"PROP").unwrap();
+    for offset in [4, 20, prop + 20] {
+        // FRM8, FVER, nested FS
+        for size in [u64::MAX, u64::MAX - 31, 1 << 32] {
+            let mut bytes = original.clone();
+            bytes[offset..offset + 8].copy_from_slice(&size.to_be_bytes());
+            assert!(read_metadata(&bytes).is_err());
+            assert!(read_raw(&bytes).is_err());
+        }
+    }
+}
+
+#[test]
+fn dsdiff_invalid_optional_disc_info_is_ignored_without_overflow() {
+    let mut bytes = encode_dsdiff(2_822_400, &[&[0xaa; 8]], 64).unwrap();
+    let expected = read_metadata(&bytes).unwrap();
+    bytes.extend_from_slice(b"DIIN");
+    bytes.extend_from_slice(&12u64.to_be_bytes());
+    bytes.extend_from_slice(b"DITI");
+    bytes.extend_from_slice(&u64::MAX.to_be_bytes());
+    let size = (bytes.len() - 12) as u64;
+    bytes[4..12].copy_from_slice(&size.to_be_bytes());
+    // Optional malformed text is ignored on 64-bit; unrepresentable sizes may
+    // be rejected on narrower targets, but must never wrap or panic.
+    match read_metadata(&bytes) {
+        Ok(actual) => assert_eq!(actual, expected),
+        Err(Error::MemoryLimitExceeded) => {}
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn empty_raw_audio_rejects_invalid_decimation_factors() {
+    let bytes = encode_dsf(2_822_400, &[&[]], 0, 8).unwrap();
+    let raw = RawAudio { metadata: read_metadata(&bytes).unwrap(), bit_order: BitOrder::LsbFirst, channel_bytes: Vec::new() };
+    for factor in [0, 1, 7, 9, u32::MAX] {
+        assert!(matches!(raw.to_pcm_with_factor(factor), Err(Error::Unsupported(_))));
+    }
+    for factor in [8, 16, 32, 64] {
+        assert_eq!(raw.to_pcm_with_factor(factor).unwrap().sample_rate, 2_822_400 / factor);
+    }
+}
