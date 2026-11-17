@@ -458,10 +458,23 @@ pub(crate) fn lossy_jpeg(src: &[u8], cpp: usize, max_samples: usize) -> Result<(
     lossy_jpeg_with_tile(src, cpp, max_samples, None)
 }
 
+/// The width and height a baseline (lossy) JPEG declares in its frame header, read without
+/// decoding any scan; `None` when the header cannot be read.
+#[cfg(feature = "line-dng")]
+pub(crate) fn lossy_jpeg_dimensions(src: &[u8]) -> Option<(usize, usize)> {
+    use zune_core::bytestream::ZCursor;
+    use zune_core::options::DecoderOptions;
+    let opts = DecoderOptions::default().set_max_width(1 << 16).set_max_height(1 << 16).set_strict_mode(false);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(src), opts);
+    d.decode_headers().ok()?;
+    let info = d.info()?;
+    Some((usize::from(info.width), usize::from(info.height)))
+}
+
 /// Validate the actual frame before decode allocates its output. Edge tiles may store
 /// a smaller frame covering all visible samples or bounded whole-MCU padding.
 #[cfg(feature = "dng")]
-fn lossy_jpeg_with_tile(
+pub(crate) fn lossy_jpeg_with_tile(
     src: &[u8],
     cpp: usize,
     max_samples: usize,

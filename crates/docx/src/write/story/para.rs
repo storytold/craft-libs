@@ -76,6 +76,12 @@ impl Writer<'_> {
                 a.push(("w:original", c.original.clone()));
                 a
             });
+            // `w:jc` encodes alignment and kashida length together. A justified paragraph
+            // whose kashida is unset (`None`) still inherits a length from its style; writing
+            // `both` would read back as `Some(Kashida::None)` and cancel that length.
+            if pp.align == Some(craft_wordmodel::props::Align::Justify) && pp.kashida.is_none() {
+                pp.kashida = Some(self.styles().resolve_para(&pp).kashida);
+            }
             ppr_inner(w, &pp, framed, num_change.as_ref());
             if has_mark {
                 self.write_mark_rpr(w, &p.mark, &mark_revs);

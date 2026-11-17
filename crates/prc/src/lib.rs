@@ -7,6 +7,9 @@
 //! tessellations and walks the product tree into placed, coloured meshes
 //! ([`PrcFile::placements`], [`PrcFile::model_tree`]).
 //!
+//! [`write_prc`] writes a triangle-mesh scene ([`MeshScene`]: named nodes, shared meshes, colours,
+//! PNG/JPEG base-colour textures) as a single-file-structure stream.
+//!
 //! Clause numbers in `[WD x.y]` refer to the PRC working draft, ISO/TC 171/SC 2 N570.
 //!
 //! Every read is bounded: inflation by [`MAX_INFLATED_BYTES`] (or a caller's limit), decoded
@@ -27,11 +30,16 @@ mod tess;
 #[cfg(test)]
 mod testw;
 mod tree;
+mod write;
 
 pub use bits::{BitReader, MAX_DECODED_ELEMENTS, MAX_SCHEMA_STEPS};
 pub use container::{FileStructure, MAX_FILE_STRUCTURES, MAX_INFLATED_BYTES, PRC_READER_VERSION, PrcFile, PrcHeader, SectionKind, UniqueId};
 pub use error::PrcError;
 pub use geometry::Matrix;
 pub use schema::Schema;
-pub use tess::{Tessellation, TriangleMesh, TriangleStyle};
+pub use tess::{Tessellation, TriangleMesh, TriangleStyle, WireTessellation};
 pub use tree::{EntityOverrides, MAX_PLACEMENTS, ModelNode, ModelUnits, NameSource, Placement, Rgba, StyleAlpha};
+pub use write::{
+    MAX_NODE_DEPTH, MeshScene, PrcWriteError, PrcWriteReport, SceneMaterial, SceneMesh, SceneNode, ScenePrimitive, SceneTexture, TextureWrap,
+    write_prc,
+};
