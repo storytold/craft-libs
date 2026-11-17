@@ -69,6 +69,8 @@ mp3-encode = ["craft-media/bitstream"]
 mpa-encode = ["mpa-decode", "mp3-encode"]
 # Bluetooth Low Complexity Subband Coding (SBC) audio codec (`sbc`).
 sbc = []
+# Sierra VMD sound decoder (`vmd::Decoder`): 8-bit PCM and 16-bit DPCM.
+vmd-decode = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).
@@ -88,12 +90,18 @@ symphonia = { version = "0.6.1", optional = true, default-features = false, feat
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
+# The VMD demuxer, for the VMD sound decoder's tests.
+craft-media = { workspace = true, features = ["vmd"] }
 proptest = { workspace = true }
 serde_json = { workspace = true }
 
 [[test]]
 name = "audio"
 required-features = ["decode", "lossless-encode", "peaks"]
+
+[[test]]
+name = "vmd"
+required-features = ["vmd-decode"]
 
 [[test]]
 name = "codecs"
