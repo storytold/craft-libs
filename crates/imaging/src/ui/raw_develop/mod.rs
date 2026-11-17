@@ -814,7 +814,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
             (None, true) => (output.closed.map(|_| DialogResult::Cancel), matches!(footer, Some(Footer::Finish(_))).then(|| self.result(finish))),
             (None, false) => (output.result(|| self.result(finish)), None),
         };
-        WorkspacePass::new(output.response, events).held(held).result(result)
+        WorkspacePass::new(output.response, events).held(held).result(result).canvas(self.canvas)
     }
 
     fn json_fields(&self, source: &Self::Source) -> Option<serde_json::Value> {

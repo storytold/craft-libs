@@ -82,6 +82,12 @@ pub trait StackDialog: Any + Send {
         None
     }
 
+    /// The canvas the dialog shows the document on, which takes the app's tool input in document points while the
+    /// dialog is open: a full-window workspace's. `None` (the default) for a dialog without one.
+    fn canvas(&self) -> Option<egui::Id> {
+        None
+    }
+
     /// The dialog's values as a JSON object, keyed as [`set_json_field`](StackDialog::set_json_field) takes them:
     /// what automation lists for the open dialog (`ui.inspect`). `None` (the default) for a dialog without values.
     fn json_fields(&self) -> Option<Value> {
@@ -183,6 +189,7 @@ trait AnyStackDialog: Send {
     fn instance(&self) -> Option<DialogId>;
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>>;
     fn held_state(&self) -> Option<HeldOk>;
+    fn canvas(&self) -> Option<egui::Id>;
     fn json_fields(&self) -> Option<Value>;
     fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String>;
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>>;
@@ -218,6 +225,10 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn held_state(&self) -> Option<HeldOk> {
         StackDialog::held_state(self)
+    }
+
+    fn canvas(&self) -> Option<egui::Id> {
+        StackDialog::canvas(self)
     }
 
     fn json_fields(&self) -> Option<Value> {
@@ -469,6 +480,12 @@ impl DialogHost {
     /// is open or its OK holds nothing now.
     pub fn held_state(&self, id: DialogId) -> Option<HeldOk> {
         self.open.iter().find(|dialog| dialog.id() == id)?.held_state()
+    }
+
+    /// The canvas of the most recently opened dialog that shows the document on one ([`StackDialog::canvas`]): where
+    /// the app's tool input in document points goes while it is open. `None` when no open dialog has one.
+    pub fn canvas(&self) -> Option<egui::Id> {
+        self.open.iter().rev().find_map(|dialog| dialog.canvas())
     }
 
     /// [`confirm`](DialogHost::confirm) for the open dialog `id` names, whatever its type.

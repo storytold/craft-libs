@@ -660,7 +660,7 @@ impl SelectMaskWorkspace {
             this.done(&ctx)
         });
         let events = std::mem::take(&mut this.events);
-        WorkspacePass::new(shown.output.response, events).result(result)
+        WorkspacePass::new(shown.output.response, events).result(result).canvas(this.canvas_id)
     }
 
     /// The start of a pass: the first pass reads the stored settings, a change the app made to the settings since the

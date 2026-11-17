@@ -432,7 +432,7 @@ impl ContentAwareFillWorkspace {
             (shown.output.result(|| work.command()), None)
         };
         let events = std::mem::take(&mut work.events);
-        WorkspacePass::new(shown.output.response, events).held(held).result(result)
+        WorkspacePass::new(shown.output.response, events).held(held).result(result).canvas(work.canvas_id)
     }
 
     /// The app's colour picker answered a [`FillEvent::PickColor`] request. A key this workspace
