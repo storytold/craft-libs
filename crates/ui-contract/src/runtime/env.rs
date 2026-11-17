@@ -68,6 +68,13 @@ impl Deref for Env {
     }
 }
 
+/// A container's footer that its body places (`FooterPlace::Body`): the container and the size the footer measured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FooterSlotOf {
+    pub owner: Id,
+    pub size: egui::Vec2,
+}
+
 /// The values of an env.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -127,6 +134,9 @@ pub struct Scoped {
     /// Where the first child the scope places in flow reports its first line: a container's header or body
     /// (`layout::FirstLines`). `None` in the children of a `Row` body, which reports its line itself.
     pub(crate) first_line: Option<Id>,
+    /// The container whose footer stands in its body (`FooterPlace::Body`) and the size that footer measured: a
+    /// `FooterSlot` shown under it takes that size and is where the footer is drawn.
+    pub(crate) footer_slot: Option<FooterSlotOf>,
     /// The `Stack` or `Row` body that encloses the scope and the axis it runs along, when a child that fills that
     /// axis shares the room its siblings leave (set only where the body is given the axis).
     pub(crate) fill_body: Option<(Id, craft_behavior::Axis)>,
@@ -353,6 +363,7 @@ impl Scoped {
         self.item_facts = None;
         self.ink = Ink::default();
         self.surface = SurfaceKind::Background;
+        self.footer_slot = None;
         self.inherited_mut().values.set(InBar(false));
     }
 
@@ -488,6 +499,7 @@ impl Env {
                 row_room: None,
                 row_line: None,
                 first_line: None,
+                footer_slot: None,
                 fill_body: None,
                 fill_share: None,
                 shrink: None,

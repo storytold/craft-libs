@@ -18,7 +18,7 @@ use crate::ui::length::{DocUnit, length_field, shown};
 use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec};
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Bind, Common, Component, Cx, Entry, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _};
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup, Help};
 use craft_ui::pickers::Select;
 use craft_ui::primitives::TextRun;
@@ -600,7 +600,7 @@ impl StackDialog for ParagraphDialog {
             FooterButton::new(words.tabs.clone(), DialogRole::Other),
         ];
         let shown = Dialog::new(words.title.clone())
-            .side_buttons(true)
+            .button_place(ButtonPlace::Side)
             .buttons(buttons)
             .settle_buttons(|_, buttons| {
                 for (at, button) in buttons.iter_mut().enumerate() {

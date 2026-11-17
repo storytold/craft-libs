@@ -126,7 +126,7 @@ fn popover(
     open: Bind<'_, bool>,
 ) -> (EditEvents<PickedColor>, Option<ScreenPickGesture>, bool) {
     let shown = Popover::new(label.clone(), open).opened_by(opener).show(ui, |ui, _| {
-        let mut picker = compact_picker(label.clone(), value.reborrowed(), None).focus_on_open(true);
+        let mut picker = compact_picker(label.clone(), value.reborrowed(), None);
         if let Some(setup) = setup.take() {
             picker = setup(picker);
         }

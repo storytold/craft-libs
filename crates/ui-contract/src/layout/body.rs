@@ -32,7 +32,21 @@ pub enum BodyLayout {
     Grid {
         /// The width rule of each column.
         columns: Cow<'static, [ColumnWidth]>,
+        /// What the grid does when its columns do not fit beside each other.
+        fit: GridFit,
     },
+}
+
+/// What a `Grid` does when the least widths of its columns do not fit beside each other in its room.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GridFit {
+    /// The cells go one under another across the room, so no column is cut: a form that reflows in a narrow panel.
+    #[default]
+    Stack,
+    /// The columns stay beside each other at their least widths and the grid overflows its room: a component whose
+    /// arrangement is fixed (the Color Picker's channel groups), which a narrow room must not rearrange.
+    Fixed,
 }
 
 /// Where a `Row` places its block of children along the row.
@@ -65,7 +79,15 @@ impl BodyLayout {
 
     /// Children row-major over `columns`: a `'static` slice, or columns built in the pass.
     pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self {
-        BodyLayout::Grid { columns: columns.into() }
+        BodyLayout::Grid { columns: columns.into(), fit: GridFit::Stack }
+    }
+
+    /// A `Grid` with `fit`; any other layout is unchanged.
+    pub fn fit(self, fit: GridFit) -> Self {
+        match self {
+            BodyLayout::Grid { columns, .. } => BodyLayout::Grid { columns, fit },
+            other => other,
+        }
     }
 
     /// A `Row` that wraps; any other layout is unchanged.
@@ -975,6 +997,17 @@ pub(crate) fn take_in_flow(ui: &mut Ui, size: Vec2) -> (Rect, bool) {
     take_in(ui, Env::of(ui).grid, size)
 }
 
+/// Leaves the next cell of the `Grid` body that encloses `ui` directly empty: the next child takes the cell after it.
+/// A row of a grid whose first column holds a control in some rows (a radio) leaves it empty in the others, so the
+/// cells after it stay in their columns. Outside a grid it does nothing.
+pub fn empty_cell(ui: &mut Ui) {
+    let env = Env::of(ui);
+    let grid = env.grid.filter(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| matches!(cursors.0.get(body), Some(Cursor::Grid(_)))));
+    if grid.is_some() {
+        take_in(ui, grid, Vec2::ZERO);
+    }
+}
+
 /// `take_in_flow`, with `grid` the body of `ui`'s env that places its children itself.
 fn take_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> (Rect, bool) {
     let cell = grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get_mut(&body).map(|cursor| cursor.cell(size))));
@@ -1102,9 +1135,9 @@ const STACKED: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 /// as a probe, every leaf at its least and no column bounded, which gives each column its least, and then once more:
 /// each column keeps at least its least, a `Content` column measuring in the room the others leave at theirs. When
 /// the leasts do not fit beside each other, that last sweep lays the cells out one under another across the room
-/// instead, so no column is cut. The real run places the cells from the widths, leasts and layout the measuring run
-/// recorded.
-fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec2, mut body: impl FnMut(&mut Ui) -> R) -> R {
+/// instead, so no column is cut; a `GridFit::Fixed` grid keeps its columns beside each other at their leasts and
+/// overflows the room. The real run places the cells from the widths, leasts and layout the measuring run recorded.
+fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, (columns, fit): (&[ColumnWidth], GridFit), gap: Vec2, mut body: impl FnMut(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
     let rtl = env.direction.is_rtl();
     let layout = child::column_layout(rtl);
@@ -1208,7 +1241,7 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
         })
         .collect();
     let gaps = gap.x * columns.len().saturating_sub(1) as f32;
-    let stacked = least.iter().sum::<f32>() + gaps > ui.available_rect_before_wrap().width() + 0.5;
+    let stacked = fit == GridFit::Stack && least.iter().sum::<f32>() + gaps > ui.available_rect_before_wrap().width() + 0.5;
     let (columns, last) = match stacked {
         true => (STACKED, GridMeasure::default()),
         false => (columns, GridMeasure::default().with_least(least.clone())),
@@ -1433,6 +1466,6 @@ pub(crate) fn run_body_measured<R>(
             }
             (inner, (*align != RowAlign::Start).then(|| took.width()))
         }
-        BodyLayout::Grid { columns } => (run_grid(ui, env, id, columns, gap, body), None),
+        BodyLayout::Grid { columns, fit } => (run_grid(ui, env, id, (&columns[..], *fit), gap, body), None),
     }
 }

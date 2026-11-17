@@ -25,6 +25,12 @@ pub(super) fn footer_in_end(props: &ContainerProps) -> bool {
     props.end.is_some() && props.footer.is_some_and(|footer| footer.place.in_end())
 }
 
+/// Whether the body places the footer (`FooterPlace::Body`): the footer takes no band, and its size is inside the
+/// body's.
+pub(super) fn footer_in_body(props: &ContainerProps) -> bool {
+    props.footer.is_some_and(|footer| footer.place == FooterPlace::Body)
+}
+
 /// Whether the end region takes the full height under the header: it asks to, or the footer sits in it.
 pub(super) fn end_full_height(props: &ContainerProps) -> bool {
     props.end.is_some_and(|end| end.full_height) || footer_in_end(props)
@@ -354,7 +360,7 @@ impl<'b> BodyHooks<'b> {
         let inline = props.header.is_some_and(|header| header.inline);
         let (in_end, full) = (footer_in_end(props), end_full_height(props));
         let header_h = if props.header.is_some() { sizes.header.unwrap_or(Vec2::ZERO).y } else { 0.0 };
-        let footer_h = if props.footer.is_some() { sizes.footer.y } else { 0.0 };
+        let footer_h = if props.footer.is_some() && !footer_in_body(props) { sizes.footer.y } else { 0.0 };
         // A footer in the end region takes no band across the container: it stacks with the end region's content.
         let across_h = if in_end { 0.0 } else { footer_h };
         let end_h = sizes.end.map_or(0.0, |end| end.y) + if in_end { footer_h } else { 0.0 };
