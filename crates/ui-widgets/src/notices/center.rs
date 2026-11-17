@@ -117,9 +117,13 @@ impl NoticeCenter {
         NoticeCenter { window: WindowKey::main(), timeout: Some(toast::TIMEOUT) }
     }
 
-    /// Posts `notice` to the center's window in the running viewport; `None` when its dismiss key is in `silenced`.
+    /// Posts `notice` to the center's window in the running viewport; `None` when its dismiss key is in `silenced`, and
+    /// in a measuring run, which posts nothing and tracks nothing (the real run posts it).
     pub fn post(&self, ctx: &Context, notice: &PostedNotice, silenced: &[String]) -> Option<ToastId> {
         if notice.dismiss_key.as_ref().is_some_and(|key| silenced.contains(key)) {
+            return None;
+        }
+        if !crate::runtime::measure::effect(ctx, "notices::post") {
             return None;
         }
         let politeness = if notice.tone == Tone::Bad { Politeness::Assertive } else { Politeness::Polite };
