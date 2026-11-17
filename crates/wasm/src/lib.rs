@@ -1,5 +1,5 @@
 //! WebAssembly modules: validation, sections, imports, exports, functions with their signatures
-//! and names, memories, tables, globals, custom sections (names, producers, target features,
+//! and names, memories, tables, globals, tags, custom sections (names, producers, target features,
 //! source map URL) and a text (WAT) rendering. Built on the pure-Rust `wasmparser` and
 //! `wasmprinter` crates; never executes anything.
 
@@ -83,6 +83,15 @@ pub struct WasmGlobal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WasmTag {
+    /// Index in the tag index space (imports first).
+    pub index: u32,
+    pub type_index: u32,
+    pub signature: String,
+    pub imported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WasmCustom {
     pub name: String,
     pub offset: u64,
@@ -127,6 +136,7 @@ pub struct WasmReport {
     pub memories: Vec<WasmMemory>,
     pub tables: Vec<WasmTable>,
     pub globals: Vec<WasmGlobal>,
+    pub tags: Vec<WasmTag>,
     pub start_function: Option<u32>,
     pub data_segments: u32,
     pub element_segments: u32,
@@ -236,6 +246,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
         memories: Vec::new(),
         tables: Vec::new(),
         globals: Vec::new(),
+        tags: Vec::new(),
         start_function: None,
         data_segments: 0,
         element_segments: 0,
@@ -255,6 +266,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
     let mut imported_tables = 0u32;
     let mut imported_memories = 0u32;
     let mut imported_globals = 0u32;
+    let mut imported_tags = 0u32;
     let mut code_index = 0u32;
     let type_sig = |types: &[Option<FuncType>], t: u32| -> String {
         match types.get(t as usize) {
@@ -354,7 +366,16 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                                 imported_globals = imported_globals.saturating_add(1);
                                 ("global", None, format!("{}{}", if g.mutable { "mut " } else { "" }, g.content_type))
                             }
-                            TypeRef::Tag(t) => ("tag", Some(t.func_type_idx), type_sig(&types, t.func_type_idx)),
+                            TypeRef::Tag(t) => {
+                                let keep_tag = cap(rep.tags.len(), &mut rep.truncated);
+                                let signature = if keep_tag || rep.imports.len() < MAX_ITEMS { type_sig(&types, t.func_type_idx) } else { String::new() };
+                                if keep_tag {
+                                    rep.tags.push(WasmTag { index: imported_tags, type_index: t.func_type_idx, signature: signature.clone(), imported: true });
+                                }
+                                // The import list and tag list are capped independently.
+                                imported_tags = imported_tags.saturating_add(1);
+                                ("tag", Some(t.func_type_idx), signature)
+                            }
                         };
                         if cap(rep.imports.len(), &mut rep.truncated) {
                             rep.imports.push(WasmImport { module: imp.module.to_string(), name: imp.name.to_string(), kind, type_index, signature });
@@ -397,6 +418,20 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                             maximum: m.maximum,
                             shared: m.shared,
                             memory64: m.memory64,
+                            imported: false,
+                        });
+                    }
+                }
+                Payload::TagSection(r) => {
+                    for (i, t) in r.into_iter().enumerate() {
+                        let t = t?;
+                        if !cap(rep.tags.len(), &mut rep.truncated) {
+                            break;
+                        }
+                        rep.tags.push(WasmTag {
+                            index: imported_tags.saturating_add(u32::try_from(i).unwrap_or(u32::MAX)),
+                            type_index: t.func_type_idx,
+                            signature: type_sig(&types, t.func_type_idx),
                             imported: false,
                         });
                     }
