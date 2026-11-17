@@ -33,7 +33,15 @@ fn arclen_within(seg: &PathSeg, accuracy: f64, limit: f64) -> Option<f64> {
         PathSeg::Quad(q) => ok(q.p0) && ok(q.p1) && ok(q.p2),
         PathSeg::Cubic(c) => ok(c.p0) && ok(c.p1) && ok(c.p2) && ok(c.p3),
     };
-    fits.then(|| kurbo::ParamCurveArclen::arclen(seg, accuracy))
+    if !fits {
+        return None;
+    }
+    // A quadratic whose three points are one has no length, and kurbo's `arclen` gives it NaN (a length that is not a number is not known,
+    // and so is not given as one: `None`).
+    if matches!(seg, PathSeg::Quad(q) if q.p0 == q.p1 && q.p1 == q.p2) {
+        return Some(0.0);
+    }
+    Some(kurbo::ParamCurveArclen::arclen(seg, accuracy)).filter(|len| len.is_finite())
 }
 
 /// The length of `path`, each cubic measured to `relative` of the length of its control polygon, or
@@ -722,6 +730,24 @@ mod tests {
             let exact = kurbo::Shape::perimeter(&ring, scale * 1e-12);
             assert!((len - exact).abs() < 1e-8 * exact, "scale {scale}: {len} against {exact}");
         }
+    }
+
+    /// A quadratic whose three control points are one point has no length, and kurbo's `arclen` gives it NaN: the perimeter of a line of 3 and such a
+    /// quadratic was `None`, which is the answer for a segment that cannot be measured, and the length of a point that is no number is a number too.
+    #[test]
+    fn a_quadratic_that_is_a_point_is_of_no_length_and_not_a_length_that_is_not_a_number() {
+        let point = |x: f64, y: f64| PathSeg::Quad(kurbo::QuadBez::new((x, y), (x, y), (x, y)));
+        for (x, y) in [(3.0, 0.0), (0.0, 0.0), (-2.5e7, 4e7), (1e-300, 0.0)] {
+            assert_eq!(measured_arclen(&point(x, y), 1e-9), Some(0.0), "({x}, {y})");
+        }
+        let mut path = kurbo::BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((3.0, 0.0));
+        path.quad_to((3.0, 0.0), (3.0, 0.0));
+        assert_eq!(measured_perimeter(&path, 1e-9), Some(3.0));
+        // A quadratic that goes out along a line and back (to 2 and from it, at the middle of its parameters) has the length it has.
+        let back = PathSeg::Quad(kurbo::QuadBez::new((0.0, 0.0), (4.0, 0.0), (0.0, 0.0)));
+        assert!(measured_arclen(&back, 1e-9).is_some_and(|l| (l - 4.0).abs() < 1e-6), "{:?}", measured_arclen(&back, 1e-9));
     }
 
     #[test]
