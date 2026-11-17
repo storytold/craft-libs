@@ -357,7 +357,7 @@ pub struct Mastering {
     scratch: [[f32; CHUNK]; 2],
     hp: Vec<OnePole>,
     lim_env: f32,
-    /// The reverb ran in the last block.
+    /// The reverb has run since it was last cleared.
     rev_on: bool,
     rev_amt: Smoothed,
     exc: Smoothed,
@@ -454,13 +454,8 @@ impl AudioEffect for Mastering {
         if nch == 0 {
             return;
         }
-        let loud = self.pv.v("loudness") > 0.0;
-        // The reverb runs until its amount has faded to 0, then starts from silence next time.
-        let use_rev = self.pv.v("reverb") > 0.0 || self.rev_amt.is_smoothing();
-        if self.rev_on && !use_rev {
-            self.rev.reset();
-        }
-        self.rev_on = use_rev;
+        let loud_on = self.pv.v("loudness") > 0.0;
+        let rev_param = self.pv.v("reverb") > 0.0;
         let mode = self.pv.idx("exciter_mode");
         let ahp = OnePole::alpha(3000.0, self.sr);
         let ceiling = db_to_gain(-0.3);
@@ -468,6 +463,9 @@ impl AudioEffect for Mastering {
         let mut start = 0;
         while start < n {
             let len = (n - start).min(CHUNK);
+            // The reverb runs until its amount has faded to 0.
+            let use_rev = rev_param || self.rev_amt.is_smoothing();
+            self.rev_on = use_rev;
             // EQ in place.
             for ch in 0..nch {
                 for v in channels[ch][start..start + len].iter_mut() {
@@ -487,6 +485,8 @@ impl AudioEffect for Mastering {
                 self.rev.process(&mut [&mut a[..len], &mut b[..len]]);
             }
             for i in 0..len {
+                // The maximizer stays in while its boost ramps back to 0 dB.
+                let loud = loud_on || self.boost.is_smoothing();
                 let (ra, ex, w, boost, out) = (self.rev_amt.tick(), self.exc.tick(), self.width.tick(), self.boost.tick(), self.out.tick());
                 let j = start + i;
                 for ch in 0..nch {
@@ -527,10 +527,17 @@ impl AudioEffect for Mastering {
                     for c in channels[..nch].iter_mut() {
                         c[j] = soft_clip(c[j] * g, ceiling);
                     }
+                } else {
+                    self.lim_env = 0.0;
                 }
                 for c in channels[..nch].iter_mut() {
                     c[j] *= out;
                 }
+            }
+            // Once the fade has ended, the next use of the reverb starts from silence.
+            if self.rev_on && !rev_param && !self.rev_amt.is_smoothing() {
+                self.rev.reset();
+                self.rev_on = false;
             }
             start += len;
         }

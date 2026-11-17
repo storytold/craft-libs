@@ -56,6 +56,8 @@ pub struct DynamicsRack {
     /// Cached coefficients.
     c: [f32; 8],
     hold: u32,
+    /// Deepest gain reduction of the sections in the last block (dB, ≥ 0).
+    gr_meter: f32,
 }
 
 impl DynamicsRack {
@@ -96,6 +98,7 @@ impl DynamicsRack {
             out: Smoothed::with_ms(1.0, sample_rate, 20.0),
             c: [0.0; 8],
             hold: 0,
+            gr_meter: 0.0,
         };
         s.apply_params(true);
         s
@@ -171,9 +174,16 @@ impl AudioEffect for DynamicsRack {
         self.lim_env = 0.0;
         self.makeup.snap();
         self.out.snap();
+        self.gr_meter = 0.0;
+    }
+    /// The deepest gain reduction of the gate, expander, compressor and limiter together during
+    /// the last block, in dB (≥ 0), without the make-up gain.
+    fn gain_reduction_db(&self) -> f32 {
+        self.gr_meter
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
+        let mut deepest = 0.0f32;
         let p = &self.pv;
         let (gate_on, gt) = (p.on("gate_on"), p.v("gate_threshold"));
         let (exp_on, et, er) = (p.on("exp_on"), p.v("exp_threshold"), p.v("exp_ratio"));
@@ -224,6 +234,7 @@ impl AudioEffect for DynamicsRack {
                 }
                 g += self.lim_env;
             }
+            deepest = deepest.min(g - makeup);
             let gain = db_to_gain(g);
             let o = self.out.tick();
             for ch in channels.iter_mut() {
@@ -233,6 +244,9 @@ impl AudioEffect for DynamicsRack {
                 }
                 ch[i] = y * o;
             }
+        }
+        if n > 0 {
+            self.gr_meter = -deepest;
         }
     }
 }
@@ -345,6 +359,8 @@ pub struct MultibandCompressor {
     counter: u32,
     /// The crossovers were last designed during a ramp, so the end of the ramp needs a design.
     xo_pending: bool,
+    /// Deepest gain reduction of a band plus the limiter in the last block (dB, ≥ 0).
+    gr_meter: f32,
 }
 
 const Q_BW: f64 = std::f64::consts::FRAC_1_SQRT_2;
@@ -370,6 +386,7 @@ impl MultibandCompressor {
             lim_rel: 0.0,
             counter: 0,
             xo_pending: false,
+            gr_meter: 0.0,
         };
         s.apply_params(true);
         s
@@ -462,10 +479,17 @@ impl AudioEffect for MultibandCompressor {
         self.env.iter_mut().for_each(|e| *e = [0.0; MB_BANDS]);
         self.lim_env = 0.0;
         self.counter = 0;
+        self.gr_meter = 0.0;
+    }
+    /// The deepest gain reduction of the most reduced band plus the limiter during the last
+    /// block, in dB (≥ 0).
+    fn gain_reduction_db(&self) -> f32 {
+        self.gr_meter
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
         let nch = channels.len().min(self.state.len());
+        let mut deepest = 0.0f32;
         let link = self.pv.on("link");
         let lim_on = self.pv.on("lim_on");
         let lt = self.pv.v("lim_threshold");
@@ -501,6 +525,7 @@ impl AudioEffect for MultibandCompressor {
             }
             // Detection (per band; linked = loudest channel drives all).
             let mut gains = [[1.0f32; MB_BANDS]; MB_MAX_CH];
+            let mut band_red = 0.0f32;
             for b in 0..MB_BANDS {
                 if byp[b] {
                     continue;
@@ -510,6 +535,7 @@ impl AudioEffect for MultibandCompressor {
                     let l = lin_db(peak);
                     let target = compressor_curve(l, thr[b], ratio[b], 0.0) - l;
                     smooth(&mut self.env[0][b], target, self.att[b], self.rel[b]);
+                    band_red = band_red.min(self.env[0][b]);
                     let g = db_to_gain(self.env[0][b]);
                     for gc in gains.iter_mut().take(nch.min(MB_MAX_CH)) {
                         gc[b] = g;
@@ -519,6 +545,7 @@ impl AudioEffect for MultibandCompressor {
                         let l = lin_db(bands[ch][b].abs() as f32);
                         let target = compressor_curve(l, thr[b], ratio[b], 0.0) - l;
                         smooth(&mut self.env[ch][b], target, self.att[b], self.rel[b]);
+                        band_red = band_red.min(self.env[ch][b]);
                         gains[ch][b] = db_to_gain(self.env[ch][b]);
                     }
                 }
@@ -543,10 +570,15 @@ impl AudioEffect for MultibandCompressor {
                 for y in ys.iter_mut().take(nch.min(MB_MAX_CH)) {
                     *y = (*y * g).clamp(-ceiling, ceiling);
                 }
+                band_red += self.lim_env;
             }
+            deepest = deepest.min(band_red);
             for ch in 0..nch.min(MB_MAX_CH) {
                 channels[ch][i] = ys[ch];
             }
+        }
+        if n > 0 {
+            self.gr_meter = -deepest;
         }
     }
 }
@@ -565,6 +597,8 @@ pub struct TubeCompressor {
     rel: f32,
     rms_c: f32,
     out: Smoothed,
+    /// Deepest gain reduction in the last block (dB, ≥ 0).
+    gr_meter: f32,
 }
 
 const TUBE_K: f32 = 0.5;
@@ -591,6 +625,7 @@ impl TubeCompressor {
             rel: 0.0,
             rms_c: coef(5.0, sample_rate),
             out: Smoothed::with_ms(1.0, sample_rate, 20.0),
+            gr_meter: 0.0,
         };
         s.apply_params(true);
         s
@@ -616,9 +651,15 @@ impl AudioEffect for TubeCompressor {
         self.env = 0.0;
         self.slow = 0.0;
         self.out.snap();
+        self.gr_meter = 0.0;
+    }
+    /// The deepest gain reduction during the last block, in dB (≥ 0).
+    fn gain_reduction_db(&self) -> f32 {
+        self.gr_meter
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
+        let mut deepest = 0.0f32;
         let (t, r) = (self.pv.v("threshold"), self.pv.v("ratio"));
         let slow_c = coef(1500.0, self.sr);
         for i in 0..n {
@@ -636,12 +677,16 @@ impl AudioEffect for TubeCompressor {
             }
             let rel = self.rel + (self.slow / -20.0).clamp(0.0, 1.0) * (1.0 - self.rel) * 0.5;
             smooth(&mut self.env, target, self.att, rel.min(0.999_999));
+            deepest = deepest.min(self.env);
             let g = db_to_gain(self.env);
             let o = self.out.tick();
             for buf in channels.iter_mut() {
                 let y = buf[i] * g;
                 buf[i] = (TUBE_K * y).tanh() / TUBE_K * o;
             }
+        }
+        if n > 0 {
+            self.gr_meter = -deepest;
         }
     }
 }

@@ -464,14 +464,45 @@ fn mastering_reverb_fades_out_and_restarts_from_silence() {
     let quiet = vec![0.0f32; SR as usize / 200];
     let (fade, _) = run(e.as_mut(), &quiet, &quiet);
     assert!(fade.iter().any(|v| v.abs() > 1e-4), "the reverb stopped at once instead of fading");
+    // One call that runs past the end of the fade clears the reverb.
     let rest = vec![0.0f32; SR as usize / 10];
-    run(e.as_mut(), &rest, &rest);
     run(e.as_mut(), &rest, &rest);
     assert_eq!(e.tail_samples(), 0);
     assert!(e.set_param("reverb", 100.0));
     let (again, _) = run(e.as_mut(), &rest, &rest);
     let peak = again.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     assert!(peak < 1e-6, "the old reverb came back at {peak}");
+}
+
+#[test]
+fn mastering_maximizer_ramps_out() {
+    let mut e = fx("mastering", &[("loudness", 100.0)]);
+    let x = vec![0.01f32; SR as usize / 10];
+    let (y, _) = run(e.as_mut(), &x, &x);
+    assert!((y[y.len() - 1] - 0.04).abs() < 1e-3, "{}", y[y.len() - 1]);
+    assert!(e.set_param("loudness", 0.0));
+    let (z, _) = run(e.as_mut(), &x, &x);
+    assert!(z[0] > 0.035, "the boost dropped at once: {}", z[0]);
+    assert!((z[z.len() - 1] - 0.01).abs() < 1e-4, "{}", z[z.len() - 1]);
+}
+
+#[test]
+fn dynamics_effects_report_gain_reduction() {
+    let n = SR as usize / 2;
+    let x = sine(1000.0, 0.5, SR as f64, n, 0.0);
+    for (id, params) in
+        [("dynamics_rack", &[("comp_threshold", -20.0), ("comp_ratio", 4.0)][..]), ("multiband_compressor", &[][..]), ("tube_compressor", &[][..])]
+    {
+        let mut e = fx(id, params);
+        run(e.as_mut(), &x, &x);
+        assert!(e.gain_reduction_db() > 3.0, "{id}: {}", e.gain_reduction_db());
+        e.reset();
+        assert_eq!(e.gain_reduction_db(), 0.0, "{id}");
+    }
+    // Make-up gain is not reduction.
+    let mut m = fx("dynamics_rack", &[("comp_ratio", 1.0), ("comp_makeup", 6.0)]);
+    run(m.as_mut(), &x, &x);
+    assert_eq!(m.gain_reduction_db(), 0.0);
 }
 
 #[test]
