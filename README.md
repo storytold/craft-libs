@@ -287,9 +287,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   stay in each app.
 - [`craft-mesh`](crates/mesh/README.md): 3D mesh file formats behind one neutral model (meshes
   of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY,
-  glTF 2.0 / GLB and 3MF, one feature each. Readers are bounded by `Limits`, never open a file themselves
-  glTF 2.0 / GLB and FBX, one feature each. Readers are bounded by `Limits`, never open a file themselves
-  and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
+  glTF 2.0 / GLB, FBX and 3MF, one feature each. Readers are bounded by `Limits`, never open a file
+  themselves and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
 - [`craft-midi`](crates/midi/README.md): Standard MIDI Files: a bounded reader for formats 0, 1 and
   2 and a format-1 writer, over a neutral model of notes and channel events in ticks at 960 per
   quarter note. From SoundCraft.
@@ -382,6 +381,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   nearest and bilinear sampling that repeats or clamps, resizing and display conversion. Sizes are
   bounded by `Limits`. From MaterialCraft.
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
+- [`craft-ai`](crates/ai/README.md) *(spec)*: AI provider abstraction — BYO API keys (OpenAI-compatible) and one-click curated local models with capability probing, resumable checksummed downloads, and document segmentation that protects markup while translating prose;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
 - [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read
   (legacy character sets, quoted-printable, labels and Apple label groups, `KEY` certificates and
