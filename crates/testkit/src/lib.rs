@@ -15,6 +15,16 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
+//! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
+//! polls a condition until it holds and fails the test when the limit passes first. Both read an
+//! optional limit variable that the caller names, `CRAFT_TEST_TIMEOUT_SECS` by default.
+//!
+//! [`hostile::mutations`] yields a fixed sequence of damaged copies of a valid seed, on every
+//! target. On targets other than `wasm32`, [`hostile::hammer`] runs a parser on the seed, every
+//! truncation of it and those copies, one after another on a worker thread with a time limit for
+//! each, and fails the test with the case that panicked or did not finish.
+//!
 //! With the `prop` feature, on targets other than `wasm32`, `prop::config` returns a proptest
 //! configuration with a pinned seed and failure persistence off. `PROPTEST_CASES` and
 //! `PROPTEST_RNG_SEED` override the case count and the seed.
@@ -29,10 +39,15 @@
 //! under foreign host environments. They are lightweight syntactic regression gates designed to complement,
 //! rather than replace, platform integration tests and CI execution.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod deadline;
 pub mod guards;
+pub mod hostile;
 #[cfg(all(feature = "prop", not(target_arch = "wasm32")))]
 pub mod prop;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use deadline::{DeadlineLimit, wait_until, with_deadline};
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
 #[cfg(not(target_arch = "wasm32"))]

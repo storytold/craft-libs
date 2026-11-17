@@ -292,7 +292,7 @@ fn test_predefined_quit_qualified_and_whitespace() {
 fn setup() {
     let q1 = muda::PredefinedMenuItem::quit(None);
     let q2 = PredefinedMenuItem :: quit(Some("Quit"));
-    let q3 = crate::menu::PredefinedMenuItem::Quit;
+    let q3 = ::muda::PredefinedMenuItem::Quit;
 }
 "#;
     let findings = predefined_quit([("src/menu.rs", source)]);
@@ -413,6 +413,320 @@ fn menu() {
 }
 
 #[test]
+fn predefined_quit_reports_a_qualified_path() {
+    let source = r#"
+use muda::PredefinedMenuItem as Item;
+fn menu() {
+    let a = <muda::PredefinedMenuItem>::quit(None);
+    let b = < PredefinedMenuItem >::quit(None);
+    let c = <Item>::quit(None);
+    let d = Vec::<PredefinedMenuItem>::quit(None);
+    let e = Wrapper<PredefinedMenuItem>::quit(None);
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![4, 5, 6]);
+}
+
+#[test]
+fn predefined_quit_ignores_another_crates_type_in_a_qualified_path() {
+    let source = r#"
+use other_menu::PredefinedMenuItem as Other;
+fn menu() {
+    let a = other_crate::PredefinedMenuItem::quit(None);
+    let b = <other_crate::PredefinedMenuItem>::quit(None);
+    let c = crate::menu::PredefinedMenuItem::Quit;
+    let d = other::muda::PredefinedMenuItem::quit(None);
+    let e = <T as Menu>::PredefinedMenuItem::quit(None);
+    let f = Other::quit(None);
+    let g = muda::PredefinedMenuItem::quit(None);
+    let h = <muda :: PredefinedMenuItem>::quit(None);
+    let i = PredefinedMenuItem::quit(None);
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![10, 11, 12]);
+}
+
+#[test]
+fn predefined_quit_ignores_a_muda_path_that_a_local_binding_of_muda_names() {
+    let source = r#"
+use other_menu as muda;
+fn menu() {
+    let a = muda::PredefinedMenuItem::quit(None);
+    let b = <muda::PredefinedMenuItem>::quit(None);
+    let c = ::muda::PredefinedMenuItem::quit(None);
+}
+mod inner {
+    use ::muda;
+    fn menu() { let d = muda::PredefinedMenuItem::quit(None); }
+}
+mod defined {
+    mod muda {}
+    fn menu() { let e = muda::PredefinedMenuItem::quit(None); }
+}
+mod gated {
+    #[cfg(unix)]
+    use other_menu as muda;
+    fn menu() { let f = muda::PredefinedMenuItem::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![6, 10, 19]);
+}
+
+#[test]
+fn predefined_quit_ignores_a_rename_through_a_local_binding_of_muda() {
+    let source = r#"
+use other_menu as muda;
+use muda::PredefinedMenuItem as Item;
+type Alias = muda::PredefinedMenuItem;
+fn menu() {
+    let a = Item::quit(None);
+    let b = Alias::quit(None);
+}
+mod absolute {
+    use other_menu as muda;
+    use ::muda::PredefinedMenuItem as Item;
+    type Alias = ::muda::PredefinedMenuItem;
+    use ::{muda::PredefinedMenuItem as Grouped};
+    fn menu() { let c = Item::quit(None); let d = Alias::quit(None); let e = Grouped::quit(None); }
+}
+mod crate_root {
+    use muda::PredefinedMenuItem as Item;
+    type Alias = muda::PredefinedMenuItem;
+    fn menu() { let f = Item::quit(None); let g = Alias::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![14, 19]);
+}
+
+#[test]
+fn predefined_quit_follows_a_name_that_the_muda_crate_is_imported_under() {
+    let source = r#"
+use muda as menu;
+fn menu_bar() {
+    let a = menu::PredefinedMenuItem::quit(None);
+    let b = <menu::PredefinedMenuItem>::quit(None);
+    let c = ::menu::PredefinedMenuItem::quit(None);
+}
+mod grouped {
+    use muda::{self as m};
+    fn menu_bar() { let d = m::PredefinedMenuItem::quit(None); }
+}
+mod renamed {
+    extern crate muda as native;
+    type Item = native::PredefinedMenuItem;
+    fn menu_bar() { let e = native::PredefinedMenuItem::quit(None); let f = Item::quit(None); }
+}
+mod imported {
+    use muda::{self as m};
+    use m::PredefinedMenuItem as Quit;
+    fn menu_bar() { let g = Quit::quit(None); }
+}
+mod unbound {
+    fn menu_bar() { let h = m::PredefinedMenuItem::quit(None); }
+}
+mod shadowed {
+    use other_menu as menu;
+    fn menu_bar() { let i = menu::PredefinedMenuItem::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![4, 5, 10, 15, 20]);
+}
+
+#[test]
+fn predefined_quit_reads_a_crate_name_in_an_import_where_the_import_is() {
+    let source = r#"
+mod native {
+    use muda as menu;
+    use menu::PredefinedMenuItem as Item;
+    type Alias = menu::PredefinedMenuItem;
+    fn menu_bar() { let a = Item::quit(None); let b = Alias::quit(None); }
+}
+mod other {
+    use other_menu as menu;
+    use menu::PredefinedMenuItem as Item;
+    type Alias = menu::PredefinedMenuItem;
+    fn menu_bar() { let c = Item::quit(None); let d = Alias::quit(None); }
+}
+mod external {
+    use muda as menu;
+    use ::menu::PredefinedMenuItem as Item;
+    type Alias = ::menu::PredefinedMenuItem;
+    fn menu_bar() { let e = Item::quit(None); let f = Alias::quit(None); }
+}
+mod grouped {
+    use muda as menu;
+    use {::menu::PredefinedMenuItem as Item};
+    fn menu_bar() { let g = Item::quit(None); }
+}
+mod shadowed {
+    use muda as menu;
+    fn menu_bar() {
+        extern crate other_menu as menu;
+        let h = menu::PredefinedMenuItem::quit(None);
+    }
+}
+mod renamed_module {
+    use other_menu as muda;
+    use muda as menu;
+    fn menu_bar() { let i = menu::PredefinedMenuItem::quit(None); }
+}
+mod renamed_crate {
+    mod muda {}
+    use ::muda as menu;
+    fn menu_bar() { let j = menu::PredefinedMenuItem::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![6, 40]);
+}
+
+#[test]
+fn predefined_quit_ignores_a_bare_name_that_another_import_or_a_local_type_binds_in_its_scope() {
+    let imported = r#"
+use other_menu::PredefinedMenuItem;
+fn menu() {
+    let a = PredefinedMenuItem::quit(None);
+    let b = muda::PredefinedMenuItem::quit(None);
+}
+"#;
+    let grouped = "use other_menu::{PredefinedMenuItem, Menu};\nfn menu() { let a = PredefinedMenuItem::quit(None); }\n";
+    let local = r#"
+struct PredefinedMenuItem;
+fn menu() {
+    let a = PredefinedMenuItem::quit(None);
+    let b = <PredefinedMenuItem>::quit(None);
+}
+"#;
+    let both = r#"
+use muda::PredefinedMenuItem;
+mod other { pub struct PredefinedMenuItem; }
+fn menu() {
+    let a = PredefinedMenuItem::quit(None);
+}
+"#;
+    let scoped = r#"
+use muda::*;
+mod other {
+    use other_menu::PredefinedMenuItem;
+    fn menu() { let a = PredefinedMenuItem::quit(None); }
+}
+mod local { struct PredefinedMenuItem; fn menu() { let b = PredefinedMenuItem::quit(None); } }
+fn menu() {
+    let c = PredefinedMenuItem::quit(None);
+    { use other_menu::PredefinedMenuItem; let d = PredefinedMenuItem::quit(None); }
+    let e = PredefinedMenuItem::quit(None);
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/imported.rs", imported)])), vec![5]);
+    assert!(predefined_quit([("src/grouped.rs", grouped)]).is_empty());
+    assert!(predefined_quit([("src/local.rs", local)]).is_empty());
+    assert_eq!(lines(&predefined_quit([("src/both.rs", both)])), vec![5]);
+    assert_eq!(lines(&predefined_quit([("src/scoped.rs", scoped)])), vec![9, 11]);
+    let child = r#"
+use other_menu::PredefinedMenuItem;
+mod child {
+    use muda::*;
+    fn menu() { let a = PredefinedMenuItem::quit(None); }
+}
+fn menu() { let b = PredefinedMenuItem::quit(None); }
+"#;
+    assert_eq!(lines(&predefined_quit([("src/child.rs", child)])), vec![5]);
+    let renamed = r#"
+mod a {
+    use muda::PredefinedMenuItem as Item;
+    fn menu() { let a = Item::quit(None); }
+}
+mod b {
+    struct Item;
+    fn menu() { let b = Item::quit(None); }
+}
+mod c { fn menu() { let c = Item::quit(None); } }
+mod d { type Quit = muda::PredefinedMenuItem; fn menu() { let d = Quit::quit(None); } }
+"#;
+    assert_eq!(lines(&predefined_quit([("src/renamed.rs", renamed)])), vec![4, 11]);
+    let aliased_or_gated = r#"
+mod alias {
+    type PredefinedMenuItem = ::muda::PredefinedMenuItem;
+    fn menu() { let a = PredefinedMenuItem::quit(None); }
+}
+mod gated {
+    use muda::*;
+    #[cfg(windows)]
+    struct PredefinedMenuItem;
+    #[cfg(windows)] use other_menu::PredefinedMenuItem;
+    fn menu() { let b = PredefinedMenuItem::quit(None); }
+}
+mod other { type PredefinedMenuItem = other_menu::PredefinedMenuItem; fn menu() { let c = PredefinedMenuItem::quit(None); } }
+mod assoc {
+    use muda::PredefinedMenuItem;
+    trait Menu { type PredefinedMenuItem; fn menu() { let d = PredefinedMenuItem::quit(None); } }
+    #[allow(dead_code)] unsafe impl<const N: usize> Menu for Wrap<{ N }> {
+        fn menu() { let e = PredefinedMenuItem::quit(None); }
+        type PredefinedMenuItem = u8;
+    }
+}
+mod reexported {
+    use crate::PredefinedMenuItem;
+    fn menu() { let f = PredefinedMenuItem::quit(None); }
+    mod inner { use super::super::{self as up, PredefinedMenuItem}; fn menu() { let g = PredefinedMenuItem::quit(None); } }
+    mod aliased { type PredefinedMenuItem = crate::menu::PredefinedMenuItem; fn menu() { let h = PredefinedMenuItem::quit(None); } }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/aliased.rs", aliased_or_gated)])), vec![4, 11, 16, 18, 24, 25, 26]);
+}
+
+#[test]
+fn std_instant_reads_a_std_time_alias_only_in_its_scope() {
+    let source = r#"
+mod native {
+    use std::time as clock;
+    fn now() { let a = clock::Instant::now(); }
+    use clock::Instant as A;
+}
+mod web {
+    use web_time as clock;
+    fn now() { let b = clock::Instant::now(); }
+    use clock::Instant as B;
+    use {clock::*, std::time::*};
+}
+mod child { fn now() { let c = clock::Instant::now(); } }
+fn run() {
+    use std::time as t;
+    let d = t::Instant::now();
+    { mod t {} let e = t::Instant::now(); }
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/lib.rs", source)])), vec![4, 5, 11, 16]);
+}
+
+#[test]
+fn std_instant_keeps_an_alias_that_a_cfg_gated_import_may_shadow() {
+    let source = r#"
+use std::time as clock;
+fn now() {
+    #[cfg(feature = "web-clock")]
+    use web_time as clock;
+    let a = clock::Instant::now();
+}
+fn gated() {
+    #[cfg(feature = "web-clock")]
+    mod clock {}
+    let b = clock::Instant::now();
+}
+#[cfg(feature = "web-clock")]
+fn web() {
+    use web_time as clock;
+    let c = clock::Instant::now();
+}
+fn wasm() {
+    #[cfg(target_arch = "wasm32")]
+    use web_time as clock;
+    let d = clock::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/lib.rs", source)])), vec![6, 11]);
+}
+
+#[test]
 fn std_instant_ignores_an_alias_that_only_a_native_cfg_imports() {
     let source = r#"
 #[cfg(not(target_arch = "wasm32"))]
@@ -471,6 +785,76 @@ fn unknown_os() { let t = std::time::Instant::now(); }
 use std::time::Instant as MacInstant;
 "#;
     assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![4, 13, 16, 19]);
+}
+
+#[test]
+fn std_instant_decodes_escapes_in_cfg_values() {
+    let source = r#"
+#[cfg(target_arch = "\x77asm32")]
+fn web() { let t = std::time::Instant::now(); }
+#[cfg(target_arch = "w\u{61}sm32")]
+fn web_two() { let t = std::time::Instant::now(); }
+#[cfg(target_arch = r"\x77asm32")]
+fn native() { let t = std::time::Instant::now(); }
+#[cfg(not(target_arch = "\q"))]
+fn unknown() { let t = std::time::Instant::now(); }
+#[cfg(target_os = "lin\
+    ux")]
+fn native_two() { let t = std::time::Instant::now(); }
+fn after() { let t = std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3, 5, 9, 13]);
+}
+
+#[test]
+fn std_instant_reads_cfg_true_and_false() {
+    let source = r#"
+#[cfg(false)]
+fn disabled() { let t = std::time::Instant::now(); }
+#[cfg(true)]
+fn enabled() { let t = std::time::Instant::now(); }
+#[cfg(not(true))]
+fn never() { let t = std::time::Instant::now(); }
+#[cfg(r#false)]
+fn named_option() { let t = std::time::Instant::now(); }
+#[cfg(not(r#true))]
+fn other_option() { let t = std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![5, 9, 11]);
+}
+
+#[test]
+fn std_instant_checks_an_item_whose_cfg_is_nested_past_the_limit() {
+    let source = format!(
+        "#[cfg({}target_arch = \"wasm32\"{})]\nfn web() {{ let t = std::time::Instant::now(); }}\n#[cfg({}unix{})]\nfn native() {{ let t = std::time::Instant::now(); }}\n",
+        "any(".repeat(65),
+        ")".repeat(65),
+        "all(".repeat(10),
+        ")".repeat(10),
+    );
+    assert_eq!(lines(&std_instant([("src/clock.rs", source.as_str())])), vec![2]);
+}
+
+#[test]
+fn std_instant_checks_the_fields_after_a_native_cfg_function_pointer_field() {
+    let source = r#"
+struct S {
+    #[cfg(unix)]
+    callback: fn(),
+    clock: std::time::Instant,
+    #[cfg(unix)]
+    native: fn() -> std::time::Instant,
+    #[cfg(unix)]
+    pub(crate) boxed: Box<dyn Fn()>,
+    other: std::time::Instant,
+}
+fn run() {
+    #[cfg(unix)]
+    'outer: loop { let _a = std::time::Instant::now(); }
+    let t = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![5, 10, 15]);
 }
 
 #[test]
@@ -567,6 +951,106 @@ fn run(x: Option<u32>) -> u64 {
 }
 
 #[test]
+fn std_instant_ends_a_native_cfg_if_let_at_its_body_not_at_a_struct_pattern() {
+    let source = r#"
+enum State { Ready { at: u64 }, Idle }
+fn run(state: State, other: State) {
+    #[cfg(unix)]
+    if let State::Ready { .. } = state { let _a = std::time::Instant::now(); }
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    while let State::Ready { at } = other { let _c = std::time::Instant::now(); }
+    let d = std::time::Instant::now();
+    #[cfg(unix)]
+    if let State::Idle = state { 0 } else if let State::Ready { at: 0..=9 } = state { let _e = std::time::Instant::now(); } else { let _f = std::time::Instant::now(); }
+    let g = std::time::Instant::now();
+    #[cfg(unix)]
+    if let State::Ready { .. } = state && let State::Ready { at } = other { let _h = std::time::Instant::now(); }
+    let i = std::time::Instant::now();
+    #[cfg(unix)]
+    for State::Ready { at } in [state] { let _j = std::time::Instant::now(); }
+    let k = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![6, 9, 12, 15, 18]);
+}
+
+#[test]
+fn std_instant_ends_a_native_cfg_if_at_its_body_not_at_a_block_in_its_condition() {
+    let source = r#"
+fn run(ready: bool, items: Vec<u64>) {
+    #[cfg(unix)]
+    if { ready } { let _a = std::time::Instant::now(); }
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    while !{ ready } { let _c = std::time::Instant::now(); }
+    let d = std::time::Instant::now();
+    #[cfg(unix)]
+    if ready && unsafe { check() } { let _e = std::time::Instant::now(); }
+    let f = std::time::Instant::now();
+    #[cfg(unix)]
+    for item in { items } { let _g = std::time::Instant::now(); }
+    let h = std::time::Instant::now();
+    #[cfg(unix)]
+    match { 1 } { _ => { let _i = std::time::Instant::now(); } }
+    let j = std::time::Instant::now();
+    #[cfg(unix)]
+    if let true = { ready } { let _k = std::time::Instant::now(); }
+    let l = std::time::Instant::now();
+    #[cfg(unix)]
+    if loop { break ready } { let _m = std::time::Instant::now(); }
+    let n = std::time::Instant::now();
+    #[cfg(unix)]
+    if async move { ready }.await { let _o = std::time::Instant::now(); }
+    let p = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5, 8, 11, 14, 17, 20, 23, 26]);
+}
+
+#[test]
+fn std_instant_ends_a_native_cfg_let_else_and_match_with_struct_patterns_where_they_end() {
+    let source = r#"
+enum State { Ready { at: u64 }, Idle }
+fn run(state: State, other: State) -> u64 {
+    #[cfg(unix)]
+    let State::Ready { at } = state else { let _a = std::time::Instant::now(); return 0; };
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    match other { State::Ready { at } => { let _c = std::time::Instant::now(); } State::Idle => {} }
+    let d = std::time::Instant::now();
+    match state {
+        #[cfg(unix)]
+        State::Ready { at } => if let State::Ready { .. } = other { let _e = std::time::Instant::now(); },
+        _ => { let f = std::time::Instant::now(); }
+    }
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![6, 9, 13]);
+}
+
+#[test]
+fn std_instant_reads_raw_identifiers_as_names_not_keywords() {
+    let source = r#"
+fn run(r#let: bool, r#in: [u8; 1]) {
+    #[cfg(unix)]
+    if r#let { let _a = std::time::Instant::now(); }
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    for x in r#in { let _c = std::time::Instant::now(); }
+    let d = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5, 8]);
+
+    let lib = "#[cfg(unix)]\nmod r#match;\nmod r#loop;\n";
+    let native = "use std::time::Instant;\n";
+    let web = "use std::time::Instant;\n";
+    assert_eq!(finding_paths(&std_instant([("src/lib.rs", lib), ("src/match.rs", native), ("src/loop.rs", web)])), vec!["src/loop.rs"]);
+}
+
+#[test]
 fn std_instant_runs_a_native_cfg_async_block_statement_to_its_semicolon() {
     let source = r#"
 async fn run() {
@@ -590,6 +1074,47 @@ fn std_instant_checks_code_before_and_after_a_native_cfg_item_on_the_same_line()
 }
 ";
     assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![2, 4]);
+}
+
+#[test]
+fn std_instant_checks_an_item_after_a_native_cfg_item_on_the_same_line() {
+    let source = r#"#[cfg(target_os="linux")] fn native() {} fn web() { std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![1]);
+}
+
+#[test]
+fn std_instant_skips_gated_code_that_follows_a_native_cfg_item_on_the_same_line() {
+    let source = r#"#[cfg(target_os = "linux")] fn a() {} #[cfg(target_os = "macos")] fn b() { std::time::Instant::now(); }
+#[cfg(unix)] fn c() {} #[cfg(windows)] use std::time::Instant as Native;
+"#;
+    assert!(std_instant([("src/clock.rs", source)]).is_empty());
+}
+
+#[test]
+fn std_instant_ends_native_cfg_impl_mod_and_struct_items_where_they_end_on_the_line() {
+    let source = r#"struct S; #[cfg(unix)] impl S { fn now() { std::time::Instant::now(); } } fn web() { std::time::Instant::now(); }
+#[cfg(unix)] mod native { fn now() { std::time::Instant::now(); } } fn web_two() { std::time::Instant::now(); }
+#[cfg(unix)] struct P { at: std::time::Instant } struct Q { at: std::time::Instant }
+#[cfg(unix)] struct T(std::time::Instant); struct U(std::time::Instant);
+#[cfg(unix)] impl S { fn a() {} } #[cfg(unix)] mod m { fn b() { std::time::Instant::now(); } }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn std_instant_reads_blocks_in_generic_brackets_as_part_of_a_native_cfg_item_head() {
+    let source = r#"#[cfg(unix)] struct Native<const N: usize = { 1 + 2 }> { clock: std::time::Instant }
+#[cfg(unix)] enum E<const N: usize = { 3 }> { A(std::time::Instant) }
+#[cfg(unix)] trait Tr<const N: usize = { 1 }>: Sized where Self: Into<W<{ 2 }>> { fn now() -> std::time::Instant { std::time::Instant::now() } }
+#[cfg(unix)] impl<const N: usize> Tr<{ N }> for Native<{ N }> { fn now() -> std::time::Instant { std::time::Instant::now() } }
+#[cfg(unix)] fn native<T>() -> W<{ 1 + 1 }> where T: Into<W<{ 2 }>> { std::time::Instant::now(); W }
+#[cfg(unix)] fn arrow<F: Fn() -> u8>(f: F) -> impl Fn() -> W<{ 3 }> where F: Copy { let _t = std::time::Instant::now(); f }
+struct Web<const N: usize = { 1 }> { clock: std::time::Instant }
+fn web() -> W<{ 1 }> where u8: Into<W<{ 2 }>> { std::time::Instant::now(); W }
+#[cfg(unix)] struct A<const N: usize = { 1 }> { a: std::time::Instant } fn after() { std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![7, 8, 9]);
 }
 
 #[test]
@@ -721,6 +1246,12 @@ use std::time::{
 }
 
 #[test]
+fn std_instant_reads_a_use_after_a_precise_capturing_bound() {
+    let source = "fn clock() -> impl Fn() + use<> {\n    use std::{time::Instant};\n    || { let _ = Instant::now(); }\n}\n";
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![2]);
+}
+
+#[test]
 fn std_instant_does_not_count_brace_character_literals_as_braces() {
     let source = r#"
 #[cfg(unix)]
@@ -753,6 +1284,140 @@ fn deeply_nested_use_groups_and_cfg_predicates_do_not_exhaust_the_stack() {
 
     let shallow = "use std::time::{{{Instant}}};\n";
     assert_eq!(lines(&std_instant([("src/shallow.rs", shallow)])), vec![1]);
+}
+
+#[test]
+fn a_long_use_path_shared_by_many_names_is_read_without_copying_it_to_each() {
+    // 10,000 path segments shared by 10,000 names, followed by a `use` the guard reports.
+    let names: Vec<String> = (0..10_000).map(|n| format!("x{n}")).collect();
+    let source = format!("use {}{{{}}};\nuse std::time::Instant;\n", "a::".repeat(10_000), names.join(", "));
+    assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
+    assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
+}
+
+#[test]
+fn a_long_name_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
+    // A 40,000-byte name shared by 10,000 leaves, followed by a `use` the guard reports.
+    let source = format!("use {}::{{{}}};\nuse std::time::Instant;\n", "n".repeat(40_000), ["self"; 10_000].join(", "));
+    assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
+    assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
+}
+
+#[test]
+fn std_instant_reports_a_grouped_import_through_a_long_alias_of_std_time() {
+    let source = r#"
+use std::time as standard_time_module_with_a_long_name;
+use standard_time_module_with_a_long_name::{Instant as Clock};
+fn now() {
+    let _ = Clock::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3]);
+}
+
+#[test]
+fn std_instant_reports_a_glob_through_a_long_alias_of_std_time() {
+    let source = r#"
+use std::time as standard_time_module_with_a_long_name;
+use standard_time_module_with_a_long_name::*;
+use standard_time_module_with_a_long_name::{Duration, *};
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3, 4]);
+}
+
+#[test]
+fn std_instant_reports_a_path_of_nine_or_more_segments_that_starts_at_std_time() {
+    let source = r#"
+use std::time as standard_time_module_with_a_long_name;
+use std::time::Instant::a::b::c::d::e::f;
+use standard_time_module_with_a_long_name::Instant::a::b::c::d::e::f::g;
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3, 4]);
+}
+
+#[test]
+fn the_guards_read_an_absolute_path_after_a_return_arrow_or_a_match_arrow() {
+    let clock = r#"
+fn now() -> ::std::time::Instant {
+    match 0 { _ => ::std::time::Instant::now() }
+}
+fn closure() { let _ = || -> ::std::time::Instant { todo() }; }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", clock)])), vec![2, 3, 5]);
+
+    let menu = r#"
+fn item() -> Item {
+    match 0 { _ => ::muda::PredefinedMenuItem::quit(None) }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", menu)])), vec![3]);
+}
+
+#[test]
+fn a_long_alias_of_std_time_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
+    // A 40,000-byte alias of `std::time` shared by 10,000 leaves.
+    let alias = "n".repeat(40_000);
+    let source = format!("use std::time as {alias};\nuse {alias}::{{{}}};\n", ["Instant"; 10_000].join(", "));
+    assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
+}
+
+#[test]
+fn a_use_past_the_path_limits_still_binds_its_name() {
+    let segment = r#"
+use other_menu::MenuItemWithAnExceptionallyLongName as PredefinedMenuItem;
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    let length = r#"
+use a::b::c::d::e::f::g::h::Item as PredefinedMenuItem;
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    let shared = r#"
+use other_menu::MenuItemWithAnExceptionallyLongName::{self as PredefinedMenuItem};
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    assert!(predefined_quit([("src/menu.rs", segment), ("src/len.rs", length), ("src/shared.rs", shared)]).is_empty());
+
+    // A path into this crate past the limits may still be a re-export of muda's type.
+    let local = r#"
+use crate::module_with_an_exceptionally_long_name::PredefinedMenuItem;
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    assert_eq!(lines(&predefined_quit([("src/local.rs", local)])), vec![3]);
+
+    let clock = r#"
+use std::time as t;
+fn now() {
+    use other_clock::ClockModuleWithAnExceptionallyLongName as t;
+    let _ = t::Instant::now();
+}
+fn later() {
+    use other_clock::ClockModuleWithAnExceptionallyLongName::{self as t};
+    let _ = t::Instant::now();
+}
+fn web() { let _ = t::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", clock)])), vec![11]);
+}
+
+#[test]
+fn std_instant_reports_an_underscore_import_of_instant_in_a_group() {
+    let source = r#"
+use std::{time::Instant as _};
+use std::time::{Instant as _};
+use std::time::Instant as _;
+use std::time::{self as _};
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![2, 3, 4]);
+    assert!(predefined_quit([("src/menu.rs", "use muda::{PredefinedMenuItem as _};\nfn f() { _::quit(); }\n")]).is_empty());
+}
+
+#[test]
+fn std_instant_keeps_an_import_that_an_alias_in_a_nested_module_shares_a_name_with() {
+    let source = r#"
+mod unrelated { use ::std::time as std; }
+use std::{time::Instant};
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3]);
 }
 
 fn finding_paths(findings: &[Finding]) -> Vec<&str> {
@@ -888,6 +1553,39 @@ mod platform {
 }
 
 #[test]
+fn std_instant_finds_the_modules_of_a_path_attribute_file_next_to_it() {
+    let lib = r#"
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "platform/native.rs"]
+mod native;
+"#;
+    let clock = "use std::time::Instant;\n";
+    let files = [("src/lib.rs", lib), ("src/platform/native.rs", "mod clock;\n"), ("src/platform/clock.rs", clock), ("src/web.rs", clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/web.rs"]);
+}
+
+#[test]
+fn std_instant_resolves_a_file_loaded_both_plainly_and_by_path_attribute_once_for_each() {
+    // `platform.rs` is a web module, and a native-only `#[path]` declaration loads it again. Its
+    // `mod clock;` is `src/platform/clock.rs` for the first and `src/clock.rs` for the second.
+    let lib = "mod platform;\n#[cfg(unix)]\n#[path = \"platform.rs\"]\nmod native;\n";
+    let clock = "use std::time::Instant;\n";
+    let files = [("src/lib.rs", lib), ("src/platform.rs", "mod clock;\n"), ("src/platform/clock.rs", clock), ("src/clock.rs", clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/platform/clock.rs"]);
+}
+
+#[test]
+fn std_instant_checks_a_file_that_a_path_attribute_module_names_for_the_web_build() {
+    // The web module `entry.rs`, loaded through `#[path]`, names `src/clock.rs`, which a native-only
+    // module also names through `#[path]`.
+    let lib = "#[path = \"entry.rs\"]\nmod web;\n#[cfg(unix)]\nmod native;\n";
+    let clock = "use std::time::Instant;\n";
+    let files =
+        [("src/lib.rs", lib), ("src/entry.rs", "mod clock;\n"), ("src/native.rs", "#[path = \"clock.rs\"]\nmod clock;\n"), ("src/clock.rs", clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/clock.rs"]);
+}
+
+#[test]
 fn std_instant_checks_module_files_declared_deeper_than_its_nesting_limit() {
     let lib = format!("{}#[cfg(unix)]\nmod deep;\n{}", "mod m {\n".repeat(70), "}\n".repeat(70));
     let shallow_lib = format!("{}#[cfg(unix)]\nmod deep;\n{}", "mod m {\n".repeat(3), "}\n".repeat(3));
@@ -898,6 +1596,36 @@ fn std_instant_checks_module_files_declared_deeper_than_its_nesting_limit() {
     assert_eq!(finding_paths(&std_instant(files)), vec![deep_path.as_str()]);
     let files = [("src/lib.rs", shallow_lib.as_str()), (shallow_path.as_str(), clock)];
     assert!(std_instant(files).is_empty());
+}
+
+#[test]
+fn std_instant_checks_a_crate_root_that_a_disabled_declaration_names() {
+    let lib = r#"
+#[cfg(any())]
+#[path = "lib.rs"]
+mod never;
+
+fn web() {
+    std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/lib.rs", lib)])), vec![7]);
+
+    // A cycle of two files that only each other name, through declarations the web build leaves out.
+    let a = "#[cfg(unix)]\n#[path = \"b.rs\"]\nmod b;\nfn web() { std::time::Instant::now(); }\n";
+    let b = "#[cfg(unix)]\n#[path = \"a.rs\"]\nmod a;\n";
+    assert_eq!(finding_paths(&std_instant([("src/a.rs", a), ("src/b.rs", b)])), vec!["src/a.rs"]);
+
+    // In a cycle with `lib.rs`, only `lib.rs` is a crate root, so its native-only module stays out.
+    let lib = "#[cfg(unix)]\n#[path = \"a.rs\"]\nmod a;\nfn web() {}\n";
+    let a = "#[cfg(any())]\n#[path = \"lib.rs\"]\nmod root;\nuse std::time::Instant;\n";
+    assert!(std_instant([("src/lib.rs", lib), ("src/a.rs", a)]).is_empty());
+
+    // A cycle that a crate root reaches keeps its native-only member out.
+    let lib = "mod a;\n";
+    let a = "#[cfg(unix)]\nmod b;\n";
+    let b = "#[path = \"../a.rs\"]\nmod again;\nuse std::time::Instant;\n";
+    assert!(std_instant([("src/lib.rs", lib), ("src/a.rs", a), ("src/a/b.rs", b)]).is_empty());
 }
 
 #[test]
@@ -961,6 +1689,22 @@ fn wgsl_half_floats_use_the_f16_range() {
     assert_eq!(findings[0].text, "70000.0");
 }
 
+#[test]
+fn wgsl_line_comments_end_and_lines_count_at_every_line_break() {
+    let shader = "// note\rconst A: f32 = 4e38;\r\nconst B: f32 = 5e38;\n// x\u{2028}const C: f32 = 6e38;\u{2029}const D: f32 = 7e38;\u{000B}// y\u{0085}const E: f32 = 8e38;\u{000C}const F: f32 = 9e38;";
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![2, 3, 5, 6, 8, 9]);
+    assert_eq!(findings[0].text, "4e38");
+}
+
+#[test]
+fn wgsl_digits_inside_unicode_identifiers_are_not_literals() {
+    let shader = "const π1e39 = 1.0;\nconst é2e40: f32 = 2.0;\nconst A: f32 =\u{200E}1e39;\n";
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![3]);
+    assert_eq!(findings[0].text, "1e39");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn test_rust_sources_filtering() {
@@ -1005,6 +1749,43 @@ fn rust_sources_skips_build_output_folders_marked_with_cachedir_tag() {
     dir.write("notes/CACHEDIR.TAG", "not a cache tag\n");
     dir.write("notes/kept.rs", "pub fn kept() {}");
     let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_sources_does_not_read_a_cachedir_tag_through_a_symlink() {
+    let outside = ScratchDir::new("cachedir_link_target");
+    outside.write("CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55\n");
+    let dir = ScratchDir::new("cachedir_link");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    dir.write("linked/kept.rs", "pub fn kept() {}");
+    std::os::unix::fs::symlink(outside.path().join("CACHEDIR.TAG"), dir.path().join("linked").join("CACHEDIR.TAG")).expect("symlink marker");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_sources_does_not_open_a_cachedir_tag_fifo() {
+    let dir = ScratchDir::new("cachedir_fifo");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    dir.write("piped/kept.rs", "pub fn kept() {}");
+    let fifo = dir.path().join("piped").join("CACHEDIR.TAG");
+    match std::process::Command::new("mkfifo").arg(&fifo).status() {
+        Ok(status) if status.success() => {}
+        other => {
+            eprintln!("skipped: mkfifo is not available here ({other:?})");
+            return;
+        }
+    }
+    // Opening the FIFO for reading and writing does not wait for another end on Linux or macOS. The
+    // signature waits in the pipe, so a scan that opened the FIFO would read it and leave out `kept.rs`
+    // without blocking.
+    let mut pipe = std::fs::OpenOptions::new().read(true).write(true).open(&fifo).expect("open FIFO");
+    std::io::Write::write_all(&mut pipe, b"Signature: 8a477f597d28d172789f06886806bc55\n").expect("write signature");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    drop(pipe);
     assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
 }
 

@@ -34,6 +34,9 @@
 //! Input is treated as hostile: every header read is bounds-checked, the picture size is capped
 //! by [`Limits`] and the image data must be present in full before anything is allocated.
 
+/// RGBA8-to-10-bit DPX encoding.
+pub mod rgba8_dpx10;
+
 #[cfg(test)]
 mod tests;
 
