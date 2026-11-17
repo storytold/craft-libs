@@ -103,8 +103,8 @@ fn pictures_and_objects_are_counted_not_read() {
 }
 
 #[test]
-fn out_of_range_unicode_wraps_and_hyphens_are_text() {
-    assert_eq!(text(br"{\rtf1 a\u4294967361?b}"), "a\u{FFFF}b", "clamped to i32, then modulo 65536");
+fn invalid_unicode_and_hyphens_are_compatible() {
+    assert_eq!(text(br"{\rtf1 a\u4294967361?b}"), "ab", "out-of-range signed parameters are dropped");
     assert_eq!(text(br"{\rtf1\ansi Rock\emdash-roll, x\tab-y, a\li-720 b}"), "Rock\u{2014}-roll, x\t-y, ab");
     assert_eq!(text(br"{\rtf1 {\b A\'4}B}"), "AB");
     assert_eq!(text(br"{\rtf1 a\'+fb}"), "a+fb");
@@ -132,9 +132,15 @@ fn nul_is_not_text() {
 #[test]
 fn surrogate_pairs() {
     assert_eq!(text(br"{\rtf1\ansi\uc1 A\u-10179?\u-8704?B \u-10174?\u-8265?\u30000?}"), "A\u{1F600}B \u{20BB7}\u{7530}");
-    assert_eq!(text(br"{\rtf1 A\u-10179?B\u-8704?C}"), "A\u{FFFD}B\u{FFFD}C", "half a pair is U+FFFD, as in Word");
-    assert_eq!(text(br"{\rtf1 A\u-10179?\par\u-8704?C}"), "A\u{FFFD}\n\u{FFFD}C", "a pair does not span a paragraph end");
-    assert_eq!(text(br"{\rtf1 A\u-10179?}"), "A\u{FFFD}");
+    assert_eq!(text(br"{\rtf1 A\u-10179?B\u-8704?C}"), "ABC", "unpaired surrogates are dropped, as in the previous DesignCraft reader");
+    assert_eq!(text(br"{\rtf1 A\u-10179?\par\u-8704?C}"), "A\nC", "a pair does not span a paragraph end");
+    assert_eq!(text(br"{\rtf1 A\u-10179?}"), "A");
+}
+
+#[test]
+fn out_of_range_unicode_escapes_are_dropped() {
+    assert_eq!(text(br"{\rtf1 a\u4294967361?b}"), "ab");
+    assert_eq!(text(br"{\rtf1 a\u-4294967231?b}"), "ab");
 }
 
 #[test]

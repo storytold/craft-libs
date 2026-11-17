@@ -1,5 +1,5 @@
-//! Clean-room AVI demuxer, written from Microsoft's published AVI RIFF file reference and the
-//! OpenDML AVI File Format Extensions 1.02.
+//! Clean-room AVI demuxer and muxer ([`AviWriter`]), written from Microsoft's published AVI RIFF
+//! file reference and the OpenDML AVI File Format Extensions 1.02.
 //!
 //! [`open`] reads the `hdrl` header list (`avih`, and per stream `strh` / `strf` / `strn` /
 //! `indx`) of the first `RIFF AVI ` and builds a per-stream table of [`Chunk`]s from the best index
@@ -18,8 +18,13 @@
 
 #![warn(missing_docs)]
 
+mod mux;
+#[cfg(test)]
+mod mux_tests;
 #[cfg(test)]
 mod tests;
+
+pub use mux::{AudioSpec, AudioTiming, AviWriter, MuxOptions, StreamSpec, VideoSpec};
 
 pub use crate::source::{ByteSource, ReadSeekSource};
 

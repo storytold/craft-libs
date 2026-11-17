@@ -99,7 +99,8 @@ A picture is refused when the pictures the decoder would hold do not fit
 1 GiB on 32-bit targets): the DPB (the larger of its slots at the new size and what it holds
 now), the picture being decoded, and what is in flight or waiting in the output queue. Pictures
 already held count at their own size, and a buffer shared by the DPB and the queue counts once.
-The per-picture size cap applies as well.
+The default per-picture luma cap is 2^25 samples; applications with a different bounded frame
+policy can raise it with `Decoder::set_max_picture_luma_samples`.
 
 `configure_avcc` checks every entry of the record before it handles any: the first list holds
 SPS NAL units and the second PPS NAL units. A record that carries a picture slice is an error and

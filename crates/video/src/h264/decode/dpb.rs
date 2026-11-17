@@ -176,6 +176,7 @@ impl<F: Clone> Dpb<F> {
             return Ok(lists);
         }
         let cur_fn = sh.frame_num;
+        ensure!(max_frame_num > 0 && max_frame_num <= (1 << 16) && cur_fn < max_frame_num, "frame number out of range");
         let pic_num = |e: &DpbEntry<F>| Self::frame_num_wrap(e, cur_fn, max_frame_num);
         let short: Vec<&DpbEntry<F>> = self.entries.iter().filter(|e| e.mark == RefMark::Short).collect();
         let mut long: Vec<&DpbEntry<F>> = self.entries.iter().filter(|e| e.mark == RefMark::Long).collect();
@@ -212,6 +213,7 @@ impl<F: Clone> Dpb<F> {
                 let mut ref_idx = 0usize;
                 for m in &sh.ref_pic_list_mod[l] {
                     ensure!(ref_idx < n, "too many ref_pic_list_modification entries");
+                    ensure!(m.idc >= 2 || m.value < max_frame_num, "abs_diff_pic_num_minus1 out of range");
                     list.push(None); // temporarily one longer
                     let (target, is_long): (Option<&DpbEntry<F>>, bool) = match m.idc {
                         0 | 1 => {
@@ -272,13 +274,13 @@ impl<F: Clone> Dpb<F> {
     /// Adaptive memory control (8.2.5.4). Returns true if MMCO 5 was executed.
     fn apply_mmcos(&mut self, mmcos: &[Mmco], cur_frame_num: u32, max_frame_num: u32, cur_long: &mut Option<u32>) -> Result<bool> {
         let mut had5 = false;
-        let curr_pic_num = cur_frame_num as i32;
+        let curr_pic_num = i64::from(cur_frame_num);
         for m in mmcos {
             match m.op {
                 1 => {
-                    let pn = curr_pic_num - (m.difference_of_pic_nums_minus1 as i32 + 1);
+                    let pn = curr_pic_num - (i64::from(m.difference_of_pic_nums_minus1) + 1);
                     for e in &mut self.entries {
-                        if e.mark == RefMark::Short && Self::frame_num_wrap(e, cur_frame_num, max_frame_num) == pn {
+                        if e.mark == RefMark::Short && i64::from(Self::frame_num_wrap(e, cur_frame_num, max_frame_num)) == pn {
                             e.mark = RefMark::Unused;
                         }
                     }
@@ -295,14 +297,14 @@ impl<F: Clone> Dpb<F> {
                         self.max_long_term_frame_idx.is_some_and(|max| m.long_term_frame_idx <= max),
                         "MMCO long-term index exceeds the configured limit"
                     );
-                    let pn = curr_pic_num - (m.difference_of_pic_nums_minus1 as i32 + 1);
+                    let pn = curr_pic_num - (i64::from(m.difference_of_pic_nums_minus1) + 1);
                     for e in &mut self.entries {
                         if e.mark == RefMark::Long && e.long_term_frame_idx == m.long_term_frame_idx {
                             e.mark = RefMark::Unused;
                         }
                     }
                     for e in &mut self.entries {
-                        if e.mark == RefMark::Short && Self::frame_num_wrap(e, cur_frame_num, max_frame_num) == pn {
+                        if e.mark == RefMark::Short && i64::from(Self::frame_num_wrap(e, cur_frame_num, max_frame_num)) == pn {
                             e.mark = RefMark::Long;
                             e.long_term_frame_idx = m.long_term_frame_idx;
                         }
@@ -459,6 +461,83 @@ mod tests {
             sar: (1, 1),
             draft: false,
         })
+    }
+
+    fn reference_slice() -> SliceHeader {
+        SliceHeader {
+            nal_ref_idc: 1,
+            nal_unit_type: 1,
+            idr: false,
+            first_mb_in_slice: 0,
+            slice_type_raw: 0,
+            slice_type: SliceType::P,
+            pps_id: 0,
+            colour_plane_id: 0,
+            frame_num: 0,
+            field_pic: false,
+            bottom_field: false,
+            idr_pic_id: 0,
+            pic_order_cnt_lsb: 0,
+            delta_pic_order_cnt_bottom: 0,
+            delta_pic_order_cnt: [0; 2],
+            redundant_pic_cnt: 0,
+            direct_spatial_mv_pred: false,
+            num_ref_idx_active: [1, 0],
+            ref_pic_list_mod: [Vec::new(), Vec::new()],
+            pred_weight_table: None,
+            no_output_of_prior_pics: false,
+            long_term_reference: false,
+            adaptive_ref_pic_marking: false,
+            mmcos: Vec::new(),
+            cabac_init_idc: 0,
+            slice_qp_delta: 0,
+            sp_for_switch: false,
+            slice_qs_delta: 0,
+            disable_deblocking_filter_idc: 0,
+            slice_alpha_c0_offset_div2: 0,
+            slice_beta_offset_div2: 0,
+            slice_group_change_cycle: 0,
+            header_bits: 0,
+        }
+    }
+
+    #[test]
+    fn large_picture_number_differences_do_not_overflow() {
+        for op in [1, 3] {
+            for difference in [i32::MAX as u32, 1 << 31, u32::MAX] {
+                let mut dpb: Dpb<u32> = Dpb::new();
+                dpb.max_long_term_frame_idx = Some(0);
+                let op = Mmco {
+                    op,
+                    difference_of_pic_nums_minus1: difference,
+                    long_term_pic_num: 0,
+                    long_term_frame_idx: 0,
+                    max_long_term_frame_idx_plus1: 0,
+                };
+                assert!(dpb.apply_mmcos(&[op], 5, 16, &mut None).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_reference_list_differences_are_rejected() {
+        use crate::h264::decode::slice::RefPicListMod;
+        for idc in [0, 1] {
+            for value in [0, 15] {
+                let mut sh = reference_slice();
+                sh.frame_num = 5;
+                sh.ref_pic_list_mod[0].push(RefPicListMod { idc, value });
+                let dpb: Dpb<u32> = Dpb::new();
+                assert!(dpb.build_ref_lists(&sh, 0, 16, |entry| entry.frame).is_ok());
+            }
+            for value in [16, i32::MAX as u32, 1 << 31, u32::MAX] {
+                let mut sh = reference_slice();
+                sh.frame_num = 5;
+                sh.ref_pic_list_mod[0].push(RefPicListMod { idc, value });
+                let dpb: Dpb<u32> = Dpb::new();
+                assert!(dpb.build_ref_lists(&sh, 0, 16, |entry| entry.frame).is_err());
+            }
+        }
     }
 
     /// A huge frame_num jump must only materialise the frames the sliding window keeps (#2779).

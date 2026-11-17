@@ -1,0 +1,18 @@
+[package]
+name = "craft-designcraft-format"
+description = "Versioned DesignCraft document JSON codec and legacy migrations over craft-document-bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-document-bundle = { workspace = true }
+craft-eps = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

@@ -10,8 +10,11 @@
 //! - Colour filter layout: IFD#3 tag `0xc5e0` (`CR2CFAPattern` in the ExifTool EXIF tag-name docs): 1 = RGGB,
 //!   2 = BGGR, 3 = GBRG, 4 = GRBG, anchored at the top-left of the full decoded sensor (masked borders included).
 //!   It differs by model (e.g. 3 on the 50D/60D/7D/550D/5D Mark II, 1 on the 40D/5D Mark III/6D/5DS R), so it is
-//!   read per file (no model table); files without the tag fall back to RGGB (storytold/lightcraft#85). The parity of the
+//!   read per file first. Without a known tag, observed model IDs provide the fallback; scene-derived
+//!   measurements are not authoritative enough to establish sensor phase. The parity of the
 //!   `SensorInfo` borders does *not* predict it (RGGB files come with both even and odd top borders).
+//!   Header-only probes do not decode pixels for this fallback: without the tag their reported CFA
+//!   is assumed and can refine on full decode, as indicated by `RawNotices::assumed_cfa`.
 //! - `SensorInfo` (maker note `0x00e0`): sensor width/height and the left/top/right/bottom borders of the image
 //!   area. Light already reaches some columns left of that border (EOS 6D: masked columns 0–70, border 84; 10–36
 //!   such columns on every corpus body), so the masked columns that give the black level are measured from the
@@ -21,6 +24,12 @@
 //!   bytes (ColorData versions -3 and -4), which are paired up in the maker note's byte order first.
 //! - The same array lists the levels of the camera's white-balance presets, each with the colour temperature Canon
 //!   gives it ([`kelvin_presets_from_color_data`]): a Kelvin scale for a body without colour matrices.
+//! - `AspectInfo` (maker note `0x009a`, as in CR3: aspect code, width, height, left, top): the in-camera aspect
+//!   ratio (3:2, 4:3, 16:9, 1:1) is not applied to the sensor data, and the rectangle is measured from the top-left
+//!   of the `SensorInfo` image area. It becomes the default crop (storytold/lightcraft#3313). Checked on the CC0
+//!   PowerShot G12 and S120 files shot at 3:2 (3648 x 2432 at top 152 of a 3648 x 2736 area, 4000 x 2664 at top 168
+//!   of 4000 x 3000: centred) and a G16 shot at 4:3 (the whole area); files shot at the sensor's own aspect store
+//!   the whole area or no tag.
 //! - sRAW / mRAW (raw IFD tag `0xc6c5` = 4) hold subsampled YCbCr instead of a mosaic: see [`sraw`].
 
 mod sraw;
@@ -38,6 +47,7 @@ const SRAW_TYPE: u16 = 0xc6c5;
 /// `SRAW_TYPE` value of the YCbCr frames of sRAW / mRAW (IFD2's preview image carries 3).
 const SRAW_YCC: u32 = 4;
 const CR2_CFA_PATTERN: u16 = 0xc5e0;
+const CANON_MODEL_ID: u16 = 0x0010;
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_BALANCE: u16 = 0x4001;
 /// ShotInfo, whose value 7 is the white-balance setting.
@@ -59,6 +69,13 @@ fn cfa_from_tag(v: Option<u64>) -> Option<Cfa> {
         _ => return None,
     };
     Some(Cfa::bayer_static(name))
+}
+
+/// Fallback for files without CR2CFAPattern. Image content cannot establish sensor phase safely.
+fn fallback_cfa(_data: &[u16], _width: usize, _area: Rect, _black: f32, _white: f32, model: Option<u64>) -> (Cfa, bool) {
+    // Observed CC0 raw.pixls.us captures: 5D II, 7D, 550D, 600D and 1200D.
+    let green_first = [0x8000_0218, 0x8000_0250, 0x8000_0270, 0x8000_0286, 0x8000_0327].into_iter().any(|id| model == Some(id));
+    (Cfa::bayer_static(if green_first { "GBRG" } else { "RGGB" }), true)
 }
 
 /// The 16-bit words of a maker-note array. Canon writes `ColorData` as SHORT in most models, but as UNDEFINED
@@ -198,6 +215,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let chunk = craft_tiff::image::Chunk { index: 0, x: 0, y: 0, width: 0, height: 0, plane: 0, offset: off, len };
     let src = chunk_bytes(bytes, &chunk).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
     let (fw, fh, nc, prec) = ljpeg::frame_info(src)?;
+    let tagged_cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN));
     let frame = match mode {
         Mode::Full => {
             let total = (fw as u64)
@@ -261,20 +279,31 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let mn =
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
     let mut active = Rect::new(0, 0, width, height);
+    let mut crop = Rect::new(0, 0, width, height);
     if let Some(si) = mn.as_ref().and_then(|m| m.ifd.u64s(SENSOR_INFO)).filter(|v| v.len() >= 9) {
         let (l, tp, r, b) = (si[5] as usize, si[6] as usize, si[7] as usize, si[8] as usize);
         if r > l && b > tp && r < width && b < height {
             active = Rect::new(l, tp, r - l + 1, b - tp + 1);
+            // `AspectInfo` is measured from the image area's origin, so it only applies when that area is known.
+            let image = Rect::new(0, 0, active.width, active.height);
+            crop = crate::shared::aspect_crop(mn.as_ref().map(|m| &m.ifd), image).unwrap_or(image);
         }
     }
     let color_data = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order)));
     let kelvin_presets = color_data.as_deref().and_then(kelvin_presets_from_color_data);
     let wb = color_data.as_deref().and_then(wb_from_color_balance).or_else(|| wb_from_wb_info(mn.as_ref()?));
-    let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
     let (white, white_source) = white_from_data_sourced(&active_rows(&data, width, active), prec as u32);
     let (black, black_source) = match masked_columns(&data, width, active, white) {
         cols if cols.len() >= 2 => black_from_columns_sourced(&data, width, cols, active.y..active.y + active.height, active),
         _ => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
+    };
+    let model = mn.as_ref().and_then(|m| m.ifd.u64(CANON_MODEL_ID));
+    let (cfa, assumed_cfa) = match tagged_cfa {
+        Some(cfa) => (cfa, false),
+        None => {
+            let (cfa, guessed) = fallback_cfa(&data, width, active, black.mean(), white, model);
+            (cfa, guessed || mode == Mode::Header)
+        }
     };
     let img = RawImage {
         format: RawFormat::Cr2,
@@ -287,17 +316,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         black,
         white: vec![white],
         active_area: active,
-        crop: Rect::new(0, 0, active.width, active.height),
+        crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
         color: ColorData { kelvin_presets, ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: crate::LevelSources { black: black_source, white: white_source },
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -398,6 +429,112 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn absent_cfa_tag_uses_safe_phase_without_shifting_for_crop_parity() {
+        let (w, h) = (192usize, 96usize);
+        for red_row in [0usize, 1] {
+            let samples: Vec<u16> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let texture = ((x / 2 + y / 2) % 17) as u16;
+                    if i % 97 == 0 {
+                        return 13000;
+                    }
+                    100 + if (y & 1) == red_row {
+                        if x & 1 == 0 { 500 + texture } else { 1000 + texture }
+                    } else if x & 1 == 0 {
+                        1000 + texture
+                    } else {
+                        667 + texture
+                    }
+                })
+                .collect();
+            for (left, top) in [(16, 4), (17, 4), (16, 5), (17, 5)] {
+                let area = Rect::new(left, top, w - left, h - top);
+                let (cfa, assumed) = fallback_cfa(&samples, w, area, 100.0, 4000.0, None);
+                assert_eq!(cfa.name(), "RGGB");
+                assert!(assumed);
+            }
+            let mut bytes = synthetic_cr2_of(&samples, w, h, None, None);
+            let marker = [0xe0, 0xc5, 4, 0, 1, 0, 0, 0];
+            let at = bytes.windows(marker.len()).position(|b| b == marker).unwrap();
+            // The explicit tag remains authoritative even when the observed sensor phase disagrees.
+            bytes[at + 8..at + 12].copy_from_slice(&4u32.to_le_bytes());
+            let explicit = crate::decode(&bytes).unwrap();
+            assert_eq!(explicit.cfa.as_ref().unwrap().name(), "GRBG");
+            assert_eq!(explicit.info(), crate::probe_info(&bytes).unwrap());
+            assert!(!explicit.notices.assumed_cfa);
+            bytes[at..at + 2].copy_from_slice(&0xc5dfu16.to_le_bytes());
+            let full = crate::decode(&bytes).unwrap();
+            assert_eq!(full.cfa.as_ref().unwrap().name(), "RGGB");
+            assert!(full.notices.assumed_cfa);
+            let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
+            assert!(header.notices.assumed_cfa);
+            assert!(matches!(header.data, RawData::U16(ref v) if v.is_empty()));
+            assert_eq!(full.data, RawData::U16(samples));
+        }
+    }
+
+    #[test]
+    fn inconclusive_cfa_measurement_keeps_observed_model_fallback_and_safe_geometry() {
+        let data = vec![512; 64 * 32];
+        let area = Rect::new(0, 0, 64, 32);
+        assert_eq!(fallback_cfa(&data, 64, area, 512.0, 16000.0, Some(0x8000_0250)).0.name(), "GBRG");
+        assert!(fallback_cfa(&data, 64, area, 512.0, 16000.0, Some(0x8000_0250)).1);
+        assert_eq!(fallback_cfa(&data, 64, area, 512.0, 16000.0, None).0.name(), "RGGB");
+        assert!(fallback_cfa(&data, 64, area, 512.0, 16000.0, None).1);
+        let gradient: Vec<u16> = (0..192 * 96)
+            .map(|i| {
+                let (x, y) = (i % 192, i / 192);
+                if y % 2 == 0 {
+                    if x % 2 == 0 { 500 } else { 1000 + 8 * x as u16 }
+                } else if x % 2 == 0 {
+                    1000 + 8 * x as u16
+                } else {
+                    500
+                }
+            })
+            .collect();
+        let (cfa, assumed) = fallback_cfa(&gradient, 192, Rect::new(0, 0, 192, 96), 0.0, 4000.0, None);
+        assert_eq!(cfa.name(), "RGGB");
+        assert!(assumed);
+        let mut bytes = synthetic_cr2_of(&gradient, 192, 96, None, None);
+        let marker = [0xe0, 0xc5, 4, 0, 1, 0, 0, 0];
+        let at = bytes.windows(marker.len()).position(|b| b == marker).unwrap();
+        // Exercise the decoder's missing-tag fallback, not the fixture's default CFA tag.
+        bytes[at..at + 2].copy_from_slice(&0xc5dfu16.to_le_bytes());
+        let decoded = crate::decode(&bytes).unwrap();
+        assert_eq!(decoded.cfa.as_ref().unwrap().name(), "RGGB");
+        assert!(decoded.notices.assumed_cfa);
+    }
+
+    #[test]
+    fn model_cfa_fallback_is_disclosed_in_header_and_full_decodes() {
+        // A single inline LONG maker-note entry needs no external offsets.
+        let mut note = Vec::new();
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&CANON_MODEL_ID.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&0x8000_0250u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        let samples = vec![512u16; 64 * 32];
+        let mut bytes = synthetic_cr2_of(&samples, 64, 32, None, Some(note));
+        let marker = [0xe0, 0xc5, 4, 0, 1, 0, 0, 0];
+        let at = bytes.windows(marker.len()).position(|b| b == marker).unwrap();
+        // Remove only the CFA tag; the model ID and encoded samples stay intact.
+        bytes[at..at + 2].copy_from_slice(&0xc5dfu16.to_le_bytes());
+        let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
+        let full = decode(&bytes, Mode::Full, &Limits::default()).unwrap();
+        for image in [&header, &full] {
+            assert_eq!(image.cfa.as_ref().unwrap().name(), "GBRG");
+            assert!(image.notices.assumed_cfa);
+        }
+        assert_eq!(header.info(), full.info());
+        assert_eq!(full.data, RawData::U16(samples));
+        assert!(header.data.is_empty());
+    }
+
+    #[test]
     fn wb_probe() {
         let mut v = vec![0u64; 120];
         v[63..67].copy_from_slice(&[2000, 1024, 1026, 1500]);
@@ -477,11 +614,20 @@ pub(crate) mod tests {
     /// A maker note of `entries` (tag, TIFF type, value bytes), each value stored after the IFD, decoded; the value
     /// offsets (relative to the TIFF header) are patched once the note's position is known.
     fn decode_with_note(entries: &[(u16, u16, Vec<u8>)]) -> RawImage {
+        decode_sized_with_note(64, 10, entries)
+    }
+
+    /// [`decode_with_note`] with a `w` x `h` sensor.
+    fn decode_sized_with_note(w: usize, h: usize, entries: &[(u16, u16, Vec<u8>)]) -> RawImage {
         let ifd_len = 2 + 12 * entries.len() + 4;
         let (mut note, mut data, mut at) = (Vec::new(), Vec::new(), Vec::new());
         note.extend_from_slice(&(entries.len() as u16).to_le_bytes());
         for (tag, ty, value) in entries {
-            let count = if *ty == 3 { value.len() / 2 } else { value.len() } as u32;
+            let count = match ty {
+                3 => value.len() / 2,
+                4 => value.len() / 4,
+                _ => value.len(),
+            } as u32;
             note.extend_from_slice(&tag.to_le_bytes());
             note.extend_from_slice(&ty.to_le_bytes());
             note.extend_from_slice(&count.to_le_bytes());
@@ -491,7 +637,7 @@ pub(crate) mod tests {
         }
         note.extend_from_slice(&0u32.to_le_bytes());
         note.extend_from_slice(&data);
-        let (mut bytes, _) = synthetic_cr2_note(64, 10, None, Some(note));
+        let (mut bytes, _) = synthetic_cr2_note(w, h, None, Some(note));
         let tiff = Tiff::parse(&bytes).unwrap();
         let off = tiff.exif().unwrap().get(t::MAKER_NOTE).unwrap().offset as usize;
         for (field, value) in at {
@@ -638,5 +784,45 @@ pub(crate) mod tests {
         let r = crate::decode(&bytes).unwrap();
         assert_eq!(r.active_area, Rect::new(left, top, w - left, h - top));
         assert!((13300.0..=13433.0).contains(&r.white[0]), "{:?}", r.white);
+    }
+
+    /// A 68 x 50 sensor whose `SensorInfo` image area is the 64 x 48 (4:3) at (4, 2), with `aspect` as its
+    /// `AspectInfo` (LONG x 5), decoded.
+    fn decode_with_aspect(aspect: Option<[u32; 5]>) -> RawImage {
+        let si: Vec<u8> = [68u16, 50, 0, 0, 0, 4, 2, 67, 49].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut entries = vec![(SENSOR_INFO, 3, si)];
+        if let Some(a) = aspect {
+            entries.push((crate::shared::ASPECT_INFO, 4, a.iter().flat_map(|v| v.to_le_bytes()).collect()));
+        }
+        decode_sized_with_note(68, 50, &entries)
+    }
+
+    /// storytold/lightcraft#3313: a CR2 shot at 3:2 on a 4:3 sensor (PowerShot G12: `AspectInfo` 3648 x 2432 at
+    /// top 152 of the 3648 x 2736 image area) opens with that rectangle as its crop, as a CR3 does; the active
+    /// area is unchanged.
+    #[test]
+    fn aspect_info_replaces_the_crop() {
+        let image = decode_with_aspect(Some([0, 64, 42, 0, 3]));
+        assert_eq!(image.active_area, Rect::new(4, 2, 64, 48));
+        assert_eq!(image.crop, Rect::new(0, 3, 64, 42));
+        assert_eq!(image.info().developed_size(), (64, 42));
+        // 1:1 with a left offset
+        assert_eq!(decode_with_aspect(Some([1, 48, 48, 8, 0])).crop, Rect::new(8, 0, 48, 48));
+        // the whole image area, as stored for a shot at the sensor's own aspect (G16 at 4:3), or no tag: unchanged
+        for aspect in [Some([2, 64, 48, 0, 0]), None] {
+            assert_eq!(decode_with_aspect(aspect).crop, Rect::new(0, 0, 64, 48), "{aspect:?}");
+        }
+    }
+
+    /// Rectangles that don't fit the image area leave the crop alone and cannot overflow; without a usable
+    /// `SensorInfo` the origin `AspectInfo` is measured from is unknown, so it isn't applied either.
+    #[test]
+    fn aspect_info_that_does_not_fit_is_ignored() {
+        for bad in [[0, 65, 42, 0, 3], [0, 64, 42, 0, 7], [0, 64, 42, 1, 3], [0, 1, 42, 0, 0], [0, 64, 0, 0, 0], [0, u32::MAX, 42, 0, 0]] {
+            assert_eq!(decode_with_aspect(Some(bad)).crop, Rect::new(0, 0, 64, 48), "{bad:?}");
+        }
+        let aspect = [0u32, 32, 8, 0, 1].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let image = decode_with_note(&[(crate::shared::ASPECT_INFO, 4, aspect)]);
+        assert_eq!((image.active_area, image.crop), (Rect::new(0, 0, 64, 10), Rect::new(0, 0, 64, 10)));
     }
 }
