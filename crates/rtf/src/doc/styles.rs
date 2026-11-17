@@ -30,6 +30,7 @@ impl Reader {
             out.italic = out.italic.or(d.italic);
             out.size = out.size.or(d.size);
             out.font = out.font.or(d.font);
+            out.rtl = out.rtl.or(d.rtl);
             cur = d.based_on;
         }
         out
@@ -87,6 +88,8 @@ impl Reader {
     pub(super) fn para_props(&self, st: &St) -> Para {
         let mut p = Para::new(self.para_kind(st));
         p.align = st.align;
+        // Direct `\rtlpar`/`\ltrpar` wins over the style's direction.
+        p.rtl = st.rtldir.or_else(|| self.file_style(st.style).rtl).unwrap_or(false);
         p.page_break = st.pagebb;
         p.spacing = spacing(st);
         p.borders = st.borders.any_visible().then_some(st.borders);
@@ -135,6 +138,8 @@ pub(super) struct StyleDef {
     pub(super) size: Option<f32>,
     /// A `\fonttbl` index, named when it's used (the table may follow).
     pub(super) font: Option<i32>,
+    /// `\rtlpar` (`Some(true)`) or `\ltrpar`: the paragraph direction the style sets.
+    pub(super) rtl: Option<bool>,
 }
 
 /// Clear from `f` the formatting a paragraph of kind `kind` gets from its style, whose
@@ -203,6 +208,10 @@ pub(super) fn is_format_word(w: &str) -> bool {
             | "s"
             | "outlinelevel"
             | "pagebb"
+            | "rtlpar"
+            | "ltrpar"
+            | "rtldir"
+            | "ltrdir"
             | "intbl"
             | "ls"
             | "ilvl"

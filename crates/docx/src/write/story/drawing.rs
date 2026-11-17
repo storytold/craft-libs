@@ -69,9 +69,18 @@ impl Writer<'_> {
     }
 
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
-    /// its own `wps:cNvPr` with drawing id `id`.
-    pub(super) fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return };
+    /// its own `wps:cNvPr` with drawing id `id`. Returns where in `w` its `w:txbxContent` was
+    /// written, for a VML fallback to repeat.
+    pub(super) fn wsp(
+        &mut self,
+        w: &mut W,
+        o: &InlineObject,
+        id: Option<&str>,
+        off: (f32, f32),
+        rels: &mut PartRels,
+        depth: usize,
+    ) -> Option<std::ops::Range<usize>> {
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return None };
         // Taken first, so it never carries over to another shape (or one inside this box).
         let box_del = self.box_del.take();
         let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
@@ -119,16 +128,22 @@ impl Writer<'_> {
             ShapeKind::ArrowDown => "downArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
+            ShapeKind::Frame => "frame",
         };
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
             None => {
                 w.open("a:prstGeom", &[("prst", prst)]);
-                match extra.corner.filter(|_| *kind == ShapeKind::RoundedRectangle) {
-                    Some(c) => {
+                let adj = match kind {
+                    ShapeKind::RoundedRectangle => Some("adj"),
+                    ShapeKind::Frame => Some("adj1"),
+                    _ => None,
+                };
+                match adj.zip(extra.corner) {
+                    Some((name, c)) => {
                         w.open("a:avLst", &[]);
                         let fmla = format!("val {}", c.min(craft_wordmodel::connector::MAX_CORNER));
-                        w.empty("a:gd", &[("name", "adj"), ("fmla", &fmla)]);
+                        w.empty("a:gd", &[("name", name), ("fmla", &fmla)]);
                         w.close("a:avLst");
                     }
                     None => w.empty("a:avLst", &[]),
@@ -183,6 +198,7 @@ impl Writer<'_> {
         // its place in it instead.
         let part = (*story).and_then(|id| self.doc.parts.get(&id).filter(|p| p.kind == craft_wordmodel::PartKind::TextBox).map(|p| (id, p)));
         let link = part.and_then(|(id, _)| self.txbx_links.get(&id).copied());
+        let mut content = None;
         if let Some((n, seq)) = link.filter(|(_, seq)| *seq > 0) {
             w.empty("wps:linkedTxbx", &[("id", &n.to_string()), ("seq", &seq.to_string())]);
         } else if let Some((id, part)) = part
@@ -192,6 +208,7 @@ impl Writer<'_> {
                 Some((n, _)) => w.open("wps:txbx", &[("id", &n.to_string())]),
                 None => w.open("wps:txbx", &[]),
             }
+            let start = w.s.len();
             w.open("w:txbxContent", &[]);
             if self.written_boxes.insert(id) {
                 let blocks = match box_del {
@@ -203,6 +220,7 @@ impl Writer<'_> {
                 w.empty("w:p", &[]);
             }
             w.close("w:txbxContent");
+            content = Some(start..w.s.len());
             w.close("wps:txbx");
             self.boxes.leave();
         }
@@ -236,6 +254,7 @@ impl Writer<'_> {
             w.close("wps:bodyPr");
         }
         w.close("wps:wsp");
+        content
     }
 
     /// A `w:drawing` holding `graphic` (an `a:graphic`) in a frame of the object's size and place.
@@ -249,6 +268,17 @@ impl Writer<'_> {
         w.close("w:drawing");
     }
 
+    /// One order for an anchored object, shared by generated and retained drawings.
+    pub(in crate::write) fn drawing_order(&mut self, float: &Float) -> u32 {
+        let z = if float.z > 0 {
+            self.zmap.get(&float.z).copied().unwrap_or(float.z.saturating_sub(1))
+        } else {
+            self.z = self.z.saturating_add(1);
+            self.z
+        };
+        self.anchor_z = z;
+        z
+    }
     pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
         let DrawingInfo { float, size: (iw, ih), docpr, name, alt, link } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
@@ -257,9 +287,9 @@ impl Writer<'_> {
         } else {
             let d = emu(float.dist.clamp(0.0, 1584.0));
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
-            // The stacking order read from the file is kept; objects without one stack in
-            // document order above it.
-            self.z = if float.z > 0 { float.z } else { self.z.saturating_add(1) };
+            // A stacking order read from a file is kept (one less: see `Float::z`); objects made
+            // here go above those.
+            let z = self.drawing_order(float);
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",
@@ -269,7 +299,7 @@ impl Writer<'_> {
                     ("distL", &d),
                     ("distR", &d),
                     ("simplePos", "0"),
-                    ("relativeHeight", &self.z.to_string()),
+                    ("relativeHeight", &z.to_string()),
                     ("behindDoc", behind),
                     ("locked", "0"),
                     ("layoutInCell", if float.outside_cell { "0" } else { "1" }),
