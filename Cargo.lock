@@ -2456,6 +2456,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-palette"
+version = "0.1.0"
+
+[[package]]
 name = "craft-pcraft-bundle"
 version = "0.1.0"
 dependencies = [

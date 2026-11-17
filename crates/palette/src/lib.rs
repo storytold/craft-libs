@@ -62,3 +62,36 @@ pub fn parse_gpl(text: &str) -> Result<Palette, String> {
     }
     Ok(Palette { name, colors: out })
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_rgb_names_and_legacy_rows() {
+        let p = parse_gpl("\u{feff}GIMP Palette\r\nName: First\r\nName: Last\nColumns: 4\nChannels: RGB\n# comment\n255 0 128  Pink   ink\n256 0 0 invalid\n-1 2 3 invalid\n1 2 3 Untitled\n4 5 6\n").unwrap();
+        assert_eq!(p.name, "Last");
+        assert_eq!(
+            p.colors,
+            vec![
+                Color { name: "Pink ink".into(), rgb: [255, 0, 128] },
+                Color { name: "Untitled".into(), rgb: [1, 2, 3] },
+                Color { name: String::new(), rgb: [4, 5, 6] }
+            ]
+        );
+    }
+
+    #[test]
+    fn limits_and_empty_input() {
+        for text in ["", "not a palette", "GIMP Palette", "GIMP Palette\n256 0 0"] {
+            assert!(parse_gpl(text).is_err());
+        }
+        assert!(parse_gpl(&"x".repeat(MAX_BYTES + 1)).is_err());
+        let many = format!("GIMP Palette\n{}Name: ignored", "1 2 3 é\n".repeat(MAX_COLORS + 1));
+        let p = parse_gpl(&many).unwrap();
+        assert_eq!(p.colors.len(), MAX_COLORS);
+        assert!(p.name.is_empty());
+        assert_eq!(p.colors[0].name, "é");
+    }
+}

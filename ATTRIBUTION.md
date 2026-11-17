@@ -107,3 +107,7 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 ## Non-seeking WAV primitives
 
 `crates/audio/src/wav_stream.rs` is extracted from AniCraft `crates/audio/src/wav.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0). Tanish Manku is retained as the primary import author, from original commit `30c121d269a49d9abe54a3834ed4aa0201542535`. Odd-data padding accounting, shared API documentation and regression tests are subsequent Dylan M. Taylor changes.
+
+## GIMP palette reader
+
+`crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.
