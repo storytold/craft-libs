@@ -26,7 +26,10 @@ pub struct BlackPreserving {
     transform: Transform,
     /// Destination K for source K at `i / (K_SAMPLES - 1)`; `K_SAMPLES` values in `[0, 1]`.
     curve: Vec<f32>,
-    /// `curve` at the 256 8-bit source codes, already quantised.
+    /// Source K from which the source black is at least as dark as the destination's darkest:
+    /// mapped to exactly 1. Infinite when the destination's black is the darker.
+    saturate: f32,
+    /// The mapping at the 256 8-bit source codes, already quantised.
     curve8: [u8; 256],
 }
 
@@ -36,7 +39,8 @@ impl BlackPreserving {
     /// Errors with [`CmsError::InvalidArgument`] when either profile is not CMYK or the intent is
     /// absolute colorimetric (which reproduces the source's paper and black, so there is no
     /// black to map), and with [`CmsError::Unsupported`] when a profile's K-only ramp is not
-    /// monotonic (black that gets lighter as K rises has no equal-lightness inverse). Other errors
+    /// monotonic at its 1024 samples (black that gets lighter as K rises has no equal-lightness
+    /// inverse; a reversal between samples is not detected). Other errors
     /// are those of [`Transform::with_options`].
     pub fn new(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<BlackPreserving, CmsError> {
         if src.color_space != ColorSpace::Cmyk || dst.color_space != ColorSpace::Cmyk {
@@ -48,15 +52,12 @@ impl BlackPreserving {
         let transform = Transform::with_options(src, dst, opts)?;
         let src_l = k_ramp_lightness(src, opts)?;
         let dst_l = k_ramp_lightness(dst, opts)?;
-        let curve: Vec<f32> = src_l.iter().map(|&l| invert(&dst_l, l) as f32).collect();
-        if !curve.windows(2).all(|w| f64::from(w[0]) - f64::from(w[1]) <= MONOTONIC_EPS) {
-            return Err(CmsError::Unsupported("black preservation: the K mapping is not monotonic".into()));
-        }
+        let (curve, saturate) = k_curve(&src_l, &dst_l)?;
         let mut curve8 = [0u8; 256];
         for (code, slot) in curve8.iter_mut().enumerate() {
-            *slot = quantise(map(&curve, code as f32 / 255.0), 255.0) as u8;
+            *slot = quantise(map(&curve, saturate, code as f32 / 255.0), 255.0) as u8;
         }
-        Ok(BlackPreserving { transform, curve, curve8 })
+        Ok(BlackPreserving { transform, curve, saturate, curve8 })
     }
 
     /// The ordinary transform, which every colour with chromatic ink goes through. Converting with
@@ -67,7 +68,7 @@ impl BlackPreserving {
 
     /// Destination K for a black-only source colour of `k` (clamped to `[0, 1]`).
     pub fn map_k(&self, k: f32) -> f32 {
-        map(&self.curve, k)
+        map(&self.curve, self.saturate, k)
     }
 
     /// Exact evaluation of one colour; slices as in [`Transform::eval`].
@@ -125,6 +126,20 @@ impl BlackPreserving {
     }
 }
 
+/// The sampled mapping from the source to the destination K-only ramp, and the source K at
+/// which the destination's darkest black is reached (the `saturate` field).
+fn k_curve(src_l: &[f64], dst_l: &[f64]) -> Result<(Vec<f32>, f32), CmsError> {
+    let curve: Vec<f32> = src_l.iter().map(|&l| invert(dst_l, l) as f32).collect();
+    if !curve.windows(2).all(|w| f64::from(w[0]) - f64::from(w[1]) <= MONOTONIC_EPS) {
+        return Err(CmsError::Unsupported("black preservation: the K mapping is not monotonic".into()));
+    }
+    let saturate = match (src_l.last(), dst_l.last()) {
+        (Some(&s), Some(&d)) if s < d => invert(src_l, d) as f32,
+        _ => f32::INFINITY,
+    };
+    Ok((curve, saturate))
+}
+
 /// L* of `p`'s K-only ramp at `K_SAMPLES` points, light to dark; refused when it is not
 /// non-increasing.
 fn k_ramp_lightness(p: &Profile, opts: TransformOptions) -> Result<Vec<f64>, CmsError> {
@@ -166,10 +181,14 @@ fn invert(ramp: &[f64], target: f64) -> f64 {
     (lo as f64 + t) / (ramp.len() - 1) as f64
 }
 
-/// Linear interpolation in `curve` (samples over `[0, 1]`) at `k`, clamped.
-fn map(curve: &[f32], k: f32) -> f32 {
+/// Linear interpolation in `curve` (samples over `[0, 1]`) at `k`, clamped; 1 from `saturate`.
+fn map(curve: &[f32], saturate: f32, k: f32) -> f32 {
     let Some(&last) = curve.last() else { return 0.0 };
-    let x = if k.is_nan() { 0.0 } else { k.clamp(0.0, 1.0) } * (curve.len() - 1) as f32;
+    let k = if k.is_nan() { 0.0 } else { k.clamp(0.0, 1.0) };
+    if k >= saturate {
+        return 1.0;
+    }
+    let x = k * (curve.len() - 1) as f32;
     let i = x.floor() as usize;
     match (curve.get(i), curve.get(i + 1)) {
         (Some(&a), Some(&b)) => a + (b - a) * (x - i as f32),

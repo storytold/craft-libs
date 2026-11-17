@@ -129,5 +129,21 @@ fn refusals_and_hostile_values() {
     assert_eq!(invert(&[100.0, 0.0], 150.0), 0.0);
     assert_eq!(invert(&[100.0, 0.0], -5.0), 1.0);
     assert!((invert(&[100.0, 50.0, 0.0], 25.0) - 0.75).abs() < 1e-12);
-    assert_eq!(map(&[], 0.5), 0.0);
+    assert_eq!(map(&[], f32::INFINITY, 0.5), 0.0);
+}
+
+#[test]
+fn black_beyond_the_destination_maximum_maps_to_full_black_between_samples() {
+    // Source L* = 100 (1 - K), destination L* = 100 - 50 K: from K = 0.5 the source is darker
+    // than any destination black, and 0.5 falls between the 1024 samples.
+    let ramp = |f: fn(f64) -> f64| (0..K_SAMPLES).map(|i| f(i as f64 / (K_SAMPLES - 1) as f64)).collect::<Vec<_>>();
+    let (src, dst) = (ramp(|k| 100.0 * (1.0 - k)), ramp(|k| 100.0 - 50.0 * k));
+    let (curve, saturate) = k_curve(&src, &dst).unwrap();
+    assert!((saturate - 0.5).abs() < 1e-6, "{saturate}");
+    for k in [0.5001f32, 0.6, 1.0] {
+        assert_eq!(map(&curve, saturate, k), 1.0, "{k}");
+    }
+    assert!((map(&curve, saturate, 0.25) - 0.5).abs() < 1e-4);
+    let (_, never) = k_curve(&dst, &src).unwrap();
+    assert_eq!(never, f32::INFINITY, "a lighter source never saturates");
 }
