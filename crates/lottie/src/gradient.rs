@@ -29,6 +29,17 @@ impl Gradient {
         Some(Self { colors, opacities })
     }
 
+    /// Raw color groups (`position, r, g, b`), followed by all opacity pairs
+    /// (`position, alpha`), in input order. No rounding, clamping, or opacity elision.
+    ///
+    /// This allocation-free view lets callers fit or interpolate equal-sized animated
+    /// values before applying their own numeric policy. In particular, opaque alpha
+    /// stops remain present so an opaque frame can interpolate to a translucent one.
+    /// Non-finite values are preserved; callers must sanitize them before JSON output.
+    pub fn flat_values(&self) -> impl Iterator<Item = f64> + '_ {
+        self.colors.iter().flat_map(|(p, [r, g, b])| [*p, *r, *g, *b]).chain(self.opacities.iter().flat_map(|(p, a)| [*p, *a]))
+    }
+
     /// The flat list, rounded to six decimals. The alpha pairs are left out when every stop is
     /// opaque.
     pub fn to_flat(&self) -> Json {
@@ -44,3 +55,4 @@ impl Gradient {
         json!(out)
     }
 }
+
