@@ -45,11 +45,17 @@ struct Bed {
     shown: Shown,
 }
 
-/// `[1, 2]` beside `[3]`, under `[4]`, so their strips lie clear of the band along the layout's top edge, where a drop
-/// adds a full-width row.
+/// `[1, 2]` beside `[3]`.
+fn row() -> Node<usize> {
+    Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![1, 2], 0), Node::tabs(vec![3], 0))
+}
+
+/// The row under `[4]`.
 fn bed() -> Bed {
-    let row = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![1, 2], 0), Node::tabs(vec![3], 0));
-    let root = Node::split(Axis::Y, SplitSize::Ratio(0.3), Node::tabs(vec![4], 0), row);
+    bed_on(Node::split(Axis::Y, SplitSize::Ratio(0.3), Node::tabs(vec![4], 0), row()))
+}
+
+fn bed_on(root: Node<usize>) -> Bed {
     let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
     let shown: Shown = Rc::default();
     let (held, seen) = (Rc::clone(&workspace), Rc::clone(&shown));
@@ -127,4 +133,21 @@ fn a_tab_joining_a_group_marks_the_group_and_its_tab_line_and_a_reorder_marks_th
     let after = tab(&bed, 2);
     let mark = drop_tab(&mut bed, 3, Pos2::new(after.right() + 10.0, after.center().y));
     assert!(matches!(mark, DropMark::Line { .. }), "a reorder inside its own strip marks its line only: {mark:?}");
+}
+
+/// A strip along the layout's top edge takes tab joins: the band there, where a drop adds a full-width row, reaches
+/// into the strip only near the edge.
+#[trial]
+fn a_tab_dropped_on_a_strip_at_the_layouts_top_edge_joins_its_group_and_the_edge_still_takes_a_row() {
+    let mut bed = bed_on(row());
+    let target = tab(&bed, 3);
+    let mark = drop_tab(&mut bed, 2, Pos2::new(target.right() + 20.0, target.center().y));
+    assert!(matches!(mark, DropMark::Region { line: Some(_), .. }), "a drop on the top strip is a tab join: {mark:?}");
+    assert_eq!(group_rect(&bed, 2), group_rect(&bed, 3), "the tab joined the top-right group");
+
+    let area = group_rect(&bed, 1).union(group_rect(&bed, 3));
+    let mark = drop_tab(&mut bed, 1, Pos2::new(target.right() + 20.0, area.top() + 1.0));
+    let DropMark::Region { area: row, line: None, .. } = mark else { panic!("the top edge marks the row a drop adds: {mark:?}") };
+    assert!((row.width() - area.width()).abs() <= SLACK, "the edge drop takes the full width {area:?}: {row:?}");
+    assert!(group_rect(&bed, 1).width() >= area.width() - SLACK, "the panel went to a full-width row on top");
 }
