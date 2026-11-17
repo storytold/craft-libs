@@ -150,11 +150,8 @@ struct GridSizes {
 
 impl GridSizes {
     fn of(cx: &StyleCx<'_>, card: bool, rows: RowHeight) -> GridSizes {
-        let spacing = ArrangeSpacing::new(
-            if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack },
-            cx.tokens.space.gap.inline,
-            rows.of(cx),
-        );
+        let spacing =
+            ArrangeSpacing::new(if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack }, cx.tokens.space.gap.inline, rows.of(cx));
         GridSizes {
             card: cx.tokens.size.thumb.card,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
