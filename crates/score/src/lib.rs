@@ -474,4 +474,12 @@ mod tests {
         assert!(musicxml(&parts, &setup()).is_err());
         assert!(svg(&parts, &setup()).is_err());
     }
+    #[test]
+    fn spelling_and_staff_steps() {
+        assert_eq!(spell(60), ('C', 0, 4));
+        assert_eq!(spell(61), ('C', 1, 4));
+        assert_eq!(staff_step(64, false), 0); // E4: bottom treble line
+        assert_eq!(staff_step(77, false), 8); // F5: top treble line
+        assert_eq!(staff_step(43, true), 0); // G2: bottom bass line
+    }
 }
