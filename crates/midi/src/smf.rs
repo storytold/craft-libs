@@ -2,12 +2,14 @@
 
 use std::collections::VecDeque;
 
-use crate::{CtrlEvent, CtrlKind, MidiError, Note, PPQ, Sequence};
+use crate::{CtrlEvent, CtrlKind, MidiError, Note, PPQ, Sequence, SysExEvent};
 
 /// Maximum number of events (across all tracks) [`read_smf`] will parse.
 pub const MAX_EVENTS: usize = 5_000_000;
 /// Maximum number of track chunks [`read_smf`] will accept.
 pub const MAX_TRACKS: usize = 4096;
+/// Most retained SysEx payload bytes across one file, checked before copying hostile input.
+pub const MAX_SYSEX_BYTES: usize = 16 * 1024 * 1024;
 
 /// Release velocity used when a note ends with a note-on of velocity 0 (per the spec, a
 /// note-on with velocity 0 is a note-off with velocity 64).
@@ -190,7 +192,7 @@ pub const MAX_WARNINGS: usize = 32;
 ///   for where the track's events ended;
 /// - bytes that are no chunk are skipped up to the next `MTrk`, and trailing bytes are ignored;
 /// - past [`MAX_TRACKS`] tracks the rest is left out; this and the event limit set
-///   [`LenientRead::over_limit`];
+///   [`LenientRead::over_limit`], as does exceeding [`MAX_SYSEX_BYTES`];
 /// - lyrics are counted in a warning (they are not kept); a format-2 file gets a warning that its
 ///   tracks are read side by side.
 pub fn read_smf_lenient(bytes: &[u8]) -> Result<LenientRead, MidiError> {
@@ -210,7 +212,7 @@ pub struct LenientRead {
     pub instruments: Vec<String>,
     /// The last tick any track reaches: its End of Track, or where its events stop.
     pub end: i64,
-    /// Whether the file goes past [`MAX_EVENTS`] events or [`MAX_TRACKS`] tracks, so what lies past
+    /// Whether the file goes past [`MAX_EVENTS`], [`MAX_TRACKS`] or [`MAX_SYSEX_BYTES`], so what lies past
     /// the limit was left out. It is set even when the warnings are already full, so a caller that
     /// refuses such files (as [`read_smf`] does) can tell without reading the warnings.
     pub over_limit: bool,
@@ -268,6 +270,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
     let mut globals = Globals { tempos: Vec::new(), meters: Vec::new(), markers: Vec::new(), key_sigs: Vec::new() };
     let (mut tracks, mut instruments) = (Vec::new(), Vec::new());
     let mut event_budget = MAX_EVENTS;
+    let mut sysex_budget = MAX_SYSEX_BYTES;
     let (mut end, mut seen, mut lyrics) = (0i64, 0usize, 0usize);
     let mut over_limit = false;
 
@@ -323,13 +326,13 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
             warn(&mut warnings, format!("track {seen} is shorter than its length says"));
             cur.pos = bytes.len();
         }
-        let read = read_track(body, body_at, conv, &mut globals, &mut event_budget);
+        let read = read_track(body, body_at, conv, &mut globals, &mut event_budget, &mut sysex_budget);
         lyrics += read.lyrics;
         end = end.max(read.end);
         match read.stop {
             Some(e) if !lenient => return Err(e),
             Some(e) => {
-                over_limit |= matches!(e, MidiError::TooManyEvents(_));
+                over_limit |= matches!(e, MidiError::TooManyEvents(_) | MidiError::SysExTooLarge(_));
                 warn(&mut warnings, format!("track {seen} {}: what came before is kept", stop_reason(&e)));
             }
             None if !read.ended && lenient => warn(&mut warnings, format!("track {seen} has no End of Track: what came before is kept")),
@@ -361,7 +364,9 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
     let globals_present = !(globals.tempos.is_empty() && globals.meters.is_empty() && globals.markers.is_empty() && globals.key_sigs.is_empty());
     if format == 1
         && (tracks.len() > 1 || globals_present)
-        && tracks.first().is_some_and(|t| t.sequence.notes.is_empty() && t.sequence.ctrls.is_empty() && (tracks.len() > 1 || t.name.is_empty()))
+        && tracks.first().is_some_and(|t| {
+            t.sequence.notes.is_empty() && t.sequence.ctrls.is_empty() && t.sequence.sysex.is_empty() && (tracks.len() > 1 || t.name.is_empty())
+        })
     {
         tracks.remove(0);
         instruments.remove(0);
@@ -382,6 +387,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
 /// Why a track's events stopped, in words for a warning.
 fn stop_reason(e: &MidiError) -> &'static str {
     match e {
+        MidiError::SysExTooLarge(_) => "exceeds the retained SysEx payload limit",
         MidiError::TooManyEvents(_) => "holds more events than are read: the rest was left out",
         MidiError::Invalid { reason, .. } if reason.starts_with("data byte") || reason.starts_with("system") || reason.starts_with("status") => {
             "holds a byte that is no event"
@@ -428,10 +434,10 @@ struct TrackState {
     lyrics: usize,
 }
 
-fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget: &mut usize) -> TrackRead {
+fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget: &mut usize, sysex_budget: &mut usize) -> TrackRead {
     let mut cur = Cursor { data: body, pos: 0, base };
     let mut st = TrackState { name: None, instrument: None, seq: Sequence::default(), open: vec![VecDeque::new(); 16 * 128], tick: 0, lyrics: 0 };
-    let result = track_events(&mut cur, conv, g, budget, &mut st);
+    let result = track_events(&mut cur, conv, g, budget, sysex_budget, &mut st);
     let TrackState { name, instrument, mut seq, mut open, tick, lyrics } = st;
     // Close hanging notes at the end of the track (or where its events stopped).
     for (key, stack) in open.iter_mut().enumerate() {
@@ -452,7 +458,14 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
 }
 
 /// Reads a track's events; `Ok(true)` when an End of Track ends them, `Ok(false)` when the data does.
-fn track_events(cur: &mut Cursor, conv: TickConv, g: &mut Globals, budget: &mut usize, st: &mut TrackState) -> Result<bool, MidiError> {
+fn track_events(
+    cur: &mut Cursor,
+    conv: TickConv,
+    g: &mut Globals,
+    budget: &mut usize,
+    sysex_budget: &mut usize,
+    st: &mut TrackState,
+) -> Result<bool, MidiError> {
     let mut file_tick: u64 = 0;
     let mut running: Option<u8> = None;
 
@@ -522,7 +535,13 @@ fn track_events(cur: &mut Cursor, conv: TickConv, g: &mut Globals, budget: &mut 
             0xF0 | 0xF7 => {
                 running = None;
                 let len = cur.vlq()?;
-                cur.bytes(usize::try_from(len).unwrap_or(usize::MAX))?;
+                let len = usize::try_from(len).unwrap_or(usize::MAX);
+                if len > *sysex_budget {
+                    return Err(MidiError::SysExTooLarge(MAX_SYSEX_BYTES));
+                }
+                let data = cur.bytes(len)?.to_vec();
+                *sysex_budget -= len;
+                st.seq.sysex.push(SysExEvent { tick, status, data });
             }
             0x80..=0xEF => {
                 running = Some(status);
@@ -778,11 +797,18 @@ fn trim_overlaps(notes: &[Note], ends: &mut [u64], dropped: &mut [bool]) {
 /// Track 1 is a conductor track holding tempos, meters, key signatures and markers; every
 /// [`SmfTrack`] follows as its own track, with its name when it is not empty. Format 0 is one track holding all of that. Negative ticks are clamped to 0, data values are
 /// clamped to their MIDI ranges, and note-on velocity 0 is written as 1 (0 would mean
-/// note-off). At each tick note-offs are written before controllers, then note-ons.
+/// note-off). At each tick note-offs are written before SysEx packets, then controllers, then note-ons.
 ///
 /// Errors: invalid tempo (non-finite or <= 0 bpm), meter denominator that is not a power of two
 /// (1..=128), more than 65535 tracks, or a gap between events beyond the 28-bit delta limit.
 pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
+    let mut remaining = MAX_SYSEX_BYTES;
+    for event in smf.tracks.iter().flat_map(|t| &t.sequence.sysex) {
+        if !matches!(event.status, 0xF0 | 0xF7) {
+            return Err(MidiError::Write("SysEx status must be F0 or F7".into()));
+        }
+        remaining = remaining.checked_sub(event.data.len()).ok_or(MidiError::SysExTooLarge(MAX_SYSEX_BYTES))?;
+    }
     // The conductor track is omitted when there is nothing to put in it and no content tracks, so an
     // empty `Smf` is written as a file with zero tracks and reads back as zero tracks.
     let has_conductor =
@@ -838,6 +864,13 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
             };
             ev.push(WEvent { tick: clamp_tick(c.tick), order: 2, bytes });
         }
+        for event in &track.sequence.sysex {
+            let mut bytes = vec![event.status];
+            push_vlq(&mut bytes, event.data.len() as u64)?;
+            bytes.extend_from_slice(&event.data);
+            // Reset/setup packets precede same-tick controllers and note-ons, after note-offs.
+            ev.push(WEvent { tick: clamp_tick(event.tick), order: 1, bytes });
+        }
         if single {
             merged.extend(ev);
         } else {
@@ -851,8 +884,24 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
 }
 
 #[cfg(test)]
+// Test fixtures assert successful parses; production code keeps the crate's unwrap denial.
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_xg_reset_survives_an_smf_round_trip() {
+        let event = [0xF0, 8, 0x43, 0x10, 0x4C, 0, 0, 0x7E, 0, 0xF7];
+        let mut body = vec![0];
+        body.extend_from_slice(&event);
+        body.extend_from_slice(&[0, 0xFF, 0x2F, 0]);
+        let mut bytes = b"MThd\0\0\0\x06\0\0\0\x01\x03\xC0MTrk".to_vec();
+        bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&body);
+        let parsed = read_smf(&bytes).unwrap();
+        let written = write_smf(&parsed).unwrap();
+        assert!(written.windows(event.len()).any(|part| part == event), "the imported XG System On was discarded");
+    }
 
     #[test]
     fn vlq_round_trip() {
