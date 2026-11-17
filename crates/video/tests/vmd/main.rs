@@ -530,7 +530,9 @@ fn real_files_match_ffmpeg() {
             pictures += 1;
         }
         assert_eq!(theirs_out.read(&mut theirs).unwrap(), 0, "{name}: ffmpeg has more pictures");
-        child.wait().unwrap();
+        // pictures that match but an ffmpeg that failed are no comparison
+        let status = child.wait().unwrap();
+        assert!(status.success(), "{name}: ffmpeg exited with {status}");
     }
     println!("{} files, {pictures} pictures match ffmpeg", paths.len());
 }
