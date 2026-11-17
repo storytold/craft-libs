@@ -409,12 +409,13 @@ impl<'a> Parser<'a> {
             return;
         }
         if name == "def" {
-            // `\def\x#1{…}`: the macro name and its parameter text come before the body.
+            // `\def\x#1{…}`: the macro name and its parameter text come before the body. The
+            // parameter text runs to the first `{` and can hold commands, as in `\def\x#1\stop{…}`.
             self.skip_spaces();
             if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
                 self.pos += 1;
             }
-            while matches!(self.t.get(self.pos), Some(Tok::Text(_))) {
+            while matches!(self.t.get(self.pos), Some(Tok::Text(_) | Tok::Cmd(_) | Tok::Amp | Tok::Tie)) {
                 self.pos += 1;
             }
         }

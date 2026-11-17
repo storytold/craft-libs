@@ -670,3 +670,19 @@ fn a_starred_line_break_shows_no_star() {
     assert_eq!(t.rows.len(), 2, "{t:?}");
     assert_eq!(t.rows[1].iter().map(|c| c.text().trim().to_string()).collect::<Vec<_>>(), ["c", "d"]);
 }
+
+#[test]
+fn a_definition_with_a_command_in_its_parameter_text_shows_nothing() {
+    // A command between the parameter text and the body (`\stop`) was read as the body, and the
+    // body was left over as text.
+    for src in [
+        "\\def\\foo#1\\stop{hidden}word",
+        "\\def\\foo#1\\stop{hidden}{word}",
+        "\\def\\foo#1\\and#2\\stop{hidden}word",
+        "\\def\\foo#1\\par{hidden}word",
+        "\\def\\foo\\bar{hidden}word",
+        "\\def\\foo#1{hidden}word",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
