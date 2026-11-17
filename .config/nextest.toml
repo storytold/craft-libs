@@ -1,7 +1,6 @@
 # cargo-nextest (https://nexte.st) runs every test in its own process, in parallel across test
-# binaries. The Windows leg of the Workspace gate uses it (.github/workflows/workspace.yml); every
-# other leg, and local runs, keep `cargo test`. Nextest does not run doctests, so the Windows leg
-# also runs `cargo test --doc`.
+# binaries. Every leg of the Workspace gate uses it (.github/workflows/workspace.yml); local runs may
+# keep `cargo test`. Nextest does not run doctests, so the gate also runs `cargo test --doc`.
 #
 #   cargo nextest run --workspace --profile ci
 #   cargo test --workspace --doc
@@ -22,6 +21,9 @@ video-fixtures = { max-threads = 1 }
 # craft-print: `PRINT_TICKET_PROVIDER` serializes the Windows PrintTicket provider, and the tests
 # share the one test print queue the gate installs.
 print = { max-threads = 1 }
+# craft-video integration tests on Linux and macOS: the binaries generate and read the same fixture
+# directories (see the `ci` overrides below).
+video-integration = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(craft-ui) & (binary(visual_regression) | test(/^combo::tests::|selected_tab_erases_a_baseline_centered_on_its_bottom_edge/))'
@@ -42,3 +44,18 @@ test-group = 'print'
 fail-fast = false
 slow-timeout = { period = "60s" }
 failure-output = "immediate-final"
+
+
+# Linux and macOS (the resource audit in craft-libs#2058): every GPU consumer shares the one `gpu`
+# slot, and the craft-video integration binaries share their fixture directories. Conservative on
+# purpose: the in-process mutexes these tests rely on do not reach across nextest's processes.
+# Windows keeps the default groups above, which its leg has passed with since it moved to nextest.
+[[profile.ci.overrides]]
+platform = 'cfg(unix)'
+filter = 'package(craft-ui) | package(craft-keymap) | package(craft-update)'
+test-group = 'gpu'
+
+[[profile.ci.overrides]]
+platform = 'cfg(unix)'
+filter = 'package(craft-video) & kind(test)'
+test-group = 'video-integration'

@@ -17,15 +17,12 @@ concurrency:
   group: doc-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# fmt, clippy and the tests run in the Workspace gate on every OS; this checks what it does not.
 jobs:
   doc:
+    name: Craft documents WASM
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS runners are kept for releases: macOS runs only when started by hand.
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -37,11 +34,5 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
           targets: wasm32-unknown-unknown
-      - run: cargo fmt --check
-      - run: cargo clippy -p craft-doc --all-targets --locked -- -D warnings
-      - run: cargo clippy -p craft-doc --all-targets --all-features --locked -- -D warnings
-      - run: cargo test -p craft-doc --locked -- --nocapture
-      - run: cargo test -p craft-doc --all-features --locked -- --nocapture
       - run: cargo check -p craft-doc --all-features --locked --target wasm32-unknown-unknown

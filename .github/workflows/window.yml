@@ -17,15 +17,13 @@ concurrency:
   group: window-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# fmt, clippy and the tests with default and with all features (egui and restore together) run in
+# the Workspace gate on every OS; this runs each feature alone.
 jobs:
   window:
+    name: Window with each feature alone
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS runners are kept for releases: macOS runs only when started by hand.
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -39,12 +37,8 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
-      - run: cargo fmt --check
-      # Default (no egui) and the egui feature both build and lint cleanly.
-      - run: cargo clippy -p craft-window --all-targets --locked -- -D warnings
+          components: clippy
       - run: cargo clippy -p craft-window --all-targets --locked --features egui -- -D warnings
-      - run: cargo test -p craft-window --locked -- --nocapture
       - run: cargo test -p craft-window --locked --features egui -- --nocapture
       - run: cargo clippy -p craft-window --all-targets --locked --features restore -- -D warnings
-      - run: cargo test -p craft-window --locked --features restore,egui -- --nocapture
+      - run: cargo test -p craft-window --locked --features restore -- --nocapture

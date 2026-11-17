@@ -2297,6 +2297,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-java-class"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-jmap"
 version = "0.1.0"
 dependencies = [
