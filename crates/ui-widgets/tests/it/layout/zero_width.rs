@@ -3,7 +3,7 @@
 //! it holds, so a centred row inside it and the stack in that row never take a width from an infinite rect.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Props as _, RowAlign, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{RowAlign, Scroll, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Vec2};
