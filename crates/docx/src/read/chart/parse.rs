@@ -1,7 +1,7 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, Grouping, Kind, Pos, Series};
+use super::model::{Axis, Grouping, Kind, LabelPos, Pos, Series, Symbol};
 use super::plot::label;
-use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
+use super::{Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
 
 impl Chart {
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {
@@ -39,10 +39,15 @@ impl Chart {
         cats.resize(n, String::new());
         let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
         let type_labels = show_values(ty.child("c:dLbls"));
+        let type_fmt = label_format(ty.child("c:dLbls"));
         for s in &mut series {
             s.values.resize(n, None);
             s.xs.resize(n, None);
             s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
+            // Absent (`None`) inherits the chart type's; explicitly source-linked (`Some(None)`) does not.
+            if s.label_fmt.is_none() {
+                s.label_fmt.clone_from(&type_fmt);
+            }
             if s.labels == Some(true) {
                 s.raw = s.values.clone();
             }
@@ -98,6 +103,13 @@ impl Chart {
         s.and_then(|s| s.color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
     }
 
+    /// Colour of series `j`'s markers: the marker's own fill, else the automatic colour of the
+    /// series index (not the series' explicit line colour, as Word draws them).
+    pub(super) fn marker_colour(&self, j: usize) -> Rgb {
+        let s = self.series.get(j);
+        s.and_then(|s| s.marker_color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
+    }
+
     /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied accent (pie) or
     /// the series colour.
     pub(super) fn point_colour(&self, j: usize, i: usize) -> Rgb {
@@ -149,7 +161,7 @@ fn to_percent(series: &mut [Series], n: usize) {
 }
 
 /// The category axis (scatter: the horizontal value axis) and the value axis of a plot area.
-fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
+pub(crate) fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
     let vals_ax: Vec<&El> = plot.children("c:valAx").collect();
     let horiz_pos = |a: &&El| matches!(a.child("c:axPos").and_then(|p| p.attr("val")), Some("b" | "t"));
     let (val_el, x_el) = if scatter {
@@ -180,6 +192,17 @@ fn show_values(d: Option<&El>) -> Option<bool> {
     d.child("c:showVal").map(|v| v.attr("val").is_none_or(truthy))
 }
 
+/// The number format of data labels (`c:dLbls/c:numFmt`): `None` when the labels say nothing,
+/// `Some(None)` when they are linked to the source (so a chart-level format does not apply),
+/// `Some(Some(code))` for their own format code.
+fn label_format(d: Option<&El>) -> Option<Option<String>> {
+    let f = d?.child("c:numFmt")?;
+    if f.attr("sourceLinked").is_some_and(truthy) {
+        return Some(None);
+    }
+    f.attr("formatCode").filter(|f| f.chars().count() <= craft_wordmodel::chart::MAX_FMT).map(|f| Some(f.to_string()))
+}
+
 fn legend_pos(chart: &El) -> Option<Pos> {
     chart.child("c:legend").map(|l| match l.child("c:legendPos").and_then(|p| p.attr("val")).unwrap_or("r") {
         "l" => Pos::Left,
@@ -206,9 +229,24 @@ impl Series {
         let sp = ser.child("c:spPr");
         let ln = sp.and_then(|p| p.child("a:ln"));
         let marker = ser.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme));
+        let marker_color = marker;
         let color = sp.and_then(|p| fill_colour(p, theme)).or_else(|| ln.and_then(|l| fill_colour(l, theme))).or(marker);
-        let line_w = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).map_or(LINE_W, |w| w.clamp(0.0, 20.0));
+        let no_fill = sp.and_then(|p| p.child("a:noFill")).is_some();
+        let line_w = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).map(|w| w.clamp(0.0, 20.0));
         let line = ln.is_none_or(|l| l.child("a:noFill").is_none());
+        // `c:marker/c:symbol`: which symbol each point gets (`none` for no markers). Scatter
+        // series show markers unless the file says not; line series only when it says so.
+        let symbol = ser.child("c:marker").and_then(|m| m.child("c:symbol")).and_then(|s| s.attr("val")).map(str::to_string);
+        let markers = symbol.as_deref().map(|s| s != "none").or_else(|| scatter.then_some(true));
+        let symbol = symbol.as_deref().map_or(Symbol::Circle, Symbol::parse);
+        let marker_size = ser
+            .child("c:marker")
+            .and_then(|m| m.child("c:size"))
+            .and_then(|s| s.attr("val"))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(2.0, 72.0));
+        let smooth = ser.child("c:smooth").and_then(|s| s.attr("val")).is_some_and(truthy);
         let (values, fmt) = numbers(ser.child(if scatter { "c:yVal" } else { "c:val" }), cap);
         let (mut xs, x_fmt) = if scatter { numbers(ser.child("c:xVal"), cap) } else { (Vec::new(), None) };
         if scatter && xs.is_empty() {
@@ -223,7 +261,30 @@ impl Series {
             }
         }
         let labels = show_values(ser.child("c:dLbls"));
-        Series { name, idx, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new() }
+        let label_fmt = label_format(ser.child("c:dLbls"));
+        let label_pos = ser.child("c:dLbls").and_then(|d| d.child("c:dLblPos")).and_then(|p| p.attr("val")).and_then(LabelPos::parse);
+        Series {
+            name,
+            idx,
+            color,
+            line_w,
+            line,
+            no_fill,
+            markers,
+            symbol,
+            marker_size,
+            smooth,
+            values,
+            xs,
+            points,
+            fmt,
+            x_fmt,
+            labels,
+            label_fmt,
+            label_pos,
+            marker_color,
+            raw: Vec::new(),
+        }
     }
 }
 
@@ -290,7 +351,7 @@ fn pts(cache: &El, cap: usize) -> Vec<Option<String>> {
 }
 
 pub(super) fn axis(a: Option<&El>) -> Axis {
-    let Some(a) = a else { return Axis { deleted: true, ..Default::default() } };
+    let Some(a) = a else { return Axis { deleted: true, labels: true, line: true, ..Default::default() } };
     let scaling = a.child("c:scaling");
     let num =
         |n: &str| scaling.and_then(|s| s.child(n)).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
@@ -305,8 +366,16 @@ pub(super) fn axis(a: Option<&El>) -> Axis {
             .child("c:numFmt")
             .filter(|f| f.attr("sourceLinked") != Some("1"))
             .and_then(|f| f.attr("formatCode"))
-            .filter(|f| f.len() <= MAX_FORMAT_CODE)
+            .filter(|f| f.chars().count() <= craft_wordmodel::chart::MAX_FMT)
             .map(str::to_string),
+        title: a.child("c:title").and_then(title_text),
+        title_rot: a
+            .child("c:title")
+            .and_then(|t| t.find("a:bodyPr"))
+            .and_then(|b| b.attr("rot"))
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .map(|v| (v as f64 / 60_000.0).clamp(-360.0, 360.0) as f32),
+        labels: a.child("c:tickLblPos").and_then(|p| p.attr("val")) != Some("none"),
     }
 }
 

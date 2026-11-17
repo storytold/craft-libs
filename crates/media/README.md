@@ -243,6 +243,10 @@ let bytes = w.finish_faststart()?.into_inner(); // or finish() for moov-at-end
   `ipcm`/`fpcm` + `pcmC` in MP4. A PCM `write_sample` call can hold any whole number of frames, and the
   track timescale must equal the sample rate.
 - Edit lists: set `TrackConfig::edits` explicitly, or use `media_start` to get a single edit.
+- Audio pre-roll: `TrackConfig::roll_distance` puts every sample in a `roll` sample group (`sgpd` +
+  `sbgp`). Set -1 for AAC with `media_start` at the priming: Apple's decoders apply that edit only
+  when the track has the group.
+- A file starts at the writer's position: chunk offsets count from there.
 - Timecode: `add_timecode_track(video, TimecodeConfig, start_frame)` adds a `tmcd` track (with `gmhd`)
   and a `tref/tmcd` link from the video track.
 - `WriterOptions::metadata` writes `©xxx` text atoms to `udta`.
@@ -443,7 +447,13 @@ page yet. Damage recovery may read bytes again up to twice the file's length plu
 is read at most about three times over; the packets kept and the header packets of a stream are
 bounded too, with a warning when a bound is reached.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
-No muxer.
+
+The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
+(storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued
+packets, granule positions, BOS/EOS, CRC-32), puts each header packet on pages of its own, closes
+audio pages at a byte or packet target, and can replace the final granule position for Ogg Opus
+end trimming. `opus_tags` and `vorbis_comment` build the comment headers; tag names that are not
+valid field names (Vorbis I §5.2.1) are left out.
 
 ## `avi`
 
@@ -651,6 +661,7 @@ Implemented from the SMPTE documents (editions used):
 | SMPTE ST 386 | 2004 | D-10 (IMX) mapping: container label, sound element type |
 | SMPTE ST 2019-4 | 2009 | VC-3 (DNxHD / DNxHR) mapping |
 | SMPTE RDD 44 | 2017 | Apple ProRes mapping |
+| Adobe CinemaDNG Image Data Format Specification | 1.0.0.0 (September 2009), §7 | CinemaDNG in MXF: frame-wrapped DNG picture elements (element type 42h), the essence container labels for CFA / LinearRaw content, RGBA descriptor; the labels are the specification's **provisional** values from Adobe's experimental range (byte 9 = 0Fh), not SMPTE-registered |
 | SMPTE RP 224 / RP 210 | registers | labels: data definitions, picture coding, essence containers, operational patterns; property labels of the primer pack (writer) |
 | SMPTE ST 330 | 2011 | basic UMIDs of the written packages |
 
@@ -692,7 +703,10 @@ let pcm = mxf.read_pcm(&file, a, 48_000, 1920)?; // planar f32, sample-exact
   orders by the bitstream (the AVC picture order counts).
 - **Codecs.** From the picture essence coding label, then the essence container label, then the
   essence bytes: AVC / AVC-Intra, VC-3, ProRes (profile from the label), MPEG-2,
-  MPEG-4 visual, JPEG 2000, DV, uncompressed.
+  MPEG-4 visual, JPEG 2000, DV, uncompressed, CinemaDNG (the CinemaDNG container labels, the
+  registered MXF-GC TIFF/EP container and TIFF/EP picture coding labels, a 42h picture element
+  type, or a TIFF header with the DNGVersion tag at the start of the essence; the DNG pictures
+  themselves are decoded by `craft-raw`).
 - **Sound.** PCM chunks (frame- or clip-wrapped) with sample counts; `read_pcm` decodes
   little-endian 8/16/24/32-bit PCM (wave / AES3 descriptors) and ST 331 AES3 elements (D-10).
 - **Timecode.** The material package timecode component (start frame count, rounded base,
@@ -765,7 +779,10 @@ w.finish()?;
   element types 0x0C / 0x0D), ProRes (RDD 44: coding label profile byte, container `02 1C`),
   AVC byte stream (ST 381-3: container `02 10 60`, coding label from `profile_idc`; Annex B access
   units with in-band SPS / PPS — the AVC sub-descriptor is not written), Broadcast Wave PCM
-  (ST 382: container `02 06 01/02`, element types 0x01 / 0x02).
+  (ST 382: container `02 06 01/02`, element types 0x01 / 0x02), CinemaDNG (frame-wrapped DNG
+  datasets, element type 0x42, the provisional container label `0F 0A 0D 0B 02 7F 01/02 00`, an
+  RGBA descriptor with pixel layout and reference levels of the decoded 16-bit RGB picture and no
+  coding label; OP-Atom is refused because it is clip-wrapped here and DNG datasets cannot be).
 - `write_opatom_pcm(&OpAtomPcm, &[i32])` builds a complete in-memory OP-Atom PCM file (AAF media
   consolidation); `encode_pcm` interleaves planar f32 as little-endian PCM.
 
