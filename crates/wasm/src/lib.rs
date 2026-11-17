@@ -6,7 +6,7 @@
 use crate::FormatError;
 use crate::bytes::Reader;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 use wasmparser::{CompositeInnerType, Encoding, ExternalKind, FuncType, KnownCustom, Name, Parser, Payload, TypeRef, Validator, WasmFeatures};
 
 /// Largest module we read (256 MiB).
@@ -162,6 +162,47 @@ fn sig(f: &FuncType) -> String {
     format!("({}) -> ({})", p.join(", "), r.join(", "))
 }
 
+struct ReferencedStrings {
+    remaining: usize,
+    exhausted: bool,
+}
+
+impl ReferencedStrings {
+    fn claim(&mut self, bytes: usize) -> bool {
+        if self.exhausted || bytes > self.remaining {
+            self.exhausted = true;
+            return false;
+        }
+        self.remaining -= bytes;
+        true
+    }
+
+    fn copy(&mut self, value: &str) -> Option<String> {
+        self.claim(value.len()).then(|| value.to_owned())
+    }
+}
+
+fn type_sig(types: &[Option<FuncType>], t: u32, cache: &mut BTreeMap<u32, String>, strings: &mut ReferencedStrings) -> Option<String> {
+    if strings.exhausted {
+        return None;
+    }
+    let signature = match cache.entry(t) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => {
+            let value = match types.get(t as usize) {
+                Some(Some(f)) => sig(f),
+                Some(None) => format!("type {t} (not a function type)"),
+                None => format!("type {t} (missing)"),
+            };
+            if !strings.claim(value.len()) {
+                return None;
+            }
+            entry.insert(value)
+        }
+    };
+    strings.copy(signature)
+}
+
 fn section_name(id: u8) -> &'static str {
     match id {
         0 => "custom",
@@ -268,13 +309,11 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
     let mut imported_tags = 0u32;
     let mut declared_functions = 0;
     let mut code_index = 0u32;
-    let type_sig = |types: &[Option<FuncType>], t: u32| -> String {
-        match types.get(t as usize) {
-            Some(Some(f)) => sig(f),
-            Some(None) => format!("type {t} (not a function type)"),
-            None => format!("type {t} (missing)"),
-        }
-    };
+    // Type and name references can expand a small module into much larger display strings.
+    // Charge both the signature cache and every retained copy before allocating that copy.
+    let reference_budget = (64 << 20).max(data.len().saturating_mul(3));
+    let mut strings = ReferencedStrings { remaining: reference_budget, exhausted: false };
+    let mut type_signatures = BTreeMap::new();
     let cap = |len: usize, truncated: &mut bool| -> bool {
         if len >= MAX_ITEMS {
             *truncated = true;
@@ -325,7 +364,8 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                         let (kind, type_index, signature) = match imp.ty {
                             TypeRef::Func(t) | TypeRef::FuncExact(t) => {
                                 rep.imported_functions = rep.imported_functions.saturating_add(1);
-                                ("func", Some(t), type_sig(&types, t))
+                                let signature = if rep.imports.len() < MAX_ITEMS { type_sig(&types, t, &mut type_signatures, &mut strings) } else { None };
+                                ("func", Some(t), signature)
                             }
                             TypeRef::Table(t) => {
                                 if cap(rep.tables.len(), &mut rep.truncated) {
@@ -338,7 +378,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                                     });
                                 }
                                 imported_tables = imported_tables.saturating_add(1);
-                                ("table", None, format!("table {} min {}", format!("{:?}", t.element_type).to_lowercase(), t.initial))
+                                ("table", None, Some(format!("table {} min {}", format!("{:?}", t.element_type).to_lowercase(), t.initial)))
                             }
                             TypeRef::Memory(m) => {
                                 if cap(rep.memories.len(), &mut rep.truncated) {
@@ -352,7 +392,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                                     });
                                 }
                                 imported_memories = imported_memories.saturating_add(1);
-                                ("memory", None, format!("memory min {} pages", m.initial))
+                                ("memory", None, Some(format!("memory min {} pages", m.initial)))
                             }
                             TypeRef::Global(g) => {
                                 if cap(rep.globals.len(), &mut rep.truncated) {
@@ -364,20 +404,29 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                                     });
                                 }
                                 imported_globals = imported_globals.saturating_add(1);
-                                ("global", None, format!("{}{}", if g.mutable { "mut " } else { "" }, g.content_type))
+                                ("global", None, Some(format!("{}{}", if g.mutable { "mut " } else { "" }, g.content_type)))
                             }
                             TypeRef::Tag(t) => {
                                 let keep_tag = cap(rep.tags.len(), &mut rep.truncated);
-                                let signature = if keep_tag || rep.imports.len() < MAX_ITEMS { type_sig(&types, t.func_type_idx) } else { String::new() };
+                                let signature =
+                                    if rep.imports.len() < MAX_ITEMS { type_sig(&types, t.func_type_idx, &mut type_signatures, &mut strings) } else { None };
                                 if keep_tag {
-                                    rep.tags.push(WasmTag { index: imported_tags, type_index: t.func_type_idx, signature: signature.clone(), imported: true });
+                                    let tag_signature = match &signature {
+                                        Some(value) => strings.copy(value),
+                                        None => type_sig(&types, t.func_type_idx, &mut type_signatures, &mut strings),
+                                    };
+                                    if let Some(signature) = tag_signature {
+                                        rep.tags.push(WasmTag { index: imported_tags, type_index: t.func_type_idx, signature, imported: true });
+                                    }
                                 }
                                 // The import list and tag list are capped independently.
                                 imported_tags = imported_tags.saturating_add(1);
                                 ("tag", Some(t.func_type_idx), signature)
                             }
                         };
-                        if cap(rep.imports.len(), &mut rep.truncated) {
+                        if cap(rep.imports.len(), &mut rep.truncated)
+                            && let Some(signature) = signature
+                        {
                             rep.imports.push(WasmImport { module: imp.module.to_string(), name: imp.name.to_string(), kind, type_index, signature });
                         }
                     }
@@ -429,12 +478,14 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                         if !cap(rep.tags.len(), &mut rep.truncated) {
                             break;
                         }
-                        rep.tags.push(WasmTag {
-                            index: imported_tags.saturating_add(u32::try_from(i).unwrap_or(u32::MAX)),
-                            type_index: t.func_type_idx,
-                            signature: type_sig(&types, t.func_type_idx),
-                            imported: false,
-                        });
+                        if let Some(signature) = type_sig(&types, t.func_type_idx, &mut type_signatures, &mut strings) {
+                            rep.tags.push(WasmTag {
+                                index: imported_tags.saturating_add(u32::try_from(i).unwrap_or(u32::MAX)),
+                                type_index: t.func_type_idx,
+                                signature,
+                                imported: false,
+                            });
+                        }
                     }
                 }
                 Payload::GlobalSection(r) => {
@@ -474,16 +525,22 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                     }
                     let range = body.range();
                     if cap(rep.functions.len(), &mut rep.truncated) {
-                        rep.functions.push(WasmFunction {
-                            index: rep.imported_functions.saturating_add(code_index),
-                            type_index: ti.unwrap_or(u32::MAX),
-                            signature: ti.map(|t| type_sig(&types, t)).unwrap_or_else(|| "no matching function section entry".into()),
-                            body_offset: range.start,
-                            body_size: range.end.saturating_sub(range.start),
-                            locals,
-                            name: None,
-                            exported_as: Vec::new(),
-                        });
+                        let signature = match ti {
+                            Some(t) => type_sig(&types, t, &mut type_signatures, &mut strings),
+                            None => strings.copy("no matching function section entry"),
+                        };
+                        if let Some(signature) = signature {
+                            rep.functions.push(WasmFunction {
+                                index: rep.imported_functions.saturating_add(code_index),
+                                type_index: ti.unwrap_or(u32::MAX),
+                                signature,
+                                body_offset: range.start,
+                                body_size: range.end.saturating_sub(range.start),
+                                locals,
+                                name: None,
+                                exported_as: Vec::new(),
+                            });
+                        }
                     }
                     code_index = code_index.saturating_add(1);
                 }
@@ -578,16 +635,20 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
     let mut exported: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for e in rep.exports.iter_mut() {
         if e.kind == "func" {
-            e.target_name = fn_names.get(&e.index).cloned();
+            e.target_name = fn_names.get(&e.index).and_then(|name| strings.copy(name));
             exported.entry(e.index).or_default().push(e.name.clone());
         }
     }
     for f in rep.functions.iter_mut() {
-        f.name = fn_names.get(&f.index).cloned();
+        f.name = fn_names.get(&f.index).and_then(|name| strings.copy(name));
         f.exported_as = exported.remove(&f.index).unwrap_or_default();
     }
     if declared_functions != code_index && rep.parse_error.is_none() {
         rep.warnings.push(format!("{declared_functions} function declarations but {code_index} bodies"));
+    }
+    if strings.exhausted {
+        rep.truncated = true;
+        rep.warnings.push(format!("referenced type signatures and function names exceed the {reference_budget}-byte budget; some metadata is omitted"));
     }
     Ok(rep)
 }
