@@ -297,8 +297,9 @@ fn text_of(chord: Chord) -> Option<&'static str> {
 
 /// Whether the focused component of the running viewport holds a press of `chord`, as routing decides for the press:
 /// it or its menu claims the chord, its routing takes the press or the text the press types (a list's type-ahead), or a
-/// menu or recorder has the keys. No app command bound to the chord runs while the component has the focus, and the press
-/// reaches egui's input only for the app's own widget (`Stop::host`), which reads its keys there.
+/// menu or recorder has the keys, or the chord is a bare Tab that moves focus from it rather than toggling the panels
+/// (`tab_toggles_now`). No app command bound to the chord runs while the component has the focus, and the press reaches
+/// egui's input only for the app's own widget (`Stop::host`), which reads its keys there.
 pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     let Some(rec) = focus::focused_rec(ctx) else { return false };
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
@@ -312,7 +313,9 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     let taken = !matches!(route, PressRoute::Free);
     let typed = text_of(chord).is_some_and(|text| !text_route(&rec, driven, text).is_empty());
     let owner = owner_at(ctx, Some(&rec), &focus::scope_chain(ctx, &rec), None);
-    holds_press(owner, Some(&rec), &press, taken, typed)
+    let bare_tab = chord.key == Key::Tab && !chord.mods.cmd && !chord.mods.ctrl && !chord.mods.alt;
+    let traverses = bare_tab && !(super::input::tab_toggles_now(ctx) && super::input::is_chrome_chord(ctx, &chord));
+    holds_press(owner, Some(&rec), &press, taken, typed) || traverses
 }
 
 /// Takes what the framework handed to one taker out of the running pass's egui input, where the app and egui's text

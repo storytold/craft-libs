@@ -170,9 +170,10 @@ impl CommandDef {
 #[non_exhaustive]
 pub enum TypingRule {
     /// Plain chords (no cmd, ctrl or alt) go to the text; function keys still fire.
-    #[default]
     PlainKeysWait,
-    /// Only chords with the command modifier and function keys fire.
+    /// Only chords with the command modifier and function keys fire: Alt and Shift chords type characters on some
+    /// layouts (Option on the Mac), so they stay with the text, as in Photoshop.
+    #[default]
     CommandKeysOnly,
     /// Nothing fires.
     AllWait,
