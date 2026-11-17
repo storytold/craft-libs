@@ -43,16 +43,19 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Limits {
-    /// Most pixels (width × height) a picture may have; each takes 12 bytes decoded. Default 2^26.
+    /// Most pixels (width × height) a picture may have; each takes 12 bytes as RGB or 16 as RGBA. Default 2^26.
     /// A picture over the target's largest allocation is refused at any setting.
     pub max_pixels: u64,
     /// Longest header read, in bytes (real ones are a few hundred). Default 64 KiB.
     pub max_header: usize,
+    /// Largest width or height, checked before allocating the validation scan line.
+    /// Defaults to `u32::MAX`, preserving the existing RGB decoder limit.
+    pub max_axis: u32,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_pixels: 1 << 26, max_header: 64 << 10 }
+        Self { max_pixels: 1 << 26, max_header: 64 << 10, max_axis: u32::MAX }
     }
 }
 
@@ -63,6 +66,15 @@ pub struct Picture {
     pub height: u32,
     /// Scene-linear RGB, three floats a pixel, top row first.
     pub rgb: Vec<f32>,
+}
+
+/// A decoded opaque RGBA picture, without an intermediate RGB allocation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RgbaPicture {
+    pub width: u32,
+    pub height: u32,
+    /// Scene-linear RGBA, top row first. Every alpha sample is 1.0.
+    pub rgba: Vec<f32>,
 }
 
 /// The largest allocation in bytes that a `Vec` or `String` can make on the target.
@@ -187,6 +199,19 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Picture> {
 
 /// [`decode`] with `max_alloc_bytes` as the largest allocation the target allows.
 fn decode_within(b: &[u8], limits: &Limits, max_alloc_bytes: u64) -> Result<Picture> {
+    let (width, height, rgb) = decode_channels::<3>(b, limits, max_alloc_bytes)?;
+    Ok(Picture { width, height, rgb })
+}
+
+/// Decodes directly to opaque linear float RGBA, with no intermediate RGB image.
+/// The allocation limit includes all four channels; scan lines are validated first.
+pub fn decode_rgba(b: &[u8], limits: &Limits) -> Result<RgbaPicture> {
+    let (width, height, rgba) = decode_channels::<4>(b, limits, MAX_ALLOC_BYTES)?;
+    Ok(RgbaPicture { width, height, rgba })
+}
+
+// Only the RGB and RGBA entry points call this helper.
+fn decode_channels<const CHANNELS: usize>(b: &[u8], limits: &Limits, max_alloc_bytes: u64) -> Result<(u32, u32, Vec<f32>)> {
     if !sniff(b) {
         return Err(Error::NotHdr);
     }
@@ -235,13 +260,16 @@ fn decode_within(b: &[u8], limits: &Limits, max_alloc_bytes: u64) -> Result<Pict
         return Err(Error::Malformed("empty picture"));
     }
     let (Ok(width), Ok(height)) = (u32::try_from(w), u32::try_from(h)) else { return Err(Error::LimitExceeded("pixel count")) };
+    if width > limits.max_axis || height > limits.max_axis {
+        return Err(Error::LimitExceeded("axis length"));
+    }
     let pixels = u64::from(width) * u64::from(height);
     if pixels > limits.max_pixels {
         return Err(Error::LimitExceeded("pixel count"));
     }
     // One scan line of RGBE pixels and the float picture, each within the target's largest allocation.
     let scan_len = alloc_len(u64::from(if x1 { height } else { width }), size_of::<[u8; 4]>(), max_alloc_bytes);
-    let rgb_len = pixels.checked_mul(3).and_then(|floats| alloc_len(floats, size_of::<f32>(), max_alloc_bytes));
+    let rgb_len = pixels.checked_mul(CHANNELS as u64).and_then(|floats| alloc_len(floats, size_of::<f32>(), max_alloc_bytes));
     let (Some(scan_len), Some(total)) = (scan_len, rgb_len) else { return Err(Error::LimitExceeded("pixel count")) };
     // A scan line takes at least a few bits of file, so a header cannot ask for more than the data has.
     if (b.len().saturating_sub(pos) as u64).saturating_mul(4096) < pixels {
@@ -255,7 +283,7 @@ fn decode_within(b: &[u8], limits: &Limits, max_alloc_bytes: u64) -> Result<Pict
         scanline(b, &mut pos, &mut scan)?;
     }
 
-    let mut rgb = vec![0f32; total];
+    let mut rgb = vec![if CHANNELS == 4 { 1f32 } else { 0f32 }; total];
     pos = pixel_data;
     for i in 0..n1 {
         scanline(b, &mut pos, &mut scan)?;
@@ -266,11 +294,11 @@ fn decode_within(b: &[u8], limits: &Limits, max_alloc_bytes: u64) -> Result<Pict
             } else {
                 (if p2 { j } else { w - 1 - j }, if p1 { h - 1 - i } else { i })
             };
-            let at = (y * w + x) * 3;
+            let at = (y * w + x) * CHANNELS;
             if let Some(o) = rgb.get_mut(at..at + 3) {
                 o.copy_from_slice(&rgbe_to_linear(p));
             }
         }
     }
-    Ok(Picture { width, height, rgb })
+    Ok((width, height, rgb))
 }
