@@ -88,7 +88,7 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
     fixture.click(&file);
     fixture.settle();
     assert!(fixture.by_label("Save").is_some(), "File is open");
-    fixture.type_text("s");
+    fixture.type_key(Key::S, "s");
     fixture.settle();
     assert_eq!(saved.get(), 1, "the letter runs the row it marks");
     assert!(fixture.by_label("Save").is_none(), "and the run closes the menu");

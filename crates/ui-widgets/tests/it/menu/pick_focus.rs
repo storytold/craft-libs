@@ -85,6 +85,8 @@ fn undo_picked_from_the_edit_menu_undoes_in_the_field_that_held_focus() {
 pub enum BarKeysCommand {
     #[command(label = "Toggle", default = "Cmd+Alt+P")]
     Toggle,
+    #[command(label = "Tool", default = "B")]
+    Tool,
 }
 
 #[trial]
@@ -119,14 +121,16 @@ fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_foc
 }
 
 /// A command chord pressed while a menu is open closes the menu and runs where focus was, as with the menu closed
-/// (#9065); the open menu's own keys, a plain letter among them, still drive it.
+/// (#9065); the open menu's own keys, the letters its rows' mnemonics name among them, still drive it, and a plain
+/// key no row names reaches the app's shortcuts.
 #[trial]
 fn a_command_shortcut_closes_an_open_menu_and_runs() {
     use craft_ui::contract::ShowContainer as _;
     use craft_ui::runtime::commands::Commands as _;
     let count = Rc::new(Cell::new(0));
+    let tools = Rc::new(Cell::new(0));
     let target = Rc::new(Cell::new(None));
-    let (seen, stop) = (count.clone(), target.clone());
+    let (seen, seen_tools, stop) = (count.clone(), tools.clone(), target.clone());
     let mut fixture = Fixture::new(move |ui| {
         let titles = vec![MenuTitle::new("&Edit", |ui| {
             MenuItem::command(EditCommands::Undo).show(ui);
@@ -134,8 +138,9 @@ fn a_command_shortcut_closes_an_open_menu_and_runs() {
         })];
         MenuBar::new("Main menu", titles).show(ui);
         craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
-            while cx.take_command::<BarKeysCommand>().is_some() {
-                seen.set(seen.get() + 1);
+            while let Some((command, _)) = cx.take_command::<BarKeysCommand>() {
+                let counter = if command == BarKeysCommand::Tool { &seen_tools } else { &seen };
+                counter.set(counter.get() + 1);
             }
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
@@ -158,12 +163,16 @@ fn a_command_shortcut_closes_an_open_menu_and_runs() {
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "focus is back on the stop that held it");
 
     open_edit(&mut fixture);
-    // A mnemonic reads the typed text, as the open menu's other letters do.
-    fixture.type_text("z");
+    fixture.type_key(egui::Key::Z, "z");
     fixture.settle();
     assert!(fixture.by_label("Zoom").is_none(), "a plain letter still picks the row it marks, which closes the menu");
-    assert_eq!(count.get(), 1, "and runs no shortcut");
+    assert_eq!((count.get(), tools.get()), (1, 0), "and runs no shortcut");
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get());
+
+    open_edit(&mut fixture);
+    fixture.type_key(egui::Key::B, "b");
+    fixture.settle();
+    assert_eq!(tools.get(), 1, "a letter no row names runs its shortcut under the open menu");
 }
 
 /// ⌘Z and ⌘C are the Help search field's own editing chords: with the field focused they stay with it, Help stays open,
@@ -372,7 +381,7 @@ fn an_open_menu_takes_letters_and_arrows_from_a_focused_text_field() {
     assert_ne!(fixture.focused_stop().map(|(id, _)| id), field.get(), "Down moves in the menu, not in the field");
     assert_eq!(*text.borrow(), "100%", "the field's text stays");
 
-    fixture.type_text("z");
+    fixture.type_key(egui::Key::Z, "z");
     fixture.settle();
     assert_eq!(zoomed.get(), 1, "the letter picks the row it marks");
     assert!(fixture.by_label("Undo").is_none(), "and closes the menu");

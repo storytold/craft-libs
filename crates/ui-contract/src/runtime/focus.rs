@@ -75,6 +75,9 @@ pub(crate) struct FocusedRecord {
     /// The arena root of the focused stop when the stop is a non-text member of an arena (a part of a canvas's frame
     /// overlay): the root's state-dependent claims hold too, so a canvas tool's keys work with a part focused.
     pub(crate) root: Option<Id>,
+    /// The container that runs the menu level the focused stop sits in: its state-dependent claims (the letters its
+    /// rows' mnemonics name) hold too.
+    pub(crate) menu: Option<Id>,
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
     pub(crate) menu_bar: bool,
@@ -829,14 +832,6 @@ pub(crate) fn scope_chain(ctx: &Context, rec: &StopRec) -> Vec<Id> {
 #[doc(hidden)]
 pub fn keyboard_in_menu(ctx: &Context) -> bool {
     focused_rec(ctx).is_some_and(|rec| menu_scope(ctx, rec.scope).is_some()) && with(ctx, |state| state.visible)
-}
-
-/// The container that runs the menu level the stop `rec` sits in: the owner of the innermost body around it, while it
-/// is inside a menu. Plain typed text in a menu goes to it, which picks the row the letter names.
-pub(crate) fn menu_level(ctx: &Context, rec: &StopRec) -> Option<Id> {
-    menu_scope(ctx, rec.scope)?;
-    let body = rec.stop.body?;
-    with(ctx, |state| state.groups.get(&body).or_else(|| state.last_groups.get(&body)).and_then(|group| group.owner))
 }
 
 /// The innermost menu scope around the component whose body is running: the menu a row being shown sits in.

@@ -14,6 +14,7 @@ use crate::runtime::frame;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Arrows, Metrics, NavShape, Roving, Sense, Value};
+use craft_keymap::{Chord, Key};
 use egui::{Response, Ui};
 
 /// The style of a menu: the surface comes from the container.
@@ -297,8 +298,8 @@ impl Component for Menu<'_> {
         Sense::empty()
     }
 
-    /// A row of a submenu level that took Back closes the menu. A typed letter runs the row it names; the container
-    /// reads it, so the letter works with no row focused. A level the pointer opened with no active row has no lead:
+    /// A row of a submenu level that took Back closes the menu. A typed letter runs the row its mnemonic names; the
+    /// container claims the letters, so a letter works whichever row is focused. A level the pointer opened with no active row has no lead:
     /// the first key enters it at an end. The active row is the lead, so the first key after the pointer lit a row
     /// moves from that row; a row lit in this pass leads from the next, so only a key in the same frame as the pointer
     /// move that lit it starts from the row lit before.
@@ -336,11 +337,13 @@ impl Component for Menu<'_> {
         if !self.submenu {
             self.step = level.take_step();
         }
-        while let Some(text) = cx.intents().take_text() {
-            let mut chars = text.chars();
-            if let (Some(typed), None) = (chars.next(), chars.next())
-                && let Some(row) = level.target(typed)
-            {
+        // The letters the rows' mnemonics name are the level's claims while focus is in it; any other key reaches the
+        // app.
+        for (letter, row) in level.lettered_rows() {
+            let Some(key) = Key::from_char(letter) else { continue };
+            let chord = Chord::plain(key);
+            cx.claim(chord);
+            if cx.take_claimed(chord) {
                 level.run(row);
                 frame::request_repaint(&cx.core.ctx);
             }

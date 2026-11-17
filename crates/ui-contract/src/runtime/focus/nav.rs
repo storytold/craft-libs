@@ -504,6 +504,15 @@ impl State {
     }
 
     /// The innermost menu scope around the scope `from`, `from` included.
+    /// The container that runs the menu level the focused stop sits in: the owner of the innermost body around the
+    /// stop, while it is inside a menu.
+    pub(super) fn focused_menu_level(&self) -> Option<Id> {
+        let rec = self.stop_of_focus()?;
+        self.menu_scope(rec.scope)?;
+        let body = rec.stop.body?;
+        self.groups.get(&body).or_else(|| self.last_groups.get(&body)).and_then(|group| group.owner)
+    }
+
     pub(super) fn menu_scope(&self, from: Option<Id>) -> Option<Id> {
         let mut at = from;
         while let Some(id) = at {
@@ -692,6 +701,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         claims: keys.map(|keys| keys.claims.to_vec()).unwrap_or_default(),
         focused: stop.as_ref().map(|stop| stop.id),
         root: stop.as_ref().filter(|stop| stop.root != stop.id && !stop.text).map(|stop| stop.root),
+        menu: state.focused_menu_level(),
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),

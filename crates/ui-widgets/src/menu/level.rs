@@ -192,10 +192,9 @@ impl MenuLevel {
         })
     }
 
-    /// The enabled row `typed` runs.
-    pub(crate) fn target(&self, typed: char) -> Option<Id> {
-        let typed = typed.to_ascii_uppercase();
-        self.with(|state| state.shown.iter().find(|row| row.enabled && row.mnemonic.is_some_and(|(letter, _)| letter == typed)).map(|row| row.id))
+    /// The enabled rows the user last saw with a mnemonic, and the letter of each.
+    pub(crate) fn lettered_rows(&self) -> Vec<(char, Id)> {
+        self.with(|state| state.shown.iter().filter(|row| row.enabled).filter_map(|row| row.mnemonic.map(|(letter, _)| (letter, row.id))).collect())
     }
 
     pub(crate) fn values(&self) -> bool {

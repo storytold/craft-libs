@@ -643,6 +643,12 @@ impl Fixture {
         self.play(frames)
     }
 
+    /// A press of `key` that types `text`, as a keyboard sends it: the key and its text in one frame, then the release.
+    pub fn type_key(&mut self, key: Key, text: &str) -> &mut Self {
+        let held = self.frames.held();
+        self.play(vec![vec![injected::key_press(key, held), injected::text_event(text)], vec![injected::key_release(key, held)]])
+    }
+
     /// Typed `text`.
     pub fn type_text(&mut self, text: &str) -> &mut Self {
         self.play(injected::text_frames(text))

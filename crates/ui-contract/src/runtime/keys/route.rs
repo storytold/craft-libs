@@ -72,7 +72,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 *taken = true;
                 continue;
             }
-            let route = text_route(ctx, rec, driven, &typed.text);
+            let route = text_route(rec, driven, &typed.text);
             *taken = !route.is_empty();
             if route.iter().any(|(to, _)| !(reads_egui && *to == rec.stop.id)) {
                 withdrawn_texts.push(at);
@@ -97,6 +97,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     }
     let focused = target.as_ref().map(|rec| rec.stop.id);
     let root = target.as_ref().filter(|rec| rec.stop.root != rec.stop.id && !rec.stop.text).map(|rec| rec.stop.root);
+    let menu = focus::record(ctx, crate::runtime::egui::pass::current_viewport(ctx)).menu;
     // The web sends a chord's key press and its clipboard event: the command reaches the component once.
     let mut clips = batch.clips.clone();
     clips.dedup();
@@ -127,10 +128,11 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         match driven.and_then(|driven| driven.intent_of(chord)) {
             Some(intent) => push(&mut routed, driven.map(|driven| driven.list), intent, false),
             None => {
-                // A capture's owner, else the claim's: the focused component's own, then its arena root's.
+                // A capture's owner, else the claim's: the focused component's own, then its arena root's, then its
+                // menu level's.
                 let held = |owner: Option<Id>| held_claims.iter().find(|(id, held)| Some(*id) == owner && held == chord).map(|(id, _)| *id);
                 let owner = captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner);
-                claimed.extend(owner.or_else(|| held(focused)).or_else(|| held(root)).or(focused).map(|id| (id, *chord)));
+                claimed.extend(owner.or_else(|| held(focused)).or_else(|| held(root)).or_else(|| held(menu)).or(focused).map(|id| (id, *chord)));
             }
         }
     }
@@ -185,7 +187,7 @@ pub(crate) fn owner_at(ctx: &Context, target: Option<&StopRec>, scopes: &[Id], b
 /// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds
 /// (`holds_press`). The owner is the focused component's class, or `Blocked` while a modal layer is stacked above the
 /// focus; inside a layer its `Overlay.keys` class ranks with the component's. A `Recorder` keeps every key and a `Menu`
-/// every key but a command chord (`keeps_key`); a text field keeps the text its presses typed. `consumed` is what
+/// its navigation keys (`keeps_key`); a text field keeps the text its presses typed. `consumed` is what
 /// routing did with each press and `taken_texts` whether a component took each text of the pass.
 fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consumed: &[Taken], taken_texts: &[bool]) -> (Shortcuts, Vec<bool>) {
     let scopes = target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default();
@@ -205,7 +207,10 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
     let keys = batch
         .shortcuts
         .iter()
-        .filter(|shortcut| !keeps_key(owner, shortcut.input.mods) && !shortcut.press.is_some_and(|at| held[at]))
+        .filter(|shortcut| {
+            let key = shortcut.input.typed.or(shortcut.input.physical);
+            !keeps_key(owner, key, shortcut.input.mods) && !shortcut.press.is_some_and(|at| held[at])
+        })
         .copied()
         .collect();
     (Shortcuts { keys, typing, dialog, layout: Layout::default() }, held)
@@ -216,12 +221,13 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
 /// routing `taken`, the keys its filter keeps from the key stage, and the presses whose text it took (`typed`: the
 /// type-ahead of a list). A text field holds the presses whose text it took, its typing; the egui text widget behind it
 /// reads the text, not the press, and the editing keys, which stay in egui's input. A recorder holds every press and a
-/// menu every press but a command chord (`keeps_key`), except that a text field in a menu (a menu's search field) keeps
-/// the text field's rule: the editing chords it lists reach it as edits before routing (`Strip::press`).
+/// menu its navigation keys (`keeps_key`), except that a text field in a menu (a menu's search field) keeps the text
+/// field's rule: the editing chords it lists reach it as edits before routing (`Strip::press`). The letters a menu's
+/// rows' mnemonics name are the menu's claims, held before routing.
 fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: bool, typed: bool) -> bool {
     let Some(keys) = target.map(|rec| &rec.stop.keys) else { return false };
     let text = keys.owner == OwnerClass::Text;
-    if keeps_key(owner, press.mods) && !text {
+    if keeps_key(owner, Some(press.key), press.mods) && !text {
         return true;
     }
     let open = owner != KeyOwner::Blocked;
@@ -235,22 +241,24 @@ fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: 
     (widget && (taken || typed || kept)) || (open && text && typed)
 }
 
-/// Whether the key owner `owner` keeps a press with `mods` held from egui's input and the app's shortcuts (9.3). A
-/// `Recorder` keeps every key. A `Menu` keeps every key but a command chord, one with Cmd or Ctrl held: its shortcut
-/// runs, and running a command from a key closes the open popups (`overlay::close_popups`), so ⌘⌥P under an open menu
-/// works as it does with the menu closed.
-fn keeps_key(owner: KeyOwner, mods: Mods) -> bool {
+/// Whether the key owner `owner` keeps a press of `key` with `mods` held from egui's input and the app's shortcuts
+/// (9.3). A `Recorder` keeps every key. A `Menu` keeps its navigation keys, Escape, Enter and the arrows, without Cmd or
+/// Ctrl; its rows' mnemonic letters are its claims. Any other key reaches the app: a tool key picks its tool under an
+/// open menu, and running a command from a key closes the open popups (`overlay::close_popups`), so ⌘⌥P under an open
+/// menu works as it does with the menu closed.
+fn keeps_key(owner: KeyOwner, key: Option<Key>, mods: Mods) -> bool {
     match owner {
         KeyOwner::Class(OwnerClass::Recorder) => true,
-        KeyOwner::Class(OwnerClass::Menu) => !(mods.cmd || mods.ctrl),
+        KeyOwner::Class(OwnerClass::Menu) => {
+            !(mods.cmd || mods.ctrl) && key.is_some_and(|key| matches!(key, Key::Escape | Key::Enter | Key::Left | Key::Right | Key::Up | Key::Down))
+        }
         _ => false,
     }
 }
 
 /// Where the focused stop `rec` sends the typed `text`, and as what: a digits stop takes its digits, and the rest goes
-/// to the list `driven` drives, to a text or type-ahead stop, or to the container of the menu level around the stop.
-/// Empty when no component takes the text. Reads state only, so a query can ask it.
-fn text_route(ctx: &Context, rec: &StopRec, driven: Option<Driven>, text: &str) -> Vec<(Id, Intent)> {
+/// to the list `driven` drives, or to a text or type-ahead stop. Empty when no component takes the text.
+fn text_route(rec: &StopRec, driven: Option<Driven>, text: &str) -> Vec<(Id, Intent)> {
     let mut route = Vec::new();
     let rest;
     let text = if rec.stop.role.digits {
@@ -269,8 +277,6 @@ fn text_route(ctx: &Context, rec: &StopRec, driven: Option<Driven>, text: &str) 
         Some(driven.list)
     } else if matches!(rec.stop.keys.owner, OwnerClass::Text) || (rec.stop.role.type_ahead && letters) {
         Some(rec.stop.id)
-    } else if letters {
-        focus::menu_level(ctx, rec)
     } else {
         None
     };
@@ -289,8 +295,8 @@ fn text_of(chord: Chord) -> Option<&'static str> {
 }
 
 /// Whether the focused component of the running viewport holds a press of `chord`, as routing decides for the press:
-/// it claims the chord, its routing takes the press or the text the press types (a list's type-ahead), or a menu or
-/// recorder has the keys. No app command bound to the chord runs while the component has the focus, and the press
+/// it or its menu claims the chord, its routing takes the press or the text the press types (a list's type-ahead), or a
+/// menu or recorder has the keys. No app command bound to the chord runs while the component has the focus, and the press
 /// reaches egui's input only for the app's own widget (`Stop::host`), which reads its keys there.
 pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     let Some(rec) = focus::focused_rec(ctx) else { return false };
@@ -303,7 +309,7 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     let driven = Driven::of(ctx, &rec);
     let route = press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven.or_else(|| list_of_field(ctx, &rec)));
     let taken = !matches!(route, PressRoute::Free);
-    let typed = text_of(chord).is_some_and(|text| !text_route(ctx, &rec, driven, text).is_empty());
+    let typed = text_of(chord).is_some_and(|text| !text_route(&rec, driven, text).is_empty());
     let owner = owner_at(ctx, Some(&rec), &focus::scope_chain(ctx, &rec), None);
     holds_press(owner, Some(&rec), &press, taken, typed)
 }
