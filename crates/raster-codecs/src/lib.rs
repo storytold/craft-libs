@@ -3,7 +3,7 @@
 //!
 //! | Module | Format | Read | Write |
 //! |---|---|---|---|
-//! | [`dds`] | DirectDraw Surface: uncompressed masks, BC1-BC3 (DXT1/3/5), the DX10 header | yes | yes |
+//! | [`dds`] | DirectDraw Surface: uncompressed masks, BC1-BC5 (DXT1/3/5, ATI1/2), the DX10 header | yes | yes (uncompressed, BC1-BC3) |
 //! | [`dicom`] | DICOM Part 10, uncompressed native pixel data | yes | no |
 //! | [`fits`] | FITS primary and image-extension HDUs | yes | yes |
 //! | [`iff`] | IFF ILBM (palette or 24-bit planes, masks) and PBM | yes | yes (24-plane ILBM) |

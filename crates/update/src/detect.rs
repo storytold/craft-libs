@@ -67,6 +67,9 @@ fn from_manifest(app: &App, manifest: &Manifest) -> Option<Installed> {
         source: InstallSource::Launcher,
         location: rec.path.display().to_string(),
         package: None,
+        externally_managed: false,
+        origin: None,
+        installation: None,
     })
 }
 
@@ -169,7 +172,15 @@ pub mod macos {
         let full_key = format!("{}Version", app.name);
         let text =
             [full_key.as_str(), "CFBundleShortVersionString", "CFBundleVersion"].iter().find_map(|k| dict.get(k).and_then(plist::Value::as_string));
-        Some(Installed { version: text.and_then(version::parse), source: InstallSource::MacApp, location: path.display().to_string(), package: None })
+        Some(Installed {
+            version: text.and_then(version::parse),
+            source: InstallSource::MacApp,
+            location: path.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        })
     }
 }
 
@@ -277,6 +288,9 @@ pub mod windows {
             source: InstallSource::Msi,
             location: m.exe.map_or_else(|| app.name.to_string(), |p| p.display().to_string()),
             package: Some(m.product_code),
+            externally_managed: false,
+            origin: None,
+            installation: None,
         })
     }
 }
@@ -303,7 +317,14 @@ pub mod linux {
         let t = Duration::from_secs(10);
         let mut out = Vec::new();
         let mut add = |manager, list: Vec<(String, String)>| {
-            out.extend(list.into_iter().filter(|(n, _)| ours(n)).map(|(name, version)| Package { manager, name, version }));
+            out.extend(list.into_iter().filter(|(n, _)| ours(n)).map(|(name, version)| Package {
+                manager,
+                name,
+                version,
+                user: false,
+                origin: None,
+                installation: None,
+            }));
         };
         if let Some(list) = capture("dpkg-query", &["-W", "-f", "${Package}|${db:Status-Status}|${Version}\n"], t) {
             add(InstallSource::Deb, packages::parse_dpkg(&list));
@@ -319,15 +340,28 @@ pub mod linux {
             add(InstallSource::Pacman, packages::parse_pacman(&list));
         }
         let arch = format!("--arch={}", std::env::consts::ARCH);
-        if let Some(list) = crate::process::capture_flatpak(&["list", "--app", &arch, "--columns=application,version"], t) {
-            let mut flatpaks = packages::parse_flatpak_list(&list);
+        if let Some(list) = crate::process::capture_flatpak(&["list", "--app", &arch, "--columns=application,version,origin,installation"], t) {
+            let mut flatpaks = packages::parse_flatpak_list_with_origin(&list);
             // Bundles built from a release tarball often list no version: ask Flatpak directly.
-            for (id, version) in flatpaks.iter_mut().filter(|(id, v)| v.is_empty() && id.starts_with("ai.storyteller.")) {
-                if let Some(v) = crate::process::capture_flatpak(&["info", &arch, id], t).as_deref().and_then(packages::parse_flatpak_info) {
+            for (id, version, _, installation) in flatpaks.iter_mut().filter(|(id, v, _, _)| v.is_empty() && id.starts_with("ai.storyteller.")) {
+                let custom_scope;
+                let scope_arg = match installation.as_deref() {
+                    Some("user") => vec!["--user"],
+                    Some("system") | None => vec!["--system"],
+                    Some(named) => {
+                        custom_scope = format!("--installation={named}");
+                        vec![custom_scope.as_str()]
+                    }
+                };
+                let info_args = [&["info"][..], &scope_arg, &[&arch, id]].concat();
+                if let Some(v) = crate::process::capture_flatpak(&info_args, t).as_deref().and_then(packages::parse_flatpak_info) {
                     *version = v;
                 }
             }
-            add(InstallSource::Flatpak, flatpaks);
+            out.extend(flatpaks.into_iter().filter(|(n, _, _, _)| ours(n)).map(|(name, version, origin, installation)| {
+                let is_user = installation.as_deref() == Some("user");
+                Package { manager: InstallSource::Flatpak, name, version, user: is_user, origin, installation }
+            }));
         }
         out
     }
@@ -402,12 +436,41 @@ pub mod linux {
 
     pub fn detect(app: &App, snapshot: &Snapshot) -> Option<Installed> {
         if let Some((path, version)) = appimages(app).into_iter().next() {
-            return Some(Installed { version, source: InstallSource::AppImage, location: path.display().to_string(), package: None });
+            return Some(Installed {
+                version,
+                source: InstallSource::AppImage,
+                location: path.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+                installation: None,
+            });
         }
         let order = [InstallSource::Deb, InstallSource::Rpm, InstallSource::Pacman, InstallSource::Flatpak];
         if let Some(p) = packages::find(app, &snapshot.packages, &order) {
-            let location = if p.manager == InstallSource::Flatpak { app.bundle_id() } else { binary_on_path(app.id) };
-            return Some(Installed { version: packages::version_of(p), source: p.manager, location, package: Some(p.name.clone()) });
+            let location = if p.manager == InstallSource::Flatpak { p.name.clone() } else { binary_on_path(app.id) };
+            let externally_managed = p.manager == InstallSource::Flatpak
+                && p.origin.as_deref().is_none_or(|origin| {
+                    if packages::is_flatpark_origin(origin) {
+                        return true;
+                    }
+                    let scope = match p.installation.as_deref() {
+                        Some("user") => "--user".to_string(),
+                        Some("system") | None => "--system".to_string(),
+                        Some(name) => format!("--installation={name}"),
+                    };
+                    crate::process::capture_flatpak(&["remotes", &scope, "--show-disabled", "--columns=name,url"], Duration::from_secs(10))
+                        .is_none_or(|remotes| packages::remote_manages_flatpak(origin, &remotes))
+                });
+            return Some(Installed {
+                version: packages::version_of(p),
+                source: p.manager,
+                location,
+                package: Some(p.name.clone()),
+                externally_managed,
+                origin: p.origin.clone(),
+                installation: p.installation.clone(),
+            });
         }
         detect_system_install(app)
     }
@@ -418,7 +481,15 @@ pub mod linux {
     /// to whatever installed it, since it can't tell which package manager that was.
     fn detect_system_install(app: &App) -> Option<Installed> {
         let bin = find_binary(app.id)?;
-        Some(Installed { version: binary_version(&bin, app), source: InstallSource::Binary, location: bin.display().to_string(), package: None })
+        Some(Installed {
+            version: binary_version(&bin, app),
+            source: InstallSource::Binary,
+            location: bin.display().to_string(),
+            package: None,
+            externally_managed: true,
+            origin: None,
+            installation: None,
+        })
     }
 
     fn find_binary(id: &str) -> Option<PathBuf> {
@@ -445,7 +516,15 @@ pub mod freebsd {
         if !bin.exists() {
             return None;
         }
-        Some(Installed { version: binary_version(&bin, app), source: InstallSource::Binary, location: bin.display().to_string(), package: None })
+        Some(Installed {
+            version: binary_version(&bin, app),
+            source: InstallSource::Binary,
+            location: bin.display().to_string(),
+            package: None,
+            externally_managed: true,
+            origin: None,
+            installation: None,
+        })
     }
 
     /// `<app> --version` prints `<app> 0.5.0 (sha, date)`.
@@ -688,6 +767,113 @@ mod tests {
         assert_eq!(parse_cli_version("printcraft 0.2.1", pdf).unwrap().to_string(), "0.2.1");
         assert_eq!(parse_cli_version("PdfCraft 0.6.0", pdf).unwrap().to_string(), "0.6.0");
         assert!(strip_cli_prefix("photocraft-cli 1.0.0", "photocraft").is_none());
+    }
+
+    /// The launcher's own record is the first thing detection trusts, and its source is the
+    /// launcher rather than whatever installed the file underneath.
+    #[test]
+    fn a_manifest_record_for_a_file_that_is_there_is_a_launcher_install() {
+        let app = App::by_id("photocraft").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photocraft.AppImage");
+        std::fs::write(&path, b"").unwrap();
+        let mut manifest = crate::manifest::Manifest::default();
+        manifest.apps.insert(
+            app.id.to_string(),
+            crate::manifest::Record {
+                version: "0.6.1".into(),
+                kind: crate::PackageKind::AppImage,
+                path: path.clone(),
+                installed_at: 0,
+                files: Vec::new(),
+                needs_root: false,
+            },
+        );
+        let found = from_manifest(app, &manifest).expect("the record names a file that is there");
+        assert_eq!(found.source, InstallSource::Launcher);
+        assert_eq!(found.version.map(|v| v.to_string()).as_deref(), Some("0.6.1"));
+        assert_eq!(found.location, path.display().to_string());
+        assert!(!found.externally_managed);
+        assert_eq!(found.origin, None);
+        assert_eq!(found.installation, None);
+    }
+
+    /// A record whose file the user removed is not an install, so detection keeps looking.
+    #[test]
+    fn a_manifest_record_for_a_file_that_is_gone_is_not_an_install() {
+        let app = App::by_id("photocraft").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = crate::manifest::Manifest::default();
+        manifest.apps.insert(
+            app.id.to_string(),
+            crate::manifest::Record {
+                version: "0.6.0".into(),
+                kind: crate::PackageKind::AppImage,
+                path: dir.path().join("gone.AppImage"),
+                installed_at: 0,
+                files: Vec::new(),
+                needs_root: false,
+            },
+        );
+        assert!(from_manifest(app, &manifest).is_none());
+    }
+
+    /// A package the snapshot already found, as the launcher sees it after a package-manager
+    /// query: only the fields detection reads are varied.
+    #[cfg(target_os = "linux")]
+    fn injected(manager: InstallSource, installation: Option<&str>, origin: Option<&str>) -> crate::packages::Package {
+        crate::packages::Package {
+            manager,
+            name: match manager {
+                InstallSource::Flatpak => "ai.storyteller.photocraft".to_string(),
+                _ => "photocraft".to_string(),
+            },
+            version: "0.6.2".into(),
+            user: installation == Some("user"),
+            origin: origin.map(str::to_string),
+            installation: installation.map(str::to_string),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_deb_package_is_reported_with_its_manager_and_version() {
+        let app = App::by_id("photocraft").unwrap();
+        let snapshot = Snapshot { packages: vec![injected(InstallSource::Deb, None, None)] };
+        let found = linux::detect(app, &snapshot).expect("the injected package is installed");
+        assert_eq!(found.source, InstallSource::Deb);
+        assert_eq!(found.version.map(|v| v.to_string()).as_deref(), Some("0.6.2"));
+        assert_eq!(found.package.as_deref(), Some("photocraft"));
+        assert!(!found.externally_managed);
+        assert_eq!(found.installation, None);
+    }
+
+    /// A Flatpak from a remote the launcher doesn't drive stays externally managed, in every
+    /// scope the `flatpak remotes` query can need.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_flatpak_from_a_repository_remote_is_externally_managed() {
+        let app = App::by_id("photocraft").unwrap();
+        for installation in [Some("user"), Some("system"), Some("custom"), None] {
+            let snapshot = Snapshot { packages: vec![injected(InstallSource::Flatpak, installation, Some("flathub"))] };
+            let found = linux::detect(app, &snapshot).expect("the injected Flatpak is installed");
+            assert_eq!(found.source, InstallSource::Flatpak);
+            assert!(found.externally_managed, "{installation:?}");
+            assert_eq!(found.location, "ai.storyteller.photocraft");
+            assert_eq!(found.origin.as_deref(), Some("flathub"));
+            assert_eq!(found.installation.as_deref(), installation);
+        }
+    }
+
+    /// FlatPark's own remote is known to manage the copy without asking flatpak again.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_flatpark_flatpak_is_externally_managed_without_asking_its_remotes() {
+        let app = App::by_id("photocraft").unwrap();
+        let snapshot = Snapshot { packages: vec![injected(InstallSource::Flatpak, Some("user"), Some("flatpark"))] };
+        let found = linux::detect(app, &snapshot).expect("the injected Flatpak is installed");
+        assert!(found.externally_managed);
+        assert_eq!(found.origin.as_deref(), Some("flatpark"));
     }
 
     #[cfg(target_os = "linux")]
