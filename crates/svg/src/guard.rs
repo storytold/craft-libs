@@ -20,23 +20,162 @@ const MAX_NESTING: u32 = 16;
 /// The longest entity name a reference is looked for with ([`references`]).
 const MAX_NAME: usize = 256;
 
+/// The longest prefix of `s` of at most `max` bytes that ends on a character boundary.
+/// Unlike `s.get(..s.len().min(max)).unwrap_or(s)`, a mid-character cut does not
+/// fall back to the rest of the string.
+fn bounded_prefix(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// A char-bounded prefix of `rest` longer than [`MAX_NAME`], used when the bounded
+/// window found no whitespace and `rest` itself is overlong.
+fn overlong_name_key<'a>(rest: &'a str, window: &'a str) -> &'a str {
+    if window.len() > MAX_NAME {
+        return window;
+    }
+    let mut end = (MAX_NAME + 1).min(rest.len());
+    while end < rest.len() && !rest.is_char_boundary(end) {
+        end += 1;
+    }
+    rest.get(..end).filter(|key| key.len() > MAX_NAME).unwrap_or(window)
+}
+
+/// Past the first `close` in `b` at or after `from`; the end of `b` when there is none.
+fn past(b: &[u8], from: usize, close: &[u8]) -> usize {
+    b.get(from..).and_then(|rest| rest.windows(close.len()).position(|w| w == close)).map_or(b.len(), |n| from + n + close.len())
+}
+
+/// Whether `rest` starts an element, attribute list or notation declaration. XML readers skip
+/// these to their first `>`, quotes and brackets included.
+fn skipped_to_first_close(rest: &[u8]) -> bool {
+    [b"<!ELEMENT".as_slice(), b"<!ATTLIST", b"<!NOTATION"].iter().any(|kind| rest.starts_with(kind))
+}
+
+/// The end of the markup declaration that starts at `at` (`<!ENTITY`, `<!ATTLIST`, the start of
+/// a `<!DOCTYPE`): past its `>`, or past the `[` that opens a document type's internal subset.
+/// Quoted literals are skipped, so a `<!--`, `]>` or `>` inside one ends nothing. An element,
+/// attribute list or notation declaration ends at its first `>`, as XML readers read it.
+fn declaration_end(b: &[u8], at: usize) -> usize {
+    if skipped_to_first_close(b.get(at..).unwrap_or_default()) {
+        return past(b, at + 2, b">");
+    }
+    let mut i = at + 2;
+    while let Some(&c) = b.get(i) {
+        i = match c {
+            b'"' | b'\'' => past(b, i + 1, &[c]),
+            b'>' | b'[' => return i + 1,
+            _ => i + 1,
+        };
+    }
+    b.len()
+}
+
+/// The end of the internal subset of a document type that starts at `from` (past its `[`): past
+/// the `]` that closes it. Quoted literals, comments, processing instructions and element,
+/// attribute list and notation declarations are skipped, so a `]` inside one closes nothing.
+fn subset_end(b: &[u8], from: usize) -> usize {
+    let mut i = from;
+    while let Some(&c) = b.get(i) {
+        let rest = b.get(i..).unwrap_or_default();
+        i = match c {
+            b'"' | b'\'' => past(b, i + 1, &[c]),
+            b']' => return i + 1,
+            _ if skipped_to_first_close(rest) => past(b, i + 2, b">"),
+            _ if rest.starts_with(b"<!--") => past(b, i + 4, b"-->"),
+            _ if rest.starts_with(b"<?") => past(b, i + 2, b"?>"),
+            _ => i + 1,
+        };
+    }
+    b.len()
+}
+
+/// Past the comment, character data or instruction that starts at `at` inside a declaration's
+/// literal ending at `end`, when it closes before `end`. `missed` holds, for each kind, the literal
+/// end at which its close was last not found, so a literal full of openers is searched once.
+fn closed_in_literal(b: &[u8], at: usize, end: usize, missed: &mut [usize; 3]) -> Option<usize> {
+    const KINDS: [(&[u8], &[u8]); 3] = [(b"<!--", b"-->"), (b"<![CDATA[", b"]]>"), (b"<?", b"?>")];
+    let rest = b.get(at..end)?;
+    let (kind, (open, close)) = KINDS.iter().enumerate().find(|(_, (open, _))| rest.starts_with(open))?;
+    let miss = missed.get_mut(kind)?;
+    if *miss == end {
+        return None;
+    }
+    let found = rest.get(open.len()..).and_then(|r| r.windows(close.len()).position(|w| w == *close)).map(|n| at + open.len() + n + close.len());
+    if found.is_none() {
+        *miss = end;
+    }
+    found
+}
+
 /// The internal general entities declared in `svg`: name → every value declared for it. Text that
-/// only looks like a declaration (in a comment, or in another entity's value) is kept too: the
-/// largest value counts, so it can only make the estimate larger.
+/// only looks like a declaration in another entity's value is kept too: the largest value counts,
+/// so it can only make the estimate larger. Comments and CDATA are skipped, so markers there are
+/// not treated as declarations. A `<!--` or `<![CDATA[` inside a declaration's quoted literal or
+/// a processing instruction starts neither, so the declarations after it are still read.
 fn declared(svg: &str) -> HashMap<&str, Vec<&str>> {
+    let b = svg.as_bytes();
     let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (at, _) in svg.match_indices("<!ENTITY") {
-        let rest = svg.get(at + "<!ENTITY".len()..).unwrap_or("").trim_start();
-        // A parameter entity (`%`) isn't referenced as `&name;`.
-        if rest.starts_with('%') {
+    let mut i = 0;
+    // The end of the declaration or processing instruction the scan is in.
+    let mut literal_end = 0;
+    while let Some(rel) = svg.get(i..).and_then(|s| s.find('<')) {
+        let at = i + rel;
+        let after = svg.get(at + 1..).unwrap_or("");
+        if at >= literal_end {
+            if let Some(body) = after.strip_prefix("!--") {
+                i = match body.find("-->") {
+                    Some(n) => at + 1 + 3 + n + 3,
+                    None => svg.len(),
+                };
+                continue;
+            }
+            if let Some(body) = after.strip_prefix("![CDATA[") {
+                i = match body.find("]]>") {
+                    Some(n) => at + 1 + 8 + n + 3,
+                    None => svg.len(),
+                };
+                continue;
+            }
+            if after.starts_with('?') {
+                literal_end = past(b, at + 2, b"?>");
+            } else if after.starts_with('!') {
+                literal_end = declaration_end(b, at);
+            }
+        }
+        if let Some(rest) = after.strip_prefix("!ENTITY") {
+            let rest = rest.trim_start();
+            // A parameter entity (`%`) isn't referenced as `&name;`.
+            if rest.starts_with('%') {
+                i = at + 1;
+                continue;
+            }
+            // Bound the name scan: a comment full of `<!ENTITYx` with no spaces must not
+            // search the rest of the file for whitespace after every marker. Floor the
+            // cut to a character boundary; never fall back to the whole suffix.
+            let window = bounded_prefix(rest, MAX_NAME + 1);
+            if let Some(end) = window.find(char::is_whitespace) {
+                let (name, rest) = rest.split_at(end);
+                let rest = rest.trim_start();
+                if let Some(quote) = rest.chars().next().filter(|q| matches!(q, '"' | '\''))
+                    && let Some(value) = rest.get(1..).and_then(|r| r.split_once(quote)).map(|(v, _)| v)
+                {
+                    map.entry(name).or_default().push(value);
+                }
+            } else if rest.len() > MAX_NAME {
+                // A name longer than MAX_NAME cannot be referenced, but it must still be
+                // recorded so `entities_expand_past` can refuse the document. If the
+                // MAX_NAME+1 cut split a character, extend to the next boundary so the
+                // recorded key is still longer than MAX_NAME.
+                map.entry(overlong_name_key(rest, window)).or_default().push("");
+            }
+            i = at + 1;
             continue;
         }
-        let Some(end) = rest.find(char::is_whitespace) else { continue };
-        let (name, rest) = rest.split_at(end);
-        let rest = rest.trim_start();
-        let Some(quote) = rest.chars().next().filter(|q| matches!(q, '"' | '\'')) else { continue };
-        let Some(value) = rest.get(1..).and_then(|r| r.split_once(quote)).map(|(v, _)| v) else { continue };
-        map.entry(name).or_default().push(value);
+        i = at + 1;
     }
     map
 }
@@ -99,7 +238,8 @@ pub fn entities_expand_past(svg: &str, most: usize) -> bool {
 /// an entity becomes elements where it is referenced, so what the text shows of the tree is not
 /// what a reader builds; drawing apps declare entities for namespace names only. A caller may
 /// refuse these outright instead of counting them ([`prescan`] counts them ten times). Text that
-/// only looks like a declaration (in a comment) counts too. `&#60;` is text, not markup.
+/// only looks like a declaration in another entity's value counts too; comments are skipped.
+/// `&#60;` is text, not markup.
 pub fn entity_holds_markup(svg: &str) -> bool {
     declared(svg).values().flatten().any(|value| value.contains('<'))
 }
@@ -137,11 +277,10 @@ pub fn too_wide(svg: &str, most: usize, most_work: usize) -> bool {
         } else if rest.starts_with(b"<![CDATA[") {
             i = find(i + 9, b"]]>");
         } else if rest.starts_with(b"<!DOCTYPE") {
-            // To the `]>` closing its subset (the first `>` when it has none).
-            let end = match (rest.iter().position(|b| *b == b'['), rest.iter().position(|b| *b == b'>')) {
-                (Some(o), Some(g)) if o < g => find(i, b"]>"),
-                _ => find(i, b">"),
-            };
+            // To the `>` after the `]` closing its subset (its first `>` when it has none),
+            // quoted literals, comments and instructions skipped.
+            let head = declaration_end(data, i);
+            let end = if data.get(head.wrapping_sub(1)) == Some(&b'[') { find(subset_end(data, head), b">") } else { head };
             let quotes = data.get(i..end).unwrap_or(&[]).iter().filter(|b| matches!(**b, b'"' | b'\'')).count();
             if over(quotes / 2) {
                 return true;
@@ -178,6 +317,10 @@ pub fn too_wide(svg: &str, most: usize, most_work: usize) -> bool {
 pub struct Prescan<'s> {
     /// Whether the elements nest deeper than the cap. The pass stops there.
     pub too_deep: bool,
+    /// Deepest element nesting observed (markup entities count ten times).
+    pub depth: usize,
+    /// Deepest stack of unclosed source elements, excluding self-closing leaves.
+    pub open_depth: usize,
     /// The text with each data URL in an element's attribute values left out: a `data:` value's
     /// quotes kept, a `url(…)`'s parentheses and quotes. Borrowed when there is none, and the
     /// whole text when `too_deep`. An embedded picture is a data URL and most of the text when
@@ -250,26 +393,42 @@ pub fn prescan(svg: &str, most: usize) -> Prescan<'_> {
         (b.len(), false)
     };
     // (now, deepest) of the elements, and of the markup inside the document type.
-    let (mut elements, mut entities) = ((0usize, 0usize), (0usize, 0usize));
+    let (mut elements, mut entities, mut open_depth) = ((0usize, 0usize), (0usize, 0usize), 0usize);
     let mut doctype_end = 0;
+    // The end of the declaration the scan is in: a `<!--`, `<?` or `<![CDATA[` in its quoted
+    // literals starts nothing, and the markup there is counted.
+    let mut literal_end = 0;
+    let mut missed = [0usize; 3];
     let mut i = 0;
     while let Some(at) = b.get(i..).and_then(|rest| rest.iter().position(|c| *c == b'<')).map(|at| i + at) {
         let rest = b.get(at..).unwrap_or_default();
         let depth = if at < doctype_end { &mut entities } else { &mut elements };
-        i = if rest.starts_with(b"<!--") {
+        let open = at >= literal_end;
+        i = if open && rest.starts_with(b"<!--") {
             find(at, b"-->").unwrap_or(b.len())
-        } else if rest.starts_with(b"<![CDATA[") {
+        } else if open && rest.starts_with(b"<![CDATA[") {
             find(at, b"]]>").unwrap_or(b.len())
-        } else if rest.starts_with(b"<?") {
+        } else if open && rest.starts_with(b"<?") {
             find(at, b"?>").unwrap_or(b.len())
-        } else if rest.starts_with(b"<!DOCTYPE") {
-            // Up to the `>` that ends it: after its internal subset (`[` … `]`) when it has one.
-            let plain = tag_end(at, false).0;
-            let subset = b.get(at..plain).is_some_and(|head| head.contains(&b'['));
-            doctype_end = if subset { find(at, b"]>").unwrap_or(b.len()) } else { plain };
+        } else if let Some(end) = (!open).then(|| closed_in_literal(b, at, literal_end, &mut missed)).flatten() {
+            // A comment, character data or instruction that closes inside the literal holds no
+            // element of the entity's markup.
+            end
+        } else if open && rest.starts_with(b"<!DOCTYPE") {
+            // Up to the end of its internal subset (`[` … `]`) when it has one, otherwise its `>`.
+            let head = declaration_end(b, at);
+            literal_end = head;
+            doctype_end = if b.get(head.wrapping_sub(1)) == Some(&b'[') { subset_end(b, head) } else { head };
             at + 2
         } else if rest.starts_with(b"<!") {
             // A declaration of the document type: the markup in its value is counted as it comes.
+            if open {
+                literal_end = declaration_end(b, at);
+            }
+            at + 2
+        } else if rest.starts_with(b"<?") {
+            // An instruction in a declaration's literal opens no element; the markup after it is
+            // counted as it comes.
             at + 2
         } else if rest.starts_with(b"</") {
             depth.0 = depth.0.saturating_sub(1);
@@ -287,8 +446,14 @@ pub fn prescan(svg: &str, most: usize) -> Prescan<'_> {
             end
         };
         if elements.1.saturating_add(entities.1.saturating_mul(10)) > most {
-            return Prescan { too_deep: true, markers: Cow::Borrowed(svg) };
+            return Prescan {
+                too_deep: true,
+                depth: elements.1.saturating_add(entities.1.saturating_mul(10)),
+                open_depth,
+                markers: Cow::Borrowed(svg),
+            };
         }
+        open_depth = open_depth.max(elements.0);
     }
     let markers = if data_values.is_empty() {
         Cow::Borrowed(svg)
@@ -303,7 +468,7 @@ pub fn prescan(svg: &str, most: usize) -> Prescan<'_> {
         text.push_str(svg.get(from..).unwrap_or_default());
         Cow::Owned(text)
     };
-    Prescan { too_deep: false, markers }
+    Prescan { too_deep: false, depth: elements.1.saturating_add(entities.1.saturating_mul(10)), open_depth, markers }
 }
 
 #[cfg(test)]
@@ -384,6 +549,80 @@ mod tests {
         let long = "n".repeat(MAX_NAME + 1);
         let long_name = format!("<!DOCTYPE svg [<!ENTITY {long} \"x\">]><svg id=\"&{long};\"/>");
         assert!(expansion_too_large(&long_name));
+    }
+
+    #[test]
+    fn a_comment_or_cdata_marker_in_a_literal_or_an_instruction_hides_no_declaration() {
+        let big = "x".repeat(1 << 20);
+        let refs = "&a;".repeat(20);
+        let large = format!("<!ENTITY a \"{big}\">");
+        for hidden in [
+            format!("<!DOCTYPE svg [<!ENTITY c \"<!--\">{large}]>"),
+            format!("<!DOCTYPE svg [<!ENTITY c '<![CDATA['>{large}]>"),
+            format!("<!DOCTYPE svg SYSTEM \"<!--\" [{large}]>"),
+            format!("<!DOCTYPE svg [<!NOTATION n SYSTEM '<!--'>{large}]>"),
+            format!("<?pi <!-- ?><!DOCTYPE svg [{large}]>"),
+            format!("<!DOCTYPE svg [<?pi <![CDATA[ ?>{large}]>"),
+            format!("<!DOCTYPE svg [<!ELEMENT svg [<!-- >{large}]>"),
+        ] {
+            assert!(expansion_too_large(&format!("{hidden}<svg id=\"{refs}\"/>")));
+        }
+        assert!(entity_holds_markup("<?pi <!-- ?><!DOCTYPE svg [<!ENTITY m '<g/>'>]><svg/>"));
+        // A real comment still hides a declaration-like text.
+        assert!(!entity_holds_markup("<!DOCTYPE svg [<!-- <!ENTITY m '<g/>'> -->]><svg/>"));
+    }
+
+    #[test]
+    fn markers_in_a_literal_hide_no_markup_from_the_depth_or_attribute_counts() {
+        let tenth = DEPTH / 10 + 1;
+        let nested = format!("{}{}", "<g>".repeat(tenth), "</g>".repeat(tenth));
+        for bait in ["<!ENTITY c \"<!--\">", "<!ENTITY c \"<?\">", "<!ENTITY c \"]>\">", "<!ELEMENT svg ] >"] {
+            assert!(too_deep(&format!("<!DOCTYPE svg [{bait}<!ENTITY a \"{nested}\">]><svg>&a;</svg>")), "{bait}");
+        }
+        // Comments and instructions in a value open and close no element.
+        let quiet = format!("<!ENTITY c \"{}\">", "<!-- x --><?pi x?>".repeat(DEPTH));
+        assert!(!too_deep(&format!("<!DOCTYPE svg [{quiet}]>{}", svg(&groups(8)))));
+        let closers = format!("<!ENTITY a \"{}\">", "<g><!-- </g> --><?pi </g>?><![CDATA[</g>]]>".repeat(tenth));
+        assert!(too_deep(&format!("<!DOCTYPE svg [{closers}]><svg>&a;</svg>")));
+        // Openers that never close in the value are read once each.
+        let openers = format!("<!ENTITY c \"{}\">", "<!--<?<![CDATA[".repeat(100_000));
+        assert!(!too_deep(&format!("<!DOCTYPE svg [{openers}]>{}", svg(&groups(8)))));
+        let many = (0..5000).map(|i| format!(" a{i}=\"1\"")).collect::<String>();
+        assert!(wide(&format!("<!DOCTYPE svg [<!ENTITY c \"]>\"><!ENTITY e '<g{many}/>'>]><svg>&e;</svg>")));
+        // An element declaration ends at its first `>`, so a `]` inside it does not end the subset.
+        assert!(wide(&format!("<!DOCTYPE svg [<!ELEMENT svg ] ><!ENTITY e '<g{many}/>'>]><svg>&e;</svg>")));
+    }
+
+    #[test]
+    fn entity_markers_in_a_comment_are_scanned_in_linear_time() {
+        // 100,000 `<!ENTITYx` markers with no whitespace: the old scan searched the rest of
+        // the file after every marker. Skipping comments and bounding the name makes this
+        // linear, and none of the markers is a declaration.
+        let markers = "<!ENTITYx".repeat(100_000);
+        let svg = format!("<svg><!--{markers}--></svg>");
+        assert!(!entities_expand_past(&svg, MAX_ENTITY_EXPANSION));
+    }
+
+    #[test]
+    fn a_multibyte_cut_does_not_scan_the_rest_of_the_suffix() {
+        // The MAX_NAME+1 window ends in the middle of `é`. Falling back to the whole
+        // suffix would walk every following `x` looking for whitespace. Inside an
+        // entity value the marker is still counted (same conservative rule as other
+        // declarations in values), and because the name is overlong the document is
+        // refused — but the scan stays linear.
+        let mid = format!("{}é{}", "x".repeat(MAX_NAME), "x".repeat(200_000));
+        let in_value = format!("<!DOCTYPE svg [<!ENTITY c \"<!ENTITY{mid}\">]><svg/>");
+        assert!(entities_expand_past(&in_value, MAX_ENTITY_EXPANSION));
+        // The recorded overlong key must stay a short prefix, not the whole suffix
+        // the old unwrap_or(rest) fallback would have stored.
+        assert!(declared(&in_value).keys().all(|name| name.len() <= MAX_NAME + 4));
+        // A short multibyte name is still read as a normal declaration.
+        let short = "<!DOCTYPE svg [<!ENTITY é \"x\">]><svg id=\"&é;\"/>";
+        assert!(!entities_expand_past(short, MAX_ENTITY_EXPANSION));
+        // An overlong name that straddles the window is still refused.
+        let long = format!("{}é", "n".repeat(MAX_NAME));
+        let long_name = format!("<!DOCTYPE svg [<!ENTITY {long} \"x\">]><svg id=\"&{long};\"/>");
+        assert!(entities_expand_past(&long_name, MAX_ENTITY_EXPANSION));
     }
 
     fn svg(body: &str) -> String {

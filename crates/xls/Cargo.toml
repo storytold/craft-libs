@@ -10,6 +10,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `testing`: a writer of small BIFF8 workbooks, plain or encrypted, for the tests of crates that read them.
+test-support = []
+
 [dependencies]
 craft-cfb = { workspace = true }
 craft-sheet = { workspace = true }
@@ -21,4 +25,5 @@ miniz_oxide = "0.9"
 thiserror = { workspace = true }
 
 [dev-dependencies]
+craft-xls = { path = ".", features = ["test-support"] }
 miniz_oxide = "0.9"
