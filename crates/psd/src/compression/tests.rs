@@ -793,3 +793,39 @@ fn padded_packbits_preserves_recovery_without_weakening_strict_decode() {
     super::packbits::decode_padded_into(&[0, 7, 255], 1, 1, &mut out).unwrap();
     assert_eq!(out, [42, 7]);
 }
+
+#[test]
+fn caller_scratch_prediction_matches_existing_decoder_across_planes() {
+    for depth in [1u16, 8, 16, 32] {
+        let layout = PlaneLayout { planes: 3, width: 13, height: 7, depth, version: Version::Psb };
+        let mut actual: Vec<u8> = (0..layout.decoded_len().unwrap()).map(|i| (i.wrapping_mul(31) % 251) as u8).collect();
+        let mut expected = actual.clone();
+        unpredict(&mut expected, &layout).unwrap();
+        let needed = if depth == 32 { layout.row_bytes() } else { 0 };
+        let mut scratch = vec![0xa5; needed + 11];
+        unpredict_with_scratch(&mut actual, &layout, &mut scratch).unwrap();
+        assert_eq!(actual, expected, "depth {depth}");
+        assert_eq!(&scratch[needed..], &[0xa5; 11]);
+    }
+}
+
+#[test]
+fn caller_scratch_prediction_rejects_invalid_inputs_before_mutation() {
+    let layout = PlaneLayout { planes: 1, width: 3, height: 2, depth: 32, version: Version::Psd };
+    let original = vec![0x73; 24];
+    for (len, scratch_len) in [(23, 12), (25, 12), (24, 11)] {
+        let mut bytes = vec![0x73; len];
+        let mut scratch = vec![0xa5; scratch_len];
+        assert!(unpredict_with_scratch(&mut bytes, &layout, &mut scratch).is_err());
+        assert_eq!(bytes, vec![0x73; len]);
+        assert_eq!(scratch, vec![0xa5; scratch_len]);
+    }
+    for invalid in [PlaneLayout { width: usize::MAX, ..layout }, PlaneLayout { planes: usize::MAX, ..layout }, PlaneLayout { depth: 12, ..layout }] {
+        let mut bytes = original.clone();
+        assert!(unpredict_with_scratch(&mut bytes, &invalid, &mut []).is_err());
+        assert_eq!(bytes, original);
+    }
+    for empty in [PlaneLayout { width: 0, ..layout }, PlaneLayout { height: 0, ..layout }] {
+        unpredict_with_scratch(&mut [], &empty, &mut []).unwrap();
+    }
+}

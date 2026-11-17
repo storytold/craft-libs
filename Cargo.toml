@@ -52,6 +52,8 @@ craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
+craft-color = { path = "crates/color" }
+craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
@@ -117,6 +119,7 @@ craft-macho = { path = "crates/macho" }
 craft-math = { path = "crates/math" }
 # No default features: craft-audio turns on the craft-media modules each of its features needs.
 craft-media = { path = "crates/media", default-features = false }
+craft-media-source = { path = "crates/media-source" }
 craft-materialx = { path = "crates/materialx" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
@@ -143,6 +146,7 @@ craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-image-codecs = { path = "crates/image-codecs" }
+craft-dds = { path = "crates/dds" }
 craft-psd = { path = "crates/psd" }
 craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }

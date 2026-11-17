@@ -50,6 +50,10 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
     }
+    // CT_Settings order: after `w:mirrorMargins`, before `w:attachedTemplate`.
+    if s.gutter_at_top {
+        w.empty("w:gutterAtTop", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }
@@ -349,7 +353,7 @@ pub(super) fn app_xml(doc: &Document) -> Vec<u8> {
             ("xmlns:vt", "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"),
         ],
     );
-    w.leaf("Application", &[], "WordCraft");
+    w.leaf("Application", &[], crate::application_name());
     w.leaf("Words", &[], &doc.word_count().to_string());
     w.leaf("Paragraphs", &[], &doc.paragraph_count().to_string());
     w.leaf("DocSecurity", &[], "0");

@@ -7,7 +7,7 @@ use common::{read, read_with};
 use craft_xlsx::testing::zip;
 use craft_xlsx::{
     CellError, CellRef, Color, ColorSource, Error, Fill, FormulaKind, Limits, Package, Pattern, PatternFill, Protection, Range, Row, SheetKind,
-    SheetPart, Styles, Value, Visibility, is_xlsb,
+    SheetPart, Styles, Table, Value, Visibility, is_xlsb,
 };
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
@@ -590,7 +590,7 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&CellRef::new(0, 14), &1)]);
     // Every formula cell keeps its saved result as its value.
     assert!((1..=15).all(|c| sheet.value(CellRef::new(0, c)) == Value::Number(0.0)));
-    for why in ["other workbooks", "missing from the file", "structured table references"] {
+    for why in ["other workbooks", "missing from the file", "tables the reader could not read"] {
         assert!(warned(&wb, why), "{why}: {:?}", wb.warnings);
     }
 }
@@ -1614,6 +1614,325 @@ fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
     let got: Vec<_> = (1..=3).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
     assert_eq!(got, [Some("Macro1!$A$1"), Some("Data:Hidden!$A$1"), None]);
     assert!(warned(&wb, "references to sheets with no cells"), "{:?}", wb.warnings);
+}
+
+// Tables ([MS-XLSB] 2.1.7.51): table parts assembled from the specification's records, and the
+// `<table>` Excel writes for the same table in `.xlsx`.
+
+fn rfx(r0: u32, r1: u32, c0: u32, c1: u32) -> Vec<u8> {
+    [r0, r1, c0, c1].iter().flat_map(|n| n.to_le_bytes()).collect()
+}
+/// `BrtBeginList`: a worksheet table with no formats or cell styles, its name as its display name.
+fn begin_list(range: &[u8], id: u32, header: u32, totals: u32, flags: u32, name: &str) -> Vec<u8> {
+    begin_list_of(0, range, id, header, totals, flags, name)
+}
+/// `BrtBeginList` of a table type (`lt`): 0 a worksheet table, 2 an XML table.
+fn begin_list_of(lt: u32, range: &[u8], id: u32, header: u32, totals: u32, flags: u32, name: &str) -> Vec<u8> {
+    let mut data = range.to_vec();
+    for n in [lt, id, header, totals, flags] {
+        data.extend(n.to_le_bytes());
+    }
+    data.extend(u32::MAX.to_le_bytes().repeat(6));
+    data.extend(0u32.to_le_bytes());
+    data.extend([wide(name), wide(name), wide("")].concat());
+    data.extend(u32::MAX.to_le_bytes().repeat(3));
+    record(343, &data)
+}
+/// `BrtBeginListCol` with its totals function (`ilta`), data format and totals label.
+fn list_col(id: u32, ilta: u32, data_dxf: u32, name: &str, total: Option<&str>) -> Vec<u8> {
+    let mut data: Vec<u8> = [id, ilta, u32::MAX, data_dxf, u32::MAX, 0, u32::MAX].iter().flat_map(|n| n.to_le_bytes()).collect();
+    data.extend(wide(name));
+    data.extend(total.map_or_else(|| u32::MAX.to_le_bytes().to_vec(), wide));
+    data.extend(u32::MAX.to_le_bytes().repeat(3));
+    record(347, &data)
+}
+/// `BrtListCCFmla` (351) or `BrtListTrFmla` (352).
+fn list_formula(id: u16, rgce: &[u8]) -> Vec<u8> {
+    record(id, &[&[0u8][..], &(rgce.len() as u32).to_le_bytes(), rgce, &0u32.to_le_bytes()].concat())
+}
+/// `PtgList`: the flags hold the columns (bits 0-1), the rows (2-6) and the two spacing bits.
+fn ptg_list(ixti: u16, flags: u16, list: u32, first: u16, last: u16) -> Vec<u8> {
+    [&[0x18u8, 0x19][..], &ixti.to_le_bytes(), &flags.to_le_bytes(), &list.to_le_bytes(), &first.to_le_bytes(), &last.to_le_bytes()].concat()
+}
+fn filter_column(col: u32, flags: u16, criteria: &[Vec<u8>]) -> Vec<u8> {
+    [record(163, &[&col.to_le_bytes()[..], &flags.to_le_bytes()].concat()), criteria.concat(), record(164, &[])].concat()
+}
+fn custom_filter(vts: u8, op: u8, union: [u8; 8], text: Option<&str>) -> Vec<u8> {
+    record(174, &[&[vts, op][..], &union, &text.map(wide).unwrap_or_default()].concat())
+}
+fn table_style(flags: u16, name: &str) -> Vec<u8> {
+    record(513, &[&flags.to_le_bytes()[..], &wide(name)].concat())
+}
+/// The rows of a `PtgList` (bits 2-6).
+const fn rows(t: u16) -> u16 {
+    t << 2
+}
+
+/// The filters of Sales: a value list with blanks, two custom criteria (OR), a bottom-percent
+/// filter applied with its button hidden, and "today" applied.
+fn sales_filters() -> Vec<Vec<u8>> {
+    vec![
+        filter_column(0, 0, &[record(165, &[1, 0, 0, 0, 0, 0, 0, 0]), record(167, &wide("k3")), record(167, &wide("k4")), record(166, &[])]),
+        filter_column(
+            1,
+            0,
+            &[
+                record(172, &0u32.to_le_bytes()),
+                custom_filter(4, 1, 20f64.to_le_bytes(), None),
+                custom_filter(6, 2, [0; 8], Some("k*")),
+                record(173, &[]),
+            ],
+        ),
+        filter_column(2, 1, &[record(170, &[&[0b110u8][..], &10f64.to_le_bytes(), &23.25f64.to_le_bytes()].concat())]),
+        filter_column(3, 0, &[record(171, &[&9u32.to_le_bytes()[..], &[1], &46340f64.to_le_bytes(), &46341f64.to_le_bytes()].concat())]),
+    ]
+}
+
+/// Sales (B2:E8, id 1) with a totals row, a calculated column, a column name needing escapes,
+/// `filters` and a sort.
+fn sales(filters: &[Vec<u8>]) -> Vec<u8> {
+    [
+        begin_list(&rfx(1, 7, 1, 4), 1, 1, 1, 1, "Sales"),
+        record(161, &rfx(1, 6, 1, 4)),
+        filters.concat(),
+        record(162, &[]),
+        record(530, &[&0u16.to_le_bytes()[..], &rfx(2, 6, 1, 4)].concat()),
+        record(532, &[&1u16.to_le_bytes()[..], &rfx(1, 7, 1, 1), &[0; 8], &u32::MAX.to_le_bytes()].concat()),
+        record(533, &[]),
+        record(531, &[]),
+        record(345, &4u32.to_le_bytes()),
+        list_col(1, 0, u32::MAX, "Key", Some("Total")),
+        record(348, &[]),
+        list_col(2, 6, u32::MAX, "Val", None),
+        record(348, &[]),
+        list_col(3, 0, 2, "It's [#1]", None),
+        record(348, &[]),
+        list_col(4, 9, u32::MAX, "Calc", None),
+        list_formula(351, &[ptg_list(0, 1 | rows(0x10), 1, 1, 1), vec![0x1E, 2, 0, 0x05]].concat()),
+        list_formula(352, &[ptg_list(0, 1, 1, 3, 3), vec![0x42, 1, 7, 0]].concat()),
+        record(348, &[]),
+        record(346, &[]),
+        table_style(0b101, "TableStyleMedium9"),
+        record(344, &[]),
+    ]
+    .concat()
+}
+
+/// NoHead (H10:I11, id 2): no header row, a totals row never shown, no stripes.
+fn no_head() -> Vec<u8> {
+    [
+        begin_list(&rfx(9, 10, 7, 8), 2, 0, 0, 0, "NoHead"),
+        record(345, &2u32.to_le_bytes()),
+        list_col(1, 0, u32::MAX, "Column1", None),
+        record(348, &[]),
+        list_col(2, 0, u32::MAX, "Column2", None),
+        record(348, &[]),
+        record(346, &[]),
+        table_style(0, "TableStyleMedium2"),
+        record(344, &[]),
+    ]
+    .concat()
+}
+
+/// XmlT (K1:L2, id 3): an XML table, its columns mapped to an XML map's elements.
+fn xml_table_part() -> Vec<u8> {
+    let col = |id: u32, name: &str, kind: u32, xpath: &str| {
+        let mut data: Vec<u8> = [id, 0, u32::MAX, u32::MAX, u32::MAX, 0].iter().flat_map(|n| n.to_le_bytes()).collect();
+        data.extend([wide(name), wide(name)].concat());
+        data.extend(u32::MAX.to_le_bytes().repeat(4));
+        let map = [&1u32.to_le_bytes()[..], &(if id == 2 { 2u32 } else { 0 }).to_le_bytes(), &kind.to_le_bytes(), &wide(xpath)].concat();
+        [record(347, &data), record(349, &map), record(350, &[]), record(348, &[])].concat()
+    };
+    [
+        begin_list_of(2, &rfx(0, 1, 10, 11), 3, 1, 0, 0, "XmlT"),
+        record(345, &2u32.to_le_bytes()),
+        col(1, "a", 0x0D, "/rows/r/a"),
+        col(2, "b", 0x01, "/rows/@b"),
+        record(346, &[]),
+        table_style(0b100, "TableStyleMedium2"),
+        record(344, &[]),
+    ]
+    .concat()
+}
+
+const XML_TABLE_XML: &str = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="3" name="XmlT" displayName="XmlT" ref="K1:L2" tableType="xml" totalsRowShown="0"><tableColumns count="2"><tableColumn id="1" uniqueName="a" name="a"><xmlColumnPr mapId="1" xpath="/rows/r/a" xmlDataType="int"/></tableColumn><tableColumn id="2" uniqueName="b" name="b"><xmlColumnPr mapId="1" xpath="/rows/@b" denormalized="1" xmlDataType="string"/></tableColumn></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#;
+const SALES_XML: &str = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Sales" displayName="Sales" ref="B2:E8" totalsRowCount="1"><autoFilter ref="B2:E7"><filterColumn colId="0"><filters blank="1"><filter val="k3"/><filter val="k4"/></filters></filterColumn><filterColumn colId="1"><customFilters><customFilter operator="lessThan" val="20"/><customFilter val="k*"/></customFilters></filterColumn><filterColumn colId="2" hiddenButton="1"><top10 top="0" percent="1" val="10" filterVal="23.25"/></filterColumn><filterColumn colId="3"><dynamicFilter type="today" val="46340" maxVal="46341"/></filterColumn></autoFilter><sortState ref="B3:E7"><sortCondition descending="1" ref="B2:B8"/></sortState><tableColumns count="4"><tableColumn id="1" name="Key" totalsRowLabel="Total"/><tableColumn id="2" name="Val" totalsRowFunction="sum"/><tableColumn id="3" name="It's [#1]" dataDxfId="2"/><tableColumn id="4" name="Calc" totalsRowFunction="custom"><calculatedColumnFormula>Sales[[#This Row],[Val]]*2</calculatedColumnFormula><totalsRowFormula>MAX(Sales[Calc])</totalsRowFormula></tableColumn></tableColumns><tableStyleInfo name="TableStyleMedium9" showFirstColumn="1" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#;
+const NO_HEAD_XML: &str = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="2" name="NoHead" displayName="NoHead" ref="H10:I11" headerRowCount="0" totalsRowShown="0"><tableColumns count="2"><tableColumn id="1" name="Column1"/><tableColumn id="2" name="Column2"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="0" showColumnStripes="0"/></table>"#;
+
+fn xml_table(xml: &str) -> Table {
+    let root = craft_xml::Options::canonical(&craft_xlsx::ns::CANONICAL).parse(xml.as_bytes()).unwrap();
+    Table::read(&root).unwrap()
+}
+
+/// `book_with_links(&xti())` whose sheet one lists `tables` (`BrtListPart`, relationship ids
+/// t1, t2, ...) after `data`.
+fn book_with_tables(data: &[u8], tables: &[Vec<u8>]) -> Vec<u8> {
+    let mut list = vec![record(660, &(tables.len() as u32).to_le_bytes())];
+    let mut rels = String::from(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+    let mut types = TYPES.trim_end_matches("</Types>").to_string();
+    for i in 1..=tables.len() {
+        list.push(record(661, &wide(&format!("t{i}"))));
+        rels.push_str(&format!(r#"<Relationship Id="t{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/t{i}.bin"/>"#));
+        types.push_str(&format!(r#"<Override PartName="/tables/t{i}.bin" ContentType="application/vnd.ms-excel.table"/>"#));
+    }
+    list.push(record(662, &[]));
+    rels.push_str("</Relationships>");
+    types.push_str("</Types>");
+    let names: Vec<String> = (1..=tables.len()).map(|i| format!("tables/t{i}.bin")).collect();
+    let (book, one, two, strings) = (book_with_links(&xti()), worksheet(data, &list.concat()), worksheet(&[], &[]), sst());
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &book),
+        ("records/_rels/book.bin.rels", RELS.as_bytes()),
+        ("data/one.bin", &one),
+        ("data/_rels/one.bin.rels", rels.as_bytes()),
+        ("data/two.bin", &two),
+        ("text/strings.bin", &strings),
+    ];
+    entries.extend(names.iter().map(String::as_str).zip(tables.iter().map(Vec::as_slice)));
+    zip(&entries)
+}
+
+/// Sheet one's tables through `Package`, and its warnings.
+fn tables_of(bytes: &[u8]) -> (Vec<Table>, Vec<String>) {
+    let mut p = Package::open(bytes, &Limits::default()).unwrap();
+    let wb = p.workbook().unwrap();
+    let part = p.sheet(&wb.sheets[0], |_| Ok(())).unwrap();
+    let tables = p.tables(&part).unwrap().into_iter().map(|(_, t)| t).collect();
+    (tables, p.warnings().to_vec())
+}
+
+#[test]
+fn a_name_using_a_structured_reference_is_decoded_after_tables_are_indexed() {
+    // `Vals` = `Sales[Val]`. Names are decoded after the workbook's tables are indexed, so
+    // the formula and a cell that uses it are kept, instead of only their saved results.
+    let name = brt_name(0, 0, WORKBOOK, "Vals", &ptg_list(0, 1, 1, 1, 1), None);
+    let list = [record(660, &1u32.to_le_bytes()), record(661, &wide("t1")), record(662, &[])];
+    let mut data = row(0);
+    data.extend(formula_cell(1, &[0x23, 5, 0, 0, 0], &[])); // =Vals, after the four names of `book_with_links`
+    let types = {
+        let t = TYPES.trim_end_matches("</Types>");
+        format!(r#"{t}<Override PartName="/tables/t1.bin" ContentType="application/vnd.ms-excel.table"/></Types>"#)
+    };
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="t1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/t1.bin"/></Relationships>"#;
+    let (one, two, strings, table) = (worksheet(&data, &list.concat()), worksheet(&[], &[]), sst(), sales(&sales_filters()));
+    let book = {
+        let plain = book_with_links(&xti());
+        let end = record(132, &[]);
+        [&plain[..plain.len() - end.len()], name.as_slice(), end.as_slice()].concat()
+    };
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", book.as_slice()),
+        ("records/_rels/book.bin.rels", RELS.as_bytes()),
+        ("data/one.bin", one.as_slice()),
+        ("data/_rels/one.bin.rels", sheet_rels.as_bytes()),
+        ("data/two.bin", two.as_slice()),
+        ("text/strings.bin", strings.as_slice()),
+        ("tables/t1.bin", table.as_slice()),
+    ]);
+    let names = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap().defined_names;
+    assert_eq!(names.iter().find(|n| n.name == "Vals").map(|n| n.formula.as_str()), Some("Sales[Val]"));
+    let wb = read(&bytes).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 1)), Some("Vals"), "{:?}", wb.warnings);
+}
+
+#[test]
+fn simple_table_references_preserve_square_bracket_spacing() {
+    let cases = [
+        (1, "Sales[Val]"),
+        (1 | 0x80, "Sales[ Val ]"),
+        (rows(1), "Sales[#All]"),
+        (rows(1) | 0x80, "Sales[ #All ]"),
+        (1 | 0x100, "Sales[Val]"),
+        (rows(1) | 0x100, "Sales[#All]"),
+    ];
+    let mut data = row(0);
+    for (i, (bits, _)) in cases.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, &ptg_list(0, *bits, 1, 1, 1), &[]));
+    }
+    let bytes = book_with_tables(&data, &[sales(&sales_filters())]);
+    let wb = read(&bytes).unwrap();
+    for (i, (_, want)) in cases.iter().enumerate() {
+        assert_eq!(wb.sheets[0].formula(CellRef::new(0, i as u32 + 1)), Some(*want), "{:?}", wb.warnings);
+    }
+}
+
+#[test]
+fn tables_are_read_as_their_xlsx_spelling() {
+    // Spacing flags: 0x80 inside the outer brackets, 0x100 after commas.
+    let cells: Vec<Vec<u8>> = vec![
+        ptg_list(0, 1, 1, 1, 1),
+        ptg_list(0, 1 | rows(2), 1, 0, 0),
+        ptg_list(0, 2 | rows(4), 1, 1, 3),
+        ptg_list(0, rows(1), 1, 0, 0),
+        ptg_list(0, 0, 1, 0, 0),
+        ptg_list(0, 2 | rows(0x10), 1, 1, 3),
+        ptg_list(0, 1, 1, 2, 2),
+        ptg_list(0, 1 | rows(4) | 0x180, 1, 1, 1),
+        ptg_list(0, rows(0x10), 2, 0, 0),
+        ptg_list(0, 1 | rows(0xC) | 0x100, 1, 0, 0),
+        ptg_list(0, rows(6), 1, 0, 0),
+        // Kept as their saved results: a table that isn't there, a deleted table, a column past
+        // the table's last.
+        ptg_list(0, 0, 9, 0, 0),
+        ptg_list(0, 0x1000, 1, 0, 0),
+        ptg_list(0, 1, 1, 4, 4),
+    ];
+    let mut data = row(0);
+    for (i, rgce) in cells.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, rgce, &[]));
+    }
+    let bytes = book_with_tables(&data, &[sales(&sales_filters()), no_head(), xml_table_part()]);
+    let (tables, _) = tables_of(&bytes);
+    assert_eq!(tables, [xml_table(SALES_XML), xml_table(NO_HEAD_XML), xml_table(XML_TABLE_XML)]);
+    let wb = read(&bytes).unwrap();
+    let got: Vec<_> = (1..=14).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
+    let want = [
+        Some("Sales[Val]"),
+        Some("Sales[[#Headers],[Key]]"),
+        Some("Sales[[#Data],[Val]:[Calc]]"),
+        Some("Sales[#All]"),
+        Some("Sales[]"),
+        Some("Sales[[#This Row],[Val]:[Calc]]"),
+        Some("Sales[It''s '['#1']]"),
+        Some("Sales[ [#Data], [Val] ]"),
+        Some("NoHead[#This Row]"),
+        Some("Sales[[#Data], [#Totals], [Key]]"),
+        Some("Sales[[#Headers],[#Data]]"),
+        None,
+        None,
+        None,
+    ];
+    assert_eq!(got, want);
+    for why in ["tables the reader could not read", "deleted tables", "missing table column"] {
+        assert!(warned(&wb, why), "{why}: {:?}", wb.warnings);
+    }
+}
+
+#[test]
+fn table_filters_and_parts_the_reader_cannot_spell_are_left_out() {
+    // A filter column whose criteria are in a future-record block (where Excel keeps date
+    // groups), and one on a Boolean value: both left out, the table kept.
+    let frt = [record(35, &[3, 0, 2, 0]), record(5094, &[0; 32]), record(36, &[])].concat();
+    let mut filters = sales_filters();
+    filters.push(filter_column(4, 0, &[frt]));
+    filters.push(filter_column(5, 0, &[record(172, &0u32.to_le_bytes()), custom_filter(8, 2, [1, 0, 0, 0, 0, 0, 0, 0], None), record(173, &[])]));
+    // A truncated table part: skipped, and formulas using it keep their saved results.
+    let mut broken = no_head();
+    broken.truncate(20);
+    let data = [row(0), formula_cell(1, &ptg_list(0, 0, 2, 0, 0), &[]), formula_cell(2, &ptg_list(0, 1, 1, 1, 1), &[])].concat();
+    let bytes = book_with_tables(&data, &[sales(&filters), broken]);
+    let (tables, warnings) = tables_of(&bytes);
+    assert_eq!(tables, [xml_table(SALES_XML)]);
+    for why in ["filters kept in extensions", "custom filters on a Boolean value", "skipped tables/t2.bin"] {
+        assert!(warnings.iter().any(|w| w.contains(why)), "{why}: {warnings:?}");
+    }
+    let wb = read(&bytes).unwrap();
+    assert_eq!([1, 2].map(|c| wb.sheets[0].formula(CellRef::new(0, c))), [None, Some("Sales[Val]")]);
+    assert!(warned(&wb, "tables the reader could not read"), "{:?}", wb.warnings);
 }
 
 #[test]
