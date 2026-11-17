@@ -432,3 +432,37 @@ fn validate(parts: &[Part], setup: &ScoreSetup) -> Result<(), String> {
     }
     Ok(())
 }
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    fn setup() -> ScoreSetup {
+        ScoreSetup { software: "SoundCraft".into(), title: "A<&\u{1}".into(), composer: "B".into(), bars_per_system: 4, show_track_names: true }
+    }
+    fn parts() -> Vec<Part> {
+        vec![Part {
+            name: "Keys".into(),
+            bass: false,
+            measures: vec![Measure {
+                numerator: 4,
+                denominator: 4,
+                items: vec![
+                    Item { pitches: vec![60, 64], units: 4, tie_start: vec![64], tie_stop: vec![] },
+                    Item { pitches: vec![64], units: 12, tie_start: vec![], tie_stop: vec![64] },
+                ],
+            }],
+        }]
+    }
+    #[test]
+    fn per_pitch_ties_and_escaping_survive_serialization() {
+        let parts = parts();
+        let xml = musicxml(&parts, &setup()).unwrap();
+        assert!(xml.contains("<work-title>A&lt;&amp;</work-title>"));
+        let notes: Vec<_> = xml.split("<note>").skip(1).map(|n| n.split("</note>").next().unwrap()).collect();
+        assert!(notes[0].contains("<duration>4</duration>"));
+        assert!(!notes[0].contains("<tie "));
+        assert!(notes[1].contains("<tie type=\"start\"/>") && notes[1].contains("<chord/>"));
+        assert!(notes[2].contains("<duration>12</duration>") && notes[2].contains("<tie type=\"stop\"/>"));
+        assert_eq!(svg(&parts, &setup()).unwrap().matches("stroke-width=\"0.9\"").count(), 1);
+    }
+}
