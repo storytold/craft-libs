@@ -13,7 +13,7 @@ use craft_behavior::{
 };
 use craft_keymap::Mods;
 use craft_theme::HitSizes;
-use egui::{Context, Id, IdMap, Pos2, Rect, Vec2, ViewportId};
+use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, Vec2, ViewportId};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -136,6 +136,10 @@ pub(crate) struct Shapes {
     /// the last, each with its component: such a widget takes its press itself.
     this_texts: IdMap<Id>,
     last_texts: IdMap<Id>,
+    /// The layers' own egui widgets (an overlay `Area`'s, which senses a click where nothing on the layer does) in the
+    /// running pass and the last: such a widget lies under every widget and shape on its layer and stands for none.
+    this_grounds: IdSet,
+    last_grounds: IdSet,
     /// The paint order the running pass's next registration takes.
     next: u32,
     /// What lies under the pass's hover point, found over `last` at the begin hook with the pass's egui targets:
@@ -218,6 +222,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         shapes.last = std::mem::take(&mut shapes.this);
         shapes.last_bodies = std::mem::take(&mut shapes.this_bodies);
         shapes.last_texts = std::mem::take(&mut shapes.this_texts);
+        shapes.last_grounds = std::mem::take(&mut shapes.this_grounds);
         shapes.next = 0;
         shapes.hover = None;
         shapes.winner = None;
@@ -382,6 +387,15 @@ pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
     crate::runtime::replay::journal(ctx, || move |ctx: &Context| record_text_widget(ctx, widget, owner));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_texts.insert(widget, owner);
+    });
+}
+
+/// Records the egui widget `widget` that a layer shows beneath everything on it (an overlay `Area`'s own): egui gives
+/// it the press where no widget on the layer is, and the press and hover there go to the layer's shapes as if egui
+/// had named no target.
+pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record.this_grounds.insert(widget);
     });
 }
 
@@ -608,8 +622,9 @@ impl PressWinners {
 /// it shows inside its clip. The members of an arena whose host withholds them (`withhold_members`) do not count.
 /// Where egui's hit test gives the point to a widget no component made (a raw egui widget on top), no press or hover
 /// goes to a root; where it gives it to a widget a component made for its own text, the press is that widget's and the
-/// hover goes to that component's topmost shape under the point. The roots that contain the point are those with a
-/// shape under it either way.
+/// hover goes to that component's topmost shape under the point. A layer's own widget, beneath everything on the layer
+/// ([`record_layer_widget`]), is no widget there. The roots that contain the point are those with a shape under it
+/// either way.
 ///
 /// Hover shows where a press goes: the press winners' shapes hover, and so does the topmost shape under the point when
 /// it takes no press (a label with a tooltip over a clickable row). A shape that takes a press and loses it does not.
@@ -699,8 +714,9 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             stack.extend(roots.iter().map(|(root, entry)| (1, *root, entry, on_layer)));
         }
         let shown = stack.iter().any(|(_, _, entry, point)| entry.placed.iter().any(|placed| placed.clip.contains(*point)));
-        let text_of = targets.click.and_then(|widget| record.last_texts.get(&widget).copied());
-        let foreign = text_of.is_none() && targets.click.is_some_and(|widget| !registered_in(&record.last, widget));
+        let click = targets.click.filter(|widget| !record.last_grounds.contains(widget));
+        let text_of = click.and_then(|widget| record.last_texts.get(&widget).copied());
+        let foreign = text_of.is_none() && click.is_some_and(|widget| !registered_in(&record.last, widget));
         let mut under = Under::default();
         // The topmost shape under the point (of the text widget's component, when one takes the press), and each root's
         // topmost shape that takes a press, ranked by tier and then by the place in paint order of the registration
@@ -847,10 +863,10 @@ fn registered_in(layers: &LayerRecord, widget: Id) -> bool {
 }
 
 /// Whether the egui widget `widget`, one of the latest press's targets, is one no component registered or made for its
-/// text in the pass the press was hit-tested against: a raw egui widget.
+/// text, and no layer shows beneath everything on it, in the pass the press was hit-tested against: a raw egui widget.
 pub(crate) fn foreign_target(ctx: &Context, widget: Id) -> bool {
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
-        !registered_in(&record.last, widget) && !record.last_texts.contains_key(&widget)
+        !registered_in(&record.last, widget) && !record.last_texts.contains_key(&widget) && !record.last_grounds.contains(&widget)
     })
 }
 
