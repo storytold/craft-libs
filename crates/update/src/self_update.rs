@@ -157,9 +157,11 @@ const CARGO_CACHE_MARKER: &str = "CACHEDIR.TAG";
 /// `build.build-dir` set, `.rustc_info.json` and those subdirectories live elsewhere and the
 /// profile directory has only Cargo's `.cargo-lock` file, which is accepted too.
 /// `CACHEDIR.TAG` alone isn't Cargo-specific (the same signature marks any cache directory), so
-/// it only corroborates that profile layout.
+/// it only corroborates that profile layout. Extracted nextest archives retain their
+/// `nextest/binaries-metadata.json` inventory rather than Cargo cache files; those are
+/// also build trees, even when the archive is unpacked outside its original target directory.
 fn is_development_build(exe: &Path, opted_in: bool) -> bool {
-    !opted_in && exe.ancestors().skip(1).any(is_cargo_build_dir)
+    !opted_in && exe.ancestors().skip(1).any(|dir| is_cargo_build_dir(dir) || is_nextest_binary(dir, exe))
 }
 
 /// Whether `dir` is a Cargo target root (by its rustc-info cache marker) or a profile output
@@ -180,6 +182,35 @@ fn is_cargo_build_dir(dir: &Path) -> bool {
         return true;
     }
     profile_parent.parent().is_some_and(|root| root.join(CARGO_CACHE_MARKER).is_file())
+}
+
+// An archive inventory identifies only its listed binaries, not every installation below
+// its extraction directory. Bound the metadata read and refuse symlink markers.
+fn is_nextest_binary(root: &Path, exe: &Path) -> bool {
+    use std::io::Read;
+    const LIMIT: u64 = 1024 * 1024;
+    let marker = root.join("nextest/binaries-metadata.json");
+    let Ok(metadata) = std::fs::symlink_metadata(&marker) else { return false };
+    if !metadata.file_type().is_file() || metadata.len() > LIMIT {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(&marker) else { return false };
+    let mut bytes = Vec::new();
+    if file.take(LIMIT + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > LIMIT {
+        return false;
+    }
+    let Ok(inventory) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return false };
+    let Some(build) = inventory.get("rust-build-meta") else { return false };
+    let Some(target) = build.get("target-directory").and_then(|v| v.as_str()) else { return false };
+    let original = build.get("build-directory").and_then(|v| v.as_str()).unwrap_or(target);
+    let Some(binaries) = inventory.get("rust-binaries").and_then(|v| v.as_object()) else { return false };
+    binaries.values().any(|binary| {
+        let Some(path) = binary.get("binary-path").and_then(|v| v.as_str()) else { return false };
+        let Ok(relative) = Path::new(path).strip_prefix(original) else { return false };
+        !relative.as_os_str().is_empty()
+            && relative.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+            && root.join(relative) == exe
+    })
 }
 
 /// Whether this installed copy can update itself. [`release_installs`] says whether a given
@@ -847,7 +878,15 @@ pub fn prepare_update_with_options(
         match install {
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
-                let existing = Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None };
+                let existing = Installed {
+                    version: None,
+                    source: InstallSource::MacApp,
+                    location: bundle.display().to_string(),
+                    package: None,
+                    externally_managed: false,
+                    origin: None,
+                    installation: None,
+                };
                 let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
                 let placed =
                     install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
@@ -2350,7 +2389,7 @@ mod tests {
         let (src, image, mount) = (dir.path().join("src"), dir.path().join("test.dmg"), dir.path().join("mount"));
         launcher_bundle(&src);
         std::fs::create_dir(&mount).unwrap();
-        let _one_at_a_time = crate::install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _one_at_a_time = crate::install::macos::disk_image_turn();
         let text = std::ffi::OsStr::new;
         let created = hdiutil(
             &[text("create"), text("-quiet"), text("-format"), text("UDZO"), text("-srcfolder"), src.as_os_str(), image.as_os_str()],
@@ -3493,7 +3532,7 @@ mod tests {
         let src = dir.path().join("src");
         bundle(&src, "0.2.0");
         let dmg = dir.path().join("artcraft-launcher-0.2.0-macos-universal.dmg");
-        let one_at_a_time = install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let one_at_a_time = install::macos::disk_image_turn();
         let ok = std::process::Command::new("hdiutil")
             .args(["create", "-quiet", "-format", "UDZO", "-volname", "ArtCraft Launcher 0.2.0", "-srcfolder"])
             .arg(&src)
@@ -3504,11 +3543,20 @@ mod tests {
         assert!(ok, "hdiutil create failed");
         drop(one_at_a_time);
         let current = apps.join("ArtCraft Launcher.app");
-        let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
+        let existing = Installed {
+            version: None,
+            source: InstallSource::MacApp,
+            location: current.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         // An unsigned test bundle: the signature check has its own tests in `install`.
         let expect = install::macos::Expect { team: None, version: None, quit_first: false };
         let stop = Stop::default();
         let wait = install::macos::CheckTurn { stop: &stop, phase: &mut |_| {} };
+        let _other_processes = install::macos::other_test_processes_wait();
         let placed =
             install::macos::install_dmg(&crate::suite::LAUNCHER, &dmg, Some(&existing), None, false, &Paths::under(dir.path()), &expect, wait)
                 .unwrap();
@@ -3537,7 +3585,7 @@ mod tests {
         .unwrap();
         std::fs::write(contents.join("MacOS/ArtCraft Launcher"), version).unwrap();
         let dmg = dir.join(format!("built-{version}.dmg"));
-        let one_at_a_time = install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let one_at_a_time = install::macos::disk_image_turn();
         let ok = std::process::Command::new("hdiutil")
             .args(["create", "-quiet", "-format", "UDZO", "-volname", "ArtCraft Launcher", "-srcfolder"])
             .arg(dir.join(format!("src-{version}")))
@@ -3599,6 +3647,8 @@ mod tests {
         let (url, requests) = serve(body.clone(), vec![Reply::Full, Reply::Full]);
         let release = launcher_release("0.2.0", &body, url, dir.path());
         let kept = install::download_path(&paths, &release.assets[0]);
+        // The updates below open the disk image.
+        let _other_processes = install::macos::other_test_processes_wait();
         for _ in 0..2 {
             let error = prepare_update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &|| Ok(()), None)
                 .unwrap_err();
@@ -3783,6 +3833,42 @@ mod tests {
         ] {
             let exe = cargo_build_tree(dir.path(), "builds/egui037-craft-libs", exe);
             assert!(is_development_build(&exe, false), "{}", exe.display());
+        }
+    }
+
+    #[test]
+    fn nextest_archive_binaries_do_not_update_themselves() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("relocated-artifacts");
+        let exe = root.join("debug/build/artcraft-launcher-native/hash/out/artcraft_launcher_native-hash");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "ELF").unwrap();
+        let metadata = root.join("nextest/binaries-metadata.json");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        // Names alone are not evidence of a Cargo build tree.
+        assert!(!is_development_build(&exe, false));
+        std::fs::write(&metadata, "{}").unwrap();
+        assert!(!is_development_build(&exe, false), "empty inventory is not evidence");
+        let inventory = serde_json::json!({
+            "rust-build-meta": {"target-directory": "/original/target"},
+            "rust-binaries": {"launcher": {"binary-path": "/original/target/debug/build/artcraft-launcher-native/hash/out/artcraft_launcher_native-hash"}}
+        });
+        std::fs::write(&metadata, inventory.to_string()).unwrap();
+        assert!(is_development_build(&exe, false));
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(!is_development_build(&exe, true), "explicit developer opt-in remains available");
+        let installed = root.join("bin/artcraft-launcher");
+        assert!(!is_development_build(&installed, false), "an unlisted descendant installation is not a test binary");
+        std::fs::remove_file(&metadata).unwrap();
+        std::fs::create_dir(&metadata).unwrap();
+        assert!(!is_development_build(&exe, false), "metadata must be a file");
+        #[cfg(unix)]
+        {
+            std::fs::remove_dir(&metadata).unwrap();
+            let external = dir.path().join("inventory.json");
+            std::fs::write(&external, inventory.to_string()).unwrap();
+            std::os::unix::fs::symlink(external, &metadata).unwrap();
+            assert!(!is_development_build(&exe, false), "symlink inventory is not evidence");
         }
     }
 

@@ -386,6 +386,23 @@ fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
     );
 }
 
+/// Every entry read is charged to one document-wide total: each pixel file may be
+/// [`MAX_LAYER_FILE`] on its own, but a document with many of them still has one budget.
+#[test]
+fn pixel_files_share_one_document_wide_budget() {
+    let doc = maindoc("RGBA", "");
+    // `layer_file("x")` reads `<image name>/layers/x`.
+    let (first, second) = ("img/layers/x", "img/layers/y");
+    let files: Vec<(&str, Vec<u8>)> = vec![(first, vec![3; 64]), (second, vec![4; 64])];
+    let bytes = archive(&doc, &files);
+    // The mimetype and maindoc reads are charged too: room for one 64-byte pixel file and 16 bytes.
+    let total = doc.len() as u64 + MIMETYPE.len() as u64 + 64 + 16;
+    let limits = craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: total };
+    let mut archive = Archive::open_with(&bytes, limits).unwrap();
+    assert_eq!(archive.layer_file("x").unwrap().unwrap(), vec![3; 64]);
+    assert!(matches!(archive.layer_file("y"), Err(Error::Invalid(_))), "the second pixel file is past the total");
+}
+
 /// Two entries of one name: `zip` keeps one, and which one the writer meant is not known.
 #[test]
 fn two_entries_of_one_name_are_refused() {
