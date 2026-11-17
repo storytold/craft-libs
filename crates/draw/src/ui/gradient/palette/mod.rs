@@ -3,7 +3,7 @@
 //! the palette supplies the rows and paints each preset's thumbnail as a gradient ramp.
 
 use craft_ui::contract::{Bind, NoValue, Outcome, Pattern};
-use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetRow, PresetState};
+use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetRow, PresetState, PresetTiles};
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 
@@ -13,7 +13,7 @@ mod stories;
 use craft_color::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 
 /// The presets take their content height up to this many small control heights, then scroll.
-const MAX_ROWS: f32 = 5.0;
+const MAX_ROWS: f32 = 6.0;
 
 /// A named group of gradient presets.
 #[derive(Clone, Debug, PartialEq)]
@@ -103,7 +103,8 @@ impl GradientRef {
 ///   left; the gradients are not), Up and Down to the nearest cell in the row above or below
 ///   across group labels, Home and End to the first and last. In List, Up, Down, Home and End
 ///   move and Left and Right do nothing. A focus move scrolls the cell into view.
-/// - The presets take their content height up to five small control heights and scroll past it, also in a host
+/// - The grid shows the presets as small chips (`PresetTiles::Chips`) under their group names.
+/// - The presets take their content height up to six small control heights and scroll past it, also in a host
 ///   that sizes to its content (a popover), where a filling browser would take the whole room.
 /// - AccessKit: Grid is a `Group` named `label` with `Button` cells; List is a `ListBox` of
 ///   `ListBoxOption`s with `selected` on the chosen one. Cells carry their place and the set's
@@ -208,7 +209,11 @@ impl<'a> GradientPalette<'a> {
             };
         let (wide, high) = GradientRamp::CHIP_ASPECT;
         let most = Env::of(ui).tokens.size.control.sm * MAX_ROWS;
-        let mut browser = PresetBrowser::new(self.label, self.state, &rows).cell_shape(CellShape::ratio(wide, high)).room_height(most).thumb(thumb);
+        let mut browser = PresetBrowser::new(self.label, self.state, &rows)
+            .cell_shape(CellShape::ratio(wide, high))
+            .tiles(PresetTiles::Chips)
+            .room_height(most)
+            .thumb(thumb);
         if let Some(selected) = self.selected {
             browser = browser.selected(selected);
         }
