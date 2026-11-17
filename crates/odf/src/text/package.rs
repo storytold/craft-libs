@@ -1583,32 +1583,8 @@ fn with_font_faces(xml: &str) -> String {
 /// A font family's generic family and pitch (§20.270, §20.271), from its name: monospaced
 /// families are `modern` and fixed, serif ones `roman`, the rest `swiss`.
 fn font_kind(family: &str) -> (&'static str, &'static str) {
-    let f = family.to_ascii_lowercase();
-    if model::is_mono(family) {
-        return ("modern", "fixed");
-    }
-    const SERIF: [&str; 16] = [
-        "serif",
-        "times",
-        "georgia",
-        "cambria",
-        "caladea",
-        "garamond",
-        "palatino",
-        "book",
-        "roman",
-        "libertine",
-        "minion",
-        "baskerville",
-        "bodoni",
-        "didot",
-        "charter",
-        "constantia",
-    ];
-    if SERIF.iter().any(|s| f.contains(s)) && !f.contains("sans") {
-        return ("roman", "variable");
-    }
-    ("swiss", "variable")
+    let generic = craft_wordmodel::font_kind::GenericFamily::of(family);
+    (generic.name(), if generic.fixed_pitch() { "fixed" } else { "variable" })
 }
 
 #[cfg(test)]
