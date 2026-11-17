@@ -373,16 +373,19 @@ pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Ve
 /// `pressed` is whether a pointer press moved focus onto the focused component (`focus::origin`).
 ///
 /// A modal or dialog layer never toggles: Tab moves focus inside it. In a window with a canvas the toggle is on when
-/// nothing is focused, the canvas is, or a press focused the component, as clicking a panel's row and pressing Tab hides
-/// the panels in Photoshop; Tab moves focus from a component the keyboard or a request focused. Elsewhere it is on only
-/// when the canvas is focused. A component that keeps Tab never reaches this function: the press is its own.
+/// nothing is focused, the canvas is, or a press focused a component other than a text field, as clicking a panel's row
+/// and pressing Tab hides the panels in Photoshop. Tab moves focus from a text field however it got the focus (Tab
+/// commits a typed value and goes to the next field) and from a component the keyboard or a request focused. Elsewhere
+/// it is on only when the canvas is focused. A component that keeps Tab never reaches this function: the press is its
+/// own.
 fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&KeyUse>, pressed: bool) -> bool {
     let closed = matches!(layer, overlay::LayerKeys::Blocked | overlay::LayerKeys::Class(OwnerClass::Dialog));
     if !enabled || closed {
         return false;
     }
     let on_canvas = focused.is_some_and(|keys| keys.chrome_key);
-    if canvas { focused.is_none() || on_canvas || pressed } else { on_canvas }
+    let pressed_control = pressed && focused.is_some_and(|keys| keys.owner != OwnerClass::Text);
+    if canvas { focused.is_none() || on_canvas || pressed_control } else { on_canvas }
 }
 
 /// Whether a bare Tab pressed now in the running viewport would toggle its panels rather than move focus, by
