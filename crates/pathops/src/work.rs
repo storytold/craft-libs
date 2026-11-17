@@ -28,8 +28,8 @@ pub(crate) enum Work {
     Sweeps,
     /// Segments of runs the tidy tried to merge into one (a run read again at each piece added).
     TidyMerge,
-    /// Input curves a run of pieces was found to lie on within the limit (the tidy takes the nearest, and stops at the first as near as the
-    /// sweep's noise).
+    /// Input curves a run of pieces was compared with in full (it passed the points tried of its pieces): the tidy takes the nearest, and
+    /// stops at the first as near as the sweep's noise.
     TidyCandidates,
     /// Lines a curve was flattened into to find the way an edge leaves a vertex.
     FlattenLines,
