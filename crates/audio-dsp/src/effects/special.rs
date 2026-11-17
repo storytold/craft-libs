@@ -527,8 +527,9 @@ impl AudioEffect for Mastering {
                     for c in channels[..nch].iter_mut() {
                         let x = c[j];
                         let y = soft_clip(x * boost * g, ceiling);
-                        // The blend stays within the ceiling, which the maximized signal holds.
-                        c[j] = if mix < 1.0 { (x + mix * (y - x)).clamp(-ceiling, ceiling) } else { y };
+                        // The blend stays within the ceiling, which the maximized signal holds. A
+                        // non-finite sample takes the maximized value, as it does once fully on.
+                        c[j] = if mix < 1.0 && x.is_finite() { (x + mix * (y - x)).clamp(-ceiling, ceiling) } else { y };
                     }
                 } else {
                     self.lim_env = 0.0;

@@ -501,6 +501,11 @@ fn mastering_maximizer_switches_without_a_step() {
     let ceiling = crate::db_to_gain(-0.3);
     let peak = on.iter().fold(0.0f32, |a, v| a.max(v.abs()));
     assert!(peak <= ceiling + 1e-6, "{peak} over the ceiling {ceiling}");
+    // A widener sum that overflows stays finite through the fade.
+    let mut e = fx("mastering", &[]);
+    assert!(e.set_param("loudness", 1.0));
+    let (l, r) = run(e.as_mut(), &[3e38; 64], &[-3e38; 64]);
+    assert!(l.iter().chain(&r).all(|v| v.is_finite()), "{l:?} {r:?}");
 }
 
 #[test]
