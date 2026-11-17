@@ -65,4 +65,5 @@ mesh_scene_from(&craft_mesh::Scene, units_in_mm: f64, up: UpAxis) -> FromMesh   
 - Linear colours become display (sRGB) values. `Blend` keeps its alpha, `Opaque` is 1, and `Mask` is drawn wholly opaque or invisible by the base alpha, since the texture is not cut out.
 - Each part becomes one primitive, one vertex per distinct corner. Normals are kept when every corner has one. A base-colour texture keeps its UV set, transform and wraps, with v flipped to a bottom-left origin; only embedded PNG and JPEG images are kept.
 - The hierarchy is copied from the roots, so a shared node is copied under each parent; copying stops at `MAX_NODE_DEPTH` levels or `MAX_NODE_COPIES` nodes. Indices out of range are dropped.
-- `warnings` counts what was left out: other texture maps, vertex colours, skins, cameras, lights, animations, unusable images and dropped indices.
+- `warnings` counts what was left out: other texture maps, vertex colours, skins, cameras, lights, animations, unusable images and out-of-range indices (node warnings count each copy).
+- `write_prc` still refuses a result that draws nothing, holds a non-finite number, or has a node matrix whose bottom row is not 0 0 0 1.

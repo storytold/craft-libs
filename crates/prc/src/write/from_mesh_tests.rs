@@ -128,8 +128,9 @@ fn corners_become_one_vertex_each_and_missing_normals_stay_missing() {
 #[test]
 fn hostile_indices_and_hierarchies_are_dropped_not_followed() {
     let mut mesh = triangle(Some(7));
-    mesh.parts[0].corners.push(Corner::at(99));
-    mesh.parts[0].corners.extend([Corner::at(0), Corner::at(1)]);
+    // A second triangle over two unused positions and one past the list, last.
+    mesh.positions.extend([[2.0, 0.0, 0.0], [2.0, 1.0, 0.0]]);
+    mesh.parts[0].corners.extend([Corner::at(3), Corner::at(4), Corner::at(99)]);
     mesh.colors = vec![[1.0; 4]; 3];
     let mut scene = Scene::from_meshes(vec![mesh], Vec::new());
     // Node 0 is its own child, a root names no node, and a node names no mesh.
@@ -144,10 +145,12 @@ fn hostile_indices_and_hierarchies_are_dropped_not_followed() {
         "1 mesh(es) have vertex colours",
         "node(s) name a mesh",
         "past the copy or depth limit",
+        "1 root or child reference(s) name a node",
     ] {
         assert!(joined.contains(want), "{want}: {joined}");
     }
-    assert_eq!(out.scene.meshes[0].primitives[0].triangles.len(), 1);
+    let p = &out.scene.meshes[0].primitives[0];
+    assert_eq!((p.triangles.len(), p.positions.len()), (1, 3), "the dropped triangle leaves no vertex");
     assert_eq!(out.scene.materials.len(), 0);
     write_prc(&out.scene).unwrap();
 }
@@ -169,4 +172,16 @@ fn translate_y() -> craft_mesh::Mat4 {
     let mut m = craft_mesh::IDENTITY;
     m[13] = 1.0;
     m
+}
+
+#[test]
+fn a_subtree_shared_too_often_stops_at_the_copy_limit() {
+    // Twenty levels, each node listing the next one twice: 2^20 paths to the leaf.
+    let mut scene = Scene::from_meshes(vec![triangle(None)], Vec::new());
+    scene.nodes = (0..20).map(|i| Node { children: vec![i + 1, i + 1], ..Node::default() }).collect();
+    scene.nodes.push(Node { mesh: Some(0), ..Node::default() });
+    let out = mesh_scene_from(&scene, 1.0, UpAxis::Z);
+    assert_eq!(out.scene.nodes.len(), super::MAX_NODE_COPIES);
+    assert!(out.warnings.iter().any(|w| w.contains("past the copy or depth limit")), "{:?}", out.warnings);
+    write_prc(&out.scene).unwrap();
 }

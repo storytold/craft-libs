@@ -11,21 +11,23 @@ use craft_mesh::{AlphaMode, Corner, IDENTITY, Mat4, Material, Mesh, NONE, Part, 
 use super::textures::picture_info;
 use super::{MAX_NODE_DEPTH, MeshScene, SceneMaterial, SceneMesh, SceneNode, ScenePrimitive, SceneTexture, TextureWrap};
 
-/// The source file's up axis. PRC viewers show +Z up.
+/// The source file's up axis. PRC viewers show +Z up. glTF is always +Y up; other formats vary by
+/// producer (FBX states it in its header).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UpAxis {
-    /// +Z is up (STL, PLY and most CAD files): nothing is turned.
+    /// +Z is up (usual for STL, PLY and CAD files): nothing is turned.
     #[default]
     Z,
-    /// +Y is up (glTF, OBJ, FBX): each root is turned so +Y becomes +Z.
+    /// +Y is up (glTF, and usually OBJ): each root is turned so +Y becomes +Z.
     Y,
 }
 
 /// A converted scene and what was left out.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FromMesh {
-    /// The scene, ready for [`write_prc`](super::write_prc).
+    /// The scene for [`write_prc`](super::write_prc), which still refuses one that draws nothing,
+    /// holds a non-finite number, or has a node matrix whose bottom row is not 0 0 0 1.
     pub scene: MeshScene,
     /// One line per kind of loss, with its count.
     pub warnings: Vec<String>,
@@ -40,6 +42,7 @@ pub const MAX_NODE_COPIES: usize = 100_000;
 /// The hierarchy is copied from the roots down, so the result is always a forest: a node with two
 /// parents is copied under each, and copying stops at [`MAX_NODE_DEPTH`] levels or
 /// [`MAX_NODE_COPIES`] nodes (a cycle reaches one of them). Indices out of range are dropped.
+/// Node warnings count each copy.
 /// Colours go from linear to display (sRGB) values; an alpha mask is drawn wholly opaque or
 /// wholly invisible by its base alpha.
 ///
@@ -81,6 +84,7 @@ struct Counts {
     extras: usize,
     bad_meshes: usize,
     bad_materials: usize,
+    bad_nodes: usize,
     cut: usize,
     animations: usize,
 }
@@ -97,7 +101,8 @@ impl Counts {
             (self.extras, "node(s) carry a skin, camera or light, which were left out"),
             (self.bad_materials, "part(s) name a material that is not there and were drawn in the default colour"),
             (self.bad_meshes, "node(s) name a mesh that is not there; the mesh was left out"),
-            (self.cut, "node(s) were left out past the copy or depth limit (a cycle, or a subtree shared too often)"),
+            (self.bad_nodes, "root or child reference(s) name a node that is not there"),
+            (self.cut, "subtree(s) were left out past the copy or depth limit (a cycle, or a subtree shared too often)"),
             (self.animations, "animation(s) were left out"),
         ]
         .into_iter()
@@ -189,6 +194,11 @@ fn primitive(m: &Mesh, part: &Part, slots: &[Option<TextureRef>], counts: &mut C
     let mut out = ScenePrimitive { material, ..ScenePrimitive::default() };
     let mut ids: HashMap<Corner, u32> = HashMap::new();
     'tri: for t in part.triangles() {
+        // Checked first, so a dropped triangle leaves no vertex behind.
+        if t.iter().any(|c| c.position as usize >= m.positions.len()) {
+            counts.bad_triangles += 1;
+            continue;
+        }
         let mut tri = [0u32; 3];
         for (id, c) in tri.iter_mut().zip(t) {
             let key = Corner { position: c.position, normal: if normals { c.normal } else { NONE }, uv: if set.is_some() { c.uv } else { NONE } };
@@ -220,7 +230,10 @@ fn nodes(scene: &Scene, up: UpAxis, out: &mut MeshScene, counts: &mut Counts) {
     // (source node, parent copy, depth counting a root as 1)
     let mut stack: Vec<(usize, Option<usize>, usize)> = scene.roots.iter().rev().map(|r| (*r, None, 1)).collect();
     while let Some((source, parent, depth)) = stack.pop() {
-        let Some(n) = scene.nodes.get(source) else { continue };
+        let Some(n) = scene.nodes.get(source) else {
+            counts.bad_nodes += 1;
+            continue;
+        };
         if depth > MAX_NODE_DEPTH || out.nodes.len() >= MAX_NODE_COPIES {
             counts.cut += 1;
             continue;
