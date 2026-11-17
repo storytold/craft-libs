@@ -89,8 +89,8 @@ pub struct Location<P> {
     /// rather than accidentally inserting beside only its first leaf when restoring.
     #[serde(default)]
     pub sibling: Vec<P>,
-    /// Group and column state when the panel was in a dock. Applies when
-    /// restoring creates a new group, column or dock for the panel.
+    /// Group and column state when the panel was in a column, docked or floating. Applies when
+    /// restoring creates a new group, column, dock or window for the panel.
     #[serde(default)]
     pub group: Option<GroupLocation>,
 }

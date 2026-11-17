@@ -2,8 +2,8 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{
-    Action, Column, DockEdge, DockError, DockPlacement, Floating, Group, Layout, NamedWorkspace, Node, PanelPlace, Permissions, SplitSize, Workspace,
-    WorkspaceChrome, WorkspaceKeeps, WorkspaceSet, node_at,
+    Action, Column, DockEdge, DockError, DockPlacement, DockSide, Floating, Group, Layout, NamedWorkspace, Node, PanelPlace, PanelState, Permissions,
+    SplitSize, Target, Workspace, WorkspaceChrome, WorkspaceKeeps, WorkspaceSet, node_at,
 };
 use emath::{Rect, pos2, vec2};
 
@@ -49,7 +49,7 @@ fn sorted(layout: &Layout<u32>) -> Vec<u32> {
 
 fn group_members(layout: &Layout<u32>, panel: u32) -> Vec<u32> {
     match layout.place(&panel).unwrap() {
-        place @ (PanelPlace::Node(_) | PanelPlace::Floating { .. }) => match layout.node_of(&place).unwrap() {
+        place @ PanelPlace::Node(_) => match layout.node_of(&place).unwrap() {
             Node::Tabs { panels, .. } => panels.clone(),
             other => panic!("{other:?}"),
         },
@@ -202,4 +202,143 @@ fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
     assert_eq!(workspace.floated.len(), 1);
     workspace.apply(Action::close(3), false, allow).unwrap();
     assert!(workspace.floated.is_empty(), "closing drops the record");
+}
+
+/// Canvas 1; an end dock with an expanded column [2] and a collapsed column [3], [4]; a floating window [6].
+fn columns() -> Layout<u32> {
+    let dock = Node::dock(DockEdge::End, vec![Column::new(vec![g(&[2], 0)]), Column::new(vec![g(&[3], 0), g(&[4], 0)]).with_iconic(true)]);
+    Layout::new(Some(Node::split(Axis::X, SplitSize::FixedSecond(300.0), tabs(&[1], 0), dock)), vec![Floating::single(vec![6], 0, window())])
+}
+
+fn floats(layout: &Layout<u32>, panel: u32) -> bool {
+    matches!(layout.place(&panel), Some(PanelPlace::Floating { .. }))
+}
+
+fn column_of(layout: &Layout<u32>, panel: u32) -> &Column<u32> {
+    layout.column(&layout.place(&panel).unwrap()).unwrap()
+}
+
+/// Collapse to icons is a state of every column: a floating window collapses and stays floating; groups leaving a
+/// column float in its state; groups joining a column, docked or floating, take that column's state.
+#[test]
+fn a_column_keeps_its_collapsed_state_when_it_floats_and_a_joined_column_decides() {
+    let mut layout = columns();
+    layout.apply(Action::set_iconic(6, true)).unwrap();
+    assert!(floats(&layout, 6) && column_of(&layout, 6).iconic);
+    assert_eq!(layout.panel_state(&6), PanelState::Open, "a collapsed floating panel is open, not showing");
+    layout.apply(Action::set_iconic(6, false)).unwrap();
+    assert_eq!(layout.panel_state(&6), PanelState::Front);
+
+    for action in [Action::move_column(3, Target::float(window())), Action::move_group(3, Target::float(window())), Action::move_panel(3, Target::float(window()))]
+    {
+        let mut moved = columns();
+        moved.apply(action.clone()).unwrap();
+        assert!(floats(&moved, 3) && column_of(&moved, 3).iconic, "{action:?} floats as icons");
+    }
+    let mut moved = columns();
+    moved.apply(Action::move_group(2, Target::float(window()))).unwrap();
+    assert!(floats(&moved, 2) && !column_of(&moved, 2).iconic, "out of an expanded column it floats expanded");
+
+    layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert_eq!(layout.panel_state(&2), PanelState::Open, "into a collapsed column it shows as an icon");
+    layout.apply(Action::move_group(2, Target::at(6, DockPlacement::group(false, None)))).unwrap();
+    assert_eq!(layout.panel_state(&2), PanelState::Front, "into an expanded floating column it shows");
+
+    layout.apply(Action::set_iconic(6, true)).unwrap();
+    layout.apply(Action::move_group(3, Target::at(6, DockPlacement::Split(DockSide::Center)))).unwrap();
+    assert_eq!(group_members(&layout, 6), [6, 3], "a group dropped on a floating icon group joins its tabs");
+    assert_eq!(layout.panel_state(&3), PanelState::Open);
+    layout.apply(Action::move_group(4, Target::float(window()))).unwrap();
+    assert_eq!(layout.floating.len(), 2);
+    layout.apply(Action::move_group(4, Target::at(6, DockPlacement::Split(DockSide::Center)))).unwrap();
+    assert_eq!(layout.floating.len(), 1, "a floating icon group merged into another closes its window");
+    assert_eq!(group_members(&layout, 6), [6, 4, 3], "it joins after the anchor");
+}
+
+/// A floating window is one column: drops above, below and into its groups land, and nothing goes beside it.
+#[test]
+fn a_floating_window_takes_drops_above_below_and_into_its_groups_and_none_beside() {
+    let layout = columns();
+    for side in [DockSide::Start, DockSide::End] {
+        assert_eq!(DockPlacement::for_zone(&layout, &6, side), Err(DockError::InvalidPlacement), "{side:?}");
+    }
+    assert_eq!(DockPlacement::for_zone(&layout, &6, DockSide::Bottom), Ok(DockPlacement::group(true, None)));
+    assert_eq!(DockPlacement::for_zone(&layout, &6, DockSide::Center), Ok(DockPlacement::Split(DockSide::Center)));
+    for placement in [DockPlacement::column(true), DockPlacement::Split(DockSide::End), DockPlacement::Edge(DockSide::Start)] {
+        let mut moved = layout.clone();
+        assert_eq!(moved.apply(Action::move_group(2, Target::at(6, placement.clone()))), Err(DockError::InvalidPlacement), "{placement:?}");
+        assert_eq!(moved, layout);
+    }
+}
+
+/// A panel that does not collapse refuses a collapse of its column and a move into a collapsed one, so a drag's dry
+/// run refuses alike; reconcile expands a saved collapsed column that holds it.
+#[test]
+fn a_panel_that_does_not_collapse_keeps_its_column_expanded() {
+    let rigid = |p: &u32| if *p == 2 { Permissions::ALL.collapses(false) } else { Permissions::ALL };
+    let mut layout = columns();
+    let before = layout.clone();
+    assert_eq!(layout.apply_with_permissions(Action::set_iconic(2, true), rigid), Err(DockError::NotAllowed));
+    for to in [Target::at(3, DockPlacement::group(true, None)), Target::at(3, DockPlacement::tab(None))] {
+        assert_eq!(layout.apply_with_permissions(Action::move_group(2, to), rigid), Err(DockError::NotAllowed));
+    }
+    assert_eq!(layout, before);
+    layout.apply_with_permissions(Action::set_iconic(3, false), rigid).unwrap();
+    layout.apply_with_permissions(Action::move_group(2, Target::at(3, DockPlacement::group(true, None))), rigid).unwrap();
+
+    let mut saved = Workspace::new(columns());
+    saved.layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert!(column_of(&saved.layout, 2).iconic);
+    saved.reconcile(|_| true, rigid, &Workspace::new(columns()));
+    assert!(!column_of(&saved.layout, 2).iconic, "reconcile expands the column");
+    assert_eq!(group_members(&saved.layout, 2), [2]);
+}
+
+/// A panel that shares no column (a toolbar) refuses every placement that puts it beside other panels in a column
+/// or group, in either direction, and still moves to a new column, a new dock or a float; reconcile gives a saved
+/// one a column of its own.
+#[test]
+fn a_panel_that_shares_no_column_moves_only_to_a_column_of_its_own() {
+    let alone = |p: &u32| if *p == 2 { Permissions::ALL.shares_column(false) } else { Permissions::ALL };
+    let layout = columns();
+    let joins = [DockPlacement::tab(None), DockPlacement::Split(DockSide::Center), DockPlacement::group(true, None), DockPlacement::group(false, Some(80.0))];
+    for placement in joins {
+        for (panel, anchor) in [(2, 3), (3, 2), (2, 6), (6, 2)] {
+            let mut moved = layout.clone();
+            let action = Action::move_group(panel, Target::at(anchor, placement.clone()));
+            assert_eq!(moved.apply_with_permissions(action, alone), Err(DockError::NotAllowed), "{panel} to {anchor}: {placement:?}");
+        }
+    }
+    for to in [Target::at(3, DockPlacement::column(true)), Target::new_dock(DockEdge::Start), Target::float(window())] {
+        let mut moved = layout.clone();
+        moved.apply_with_permissions(Action::move_group(2, to.clone()), alone).unwrap_or_else(|e| panic!("{to:?}: {e}"));
+        assert_eq!(column_of(&moved, 2).panels().count(), 1, "{to:?}");
+    }
+
+    let mut saved = Workspace::new(columns());
+    saved.layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    saved.reconcile(|_| true, alone, &Workspace::new(columns()));
+    assert_eq!(column_of(&saved.layout, 2).panels().collect::<Vec<_>>(), [&2], "reconcile gives it a column of its own");
+    assert_eq!(sorted(&saved.layout), [1, 2, 3, 4, 6]);
+}
+
+/// A stepped column (a toolbar's) keeps its step count docked, floating and through JSON, and its width moves only
+/// by steps.
+#[test]
+fn a_stepped_column_keeps_its_step_count_and_refuses_a_width() {
+    let mut layout = columns();
+    assert_eq!(layout.apply(Action::set_column_steps(2, 0)), Err(DockError::InvalidGeometry));
+    layout.apply(Action::set_column_steps(2, 2)).unwrap();
+    assert_eq!(column_of(&layout, 2).steps, Some(2));
+    let before = layout.clone();
+    assert_eq!(layout.apply(Action::resize_column(2, 200.0)), Err(DockError::InvalidPlacement));
+    assert_eq!(layout, before);
+    let saved: Layout<u32> = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
+    assert_eq!(saved, layout);
+
+    layout.apply(Action::move_column(2, Target::float(window()))).unwrap();
+    assert!(floats(&layout, 2));
+    assert_eq!(column_of(&layout, 2).steps, Some(2), "a floated stepped column keeps its steps");
+    let saved: Layout<u32> = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
+    assert_eq!(saved, layout);
 }
