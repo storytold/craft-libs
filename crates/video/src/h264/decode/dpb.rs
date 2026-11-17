@@ -182,6 +182,11 @@ impl<F: Clone> Dpb<F> {
         true
     }
 
+    /// The field held for direct output ([`Dpb::held`]), if any.
+    pub fn held(&self) -> Option<&F> {
+        self.held.as_ref().map(|h| &h.frame)
+    }
+
     /// Output a held field ([`Dpb::held`]) whose second field can no longer follow.
     fn release_held(&mut self, out: &mut Vec<Output<F>>) {
         if let Some(h) = self.held.take_if(|h| !h.open) {
@@ -652,8 +657,9 @@ impl<F: Clone> Dpb<F> {
     ) -> Result<()> {
         ensure!(!sh.field_pic, "a field picture stored as a frame (use store_field)");
         self.close_open();
-        self.release_held(out);
+        // (a failed marking keeps the held field for the next picture or the flush)
         let (mark, long_idx, had5) = self.mark_current(sh, limits, None)?;
+        self.release_held(out);
         if had5 {
             // All earlier pictures are output before the current one (C.4.4).
             self.flush(out);
@@ -763,8 +769,9 @@ impl<F: Clone> Dpb<F> {
             return Ok(());
         }
         self.close_open();
-        self.release_held(out);
+        // (a failed marking keeps the held field for the next picture or the flush)
         let (mark, long_idx, had5) = self.mark_current(sh, limits, None)?;
+        self.release_held(out);
         if had5 {
             // All earlier pictures are output before the current one (C.4.4).
             self.flush(out);
@@ -1125,6 +1132,35 @@ mod tests {
             let want: &[u32] = if lone { &[1, 3, 2, 5] } else { &[1, 304, 2] };
             assert_eq!(out.iter().map(|o| o.frame).collect::<Vec<_>>(), want, "lone={lone}");
         }
+    }
+
+    /// A held field survives a picture whose reference marking fails: it is output by the next
+    /// picture or the flush, not dropped.
+    #[test]
+    fn a_held_field_survives_a_failed_marking() {
+        let mut dpb: Dpb<u32> = Dpb::new();
+        dpb.capacity = 2;
+        let mut out = Vec::new();
+        let mut sh = reference_slice();
+        sh.idr = true;
+        dpb.store_frame(&sh, 1, [0, 0], (16, 2), meta(), &mut out).unwrap();
+        let mut sh = reference_slice();
+        sh.frame_num = 1;
+        dpb.store_frame(&sh, 2, [8, 8], (16, 2), meta(), &mut out).unwrap();
+        store_field(&mut dpb, &field_slice(2, false, false, SliceType::B), 3, 4, 2, &mut out).unwrap();
+        assert_eq!(dpb.held(), Some(&3));
+        // MMCO 6 without long-term frame indices fails
+        let mut sh = reference_slice();
+        sh.frame_num = 2;
+        sh.adaptive_ref_pic_marking = true;
+        sh.mmcos =
+            vec![Mmco { op: 6, difference_of_pic_nums_minus1: 0, long_term_pic_num: 0, long_term_frame_idx: 0, max_long_term_frame_idx_plus1: 0 }];
+        assert!(dpb.store_frame(&sh, 4, [12, 12], (16, 2), meta(), &mut out).is_err());
+        // nothing was output by the failed picture: the field is still held
+        assert_eq!(out.iter().map(|o| o.frame).collect::<Vec<_>>(), [1]);
+        assert_eq!(dpb.held(), Some(&3));
+        dpb.flush(&mut out);
+        assert_eq!(out.iter().map(|o| o.frame).collect::<Vec<_>>(), [1, 3, 2]);
     }
 
     /// 8.2.5.3: the second field of a pair whose first field is short-term does not run the

@@ -505,7 +505,8 @@ impl Decoder {
         ids.dedup();
         let shared = ids.iter().fold(0u64, |n, (id, b)| n.saturating_add(self.queued_ids.get(id).copied().unwrap_or(0).saturating_mul(*b)));
         let queued = self.queued_bytes.saturating_sub(shared);
-        let in_dpb = self.dpb.entries.iter().fold(0u64, |n, e| n.saturating_add(e.frame.bytes()));
+        // (a field held for direct output, C.4.5.2, counts with the DPB)
+        let in_dpb = self.dpb.entries.iter().fold(self.dpb.held().map_or(0, |f| f.bytes()), |n, e| n.saturating_add(e.frame.bytes()));
         let dpb = sps.max_dpb_frames().max(self.dpb.entries.len()) as u64;
         // The DPB (the larger of its new slots and what it holds now), the picture being decoded,
         // and what is in flight or queued.
@@ -604,7 +605,7 @@ impl Decoder {
         let meta = Arc::new(OutputMeta { draft, ..output_meta(&sps, pts, key) });
         let mut outs = Vec::new();
         let limits = (sps.max_frame_num(), sps.max_num_ref_frames as usize);
-        if first.field_pic {
+        let stored = if first.field_pic {
             let parity = first.bottom_field as usize;
             let fpoc = if first.has_mmco5() { 0 } else { frame.poc };
             let mut fields = [None, None];
@@ -615,15 +616,16 @@ impl Decoder {
                 if let Stored::Fields(f) = stored {
                     f[parity] = Some(frame);
                 }
-            })?;
+            })
         } else {
             // MMCO5 makes both field order counts relative to the frame's (8.2.1).
             let base = if first.has_mmco5() { poc.frame() } else { 0 };
             let field_poc = [poc.top.saturating_sub(base), poc.bottom.saturating_sub(base)];
-            self.dpb.store_frame(&first, Stored::Frame(frame), field_poc, limits, meta, &mut outs)?;
-        }
+            self.dpb.store_frame(&first, Stored::Frame(frame), field_poc, limits, meta, &mut outs)
+        };
+        // pictures output before a failure still go out
         self.emit(outs);
-        Ok(())
+        stored
     }
 
     fn dispatch(&mut self, frame: FrameRef, slices: Vec<SliceJob>, draft: bool) {

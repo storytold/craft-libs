@@ -567,8 +567,9 @@ fn explicit_weighted_prediction_p_and_b_skip() {
 }
 
 /// A picture with MMCO 5 decodes with its own order count; it becomes 0 only when the picture is
-/// stored (8.2.1, tempPicOrderCnt). A reference B picture (POC 2) with MMCO 5 and implicit
-/// weights between POC 0 and POC 8 weighs them 48 and 16; with POC 0 it would copy list 0.
+/// stored (8.2.1, tempPicOrderCnt). A reference B picture with MMCO 5 at POC 12 (above every
+/// earlier picture, as 8.2.1 requires) predicts with implicit weights from POC 8 (list 0, weight 96)
+/// and POC 0 (list 1, weight -32); with POC 0 for itself it would copy the POC 0 picture.
 #[test]
 fn mmco5_picture_decodes_with_its_own_order_count() {
     for cabac in [false, true] {
@@ -578,7 +579,7 @@ fn mmco5_picture_decodes_with_its_own_order_count() {
         let pics = [
             Pic { idr: true, frame_num: 0, ref_idc: 3, poc_lsb: Some(0), mbs: a.clone(), ..Default::default() },
             Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(8), mbs: b.clone(), ..Default::default() },
-            Pic { frame_num: 2, ref_idc: 1, poc_lsb: Some(2), b: true, mmcos: vec![(5, 0, 0)], mbs: vec![None; NMB], ..Default::default() },
+            Pic { frame_num: 2, ref_idc: 1, poc_lsb: Some(12), b: true, mmcos: vec![(5, 0, 0)], mbs: vec![None; NMB], ..Default::default() },
         ];
         let mut stream = sps(77, 2, false, PocType::T0);
         stream.extend(pps_with(cabac, false, 2));
@@ -586,13 +587,12 @@ fn mmco5_picture_decodes_with_its_own_order_count() {
             stream.extend(slice_nal(p, cabac));
         }
         let (pa, pb) = (render(&a, None), render(&b, None));
-        let mix = |x: &[u8], y: &[u8]| -> Vec<u8> { x.iter().zip(y).map(|(&p, &q)| ((p as i32 * 48 + q as i32 * 16 + 32) >> 6) as u8).collect() };
+        let mix = |x: &[u8], y: &[u8]| -> Vec<u8> {
+            x.iter().zip(y).map(|(&p, &q)| ((q as i32 * 96 - p as i32 * 32 + 32) >> 6).clamp(0, 255) as u8).collect()
+        };
         let bi = (mix(&pa.0, &pb.0), mix(&pa.1, &pb.1), mix(&pa.2, &pb.2));
         let expected = [pa, pb, bi];
-        // ffmpeg has the same samples but outputs the MMCO 5 picture by its order count (before
-        // POC 8); C.4.4 outputs every earlier picture first ("bumping" until the DPB is empty).
-        let ff_order = [expected[0].clone(), expected[2].clone(), expected[1].clone()];
-        cross_check_ffmpeg(&stream, &ff_order, if cabac { "synth_mmco5_poc_cabac" } else { "synth_mmco5_poc_cavlc" });
+        cross_check_ffmpeg(&stream, &expected, if cabac { "synth_mmco5_poc_cabac" } else { "synth_mmco5_poc_cavlc" });
         for threads in [1, 3] {
             let mut dec = Decoder::with_threads(threads);
             let mut out = dec.decode(&stream, 0).unwrap();
