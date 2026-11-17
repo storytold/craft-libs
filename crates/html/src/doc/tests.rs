@@ -1047,3 +1047,72 @@ fn html_roundtrip_preserves_colgroups_widths_and_vmerge() {
     assert_eq!(tb2.rows[1].cells[0].props.vmerge, tb1.rows[1].cells[0].props.vmerge, "vmerge continue matches");
     assert_eq!(tb2.vertical_extent(0, 0), tb1.vertical_extent(0, 0), "vertical merge extent matches");
 }
+
+fn assert_single_col_vmerge_table(tb: &craft_wordmodel::Table) {
+    use craft_wordmodel::props::VMerge;
+    assert_eq!(tb.rows.len(), 3, "table must have 3 rows");
+    assert_eq!(tb.grid.len(), 1, "table must have 1 column");
+    assert_eq!(tb.rows[0].cells.len(), 1);
+    assert_eq!(tb.rows[1].cells.len(), 1);
+    assert_eq!(tb.rows[2].cells.len(), 1);
+    assert_eq!(tb.rows[0].cells[0].props.vmerge, VMerge::Restart);
+    assert_eq!(tb.rows[1].cells[0].props.vmerge, VMerge::Continue);
+    assert_eq!(tb.rows[2].cells[0].props.vmerge, VMerge::None);
+    assert_eq!(tb.vertical_extent(0, 0), Some((0, 2)));
+    assert_eq!(tb.grid_col(2, 0), 0, "Bottom cell must be at grid column 0");
+    let bottom_text = match &*tb.rows[2].cells[0].blocks[0] {
+        craft_wordmodel::Block::Para(p) => &p.text,
+        _ => panic!("expected paragraph in Bottom cell"),
+    };
+    assert_eq!(bottom_text, "Bottom", "Bottom must be at row 2, cell 0");
+}
+
+#[test]
+fn html_roundtrip_preserves_fully_covered_row_and_single_column_table() {
+    // A one-column table with a Word vertical merge across the first two rows,
+    // followed by an ordinary "Bottom" cell in row three.
+    let html = "<table>\
+        <tr><td style='mso-yfti-vmerge:restart'>Top</td></tr>\
+        <tr><td style='mso-yfti-vmerge:continue'>Cont</td></tr>\
+        <tr><td>Bottom</td></tr>\
+    </table>";
+
+    let f1 = parse(html);
+    let FBlock::Table(t1) = &f1.blocks[0] else { panic!() };
+    assert_eq!(t1.rows.len(), 3, "initial import must have 3 rows");
+    assert_eq!(t1.cols(), 1, "initial import must have 1 column");
+    assert_eq!(t1.rows[0].len(), 1);
+    assert_eq!(t1.rows[1].len(), 1);
+    assert_eq!(t1.rows[2].len(), 1);
+    assert!(!t1.rows[0][0].covered);
+    assert!(t1.rows[0][0].vmerge_restart);
+    assert!(t1.rows[1][0].covered);
+    assert!(!t1.rows[2][0].covered);
+
+    let doc1 = model::to_doc(&f1);
+    let craft_wordmodel::Block::Table(tb1) = &*doc1.body[0] else { panic!() };
+    assert_single_col_vmerge_table(tb1);
+
+    // Export to HTML via export()
+    let exported = export(&doc1);
+    assert!(exported.contains("rowspan=\"2\""), "exported HTML must emit rowspan=\"2\": {exported}");
+    assert!(exported.contains("<tr></tr>"), "covered row with no visible cells must emit empty tr: {exported}");
+    assert!(exported.contains("Bottom"), "exported HTML must contain Bottom: {exported}");
+
+    // Parse the exported HTML again
+    let f2 = parse(&exported);
+    let FBlock::Table(t2) = &f2.blocks[0] else { panic!() };
+    assert_eq!(t2.rows.len(), 3, "round-trip Flow must keep 3 rows");
+    assert_eq!(t2.cols(), 1, "round-trip Flow must keep 1 column");
+    assert_eq!(t2.rows[0].len(), 1, "row 0 has 1 cell");
+    assert_eq!(t2.rows[1].len(), 1, "row 1 (fully covered row) has 1 cell");
+    assert_eq!(t2.rows[2].len(), 1, "row 2 has 1 cell");
+    assert!(!t2.rows[0][0].covered);
+    assert!(t2.rows[1][0].covered, "row 1 cell must be covered placeholder");
+    assert!(!t2.rows[2][0].covered, "row 2 cell (Bottom) must not be covered");
+
+    // Convert round-tripped flow to document model
+    let doc2 = model::to_doc(&f2);
+    let craft_wordmodel::Block::Table(tb2) = &*doc2.body[0] else { panic!() };
+    assert_single_col_vmerge_table(tb2);
+}

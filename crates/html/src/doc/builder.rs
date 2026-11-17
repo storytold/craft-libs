@@ -882,11 +882,14 @@ impl<'r> Builder<'r> {
                     let borderless = !t.bordered;
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
-                    let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(craft_wordmodel::table::MAX_ROWS).collect();
+                    let rows: Vec<_> = t.rows.into_iter().take(craft_wordmodel::table::MAX_ROWS).collect();
                     let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
                     let col_widths = &t.col_widths;
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
+                        ft.rows.retain(|r| !r.is_empty());
+                    }
+                    if !ft.rows.is_empty() {
                         if !col_widths.is_empty() && ft.cols() <= MAX_TABLE_COLS {
                             let mut widths = vec![None; ft.cols()];
                             for (i, &cw) in col_widths.iter().take(ft.cols()).enumerate() {
@@ -1194,6 +1197,7 @@ impl<'r> Builder<'r> {
                     if let Some(r) = t.row.take() {
                         t.rows.push(r);
                     }
+                    t.row = Some(Vec::new());
                 }
             }
             ElKind::Cell => {
