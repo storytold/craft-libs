@@ -3268,6 +3268,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xtask"
+version = "0.1.0"
+dependencies = [
+ "craft-atomic",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "craft-y4m"
 version = "0.1.0"
 dependencies = [
