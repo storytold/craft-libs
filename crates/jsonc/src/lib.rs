@@ -314,14 +314,18 @@ impl Doc {
     pub fn set(&self, path: &[&str], value: &Value) -> Result<String, String> {
         let Some((last, parents)) = path.split_last() else { return Err("empty path".into()) };
         let Some(root) = &self.root else {
-            // Empty file: write a fresh document.
+            // No object yet: retain comments, whitespace and an optional BOM before the new one.
             let mut v = value.clone();
             for k in path.iter().rev() {
                 let mut m = Map::new();
                 m.insert((*k).to_string(), v);
                 v = Value::Object(m);
             }
-            let mut s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+            let mut s = self.text.clone();
+            if !s.is_empty() && !s.ends_with('\n') {
+                s.push('\n');
+            }
+            s.push_str(&serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
             s.push('\n');
             return Ok(s);
         };
@@ -387,7 +391,7 @@ impl Doc {
         Ok(splice(&self.text, &edits))
     }
 
-    /// Remove the member at `path`. Returns the new text, or `None` if it was not there.
+    /// Remove every member at `path`. Returns the new text, or `None` if it was not there.
     pub fn remove(&self, path: &[&str]) -> Option<String> {
         let (last, parents) = path.split_last()?;
         let mut node = self.root.as_ref()?;
@@ -395,26 +399,41 @@ impl Doc {
             node = &node.member(k)?.value;
         }
         let NodeKind::Object { members, .. } = &node.kind else { return None };
-        let idx = members.iter().rposition(|m| m.key == *last)?;
-        let m = members.get(idx)?;
-        // Find the token right after the value and right before the key.
-        let after = self.tokens.iter().find(|t| t.start >= m.value.end).copied().filter(|t| t.kind == Tok::Comma);
-        let before = self.tokens.iter().rev().find(|t| t.end <= m.key_start).copied().filter(|t| t.kind == Tok::Comma);
-        let member_end = after.map(|t| t.end).unwrap_or(m.value.end);
-        let rest = self.text.get(member_end..).unwrap_or_default();
-        let line_rest = rest.split('\n').next().unwrap_or_default();
-        let own_lines = self.first_on_line(m.key_start) && line_rest.trim().is_empty();
-        let (start, end) = if own_lines && (after.is_some() || before.is_none() || !self.strict) {
-            // Delete whole lines; a comma left before is a harmless trailing comma in JSONC.
-            (self.line_start(m.key_start), member_end + line_rest.len() + usize::from(rest.len() > line_rest.len()))
-        } else if let Some(c) = after {
-            (m.key_start, c.end)
-        } else if let Some(c) = before {
-            (c.start, m.value.end)
-        } else {
-            (m.key_start, m.value.end)
-        };
-        Some(splice(&self.text, &[(start, end, String::new())]))
+        let mut edits = Vec::new();
+        // Remove members separately so comments between duplicates survive.
+        // A final run's leading comma is a separate edit for the same reason.
+        for run in members.split(|m| m.key != *last) {
+            let Some(first) = run.first() else { continue };
+            let before_idx = self.tokens.partition_point(|t| t.end <= first.key_start);
+            let before = before_idx.checked_sub(1).and_then(|i| self.tokens.get(i)).copied().filter(|t| t.kind == Tok::Comma);
+            for member in run {
+                let after_idx = self.tokens.partition_point(|t| t.start < member.value.end);
+                let after = self.tokens.get(after_idx).copied().filter(|t| t.kind == Tok::Comma);
+                let with_comma = after.is_none_or(|c| self.text.get(member.value.end..c.start).is_some_and(|gap| gap.trim().is_empty()));
+                let member_end = if with_comma { after.map(|t| t.end).unwrap_or(member.value.end) } else { member.value.end };
+                let rest = self.text.get(member_end..).unwrap_or_default();
+                let line_rest = rest.split('\n').next().unwrap_or_default();
+                let own_lines = self.first_on_line(member.key_start) && line_rest.trim().is_empty();
+                let remove_lines = own_lines && (after.is_some() || before.is_none() || !self.strict);
+                let (start, end) = if remove_lines {
+                    // Keep the existing whole-line removal and JSONC trailing-comma style.
+                    (self.line_start(member.key_start), member_end + line_rest.len() + usize::from(rest.len() > line_rest.len()))
+                } else {
+                    (member.key_start, member_end)
+                };
+                edits.push((start, end, String::new()));
+                if !with_comma && let Some(c) = after {
+                    edits.push((c.start, c.end, String::new()));
+                }
+                if after.is_none()
+                    && !remove_lines
+                    && let Some(c) = before
+                {
+                    edits.push((c.start, c.end, String::new()));
+                }
+            }
+        }
+        (!edits.is_empty()).then(|| splice(&self.text, &edits))
     }
 }
 
