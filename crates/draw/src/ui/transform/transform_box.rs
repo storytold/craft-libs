@@ -906,10 +906,7 @@ impl Component for TransformBox<'_> {
     /// it: each corner and the pivot within f32 precision of the proposal is the proposal, not a change of the
     /// document under the drag.
     fn same_value(&self, proposed: &BoxState, host: &BoxState) -> bool {
-        let near = |a: Point, b: Point| {
-            let tolerance = |u: f64, v: f64| 4.0 * f64::from(f32::EPSILON) * u.abs().max(v.abs()).max(1.0);
-            (a.x - b.x).abs() <= tolerance(a.x, b.x) && (a.y - b.y).abs() <= tolerance(a.y, b.y)
-        };
+        let near = |a: Point, b: Point| craft_behavior::same_in_f32(a.x, b.x) && craft_behavior::same_in_f32(a.y, b.y);
         proposed.quad.iter().zip(&host.quad).all(|(a, b)| near(*a, *b)) && near(proposed.pivot, host.pivot)
     }
 

@@ -313,6 +313,11 @@ impl Component for SliderField<'_> {
         Some(self.value.reborrow())
     }
 
+    /// A host that keeps the value in `f32` writes the proposal back rounded to it: that is the gesture's own value.
+    fn same_value(&self, proposed: &f64, host: &f64) -> bool {
+        craft_behavior::same_in_f32(*proposed, *host)
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let shown = shown_of(cx.value());
         let name = cx.label();

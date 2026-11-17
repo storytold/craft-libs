@@ -69,3 +69,34 @@ fn a_write_back_at_the_codecs_precision_is_the_gestures_own() {
     let (cancels, _) = scrub(|value| value + OVERWRITE);
     assert_eq!(cancels, vec![CancelReason::HostChanged], "a different value is a host change");
 }
+
+/// A slider field whose host keeps the value in float32 (a percentage stored as a fraction) gets each proposal back
+/// rounded to it: the drag runs on and ends with one commit, with no host-change cancel.
+#[trial]
+fn a_slider_fields_drag_survives_a_float32_write_back() {
+    use craft_ui::form::SliderField;
+    use craft_ui::runtime::access::Role;
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+    let doc = Rc::new(RefCell::new(0.5_f32));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let (held, seen) = (Rc::clone(&doc), Rc::clone(&events));
+    let mut fixture = Fixture::new(move |ui| {
+        let given = f64::from(*held.borrow()) * 100.0;
+        let out = SliderField::new("Density", Bind::given(given), 0.0..=100.0).show(ui);
+        for event in &out.events {
+            if let Some(value) = event.landed() {
+                *held.borrow_mut() = (value / 100.0) as f32;
+            }
+            seen.borrow_mut().push(event.clone());
+        }
+    });
+    fixture.settle();
+    let track = fixture.by_role(Role::SLIDER).first().expect("the slider").rect;
+    fixture.drag_at(track.left_center() + Vec2::new(track.width() * 0.3, 0.0), Vec2::new(track.width() * 0.237, 0.0));
+    fixture.settle();
+    let events = events.borrow();
+    assert!(!events.iter().any(|event| matches!(event, EditEvent::Cancel { .. })), "no cancel: {events:?}");
+    assert_eq!(events.iter().filter(|event| matches!(event, EditEvent::Commit { .. })).count(), 1, "one commit: {events:?}");
+    assert!((f64::from(*doc.borrow()) - 0.5).abs() > 0.01, "the drag moved the value");
+}
