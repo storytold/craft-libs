@@ -1223,7 +1223,10 @@ commit of the carve; where VectorCraft has since done what a difference says, th
     off at a precision of 0.0024, 0.0026 or 0.0029, where the middles are 0.0023 off); and at the quarters of each piece as well (the ends and the middle of a piece are the same
     points of two curves that cross in the middle and share their ends, which can be 1.9 apart a quarter of the way along: a run cut from
     the second at a hundred-thousandth was taken for the first at a precision of 0.01, up to 1.9 off). Those are points of the piece, and the
-    distance between them is not bounded; a run that no input curve passes is refitted from samples of its pieces, within the precision, as any run is;
+    distance between them is not bounded; where several input curves pass, the pieces are taken for a part of the nearest of them by those points (the
+    first of those as near as the sweep's noise ends the search, and no more than 16 that pass are compared: the first in the input took the pieces
+    of the second, 0.003 off at a precision of 0.0029, where the second was in the input all the while); a run that no input curve passes is refitted from
+    samples of its pieces, within the precision, as any run is;
   - the Pathfinder Outline looks for the junctions on a curve inside its bounds, not inside the box of its control points
     (the curve is inside its bounds, and a junction within the sweep's noise of it is inside them widened by that
     and the rounding of the coordinates), and looks them up by blocks that have the segment's heights, not one by one

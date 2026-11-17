@@ -28,6 +28,9 @@ pub(crate) enum Work {
     Sweeps,
     /// Segments of runs the tidy tried to merge into one (a run read again at each piece added).
     TidyMerge,
+    /// Input curves a run of pieces was found to lie on within the limit (the tidy takes the nearest, and stops at the first as near as the
+    /// sweep's noise).
+    TidyCandidates,
     /// Lines a curve was flattened into to find the way an edge leaves a vertex.
     FlattenLines,
     /// Points of a stretch the search for the direction at a split was charged for (all of them, whatever it reads), part of [`Work::Fit`].

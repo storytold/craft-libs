@@ -711,9 +711,15 @@ fn try_merge(run: &[Seg], tidy: &Tidy) -> Option<Seg> {
     Some(Seg { c, line: false })
 }
 
-/// If every piece of `run` lies on one input cubic, return the exact sub-curve spanning the run.
+/// The most input curves a run is tried in full against, once it has been found within the limit of each: the search for the nearest of
+/// curves that all pass stops there, and takes the nearest found.
+const MAX_MATCH_CANDIDATES: usize = 16;
+
+/// If every piece of `run` lies on one input cubic, return the exact sub-curve spanning the run. Where several input curves pass, the
+/// one the pieces are nearest to (by the points tried, [`worst_off`]) is the one, and the first of those that are as near as the sweep's
+/// own noise ends the search: a run cut from an input curve is on it to the rounding, and is no nearer another that lies within the noise.
 fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
-    use kurbo::{ParamCurve, ParamCurveNearest};
+    use kurbo::ParamCurveNearest;
     let a = run[0].c.p0;
     let b = run[run.len() - 1].c.p3;
     let scale = 1.0 + a.x.abs().max(a.y.abs()).max(b.x.abs()).max(b.y.abs());
@@ -726,6 +732,8 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
     // match itself, the match is the limit: the sweep puts a piece off its curve by that much (the ends are taken for the curve's within it),
     // and a boundary that is moved by less than it is within what the sweep can tell.
     let middle_limit = (tol * 10.0).min(tidy.precision.max(tol));
+    let mut best: Option<(f64, CubicBez)> = None;
+    let mut passing = 0;
     for i in tidy.curve_indices_around(a, b) {
         let Some((_, c)) = tidy.curves.get(i) else { continue };
         let na = c.nearest(a, 1e-12);
@@ -733,29 +741,66 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
         if na.distance_sq.sqrt() > tol || nb.distance_sq.sqrt() > tol {
             continue;
         }
-        // Each piece's middle and its end: the joints between pieces are where two input curves that share their ends lie
-        // furthest apart (a lens is widest in the middle of its curves), so a run of two halves that only the middles of its
-        // halves were tested against took the wrong curve, 0.003 off, at a precision of 0.0024 to 0.0029. And its quarters: two
-        // curves that cross in the middle and share their ends have the same points at the ends and the middle of a piece and can be far apart
-        // a quarter of the way along (a long piece of a run cut unevenly was taken for the first of two such curves, 1.9 off at a
-        // precision of 0.01). The middle and the end are tried first, and the quarters only of a piece whose middle and end are on the
-        // curve. These are points of the piece, and how far it is from the curve between them is not bounded: a piece as near at five
-        // points and further apart between them is one that two cubics crossing at all five would have.
-        let on_curve = run.iter().all(|s| {
-            [s.c.eval(0.5), s.c.p3, s.c.eval(0.25), s.c.eval(0.75)].into_iter().all(|p| c.nearest(p, 1e-12).distance_sq.sqrt() <= middle_limit)
-        });
-        if !on_curve || (na.t - nb.t).abs() < 1e-12 {
+        let Some(worst) = worst_off(run, c, middle_limit) else { continue };
+        if (na.t - nb.t).abs() < 1e-12 {
             continue;
         }
-        let sub = if na.t < nb.t {
-            c.subsegment(na.t..nb.t)
-        } else {
-            let r = c.subsegment(nb.t..na.t);
-            CubicBez::new(r.p3, r.p2, r.p1, r.p0)
-        };
-        return Some(CubicBez::new(a, sub.p1, sub.p2, b));
+        work::add(Work::TidyCandidates, 1);
+        let sub = part_of(c, na.t, nb.t);
+        let merged = CubicBez::new(a, sub.p1, sub.p2, b);
+        // As near as the sweep's noise: no other curve is told from this one by the points tried (copies one on another are one
+        // curve, and are found at the first).
+        if worst <= tol {
+            return Some(merged);
+        }
+        // Not so near: the curves that lie within the limit of the pieces without being the one they were cut from (the lens of two
+        // that share their ends, up to the limit apart: the first in the input took the pieces of the second, 0.003 off at a precision of
+        // 0.0029 where the second was in the input all the while) are told from it by being nearer, or not.
+        if best.as_ref().is_none_or(|(w, _)| worst < *w) {
+            best = Some((worst, merged));
+        }
+        passing += 1;
+        if passing >= MAX_MATCH_CANDIDATES {
+            break;
+        }
     }
-    None
+    best.map(|(_, merged)| merged)
+}
+
+/// How far from the curve `c` the pieces of `run` are, at the points tried: the middle and the end of each piece, and its quarters.
+/// `None` when one is further than `limit`, or is not a number. The joints between pieces are where two input curves that share their
+/// ends lie furthest apart (a lens is widest in the middle of its curves), so a run of two halves that only the middles of its halves were
+/// tested against took the wrong curve, 0.003 off, at a precision of 0.0024 to 0.0029. And its quarters: two curves that cross in
+/// the middle and share their ends have the same points at the ends and the middle of a piece and can be far apart a quarter of the way along
+/// (a long piece of a run cut unevenly was taken for the first of two such curves, 1.9 off at a precision of 0.01). The middle and the end
+/// are tried first, and the quarters only of a piece whose middle and end are on the curve. These are points of the piece, and how far
+/// it is from the curve between them is not bounded: a piece as near at five points and further apart between them is one that two
+/// cubics crossing at all five would have.
+fn worst_off(run: &[Seg], c: &CubicBez, limit: f64) -> Option<f64> {
+    use kurbo::{ParamCurve, ParamCurveNearest};
+    let mut worst = 0.0f64;
+    for s in run {
+        for p in [s.c.eval(0.5), s.c.p3, s.c.eval(0.25), s.c.eval(0.75)] {
+            let d = c.nearest(p, 1e-12).distance_sq.sqrt();
+            // (A distance that is not a number is no distance within the limit.)
+            if d.is_nan() || d > limit {
+                return None;
+            }
+            worst = worst.max(d);
+        }
+    }
+    Some(worst)
+}
+
+/// The part of `c` from the parameter `from` to `to`, running from `c`'s point at `from` (so reversed where `to` is the smaller).
+fn part_of(c: &CubicBez, from: f64, to: f64) -> CubicBez {
+    use kurbo::ParamCurve;
+    if from < to {
+        c.subsegment(from..to)
+    } else {
+        let r = c.subsegment(to..from);
+        CubicBez::new(r.p3, r.p2, r.p1, r.p0)
+    }
 }
 
 impl Tidy {
@@ -1624,13 +1669,125 @@ mod tests {
         };
         for run in cuts(&[1e-5, 0.25, 0.5, 0.75, 1.0 - 1e-5]) {
             let merged = try_merge(&run, &both).expect("the pieces are one curve");
-            assert!(!merged.line && off(&merged.c, &second) < 1e-6, "{} pieces: {} from the curve they are cut from", run.len(), off(&merged.c, &second));
+            assert!(
+                !merged.line && off(&merged.c, &second) < 1e-6,
+                "{} pieces: {} from the curve they are cut from",
+                run.len(),
+                off(&merged.c, &second)
+            );
             // With the second curve not in the input, the first is no curve they are a part of: a refit within the precision, or none.
             if let Some(refit) = try_merge(&run, &only_first) {
                 let far = (0..=40).map(|k| refit.c.nearest(second.eval(f64::from(k) / 40.0), 1e-9).distance_sq.sqrt()).fold(0.0, f64::max);
                 assert!(far <= DEFAULT_PRECISION + 1e-9, "{} pieces: refitted {far} from the curve they are cut from", run.len());
             }
         }
+    }
+
+    /// A piece that strays from the curve at one quarter of its length and nowhere else the middle and the end tell is not taken for part of the
+    /// curve, whichever quarter it is (the first and the last have a point each), and one that strays by less than the limit is. The piece is
+    /// the part of the curve it lies on with a bump added to its control points: `u (1 - u) (a + b u)` along the curve's height (the Bernstein
+    /// form of the bump has `a / 3` at the first handle and `(a + b) / 3` at the second), which at `a = 1` and `b = -1.6` is 0.1125 of its
+    /// size at one quarter, 0.05 at the middle and -0.0375 at three quarters; and the mirror of it (the same, from the other end).
+    #[test]
+    fn a_piece_that_strays_from_a_curve_at_one_quarter_only_is_not_taken_for_a_part_of_it() {
+        let curve = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 100.0), (500.0, 0.0));
+        let input = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(curve.p0), kurbo::PathEl::CurveTo(curve.p1, curve.p2, curve.p3)]);
+        let tidy = Tidy::keeping(DEFAULT_PRECISION, [&input]);
+        // The limit for the middle and the end of a piece is 0.005 here (ten matches of a millionth of 500).
+        let bumped = |size: f64, mirrored: bool| {
+            let (a, b) = (1.0 * size, -1.6 * size);
+            let (d1, d2) = if mirrored { ((a + b) / 3.0, a / 3.0) } else { (a / 3.0, (a + b) / 3.0) };
+            let mut c = curve;
+            c.p1.y += d1;
+            c.p2.y += d2;
+            [Seg { c, line: false }]
+        };
+        for mirrored in [false, true] {
+            // 0.1125 of 0.07 is 0.0079 at the quarter, over the limit; the middle (0.0035) and the end are within it.
+            assert!(exact_merge(&bumped(0.07, mirrored), &tidy).is_none(), "mirrored {mirrored}: a piece 0.008 off at a quarter");
+            // At 0.02 the most it is off is 0.0023: the piece is a part of the curve, and is the curve's own.
+            let near = exact_merge(&bumped(0.02, mirrored), &tidy).unwrap_or_else(|| panic!("mirrored {mirrored}: a piece 0.002 off"));
+            assert!(near.p1.distance(curve.p1) < 1e-9 && near.p2.distance(curve.p2) < 1e-9);
+        }
+    }
+
+    /// Of the input curves a run lies within the limit of, the nearest is the one it is a part of, whatever the order of the input: the second of
+    /// two that share their ends and are 0.003 apart, with the run cut from it at a fifth of its length, was passed over for the first at
+    /// a precision of 0.0029 (the points tried are all within 0.00288 of the first, and the curves are 0.0030 apart in the middle of the second's
+    /// first four fifths); and where several are as near as the sweep's noise, the first ends the search at once, however many they are.
+    #[test]
+    fn the_nearest_of_the_curves_a_run_lies_within_the_limit_of_is_the_one_it_is_a_part_of() {
+        let first = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 100.0), (500.0, 0.0));
+        let second = CubicBez::new((0.0, 0.0), (150.0, 100.004), (350.0, 100.004), (500.0, 0.0));
+        let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
+        let off = |c: &CubicBez, from: &CubicBez| {
+            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
+        };
+        // Premise: the curves are 0.003 apart in the middle, more than the precision asked for.
+        assert!(first.eval(0.5).distance(second.eval(0.5)) > 0.0029, "{}", first.eval(0.5).distance(second.eval(0.5)));
+        let run: Vec<Seg> = [0.0..0.2, 0.2..1.0].into_iter().map(|r| Seg { c: second.subsegment(r), line: false }).collect();
+        for (what, inputs) in [("first ahead", [input(first), input(second)]), ("second ahead", [input(second), input(first)])] {
+            let tidy = Tidy::keeping(0.0029, &inputs);
+            work::reset();
+            let merged = try_merge(&run, &tidy).expect("the pieces are one curve");
+            assert!(!merged.line && off(&merged.c, &second) < 1e-9, "{what}: {} from the curve the pieces are cut from", off(&merged.c, &second));
+            assert!(work::take(Work::TidyCandidates) >= 1);
+        }
+        // Copies one on another are as near as each other: the first is taken and no other is tried, however many.
+        let copies: Vec<BezPath> = (0..64).map(|_| input(second)).collect();
+        let tidy = Tidy::keeping(DEFAULT_PRECISION, &copies);
+        work::reset();
+        let merged = try_merge(&run, &tidy).expect("the pieces are one curve");
+        assert!(off(&merged.c, &second) < 1e-9);
+        assert_eq!(work::take(Work::TidyCandidates), 1, "64 copies: the first is as near as can be told");
+        // Curves that all pass and none is that near are tried up to the most and the nearest of those is taken: 20 curves 0.0005 to 0.0043
+        // from the second (more than the sweep's noise at these coordinates, 5e-4, and within the limit), the nearest last in the input.
+        let lens = |k: usize| {
+            CubicBez::new((0.0, 0.0), (150.0, 100.004 - 0.0002 * (k + 1) as f64), (350.0, 100.004 - 0.0002 * (k + 1) as f64), (500.0, 0.0))
+        };
+        let mut crowd: Vec<BezPath> = (0..MAX_MATCH_CANDIDATES + 4).rev().map(|k| input(lens(k))).collect();
+        crowd.push(input(second));
+        let tidy = Tidy::keeping(0.01, &crowd);
+        work::reset();
+        let merged = try_merge(&run, &tidy).expect("the pieces are one curve");
+        assert_eq!(work::take(Work::TidyCandidates), MAX_MATCH_CANDIDATES, "the search stops at the most");
+        // The nearest of the first 16 (the curves 0.004 down to 0.001 from the second, the fourth of them being the nearest) is the one taken.
+        assert!(off(&merged.c, &lens(4)) < 1e-9, "{} from the nearest of those tried", off(&merged.c, &lens(4)));
+    }
+
+    /// How far the pieces of a run are from a curve at the points tried: the most of them, or `None` where one is over the limit or is not a number.
+    #[test]
+    fn the_worst_of_the_points_tried_of_a_run_is_its_distance_from_the_curve_or_none() {
+        let curve = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 100.0), (500.0, 0.0));
+        let piece = |r: std::ops::Range<f64>| Seg { c: curve.subsegment(r), line: false };
+        let run = [piece(0.0..0.3), piece(0.3..1.0)];
+        assert!(worst_off(&run, &curve, 1e-9).is_some_and(|w| w < 1e-9), "exactly its pieces");
+        // A handle moved by 0.02 across the curve puts the second piece up to 0.02 times 3 u (1 - u)^2 off it, 0.0084 at its quarter (the points
+        // tried are its middle, end and quarters).
+        let mut bent = run;
+        bent[1].c.p1.y += 0.02;
+        let worst = worst_off(&bent, &curve, 0.01).expect("within 0.01");
+        assert!(worst > 0.008 && worst < 0.009, "{worst}");
+        assert_eq!(worst_off(&bent, &curve, worst * 0.99), None, "over the limit");
+        assert!(worst_off(&bent, &curve, worst * 1.01).is_some_and(|w| (w - worst).abs() < 1e-12), "within it");
+        // A point that is not a number is within no limit, and the first piece is held to it as the last is.
+        let mut nan = run;
+        nan[0].c.p2.x = f64::NAN;
+        assert_eq!(worst_off(&nan, &curve, 1e9), None);
+        let mut first_bent = run;
+        first_bent[0].c.p1.y += 0.02;
+        assert_eq!(worst_off(&first_bent, &curve, 0.001), None);
+    }
+
+    /// The part of a curve between two parameters runs from the first to the second, and is a point where they are one.
+    #[test]
+    fn the_part_of_a_curve_runs_from_the_first_parameter_to_the_second() {
+        let c = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 80.0), (500.0, 20.0));
+        let forward = part_of(&c, 0.2, 0.6);
+        let back = part_of(&c, 0.6, 0.2);
+        assert!(forward.p0.distance(c.eval(0.2)) < 1e-9 && forward.p3.distance(c.eval(0.6)) < 1e-9);
+        assert!(back.p0.distance(c.eval(0.6)) < 1e-9 && back.p3.distance(c.eval(0.2)) < 1e-9);
+        assert!(back.eval(0.25).distance(forward.eval(0.75)) < 1e-9, "the same curve the other way");
     }
 
     #[test]
