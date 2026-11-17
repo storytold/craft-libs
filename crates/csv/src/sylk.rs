@@ -219,12 +219,13 @@ fn position(arg: &str, max: u32) -> Option<u32> {
     arg.trim().parse::<u32>().ok().filter(|n| (1..=max).contains(n)).map(|n| n - 1)
 }
 
-/// A `K` value: `"text"` (everything between the first and the last quote, as written), a
-/// boolean, a number, or other text (an error value when it starts with `#`).
+/// A `K` value: `"text"` (everything between the first and the last quote, with Excel's
+/// character escapes decoded), a boolean, a number, or other text (an error value when it starts
+/// with `#`).
 fn parse_value(arg: &str) -> Value {
     if let Some(text) = arg.strip_prefix('"') {
         let text = text.strip_suffix('"').unwrap_or(text);
-        return Value::Text(text.to_string());
+        return Value::Text(decode_escapes(text));
     }
     if arg.eq_ignore_ascii_case("TRUE") || arg.eq_ignore_ascii_case("FALSE") {
         return Value::Bool(arg.eq_ignore_ascii_case("TRUE"));
@@ -236,6 +237,149 @@ fn parse_value(arg: &str) -> Value {
         Ok(n) if n.is_finite() => Value::Number(n),
         _ => Value::Text(arg.to_string()),
     }
+}
+
+/// ISO 6937's diacritics (codes 0xC1–0xCF): each code, its combining mark, and the letters it
+/// composes with, as pairs of letter and precomposed letter (from Unicode's canonical composition).
+/// A diacritic on a SPACE is the spacing accent (`´`, `¨`, `ˇ`, ...), as in glibc's ISO_6937 map; the
+/// grave, circumflex and tilde have none, since `` ` ``, `^` and `~` are plain ASCII.
+const ISO6937_DIACRITICS: [(u8, char, &str); 13] = [
+    (0xC1, '\u{0300}', "AÀaàEÈeèIÌiìNǸnǹOÒoòUÙuùWẀwẁYỲyỳ"), // grave
+    (0xC2, '\u{0301}', " ´AÁaáCĆcćEÉeéGǴgǵIÍiíKḰkḱLĹlĺMḾmḿNŃnńOÓoóPṔpṕRŔrŕSŚsśUÚuúWẂwẃYÝyýZŹzź"), // acute
+    (0xC3, '\u{0302}', "AÂaâCĈcĉEÊeêGĜgĝHĤhĥIÎiîJĴjĵOÔoôSŜsŝUÛuûWŴwŵYŶyŷZẐzẑ"), // circumflex
+    (0xC4, '\u{0303}', "AÃaãEẼeẽIĨiĩNÑnñOÕoõUŨuũVṼvṽYỸyỹ"), // tilde
+    (0xC5, '\u{0304}', " ¯AĀaāEĒeēGḠgḡIĪiīOŌoōUŪuūYȲyȳ"),   // macron
+    (0xC6, '\u{0306}', " ˘AĂaăEĔeĕGĞgğIĬiĭOŎoŏUŬuŭ"),       // breve
+    (0xC7, '\u{0307}', " ˙AȦaȧBḂbḃCĊcċDḊdḋEĖeėFḞfḟGĠgġHḢhḣIİMṀmṁNṄnṅOȮoȯPṖpṗRṘrṙSṠsṡTṪtṫWẆwẇXẊxẋYẎyẏZŻzż"), // dot above
+    (0xC8, '\u{0308}', " ¨AÄaäEËeëHḦhḧIÏiïOÖoötẗUÜuüWẄwẅXẌxẍYŸyÿ"), // diaeresis
+    (0xCA, '\u{030a}', " ˚AÅaåUŮuůwẘyẙ"),                   // ring
+    (0xCB, '\u{0327}', " ¸CÇcçDḐdḑEȨeȩGĢgģHḨhḩKĶkķLĻlļNŅnņRŖrŗSŞsşTŢtţ"), // cedilla
+    (0xCD, '\u{030b}', " ˝OŐoőUŰuű"),                       // double acute
+    (0xCE, '\u{0328}', " ˛AĄaąEĘeęIĮiįOǪoǫUŲuų"),           // ogonek
+    (0xCF, '\u{030c}', " ˇAǍaǎCČcčDĎdďEĚeěGǦgǧHȞhȟIǏiǐjǰKǨkǩLĽlľNŇnňOǑoǒRŘrřSŠsšTŤtťUǓuǔZŽzž"), // caron
+];
+
+/// ISO 6937's spacing characters above ASCII (codes 0xA1–0xFE that aren't diacritics).
+const ISO6937_SPACING: [(u8, char); 71] = [
+    (0xA1, '¡'),
+    (0xA2, '¢'),
+    (0xA3, '£'),
+    (0xA5, '¥'),
+    (0xA7, '§'),
+    (0xA8, '¤'),
+    (0xA9, '‘'),
+    (0xAA, '“'),
+    (0xAB, '«'),
+    (0xAC, '←'),
+    (0xAD, '↑'),
+    (0xAE, '→'),
+    (0xAF, '↓'),
+    (0xB0, '°'),
+    (0xB1, '±'),
+    (0xB2, '²'),
+    (0xB3, '³'),
+    (0xB4, '×'),
+    (0xB5, 'µ'),
+    (0xB6, '¶'),
+    (0xB7, '·'),
+    (0xB8, '÷'),
+    (0xB9, '’'),
+    (0xBA, '”'),
+    (0xBB, '»'),
+    (0xBC, '¼'),
+    (0xBD, '½'),
+    (0xBE, '¾'),
+    (0xBF, '¿'),
+    (0xD0, '―'),
+    (0xD1, '¹'),
+    (0xD2, '®'),
+    (0xD3, '©'),
+    (0xD4, '™'),
+    (0xD5, '♪'),
+    (0xD6, '¬'),
+    (0xD7, '¦'),
+    (0xDC, '⅛'),
+    (0xDD, '⅜'),
+    (0xDE, '⅝'),
+    (0xDF, '⅞'),
+    (0xE0, 'Ω'),
+    (0xE1, 'Æ'),
+    (0xE2, 'Đ'),
+    (0xE3, 'ª'),
+    (0xE4, 'Ħ'),
+    (0xE6, 'Ĳ'),
+    (0xE7, 'Ŀ'),
+    (0xE8, 'Ł'),
+    (0xE9, 'Ø'),
+    (0xEA, 'Œ'),
+    (0xEB, 'º'),
+    (0xEC, 'Þ'),
+    (0xED, 'Ŧ'),
+    (0xEE, 'Ŋ'),
+    (0xEF, 'ŉ'),
+    (0xF0, 'ĸ'),
+    (0xF1, 'æ'),
+    (0xF2, 'đ'),
+    (0xF3, 'ð'),
+    (0xF4, 'ħ'),
+    (0xF5, 'ı'),
+    (0xF6, 'ĳ'),
+    (0xF7, 'ŀ'),
+    (0xF8, 'ł'),
+    (0xF9, 'ø'),
+    (0xFA, 'œ'),
+    (0xFB, 'ß'),
+    (0xFC, 'þ'),
+    (0xFD, 'ŧ'),
+    (0xFE, 'ŋ'),
+];
+
+/// Text with Excel's SYLK character escapes decoded. Excel writes a character outside ASCII as
+/// `ESC N` and one byte, the character's ISO 6937 code less 0x80. A diacritic's code is followed
+/// by the letter it goes on (`ESC N H o` is `ö`, `ESC N {` is `ß`). A code ISO 6937 doesn't define,
+/// or an `ESC` that isn't followed by `N` and a code, is kept as written.
+fn decode_escapes(text: &str) -> String {
+    if !text.contains('\u{1b}') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        let mut ahead = chars.clone();
+        let code = (c == '\u{1b}' && ahead.next() == Some('N'))
+            .then(|| ahead.next())
+            .flatten()
+            .and_then(|b| u8::try_from(b).ok())
+            .filter(|b| (0x20..0x80).contains(b));
+        let Some(code) = code.map(|b| b + 0x80) else {
+            out.push(c);
+            continue;
+        };
+        if let Some(&(_, mark, pairs)) = ISO6937_DIACRITICS.iter().find(|(d, _, _)| *d == code) {
+            // The letter it goes on: precomposed where Unicode has the pair, else letter and mark.
+            // The base is an ordinary character: another escape (or any control character) after a
+            // diacritic leaves this escape as written, and the next one is decoded on its own.
+            let Some(base) = ahead.next().filter(|b| !b.is_control()) else {
+                out.push(c);
+                continue;
+            };
+            let letters: Vec<char> = pairs.chars().collect();
+            match letters.chunks(2).find(|p| p.first() == Some(&base)).and_then(|p| p.get(1)) {
+                Some(&composed) => out.push(composed),
+                None => {
+                    out.push(base);
+                    out.push(mark);
+                }
+            }
+        } else if let Some(&(_, ch)) = ISO6937_SPACING.iter().find(|(s, _)| *s == code) {
+            out.push(ch);
+        } else {
+            out.push(c);
+            continue;
+        }
+        chars = ahead;
+    }
+    out
 }
 
 /// One part of an R1C1 reference: `R`/`C` followed by an absolute number, a bracketed offset or

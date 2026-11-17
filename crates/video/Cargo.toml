@@ -36,6 +36,8 @@ mpeg4 = ["mpeg4-encode"]
 mpeg4-encode = ["craft-media/bitstream"]
 # FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
 ffv1 = []
+# Hap (Vidvox): decoder and encoder, with Snappy and chunked second stages.
+hap = []
 # Motion JPEG: a frame-level decoder and encoder over `craft-jpeg`.
 mjpeg = ["dep:craft-jpeg"]
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
@@ -74,6 +76,10 @@ rav1e = { version = "0.8", default-features = false, optional = true }
 craft-media-testkit = { workspace = true }
 # The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test.
 craft-media = { workspace = true, features = ["avi"] }
+
+[[test]]
+name = "hap"
+required-features = ["hap"]
 
 [[test]]
 name = "mjpeg"

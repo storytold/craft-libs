@@ -8,9 +8,10 @@
 //! | `dnx` | [`dnx`] | Avid DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder |
 //! | `apv` | [`apv`] | APV (RFC 9924): decoder (`apv-decode`) and encoder (`apv-encode`) |
 //! | `vp8` | [`vp8`] | VP8 (RFC 6386): decoder (`vp8-decode`) and key-frame encoder (`vp8-encode`) |
-//! | `mpeg2` | [`mpeg2`] | MPEG-2 video (ITU-T H.262) and MPEG-1 video: decoder (`mpeg2-decode`) and MPEG-2 I/P/B encoder (`mpeg2-encode`) |
+//! | `mpeg2` | [`mpeg2`] | MPEG-2 video (ITU-T H.262) and MPEG-1 video: decoder (`mpeg2-decode`) and MPEG-2 I/P/B encoder with CBR / VBR (`mpeg2-encode`) |
 //! | `mpeg4` | [`mpeg4`] | MPEG-4 Part 2 video (ISO/IEC 14496-2, Xvid/DivX): Simple profile encoder (`mpeg4-encode`) |
 //! | `ffv1` | [`ffv1`] | FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder |
+//! | `hap` | [`hap`] | Vidvox Hap, Hap Alpha, Hap Q, Hap Q Alpha, Hap Alpha-Only: decoder and encoder |
 //! | `mjpeg` | [`mjpeg`] | Motion JPEG: frame-level decoder and baseline encoder over `craft-jpeg` |
 //! | `prores` | [`prores`] | Apple ProRes (SMPTE RDD 36): decoder and encoder |
 //! | `h264` | [`h264`] | ITU-T H.264 / AVC: decoder (`h264-decode`) and encoder (`h264-encode`) |
@@ -23,10 +24,14 @@
 //!
 //! The decoders bound the pictures they hold with a memory budget ([`budget`]).
 //!
+//! Each decoder returns its own picture type. [`frame::VideoFrame`] is the codec-agnostic form
+//! they all convert into (`VideoFrame::try_from`).
+//!
 //! Containers and bit-level I/O are in `craft-media`; the codecs here share its `bitstream`
 //! module and describe their streams with `craft_media::CodecParams`.
 
 pub mod budget;
+pub mod frame;
 
 #[cfg(any(feature = "apv-decode", feature = "apv-encode"))]
 pub mod apv;
@@ -45,6 +50,9 @@ pub mod mpeg4;
 
 #[cfg(feature = "ffv1")]
 pub mod ffv1;
+
+#[cfg(feature = "hap")]
+pub mod hap;
 
 #[cfg(feature = "mjpeg")]
 pub mod mjpeg;

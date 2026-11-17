@@ -12,7 +12,10 @@ repository.workspace = true
 corpus = []
 default = []
 serde = ["dep:serde"]
-testgen = []
+# `fixtures` and `testgen`: test-data generators for the tests of crates that read PSD files.
+test-support = []
+# The former name of `test-support`.
+testgen = ["test-support"]
 
 [dependencies]
 thiserror = { workspace = true }
@@ -26,7 +29,7 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-craft-psd = { path = ".", features = ["testgen"] }
+craft-psd = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

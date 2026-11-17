@@ -44,6 +44,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
 | `mp3-decode` | `mp3::Decoder`, `mp3::InfoTag` | `mpa-decode` |
 | `mp3-encode` | `mp3::Encoder`; `encode`, `FileEncoder` for MP3; `PacketEncoder` for MP3 | craft-media `bitstream` |
+| `gsm-decode`, `gsm-encode` (`gsm`) | `gsm::Decoder`, `gsm::Encoder`, `gsm::decode`, `gsm::encode`: GSM 06.10 full-rate speech, bit-exact, raw `.gsm` and WAV (GSM 6.10) packings | none |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |

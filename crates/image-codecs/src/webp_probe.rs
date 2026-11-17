@@ -25,9 +25,10 @@ pub fn header(bytes: &[u8]) -> Result<(u32, u32, u16), CodecError> {
     if !has_image {
         return Err(err("no image data"));
     }
-    let (w, h) = crate::probe_size(bytes)?;
+    // Read stored dimensions directly. Undoing probe_size with the compatibility EXIF
+    // orientation is incorrect when its lenient parser disagrees with the strict one.
+    let (w, h, _) = crate::codecs::webp::probe(bytes, &crate::Limits::default())?;
     let orientation = exif.map_or(1, craft_metadata::compat_orientation::orientation);
-    let (w, h) = if (5..=8).contains(&orientation) { (h, w) } else { (w, h) };
     Ok((w, h, orientation))
 }
 
@@ -44,6 +45,20 @@ mod tests {
         let exif = bytes.windows(4).position(|v| v == b"EXIF").unwrap();
         let tiff = exif + 8;
         bytes[tiff + 18] = 6;
+        assert_eq!(header(&bytes).unwrap(), (2, 3, 6));
+    }
+
+    #[test]
+    fn malformed_exif_does_not_swap_stored_dimensions() {
+        let mut image = crate::Image::from_u8(2, 3, crate::ChannelLayout::Rgb, vec![42; 18]).unwrap();
+        image.meta.exif = Some(b"II\x2a\x00\x08\x00\x00\x00\x01\x00\x12\x01\x03\x00\x01\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00".to_vec());
+        let mut bytes = crate::encode(&image, Format::WebP, &crate::EncodeOptions::default()).unwrap();
+        let exif = bytes.windows(4).position(|v| v == b"EXIF").unwrap() + 8;
+        bytes[exif + 18] = 6;
+        // Compatibility metadata preserves orientation despite a malformed count;
+        // the strict orientation used by probe_size rejects it. Stored size is neither.
+        bytes[exif + 14..exif + 18].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(crate::probe_size(&bytes).unwrap(), (2, 3));
         assert_eq!(header(&bytes).unwrap(), (2, 3, 6));
     }
 

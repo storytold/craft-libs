@@ -467,6 +467,12 @@ pub struct HostWindow {
     pub visible: bool,
     /// The window level its builder asked for on its last frame.
     pub level: Option<egui::WindowLevel>,
+    /// Its builder's `position` on its last frame: where the window opens when egui creates it.
+    pub position: Option<Pos2>,
+    /// Its builder's `taskbar` setting on its last frame.
+    pub taskbar: Option<bool>,
+    /// Its builder's X11 window type on its last frame.
+    pub window_type: Option<egui::X11WindowType>,
     /// Frames it drew.
     pub frames: usize,
     /// Events for its next frame, in its own coordinates.
@@ -567,11 +573,14 @@ impl NativeHost {
             let builder = &viewport.builder;
             let rect = Rect::from_min_size(builder.position.unwrap_or_default() + host.frame, builder.inner_size.unwrap_or(vec2(300.0, 200.0)));
             let visible = builder.visible.unwrap_or(true);
-            let level = builder.window_level;
+            let (level, position, taskbar, window_type) = (builder.window_level, builder.position, builder.taskbar, builder.window_type);
             host.windows.entry(id).or_insert_with(|| HostWindow {
                 rect,
                 visible,
                 level,
+                position,
+                taskbar,
+                window_type,
                 frames: 0,
                 events: Vec::new(),
                 close: false,
@@ -587,6 +596,7 @@ impl NativeHost {
             let Some(window) = host.windows.get_mut(&id) else { return };
             window.frames += 1;
             window.level = level;
+            (window.position, window.taskbar, window.window_type) = (position, taskbar, window_type);
             if std::mem::take(&mut window.close)
                 && let Some(info) = viewports.get_mut(&id)
             {
