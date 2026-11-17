@@ -321,11 +321,12 @@ impl Doc {
                 v = Value::Object(m);
             }
             let mut s = self.text.clone();
+            let eol = self.eol();
             if !s.is_empty() && !s.ends_with('\n') {
-                s.push('\n');
+                s.push_str(eol);
             }
-            s.push_str(&serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
-            s.push('\n');
+            s.push_str(&render(&v, "", eol));
+            s.push_str(eol);
             return Ok(s);
         };
         // Walk down as far as the path exists.
