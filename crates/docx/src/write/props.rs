@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
-    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, Kashida, LineSpacing, ParaProps, RowProps,
+    TabAlign, TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -201,6 +201,11 @@ pub fn align_val(a: Align) -> &'static str {
     }
 }
 
+/// `w:jc` for a paragraph, including the kashida length of a justified one.
+pub fn jc_val(a: Align, kashida: Option<Kashida>) -> &'static str {
+    if a == Align::Justify { kashida.unwrap_or(Kashida::None).jc() } else { align_val(a) }
+}
+
 /// A tab stop's or positional tab's `w:leader` value.
 pub fn tab_leader(l: TabLeader) -> &'static str {
     match l {
@@ -261,10 +266,12 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:pageBreakBefore", p.page_break_before);
     write_frame(w, p, framed);
     toggle(w, "w:widowControl", p.widow_control);
-    if let Some(nr) = p.numbering {
+    if p.numbering.is_some() || num_change.is_some() {
         w.open("w:numPr", &[]);
-        w.val("w:ilvl", &n(nr.level.min(8) as i64));
-        w.val("w:numId", &n(nr.num as i64));
+        if let Some(nr) = p.numbering {
+            w.val("w:ilvl", &n(nr.level.min(8) as i64));
+            w.val("w:numId", &n(nr.num as i64));
+        }
         if let Some(a) = num_change {
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:numberingChange", &refs);
@@ -285,7 +292,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:contextualSpacing", p.contextual_spacing);
     toggle(w, "w:mirrorIndents", p.mirror_indents);
     if let Some(a) = p.align {
-        w.val("w:jc", align_val(a));
+        w.val("w:jc", jc_val(a, p.kashida));
     }
     if let Some(direction) = p.text_direction {
         w.val("w:textDirection", direction.ooxml());
