@@ -1,13 +1,14 @@
 //! The size dialogs `ImageSize` and `CanvasSize`: the rows, the readouts and the dialog around them that the two share,
 //! and the `Resample` and `CanvasExtension` choices.
 
-use super::FormDialog;
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
+use super::{FormDialog, ResetFooter, ResetPick};
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogResult, FieldRefusal};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
+use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::UnitSelect;
 use crate::runtime::env::{Env, Label, UnitKind, Units};
 use crate::runtime::overlay::CloseReason;
@@ -212,6 +213,8 @@ pub struct SizingOutput<R> {
     pub closed: Option<CloseReason>,
     /// The answer, the pass the dialog closed as OK.
     pub result: Option<R>,
+    /// The answer OK filed in this pass for the host to judge, from a dialog that holds its OK ([`Hold`]).
+    pub held: Option<R>,
 }
 
 impl<R> SizingOutput<R> {
@@ -282,6 +285,22 @@ fn set_size_json(size: &mut LinkedSize, field: &str, value: &serde_json::Value) 
     })
 }
 
+/// The held OK of a hosted size dialog, as `ParamDialog` holds its own: with `on`, OK files its answer for the host
+/// instead of closing; `waiting` keeps OK disabled until the host answers; `finish` closes the dialog with the answer
+/// the host accepted; `refusal` is the host's reason, shown under the rows until a value changes.
+pub(super) struct Hold<S> {
+    pub(super) on: bool,
+    pub(super) finish: bool,
+    pub(super) waiting: bool,
+    pub(super) refusal: Option<(Label, S)>,
+}
+
+impl<S> Default for Hold<S> {
+    fn default() -> Self {
+        Hold { on: false, finish: false, waiting: false, refusal: None }
+    }
+}
+
 /// A size dialog on `FormDialog`: `rows` edits the values and `answer` makes the result from them at OK. OK, Cancel
 /// and Alt-for-Reset follow `ParamDialog`; OK is refused while the pixel size is empty or over the limit.
 pub(super) fn show_form<'a, S: SizeForm + Default, R>(
@@ -289,18 +308,37 @@ pub(super) fn show_form<'a, S: SizeForm + Default, R>(
     title: Label,
     open: Option<Bind<'a, bool>>,
     values: Bind<'a, S>,
+    hold: Hold<S>,
     mut rows: impl FnMut(&mut Ui, &mut S),
-    answer: impl FnOnce(&S) -> R,
+    answer: impl Fn(&S) -> R,
 ) -> SizingOutput<R> {
-    let mut dialog = FormDialog::new(title.clone(), values).outer_gesture(true);
+    // The footer `FormDialog` builds for this pass, made the same way, so its `pick` reads `FormOutput::picked`.
+    let footer = ResetFooter::new(ui, None, true);
+    let mut dialog = FormDialog::new(title.clone(), values).outer_gesture(true).accept_stays_open(hold.on);
+    if hold.waiting {
+        dialog = dialog.ok_enabled(false);
+    }
     if let Some(open) = open {
         dialog = dialog.opened(open);
     }
-    let shown = dialog.show(ui, |ui, _, state| {
+    let mut latest: Option<S> = None;
+    let shown = dialog.show(ui, |ui, form, state| {
+        // A measuring run closes nothing: the real run of the pass makes the close.
+        if hold.finish && !crate::runtime::measure::active(ui.ctx()) {
+            form.request_close_as(CloseReason::Activated);
+        }
         FieldGroup::new(title.clone()).show(ui, |ui, _| rows(ui, state));
+        if let Some((reason, _)) = hold.refusal.as_ref().filter(|(_, refused)| *refused == *state) {
+            Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
+        }
+        latest = Some(state.clone());
         size_valid(state.pixels())
     });
-    SizingOutput { response: shown.response, closed: shown.closed, result: shown.accepted.map(|state| answer(&state)) }
+    let held = match (footer.pick(shown.picked), latest) {
+        (Some(ResetPick::Accept), Some(state)) if hold.on && size_valid(state.pixels()) => Some(answer(&state)),
+        _ => None,
+    };
+    SizingOutput { response: shown.response, closed: shown.closed, result: shown.accepted.map(|state| answer(&state)), held }
 }
 
 /// The rows both dialogs show, with the words and units they need.

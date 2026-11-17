@@ -1,13 +1,14 @@
 //! `CanvasSize`: the Canvas Size dialog.
 
-use super::{CanvasExtension, Kit, LinkedSize, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
+use super::{CanvasExtension, Hold, Kit, LinkedSize, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use crate::display::Text;
 use crate::form::Field;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
 use crate::runtime::env::{ColumnSize, Label, UnitKind};
+use crate::runtime::overlay::CloseReason;
 use crate::sections::Section;
 use craft_behavior::PixelSize;
 use craft_theme::variant::Tone;
@@ -163,17 +164,25 @@ pub struct CanvasSize<'a> {
     /// The bytes one pixel takes, for the file size readouts.
     #[prop(quantity = "bytes per pixel")]
     bytes_per_pixel: f64,
+    /// The held OK of a hosted dialog.
+    hold: Hold<CanvasSizeValues>,
 }
 
 impl<'a> CanvasSize<'a> {
     /// The dialog over `values`.
     pub fn new(values: Bind<'a, CanvasSizeValues>) -> Self {
-        CanvasSize { values, open: None, bytes_per_pixel: 4.0 }
+        CanvasSize { values, open: None, bytes_per_pixel: 4.0, hold: Hold::default() }
+    }
+
+    /// Holds the OK of a hosted dialog ([`Hold`]).
+    fn hold_ok(mut self, hold: Hold<CanvasSizeValues>) -> Self {
+        self.hold = hold;
+        self
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> CanvasSizeOutput {
-        let CanvasSize { values, open, bytes_per_pixel } = self;
+        let CanvasSize { values, open, bytes_per_pixel, hold } = self;
         let kit = Kit::new(ui);
         let words = kit.words();
 
@@ -183,6 +192,7 @@ impl<'a> CanvasSize<'a> {
             title,
             open,
             values,
+            hold,
             |ui, state| {
                 let size = state.size.original();
                 let has_background = state.has_background;
@@ -251,6 +261,12 @@ pub struct HostedCanvasSize {
     open: bool,
     values: CanvasSizeValues,
     build: Box<Build>,
+    /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedCanvasSize::held_ok)).
+    hold: bool,
+    /// The OK the host holds back until it answers `answer_ok`.
+    held: HeldAnswer<CanvasSizeResult>,
+    /// The values the host refused the held OK for: the refusal shows until they change.
+    refused_at: Option<CanvasSizeValues>,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -266,6 +282,9 @@ impl HostedCanvasSize {
             open: true,
             values,
             build: Box::new(build),
+            hold: false,
+            held: HeldAnswer::new(),
+            refused_at: None,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -275,14 +294,57 @@ impl HostedCanvasSize {
     pub fn values(&self) -> &CanvasSizeValues {
         &self.values
     }
+
+    /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
+    /// [`answer_ok`](Self::answer_ok). OK stays disabled until then.
+    #[must_use]
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
+    }
+
+    /// [`held_ok`](Self::held_ok) for a dialog already open.
+    pub fn hold_ok(&mut self) {
+        self.hold = true;
+    }
+
+    /// The OK filed by a held dialog, once.
+    pub fn take_ok(&mut self) -> Option<CanvasSizeResult> {
+        self.held.take()
+    }
+
+    /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
+    /// OK again and shows the label under the rows until a value changes. Without a held OK it does nothing.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        if answer.is_err() {
+            self.refused_at = Some(self.values.clone());
+        }
+        self.held.answer(answer);
+    }
 }
 
 impl StackDialog for HostedCanvasSize {
     type Result = CanvasSizeResult;
 
-    /// Answers what OK answers; `None` while OK is refused (a side out of range).
+    /// Answers what OK answers; `None` while OK is refused (a side out of range). A held dialog files the answer for the
+    /// host, as its button does, and answers none; once the host accepted the held answer, it answers that.
     fn confirm(&mut self, _ctx: &egui::Context) -> Option<Self::Result> {
-        size_valid(self.values.pixels()).then(|| self.values.result())
+        if self.held.is_accepted() {
+            return self.held.finish();
+        }
+        if self.held.is_waiting() {
+            return None;
+        }
+        let result = size_valid(self.values.pixels()).then(|| self.values.result())?;
+        if self.hold {
+            self.held.file(result);
+            return None;
+        }
+        Some(result)
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
     }
 
     /// `width`, `height`, `unit` and `widthUnit` (as the size rows show them), `relative`, `anchor` and `extension`.
@@ -326,10 +388,28 @@ impl StackDialog for HostedCanvasSize {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<CanvasSizeResult>> {
-        let shown = (self.build)(Bind::bound(&mut self.values)).opened(Bind::bound(&mut self.open)).show(ui);
+        let finish = self.held.is_accepted();
+        let hold = Hold {
+            on: self.hold,
+            finish,
+            waiting: self.held.is_waiting(),
+            refusal: self.held.refusal().zip(self.refused_at.as_ref()).map(|((reason, _), at)| (reason.clone(), at.clone())),
+        };
+        let mut shown = (self.build)(Bind::bound(&mut self.values)).hold_ok(hold).opened(Bind::bound(&mut self.open)).show(ui);
         #[cfg(feature = "testing")]
         {
             self.facts = crate::contract::Outcome::story_facts(&shown);
+        }
+        if let Some(result) = shown.held.take() {
+            self.held.file(result);
+        }
+        if self.refused_at.as_ref().is_some_and(|at| *at != self.values) {
+            self.refused_at = None;
+            self.held.clear_refusal();
+        }
+        // The host accepted the held answer: the pass that closes the dialog answers it.
+        if finish && shown.result.is_none() && matches!(shown.closed, Some(CloseReason::Activated)) {
+            return Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok));
         }
         shown.hosted()
     }
