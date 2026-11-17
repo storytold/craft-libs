@@ -1,20 +1,7 @@
 use crate::test_support::formats::wasm_module;
 use crate::{MAX_ITEMS, inspect};
 
-fn leb(mut value: usize) -> Vec<u8> {
-    let mut out = Vec::new();
-    while value >= 128 {
-        out.push((value as u8 & 0x7f) | 0x80);
-        value >>= 7;
-    }
-    out.push(value as u8);
-    out
-}
-
-fn string(out: &mut Vec<u8>, value: &str) {
-    out.extend(leb(value.len()));
-    out.extend(value.as_bytes());
-}
+use crate::test_support::{leb, string};
 
 fn custom(module: &mut Vec<u8>, name: &str, data: &[u8]) {
     let mut body = Vec::new();

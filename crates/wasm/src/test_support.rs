@@ -146,3 +146,18 @@ pub mod formats {
     pub const WASM_GLUE: &str =
         "const imports = { env: { log: (x) => console.log(x) } };\nfetch(\"./demo.wasm\").then(r => WebAssembly.instantiateStreaming(r, imports));\n";
 }
+
+pub fn leb(mut value: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    while value >= 128 {
+        out.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+    out
+}
+
+pub fn string(out: &mut Vec<u8>, value: &str) {
+    out.extend(leb(value.len()));
+    out.extend(value.as_bytes());
+}

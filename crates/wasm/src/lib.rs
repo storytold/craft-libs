@@ -294,6 +294,171 @@ fn target_features(data: &[u8]) -> Vec<String> {
     out
 }
 
+fn cap(len: usize, truncated: &mut bool) -> bool {
+    if len >= MAX_ITEMS {
+        *truncated = true;
+        false
+    } else {
+        true
+    }
+}
+fn read_types(
+    r: wasmparser::TypeSectionReader<'_>,
+    types: &mut Vec<Option<FuncType>>,
+    rep: &mut WasmReport,
+) -> Result<(), wasmparser::BinaryReaderError> {
+    for rg in r {
+        for st in rg?.into_types() {
+            if types.len() >= MAX_ITEMS {
+                rep.truncated = true;
+                break;
+            }
+            types.push(match st.composite_type.inner {
+                CompositeInnerType::Func(f) => Some(f),
+                _ => None,
+            });
+        }
+    }
+    rep.types = types.len();
+
+    Ok(())
+}
+fn read_custom(c: wasmparser::CustomSectionReader<'_>, rep: &mut WasmReport, fn_names: &mut BTreeMap<u32, String>, producer_values: &mut usize) {
+    if cap(rep.custom_sections.len(), &mut rep.truncated) {
+        let range = c.range();
+        rep.custom_sections.push(WasmCustom { name: c.name().to_string(), offset: range.start, size: range.end.saturating_sub(range.start) });
+    }
+    match c.name() {
+        "sourceMappingURL" => rep.source_mapping_url = leading_string(c.data()),
+        "external_debug_info" => rep.external_debug_info = leading_string(c.data()),
+        "target_features" => rep.target_features = target_features(c.data()),
+        _ => {}
+    }
+    match c.as_known() {
+        KnownCustom::Name(names) => {
+            // A damaged name section is reported but does not stop the rest.
+            for (i, sub) in names.into_iter().take(65).enumerate() {
+                if i == 64 {
+                    rep.truncated = true;
+                    break;
+                }
+                let Ok(sub) = sub else {
+                    rep.warnings.push("the name section is damaged".into());
+                    break;
+                };
+                match sub {
+                    Name::Module { name, .. } => rep.module_name = Some(name.to_string()),
+                    Name::Function(map) => {
+                        for (i, n) in map.into_iter().take(MAX_ITEMS + 1).enumerate() {
+                            if i == MAX_ITEMS {
+                                rep.truncated = true;
+                                break;
+                            }
+                            match n {
+                                Ok(n) => {
+                                    if let Some(name) = fn_names.get_mut(&n.index) {
+                                        // Repeated sections may replace an already retained name at the limit.
+                                        *name = n.name.to_string();
+                                    } else if cap(fn_names.len(), &mut rep.truncated) {
+                                        fn_names.insert(n.index, n.name.to_string());
+                                    }
+                                }
+                                Err(_) => {
+                                    rep.warnings.push("a function name entry is damaged".into());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        KnownCustom::Producers(p) => {
+            for (i, f) in p.into_iter().take(65).enumerate() {
+                if i == 64 || !cap(rep.producers.len(), &mut rep.truncated) {
+                    rep.truncated = true;
+                    break;
+                }
+                let Ok(f) = f else {
+                    rep.warnings.push("the producers section is damaged".into());
+                    break;
+                };
+                let mut values = Vec::new();
+                for (i, value) in f.values.into_iter().take(65).enumerate() {
+                    if i == 64 || !cap(*producer_values, &mut rep.truncated) {
+                        rep.truncated = true;
+                        break;
+                    }
+                    if let Ok(value) = value {
+                        values.push(ProducerValue { name: value.name.to_string(), version: value.version.to_string() });
+                        *producer_values += 1;
+                    }
+                }
+                rep.producers.push(ProducerField { field: f.name.to_string(), values });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn read_code(
+    body: wasmparser::FunctionBody<'_>,
+    types: &[Option<FuncType>],
+    func_types: &[u32],
+    code_index: &mut u32,
+    rep: &mut WasmReport,
+    type_signatures: &mut BTreeMap<u32, String>,
+    strings: &mut ReferencedStrings,
+) -> Result<(), wasmparser::BinaryReaderError> {
+    let ti = func_types.get(*code_index as usize).copied();
+    let mut locals = 0u64;
+    let lr = body.get_locals_reader()?;
+    for l in lr {
+        let (n, _) = l?;
+        locals = locals.saturating_add(u64::from(n));
+    }
+    let range = body.range();
+    if cap(rep.functions.len(), &mut rep.truncated) {
+        let signature = match ti {
+            Some(t) => type_sig(types, t, type_signatures, strings),
+            None => strings.copy("no matching function section entry"),
+        };
+        if let Some(signature) = signature {
+            rep.functions.push(WasmFunction {
+                index: rep.imported_functions.saturating_add(*code_index),
+                type_index: ti.unwrap_or(u32::MAX),
+                signature,
+                body_offset: range.start,
+                body_size: range.end.saturating_sub(range.start),
+                locals,
+                name: None,
+                exported_as: Vec::new(),
+            });
+        }
+    }
+    *code_index = code_index.saturating_add(1);
+
+    Ok(())
+}
+fn read_functions(
+    r: wasmparser::FunctionSectionReader<'_>,
+    func_types: &mut Vec<u32>,
+    declared_functions: &mut u32,
+    rep: &mut WasmReport,
+) -> Result<(), wasmparser::BinaryReaderError> {
+    *declared_functions = r.count();
+    for t in r {
+        if func_types.len() >= MAX_ITEMS {
+            rep.truncated = true;
+            break;
+        }
+        func_types.push(t?);
+    }
+
+    Ok(())
+}
+
 /// Read a module. Fails only when the bytes are not WebAssembly at all or too large; structural
 /// damage is reported in `parse_error` and `validation`.
 pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
@@ -347,14 +512,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
     let reference_budget = (64 << 20).max(data.len().saturating_mul(3));
     let mut strings = ReferencedStrings { remaining: reference_budget, exhausted: false };
     let mut type_signatures = BTreeMap::new();
-    let cap = |len: usize, truncated: &mut bool| -> bool {
-        if len >= MAX_ITEMS {
-            *truncated = true;
-            false
-        } else {
-            true
-        }
-    };
+
     let result: Result<(), wasmparser::BinaryReaderError> = (|| {
         for payload in Parser::new(0).parse_all(data) {
             let payload = payload?;
@@ -380,19 +538,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                     }
                 }
                 Payload::TypeSection(r) => {
-                    for rg in r {
-                        for st in rg?.into_types() {
-                            if types.len() >= MAX_ITEMS {
-                                rep.truncated = true;
-                                break;
-                            }
-                            types.push(match st.composite_type.inner {
-                                CompositeInnerType::Func(f) => Some(f),
-                                _ => None,
-                            });
-                        }
-                    }
-                    rep.types = types.len();
+                    read_types(r, &mut types, &mut rep)?;
                 }
                 Payload::ImportSection(r) => {
                     for imp in r.into_imports() {
@@ -472,14 +618,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                     }
                 }
                 Payload::FunctionSection(r) => {
-                    declared_functions = r.count();
-                    for t in r {
-                        if func_types.len() >= MAX_ITEMS {
-                            rep.truncated = true;
-                            break;
-                        }
-                        func_types.push(t?);
-                    }
+                    read_functions(r, &mut func_types, &mut declared_functions, &mut rep)?;
                 }
                 Payload::TableSection(r) => {
                     for (i, t) in r.into_iter().enumerate() {
@@ -556,115 +695,10 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                 Payload::DataCountSection { count, .. } => rep.data_count = Some(count),
                 Payload::DataSection(r) => rep.data_segments = r.count(),
                 Payload::CodeSectionEntry(body) => {
-                    let ti = func_types.get(code_index as usize).copied();
-                    let mut locals = 0u64;
-                    let lr = body.get_locals_reader()?;
-                    for l in lr {
-                        let (n, _) = l?;
-                        locals = locals.saturating_add(u64::from(n));
-                    }
-                    let range = body.range();
-                    if cap(rep.functions.len(), &mut rep.truncated) {
-                        let signature = match ti {
-                            Some(t) => type_sig(&types, t, &mut type_signatures, &mut strings),
-                            None => strings.copy("no matching function section entry"),
-                        };
-                        if let Some(signature) = signature {
-                            rep.functions.push(WasmFunction {
-                                index: rep.imported_functions.saturating_add(code_index),
-                                type_index: ti.unwrap_or(u32::MAX),
-                                signature,
-                                body_offset: range.start,
-                                body_size: range.end.saturating_sub(range.start),
-                                locals,
-                                name: None,
-                                exported_as: Vec::new(),
-                            });
-                        }
-                    }
-                    code_index = code_index.saturating_add(1);
+                    read_code(body, &types, &func_types, &mut code_index, &mut rep, &mut type_signatures, &mut strings)?;
                 }
                 Payload::CustomSection(c) => {
-                    if cap(rep.custom_sections.len(), &mut rep.truncated) {
-                        let range = c.range();
-                        rep.custom_sections.push(WasmCustom {
-                            name: c.name().to_string(),
-                            offset: range.start,
-                            size: range.end.saturating_sub(range.start),
-                        });
-                    }
-                    match c.name() {
-                        "sourceMappingURL" => rep.source_mapping_url = leading_string(c.data()),
-                        "external_debug_info" => rep.external_debug_info = leading_string(c.data()),
-                        "target_features" => rep.target_features = target_features(c.data()),
-                        _ => {}
-                    }
-                    match c.as_known() {
-                        KnownCustom::Name(names) => {
-                            // A damaged name section is reported but does not stop the rest.
-                            for (i, sub) in names.into_iter().take(65).enumerate() {
-                                if i == 64 {
-                                    rep.truncated = true;
-                                    break;
-                                }
-                                let Ok(sub) = sub else {
-                                    rep.warnings.push("the name section is damaged".into());
-                                    break;
-                                };
-                                match sub {
-                                    Name::Module { name, .. } => rep.module_name = Some(name.to_string()),
-                                    Name::Function(map) => {
-                                        for (i, n) in map.into_iter().take(MAX_ITEMS + 1).enumerate() {
-                                            if i == MAX_ITEMS {
-                                                rep.truncated = true;
-                                                break;
-                                            }
-                                            match n {
-                                                Ok(n) => {
-                                                    if let Some(name) = fn_names.get_mut(&n.index) {
-                                                        // Repeated sections may replace an already retained name at the limit.
-                                                        *name = n.name.to_string();
-                                                    } else if cap(fn_names.len(), &mut rep.truncated) {
-                                                        fn_names.insert(n.index, n.name.to_string());
-                                                    }
-                                                }
-                                                Err(_) => {
-                                                    rep.warnings.push("a function name entry is damaged".into());
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        KnownCustom::Producers(p) => {
-                            for (i, f) in p.into_iter().take(65).enumerate() {
-                                if i == 64 || !cap(rep.producers.len(), &mut rep.truncated) {
-                                    rep.truncated = true;
-                                    break;
-                                }
-                                let Ok(f) = f else {
-                                    rep.warnings.push("the producers section is damaged".into());
-                                    break;
-                                };
-                                let mut values = Vec::new();
-                                for (i, value) in f.values.into_iter().take(65).enumerate() {
-                                    if i == 64 || !cap(producer_values, &mut rep.truncated) {
-                                        rep.truncated = true;
-                                        break;
-                                    }
-                                    if let Ok(value) = value {
-                                        values.push(ProducerValue { name: value.name.to_string(), version: value.version.to_string() });
-                                        producer_values += 1;
-                                    }
-                                }
-                                rep.producers.push(ProducerField { field: f.name.to_string(), values });
-                            }
-                        }
-                        _ => {}
-                    }
+                    read_custom(c, &mut rep, &mut fn_names, &mut producer_values);
                 }
                 Payload::End(_) => {}
                 _ => {}
