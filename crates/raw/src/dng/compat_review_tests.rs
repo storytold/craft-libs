@@ -118,3 +118,62 @@ fn decoded_notices_record_actual_crop_gain_table_and_cfa_decisions() {
     let limits = Limits { max_samples: 47, ..Default::default() };
     assert!(matches!(decode_as(&linear(&[]), Mode::Full, RawFormat::Dng, &limits), Err(RawError::Limit(_))));
 }
+
+/// A 16-bit CFA DNG of `width` x `height` whose strip holds every row in full but whose `StripByteCounts` says
+/// `counted` bytes.
+fn understated_strip_dng(width: u32, height: u32, counted: u32, active_area: Option<[u32; 4]>) -> Vec<u8> {
+    let mut raw = IfdBuilder::new();
+    for (tag, value) in [
+        (t::IMAGE_WIDTH, Value::Long(vec![width])),
+        (t::IMAGE_LENGTH, Value::Long(vec![height])),
+        (t::BITS_PER_SAMPLE, Value::Short(vec![16])),
+        (t::SAMPLES_PER_PIXEL, Value::Short(vec![1])),
+        (t::PHOTOMETRIC, Value::Short(vec![photometric::CFA])),
+        (t::COMPRESSION, Value::Short(vec![1])),
+        (t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2])),
+        (t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2])),
+    ] {
+        raw.set(tag, value);
+    }
+    if let Some(area) = active_area {
+        raw.set(t::ACTIVE_AREA, Value::Long(area.to_vec()));
+    }
+    let samples = (width * height) as u16;
+    raw.set_image(ImageData::Strips { rows_per_strip: height, strips: vec![(0..samples).flat_map(u16::to_le_bytes).collect()] });
+    let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[raw]).unwrap();
+    // the writer counts the real bytes: understate that one count, a LONG in the IFD
+    let count = (width * height * 2).to_le_bytes();
+    let at = bytes.windows(4).position(|w| w == count).unwrap();
+    bytes[at..at + 4].copy_from_slice(&counted.to_le_bytes());
+    bytes
+}
+
+/// storytold/craft-libs#2040: the DJI Mavic 3 counts 5280 x 3956 x 2 bytes for a strip that holds 5376-wide rows
+/// to the end of the file.
+#[test]
+fn a_strip_counted_only_active_area_wide_is_read_in_full() {
+    let bytes = understated_strip_dng(8, 4, 6 * 4 * 2, Some([0, 0, 4, 6]));
+    for mode in [Mode::Full, Mode::Header] {
+        let img = decode_as(&bytes, mode, RawFormat::Dng, &Limits::default()).unwrap();
+        assert_eq!((img.width, img.height), (8, 4));
+    }
+    let img = decode_as(&bytes, Mode::Full, RawFormat::Dng, &Limits::default()).unwrap();
+    let RawData::U16(v) = &img.data else { panic!("integer samples") };
+    assert_eq!(v, &(0..32).collect::<Vec<u16>>());
+}
+
+/// Any other short strip is still a corrupt file.
+#[test]
+fn other_short_strips_are_still_refused() {
+    let refused = |bytes: Vec<u8>| matches!(decode_as(&bytes, Mode::Full, RawFormat::Dng, &Limits::default()), Err(RawError::Corrupt(_)));
+    // no ActiveArea to explain the count
+    assert!(refused(understated_strip_dng(8, 4, 6 * 4 * 2, None)));
+    // the count is not exactly the area's bytes
+    assert!(refused(understated_strip_dng(8, 4, 5 * 4 * 2, Some([0, 0, 4, 6]))));
+    // the area does not start at column 0
+    assert!(refused(understated_strip_dng(8, 4, 6 * 4 * 2, Some([0, 2, 4, 8]))));
+    // the file does not hold the whole raster
+    let mut cut = understated_strip_dng(8, 4, 6 * 4 * 2, Some([0, 0, 4, 6]));
+    cut.truncate(cut.len() - 8);
+    assert!(refused(cut));
+}
