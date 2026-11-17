@@ -92,6 +92,10 @@ fn every_limit_refuses_the_file_past_it() {
     let bomb = format!("<!DOCTYPE svg [<!ENTITY a \"{}\">]>{}", "x".repeat(1000), svg(&format!("<title>{}</title>", "&a;".repeat(10))));
     assert_eq!(try_parse(&bomb, &Limits { entity_bytes: 9_999, ..shallow() }).err(), Some(Error::Entities));
     assert!(try_parse(&bomb, &Limits { entity_bytes: 10_000, ..shallow() }).is_ok());
+    // A comment marker in an earlier entity's value hides no declaration.
+    let bait = bomb.replacen("<!ENTITY a", "<!ENTITY c \"<!--\"><!ENTITY a", 1);
+    assert_eq!(try_parse(&bait, &Limits { entity_bytes: 9_999, ..shallow() }).err(), Some(Error::Entities));
+    assert!(try_parse(&bait, &Limits { entity_bytes: 10_000, ..shallow() }).is_ok());
     // XML nodes.
     assert!(matches!(try_parse(&svg(&"<g/>".repeat(100)), &Limits { xml_nodes: 50, ..shallow() }), Err(Error::Xml(_))));
     // Not XML, and XML that is not an SVG.

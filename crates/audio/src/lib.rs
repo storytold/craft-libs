@@ -31,7 +31,8 @@
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
 //!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files),
-//!   [`smacker`] (`smacker-decode`: the audio chunks of a Smacker file).
+//!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`smacker`]
+//!   (`smacker-decode`: the audio chunks of a Smacker file).
 //!
 //! The shared types below build with no features.
 
@@ -42,6 +43,8 @@ pub mod ac3;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
 mod buffer;
+#[cfg(any(feature = "gsm-decode", feature = "gsm-encode"))]
+pub mod gsm;
 mod layout;
 #[cfg(any(feature = "mp3-encode", feature = "mp3-decode"))]
 pub mod mp3;
@@ -57,6 +60,8 @@ pub mod peaks;
 pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
+#[cfg(feature = "sbc")]
+pub mod sbc;
 #[cfg(feature = "smacker-decode")]
 pub mod smacker;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
@@ -778,3 +783,7 @@ mod tests {
 
 /// DVD and Blu-ray LPCM packet decoding.
 pub mod lpcm;
+
+/// Non-seeking canonical WAV streaming primitives.
+#[cfg(feature = "pcm-encode")]
+pub mod wav_stream;

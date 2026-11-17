@@ -44,6 +44,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
 | `mp3-decode` | `mp3::Decoder`, `mp3::InfoTag` | `mpa-decode` |
 | `mp3-encode` | `mp3::Encoder`; `encode`, `FileEncoder` for MP3 | craft-media `bitstream` |
+| `gsm-decode`, `gsm-encode` (`gsm`) | `gsm::Decoder`, `gsm::Encoder`, `gsm::decode`, `gsm::encode`: GSM 06.10 full-rate speech, bit-exact, raw `.gsm` and WAV (GSM 6.10) packings | none |
 | `smacker-decode` | `smacker::decode`, `smacker::pcm`: the audio chunks of a Smacker file (`craft_media::smacker`) to interleaved 8-bit or 16-bit samples. Not part of `decode` or `TrackDecoder` | craft-media `smacker` |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |

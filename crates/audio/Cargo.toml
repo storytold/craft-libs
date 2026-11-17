@@ -46,6 +46,10 @@ qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
 qoa-encode = []
 opus-encode = []
+# GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
+gsm = ["gsm-decode", "gsm-encode"]
+gsm-decode = []
+gsm-encode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) decoder (`mp3::Decoder`).
@@ -58,6 +62,8 @@ ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
 mp3-encode = ["craft-media/bitstream"]
+# Bluetooth Low Complexity Subband Coding (SBC) audio codec (`sbc`).
+sbc = []
 # Smacker audio (Huffman-coded DPCM) chunk decoder (`smacker`).
 smacker-decode = ["craft-media/smacker"]
 # Multi-resolution waveform overviews (`peaks`).
@@ -99,8 +105,16 @@ name = "flac_decode"
 required-features = ["flac-decode", "flac-encode"]
 
 [[test]]
+name = "gsm_oracle"
+required-features = ["gsm"]
+
+[[test]]
 name = "qoa_oracle"
 required-features = ["qoa"]
+
+[[test]]
+name = "sbc_oracle"
+required-features = ["sbc"]
 
 [[example]]
 name = "info"

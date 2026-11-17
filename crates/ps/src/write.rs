@@ -47,6 +47,9 @@ pub fn written(v: f64) -> f64 {
 /// finite).
 pub fn push_num_places(s: &mut String, v: f64, places: u32) {
     let places = places.min(9);
+    if push_num_scaled(s, v, places) {
+        return;
+    }
     let scale = 10f64.powi(places as i32);
     // Past where the scaling overflows, values have no fractional digits to round.
     let v = if !v.is_finite() {
@@ -67,6 +70,75 @@ pub fn push_num_places(s: &mut String, v: f64, places: u32) {
     if s[start..].contains('.') {
         let keep = s[start..].trim_end_matches('0').trim_end_matches('.').len();
         s.truncate(start + keep);
+    }
+}
+
+/// `10^places` for `places` up to 9, each exact in an `f64`.
+const POW10: [f64; 10] = [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9];
+
+/// 2^52: below it every integer is an `f64`, and dividing one by `10^places` lands within half a
+/// decimal step of the exact quotient, so the decimal digits are those of the integer.
+const SCALED_LIMIT: f64 = 4_503_599_627_370_496.0;
+
+/// Append `v` with at most `places` decimals by writing the digits of the rounded integer
+/// `v * 10^places`, the same text [`push_num_places`] writes. Returns false and appends nothing
+/// when `places` is above 9, `v` is not finite, the scaling overflows or the rounded integer is
+/// 2^52 or more in magnitude.
+fn push_num_scaled(s: &mut String, v: f64, places: u32) -> bool {
+    let Some(&scale) = POW10.get(places as usize) else {
+        return false;
+    };
+    let k = (v * scale).round();
+    let magnitude = k.abs();
+    if magnitude.is_nan() || magnitude >= SCALED_LIMIT {
+        return false;
+    }
+    // `magnitude` is a whole number below 2^52, so the cast is exact.
+    let mut m = magnitude as u64;
+    let mut decimals = places as usize;
+    while decimals > 0 && m.is_multiple_of(10) {
+        m /= 10;
+        decimals -= 1;
+    }
+    let unit = POW10_INT.get(decimals).copied().unwrap_or(1);
+    let (whole, fraction) = (m / unit, m % unit);
+    // A rounded negative zero has no sign: it is written `0`.
+    if k < 0.0 {
+        s.push('-');
+    }
+    push_digits(s, whole, POW10_INT.iter().take_while(|&&p| p <= whole).count().max(1));
+    if decimals > 0 {
+        s.push('.');
+        push_digits(s, fraction, decimals);
+    }
+    true
+}
+
+/// `10^n` for `n` up to 16, enough for every digit of an integer below 2^52.
+const POW10_INT: [u64; 17] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+];
+
+/// Append the last `width` decimal digits of `n`, leading zeros included.
+fn push_digits(s: &mut String, n: u64, width: usize) {
+    for &p in POW10_INT.iter().take(width).rev() {
+        s.push(char::from(b'0' + ((n / p) % 10) as u8));
     }
 }
 
@@ -243,8 +315,8 @@ pub fn inflate(data: &[u8], max: u64) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FillRule, PaintOps, PathOps, bytes, clip_op, deflate, fill_op, inflate, matrix, num, push_num, push_num_places, push_nums, push_path, string,
-        written,
+        FillRule, PaintOps, PathOps, bytes, clip_op, deflate, fill_op, inflate, matrix, num, push_num, push_num_places, push_num_scaled, push_nums,
+        push_path, string, written,
     };
     use kurbo::{Affine, BezPath};
 
@@ -283,6 +355,220 @@ mod tests {
         assert_eq!(places(1.23456789, 9), "1.23456789");
         assert_eq!(places(1e15, 0), "1000000000000000");
         assert_eq!(places(1e15 - 1.0, 0), "999999999999999");
+    }
+
+    /// `push_num_places` without the integer path: every value goes through the float formatter.
+    fn base_push_num_places(s: &mut String, v: f64, places: u32) {
+        use std::fmt::Write;
+        let places = places.min(9);
+        let scale = 10f64.powi(places as i32);
+        let v = if !v.is_finite() {
+            0.0
+        } else if (v * scale).is_finite() {
+            (v * scale).round() / scale
+        } else {
+            v
+        };
+        if v == v.trunc() && v.abs() < 1e15 {
+            let _ = write!(s, "{}", v as i64);
+            return;
+        }
+        let start = s.len();
+        let _ = write!(s, "{v:.*}", places as usize);
+        if s[start..].contains('.') {
+            let keep = s[start..].trim_end_matches('0').trim_end_matches('.').len();
+            s.truncate(start + keep);
+        }
+    }
+
+    /// A deterministic xorshift sequence.
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// Values that hit decimal ties, the 2^52 and 1e15 limits and their neighboring bit patterns,
+    /// coordinates of every magnitude, and arbitrary bit patterns.
+    fn number_samples() -> Vec<f64> {
+        let two52 = 4_503_599_627_370_496.0f64;
+        let mut values = vec![
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.5,
+            -0.5,
+            1.5,
+            2.5,
+            -2.5,
+            0.1 + 0.2,
+            f64::from(0.4f32),
+            0.123_456_78,
+            123_456.789_012_345,
+            -0.000_04,
+            -0.000_05,
+            0.000_05,
+            1e-10,
+            -1e-10,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            5e-324,
+            1e15,
+            1e15 - 1.0,
+            -1e15,
+            1e15 + 0.5,
+            two52,
+            two52 - 1.0,
+            two52 - 0.5,
+            -two52,
+            1e16,
+            1e20,
+            1.5e305,
+            f64::MAX,
+            f64::MIN,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        let mut scale = 1.0;
+        for _ in 0..=9 {
+            for v in [two52 / scale, (two52 - 1.0) / scale, 1e15 / scale, 0.5 / scale, 1.5 / scale, 2.5 / scale] {
+                values.extend([v, -v]);
+            }
+            scale *= 10.0;
+        }
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..12_000 {
+            let r = next(&mut state);
+            values.push(f64::from_bits(r));
+            let exponent = (r % 24) as i32 - 8;
+            let mantissa = (next(&mut state) % 2_000_000_001) as f64 / 1e9 - 1.0;
+            values.push(mantissa * 10f64.powi(exponent));
+            let places = (r % 10) as i32;
+            let tie = ((next(&mut state) % 20_000_000_001) as f64 - 1e10 + 0.5) / 10f64.powi(places);
+            values.push(tie);
+            values.push((next(&mut state) % 100_000_000) as f64 / 1e4 - 5_000.0);
+        }
+        let neighbors: Vec<f64> = values
+            .iter()
+            .filter(|v| v.is_finite() && **v != 0.0)
+            .flat_map(|v| [f64::from_bits(v.to_bits() - 1), f64::from_bits(v.to_bits() + 1)])
+            .collect();
+        values.extend(neighbors);
+        values
+    }
+
+    #[test]
+    fn numbers_match_base_formatter() {
+        let mut integer_path = 0usize;
+        for places in 0..=12 {
+            for v in number_samples() {
+                let mut expected = String::from("x ");
+                base_push_num_places(&mut expected, v, places);
+                let mut got = String::from("x ");
+                push_num_places(&mut got, v, places);
+                assert_eq!(got, expected, "{v:e} ({:#x}) at {places} places", v.to_bits());
+                if push_num_scaled(&mut String::new(), v, places.min(9)) {
+                    integer_path += 1;
+                }
+            }
+        }
+        // The comparison covers the integer path, not only the fallback.
+        assert!(integer_path > 200_000, "{integer_path} values took the integer path");
+    }
+
+    #[test]
+    fn coordinates_are_written_through_integers() {
+        for (v, places) in [(0.0, 4), (-0.0, 4), (1.5, 4), (-2.25, 4), (4.3333, 4), (612.0, 0), (0.123_456_78, 7), (-0.000_05, 4), (1.23456789, 9)] {
+            let mut s = String::from("x ");
+            assert!(push_num_scaled(&mut s, v, places), "{v} at {places} places");
+            let mut expected = String::from("x ");
+            base_push_num_places(&mut expected, v, places);
+            assert_eq!(s, expected);
+        }
+        let two52 = 4_503_599_627_370_496.0f64;
+        for (v, places) in [
+            (f64::NAN, 4),
+            (f64::INFINITY, 4),
+            (f64::NEG_INFINITY, 0),
+            (f64::MAX, 4),
+            (f64::MIN, 0),
+            (1e305, 9),
+            (two52, 0),
+            (-two52, 0),
+            (two52 / 1e9, 9),
+            (1e20, 0),
+            (1.5, 10),
+        ] {
+            let mut s = String::from("x ");
+            assert!(!push_num_scaled(&mut s, v, places), "{v} at {places} places");
+            assert_eq!(s, "x ");
+        }
+    }
+
+    #[test]
+    fn number_boundaries_keep_base_text() {
+        let places = |v: f64, n: u32| {
+            let mut s = String::new();
+            push_num_places(&mut s, v, n);
+            s
+        };
+        let two52 = 4_503_599_627_370_496.0f64;
+        assert_eq!(places(1e15, 0), "1000000000000000");
+        assert_eq!(places(-1e15, 0), "-1000000000000000");
+        assert_eq!(places(two52 - 1.0, 0), "4503599627370495");
+        assert_eq!(places(two52, 0), "4503599627370496");
+        assert_eq!(places(1e20, 0), "100000000000000000000");
+        assert_eq!(places(450_359_962_737_049.5, 1), "450359962737049.5");
+        assert_eq!(places(-0.0, 4), "0");
+        assert_eq!(places(-0.000_04, 4), "0");
+        assert_eq!(places(-0.000_05, 4), "-0.0001");
+        assert_eq!(places(0.5, 0), "1");
+        assert_eq!(places(-1.5, 0), "-2");
+        assert_eq!(places(0.000_000_001, 9), "0.000000001");
+        assert_eq!(places(1.25, 20), "1.25");
+        assert_eq!(places(10.5, 4), "10.5");
+        assert_eq!(places(100.0, 4), "100");
+        let mut s = String::from("x");
+        push_nums(&mut s, &[]);
+        assert_eq!(s, "x");
+        let mut scale = 1.0;
+        for (n, value) in super::POW10.iter().enumerate() {
+            assert_eq!(*value, scale, "10^{n}");
+            assert_eq!(*value, 10f64.powi(n as i32), "10^{n}");
+            scale *= 10.0;
+        }
+    }
+
+    /// Times the base formatter against `push_num_places` on path coordinates. Run with
+    /// `cargo test --release -p craft-ps --features write number_writing_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe"]
+    fn number_writing_timing() {
+        use std::time::Instant;
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let values: Vec<f64> = (0..1_200_000).map(|_| (next(&mut state) % 12_000_000_000) as f64 / 1e7 - 200.0).collect();
+        let mut base_ms = vec![];
+        let mut new_ms = vec![];
+        for _ in 0..7 {
+            let start = Instant::now();
+            let mut base = String::with_capacity(values.len() * 10);
+            for v in &values {
+                base_push_num_places(&mut base, *v, 4);
+                base.push(' ');
+            }
+            base_ms.push(start.elapsed().as_secs_f64() * 1e3);
+            let start = Instant::now();
+            let mut new = String::with_capacity(values.len() * 10);
+            push_nums(&mut new, &values);
+            new_ms.push(start.elapsed().as_secs_f64() * 1e3);
+            assert_eq!(new, base);
+        }
+        println!("{} numbers at 4 places", values.len());
+        println!("base formatter ms: {base_ms:.2?}");
+        println!("integer path ms: {new_ms:.2?}");
     }
 
     #[test]

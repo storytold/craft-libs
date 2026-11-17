@@ -199,6 +199,103 @@ pub fn expand_units(units: &[u8], width: u32, height: u32, (h, v): (u32, u32)) -
 /// uncompressed or PackBits; anything else is [`TiffError::Invalid`]. More than `max_pixels`
 /// pixels is [`TiffError::Limit`], and a file too small to hold the image is refused before the data units are allocated.
 pub fn decode_rgb8(data: &[u8], ifd: &Ifd, max_pixels: u64) -> crate::Result<Vec<u8>> {
+    let DecodedUnits { width, height, sub, units } = decode_units(data, ifd, max_pixels)?;
+    let mut rgb = expand_units(&units, width, height, sub).ok_or_else(|| TiffError::Invalid("YCbCr image: data units".into()))?;
+    YCbCr::from_ifd(ifd, 255).convert_u8(&mut rgb, 3);
+    Ok(rgb)
+}
+
+/// Colour interpretation for direct RGBA decoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorPolicy {
+    /// Existing shared/libtiff conversion; unusable colour tags use defaults.
+    Libtiff,
+    /// Literal TIFF 6.0 green equation, with malformed colour tags rejected.
+    /// Retains the historical FilmCraft interpretation, including non-unit-sum weights.
+    TiffEquation,
+}
+
+/// Decode directly into opaque RGBA without an intermediate RGB image.
+/// Uses the same strip/subsampling/PackBits validation as [`decode_rgb8`].
+/// Output allocation is checked and fallible. Orientation is left to the caller.
+pub fn decode_rgba8(data: &[u8], ifd: &Ifd, max_pixels: u64, policy: ColorPolicy) -> crate::Result<Vec<u8>> {
+    let color = match policy {
+        ColorPolicy::Libtiff => YCbCr::from_ifd(ifd, 255),
+        ColorPolicy::TiffEquation => strict_color(ifd)?,
+    };
+    let DecodedUnits { width, height, sub: (sh, sv), units } = decode_units(data, ifd, max_pixels)?;
+    let len = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|n| n.checked_mul(4))
+        .filter(|&n| n <= isize::MAX as u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or(TiffError::Limit("pixel count"))?;
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(len).map_err(|_| TiffError::Limit("memory"))?;
+    rgba.resize(len, 255);
+    let (w, h, sh, sv) = (width as usize, height as usize, sh as usize, sv as usize);
+    let units_x = w.div_ceil(sh);
+    let tables = (policy == ColorPolicy::Libtiff).then(|| color.tables(255));
+    for (i, unit) in units.chunks_exact(sh * sv + 2).enumerate() {
+        let (ux, uy) = (i % units_x, i / units_x);
+        let (luma, chroma) = unit.split_at(sh * sv);
+        let [cb, cr] = <[u8; 2]>::try_from(chroma).map_err(|_| TiffError::Invalid("YCbCr data unit".into()))?;
+        for (k, &y) in luma.iter().enumerate() {
+            let (x, row) = (ux * sh + k % sh, uy * sv + k / sh);
+            if x < w && row < h {
+                let rgb = match &tables {
+                    Some(t) => t.rgb(usize::from(y), usize::from(cb), usize::from(cr)).map(|v| v as u8),
+                    None => tiff_rgb(&color, y, cb, cr),
+                };
+                let at = (row * w + x) * 4;
+                if let Some(px) = rgba.get_mut(at..at + 3) {
+                    px.copy_from_slice(&rgb);
+                }
+            }
+        }
+    }
+    Ok(rgba)
+}
+
+fn strict_color(ifd: &Ifd) -> crate::Result<YCbCr> {
+    let defaults = YCbCr::defaults(255);
+    let luma = match ifd.f64s(YCBCR_COEFFICIENTS) {
+        None => defaults.luma,
+        Some(v) => v.get(..3).and_then(|v| v.try_into().ok()).ok_or_else(|| TiffError::Invalid("invalid YCbCrCoefficients".into()))?,
+    };
+    let reference_black_white = match ifd.f64s(REFERENCE_BLACK_WHITE) {
+        None => defaults.reference_black_white,
+        Some(v) => v.get(..6).and_then(|v| v.try_into().ok()).ok_or_else(|| TiffError::Invalid("invalid ReferenceBlackWhite".into()))?,
+    };
+    if luma.iter().any(|v| !v.is_finite()) || luma[1].abs() < 1e-6 {
+        return Err(TiffError::Invalid("invalid YCbCrCoefficients".into()));
+    }
+    if reference_black_white.iter().any(|v| !v.is_finite()) || reference_black_white.as_chunks::<2>().0.iter().any(|[b, w]| (w - b).abs() < 1e-6) {
+        return Err(TiffError::Invalid("invalid ReferenceBlackWhite".into()));
+    }
+    Ok(YCbCr { luma, reference_black_white })
+}
+
+fn tiff_rgb(color: &YCbCr, y: u8, cb: u8, cr: u8) -> [u8; 3] {
+    let [lr, lg, lb] = color.luma;
+    let [yb, yw, cbb, cbw, crb, crw] = color.reference_black_white;
+    let y = (f64::from(y) - yb) * 255.0 / (yw - yb);
+    let cb = (f64::from(cb) - cbb) * 127.0 / (cbw - cbb);
+    let cr = (f64::from(cr) - crb) * 127.0 / (crw - crb);
+    let r = cr * (2.0 - 2.0 * lr) + y;
+    let b = cb * (2.0 - 2.0 * lb) + y;
+    let g = (y - lb * b - lr * r) / lg;
+    [r, g, b].map(|v| v.round().clamp(0.0, 255.0) as u8)
+}
+
+struct DecodedUnits {
+    width: u32,
+    height: u32,
+    sub: (u32, u32),
+    units: Vec<u8>,
+}
+
+fn decode_units(data: &[u8], ifd: &Ifd, max_pixels: u64) -> crate::Result<DecodedUnits> {
     // TiffError has no "unsupported" variant; adding one would break exhaustive matches downstream.
     let unsupported = |what: &str| TiffError::Invalid(format!("unsupported YCbCr image with {what}"));
     let invalid = |what: &str| TiffError::Invalid(format!("YCbCr image: {what}"));
@@ -265,7 +362,5 @@ pub fn decode_rgb8(data: &[u8], ifd: &Ifd, max_pixels: u64) -> crate::Result<Vec
     if units.len() < need {
         return Err(TiffError::Truncated(data.len() as u64));
     }
-    let mut rgb = expand_units(&units, width, height, sub).ok_or_else(|| invalid("data units"))?;
-    YCbCr::from_ifd(ifd, 255).convert_u8(&mut rgb, 3);
-    Ok(rgb)
+    Ok(DecodedUnits { width, height, sub, units })
 }

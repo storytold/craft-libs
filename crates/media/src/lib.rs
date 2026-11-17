@@ -15,6 +15,8 @@
 //! - `smacker` (feature `smacker`): a clean-room Smacker (SMK) demuxer.
 //! - [`Container`] and [`CodecId`] (no feature): the identifiers the codec crates report a file's
 //!   container and codec with.
+//! - `FileReader` (native): a pooled file `ByteSource` so many clips can be open without holding a
+//!   descriptor each.
 //!
 //! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi`, `mxf`, `mpegts` and `smacker` are opt-in. A crate that needs
 //! only bit I/O uses `default-features = false, features = ["bitstream"]`.
@@ -23,6 +25,8 @@
 pub mod avi;
 #[cfg(feature = "bitstream")]
 pub mod bitstream;
+#[cfg(not(target_arch = "wasm32"))]
+mod file;
 mod id;
 #[cfg(feature = "isobmff")]
 pub mod isobmff;
@@ -37,6 +41,8 @@ pub mod ogg;
 #[cfg(feature = "smacker")]
 pub mod smacker;
 pub mod source;
+#[cfg(not(target_arch = "wasm32"))]
+pub use file::{FileReader, MAX_OPEN_FILES};
 
 pub use id::{CodecId, CodecParams, Container, PcmFormat, xiph_lace};
 pub use source::{ByteSource, ReadSeekSource};

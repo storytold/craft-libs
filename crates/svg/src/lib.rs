@@ -30,3 +30,6 @@ pub mod svgz;
 #[cfg(feature = "tree")]
 pub mod tree;
 pub mod write;
+
+/// Compatibility CSS subset for simple SVG importers.
+pub mod simple_css;

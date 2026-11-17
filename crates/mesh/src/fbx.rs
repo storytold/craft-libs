@@ -41,9 +41,12 @@
 //!
 //! Not read: FBX 5 and older, animation stacks, skin deformers, blend shapes, lights, NURBS and patches.
 //!
-//! [`Limits::max_data_bytes`] bounds what one file may keep in memory: its parsed values (an
-//! array element counts 8 bytes whatever its type in the file), the meshes built from them and
-//! the image bytes.
+//! [`Limits::max_data_bytes`] is the budget the reader charges for one file: its parsed values,
+//! the meshes built from them and the image bytes. A binary file is charged 8 bytes per array
+//! element whatever its type in the file; its scalar, string and raw values are not counted. An
+//! ASCII file is charged `size_of::<Prop>()` for every value, each array element included, plus
+//! the bytes of its strings. Neither form is charged for record names or for the overhead of
+//! records and their containers, so the reader keeps those even with a budget of 0.
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
