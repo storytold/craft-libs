@@ -90,6 +90,7 @@ fn names(v: Option<&Value>) -> Vec<String> {
 
 /// Parse a HAR document, keeping at most `max_entries` entries.
 pub fn parse(json: &[u8], max_entries: usize) -> Result<Har, HarError> {
+    let json = json.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(json);
     let v: Value = serde_json::from_slice(json).map_err(|e| HarError::BadJson(e.to_string()))?;
     let log = v.get("log").ok_or(HarError::NotHar("no \"log\" object"))?;
     let entries = log.get("entries").and_then(Value::as_array).ok_or(HarError::NotHar("no \"log.entries\" array"))?;
@@ -156,6 +157,15 @@ pub fn parse(json: &[u8], max_entries: usize) -> Result<Har, HarError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_a_har_with_a_utf8_bom() {
+        let capture = br#"{"log":{"entries":[]}}"#;
+        let mut encoded = vec![0xef, 0xbb, 0xbf];
+        encoded.extend_from_slice(capture);
+        assert_eq!(parse(&encoded, 1).unwrap(), parse(capture, 1).unwrap());
+        assert!(parse(&[0xef, 0xbb], 1).is_err());
+    }
 
     #[test]
     fn parses_minimal_har() {
