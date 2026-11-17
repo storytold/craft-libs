@@ -720,13 +720,21 @@ fn run_job_as<S: PoolSample>(frame: FrameRef, slices: Vec<SliceJob>, shared: &Sh
             // Nothing will show this picture: publish the remaining rows as they are.
             pic.skip_deblock = true;
         }
+        // The error is stored before the last row is published: once `flush` has seen every row
+        // of the picture (`Frame::wait_complete`), `take_error` sees its error too.
+        if let (Some(e), Ok(mut slot)) = (first_err, shared.error.lock()) {
+            slot.get_or_insert(e);
+        }
         pic.flush_rows(true);
-        (pic, first_err)
+        pic
     }));
-    let (pic, err) = match result {
-        Ok((pic, err)) => (Some(pic), err),
+    let pic = match result {
+        Ok(pic) => Some(pic),
         Err(_) => {
-            // Make sure readers never block on this frame.
+            // The error first, then the rows (see above); and readers never block on this frame.
+            if let Ok(mut slot) = shared.error.lock() {
+                slot.get_or_insert(Error::Invalid("internal error while decoding a picture".into()));
+            }
             let fallback = Planes::<S>::gray(frame.width, frame.height, frame.fmt);
             let blank = vec![MbState::default(); frame.mb_w * frame.mb_h()];
             for r in 0..frame.mb_h() {
@@ -734,7 +742,7 @@ fn run_job_as<S: PoolSample>(frame: FrameRef, slices: Vec<SliceJob>, shared: &Sh
                     frame.publish(r, Frame::make_row(&fallback, r, &blank, &|_, _, _| u32::MAX));
                 }
             }
-            (None, Some(Error::Invalid("internal error while decoding a picture".into())))
+            None
         }
     };
     if let Ok(mut s) = shared.stats.lock() {
@@ -756,9 +764,6 @@ fn run_job_as<S: PoolSample>(frame: FrameRef, slices: Vec<SliceJob>, shared: &Sh
                 s.mb_inter_8x8_transform += 1;
             }
         }
-    }
-    if let (Some(e), Ok(mut slot)) = (err, shared.error.lock()) {
-        slot.get_or_insert(e);
     }
     if let (Some(pic), Ok(mut p)) = (pic, S::pool(shared).lock())
         && p.len() < 4
