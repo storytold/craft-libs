@@ -129,7 +129,10 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// The workspace is locked: nothing moves, floats or closes.
     #[prop(flag)]
     locked: bool,
-    /// The panel open in an iconic column's flyout, owned by the host. Without it the area keeps the value.
+    /// The panel open in an iconic column's flyout, owned by the host. Without it the area keeps the value. A host
+    /// that opens a panel whose column is collapsed to icons ([`Layout::opens_in_flyout`]), from its Window menu
+    /// ([`WindowMenuRowsOutput::flyout`](crate::docking::WindowMenuRowsOutput::flyout)) or a command, writes this
+    /// binding: the panel shows in its flyout, and the layout does not change.
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
 }

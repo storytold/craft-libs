@@ -12,12 +12,17 @@ use std::hash::Hash;
 /// that shows the panel (open a closed one, bring a panel behind another tab to the front) or closes it (a panel
 /// showing); the app applies it through the same path as the actions of a `DockArea`. A Hidden pick's `Action::open`
 /// restores the panel's last place through `Workspace::apply_all`.
+///
+/// A panel in a column collapsed to icons ([`Layout::opens_in_flyout`]) shows in its flyout: its row is checked
+/// while its flyout is open ([`flyout`](WindowMenuRows::flyout)), and a pick opens the flyout, or closes it when it is
+/// open, through [`WindowMenuRowsOutput::flyout`], which the app writes to the binding it gives `DockArea::flyout`.
 #[derive(crate::contract::Pattern)]
 #[pattern(probe(WindowMenuRows<'static, u32>))]
 pub struct WindowMenuRows<'a, P> {
     layout: &'a Layout<P>,
     panels: &'a dyn DockPanels<P>,
     order: &'a [P],
+    flyout: Option<&'a P>,
 }
 
 /// What the rows report.
@@ -26,25 +31,42 @@ pub struct WindowMenuRows<'a, P> {
 pub struct WindowMenuRowsOutput<P> {
     /// What the picked row asks for.
     pub action: Option<Action<P>>,
+    /// The open flyout the picked row asks for, when its panel is in a column collapsed to icons: that panel, or
+    /// `None` to close the flyout it had open.
+    pub flyout: Option<Option<P>>,
 }
 
 impl<'a, P: Clone + Eq + Hash> WindowMenuRows<'a, P> {
     /// Rows for `order` (every panel the app has, open or not), checked from `layout`, labelled by `panels`.
     pub fn new(layout: &'a Layout<P>, panels: &'a dyn DockPanels<P>, order: &'a [P]) -> Self {
-        WindowMenuRows { layout, panels, order }
+        WindowMenuRows { layout, panels, order, flyout: None }
+    }
+
+    /// The panel whose flyout is open: the value of the binding the app gives `DockArea::flyout`.
+    #[must_use]
+    pub fn flyout(mut self, open: Option<&'a P>) -> Self {
+        self.flyout = open;
+        self
     }
 
     /// Shows the rows in the menu body `ui`.
     pub fn show(self, ui: &mut Ui) -> WindowMenuRowsOutput<P> {
-        let mut action = None;
+        let (mut action, mut flyout) = (None, None);
         for panel in self.order {
             let spec = self.panels.spec(panel);
             let state = self.layout.panel_state(panel);
-            let mut row = MenuItem::new(spec.label).check(state != PanelState::Hidden);
+            let in_flyout = self.layout.opens_in_flyout(panel);
+            let open = self.flyout == Some(panel);
+            let mut row = MenuItem::new(spec.label).check(if in_flyout { open } else { state != PanelState::Hidden });
             if let Some(icon) = spec.icon {
                 row = row.icon(icon);
             }
-            if row.show(ui).ran {
+            if !row.show(ui).ran {
+                continue;
+            }
+            if in_flyout {
+                flyout = Some((!open).then(|| panel.clone()));
+            } else {
                 action = Some(match state {
                     PanelState::Hidden => Action::open(panel.clone(), None),
                     PanelState::Open => Action::activate(panel.clone()),
@@ -52,6 +74,6 @@ impl<'a, P: Clone + Eq + Hash> WindowMenuRows<'a, P> {
                 });
             }
         }
-        WindowMenuRowsOutput { action }
+        WindowMenuRowsOutput { action, flyout }
     }
 }
