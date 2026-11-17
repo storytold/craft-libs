@@ -398,8 +398,9 @@ impl Writer<'_> {
         }
         let float = &float;
         self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text(), link: link.as_deref() });
-        // This shape's stacking order: floating objects in its text box move `self.z` on.
-        let z = self.z;
+        // This shape's stacking order, as its anchor gave it: floating objects in its text box
+        // write anchors of their own.
+        let z = self.anchor_z;
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
