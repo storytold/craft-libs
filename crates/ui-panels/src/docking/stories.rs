@@ -87,6 +87,13 @@ fn two_panels(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     DockGroup::new(LAYERS, &panels, panels[0].key).show(ui, |_, _| ()).output.into()
 }
 
+/// A group in a floating window: nothing goes beside it, so a drop on its body joins it or stacks above or below.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_group_in_a_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    DockGroup::new(LAYERS, &panels, panels[0].key).in_window().show(ui, |_, _| ()).output.into()
+}
+
 /// A click on the panel menu button opens the group's panel menu.
 fn open_panel_menu(fixture: &mut Fixture) {
     if let Some(button) = fixture.root_id().and_then(|id| fixture.part(id, MENU)) {

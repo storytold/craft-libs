@@ -18,7 +18,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
 use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
-use craft_behavior::{IconId, Metrics, PartKey, PressPhase, Sense, keyed};
+use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
@@ -205,8 +205,9 @@ struct Reported {
 /// A group of panels: a header of tab strip and panel menu button, dragged by its empty part, over the active panel's
 /// body. Show it with `show_at(group_rect)` in the body of a `SplitArea`, with an `IdSource::Id` made from the
 /// group's anchor so its state survives a re-dock. Under a `dock` id it registers the spots a drop lands on: the
-/// strip, and (while expanded) the sides and the middle of the body. The group is an instance of the `dockGroup`
-/// command scope: it publishes the panel command states it is given and reports the commands that reach it.
+/// strip, and (while expanded) the sides and the middle of the body; in a floating window
+/// ([`in_window`](DockGroup::in_window)) the top, the bottom and the middle only. The group is an instance of the
+/// `dockGroup` command scope: it publishes the panel command states it is given and reports the commands that reach it.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, overlay, probe(DockGroup<'static, usize>))]
 pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
@@ -235,6 +236,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// How the body's side zones are sized.
     #[prop]
     zones: ZoneRule,
+    /// The group is in a floating window, which is one column with nothing beside it: the body's start and end
+    /// sides take no drop, and its top, bottom and middle zones reach across them.
+    #[prop(flag)]
+    in_window: bool,
     /// The rows of the group menu: the panel menu button and a context request on a tab open them.
     #[prop]
     menu: Vec<PanelRow>,
@@ -271,6 +276,7 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
             wheel_selects_tabs: false,
             dock: None,
             zones: ZoneRule::Fraction,
+            in_window: false,
             menu: Vec::new(),
             panel_menu_shown: true,
             command_states: Vec::new(),
@@ -394,6 +400,11 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
         }
         let body = Rect::from_min_max(Pos2::new(rect.left(), strip.bottom()), rect.max);
         for (side, zone) in self.zones.zones(body, &cx.style.sizes, rtl) {
+            let zone = match side {
+                DockSide::Start | DockSide::End if self.in_window => continue,
+                _ if self.in_window => Rect::from_x_y_ranges(body.x_range(), zone.y_range()),
+                _ => zone,
+            };
             DockTargets::<P>::register_in(&cx.core.ctx, dock, DockSpot::group(self.anchor.clone(), side), zone, rect);
         }
     }

@@ -150,9 +150,10 @@ pub struct IconicColumnStyle {
 /// outside close the flyout; with `auto_collapse` the focus leaving it does too.
 ///
 /// The open flyout is the bound `Option<P>` of [`new`](IconicColumn::new), owned by the host like the layout: a click
-/// on an icon, Escape and auto-collapse write it, and the host opens a panel (the Window menu) by writing it. The column registers the drop bands of its edges and of the halves of
-/// each icon group with the dock `dock`. The flyout shows its group through the `view` of
-/// [`show_flyouts`](IconicColumn::show_flyouts), with the opened panel active, as tall as the view measures the
+/// on an icon, Escape and auto-collapse write it, and the host opens a panel (the Window menu) by writing it. The
+/// column registers its drop spots with the dock `dock` as an expanded column does: its edges, the seams between its
+/// icon groups, the top and bottom of the stack and each icon group's cells, which join its tabs. The flyout shows
+/// its group through the `view` of [`show_flyouts`](IconicColumn::show_flyouts), with the opened panel active, as tall as the view measures the
 /// group within the room and at least the height of its panels' default heights; a group the user sized keeps that
 /// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`.
 /// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
@@ -619,24 +620,41 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
 }
 
 impl<P: Value + Hash + 'static> IconicColumn<'_, P> {
-    /// Registers the drop bands of a dock column's edges, and the upper and lower half of every icon group: a drop on
-    /// the upper half stacks above the group, one on the lower half below it.
+    /// Registers the drop spots of the column the way an expanded column registers them: the bands of a dock
+    /// column's two edges (a new column beside it), the seam on the separator between two icon groups (a new group
+    /// between them), the top of the first group and the bottom of the last down to the column's foot (a new group
+    /// above or below), and the cells of each icon group (join its tabs). A floating column registers no edge bands:
+    /// nothing goes beside it.
     fn register(&self, ctx: &egui::Context, rect: Rect, rtl: bool, plan: &Plan, sizes: &IconicSizes) {
-        let Some(first) = self.column.groups.first().and_then(|group| group.panels.first()) else { return };
+        let anchor = |group: usize| self.column.groups.get(group).and_then(|group| group.panels.first());
+        let Some(first) = anchor(0) else { return };
         if self.bar == ColumnBar::Own {
             register_edges(ctx, self.dock, first, rect, rtl, &sizes.column);
         }
-        let half = sizes.separator * 0.5;
-        let last = plan.groups.len().saturating_sub(1);
+        let half = sizes.column.seam_band * 0.5;
+        // How far the top and bottom bands reach into a group's cells: a quarter of a short group leaves its middle
+        // to the join.
+        let reach = |group: &Rect| half.min(group.height() * 0.25);
+        let mut above: Option<(&P, Rect)> = None;
         for (at, group) in &plan.groups {
-            let Some(anchor) = self.column.groups.get(*at).and_then(|group| group.panels.first()) else { continue };
-            let middle = group.center().y;
-            let upper_top = if *at == 0 { plan.body.top() } else { group.top() - half };
-            let lower_bottom = if *at == last { plan.body.bottom() } else { group.bottom() + half };
-            let upper = Rect::from_x_y_ranges(group.x_range(), upper_top..=middle);
-            let lower = Rect::from_x_y_ranges(group.x_range(), middle..=lower_bottom);
-            DockTargets::register(ctx, self.dock, DockSpot::group(anchor.clone(), DockSide::Top), upper);
-            DockTargets::register(ctx, self.dock, DockSpot::group(anchor.clone(), DockSide::Bottom), lower);
+            let Some(panel) = anchor(*at) else { continue };
+            DockTargets::register(ctx, self.dock, DockSpot::group(panel.clone(), DockSide::Center), *group);
+            if let Some((before, over)) = above {
+                let middle = (over.bottom() + group.top()) * 0.5;
+                let seam = Rect::from_x_y_ranges(group.x_range(), (middle - half)..=(middle + half));
+                DockTargets::register(ctx, self.dock, DockSpot::seam(before.clone(), panel.clone()), seam);
+            }
+            above = Some((panel, *group));
+        }
+        if let Some((_, top)) = plan.groups.first() {
+            let band = Rect::from_x_y_ranges(top.x_range(), plan.body.top()..=(top.top() + reach(top)));
+            DockTargets::register_in(ctx, self.dock, DockSpot::group(first.clone(), DockSide::Top), band, *top);
+        }
+        if let Some((at, bottom)) = plan.groups.last()
+            && let Some(last) = anchor(*at)
+        {
+            let band = Rect::from_x_y_ranges(bottom.x_range(), (bottom.bottom() - reach(bottom))..=plan.body.bottom().max(bottom.bottom()));
+            DockTargets::register_in(ctx, self.dock, DockSpot::group(last.clone(), DockSide::Bottom), band, *bottom);
         }
     }
 }

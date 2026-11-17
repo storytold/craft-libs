@@ -267,11 +267,13 @@ struct Passed<P> {
     files: Vec<drag::OsFile>,
 }
 
-/// How a group is shown: minimized, and whether it is an accordion section (with its open state).
+/// How a group is shown: minimized, whether it is an accordion section (with its open state), and whether it is in
+/// a floating window, where nothing goes beside it.
 #[derive(Clone, Copy)]
 struct Look {
     minimized: bool,
     section: Option<bool>,
+    in_window: bool,
 }
 
 /// A dock to show: its window edge, its columns and its rect.
@@ -662,7 +664,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         match node {
             Node::Tabs { panels: members, active, .. } => {
-                self.group(ui, body, members, *active, Look { minimized: false, section: None }, GroupAt::Show(rect));
+                self.group(ui, body, members, *active, Look { minimized: false, section: None, in_window: false }, GroupAt::Show(rect));
             }
             Node::Stack { entries, .. } => {
                 let sections: Vec<StackSection> = entries
@@ -678,7 +680,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     for (entry, height) in entries.iter().zip(&heights) {
                         let section = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(rect.width(), *height));
                         top += height;
-                        let look = Look { minimized: !entry.open, section: Some(entry.open) };
+                        let look = Look { minimized: !entry.open, section: Some(entry.open), in_window: false };
                         self.group(ui, inner, std::slice::from_ref(&entry.panel), 0, look, GroupAt::Show(section));
                     }
                 });
@@ -813,6 +815,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .menu(menu.clone())
                 .panel_menu_shown(hosted)
                 .command_states(states.clone());
+            if look.in_window {
+                group = group.in_window();
+            }
             if minimized {
                 group = group.minimized();
             } else if !document(&scene.spec(&members[at])) {
@@ -887,8 +892,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         None
     }
 
-    fn group_of(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, group: &Group<P>, at: GroupAt) -> Option<f32> {
-        let look = Look { minimized: group.minimized, section: None };
+    /// A group of a column, docked or in a floating window (`in_window`).
+    fn group_of(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, group: &Group<P>, at: GroupAt, in_window: bool) -> Option<f32> {
+        let look = Look { minimized: group.minimized, section: None, in_window };
         self.group(ui, body, &group.panels, group.active, look, at)
     }
 
@@ -919,13 +925,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
         let dock = self.dock;
         let ColumnAt { cell, edge, bar, within, open } = at;
+        let in_window = bar == ColumnBar::Window;
         let work = if column.iconic {
             let output = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
                 .edge(edge)
                 .bar(bar)
                 .within(within)
                 .auto_collapse(scene.auto_collapse)
-                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at));
+                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
             self.report.flyout.extend(output.edit.events);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
         } else {
@@ -935,7 +942,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .within(within)
                 .auto_collapse(scene.auto_collapse)
                 .show_groups_at(ui, cell, |group, rect, ui, body| {
-                    self.group_of(ui, body, group, GroupAt::Show(rect));
+                    self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
                 });
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None }
         };
