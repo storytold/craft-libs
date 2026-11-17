@@ -40,3 +40,7 @@ mod java_invoke_operands;
 #[cfg(test)]
 #[path="regressions/java_linkage_references.rs"]
 mod java_linkage_references;
+
+#[cfg(test)]
+#[path="regressions/java_truncated_attributes.rs"]
+mod java_truncated_attributes;
