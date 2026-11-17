@@ -136,8 +136,8 @@ fn many_parameter_urls_preserve_bodies_and_base64_disposition() {
     ] {
         let text = format!("<svg><image href='data:image/png{params}{suffix},{body}'/></svg>");
         let repaired = repair(&text, &Limits { bytes: 2 << 20, ..Default::default() }).unwrap();
-        let xml = checked_xml(&repaired, &Limits { bytes: 2 << 20, ..Default::default() }).unwrap();
-        let value = xml.descendants().find(|node| node.has_tag_name("image")).unwrap().attribute("href").unwrap();
+        let checked = super::super::preflight(&repaired, &Limits { bytes: 2 << 20, ..Default::default() }).unwrap();
+        let value = checked.xml.descendants().find(|node| node.has_tag_name("image")).unwrap().attribute("href").unwrap();
         assert!(!value.contains(";p0="));
         assert_eq!(data_url::DataUrl::process(value).unwrap().decode_to_vec().unwrap().0, expected);
         assert!(matches!(repair(&repaired, &Limits { bytes: 2 << 20, ..Default::default() }).unwrap(), Cow::Borrowed(_)));
