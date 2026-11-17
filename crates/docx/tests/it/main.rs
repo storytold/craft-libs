@@ -18,6 +18,7 @@ mod east_asian_lang;
 mod east_asian_layout;
 mod emphasis_marks;
 mod fixtures;
+mod font_table;
 mod glossary;
 mod heading_levels;
 mod kashida;

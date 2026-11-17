@@ -47,6 +47,7 @@ pub mod ply;
 pub mod stl;
 #[cfg(feature = "threemf")]
 pub mod threemf;
+mod triangulate;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -193,7 +194,8 @@ impl Part {
         })
     }
 
-    /// The faces as triangles: a polygon becomes a fan from its first corner.
+    /// The faces as triangles: a polygon becomes a fan from its first corner, which is right
+    /// only for a convex face. [`Part::triangles_in`] triangulates concave faces too.
     pub fn triangles(&self) -> impl Iterator<Item = [Corner; 3]> + '_ {
         self.faces().flat_map(|f| {
             let first = f.first().copied();
@@ -204,7 +206,19 @@ impl Part {
         })
     }
 
-    /// Triangles the faces fan into.
+    /// The faces as triangles, with `positions` (the mesh's [`Mesh::positions`]) to see their
+    /// shape. A convex face becomes a fan from its first corner, as in [`Part::triangles`]; a
+    /// concave one is triangulated by ear clipping in its own plane, so no triangle covers a
+    /// notch. Each triangle keeps the face's winding. A face with a corner that has no position,
+    /// or with no area, keeps the fan. What is left of a face when no ear can be found (it
+    /// crosses itself) or the part's work budget (256 steps per corner) is spent is
+    /// fanned. Every face gives `corners − 2` triangles, as [`Part::triangle_count`] counts.
+    pub fn triangles_in<'a>(&'a self, positions: &'a [[f64; 3]]) -> impl Iterator<Item = [Corner; 3]> + 'a {
+        let mut budget = triangulate::WORK_PER_CORNER.saturating_mul(self.corners.len());
+        self.faces().flat_map(move |f| triangulate::face(f, positions, &mut budget))
+    }
+
+    /// Triangles the faces give: `corners − 2` each.
     pub fn triangle_count(&self) -> usize {
         if self.face_sizes.is_empty() { self.corners.len() / 3 } else { self.face_sizes.iter().map(|n| (*n as usize).saturating_sub(2)).sum() }
     }
@@ -291,8 +305,8 @@ impl Mesh {
         Ok(())
     }
 
-    /// The mesh as triangles with one vertex per distinct corner. Corners whose indices are out
-    /// of range are dropped with their triangle.
+    /// The mesh as triangles ([`Part::triangles_in`]) with one vertex per distinct corner.
+    /// Corners whose indices are out of range are dropped with their triangle.
     pub fn unified(&self) -> Unified {
         let mut out = Unified::default();
         let all = |f: &dyn Fn(&Corner) -> bool| self.parts.iter().all(|p| p.corners.iter().all(f));
@@ -302,7 +316,7 @@ impl Mesh {
         let mut ids: HashMap<Corner, u32> = HashMap::new();
         for part in &self.parts {
             let mut tris = Vec::with_capacity(part.triangle_count());
-            'tri: for t in part.triangles() {
+            'tri: for t in part.triangles_in(&self.positions) {
                 let mut tri = [0u32; 3];
                 for (slot, c) in tri.iter_mut().zip(t) {
                     let key = Corner {
@@ -365,6 +379,52 @@ pub struct TextureRef {
     pub image: usize,
     pub uv_set: u32,
     pub wrap: [Wrap; 2],
+    /// Where the slot's UVs land before the image is looked up (glTF `KHR_texture_transform`).
+    pub transform: Option<UvTransform>,
+}
+
+/// A UV transform: scale, then rotate by `rotation` radians, then add `offset`, in the order and
+/// with the signs of glTF's `KHR_texture_transform` (v runs down the image).
+///
+/// Compared and hashed by bits, so [`TextureRef`] keeps `Eq` and `Hash`.
+#[derive(Clone, Copy, Debug)]
+pub struct UvTransform {
+    pub offset: [f32; 2],
+    pub rotation: f32,
+    pub scale: [f32; 2],
+}
+
+impl Default for UvTransform {
+    fn default() -> Self {
+        Self { offset: [0.0; 2], rotation: 0.0, scale: [1.0; 2] }
+    }
+}
+
+impl UvTransform {
+    /// The transformed coordinate.
+    pub fn apply(&self, [u, v]: [f32; 2]) -> [f32; 2] {
+        let (sin, cos) = self.rotation.sin_cos();
+        let (su, sv) = (u * self.scale[0], v * self.scale[1]);
+        [cos * su + sin * sv + self.offset[0], cos * sv - sin * su + self.offset[1]]
+    }
+
+    fn bits(&self) -> [u32; 5] {
+        [self.offset[0], self.offset[1], self.rotation, self.scale[0], self.scale[1]].map(f32::to_bits)
+    }
+}
+
+impl PartialEq for UvTransform {
+    fn eq(&self, other: &Self) -> bool {
+        self.bits() == other.bits()
+    }
+}
+
+impl Eq for UvTransform {}
+
+impl std::hash::Hash for UvTransform {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bits().hash(state);
+    }
 }
 
 /// A metallic-roughness material: the simple parameters every format here can carry.
