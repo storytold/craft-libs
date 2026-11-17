@@ -51,6 +51,10 @@ pub const MAX_STACK_XML: usize = 16 << 20;
 pub const MAX_ENTRY: usize = 512 << 20;
 /// Most entries the archive may declare; checked before the archive is indexed.
 pub const MAX_ENTRIES: u64 = 100_000;
+/// Most bytes all the entries read from one archive may expand to together. Each layer image may
+/// be [`MAX_ENTRY`] on its own, so without a total a document of many layers could spend far more
+/// than one open should.
+pub const MAX_TOTAL: u64 = 4 << 30;
 /// Deepest element nesting of `stack.xml`.
 pub const MAX_XML_DEPTH: usize = 512;
 
@@ -363,8 +367,13 @@ pub struct Archive<'a> {
 impl<'a> Archive<'a> {
     /// Opens the archive, checks its `mimetype` and reads `stack.xml`.
     pub fn open(bytes: &'a [u8]) -> Result<Archive<'a>> {
-        let mut zip =
-            craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: u64::MAX }).map_err(zip_error)?;
+        Self::open_with_total(bytes, MAX_TOTAL)
+    }
+
+    /// [`Archive::open`], allowing the entries read from the archive to expand to
+    /// `max_total_bytes` together ([`MAX_TOTAL`] is the default).
+    pub(crate) fn open_with_total(bytes: &'a [u8], max_total_bytes: u64) -> Result<Archive<'a>> {
+        let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes }).map_err(zip_error)?;
         // `zip` keeps one entry of a repeated name; which one the writer meant is not known.
         if zip.has_duplicate_names() {
             return Err(invalid("two entries of the archive share a name"));

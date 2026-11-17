@@ -31,6 +31,7 @@ here. There is no writer.
 | `<layer>` nodes | 8192 (`MAX_NODES`) |
 | `maindoc.xml` | 32 MiB, 512 levels of nesting, no internal DTD subset |
 | A pixel file, inflated | 1 GiB (`MAX_LAYER_FILE`) |
+| All entries read from one archive | 4 GiB (`MAX_TOTAL`) |
 | ICC profile | 16 MiB |
 | Tile | 1024 × 1024 px, 64 bytes per pixel, header lines of 256 bytes |
 
