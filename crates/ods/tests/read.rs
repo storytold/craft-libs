@@ -5,7 +5,7 @@ use craft_ods::testing::{content, package, spreadsheet};
 use craft_ods::{CellRef, Error, Options, Range, Sheet, Value, ValueType, Workbook, read};
 
 fn ods(tables: &str) -> Vec<u8> {
-    spreadsheet(tables)
+    spreadsheet(tables).unwrap()
 }
 fn row(cells: &str) -> Vec<u8> {
     ods(&format!(r#"<table:table table:name="Data"><table:table-row>{cells}</table:table-row></table:table>"#))
@@ -28,8 +28,8 @@ fn a_namespace_declaration_bomb_is_refused() {
         content(r#"<table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#)
             .replacen("<office:document-content ", &format!("<office:document-content{decls} "), 1)
     };
-    assert!(open(&package(doc(&bomb(8)).as_bytes())).is_ok());
-    assert!(open(&package(doc(&bomb(10_000)).as_bytes())).is_err());
+    assert!(open(&package(doc(&bomb(8)).as_bytes()).unwrap()).is_ok());
+    assert!(open(&package(doc(&bomb(10_000)).as_bytes()).unwrap()).is_err());
 }
 
 #[test]
@@ -149,9 +149,9 @@ fn namespaces_are_resolved_not_inferred_from_prefixes() {
         .replace("</table:", "</t:")
         .replace(" table:", " t:")
         .replace("xmlns:table=", "xmlns:t=");
-    assert_eq!(shown(&open(&package(xml.as_bytes())).unwrap().sheets[0], CellRef::new(0, 0)), Value::Number(9.0));
+    assert_eq!(shown(&open(&package(xml.as_bytes()).unwrap()).unwrap().sheets[0], CellRef::new(0, 0)), Value::Number(9.0));
     let spoofed = xml.replace("urn:oasis:names:tc:opendocument:xmlns:table:1.0", "wrong-namespace");
-    assert!(open(&package(spoofed.as_bytes())).is_err());
+    assert!(open(&package(spoofed.as_bytes()).unwrap()).is_err());
     let wb = open(&row(
         r#"<table:table-cell xmlns:fake="wrong-namespace" fake:value-type="float" fake:value="123"><text:p>kept</text:p></table:table-cell>"#,
     ))
@@ -166,7 +166,7 @@ fn bad_packages_encryption_and_bad_xml_are_refused() {
     let mut w = craft_odf::PackageWriter::new("application/zip");
     w.file("content.xml", "text/xml", xml.as_bytes());
     assert!(matches!(open(&w.finish().unwrap()), Err(Error::Invalid(_))));
-    assert!(craft_ods::is_ods(&package(xml.as_bytes())));
+    assert!(craft_ods::is_ods(&package(xml.as_bytes()).unwrap()));
     let mut w = craft_odf::PackageWriter::new(craft_odf::mime::SPREADSHEET);
     w.file("content.xml", "text/xml", xml.as_bytes());
     if let Some(e) = w.manifest_mut().entries.iter_mut().find(|e| e.path == "content.xml") {
@@ -182,10 +182,10 @@ fn bad_packages_encryption_and_bad_xml_are_refused() {
         xml.replace("Data", "&custom;"),
         content(""),
     ] {
-        assert!(open(&package(bad.as_bytes())).is_err(), "{bad}");
+        assert!(open(&package(bad.as_bytes()).unwrap()).is_err(), "{bad}");
     }
     let deep = content(&format!("{}{}", "<x>".repeat(300), "</x>".repeat(300)));
-    assert!(open(&package(deep.as_bytes())).is_err());
+    assert!(open(&package(deep.as_bytes()).unwrap()).is_err());
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn expansion_bounds_stop_small_repeat_bombs() {
     // One row of cells each just under the 1 MiB cell limit, past 64 MiB in all: refused while
     // the row is read. The row's end is never reached.
     let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(1024 * 1024 - 1));
-    let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65))).as_bytes());
+    let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65))).as_bytes()).unwrap();
     assert!(matches!(open(&cells), Err(Error::TooLarge(_))));
     // A row repeated once more than its cells' text allows is refused, and one that fits reads.
     let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));

@@ -19,7 +19,7 @@
 //!
 //! ```
 //! # fn main() -> Result<(), craft_ods::Error> {
-//! # let bytes = craft_ods::testing::spreadsheet(r#"<table:table table:name="Prices"><table:table-row><table:table-cell office:value-type="string"><text:p>Tea</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="2.5" table:number-columns-repeated="2"/></table:table-row></table:table>"#);
+//! # let bytes = craft_ods::testing::spreadsheet(r#"<table:table table:name="Prices"><table:table-row><table:table-cell office:value-type="string"><text:p>Tea</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="2.5" table:number-columns-repeated="2"/></table:table-row></table:table>"#)?;
 //! let book = craft_ods::read(&bytes, &craft_ods::Options::default())?;
 //! let sheet = &book.sheets[0];
 //! assert_eq!(sheet.name, "Prices");
