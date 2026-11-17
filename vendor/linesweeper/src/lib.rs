@@ -79,7 +79,7 @@ pub enum Error {
     InconsistentWindingNumbers,
     /// At least one of the inputs had a coordinate with a magnitude above [`MAX_COORDINATE`].
     TooLarge,
-    /// The sweep did more work (segment comparisons, position checks, linear searches of the
+    /// The sweep did more work (segment comparisons, position checks, searches of the
     /// sweep line and visits of horizontal segments) than its work limit allows, or the
     /// topology's output would pass its output limit.
     WorkLimitExceeded,

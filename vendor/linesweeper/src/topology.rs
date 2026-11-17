@@ -728,7 +728,7 @@ impl<W: WindingNumber> Topology<W> {
     /// [`Error::WorkLimitExceeded`](crate::Error::WorkLimitExceeded) once the sweep has done
     /// more than `work_limit` units, counted as in
     /// [`Sweeper::set_work_limit`](crate::sweep::Sweeper::set_work_limit): segment comparisons,
-    /// segment position checks, and the segments that linear searches pass. Stacked copies of a shape and nearly coincident segments
+    /// segment position checks, and the segments that linear searches pass or binary searches probe. Stacked copies of a shape and nearly coincident segments
     /// can need billions of comparisons, and the limit bounds the time a caller waits.
     pub fn from_paths_with_work_limit<'a, Iter>(
         paths: Iter,

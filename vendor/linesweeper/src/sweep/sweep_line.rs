@@ -416,7 +416,8 @@ pub struct Sweeper<'a> {
     // checked against horizontal segments and contour endpoints while finding
     // the changed intervals, with n log2 n more for sorting a sweep line's n
     // horizontal segments. `segments_passed` counts the segments that linear
-    // searches of the sweep line step over without comparing them; each
+    // searches of the sweep line step over without comparing them, and the
+    // entries that the binary searches for a segment's position probe; each
     // `SEGMENTS_PASSED_PER_UNIT` of them counts as one unit of work.
     // `range_horizontals` counts the horizontal segments that the steps of a
     // `SweepLineRange` visit; a range borrows the sweeper, so it is a `Cell`.
@@ -489,7 +490,8 @@ impl<'segs> Sweeper<'segs> {
     /// positions checked against horizontal segments and contour endpoints while
     /// finding a sweep line's changed intervals, plus n log2 n for sorting the n
     /// horizontal segments of a sweep line, plus one unit for every 16 segments
-    /// that linear searches of the sweep line step over without comparing them,
+    /// that linear searches of the sweep line step over without comparing them
+    /// or that binary searches for a segment's position probe,
     /// plus the horizontal segments that each step of a [`SweepLineRange`]
     /// visits. A caller stops processing a range once
     /// [`SweepLineRange::work_limit_exceeded`] returns `true`.
@@ -520,8 +522,9 @@ impl<'segs> Sweeper<'segs> {
     }
 
     /// The work done so far: the segment comparisons, cached or not, the
-    /// position checks, the segments that linear searches passed, and the
-    /// horizontal segments that range steps visited.
+    /// position checks, the segments that linear searches passed, the entries
+    /// that position searches probed, and the horizontal segments that range
+    /// steps visited.
     fn work(&self) -> u64 {
         let calls = self.comparisons.borrow().calls;
         calls
@@ -537,11 +540,11 @@ impl<'segs> Sweeper<'segs> {
         self.range_horizontals.set(total);
     }
 
-    /// Finds `seg_idx` on the sweep line, counting the segments the search passes.
+    /// Finds `seg_idx` on the sweep line, counting the entries the binary search probes.
     fn find_position(&mut self, seg_idx: SegIdx) -> Option<usize> {
         let pos = self.line.position(seg_idx);
-        let passed = pos.map_or(self.line.segs.len(), |pos| pos + 1);
-        self.segments_passed = self.segments_passed.saturating_add(passed as u64);
+        let probes = usize::BITS - self.line.segs.len().leading_zeros();
+        self.segments_passed = self.segments_passed.saturating_add(u64::from(probes));
         pos
     }
 
@@ -3209,32 +3212,36 @@ mod tests {
     }
 
     // Craft patch (work limit). Disjoint rectangles sharing their top and bottom
-    // heights need almost no comparisons, but each exit searches the whole sweep
-    // line. Those linear searches count toward the work limit.
+    // heights need almost no comparisons. Each exit finds its segment by binary
+    // search, so the work counts the search's probes, and doubling the
+    // rectangles about doubles the work.
     #[test]
-    fn work_limit_counts_linear_searches() {
+    fn work_limit_counts_position_searches_by_their_probes() {
         use kurbo::{Rect, Shape};
 
-        let mut path = BezPath::new();
-        for i in 0..2000 {
-            let x = f64::from(i) * 3.0;
-            path.extend(Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1).iter());
-        }
-        let mut segs = Segments::default();
-        segs.add_bez_path(&path).unwrap();
+        let work = |n: u32| {
+            let mut path = BezPath::new();
+            for i in 0..n {
+                let x = f64::from(i) * 3.0;
+                path.extend(Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1).iter());
+            }
+            let mut segs = Segments::default();
+            segs.add_bez_path(&path).unwrap();
 
-        let mut bufs = SweepLineBuffers::default();
-        let mut sweep = Sweeper::new(&segs, 1e-6);
-        while sweep.next_line(&mut bufs).is_some() {}
-        assert!(!sweep.work_limit_exceeded());
-        let total = sweep.work();
-        // 4,000 exits passing 2,000 segments on average, at one unit per 16.
-        assert!(total > 200_000, "{total} units of work");
+            let mut bufs = SweepLineBuffers::default();
+            let mut sweep = Sweeper::new(&segs, 1e-6);
+            while sweep.next_line(&mut bufs).is_some() {}
+            assert!(!sweep.work_limit_exceeded());
+            let total = sweep.work();
 
-        let mut sweep = Sweeper::new(&segs, 1e-6);
-        sweep.set_work_limit(total / 2);
-        while sweep.next_line(&mut bufs).is_some() {}
-        assert!(sweep.work_limit_exceeded());
+            let mut sweep = Sweeper::new(&segs, 1e-6);
+            sweep.set_work_limit(total / 2);
+            while sweep.next_line(&mut bufs).is_some() {}
+            assert!(sweep.work_limit_exceeded());
+            total
+        };
+        let (small, large) = (work(2000), work(4000));
+        assert!(large < small * 5 / 2, "{small} units for 2,000 rectangles, {large} for 4,000");
     }
 
     // Craft patch (work limit). The circles are stacked, so the first sweep

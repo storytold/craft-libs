@@ -21,7 +21,7 @@ use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 pub const DEFAULT_SLIVER: f64 = 0.01;
 
 /// The most work the sweep may do, counted as segment comparisons plus segment position checks
-/// plus one unit for every 16 segments a linear search of the sweep line passes plus the
+/// plus one unit for every 16 segments a search of the sweep line passes or probes plus the
 /// horizontal segments each step of a sweep line visits,
 /// before the shapes count as too degenerate to sweep. Stacked copies of a shape can need billions
 /// of comparisons; a release build makes about 17 million a second.
