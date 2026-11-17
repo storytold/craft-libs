@@ -6,9 +6,13 @@
 //! accept focused style values and return egui responses; no application engine is required.
 
 pub mod anchor;
+#[cfg(feature = "share")]
+pub mod account;
 pub mod backdrop;
 pub mod buttons;
 pub mod capture;
+#[cfg(feature = "cloud")]
+pub mod cloud;
 pub mod combo;
 pub mod direction;
 pub mod docking;
@@ -18,10 +22,14 @@ pub mod icons;
 pub mod ime;
 pub mod layout;
 pub mod localized;
+pub mod menu;
 pub mod panes;
 pub mod pick;
+pub mod presence;
 pub mod printing;
 pub mod shapes;
+#[cfg(feature = "share")]
+pub mod share;
 pub mod tabs;
 #[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
 pub mod testing;

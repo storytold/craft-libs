@@ -654,6 +654,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                 let layout = if nf == 1 { ChannelLayout::Gray } else { ChannelLayout::Rgb };
                 let sample = if precision <= 8 { SampleType::U8 } else { SampleType::U16 };
                 limits.check(width as u32, height as u32, layout, sample)?;
+                // Each scan retains u16 samples even when the final image is 8-bit.
+                limits.check_bytes(width as u32, height as u32, 2)?;
                 let components = (0..nf).map(|i| seg[6 + 3 * i]).collect();
                 frame = Some(Frame { precision, width, height, components });
             }
@@ -731,7 +733,7 @@ fn finish(frame: Option<Frame>, planes: Vec<Vec<u16>>, scans: usize) -> Result<I
         }
     };
     if p <= 8 {
-        let to8 = |v: u16| -> u8 { if p == 8 { v as u8 } else { (scale(v) >> 8) as u8 } };
+        let to8 = |v: u16| -> u8 { if p == 8 { v as u8 } else { (u32::from(v) * 255 / ((1u32 << p) - 1)) as u8 } };
         let mut data = Vec::with_capacity(w * h * nc);
         for i in 0..w * h {
             for plane in &planes {
@@ -782,6 +784,25 @@ mod tests {
 
     fn plan(img: &Image) -> Plan {
         Plan { layout: img.layout(), sample: img.sample_type() }
+    }
+
+    #[test]
+    fn low_precision_samples_span_the_full_output_range() {
+        for precision in 2..=7 {
+            let max = (1u16 << precision) - 1;
+            let f = Frame { precision, width: usize::from(max) + 1, height: 1, components: vec![1] };
+            let image = finish(Some(f), vec![(0..=max).collect()], 1).unwrap();
+            let expected: Vec<u8> = (0..=max).map(|v| (u32::from(v) * 255 / u32::from(max)) as u8).collect();
+            assert_eq!(image.data(), expected);
+        }
+    }
+
+    #[test]
+    fn eight_bit_scan_intermediate_respects_allocation_limit() {
+        let img = image(8, 8, ChannelLayout::Gray, false, 0);
+        let bytes = encode(&img, plan(&img)).unwrap();
+        assert!(matches!(decode(&bytes, &Limits::new(8, 8, 64, 127)), Err(CodecError::LimitExceeded(_))));
+        assert!(decode(&bytes, &Limits::new(8, 8, 64, 128)).is_ok());
     }
 
     #[test]

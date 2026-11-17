@@ -199,8 +199,9 @@ pub use codepage::decode_code_page;
 /// # Errors
 ///
 /// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
-/// truncated binary data, or more than [`MAX_TAGS`] group codes. For ASCII input, invalid numeric
-/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
+/// truncated binary data, or more group codes than the limit returned by [`max_tags()`], which is
+/// [`MAX_TAGS`] by default. For ASCII input, invalid numeric text becomes `0.0` for real values or
+/// `0` for integer values, and an EOF tag is not required.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, max_tags())
 }

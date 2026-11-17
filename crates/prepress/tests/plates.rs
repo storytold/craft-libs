@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use craft_cms::{Intent, Profile, Transform, builtin};
-use craft_prepress::{Alternate, CmsConversion, Conversion, Error, Fallback, Ink, InkId, MAX_SPOT_INKS, Options, Process, plates};
+use craft_prepress::{Alternate, CmsConversion, Conversion, Error, Fallback, Ink, InkId, MAX_SPOT_INKS, Options, Process, plates, press_profile};
 
 /// A 40 × 40 pt page with `content` and `resources`, `catalog` entries, and `objects`
 /// numbered from 5 (each a whole object body).
@@ -126,6 +126,26 @@ fn process_color_converts_through_the_output_intent_else_the_fallback() {
 
     let broken = Options { fallback: Fallback::Profile(Arc::from(&b"not a profile"[..])), ..Options::default() };
     assert!(matches!(plates(&red(""), 0, 72.0, &broken), Err(Error::Profile(_))));
+}
+
+#[test]
+fn the_press_profile_is_the_one_the_plates_separate_through() {
+    let synthetic = builtin::COATED_CMYK_ICC;
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /DestOutputProfile 5 0 R >>]";
+    let red = |catalog: &str| page_pdf("1 0 0 rg 0 0 40 40 re f", "", catalog, &[stream("/N 4", synthetic)]);
+    let parsed = |icc: &[u8]| Some(Profile::parse(icc).unwrap());
+    let defaults = Options::default();
+
+    assert_eq!(press_profile(&red(intent), 0, &defaults).unwrap(), parsed(synthetic), "the output intent's");
+    assert_eq!(press_profile(&red(""), 0, &defaults).unwrap(), parsed(builtin::COATED_FOGRA39_ICC), "FOGRA39");
+    let callers = Options { fallback: Fallback::Profile(Arc::from(synthetic)), ..Options::default() };
+    assert_eq!(press_profile(&red(""), 0, &callers).unwrap(), parsed(synthetic), "the caller's");
+    let formulas = Options { fallback: Fallback::DeviceFormulas, ..Options::default() };
+    assert_eq!(press_profile(&red(""), 0, &formulas).unwrap(), None, "device formulas have no profile");
+    assert_eq!(press_profile(&red(intent), 0, &formulas).unwrap(), parsed(synthetic), "an output intent still wins");
+    assert!(matches!(press_profile(&red(""), 1, &defaults), Err(Error::NoPage(1))));
+    let broken = Options { fallback: Fallback::Profile(Arc::from(&b"not a profile"[..])), ..Options::default() };
+    assert!(matches!(press_profile(&red(""), 0, &broken), Err(Error::Profile(_))));
 }
 
 #[test]
