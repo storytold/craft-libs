@@ -4,7 +4,7 @@ use super::{PresetBrowser, PresetReorder};
 use crate::choice::SwatchFace;
 use crate::contract::Bind;
 use crate::list::ThumbAspect;
-use crate::patterns::presets::{PresetEvent, PresetFooterOptions, PresetRow, PresetState};
+use crate::patterns::presets::{PresetEvent, PresetFooterOptions, PresetRow, PresetState, PresetTiles};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Srgba;
 use egui::Ui;
@@ -63,6 +63,29 @@ fn preset_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .toolbar(true)
         .reorder(PresetReorder::items_and_groups().nest(NESTING))
         .footer(PresetFooterOptions::new().slider(slider).new_group(new_group).can_delete(selected.is_some()));
+    if let Some(key) = selected {
+        browser = browser.selected(key);
+    }
+    let out = browser.show(ui);
+    let selected = data.value("selected", None::<u32>);
+    for event in &out.events {
+        if let PresetEvent::Select { key, .. } | PresetEvent::Activate { key, .. } = event {
+            *selected = Some(*key);
+        }
+    }
+    let readout = match *selected {
+        Some(n) => format!("Selected: Preset {n}"),
+        None => String::from("Nothing selected."),
+    };
+    StoryOutput::from(out).readout(readout)
+}
+
+/// The chips variant: the same library as small bare chips under text-high group names, as a palette in a popover.
+#[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
+fn preset_browser_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = library_rows();
+    let selected = *data.value("selected", None::<u32>);
+    let mut browser = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows).tiles(PresetTiles::Chips);
     if let Some(key) = selected {
         browser = browser.selected(key);
     }

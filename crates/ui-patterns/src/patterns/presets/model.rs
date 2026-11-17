@@ -45,6 +45,19 @@ impl CellShape {
     }
 }
 
+/// How large the grid view's tiles are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PresetTiles {
+    /// Thumbnails at the browser's zoom, with captions when the rows have them, under control-high group headers: a
+    /// library panel.
+    #[default]
+    Thumbnails,
+    /// Small bare chips, as a palette in a popover shows them: each picture a small thumbnail on its short edge, no
+    /// captions (the name stays the tooltip and the accessible name), group headers a text row high, and no zoom.
+    Chips,
+}
+
 /// What the thumbnail painter is told about the cell it paints.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]

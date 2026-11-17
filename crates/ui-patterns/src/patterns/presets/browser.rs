@@ -14,14 +14,14 @@ pub use reorder::PresetReorder;
 
 use super::event::{PresetEvent, PresetOutput};
 use super::footer::{PresetFooter, PresetFooterEvent, PresetFooterOptions};
-use super::model::{CellShape, PresetRow, ThumbInfo, children_end, has_captions};
+use super::model::{CellShape, PresetRow, PresetTiles, ThumbInfo, children_end, has_captions};
 use super::state::{DefaultOpen, PresetState, PresetView};
 use super::words::PresetWords;
 use crate::bars::{Bar, BarKind};
 use crate::choice::Segmented;
 use crate::contract::{
     Bind, BodyCx, CollectionEvent, DropMark, DropTarget, DropZone, Entry, ListDrag, OpenChange, Pattern, Props, Rename, ReorderMove, ReorderRule,
-    SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
+    RowHeight, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
 };
 use crate::display::Divider;
 use crate::layout_components::Stack;
@@ -197,6 +197,9 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The shape of a grid tile's picture.
     #[prop]
     cell_shape: CellShape,
+    /// How large the grid view's tiles are; the list view is the same for both.
+    #[prop]
+    tiles: PresetTiles,
     /// The zoom the thumbnails span and how it steps; the footer's slider uses the same.
     #[prop]
     thumb_range: TileZoom,
@@ -274,6 +277,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             rows,
             selected: None,
             cell_shape: CellShape::Square,
+            tiles: PresetTiles::Thumbnails,
             thumb_range: TileZoom::Ladder,
             default_open: DefaultOpen::All,
             toolbar: false,
@@ -557,6 +561,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             rows,
             selected,
             cell_shape,
+            tiles: tile_size,
             thumb_range,
             default_open,
             toolbar,
@@ -683,16 +688,24 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 let tiles = Shown { rows, at: plan.tiles.clone(), open: vec![false; plan.tiles.len()], tree: false, actions: 0 };
                 let tail: Vec<TailRow<BrowserKey<K>>> =
                     actions.iter().enumerate().map(|(at, label)| TailRow::new(BrowserKey::Action(at), label.clone())).collect();
-                let captions = if has_captions(rows) { CaptionPlace::Below } else { CaptionPlace::None };
-                let mut grid = TileGrid::<BrowserKey<K>>::new(label.clone())
+                let aspect = card_aspect(cell_shape);
+                let grid = TileGrid::<BrowserKey<K>>::new(label.clone())
                     .id(list_id)
                     .select(SelectMode::Single)
                     .arrows_select(false)
                     .selection(Bind::given(selection))
-                    .caption(captions)
-                    .thumb_size(ThumbSize::Large)
-                    .aspect(card_aspect(cell_shape))
-                    .zoom(zoom as f32)
+                    .aspect(aspect);
+                let grid = match tile_size {
+                    PresetTiles::Thumbnails => {
+                        let captions = if has_captions(rows) { CaptionPlace::Below } else { CaptionPlace::None };
+                        grid.caption(captions).thumb_size(ThumbSize::Large).zoom(zoom as f32)
+                    }
+                    // The zoom is a factor on the picture's width: a wide chip is the small thumbnail high.
+                    PresetTiles::Chips => {
+                        grid.caption(CaptionPlace::None).thumb_size(ThumbSize::Small).zoom(aspect.max(1.0)).row_height(RowHeight::Text)
+                    }
+                };
+                let mut grid = grid
                     .groups(&plan.groups)
                     .tail(&tail)
                     .collapsible()

@@ -15,7 +15,7 @@ use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
     ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, Meta as _, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, section_part,
+    Role, RowHeight, RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, section_part,
 };
 use crate::controls::disclosure::Disclosure;
 use crate::list::{DropTest, ListRow, ListRowStyle, RowTest, ThumbSize};
@@ -142,18 +142,18 @@ struct GridSizes {
     thumbs: [f32; 3],
     /// What a tile adds around its picture.
     around: AroundPicture,
-    /// The gaps of the arrangement and the height of a group header (a heading row, as high as the grid's other rows),
-    /// for captioned tiles and for bare ones.
+    /// The gaps of the arrangement and the height of a group header (a heading row, as high as the grid's rows: the
+    /// collection's row height), for captioned tiles and for bare ones.
     spacing: ArrangeSpacing,
     bare_spacing: ArrangeSpacing,
 }
 
 impl GridSizes {
-    fn of(cx: &StyleCx<'_>, card: bool) -> GridSizes {
+    fn of(cx: &StyleCx<'_>, card: bool, rows: RowHeight) -> GridSizes {
         let spacing = ArrangeSpacing::new(
             if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack },
             cx.tokens.space.gap.inline,
-            ListRow::row_height(cx, ThumbSize::None, false),
+            rows.of(cx),
         );
         GridSizes {
             card: cx.tokens.size.thumb.card,
@@ -394,7 +394,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// The layout of this pass: `previous` when it was made from the same recipe, else a new arrangement. A card is
     /// the picture plus what the tile adds around it in every tiling.
     fn laid_out(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, item: Option<Vec2>, cx: &StyleCx<'_>) -> GridLayout {
-        let style = GridSizes::of(cx, self.card);
+        let style = GridSizes::of(cx, self.card, self.items.row_height);
         let spacing = style.spacing(self.caption);
         let around = style.around.get(self.caption, self.detail_line);
         // A card never outgrows the grid: in a column narrower than a card the card takes the column.
@@ -405,7 +405,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             side = ((free - (columns - 1.0) * gap) / columns - around.size().x).max(1.0);
         }
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
-        let tail_height = ListRow::row_height(cx, ThumbSize::None, false);
+        let tail_height = self.items.row_height.of(cx);
         let recipe = self.items.rows_stamp.map(|stamp| Recipe {
             stamp,
             width,
@@ -414,6 +414,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             aspect,
             justified: self.justified,
             around,
+            group_header: spacing.group_header,
             groups: self.groups.iter().map(|group| (group.start, group.count, group.open)).collect(),
             tail: (self.tail.len(), tail_height),
         });
@@ -480,7 +481,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// The header row of `group`: a heading at the group's depth, with its icon and its detail at the end, and a
     /// disclosure column the grid owns when the groups open and close.
     fn header_row(&self, group: &TileGroup<K>, state: RowState) -> ListRow<'static> {
-        let mut row = ListRow::new(group.title.clone()).heading().node(false).depth(group.depth).state(state);
+        let mut row = ListRow::new(group.title.clone()).heading().rows(self.items.row_height).node(false).depth(group.depth).state(state);
         if self.collapsible {
             row = row.group(group.open).disclosure_by_host();
         }
@@ -686,7 +687,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 ui.draw().edge_rule(RuleKind::Divider, rect, RectSide::Top);
             }
             let state = RowState { emphasized: lead == Some(Slot::Tail(at)), ..RowState::default() };
-            ui.face(section_part(&row.key), ListRow::new(row.label.clone()).node(false).state(state));
+            ui.face(section_part(&row.key), ListRow::new(row.label.clone()).rows(self.items.row_height).node(false).state(state));
         }
     }
 
@@ -804,7 +805,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         if self.card_columns == 0 {
             return 0.0;
         }
-        let style = GridSizes::of(cx, self.card);
+        let style = GridSizes::of(cx, self.card, self.items.row_height);
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
         let around = style.around.get(self.caption, self.detail_line);
         let card = style.card(self.picture_side(&style, item, around), aspect, around).x;

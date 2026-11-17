@@ -512,6 +512,8 @@ pub(super) struct Recipe {
     pub(super) aspect: f32,
     pub(super) justified: bool,
     pub(super) around: Around,
+    /// A group header's height.
+    pub(super) group_header: f32,
     /// Each group's first tile, count and open state.
     pub(super) groups: Vec<(usize, usize, bool)>,
     /// How many tail rows follow, and their height.
