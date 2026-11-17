@@ -13,6 +13,8 @@ fn over_budget(buf: &str, budget: usize) -> Result<(), String> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoreSetup {
+    /// Software name recorded in the MusicXML encoding metadata.
+    pub software: String,
     pub title: String,
     pub composer: String,
     pub bars_per_system: u32,
@@ -55,13 +57,10 @@ fn spell(pitch: u8) -> (char, i32, i32) {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.chars()
-        .filter(|c| matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'))
-        .collect::<String>()
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    // Keep the score export's existing literal whitespace and quote spelling. The
+    // shared attribute writer owns XML legality/escaping; only its generated
+    // whitespace references are restored (input ampersands were escaped first).
+    craft_xml::esc_attr(s).replace("&#9;", "\t").replace("&#10;", "\n").replace("&#13;", "\r")
 }
 
 fn note_type(units: u32) -> (&'static str, bool) {
@@ -82,9 +81,10 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
     musicxml_budgeted(parts, setup, MAX_OUTPUT_BYTES)
 }
 
-/// [`musicxml`] with an explicit byte budget (kept separate so tests can pass a tiny budget
-/// instead of building a 256 MiB score).
-fn musicxml_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<String, String> {
+/// MusicXML with an explicit byte budget, capped at 256 MiB.
+pub fn musicxml_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<String, String> {
+    validate(parts, setup)?;
+    let budget = budget.min(MAX_OUTPUT_BYTES);
     let mut x = String::new();
     x.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n");
     x.push_str("<!DOCTYPE score-partwise PUBLIC \"-//Recordare//DTD MusicXML 4.0 Partwise//EN\" \"http://www.musicxml.org/dtds/partwise.dtd\">\n");
@@ -97,7 +97,8 @@ fn musicxml_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Resul
     if !setup.composer.is_empty() {
         let _ = writeln!(x, "    <creator type=\"composer\">{}</creator>", xml_escape(&setup.composer));
     }
-    x.push_str("    <encoding><software>SoundCraft</software></encoding>\n  </identification>\n  <part-list>\n");
+    let _ = writeln!(x, "    <encoding><software>{}</software></encoding>", xml_escape(&setup.software));
+    x.push_str("  </identification>\n  <part-list>\n");
     for (i, p) in parts.iter().enumerate() {
         let _ = writeln!(x, "    <score-part id=\"P{}\"><part-name>{}</part-name></score-part>", i + 1, xml_escape(&p.name));
     }
@@ -191,9 +192,10 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
     svg_budgeted(parts, setup, MAX_OUTPUT_BYTES)
 }
 
-/// [`svg`] with an explicit byte budget (kept separate so tests can pass a tiny budget instead of
-/// building a 256 MiB score).
-fn svg_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<String, String> {
+/// SVG with an explicit byte budget, capped at 256 MiB.
+pub fn svg_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<String, String> {
+    validate(parts, setup)?;
+    let budget = budget.min(MAX_OUTPUT_BYTES);
     const W: f64 = 794.0;
     const MARGIN: f64 = 48.0;
     const SP: f64 = 7.0; // staff space
@@ -395,3 +397,38 @@ fn rest(o: &mut String, x: f64, y0: f64, sp: f64, units: u32) {
     }
 }
 
+// Public notation data can come from callers other than SoundCraft's bounded layout.
+// Validate before writing/escaping so malicious dimensions cannot overflow sums or create
+// an unbounded temporary string before the output-budget checks run.
+fn validate(parts: &[Part], setup: &ScoreSetup) -> Result<(), String> {
+    let invalid = || "score exceeds supported notation limits".to_string();
+    if parts.len() > 4096 {
+        return Err(invalid());
+    }
+    let mut text = setup.title.len().checked_add(setup.composer.len()).and_then(|n| n.checked_add(setup.software.len())).ok_or_else(invalid)?;
+    for part in parts {
+        text = text.checked_add(part.name.len()).ok_or_else(invalid)?;
+        if text > 16 * 1024 * 1024 || part.measures.len() > 2000 {
+            return Err(invalid());
+        }
+        for measure in &part.measures {
+            if measure.items.len() > 128 {
+                return Err(invalid());
+            }
+            for item in &measure.items {
+                if ![1, 2, 3, 4, 6, 8, 12, 16].contains(&item.units)
+                    || item.pitches.len() > 16
+                    || item.tie_start.len() > 16
+                    || item.tie_stop.len() > 16
+                    || item.pitches.iter().chain(&item.tie_start).chain(&item.tie_stop).any(|p| *p > 127)
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+    }
+    if text > 16 * 1024 * 1024 {
+        return Err(invalid());
+    }
+    Ok(())
+}
