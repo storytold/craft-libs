@@ -119,7 +119,11 @@ impl<'a> Lexer<'a> {
         let end = rest.iter().position(|&c| c == b'\n').map_or(rest.len(), |n| n + 1);
         // A command names its language within its first 256 bytes; longer lines aren't copied.
         let line = String::from_utf8_lossy(&rest[..end.min(256)]).to_ascii_uppercase();
-        if let Some(lang) = line.split_once("LANGUAGE").map(|(_, l)| l.trim_start_matches([' ', '=']).trim()) {
+        // COMMENT/ECHO text may mention LANGUAGE without changing the printer language.
+        if let Some((command, language)) = line.split_once("LANGUAGE")
+            && command.split_ascii_whitespace().eq(["@PJL", "ENTER"])
+        {
+            let lang = language.trim_start_matches([' ', '=']).trim();
             self.mode = if lang.starts_with("HPGL") { Mode::Hpgl } else { Mode::Pcl };
         }
         self.at += end;
@@ -430,6 +434,15 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pjl_comments_do_not_select_a_language() {
+        for command in ["COMMENT LANGUAGE=PCL", "ECHO ENTER LANGUAGE=PCL", "SET LANGUAGE=PCL"] {
+            let bytes = format!("\x1b%-12345X@PJL {command}\n@PJL ENTER LANGUAGE=HPGL2\nIN;");
+            assert_eq!(Lexer::new(bytes.as_bytes()).op(true), Some(*b"IN"));
+        }
+        assert_eq!(Lexer::new(b"\x1b%-12345X@pjl\tenter\tlanguage=HPGL2\r\nIN;").op(true), Some(*b"IN"));
+    }
 
     #[test]
     fn framing_labels_and_bounded_numbers() {
