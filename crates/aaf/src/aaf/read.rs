@@ -67,6 +67,7 @@ fn indirect_f64(d: &[u8]) -> Option<f64> {
 
 struct R<'a> {
     report: &'a mut Report,
+    options: super::ReadOptions,
     mobs: HashMap<MobId, &'a Obj>,
     essence: HashMap<MobId, &'a [u8]>,
     doc: Document,
@@ -90,7 +91,7 @@ struct NestClip<'a> {
 /// Compositions nested deeper than this are read as gaps.
 const MAX_NESTING: usize = 16;
 
-pub(crate) fn read(bytes: &[u8], report: &mut Report) -> Result<Document> {
+pub(crate) fn read(bytes: &[u8], options: &super::ReadOptions, report: &mut Report) -> Result<Document> {
     let root = store::read(bytes).map_err(|e| Error::Parse { format: "AAF", message: e })?;
     let header = root.strong(pid::ROOT_HEADER).ok_or_else(|| Error::Parse { format: "AAF", message: "no header object".into() })?;
     let content = header.strong(pid::CONTENT).ok_or_else(|| Error::Parse { format: "AAF", message: "no content storage".into() })?;
@@ -106,7 +107,8 @@ pub(crate) fn read(bytes: &[u8], report: &mut Report) -> Result<Document> {
             essence.insert(id, d);
         }
     }
-    let mut r = R { report, mobs, essence, doc: Document::default(), sources: HashMap::new(), nests: HashMap::new(), open: Vec::new() };
+    let mut r =
+        R { report, options: *options, mobs, essence, doc: Document::default(), sources: HashMap::new(), nests: HashMap::new(), open: Vec::new() };
     // Top-level compositions: those no other composition uses, among the ones tagged top-level
     // when any are. (Premiere Pro tags a nested sequence's composition top-level too; it is still
     // only a nested sequence.) Compositions that only use each other in a circle all count. The
@@ -331,7 +333,9 @@ impl R<'_> {
                 items
             }
             x if x == cls::SELECTOR => {
-                self.report.info("a selector was flattened to its selected input");
+                if self.options.report_flattening {
+                    self.report.info("a selector was flattened to its selected input");
+                }
                 match c.strong(pid::SELECTED) {
                     Some(s) => {
                         let mut items = self.segment(s, rate, kind, depth);
@@ -342,7 +346,9 @@ impl R<'_> {
                 }
             }
             x if x == cls::NESTED_SCOPE => {
-                self.report.info("a nested scope was flattened to its final input");
+                if self.options.report_flattening {
+                    self.report.info("a nested scope was flattened to its final input");
+                }
                 match c.objs(pid::NESTED_SLOTS).last() {
                     Some(s) => {
                         let mut items = self.segment(s, rate, kind, depth);
@@ -388,7 +394,12 @@ impl R<'_> {
         let len = units_to_ticks(len_of(c), rate.0, rate.1);
         let tagged_name = tagged_values(c, pid::COMPONENT_USER_COMMENTS).into_iter().find(|(k, _)| k == "Clip Name").map(|(_, v)| v);
         let (Some(id), Some(slot)) = (c.mob_id(pid::SOURCE_ID), c.u32(pid::SOURCE_MOB_SLOT_ID)) else { return CItem::Filler(len) };
-        let name = tagged_name.or_else(|| self.mobs.get(&id).and_then(|mob| mob.string(pid::MOB_NAME))).unwrap_or_default();
+        let name = if self.options.infer_clip_name {
+            tagged_name.or_else(|| self.mobs.get(&id).and_then(|mob| mob.string(pid::MOB_NAME)))
+        } else {
+            tagged_name
+        }
+        .unwrap_or_default();
         if id == [0; 32] {
             return CItem::Filler(len);
         }
@@ -401,6 +412,7 @@ impl R<'_> {
             .and_then(|mob| mob.objs(pid::SLOTS).iter().find(|s| s.u32(pid::SLOT_ID) == Some(slot)))
             .and_then(|s| rate_of(s, pid::EDIT_RATE))
             .unwrap_or(rate);
+        let source_rate = if self.options.source_slot_rate { source_rate } else { rate };
         let start = units_to_ticks(c.i64(pid::START_TIME).unwrap_or(0), source_rate.0, source_rate.1);
         match self.resolve(id, slot, start, kind, master_key, 0) {
             Some((source, t)) => CItem::Clip(CClip { len, source, start: t, gain: None, name }),
@@ -506,6 +518,7 @@ impl R<'_> {
                 .and_then(|m| m.objs(pid::SLOTS).iter().find(|s| s.u32(pid::SLOT_ID) == Some(next_slot)))
                 .and_then(|s| rate_of(s, pid::EDIT_RATE))
                 .unwrap_or(rate);
+            let source_rate = if self.options.source_slot_rate { source_rate } else { rate };
             let inner = units_to_ticks(clip.i64(pid::START_TIME).unwrap_or(0), source_rate.0, source_rate.1);
             if next == [0; 32] {
                 return None;
@@ -545,7 +558,11 @@ impl R<'_> {
             DataKind::Sound => CKind::Sound,
             _ => kind,
         };
-        let path = d.objs(pid::LOCATOR).iter().find_map(|l| l.string(pid::URL_STRING)).map(|u| locator_path(&u));
+        let path = d
+            .objs(pid::LOCATOR)
+            .iter()
+            .find_map(|l| l.string(pid::URL_STRING))
+            .map(|u| if self.options.decode_relative_locator { locator_path(&u) } else { craft_timeline::path::file_url_to_path(&u) });
         let file_rate = rate_of(d, pid::SAMPLE_RATE).unwrap_or(rate);
         let length = d
             .i64(pid::FILE_LENGTH)
@@ -604,7 +621,8 @@ impl R<'_> {
             if let Some(data) = self.essence.get(&id) {
                 s.embedded = Some(data.to_vec());
                 // embedded essence may be a whole WAVE / AIFF file
-                if let Some((pcm, ch, sr, bits)) = crate::pcm::parse_wav(data) {
+                let pcm = if self.options.permissive_pcm { craft_audio::essence_pcm::parse_wav(data) } else { crate::pcm::parse_wav(data) };
+                if let Some((pcm, ch, sr, bits)) = pcm {
                     s.embedded = Some(pcm);
                     s.file_channels = ch as u32;
                     s.channels = if s.channel.is_some() { 1 } else { ch as u32 };

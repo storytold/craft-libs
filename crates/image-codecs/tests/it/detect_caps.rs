@@ -62,6 +62,8 @@ fn default_build_formats_all_symmetric() {
         Format::Dpx,
         Format::Cineon,
         Format::Iff,
+        #[cfg(feature = "sunraster")]
+        Format::SunRaster,
         #[cfg(feature = "sgi")]
         Format::Sgi,
         Format::JpegLs,
@@ -258,6 +260,20 @@ fn detect_magic_jpeg_ls() {
     assert!(decode_as(Format::JpegLs, &[0xFF, 0xD8, 0xFF, 0xF7]).is_err());
 }
 
+#[cfg(feature = "sunraster")]
+#[test]
+fn detect_magic_sun_raster() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgb, (0..45).collect()).unwrap();
+    let bytes = encode(&img, Format::SunRaster, &EncodeOptions::default()).unwrap();
+    assert_eq!(detect(&bytes), Some(Format::SunRaster));
+    assert_eq!(from_extension("scan.RAS"), Some(Format::SunRaster));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::SunRaster));
+    assert_eq!(detect(&[0x59, 0xa6, 0x6a, 0x95]), None);
+    assert!(decode_as(Format::SunRaster, &[0x59, 0xa6, 0x6a, 0x95]).is_err());
+}
+
 #[test]
 fn detect_magic_avif() {
     assert_eq!(detect(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some(Format::Avif));
@@ -359,4 +375,16 @@ fn sgi_requires_explicit_feature() {
     let mut header = vec![0; 512];
     header[..12].copy_from_slice(&[1, 218, 0, 1, 0, 2, 0, 1, 0, 1, 0, 1]);
     assert_eq!(detect(&header), None);
+}
+
+#[cfg(not(feature = "sunraster"))]
+#[test]
+fn sun_raster_disabled_by_default() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let bytes = [0x59, 0xa6, 0x6a, 0x95, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 42, 0];
+    assert_ne!(detect(&bytes), Some(Format::SunRaster));
+    assert!(!caps(Format::SunRaster).read && !caps(Format::SunRaster).write);
+    assert!(decode_as(Format::SunRaster, &bytes).is_err());
+    let image = Image::from_u8(1, 1, ChannelLayout::Gray, vec![42]).unwrap();
+    assert!(encode(&image, Format::SunRaster, &EncodeOptions::default()).is_err());
 }
