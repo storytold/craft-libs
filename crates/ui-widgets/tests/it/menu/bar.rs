@@ -116,7 +116,7 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
             let rows = rows.clone();
             let titles = vec![MenuTitle::new("&File", move |ui| {
                 for name in &rows {
-                    let active = MenuItem::new(name.as_str()).show(ui).active;
+                    let active = MenuItem::new(name.clone()).show(ui).active;
                     // The last run of the frame is the one that paints.
                     seen.borrow_mut().insert(name.clone(), active);
                 }
