@@ -1,8 +1,8 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-changes listed under Local changes, which touch `src/sweep/sweep_line.rs`, `src/curve/mod.rs` and
-`docs/sweep.typ`.
+changes listed under Local changes, which touch `src/sweep/sweep_line.rs`, `src/topology.rs`,
+`src/curve/mod.rs`, `src/curve/line.rs` and `docs/sweep.typ`.
 `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
@@ -18,10 +18,13 @@ holds `upstream_revision`. `local_patches` describes each local change.
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
 | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
+| When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN | `Craft patch (huge chord)` | `src/curve/mod.rs` | `short_curve_chord_with_huge_x` fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307 |
+| `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height | `Craft patch (subnormal x)` | `src/curve/line.rs` | `subnormal_x` checks that line and a line from x = -1.5e-323 to 1.5e-323 |
 | `AlmostHorizontalDecomposition::from_monotone_cubic` keeps each piece's handles on the right side of its end points instead of clamping them into the piece's y-range, so the pieces the sweep compares follow the input curve | `Craft patch (monotone handles)` | `src/curve/mod.rs` | `curve::test::decomposition_keeps_handles_outside_the_y_range` |
 | The intersection scan to the left in `docs/sweep.typ` compares each segment with `alpha^(i+1)` instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma after it is stated for `alpha^(i+1)` | none | `docs/sweep.typ` | none |
 | Two typos in `docs/sweep.typ` are corrected: "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false | none | `docs/sweep.typ` | none |
 | The lemma for the intersection scan to the left in `docs/sweep.typ` asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two | none | `docs/sweep.typ` | none |
+| Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change | `Craft patch (clippy lints)` | `src/sweep/sweep_line.rs`, `src/topology.rs` | none |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
 
@@ -51,13 +54,15 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 ## Tests
 
 `scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
-tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter does not list this
-directory, so a pull request that changes only files here does not start `pdf.yml`. Run the tests from
-this directory:
+tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter lists this directory,
+so a pull request that changes files here starts `pdf.yml`. No workflow runs clippy on this copy. Run
+the tests and clippy from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
 cargo test --locked --doc
+cargo clippy --locked --all-features --lib --test regression -- -D warnings
+cargo clippy --locked --all-features --lib --profile test -- -D warnings
 ```
 
 `Cargo.toml` leaves out the `kompari`, `linesweeper_util` and `path-bool` dev-dependencies, which

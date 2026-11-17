@@ -12,6 +12,10 @@
 //! [`Image::sample_nearest`] and [`Image::sample`] (bilinear) use the texel coordinates, wrapping
 //! and weights of the Vulkan specification, sections 20.4.1, 20.6.1 and 20.6.3
 //! (<https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#textures-texel-filtering>).
+//! [`Image::get_axes`], [`Image::sample_axes`] and [`Image::sample_nearest_axes`] take the wrap
+//! mode of each axis on its own. [`Image::sample_stored`] is MaterialCraft's function-graph texture
+//! read: bilinear with weights rounded to eight fractional bits, and with its result rounded to 16
+//! bits when the image's integer-sampling flag is on ([`Image::with_integer_sampling`]).
 //!
 //! Sizes are bounded. [`Limits`] caps the side, the pixel count and the bytes, and the `try_`
 //! constructors return an [`ImageError`] before allocating anything over them. A plane is also
@@ -26,13 +30,28 @@
 //! resampler of [`Image::try_resize`]. The forms without `try_` allocate like `Vec`. A failed
 //! infallible allocation ends the process. Rows are generated on several threads only with the
 //! `parallel` feature.
+//!
+//! [`normal`] makes tangent-space normal maps from a height plane, and [`packing`] packs
+//! occlusion, roughness and metallic into one RGBA image. Both read a [`ScalarSource`] one row at
+//! a time, so a tiled surface is read in place instead of copied into a float plane.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+#[cfg(any(feature = "dds", test))]
+pub mod dds;
 
 use std::sync::Arc;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+
+pub mod normal;
+pub mod packing;
+mod source;
+#[cfg(test)]
+mod tiled_tests;
+
+pub use source::{ScalarSource, SourceError, TextureOpError};
 
 /// Largest side the clamping constructors make, and the default [`Limits::max_side`].
 pub const MAX_SIDE: u32 = 8192;
@@ -130,15 +149,18 @@ pub struct Image {
     w: u32,
     h: u32,
     kind: Kind,
+    /// Whether [`Image::sample_stored`] rounds its result to 16 bits, as for a normalized integer
+    /// texture. Off for every new image.
+    integer_sampling: bool,
     /// Row-major, `kind.channels()` floats per pixel.
     data: Arc<Vec<f32>>,
 }
 
-/// Images are equal when their size, kind and floats are equal. Floats compare as `f32` does, so
-/// an image holding NaN is unequal to every image, its clones included.
+/// Images are equal when their size, kind, integer-sampling flag and floats are equal. Floats
+/// compare as `f32` does, so an image holding NaN is unequal to every image, its clones included.
 impl PartialEq for Image {
     fn eq(&self, o: &Image) -> bool {
-        self.w == o.w && self.h == o.h && self.kind == o.kind && self.data == o.data
+        self.w == o.w && self.h == o.h && self.kind == o.kind && self.integer_sampling == o.integer_sampling && self.data == o.data
     }
 }
 
@@ -187,6 +209,13 @@ fn reduce(t: f32, tile: bool) -> Option<f32> {
     Some(if tile { t.rem_euclid(1.0).min(BELOW_ONE) } else { t.clamp(-1.0, 2.0) })
 }
 
+/// A bilinear sum taken in `f64` as an `f32`: a finite sum clamped to the `f32` range, and an
+/// infinite or NaN sum as it is.
+#[inline]
+fn f32_of_sum(v: f64) -> f32 {
+    if v.is_finite() { v.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32 } else { v as f32 }
+}
+
 /// Fill `data` row by row with `f(x, y)`, keeping the first `c` channels of each result.
 fn fill<F: Fn(u32, u32) -> [f32; 4] + Sync>(data: &mut [f32], w: u32, c: usize, f: &F) {
     let row_len = (w as usize).max(1) * c;
@@ -209,7 +238,7 @@ impl Image {
         let (w, h, len) = bounded_size(w, h, kind, MAX_ALLOC_BYTES);
         let mut data = vec![0.0f32; len];
         fill(&mut data, w, kind.channels(), &f);
-        Image { w, h, kind, data: Arc::new(data) }
+        Image { w, h, kind, integer_sampling: false, data: Arc::new(data) }
     }
 
     /// An image checked against `limits`, with its memory reserved before any pixel is generated.
@@ -219,7 +248,7 @@ impl Image {
         data.try_reserve_exact(len).map_err(|_| ImageError::OutOfMemory(w, h))?;
         data.resize(len, 0.0);
         fill(&mut data, w, kind.channels(), &f);
-        Ok(Image { w, h, kind, data: Arc::new(data) })
+        Ok(Image { w, h, kind, integer_sampling: false, data: Arc::new(data) })
     }
 
     /// A constant image, each side clamped to `1..=MAX_SIDE`.
@@ -272,7 +301,21 @@ impl Image {
         if data.len() != expected {
             return Err(ImageError::BadDataLength { expected, found: data.len() });
         }
-        Ok(Image { w, h, kind, data })
+        Ok(Image { w, h, kind, integer_sampling: false, data })
+    }
+
+    /// This image with the integer-sampling flag set to `on`. The flag only changes
+    /// [`Image::sample_stored`], which then rounds its result to 16 bits. Clones keep the flag.
+    /// [`Image::map`], [`Image::resize`] to a new size and the other operations that make a new
+    /// buffer return an image with the flag off. The pixels are not changed or copied.
+    pub fn with_integer_sampling(mut self, on: bool) -> Image {
+        self.integer_sampling = on;
+        self
+    }
+
+    /// Whether [`Image::sample_stored`] rounds its result to 16 bits.
+    pub fn integer_sampling(&self) -> bool {
+        self.integer_sampling
     }
 
     pub fn width(&self) -> u32 {
@@ -308,7 +351,14 @@ impl Image {
     /// The pixel at integer coordinates (wrapped or clamped), as RGBA (gray → `[v, v, v, 1]`).
     #[inline]
     pub fn get(&self, x: i64, y: i64, tile: bool) -> [f32; 4] {
-        let (x, y) = (wrap(x, self.w, tile), wrap(y, self.h, tile));
+        self.get_axes(x, y, [tile; 2])
+    }
+
+    /// [`Image::get`] with the wrap mode of each axis given on its own: `tiling[0]` repeats `x`
+    /// and `tiling[1]` repeats `y`; an axis whose entry is `false` is clamped to its edge texels.
+    #[inline]
+    pub fn get_axes(&self, x: i64, y: i64, tiling: [bool; 2]) -> [f32; 4] {
+        let (x, y) = (wrap(x, self.w, tiling[0]), wrap(y, self.h, tiling[1]));
         let i = y * self.w as usize + x;
         match self.kind {
             Kind::Gray => {
@@ -339,7 +389,15 @@ impl Image {
     /// leaves a sample at a texel center unchanged. NaN or infinite coordinates give `[0, 0, 0, 1]`.
     #[inline]
     pub fn sample(&self, u: f32, v: f32, tile: bool) -> [f32; 4] {
-        let (Some(u), Some(v)) = (reduce(u, tile), reduce(v, tile)) else {
+        self.sample_axes(u, v, [tile; 2])
+    }
+
+    /// [`Image::sample`] with the wrap mode of each axis given on its own: `tiling[0]` for `u` and
+    /// `tiling[1]` for `v`, as glTF samplers set `wrapS` and `wrapT` separately. With both entries
+    /// equal the result is the same as [`Image::sample`] with that `tile`.
+    #[inline]
+    pub fn sample_axes(&self, u: f32, v: f32, tiling: [bool; 2]) -> [f32; 4] {
+        let (Some(u), Some(v)) = (reduce(u, tiling[0]), reduce(v, tiling[1])) else {
             return [0.0, 0.0, 0.0, 1.0];
         };
         let fx = u * self.w as f32 - 0.5;
@@ -356,12 +414,12 @@ impl Image {
             if weight == 0.0 {
                 continue;
             }
-            let p = self.get(x, y, tile);
+            let p = self.get_axes(x, y, tiling);
             for (o, p) in o.iter_mut().zip(p) {
                 *o += f64::from(weight) * f64::from(p);
             }
         }
-        o.map(|v| if v.is_finite() { v.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32 } else { v as f32 })
+        o.map(f32_of_sum)
     }
 
     #[inline]
@@ -373,18 +431,73 @@ impl Image {
         }
     }
 
+    /// Bilinear sample at normalized `(u, v)` with filter weights of eight fractional bits, the
+    /// texture read of MaterialCraft's function graphs. The texel coordinate and wrapping are those
+    /// of [`Image::sample`]. Each fractional part `α` and `β` is rounded to the nearest multiple of
+    /// 1/256 (a half rounds away from zero), and the four texels are blended by linear
+    /// interpolation in `f32`: `a + (b − a)α` along each of the two rows, then the same between
+    /// the rows with `β`. When the image's integer-sampling flag is on
+    /// ([`Image::with_integer_sampling`]), each channel is then clamped to `0..=1` and rounded to
+    /// the nearest multiple of 1/65535, as a filtered 16-bit texel. A NaN channel stays NaN.
+    ///
+    /// A channel whose interpolation is infinite or NaN is computed again as the weighted sum of
+    /// [`Image::sample`], skipping texels of weight 0 and clamping a finite sum to the `f32`
+    /// range, so finite texels give a finite sample. NaN or infinite coordinates give
+    /// `[0, 0, 0, 1]`.
+    #[inline]
+    pub fn sample_stored(&self, u: f32, v: f32, tile: bool) -> [f32; 4] {
+        let pixel = self.sample_fixed_weights(u, v, tile);
+        if self.integer_sampling { pixel.map(|value| (value.clamp(0.0, 1.0) * 65535.0).round() / 65535.0) } else { pixel }
+    }
+
+    /// The bilinear interpolation of [`Image::sample_stored`] before its 16-bit rounding.
+    #[inline]
+    fn sample_fixed_weights(&self, u: f32, v: f32, tile: bool) -> [f32; 4] {
+        let (Some(u), Some(v)) = (reduce(u, tile), reduce(v, tile)) else {
+            return [0.0, 0.0, 0.0, 1.0];
+        };
+        let fx = u * self.w as f32 - 0.5;
+        let fy = v * self.h as f32 - 0.5;
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let tx = ((fx - x0) * 256.0).round() / 256.0;
+        let ty = ((fy - y0) * 256.0).round() / 256.0;
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let (a, b, c, d) = (self.get(x0, y0, tile), self.get(x0 + 1, y0, tile), self.get(x0, y0 + 1, tile), self.get(x0 + 1, y0 + 1, tile));
+        let mut o = [0.0f32; 4];
+        for (k, o) in o.iter_mut().enumerate() {
+            let top = a[k] + (b[k] - a[k]) * tx;
+            let bot = c[k] + (d[k] - c[k]) * tx;
+            *o = top + (bot - top) * ty;
+            if !o.is_finite() {
+                let taps = [((1.0 - tx) * (1.0 - ty), a[k]), (tx * (1.0 - ty), b[k]), ((1.0 - tx) * ty, c[k]), (tx * ty, d[k])];
+                let sum = taps.iter().filter(|(weight, _)| *weight != 0.0).map(|(weight, p)| f64::from(*weight) * f64::from(*p)).sum();
+                *o = f32_of_sum(sum);
+            }
+        }
+        o
+    }
+
     /// Nearest sample at normalized `(u, v)`: the texel `floor(u × w)`, wrapped or clamped. NaN or
     /// infinite coordinates give `[0, 0, 0, 1]`.
     #[inline]
     pub fn sample_nearest(&self, u: f32, v: f32, tile: bool) -> [f32; 4] {
-        let (Some(u), Some(v)) = (reduce(u, tile), reduce(v, tile)) else {
+        self.sample_nearest_axes(u, v, [tile; 2])
+    }
+
+    /// [`Image::sample_nearest`] with the wrap mode of each axis given on its own: `tiling[0]` for
+    /// `u` and `tiling[1]` for `v`. With both entries equal the result is the same as
+    /// [`Image::sample_nearest`] with that `tile`.
+    #[inline]
+    pub fn sample_nearest_axes(&self, u: f32, v: f32, tiling: [bool; 2]) -> [f32; 4] {
+        let (Some(u), Some(v)) = (reduce(u, tiling[0]), reduce(v, tiling[1])) else {
             return [0.0, 0.0, 0.0, 1.0];
         };
         let (x, y) = ((u * self.w as f32).floor() as i64, (v * self.h as f32).floor() as i64);
         // A repeated coordinate is below 1, so its texel is below the size even where `u × w`
         // rounds up to it.
-        let (x, y) = if tile { (x.min(i64::from(self.w) - 1), y.min(i64::from(self.h) - 1)) } else { (x, y) };
-        self.get(x, y, tile)
+        let x = if tiling[0] { x.min(i64::from(self.w) - 1) } else { x };
+        let y = if tiling[1] { y.min(i64::from(self.h) - 1) } else { y };
+        self.get_axes(x, y, tiling)
     }
 
     /// Map every pixel (as RGBA) to a new image of `kind`, same size. When a result of that size
@@ -891,5 +1004,248 @@ mod tests {
         let half = img.resize(2, 1, false);
         assert_eq!(half.data(), &[0.5, 0.5, 0.0, 1.0, 2.5, 0.5, 0.0, 1.0]);
         assert_eq!(img.to_gray().width(), 4);
+    }
+
+    /// The four wrap combinations of the two axes.
+    const TILINGS: [[bool; 2]; 4] = [[false, false], [true, true], [true, false], [false, true]];
+
+    /// Gray texels of 8-bit values, `k / 255`.
+    fn gray8() -> Image {
+        Image::gray(5, 3, |x, y| ((x * 37 + y * 91 + 13) % 256) as f32 / 255.0)
+    }
+
+    /// Color texels from −2.5 to 3.42, with negative values and values above 1.
+    fn color() -> Image {
+        Image::generate(4, 3, Kind::Color, |x, y| {
+            let s = |k: u32| ((x * 7 + y * 13 + k * 5) % 17) as f32 * 0.37 - 2.5;
+            [s(0), s(1), s(2), s(3)]
+        })
+    }
+
+    /// 65 even steps from `lo` to `hi`, then the texel centers and edges of sides 3, 4 and 5.
+    fn coordinates(lo: f32, hi: f32) -> Vec<f32> {
+        let mut v: Vec<f32> = (0..=64).map(|i| lo + (hi - lo) * i as f32 / 64.0).collect();
+        for side in [3u32, 4, 5] {
+            v.extend((0..=2 * side).map(|i| i as f32 / (2 * side) as f32));
+        }
+        v
+    }
+
+    /// FNV-1a over the bits of every channel.
+    fn hash(h: &mut u64, p: [f32; 4]) {
+        for b in p.iter().flat_map(|v| v.to_bits().to_le_bytes()) {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+
+    const FNV_START: u64 = 0xcbf2_9ce4_8422_2325;
+
+    /// Hash of `f(u, v)` over every pair of `coordinates`.
+    fn hash_grid(us: &[f32], f: impl Fn(f32, f32) -> [f32; 4]) -> u64 {
+        let mut h = FNV_START;
+        for &u in us {
+            for &v in us {
+                hash(&mut h, f(u, v));
+            }
+        }
+        h
+    }
+
+    /// Hashes of `sample_stored`, `sample_nearest_axes` and `get_axes` computed with MaterialCraft's
+    /// `crates/image` at storytold/materialcraft `6c3b35c396`, over the fixtures and grids above.
+    #[test]
+    fn stored_and_axis_reads_match_materialcraft() {
+        // (range, image, integer sampling, tile, sample_stored hash)
+        let stored = [
+            ("unit", "gray8", false, false, 0x702b_0f81_2833_5e06u64),
+            ("unit", "gray8", false, true, 0x4ac5_b29c_45b2_d0ca),
+            ("unit", "gray8", true, false, 0x8400_a867_00fc_389a),
+            ("unit", "gray8", true, true, 0x47ea_befd_7fd6_cc5e),
+            ("unit", "color", false, false, 0x25f6_2544_f084_4182),
+            ("unit", "color", false, true, 0x607f_3c9f_896b_5975),
+            ("unit", "color", true, false, 0x0261_02eb_451b_36d6),
+            ("unit", "color", true, true, 0x51f8_9417_f5e9_2341),
+            ("wide", "gray8", false, false, 0xb0e7_096c_c64b_0f72),
+            ("wide", "gray8", false, true, 0x7a8a_4059_68ac_2a07),
+            ("wide", "gray8", true, false, 0x418c_9c08_2718_2171),
+            ("wide", "gray8", true, true, 0xe0b7_0088_256f_ccb2),
+            ("wide", "color", false, false, 0x51b4_8bb3_2885_f844),
+            ("wide", "color", false, true, 0xab4b_72d5_25ff_aaed),
+            ("wide", "color", true, false, 0x6570_eaa2_25f3_4d29),
+            ("wide", "color", true, true, 0x15a3_5aa7_7f50_4f92),
+        ];
+        // (range, image, sample_nearest_axes hash for each entry of TILINGS)
+        let nearest = [
+            ("unit", "gray8", [0xe427_9012_572d_b173u64, 0x76b9_e33c_849f_069d, 0x42ab_5ecd_8f1a_5dd2, 0x190c_23b8_f3e9_a2e5]),
+            ("unit", "color", [0x6a0e_0370_810d_1ad9, 0x0ab0_d62b_8308_4f9d, 0xa839_3cdf_db7d_844a, 0x1fc4_027e_bb8d_7c45]),
+            ("wide", "gray8", [0xd1cf_daaf_d7db_239c, 0x1d22_a6db_ad03_0960, 0x754e_fabf_5203_d6a0, 0xfe73_7385_df89_4dd4]),
+            ("wide", "color", [0xb894_834b_96fe_684d, 0x7eb4_0a21_3a51_c6bc, 0x2443_5503_2fea_4068, 0x4705_30d0_9afc_dc75]),
+        ];
+        // (image, get_axes hash over x and y in -12..12 for each entry of TILINGS)
+        let get = [
+            ("gray8", [0x6c95_1e05_c9c6_8f21u64, 0xac4a_e19a_4da7_b625, 0xcee5_f582_facb_f043, 0x7f1d_ff0e_357b_5eb5]),
+            ("color", [0x21af_a81f_327a_d3af, 0x9cf4_2557_9880_5345, 0x9b58_bde1_8021_2779, 0x6bb0_a98f_13d5_6635]),
+        ];
+        let image = |name: &str| if name == "gray8" { gray8() } else { color() };
+        let grid = |range: &str| if range == "unit" { coordinates(0.0, 0.99) } else { coordinates(-2.5, 3.5) };
+        for (range, name, integer, tile, expected) in stored {
+            let img = image(name).with_integer_sampling(integer);
+            let h = hash_grid(&grid(range), |u, v| img.sample_stored(u, v, tile));
+            assert_eq!(h, expected, "sample_stored {range} {name} integer {integer} tile {tile}");
+        }
+        for (range, name, expected) in nearest {
+            let img = image(name);
+            for (tiling, expected) in TILINGS.into_iter().zip(expected) {
+                let h = hash_grid(&grid(range), |u, v| img.sample_nearest_axes(u, v, tiling));
+                assert_eq!(h, expected, "sample_nearest_axes {range} {name} {tiling:?}");
+            }
+        }
+        for (name, expected) in get {
+            let img = image(name);
+            for (tiling, expected) in TILINGS.into_iter().zip(expected) {
+                let mut h = FNV_START;
+                for x in -12..12 {
+                    for y in -12..12 {
+                        hash(&mut h, img.get_axes(x, y, tiling));
+                    }
+                }
+                assert_eq!(h, expected, "get_axes {name} {tiling:?}");
+            }
+        }
+    }
+
+    /// Values of MaterialCraft's `sample_axes` at storytold/materialcraft `6c3b35c396`. It blends
+    /// by linear interpolation in `f32`, and this crate sums the weighted texels in `f64`, so the
+    /// results differ by rounding only.
+    #[test]
+    fn axis_bilinear_matches_materialcraft_up_to_rounding() {
+        let img = color();
+        let cases = [
+            (0.3, 0.7, [true, false], [1.473_799_7, -0.072_800_055, 0.645_000_2, 0.733_799_8]),
+            (0.3, 0.7, [false, true], [1.473_799_7, -0.072_800_055, 0.645_000_2, 0.733_799_8]),
+            (1.2, -0.4, [true, false], [-1.722_999_5, 0.127_000_57, 0.089_999_32, 1.939_999_3]),
+            (1.2, -0.4, [false, true], [-1.057_000_3, -1.094, 0.756_000_1, 2.606_000_2]),
+            (-0.15, 1.1, [true, false], [2.051, -1.76, 0.090_000_15, 1.311_000_1]),
+            (-0.15, 1.1, [false, true], [-1.834_000_6, 0.015_999_317, 0.608_000_5, 2.458_000_7]),
+            (0.95, 0.05, [true, false], [-1.464, 0.386_000_04, 2.236_000_3, -0.317_000_15]),
+            (0.95, 0.05, [false, true], [0.145_500_18, -0.206_000_21, 1.644_000_2, -0.594_499_8]),
+        ];
+        for (u, v, tiling, expected) in cases {
+            let p = img.sample_axes(u, v, tiling);
+            for (p, e) in p.iter().zip(expected) {
+                assert!((p - e).abs() <= 2.0e-6, "u {u} v {v} {tiling:?}: {p} against {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn equal_axes_give_the_shared_results() {
+        let us = coordinates(-2.5, 3.5);
+        for img in [gray8(), color()] {
+            for tile in [false, true] {
+                for &u in &us {
+                    for &v in &us {
+                        assert_eq!(img.sample_axes(u, v, [tile; 2]).map(f32::to_bits), img.sample(u, v, tile).map(f32::to_bits));
+                        assert_eq!(img.sample_nearest_axes(u, v, [tile; 2]).map(f32::to_bits), img.sample_nearest(u, v, tile).map(f32::to_bits));
+                    }
+                }
+                for x in -12..12 {
+                    assert_eq!(img.get_axes(x, -x, [tile; 2]), img.get(x, -x, tile));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn axes_wrap_independently() {
+        // Texel (x, y) holds x + 10y.
+        let img = Image::gray(4, 2, |x, y| (x + 10 * y) as f32);
+        assert_eq!(img.get_axes(-1, -1, [true, false])[0], 3.0);
+        assert_eq!(img.get_axes(-1, -1, [false, true])[0], 10.0);
+        assert_eq!(img.get_axes(5, 3, [true, false])[0], 11.0);
+        assert_eq!(img.sample_nearest_axes(1.1, 1.5, [true, false])[0], 10.0);
+        assert_eq!(img.sample_nearest_axes(1.1, 1.5, [false, true])[0], 13.0);
+        // v = 0.25 is the center of row 0; u = 1 is halfway between texels 3 and 0 when repeating.
+        assert!((img.sample_axes(1.0, 0.25, [true, false])[0] - 1.5).abs() < 1e-6);
+        assert_eq!(img.sample_axes(1.0, 0.25, [false, true])[0], 3.0);
+        assert_eq!(img.sample_axes(f32::NAN, 0.5, [false, true]), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(img.sample_nearest_axes(0.5, f32::INFINITY, [true, false]), [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn stored_sampling_rounds_weights_to_eight_bits() {
+        let img = Image::gray(2, 1, |x, _| x as f32);
+        // u × 2 − 0.5 = 0.3: the weight 0.3 rounds to 77/256.
+        assert_eq!(img.sample_stored(0.4, 0.5, false)[0], 77.0 / 256.0);
+        assert!((img.sample(0.4, 0.5, false)[0] - 0.3).abs() < 1e-6);
+        // A fraction of 255.5/256 or more rounds up to the next texel.
+        assert_eq!(img.sample_stored((1.5 - 0.25 / 256.0) / 2.0, 0.5, false)[0], 1.0);
+        assert_eq!(img.sample_stored(f32::NAN, 0.5, true), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(img.sample_stored(0.5, f32::NEG_INFINITY, false), [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn integer_sampling_rounds_stored_samples_to_sixteen_bits() {
+        let img = Image::gray(2, 1, |x, _| x as f32);
+        assert!(!img.integer_sampling());
+        let int = img.clone().with_integer_sampling(true);
+        assert!(int.integer_sampling());
+        // 77/256 × 65535 = 19711.64, which rounds to 19712.
+        assert_eq!(int.sample_stored(0.4, 0.5, false)[0], 19_712.0 / 65_535.0);
+        assert_eq!(int.sample(0.4, 0.5, false), img.sample(0.4, 0.5, false));
+        assert_eq!(int.sample_nearest(0.4, 0.5, false), img.sample_nearest(0.4, 0.5, false));
+        let l = Limits::default();
+        let Ok(wide) = Image::from_data(3, 1, Kind::Gray, vec![-0.5, 2.0, f32::NAN], &l) else { panic!("valid 3 x 1 image") };
+        let wide = wide.with_integer_sampling(true);
+        assert_eq!(wide.sample_stored(0.5 / 3.0, 0.5, false)[0], 0.0);
+        assert_eq!(wide.sample_stored(1.5 / 3.0, 0.5, false)[0], 1.0);
+        assert!(wide.sample_stored(2.5 / 3.0, 0.5, false)[0].is_nan());
+        assert_eq!(wide.sample_stored(0.5 / 3.0, 0.5, false)[3], 1.0);
+    }
+
+    #[test]
+    fn integer_sampling_follows_clones_and_not_new_buffers() {
+        let img = Image::gray(4, 2, |x, y| (x + y) as f32 / 8.0).with_integer_sampling(true);
+        let plain = img.clone().with_integer_sampling(false);
+        assert_eq!(img.clone(), img);
+        assert_ne!(img, plain);
+        assert_eq!(img.data(), plain.data());
+        assert!(img.clone().integer_sampling());
+        assert!(img.to_gray().integer_sampling());
+        assert!(img.resize(4, 2, false).integer_sampling());
+        assert!(!img.resize(2, 1, false).integer_sampling());
+        assert!(!img.map(Kind::Gray, |p| p).integer_sampling());
+        assert!(!img.to_color().integer_sampling());
+        assert!(img.try_to_kind(Kind::Gray, &Limits::default()).is_ok_and(|i| i.integer_sampling()));
+        assert!(Arc::ptr_eq(img.shared_data(), plain.shared_data()));
+    }
+
+    #[test]
+    fn stored_sampling_keeps_finite_texels_finite() {
+        let l = Limits::default();
+        let Ok(inf) = Image::from_data(2, 1, Kind::Gray, vec![1.0, f32::INFINITY], &l) else { panic!("valid 2 x 1 image") };
+        // The center of texel 0 gives texel 0, though its neighbor is infinite.
+        assert_eq!(inf.sample_stored(0.25, 0.5, false)[0], 1.0);
+        assert_eq!(inf.sample_stored(0.5, 0.5, false)[0], f32::INFINITY);
+        let Ok(hdr) = Image::from_data(2, 1, Kind::Gray, vec![f32::MAX, -f32::MAX], &l) else { panic!("valid 2 x 1 image") };
+        assert_eq!(hdr.sample_stored(0.5, 0.5, false)[0], 0.0);
+        assert_eq!(hdr.clone().with_integer_sampling(true).sample_stored(0.5, 0.5, false)[0], 0.0);
+        let max = Image::filled(2, 2, Kind::Gray, [f32::MAX; 4]);
+        for tile in [false, true] {
+            assert_eq!(max.sample_stored(0.3, 0.6, tile)[0], f32::MAX, "tile = {tile}");
+        }
+    }
+
+    #[test]
+    fn stored_sampling_keeps_the_repeat_period_at_large_coordinates() {
+        let img = stripe();
+        let at_zero = img.sample_stored(0.0, 0.5, true)[0];
+        assert_eq!(at_zero, 0.5);
+        for u in [1.0e9_f32, -1.0e9, 4.0e9, 3.0e12, f32::MAX] {
+            assert_eq!(img.sample_stored(u, 0.5, true)[0], at_zero, "u = {u}");
+            let edge = if u > 0.0 { 1.0 } else { 0.0 };
+            assert_eq!(img.sample_stored(u, 0.5, false)[0], edge, "u = {u}");
+        }
     }
 }
