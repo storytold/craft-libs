@@ -1,23 +1,30 @@
 //! Sony's in-file lens-correction records (shading, lateral chromatic aberration, distortion): bounded decoding of
-//! the raw image IFD's fields and their encrypted `SR2SubIFD` copies into [`SonyLensCorrections`], and validated
-//! ILCE-7RM4A, ILCE-7M3 and ILCE-7CR distortion tables into DNG warps for the shared optics pipeline.
+//! the raw image IFD's fields and their encrypted `SR2SubIFD` copies into [`SonyLensCorrections`], the validated
+//! ILCE-7RM4A, ILCE-7M3 and ILCE-7CR distortion tables into DNG warps for the shared optics pipeline, and one general
+//! conversion of any other body's distortion table into a warp offered beside them ([`general_warp`]).
 //!
 //! Tag identity/layout: https://exiftool.org/TagNames/EXIF.html (`0x7031` to `0x7037`, signed shorts) and
 //! https://exiftool.org/TagNames/Sony.html#SR2SubIFD (`0x797d`, `0x7980`, `0x7982`). The `SR2SubIFD` setting tags
 //! `0x797c`, `0x797f` and `0x7981` sit next to those tables, unnamed there; they equal the raw IFD's settings in every
 //! file inspected. Geometry inferred independently from files and Sony Imaging Edge exports; see
 //! docs/sony-lens-corrections.md. No lens database and no external decoder code. The MakerNote's similarly named
-//! tables have another scale and layout and are never read here.
+//! tables may use a different layout and are never read here. Shading copies have been observed both as
+//! consecutive values and at even indices of a longer MakerNote table; an identical value does not prove its geometry.
 //!
 //! A raw-IFD field is the one the TIFF reader parsed, the copy the image itself uses (its first occurrence, within
 //! the reader's limits). The directory is also scanned, for diagnostics only: whether a tag is repeated, and why an
 //! entry the reader left out was dropped (values outside the file, an unknown type, or past the reader's limits).
 //! `SR2SubIFD` fields are read straight from their first entry. Only the exact layouts are accepted: SHORT\[1\] (or
-//! nonnegative SSHORT\[1\]) settings, SSHORT\[17\] headed by 16 for shading and distortion, SSHORT\[33\] headed by
-//! 32 for CA. Nothing is allocated from a count. The raw IFD's copy wins; the `SR2SubIFD`'s is used only when the raw
+//! nonnegative SSHORT\[1\]) settings, SSHORT\[17\] headed by 11 or 16 for shading and distortion, SSHORT\[33\] headed
+//! by 22 or 32 for CA. Unused storage values are discarded. Nothing is allocated from a count. The raw IFD's copy
+//! wins; the `SR2SubIFD`'s is used only when the raw
 //! IFD lacks the tag, and a malformed raw-IFD copy is reported, not replaced. Decoding grants nothing: only components
-//! whose interpretation was independently validated for the model and mode are converted ([`SonyLensStatus`]), and
-//! the conversion receives exactly the table the decoder applied before this record existed.
+//! whose interpretation was independently validated for the model and mode become opcodes ([`SonyLensStatus`]), and
+//! that conversion receives exactly the table the decoder applied before this record existed. Every other body's
+//! table goes through the general conversion, which names no camera or lens: its warp is
+//! [`crate::OpcodeLists::fallback_warp`], never an opcode, so a reader chooses whether to use it.
+//! The separate SR2 `0x7983` SHORT[2] / `0x7984` SSHORT[20] record (`extended`: an exact 19-knot prefix with its own
+//! diagnostics) describes the same lens on later bodies and takes the place of the older table where it is usable.
 
 use crate::lens_metadata::{
     SonyComponent, SonyCopy, SonyField, SonyFieldError, SonyLensCorrections, SonyLensGeometry, SonyLensStatus, SonySetting, SonySettingMeaning,
@@ -26,6 +33,9 @@ use crate::lens_metadata::{
 use crate::sr2::SubIfd;
 use crate::{Opcode, Rect};
 use craft_tiff::{ByteOrder, FieldType, Ifd, Value};
+
+mod extended;
+mod high_order;
 
 /// Each component's setting and table tags, `(raw IFD, SR2SubIFD)`.
 const SHADING: Tags = Tags { setting: (0x7031, 0x797c), table: (0x7032, 0x797d) };
@@ -172,8 +182,8 @@ impl<'a> Directory<'a> {
         }
     }
 
-    /// A radial table of exactly `N` samples in entry `e`: SSHORT\[N + 1\], the first value `N`.
-    fn table<const N: usize>(&self, e: &'a [u8]) -> Read<[i16; N]> {
+    /// A fixed-capacity radial table and its active count, excluding storage padding.
+    fn table<const N: usize>(&self, e: &'a [u8]) -> Read<([i16; N], u8)> {
         let (kind, count) = self.field(e);
         if kind != SSHORT {
             return Read::Rejected(SonyFieldError::FieldType(kind));
@@ -184,10 +194,10 @@ impl<'a> Directory<'a> {
         let Some(bytes) = self.values(e, 2 * (N + 1)) else { return Read::Rejected(SonyFieldError::OutsideData) };
         let at = |i: usize| self.order.read_u16(bytes, 2 * i).map_or(0, |v| v as i16);
         let prefix = at(0);
-        if usize::try_from(prefix).ok() != Some(N) {
+        if usize::try_from(prefix).ok().is_none_or(|n| n != N && n != N / 16 * 11) {
             return Read::Rejected(SonyFieldError::CountPrefix(prefix));
         }
-        Read::Valid(std::array::from_fn(|i| at(i + 1)))
+        Read::Valid((std::array::from_fn(|i| if i < prefix as usize { at(i + 1) } else { 0 }), prefix as u8))
     }
 
     /// A setting in entry `e`: SHORT\[1\], or SSHORT\[1\] when not negative.
@@ -209,17 +219,25 @@ impl<'a> Directory<'a> {
     }
 }
 
-/// A table as the TIFF reader parsed it: SSHORT\[N + 1\], the first value `N`.
-fn parsed_table<const N: usize>(value: &Value) -> Read<[i16; N]> {
+/// A table as the TIFF reader parsed it, retaining the active count separately from fixed storage capacity.
+fn parsed_table<const N: usize>(value: &Value) -> Read<([i16; N], u8)> {
     let Value::SShort(v) = value else { return Read::Rejected(SonyFieldError::FieldType(value.field_type() as u16)) };
     if v.len() != N + 1 {
         return Read::Rejected(SonyFieldError::Count(v.len() as u64));
     }
     let at = |i: usize| v.get(i).copied().unwrap_or(0);
-    if usize::try_from(at(0)).ok() != Some(N) {
+    let prefix = at(0);
+    if usize::try_from(prefix).ok().is_none_or(|n| n != N && n != N / 16 * 11) {
         return Read::Rejected(SonyFieldError::CountPrefix(at(0)));
     }
-    Read::Valid(std::array::from_fn(|i| at(i + 1)))
+    Read::Valid((std::array::from_fn(|i| if i < prefix as usize { at(i + 1) } else { 0 }), prefix as u8))
+}
+
+/// Keep the count used to compare both copies, then expose the samples in the existing fixed-size record.
+fn counted<T>(field: SonyField<(T, u8)>) -> (SonyField<T>, Option<u8>) {
+    let count = field.value.as_ref().map(|(_, n)| *n);
+    let SonyField { value, source, raw_ifd, sr2, copies_agree, raw_ifd_repeated, sr2_repeated } = field;
+    (SonyField { value: value.map(|(v, _)| v), source, raw_ifd, sr2, copies_agree, raw_ifd_repeated, sr2_repeated }, count)
 }
 
 /// A setting as the TIFF reader parsed it: SHORT\[1\], or SSHORT\[1\] when not negative (the documented and the stored
@@ -280,70 +298,133 @@ pub(super) fn is_3_2(r: Rect) -> bool {
 
 /// Decode the file's record and the validated distortion warp. `raw` is the raw image IFD as the TIFF reader parsed
 /// it (in a BigTIFF file when `big`), `sr2` the decrypted `SR2SubIFD`. The record is `None` when neither directory
-/// holds any of the six fields.
+/// holds any of the legacy fields or the alternate SR2 distortion record.
+#[cfg(test)]
 pub(super) fn corrections(
+    bytes: &[u8],
+    order: ByteOrder,
+    ifd: (&Ifd, bool),
+    sr2: Option<&SubIfd>,
+    model: &str,
+    geometry: SonyLensGeometry,
+) -> (Option<SonyLensCorrections>, Option<Opcode>) {
+    let (record, warp, _) = corrections_and_off_warp(bytes, order, ifd, sr2, model, geometry);
+    (record, warp)
+}
+
+/// [`corrections`], plus the lens warp for a file whose camera did not correct distortion (see
+/// [`crate::OpcodeLists::fallback_warp`]).
+pub(super) fn corrections_and_off_warp(
     bytes: &[u8],
     order: ByteOrder,
     (raw, big): (&Ifd, bool),
     sr2: Option<&SubIfd>,
     model: &str,
     geometry: SonyLensGeometry,
-) -> (Option<SonyLensCorrections>, Option<Opcode>) {
+) -> (Option<SonyLensCorrections>, Option<Opcode>, Option<Opcode>) {
     let plain = usize::try_from(raw.offset).ok().and_then(|at| Some(Directory { entries: bytes.get(at..)?, data: bytes, base: 0, order, big }));
     let encrypted = sr2.map(|s| {
         let (block, start) = s.block();
         Directory { entries: block, data: block, base: start, order: s.order(), big: false }
     });
     let (p, s) = (plain.as_ref(), encrypted.as_ref());
-    // CA: two contiguous 16-sample curves after the count
-    let split = |v: [i16; 32]| -> [[i16; 16]; 2] { std::array::from_fn(|c| std::array::from_fn(|i| v[16 * c + i])) };
+    // CA halves are contiguous at the ACTIVE count: the second 11-knot curve starts at 11, not at storage slot 16.
+    let split = |(v, n): ([i16; 32], u8)| -> ([[i16; 16]; 2], u8) {
+        let knots = usize::from(n / 2);
+        (std::array::from_fn(|c| std::array::from_fn(|i| if i < knots { v[knots * c + i] } else { 0 })), n / 2)
+    };
     let table16 = |tags: (u16, u16)| combine(raw_copy(raw, p, tags.0, parsed_table::<16>), sr2_copy(s, tags.1, |d, e| d.table::<16>(e)));
-    let shading_table = table16(SHADING.table);
-    let distortion_table = table16(DISTORTION.table);
-    let ca_table = combine(raw_copy(raw, p, CA.table.0, parsed_table::<32>).map(split), sr2_copy(s, CA.table.1, |d, e| d.table::<32>(e)).map(split));
+    let (shading_table, shading_samples) = counted(table16(SHADING.table));
+    let (distortion_table, distortion_samples) = counted(table16(DISTORTION.table));
+    let (ca_table, ca_samples) =
+        counted(combine(raw_copy(raw, p, CA.table.0, parsed_table::<32>).map(split), sr2_copy(s, CA.table.1, |d, e| d.table::<32>(e)).map(split)));
     let setting = |tags: Tags, kind: Kind| {
         combine(raw_copy(raw, p, tags.setting.0, |v| parsed_setting(v, kind)), sr2_copy(s, tags.setting.1, |d, e| d.setting(e, kind)))
     };
     let settings = [setting(SHADING, Kind::Shading), setting(CA, Kind::Ca), setting(DISTORTION, Kind::Distortion)];
-    if !shading_table.is_present() && !ca_table.is_present() && !distortion_table.is_present() && !settings.iter().any(SonyField::is_present) {
-        return (None, None);
+    let mut extended_distortion = extended::read(s);
+    if !shading_table.is_present()
+        && !ca_table.is_present()
+        && !distortion_table.is_present()
+        && !settings.iter().any(SonyField::is_present)
+        && extended_distortion.is_none()
+    {
+        return (None, None, None);
     }
     let [shading_setting, ca_setting, distortion_setting] = settings;
-    // Only the validated scope reaches the conversion: the raw IFD's table, as the TIFF reader parsed it, of a Bayer
-    // image whose image crop and reference are native 3:2 (DefaultCrop can keep native geometry while Sony's tags
-    // select an aspect crop).
+    // Only the validated scope becomes an opcode: the raw IFD's 16-knot table, as the TIFF reader parsed it, of a
+    // Bayer image whose image crop and reference are native 3:2 (DefaultCrop can keep native geometry while Sony's
+    // tags select an aspect crop).
     let a7cr = model == "ILCE-7CR";
     let validated_model = DISTORTION_MODELS.contains(&model) || a7cr;
     let in_mode = !geometry.linear_ycbcr
         && geometry.native_3_2
         && distortion_table.source == Some(SonySource::RawIfd)
+        && distortion_samples == Some(16)
         && (!a7cr || ((geometry.reference.width, geometry.reference.height) == A7CR_FRAME && geometry.image_crop == geometry.reference));
-    let a7cr_auto = distortion_setting.value.is_some_and(|s| matches!(s.meaning, SonySettingMeaning::Auto | SonySettingMeaning::ForcedAuto));
-    let (w, h) = (geometry.storage_width, geometry.storage_height);
-    let warp = match &distortion_table.value {
-        Some(table) if in_mode && a7cr && a7cr_auto => a7cr_distortion(table, Rect::new(0, 0, w, h), geometry.reference),
-        Some(table) if in_mode && !a7cr => distortion(model, table, Rect::new(0, 0, w, h), geometry.reference),
+    let auto = distortion_setting.value.is_some_and(|s| matches!(s.meaning, SonySettingMeaning::Auto | SonySettingMeaning::ForcedAuto));
+    // Camera previews of both bodies leave geometry alone when the two copies of the setting agree on Off.
+    let off = agreed(&distortion_setting) && distortion_setting.value.is_some_and(|s| s.meaning == SonySettingMeaning::Off);
+    let active = Rect::new(0, 0, geometry.storage_width, geometry.storage_height);
+    // `enabled` stands for the camera having corrected distortion.
+    let validated = |enabled: bool| match &distortion_table.value {
+        Some(table) if in_mode && a7cr && enabled => a7cr_distortion(table, active, geometry.reference),
+        Some(table) if in_mode && !a7cr && enabled => distortion(model, table, active, geometry.reference),
         _ => None,
     };
-    let distortion_status = match &distortion_table.value {
+    let warp = validated(if a7cr { auto } else { !off });
+    let mut distortion_status = match &distortion_table.value {
         None => SonyLensStatus::NoTable,
         Some(_) if warp.is_some() => SonyLensStatus::Applied,
         Some(_) if !validated_model => SonyLensStatus::NotValidatedModel,
         Some(_) if !in_mode => SonyLensStatus::NotValidatedMode,
-        Some(_) if a7cr && !a7cr_auto => SonyLensStatus::CameraCorrectionDisabled,
+        Some(_) if if a7cr { !auto } else { off } => SonyLensStatus::CameraCorrectionDisabled,
         Some(table) if table.iter().all(|v| *v == 0) => SonyLensStatus::Neutral,
         Some(_) => SonyLensStatus::Rejected,
     };
-    // No independent validation of shading or CA semantics exists on any body: decoded, never applied.
+    // Sony never warps the stored samples: the menu setting (Off, Low, ...) only says whether the camera corrected
+    // its own JPEG, and the table describes the lens either way. That warp rides beside `OpcodeList3`, which goes on
+    // describing what the camera did, so a renderer can still correct the lens: the validated conversion where the
+    // camera had it off, the general one for every other body and mode. "No parameters" gets none.
+    let recorded = distortion_setting.value.is_some_and(|s| s.meaning != SonySettingMeaning::Unavailable);
+    let mut off_warp = if warp.is_none() && recorded { validated(true) } else { None };
+    // A usable alternate record owns distortion; a damaged one is never silently replaced by the older table.
+    let alternate = extended_distortion.as_mut().is_some_and(|record| !extended::settle(record));
+    if warp.is_none() && off_warp.is_none() {
+        off_warp = match extended_distortion.as_ref() {
+            Some(record) if alternate => extended::general_warp(record, &geometry),
+            _ => general_warp(&distortion_table, &distortion_setting, distortion_samples, &geometry),
+        };
+        if alternate && off_warp.is_some() && distortion_table.is_present() {
+            distortion_status = SonyLensStatus::Superseded;
+        }
+    }
+    // Shading and CA are decoded for the reader, never applied here.
     let unvalidated = |present: bool| if present { SonyLensStatus::NotValidatedComponent } else { SonyLensStatus::NoTable };
     let record = SonyLensCorrections {
-        shading: SonyComponent { status: unvalidated(shading_table.value.is_some()), setting: shading_setting, table: shading_table },
-        chromatic_aberration: SonyComponent { status: unvalidated(ca_table.value.is_some()), setting: ca_setting, table: ca_table },
-        distortion: SonyComponent { setting: distortion_setting, table: distortion_table, status: distortion_status },
+        shading: SonyComponent {
+            status: unvalidated(shading_table.value.is_some()),
+            setting: shading_setting,
+            table: shading_table,
+            samples_per_channel: shading_samples,
+        },
+        chromatic_aberration: SonyComponent {
+            status: unvalidated(ca_table.value.is_some()),
+            setting: ca_setting,
+            table: ca_table,
+            samples_per_channel: ca_samples,
+        },
+        distortion: SonyComponent {
+            setting: distortion_setting,
+            table: distortion_table,
+            status: distortion_status,
+            samples_per_channel: distortion_samples,
+        },
+        extended_distortion,
         sr2_read: sr2.is_some(),
         geometry,
     };
-    (Some(record), warp)
+    (Some(record), warp, off_warp)
 }
 
 /// A7CR camera-JPEG convention, measured independently of the ILCE-7RM4A conversion below.
@@ -446,30 +527,147 @@ fn distortion(model: &str, table: &[i16; 16], active: Rect, crop: Rect) -> Optio
     if table.iter().all(|v| *v == 0) || table.iter().any(|v| !(-4096..=4096).contains(v)) {
         return None;
     }
+    // Only native 3:2 framing has been validated. An in-camera aspect crop may retain a table
+    // normalized to the full sensor frame; do not silently reinterpret it as the smaller crop.
+    if !is_3_2(crop.clipped(active.width, active.height)) {
+        return None;
+    }
+    q14_distortion(table, active, crop, MAX_ERROR, SAMPLES)
+}
+
+/// Whether both copies of a field are present, valid and equal.
+fn agreed<T>(field: &SonyField<T>) -> bool {
+    field.source == Some(SonySource::RawIfd)
+        && field.raw_ifd == SonyCopy::Valid
+        && field.sr2 == SonyCopy::Valid
+        && field.copies_agree == Some(true)
+        && !field.raw_ifd_repeated
+        && !field.sr2_repeated
+}
+
+/// Whether a field can be used: its two copies agree, or the encrypted `SR2SubIFD` holds the file's only copy (the
+/// earlier bodies write no raw-IFD one). A damaged or repeated raw-IFD entry is never replaced by the other copy.
+pub fn accepted_copy<T>(field: &SonyField<T>) -> bool {
+    agreed(field)
+        || field.source == Some(SonySource::Sr2SubIfd)
+            && field.raw_ifd == SonyCopy::Absent
+            && field.sr2 == SonyCopy::Valid
+            && field.copies_agree.is_none()
+            && !field.raw_ifd_repeated
+            && !field.sr2_repeated
+}
+
+/// The frame a table's radius is normalised to: the sensor's own. That is the camera's reference crop, which stays
+/// the sensor's 3:2 frame when Sony's tags select another aspect ratio, or a reference of any shape that fills the
+/// stored image (a 4:3 sensor). A file that tags neither crop (an early body's 16:9 raw) gets the 3:2 frame of the
+/// stored image's width about its crop. `None` for an in-camera crop mode (APS-C on a full-frame body stores about
+/// two thirds of the sensor and may keep the full sensor's radius) and for a frame outside the image.
+pub(super) fn optical_reference(g: &SonyLensGeometry) -> Option<Rect> {
+    // at least `twentieths` of the stored frame each way; lossless files pad it
+    let covers = |r: Rect, twentieths: usize| {
+        r.width.saturating_mul(20) >= g.storage_width.saturating_mul(twentieths)
+            && r.height.saturating_mul(20) >= g.storage_height.saturating_mul(twentieths)
+    };
+    let reference = if is_3_2(g.reference) && covers(g.reference, 17) || covers(g.reference, 19) {
+        g.reference
+    } else if g.sony_crop.is_none() && g.default_crop.is_none() && g.reference == g.image_crop {
+        let crop = g.image_crop;
+        let height = crop.width.checked_mul(2)? / 3;
+        let centre = crop.y.checked_mul(2)?.checked_add(crop.height)?;
+        Some(Rect::new(crop.x, centre.saturating_sub(height) / 2, crop.width, height)).filter(|&r| covers(r, 17))?
+    } else {
+        return None;
+    };
+    let inside = reference.x.checked_add(reference.width)? <= g.storage_width && reference.y.checked_add(reference.height)? <= g.storage_height;
+    inside.then_some(reference)
+}
+
+/// The general conversion, for every body and mode without a validated one: the table as Q14 radial scale at evenly
+/// spaced output radii out to the corner of the [`optical_reference`], zoomed until the frame is filled. It names no
+/// camera or lens. The copies must agree ([`accepted_copy`]) and the setting must be recorded; see
+/// [`general_conversion`] for the curve limits.
+pub(super) fn general_warp(
+    table: &SonyField<[i16; 16]>,
+    setting: &SonyField<SonySetting>,
+    count: Option<u8>,
+    g: &SonyLensGeometry,
+) -> Option<Opcode> {
+    if !accepted_copy(table) || !accepted_copy(setting) || setting.value.is_none_or(|s| s.meaning == SonySettingMeaning::Unavailable) {
+        return None;
+    }
+    general_conversion(table.value.as_ref()?, count?, g)
+}
+
+/// 11 or 16 knots within ±25 %, on a frame with an [`optical_reference`]. The four-term fit stays within a quarter
+/// of a pixel of the table at a 1440-pixel-wide preview; a curve it cannot follow takes the higher-order one.
+pub(super) fn general_conversion(table: &[i16; 16], count: u8, g: &SonyLensGeometry) -> Option<Opcode> {
+    if !matches!(count, 11 | 16) {
+        return None;
+    }
+    let crop = optical_reference(g)?;
+    let words = table.get(..usize::from(count))?;
+    if words.iter().all(|&v| v == 0) || words.iter().any(|v| !(-4096..=4096).contains(v)) {
+        return None;
+    }
+    let active = Rect::new(0, 0, g.storage_width, g.storage_height);
+    let radius = (crop.width.saturating_sub(1) as f64).hypot(crop.height.saturating_sub(1) as f64) / 2.0;
+    if radius.is_nan() || radius <= 1.0 {
+        return None;
+    }
+    let error = 0.25 * crop.width as f64 / 1440.0 / radius;
+    q14_distortion(words, active, crop, error, 32768).or_else(|| general_high_order(words, active, crop))
+}
+
+/// The degree-14 fit ([`high_order`]) of the same map, for a curve (such as a moustache) that the four-term warp
+/// cannot follow within its bound. The same dense accuracy and fold checks decide.
+fn general_high_order(words: &[i16], active: Rect, crop: Rect) -> Option<Opcode> {
+    let gaps = words.len().checked_sub(1).filter(|&g| g > 0)?;
+    let (cw, ch) = (crop.width.checked_sub(1)? as f64, crop.height.checked_sub(1)? as f64);
+    let scale = |r| q14_scale(words, r);
+    let nearest = cw.min(ch) / cw.hypot(ch);
+    let knots = || (0..=gaps).map(|i| i as f64 / gaps as f64);
+    let maximum = knots().filter(|&r| r >= nearest).map(scale).fold(scale(nearest), f64::max);
+    if !maximum.is_finite() || maximum <= 0.0 {
+        return None;
+    }
+    high_order::fit_map(active, crop, knots(), |r| r * scale(r) / maximum, 0.30)
+}
+
+/// Output-radius Q14 convention. Callers own the setting and range checks; only active knots are passed, never
+/// storage padding.
+fn q14_distortion(table: &[i16], active: Rect, crop: Rect, max_error: f64, validation_samples: usize) -> Option<Opcode> {
+    if !(2..=16).contains(&table.len()) {
+        return None;
+    }
+    let gaps = table.len() - 1;
     let crop = crop.clipped(active.width, active.height);
     if active.width < 2 || active.height < 2 || crop.width < 2 || crop.height < 2 {
         return None;
     }
-    // Only native 3:2 framing has been validated. An in-camera aspect crop may retain a table
-    // normalized to the full sensor frame; do not silently reinterpret it as the smaller crop.
-    if (crop.width as f64 / crop.height as f64 - 1.5).abs() > 0.005 {
-        return None;
-    }
     // Interpolate fractional radial scale at evenly spaced radii from centre to cropped corner.
-    let scale = |r: f64| {
-        let at = r.clamp(0.0, 1.0) * 15.0;
-        let i = (at.floor() as usize).min(14);
-        let a = f64::from(table[i]);
-        let b = f64::from(table[i + 1]);
-        1.0 + (a + (b - a) * (at - i as f64)) / 16384.0
-    };
+    let scale = |r| q14_scale(table, r);
     let (cw, ch) = (crop.width as f64 - 1.0, crop.height as f64 - 1.0);
     let diagonal = cw.hypot(ch);
     // Zoom until the entire rectangular output boundary is inside the source. For a piecewise-linear
     // scale its maximum on that boundary occurs at its nearest radius or at one of the remaining knots.
     let nearest = cw.min(ch) / diagonal;
-    let max_scale = (0..16).map(|i| i as f64 / 15.0).filter(|&r| r >= nearest).map(scale).fold(scale(nearest), f64::max);
+    let max_scale = (0..table.len()).map(|i| i as f64 / gaps as f64).filter(|&r| r >= nearest).map(scale).fold(scale(nearest), f64::max);
     let zoom = 1.0 / max_scale;
+    fit_q14_warp(active, crop, max_error, validation_samples, |r| r * scale(r) * zoom)
+}
+
+fn q14_scale(table: &[i16], r: f64) -> f64 {
+    let gaps = table.len() - 1;
+    let at = r.clamp(0.0, 1.0) * gaps as f64;
+    let i = (at as usize).min(gaps - 1);
+    let a = f64::from(table[i]);
+    let b = f64::from(table[i + 1]);
+    1.0 + (a + (b - a) * (at - i as f64)) / 16384.0
+}
+
+fn fit_q14_warp(active: Rect, crop: Rect, max_error: f64, validation_samples: usize, sample: impl Fn(f64) -> f64) -> Option<Opcode> {
+    let (cw, ch) = (crop.width as f64 - 1.0, crop.height as f64 - 1.0);
+    let diagonal = cw.hypot(ch);
     let basis = |r: f64| {
         let r2 = r * r;
         [r, r * r2, r * r2 * r2, r * r2 * r2 * r2]
@@ -479,8 +677,8 @@ fn distortion(model: &str, table: &[i16; 16], active: Rect, crop: Rect) -> Optio
     let mut previous = -1.0;
     for j in 0..=SAMPLES {
         let r = j as f64 / SAMPLES as f64;
-        let source = r * scale(r) * zoom;
-        if source <= previous {
+        let source = sample(r);
+        if !source.is_finite() || source <= previous {
             return None;
         }
         previous = source;
@@ -494,12 +692,12 @@ fn distortion(model: &str, table: &[i16; 16], active: Rect, crop: Rect) -> Optio
     }
     let mut k = solve4(matrix, rhs)?;
     // Keep the polynomial within a fraction of a preview pixel of the file's table, and forbid folds.
-    for j in 0..=SAMPLES {
-        let r = j as f64 / SAMPLES as f64;
+    for j in 0..=validation_samples {
+        let r = j as f64 / validation_samples as f64;
         let fit = basis(r).iter().zip(k).map(|(a, b)| a * b).sum::<f64>();
         let r2 = r * r;
         let derivative = k[0] + r2 * (3.0 * k[1] + r2 * (5.0 * k[2] + r2 * 7.0 * k[3]));
-        if (fit - r * scale(r) * zoom).abs() > MAX_ERROR || derivative <= 0.0 {
+        if (fit - sample(r)).abs() > max_error || derivative <= 0.0 {
             return None;
         }
     }
@@ -543,6 +741,7 @@ fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod general;
     use crate::lens_metadata::SonyCopy::{Absent, Rejected, Valid};
     use crate::lens_metadata::SonyFieldError::*;
     use crate::{LensMetadata, Limits, Mode, RawImage};
@@ -630,8 +829,8 @@ mod tests {
                 size: (32, 24),
                 sony_crop: Some([2, 2, 30, 20]),
                 default_crop: Some([2, 2, 30, 20]),
-                plain: plain(&TELE, 0),
-                sr2: Some(encrypted(&TELE, 0)),
+                plain: plain(&TELE, 17),
+                sr2: Some(encrypted(&TELE, 17)),
                 stored_key: KEY,
                 sr2_patch: None,
             }
@@ -712,6 +911,28 @@ mod tests {
     fn sony(img: &RawImage) -> &SonyLensCorrections {
         img.lens_metadata.sony.as_ref().expect("a Sony lens record")
     }
+
+    #[test]
+    fn extended_distortion_is_decoded_without_legacy_fields_and_survives_serialization() {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let mut arw = Arw::new("ILCE-1M2", order);
+            arw.plain.clear();
+            let knots: [i16; 19] = std::array::from_fn(|i| i as i16 * i as i16 * 4);
+            let values = std::iter::once(19).chain(knots.map(|v| v as u16)).collect();
+            arw.sr2 = Some(vec![(0x7983, SHORT, vec![1, 16]), (0x7984, SSHORT, values)]);
+            let image = decode(&arw.build());
+            let record = sony(&image);
+            let extended = record.extended_distortion.as_ref().unwrap();
+            assert_eq!(extended.setting.value, Some([1, 16]));
+            assert_eq!(extended.table.value, Some(knots));
+            assert_eq!(record.distortion.status, SonyLensStatus::NoTable);
+            assert!(image.opcodes.list3.is_empty(), "reading an alternate table must not enable an unvalidated warp");
+            let mut json = serde_json::to_value(record).unwrap();
+            assert_eq!(serde_json::from_value::<SonyLensCorrections>(json.clone()).unwrap(), *record);
+            json.as_object_mut().unwrap().remove("extended_distortion");
+            assert!(serde_json::from_value::<SonyLensCorrections>(json).unwrap().extended_distortion.is_none());
+        }
+    }
     /// (has a value, source, raw-IFD copy, SR2SubIFD copy, agreement) of one field.
     fn prov<T>(f: &SonyField<T>) -> (bool, Option<SonySource>, SonyCopy, SonyCopy, Option<bool>) {
         (f.value.is_some(), f.source, f.raw_ifd, f.sr2, f.copies_agree)
@@ -735,11 +956,13 @@ mod tests {
         for order in [Little, Big] {
             for bigtiff in [false, true] {
                 for (model, warps, distortion_status) in
-                    [("ILCE-7CR", 0, SonyLensStatus::NotValidatedMode), ("ILCE-7RM4A", 1, SonyLensStatus::Applied)]
+                    [("ILCE-7CR", 0, SonyLensStatus::NotValidatedMode), ("ILCE-7RM4A", 0, SonyLensStatus::CameraCorrectionDisabled)]
                 {
                     let case = format!("{model} {order:?} bigtiff={bigtiff}");
                     let mut arw = Arw::new(model, order);
                     arw.bigtiff = bigtiff;
+                    arw.plain = plain(&TELE, 0);
+                    arw.sr2 = Some(encrypted(&TELE, 0));
                     let img = decode(&arw.build());
                     let s = sony(&img);
                     assert_eq!(img.opcodes.list3.len(), warps, "{case}");
@@ -768,9 +991,6 @@ mod tests {
                         native_3_2: true,
                     };
                     assert_eq!(s.geometry, geometry, "{case}");
-                    // the applied warp is the validated conversion of the raw IFD's table, as before
-                    let reference: Vec<Opcode> = distortion(model, &TELE, Rect::new(0, 0, 32, 24), crop).into_iter().collect();
-                    assert_eq!(img.opcodes.list3, reference, "{case}");
                     // DNG export keeps the warp and invents no Sony record
                     #[cfg(feature = "dng")]
                     {
@@ -780,6 +1000,114 @@ mod tests {
                         assert_eq!(back.lens_metadata, LensMetadata::default(), "{case}");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_distortion_respects_camera_off_with_a_nonzero_table() {
+        use SonyLensStatus::*;
+        for model in ["ILCE-7M3", "ILCE-7RM4A"] {
+            for order in [Little, Big] {
+                for (setting, expected) in [(0, CameraCorrectionDisabled), (1, Applied), (17, Applied)] {
+                    let mut arw = Arw::new(model, order);
+                    arw.plain = plain(&TELE, setting);
+                    arw.sr2 = Some(encrypted(&TELE, setting));
+                    let raw = decode(&arw.build());
+                    assert_eq!(sony(&raw).distortion.table.value, Some(TELE));
+                    assert_eq!(sony(&raw).distortion.status, expected, "{model} {order:?} {setting}");
+                    assert_eq!(raw.opcodes.list3.len(), usize::from(expected == Applied));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn camera_off_keeps_the_lens_warp_beside_the_opcodes() {
+        // Sony never warps the stored samples: an Off or Low file still carries the warp an Auto file applies
+        for model in ["ILCE-7M3", "ILCE-7RM4A"] {
+            let decode_with = |setting| {
+                let mut arw = Arw::new(model, Little);
+                arw.plain = plain(&TELE, setting);
+                arw.sr2 = Some(encrypted(&TELE, setting));
+                decode(&arw.build())
+            };
+            let auto = decode_with(1);
+            let [warp] = auto.opcodes.list3.as_slice() else { panic!("{model}: Auto applies the warp") };
+            assert_eq!(auto.opcodes.fallback_warp, None);
+            let off = decode_with(0);
+            assert!(off.opcodes.list3.is_empty(), "{model}: the camera did not apply it");
+            assert_eq!(off.opcodes.fallback_warp.as_ref(), Some(warp), "{model}");
+            assert_eq!(sony(&off).distortion.status, SonyLensStatus::CameraCorrectionDisabled);
+            // "no correction parameters available": nothing to trust
+            assert_eq!(decode_with(255).opcodes.fallback_warp, None, "{model}");
+        }
+    }
+
+    #[test]
+    fn eleven_knot_tables_keep_the_active_count_and_split_ca_before_padding() {
+        for order in [Little, Big] {
+            for bigtiff in [false, true] {
+                let mut arw = Arw::new("ILCE-7RM4A", order);
+                arw.bigtiff = bigtiff;
+                let shade: Vec<i16> = (0..11).chain([31000; 5]).collect();
+                let dist: Vec<i16> = (10..21).chain([31000; 5]).collect();
+                let ca: Vec<i16> = (100..111).chain(200..211).chain([31000; 10]).collect();
+                for (tags, prefix, values) in [(SHADING, 11, &shade), (CA, 22, &ca), (DISTORTION, 11, &dist)] {
+                    set(&mut arw.plain, tags.table.0, sshort(prefix, values));
+                    let encrypted = arw.sr2.as_mut().unwrap();
+                    encrypted.retain(|(tag, _, _)| *tag != tags.table.1);
+                    encrypted.push((tags.table.1, SSHORT, std::iter::once(prefix).chain(values.iter().copied()).map(|v| v as u16).collect()));
+                }
+                let img = decode(&arw.build());
+                let s = sony(&img);
+                assert_eq!(s.shading.samples_per_channel, Some(11));
+                assert_eq!(s.chromatic_aberration.samples_per_channel, Some(11));
+                assert_eq!(s.distortion.samples_per_channel, Some(11));
+                assert_eq!(s.shading.table.value.unwrap()[..11], shade[..11]);
+                assert_eq!(s.distortion.table.value.unwrap()[..11], dist[..11]);
+                let curves = s.chromatic_aberration.table.value.unwrap();
+                assert_eq!(curves[0][..11], ca[..11]);
+                assert_eq!(curves[1][..11], ca[11..22]);
+                assert_eq!(curves[0][11..], [0; 5]);
+                assert_eq!(curves[1][11..], [0; 5]);
+                assert_eq!(s.shading.table.value.unwrap()[11..], [0; 5]);
+                assert_eq!(s.distortion.table.value.unwrap()[11..], [0; 5]);
+                assert_eq!(s.distortion.table.copies_agree, Some(true));
+                assert_eq!(s.distortion.status, SonyLensStatus::NotValidatedMode);
+                assert_eq!(s.shading.status, SonyLensStatus::NotValidatedComponent);
+                assert!(img.opcodes.list3.is_empty());
+                // Unused padding is not lens data and need not agree between copies.
+                let encrypted = arw.sr2.as_mut().unwrap();
+                for (tag, _, values) in encrypted.iter_mut() {
+                    let active = if *tag == CA.table.1 {
+                        22
+                    } else if *tag == SHADING.table.1 || *tag == DISTORTION.table.1 {
+                        11
+                    } else {
+                        continue;
+                    };
+                    values[active + 1..].fill(12345);
+                }
+                let padding = decode(&arw.build());
+                assert_eq!(sony(&padding).chromatic_aberration.table.copies_agree, Some(true));
+                assert_eq!(sony(&padding).distortion.table.copies_agree, Some(true));
+                // A different active count is a disagreement even if padded decoded samples are equal.
+                let encrypted = arw.sr2.as_mut().unwrap();
+                let (_, _, values) = encrypted.iter_mut().find(|(tag, _, _)| *tag == DISTORTION.table.1).unwrap();
+                values[0] = 16;
+                values[12..].fill(0);
+                let different_count = decode(&arw.build());
+                assert_eq!(sony(&different_count).distortion.table.copies_agree, Some(false));
+                assert_eq!(sony(&different_count).distortion.samples_per_channel, Some(11));
+                // The encrypted copy is also readable without a plain copy, but never enables a warp.
+                arw.plain.clear();
+                let fallback = decode(&arw.build());
+                let f = sony(&fallback);
+                assert_eq!(f.chromatic_aberration.samples_per_channel, Some(11));
+                assert_eq!(f.chromatic_aberration.table.value, Some(curves));
+                assert_eq!(f.chromatic_aberration.table.source, Some(SonySource::Sr2SubIfd));
+                assert!(fallback.opcodes.list3.is_empty());
             }
         }
     }
@@ -980,6 +1308,7 @@ mod tests {
             // model (only the raw IFD's table was validated)
             let mut arw = Arw::new("ILCE-7RM4A", order);
             arw.plain.clear();
+            arw.sr2 = Some(encrypted(&TELE, 0));
             let img = decode(&arw.build());
             let s = sony(&img);
             assert_eq!(provenance(s), [(true, sr2, Absent, Valid, None); 6]);
@@ -1012,7 +1341,7 @@ mod tests {
     fn disagreeing_copies_are_reported_and_the_raw_ifd_wins() {
         for order in [Little, Big] {
             let mut arw = Arw::new("ILCE-7RM4A", order);
-            arw.sr2 = Some(encrypted(&WIDE, 17));
+            arw.sr2 = Some(encrypted(&WIDE, 0));
             let img = decode(&arw.build());
             let s = sony(&img);
             let raw = Some(SonySource::RawIfd);
@@ -1020,7 +1349,7 @@ mod tests {
             assert_eq!(prov(&s.distortion.setting), (true, raw, Valid, Valid, Some(false)));
             assert_eq!(prov(&s.shading.table), (true, raw, Valid, Valid, Some(true)));
             assert_eq!(s.distortion.table.value, Some(TELE));
-            assert_eq!(s.distortion.setting.value.map(|v| v.value), Some(0));
+            assert_eq!(s.distortion.setting.value.map(|v| v.value), Some(17));
             // the validated conversion is unchanged: the raw IFD's table
             let reference: Vec<Opcode> = distortion("ILCE-7RM4A", &TELE, Rect::new(0, 0, 32, 24), Rect::new(2, 2, 30, 20)).into_iter().collect();
             assert_eq!(img.opcodes.list3, reference);

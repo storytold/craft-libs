@@ -90,9 +90,18 @@ mod arw6_curve;
 #[cfg(all(test, feature = "arw"))]
 mod arw6_testenc;
 #[cfg(feature = "arw")]
+mod arw_camera_settings;
+#[cfg(feature = "arw")]
+mod arw_capture_gains;
+#[cfg(feature = "arw")]
 mod arw_lens;
 #[cfg(feature = "arw")]
 mod arw_lens_rm6;
+/// Sony lens-record geometry shared by the decoder and development pipelines.
+#[cfg(feature = "arw")]
+pub mod sony {
+    pub use crate::arw_lens::accepted_copy;
+}
 /// Bounded DNG strip and tile sample reader.
 #[cfg(feature = "line-dng")]
 pub mod dng_lines;
