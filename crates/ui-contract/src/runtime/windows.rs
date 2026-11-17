@@ -309,11 +309,17 @@ pub(crate) fn blocking_modal(ctx: &Context) -> Option<ViewportId> {
 /// It reads only this pass's facts, so the mount, the body (which runs inside the child's pass) and the window steps
 /// agree within a pass.
 pub(crate) fn mount_window(ctx: &Context, id: Id) -> bool {
+    let current = pass::current_viewport(ctx);
+    let opener = if current == viewports::viewport_id(id) { viewports::parent(ctx) } else { current };
+    opens_over(ctx, opener)
+}
+
+/// Whether a viewport mount opened from `opener`'s window shows in an OS window of its own: the rule of
+/// [`mount_window`].
+fn opens_over(ctx: &Context, opener: ViewportId) -> bool {
     if !WindowHost::of(ctx).viewports_available() {
         return false;
     }
-    let current = pass::current_viewport(ctx);
-    let opener = if current == viewports::viewport_id(id) { viewports::parent(ctx) } else { current };
     let shell = shell_of(ctx, opener);
     let covers = match shell.window.state {
         WindowState::Fullscreen => true,

@@ -192,6 +192,11 @@ impl SizeLimits {
         SizeLimits { min: self.min + extra, max: self.max.map(|max| max + extra) }
     }
 
+    /// `size` within these limits; the minimum wins over a smaller maximum.
+    pub fn clamp(self, size: Vec2) -> Vec2 {
+        size.min(self.max.unwrap_or(Vec2::INFINITY)).max(self.min)
+    }
+
     /// Whether every value is finite and non-negative, the maximum is no less than the minimum and no value is
     /// above [`Self::BOUND`].
     pub fn valid(self) -> bool {
