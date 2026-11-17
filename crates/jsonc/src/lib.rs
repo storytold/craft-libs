@@ -347,7 +347,7 @@ impl Doc {
         {
             // Replace the existing value in place.
             let indent = self.indent_at(m.key_start);
-            let rendered = render(value, &indent);
+            let rendered = render(value, &indent, self.eol());
             return Ok(splice(&self.text, &[(m.value.start, m.value.end, rendered)]));
         }
         // Insert a new member (holding the rest of the path) into `node`.
@@ -362,6 +362,11 @@ impl Doc {
         self.insert_member(node, first, &v)
     }
 
+    /// The line ending the document already uses (CRLF if it has any, else LF).
+    fn eol(&self) -> &'static str {
+        if self.text.contains("\r\n") { "\r\n" } else { "\n" }
+    }
+
     fn insert_member(&self, obj: &Node, key: &str, value: &Value) -> Result<String, String> {
         let NodeKind::Object { members, trailing_comma } = &obj.kind else { return Err("not an object".into()) };
         let close = obj.end.saturating_sub(1);
@@ -370,8 +375,9 @@ impl Doc {
             Some(m) if self.first_on_line(m.key_start) => self.indent_at(m.key_start),
             _ => format!("{close_indent}  "),
         };
+        let eol = self.eol();
         let key_json = serde_json::to_string(key).map_err(|e| e.to_string())?;
-        let member = format!("{indent}{key_json}: {}", render(value, &indent));
+        let member = format!("{indent}{key_json}: {}", render(value, &indent, eol));
         let mut edits = Vec::new();
         if let Some(last) = members.last()
             && !trailing_comma
@@ -380,13 +386,13 @@ impl Doc {
         }
         if self.first_on_line(close) && !members.is_empty() {
             let ls = self.line_start(close);
-            edits.push((ls, ls, format!("{member}\n")));
+            edits.push((ls, ls, format!("{member}{eol}")));
         } else {
             // `{}` or `{ "a": 1 }` on one line: open it up.
             let inner_end = close;
             let before = self.text.get(..inner_end).unwrap_or_default();
             let trimmed_end = before.trim_end().len().max(obj.start + 1);
-            edits.push((trimmed_end, inner_end, format!("\n{member}\n{close_indent}")));
+            edits.push((trimmed_end, inner_end, format!("{eol}{member}{eol}{close_indent}")));
         }
         Ok(splice(&self.text, &edits))
     }
@@ -438,12 +444,12 @@ impl Doc {
 }
 
 /// Pretty-print `value` with continuation lines indented by `indent`.
-fn render(value: &Value, indent: &str) -> String {
+fn render(value: &Value, indent: &str, eol: &str) -> String {
     let s = serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".into());
     let mut out = String::new();
     for (i, line) in s.lines().enumerate() {
         if i > 0 {
-            out.push('\n');
+            out.push_str(eol);
             out.push_str(indent);
         }
         out.push_str(line);
@@ -483,6 +489,16 @@ mod tests {
   },
 }
 "#;
+
+    #[test]
+    fn set_keeps_crlf_line_endings() {
+        for src in ["{\r\n  \"a\": 1\r\n}\r\n", "{}\r\n"] {
+            let d = parse(src, true).unwrap();
+            let out = d.set(&["z"], &json!({"k": [1]})).unwrap();
+            assert_eq!(out.matches('\n').count(), out.matches("\r\n").count(), "mixed line endings: {out:?}");
+            assert_eq!(parse(&out, true).unwrap().get(&["z", "k"]), Some(json!([1])));
+        }
+    }
 
     #[test]
     fn parses_comments_and_trailing_commas() {
