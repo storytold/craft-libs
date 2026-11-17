@@ -93,6 +93,12 @@ mod arw6_testenc;
 mod arw_lens;
 #[cfg(feature = "arw")]
 mod arw_lens_rm6;
+/// Bounded DNG strip and tile sample reader.
+#[cfg(feature = "line-dng")]
+pub mod dng_lines;
+/// Bounded DNG camera and processing metadata.
+#[cfg(feature = "line-dng")]
+pub mod dng_metadata;
 #[allow(dead_code)]
 mod huffman;
 #[cfg(feature = "jxl")]
@@ -116,6 +122,9 @@ mod nef;
 mod nef_lens;
 #[cfg(feature = "nef")]
 mod nefc;
+pub mod opcode_params;
+/// Bounded raw DNG opcode-list envelopes.
+pub mod opcode_raw;
 pub mod opcodes;
 #[cfg(feature = "orf")]
 mod orf;
@@ -1076,6 +1085,45 @@ pub struct RawImage {
     pub notices: RawNotices,
 }
 
+pub(crate) fn validate_image_layout(
+    width: usize,
+    height: usize,
+    cpp: usize,
+    data_len: Option<usize>,
+    cfa: Option<&Cfa>,
+    active_area: Rect,
+) -> Result<()> {
+    if width == 0 || height == 0 || !(1..=4).contains(&cpp) {
+        return Err(RawError::Corrupt("bad dimensions".into()));
+    }
+    // two samples a pixel are neither one colour nor RGB: nothing downstream can develop them (storytold/lightcraft#1511)
+    if cpp == 2 {
+        return Err(RawError::Unsupported("2 samples per pixel".into()));
+    }
+    if let Some(data_len) = data_len {
+        let expected = crate::checked_pixel_count(width as u64, height as u64)
+            .and_then(|n| n.checked_mul(cpp as u64))
+            .ok_or_else(|| RawError::Corrupt("data length mismatch".into()))?;
+        let actual = u64::try_from(data_len).map_err(|_| RawError::Corrupt("data length mismatch".into()))?;
+        if actual != expected {
+            return Err(RawError::Corrupt("data length mismatch".into()));
+        }
+    }
+    if let Some(c) = cfa
+        && (!c.valid() || c.pattern.iter().any(|&p| p > 2))
+    {
+        return Err(RawError::Unsupported(format!("CFA pattern {}", c.name())));
+    }
+    let a = active_area;
+    // checked: a crop origin from a maker note can be `u64::MAX`, and `x + width` would wrap
+    // back inside the image here and again in `normalized`'s index arithmetic.
+    let fits = |x: usize, len: usize, limit: usize| x.checked_add(len).is_some_and(|end| end <= limit);
+    if a.width == 0 || a.height == 0 || !fits(a.x, a.width, width) || !fits(a.y, a.height, height) {
+        return Err(RawError::Corrupt("active area outside image".into()));
+    }
+    Ok(())
+}
+
 impl RawImage {
     /// The description without the samples (what [`probe_info`] returns for the same file).
     pub fn info(&self) -> RawInfo {
@@ -1150,35 +1198,7 @@ impl RawImage {
     }
 
     fn check(&self, samples: bool) -> Result<()> {
-        if self.width == 0 || self.height == 0 || !(1..=4).contains(&self.cpp) {
-            return Err(RawError::Corrupt("bad dimensions".into()));
-        }
-        // two samples a pixel are neither one colour nor RGB: nothing downstream can develop them (storytold/lightcraft#1511)
-        if self.cpp == 2 {
-            return Err(RawError::Unsupported("2 samples per pixel".into()));
-        }
-        if samples {
-            let expected = crate::checked_pixel_count(self.width as u64, self.height as u64)
-                .and_then(|n| n.checked_mul(self.cpp as u64))
-                .ok_or_else(|| RawError::Corrupt("data length mismatch".into()))?;
-            let actual = u64::try_from(self.data.len()).map_err(|_| RawError::Corrupt("data length mismatch".into()))?;
-            if actual != expected {
-                return Err(RawError::Corrupt("data length mismatch".into()));
-            }
-        }
-        if let Some(c) = &self.cfa
-            && (!c.valid() || c.pattern.iter().any(|&p| p > 2))
-        {
-            return Err(RawError::Unsupported(format!("CFA pattern {}", c.name())));
-        }
-        let a = self.active_area;
-        // checked: a crop origin from a maker note can be `u64::MAX`, and `x + width` would wrap
-        // back inside the image here and again in `normalized`'s index arithmetic.
-        let fits = |x: usize, len: usize, limit: usize| x.checked_add(len).is_some_and(|end| end <= limit);
-        if a.width == 0 || a.height == 0 || !fits(a.x, a.width, self.width) || !fits(a.y, a.height, self.height) {
-            return Err(RawError::Corrupt("active area outside image".into()));
-        }
-        Ok(())
+        validate_image_layout(self.width, self.height, self.cpp, samples.then_some(self.data.len()), self.cfa.as_ref(), self.active_area)
     }
 
     /// White level for sample `s`.

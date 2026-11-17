@@ -15,7 +15,7 @@ fn scene_value(x: usize, y: usize, c: u8, max: f32) -> f32 {
     v * max
 }
 
-fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
+pub(super) fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
     let black = 256.0;
     let white = 16000.0;
     let mut data = Vec::with_capacity(w * h * cpp);
@@ -194,7 +194,7 @@ fn deflate_roundtrips_integer_and_float() {
 
 // ---------------------------------------------------------------- hand-built variants
 
-fn base_ifd(w: usize, h: usize, bits: u16, cpp: usize, cfa: bool) -> IfdBuilder {
+pub(super) fn base_ifd(w: usize, h: usize, bits: u16, cpp: usize, cfa: bool) -> IfdBuilder {
     let mut ifd = IfdBuilder::new();
     ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w as u32]));
@@ -209,12 +209,12 @@ fn base_ifd(w: usize, h: usize, bits: u16, cpp: usize, cfa: bool) -> IfdBuilder 
     ifd
 }
 
-fn dng(raw: IfdBuilder, order: ByteOrder) -> Vec<u8> {
+pub(super) fn dng(raw: IfdBuilder, order: ByteOrder) -> Vec<u8> {
     dng_with(raw, order, |_| {})
 }
 
 /// [`dng`] with extra IFD 0 tags (where DNG writers put camera-profile tags).
-fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilder)) -> Vec<u8> {
+pub(super) fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilder)) -> Vec<u8> {
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
     ifd0.set(t::DNG_VERSION, Value::Byte(vec![1, 6, 0, 0]));
@@ -237,12 +237,12 @@ fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilde
     TiffWriter::new(order, false).write(&[ifd0]).unwrap()
 }
 
-fn pattern(w: usize, h: usize, cpp: usize, bits: u32) -> Vec<u16> {
+pub(super) fn pattern(w: usize, h: usize, cpp: usize, bits: u32) -> Vec<u16> {
     let max = (1u32 << bits) - 1;
     (0..w * h * cpp).map(|i| ((i as u32).wrapping_mul(2654435761u32) >> 7) % (max + 1)).map(|v| v as u16).collect()
 }
 
-fn pack_msb(v: &[u16], bits: u32, w: usize) -> Vec<u8> {
+pub(super) fn pack_msb(v: &[u16], bits: u32, w: usize) -> Vec<u8> {
     let mut out = Vec::new();
     for row in v.chunks(w) {
         let mut acc = 0u64;
@@ -262,7 +262,7 @@ fn pack_msb(v: &[u16], bits: u32, w: usize) -> Vec<u8> {
     out
 }
 
-fn u16_bytes(v: &[u16], order: ByteOrder) -> Vec<u8> {
+pub(super) fn u16_bytes(v: &[u16], order: ByteOrder) -> Vec<u8> {
     let mut b = Vec::new();
     v.iter().for_each(|&x| order.put_u16(&mut b, x));
     b
@@ -407,7 +407,7 @@ fn floating_point_dngs() {
 /// The chunks (tiles of `tw` x `th`, or strips when `tw == w`) of an image of `cpp` interleaved samples per pixel, each
 /// nominal-sized (strips: clipped to the image height) with zero padding past the image edge: one chunk per tile, and for `planar` one set of chunks per
 /// plane (one sample per pixel), plane after plane.
-fn chunk_samples<T: Copy + Default>(px: &[T], w: usize, h: usize, cpp: usize, tw: usize, th: usize, planar: bool) -> Vec<Vec<T>> {
+pub(super) fn chunk_samples<T: Copy + Default>(px: &[T], w: usize, h: usize, cpp: usize, tw: usize, th: usize, planar: bool) -> Vec<Vec<T>> {
     let planes = if planar { cpp } else { 1 };
     let ccpp = if planar { 1 } else { cpp };
     let mut out = Vec::new();
@@ -432,7 +432,7 @@ fn chunk_samples<T: Copy + Default>(px: &[T], w: usize, h: usize, cpp: usize, tw
     out
 }
 
-fn layout_image(raw: &mut IfdBuilder, chunks: Vec<Vec<u8>>, w: usize, tile: (usize, usize)) {
+pub(super) fn layout_image(raw: &mut IfdBuilder, chunks: Vec<Vec<u8>>, w: usize, tile: (usize, usize)) {
     raw.set_image(if tile.0 == w {
         ImageData::Strips { rows_per_strip: tile.1 as u32, strips: chunks }
     } else {

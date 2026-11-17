@@ -682,3 +682,232 @@ fn object_only_hierarchy_ignores_property_connections() {
     assert_eq!(scene.roots.len(), 2);
     assert_eq!(doc.scene(&Limits::default(), &mut no_external).unwrap().roots.len(), 1);
 }
+
+#[test]
+fn binary_scalar_properties_are_bounded_before_reserving() {
+    let mut bytes = BINARY_MAGIC.to_vec();
+    bytes.extend(7400u32.to_le_bytes());
+    let count = 1000u32;
+    let end = bytes.len() + 13 + 1 + count as usize * 2;
+    bytes.extend((end as u32).to_le_bytes());
+    bytes.extend(count.to_le_bytes());
+    bytes.extend((count * 2).to_le_bytes());
+    bytes.push(1);
+    bytes.push(b'A');
+    for _ in 0..count {
+        bytes.extend([b'C', 1]);
+    }
+    let limits = Limits { max_data_bytes: 1024, ..Limits::default() };
+    assert!(matches!(read_document(&bytes, &limits), Err(Error::TooLarge(_))));
+    assert!(read_document(&bytes, &Limits::default()).is_ok());
+}
+
+#[test]
+fn fbx_invalid_material_slot_is_unassigned_and_unnamed_material_has_id() {
+    let text = ASCII.replace("a: 0,1\n", "a: 0,99\n").replace("\"Material::Red\"", "\"\"");
+    let scene = parse(text.as_bytes()).unwrap();
+    assert!(scene.materials.iter().any(|m| m.name == "Material_400"));
+    let parts = &scene.meshes[0].parts;
+    assert!(parts.iter().any(|p| p.material.is_none()));
+    assert!(parts.iter().any(|p| p.material.is_some()));
+}
+
+#[test]
+fn cameras_keep_lens_and_model_hierarchy() {
+    let text = r#"FBXHeaderExtension: { FBXVersion: 7400 }
+Objects: {
+ Model: 1, "Model::Rig", "Null" { Properties70: { P: "Lcl Translation", "", "", "", 1,2,3 } }
+ Model: 2, "Model::View", "Camera" { }
+ NodeAttribute: 3, "NodeAttribute::Lens", "Camera" { Properties70: {
+  P: "FocalLength", "", "", "", 50
+  P: "FilmHeight", "", "", "", 1
+ } }
+ Model: 4, "Model::Ortho", "Camera" { Properties70: {
+  P: "CameraProjectionType", "", "", "", 1
+  P: "OrthoZoom", "", "", "", 3
+ } }
+ Model: 5, "Model::Producer Perspective", "Camera" { }
+}
+Connections: {
+ C: "OO",2,1
+ C: "OO",3,2
+}
+"#;
+    let scene = parse(text.as_bytes()).unwrap();
+    assert_eq!(scene.cameras.len(), 2);
+    let crate::Projection::Perspective { yfov, .. } = scene.cameras[0].projection else { panic!("perspective") };
+    assert!((yfov - 2.0 * (25.4_f64 / 100.0).atan()).abs() < 1e-12);
+    assert!(matches!(scene.cameras[1].projection, crate::Projection::Orthographic { ymag: 3.0, .. }));
+    let camera_node = scene.nodes.iter().find(|n| n.camera == Some(0)).unwrap();
+    let forward = crate::transform_point(&camera_node.transform, [0.0, 0.0, -1.0]);
+    assert!((forward[0] - 1.0).abs() < 1e-12);
+    let rig = scene.nodes.iter().find(|n| n.name == "Rig").unwrap();
+    assert!(rig.children.iter().any(|i| scene.nodes[*i].name == "View"));
+    let limits = Limits { max_extras: 1, ..Limits::default() };
+    assert!(matches!(read(text.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+}
+
+#[test]
+fn all_connected_and_unplaced_geometries_are_instances() {
+    let geometry = |id| format!("Geometry: {id}, \"Geometry::Part{id}\", \"Mesh\" {{ Vertices: 0,0,0,1,0,0,0,1,0 PolygonVertexIndex: 0,1,-3 }}\n");
+    let text = format!(
+        "FBXHeaderExtension: {{ FBXVersion: 7400 }}\nObjects: {{\n{}{}{} Model: 10, \"Model::M\", \"Mesh\" {{}} }}\nConnections: {{ C: \"OO\",1,10 C: \"OO\",2,10 C: \"OO\",2,10 }}",
+        geometry(1),
+        geometry(2),
+        geometry(3)
+    );
+    let scene = parse(text.as_bytes()).unwrap();
+    assert_eq!(scene.meshes.len(), 3);
+    assert_eq!(scene.instances(&Limits::default()).unwrap().len(), 3);
+    assert_eq!(scene.roots.len(), 2);
+}
+
+#[test]
+fn fbx_corner_colors_keep_seams_and_incomplete_layers_are_omitted() {
+    let layer = r#"LayerElementColor: 0 {
+ MappingInformationType: "ByPolygonVertex"
+ ReferenceInformationType: "Direct"
+ Colors: 1,0,0,1, 0,1,0,1, 0,0,1,1, 1,1,0,1, 0,1,0,1, 0,0,1,1
+}"#;
+    let text = ASCII.replace("LayerElementNormal: 0 {", &format!("{layer}\n LayerElementNormal: 0 {{"));
+    // Add a color for every corner of the original quad and triangle.
+    let text = text.replace("0,0,1,1\n}", "0,0,1,1, 1,0,1,1\n}");
+    let scene = parse(text.as_bytes()).unwrap();
+    let mesh = &scene.meshes[0];
+    let colors: Vec<_> = mesh.parts.iter().flat_map(|part| part.corners.iter()).map(|corner| mesh.colors[corner.position as usize]).collect();
+    assert_eq!(colors.len(), 7);
+    assert!(colors.contains(&[1.0, 0.0, 0.0, 1.0]));
+    assert!(colors.contains(&[0.0, 1.0, 0.0, 1.0]));
+    assert!(colors.contains(&[1.0, 0.0, 1.0, 1.0]));
+    let incomplete = text.replace(", 1,0,1,1\n}", "\n}");
+    assert!(parse(incomplete.as_bytes()).unwrap().meshes[0].colors.is_empty());
+}
+
+#[test]
+fn ascii_budget_applies_while_reading_values_and_records() {
+    let limits = Limits { max_data_bytes: 512, ..Limits::default() };
+    let many_values = format!("Objects: {{\n A: {}\n}}", "1,".repeat(1000));
+    assert!(matches!(read_document(many_values.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    let many_records = format!("Objects: {{\n{}\n}}", "A: {}\n".repeat(1000));
+    assert!(matches!(read_document(many_records.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    let giant_string = format!("Objects: {{ A: \"{}\" }}", "x".repeat(1024));
+    assert!(matches!(read_document(giant_string.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    // Empty punctuation and comments do not consume memory in proportion to their length.
+    let ignored = format!(";{}\nObjects: {{}}", ",".repeat(10_000));
+    assert!(read_document(ignored.as_bytes(), &limits).is_ok());
+}
+
+#[test]
+fn strict_ascii_reports_unbalanced_and_unterminated_records() {
+    let strict = |s: &str| crate::fbx::read_document_strict(s.as_bytes(), &Limits::default());
+    assert!(strict(ASCII).is_ok());
+    for s in ["Objects: { A: 1", "Objects: { } }", "Objects: { A: \"unterminated", "Objects: { A: 1 2 }"] {
+        assert!(strict(s).is_err(), "{s}");
+    }
+    assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
+}
+
+#[test]
+fn strict_binary_requires_a_closing_record() {
+    let doc = document(ASCII.as_bytes());
+    let bytes = write_binary(&doc.records, 7400, false);
+    assert!(crate::fbx::read_document_strict(&bytes, &Limits::default()).is_ok());
+    let truncated = &bytes[..bytes.len() - 29];
+    assert!(read_document(truncated, &Limits::default()).is_ok());
+    assert!(crate::fbx::read_document_strict(truncated, &Limits::default()).is_err());
+}
+
+#[test]
+fn diffuse_materials_preserve_factors_and_texture_candidates() {
+    let text = with(
+        "Texture: 600, \"Texture::Base\", \"\" { RelativeFilename: \"maps/base.png\" FileName: \"C:/a/base.png\" }\n",
+        "C: \"OP\",600,400,\"Maya|baseColor\"\n",
+    );
+    let doc = document(text.as_bytes());
+    let mut asked = Vec::new();
+    let materials = doc
+        .diffuse_materials(&Limits::default(), &mut |paths| {
+            asked.push(paths.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+            Some(b"image".to_vec())
+        })
+        .unwrap();
+    assert_eq!(asked, vec![vec!["maps/base.png", "base.png"]]);
+    let red = materials.iter().find(|m| m.name == "Red").unwrap();
+    assert_eq!(red.factor, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(red.image.as_deref(), Some(&b"image"[..]));
+    let small = Limits { max_data_bytes: 4, ..Limits::default() };
+    assert!(matches!(doc.diffuse_materials(&small, &mut |_| Some(b"image".to_vec())), Err(Error::TooLarge(_))));
+    let embedded_text = with(
+        &format!("Texture: 600, \"Texture::Base\", \"\" {{}}\nVideo: 700, \"Video::Base\", \"Clip\" {{ Content: \"{}\" }}\n", b64(b"embedded")),
+        "C: \"OP\",600,400,\"DiffuseColor\"\nC: \"OO\",700,600\n",
+    );
+    let embedded = document(embedded_text.as_bytes()).diffuse_materials(&Limits::default(), &mut |_| None).unwrap();
+    assert_eq!(embedded.iter().find(|m| m.name == "Red").unwrap().image.as_deref(), Some(&b"embedded"[..]));
+}
+
+#[test]
+fn per_corner_and_per_vertex_material_ids_use_each_polygons_first_corner() {
+    let by_corner = ASCII.replace("MappingInformationType: \"ByPolygon\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *2 {\n\t\t\t\ta: 0,1", "MappingInformationType: \"ByPolygonVertex\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *7 {\n\t\t\t\ta: 0,0,0,0,1,1,1");
+    assert_ne!(by_corner, ASCII);
+    let parts = &parse(by_corner.as_bytes()).unwrap().meshes[0].parts;
+    assert_eq!(parts.len(), 2, "the triangle takes material 1 from its first corner");
+    // The triangle starts at control point 4, whose material is 1.
+    let by_vertex = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,4,0,-2").replace(
+        "MappingInformationType: \"ByPolygon\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *2 {\n\t\t\t\ta: 0,1",
+        "MappingInformationType: \"ByControlPoint\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *5 {\n\t\t\t\ta: 0,0,0,0,1",
+    );
+    let scene = parse(by_vertex.as_bytes()).unwrap();
+    assert_eq!(scene.meshes[0].parts.len(), 2);
+    assert!(scene.meshes[0].parts.iter().all(|p| p.material.is_some()));
+}
+
+#[test]
+fn strict_colors_validate_and_read_the_same_layer() {
+    let good = "LayerElementColor: 0 { MappingInformationType: \"AllSame\" ReferenceInformationType: \"Direct\" Colors: 0,1,0,1 }\n";
+    let bad = "LayerElementColor: 1 { MappingInformationType: \"AllSame\" ReferenceInformationType: \"Direct\" Colors: \"bad\",1,0,0,1 }\n";
+    let text = ASCII.replace("LayerElementNormal: 0 {", &format!("{bad} {good} LayerElementNormal: 0 {{"));
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    let scene = document(text.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert!(scene.meshes[0].colors.iter().all(|c| *c == [0.0, 1.0, 0.0, 1.0]));
+    assert!(!scene.meshes[0].colors.is_empty());
+    let only_bad = ASCII.replace("LayerElementNormal: 0 {", &format!("{} LayerElementNormal: 0 {{", bad.replace(": 1 {", ": 0 {")));
+    assert!(document(only_bad.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
+}
+
+#[test]
+fn strict_geometry_validates_the_colors_index_alias() {
+    let layer = |index: &str| {
+        format!(
+            "LayerElementColor: 0 {{ MappingInformationType: \"AllSame\" ReferenceInformationType: \"IndexToDirect\" Colors: 0,1,0,1 ColorsIndex: {index} }}\n"
+        )
+    };
+    let with = |index: &str| ASCII.replace("LayerElementNormal: 0 {", &format!("{} LayerElementNormal: 0 {{", layer(index)));
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    assert!(document(with("0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_ok());
+    assert!(document(with("\"bad\",0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
+    assert!(document(with("0.5").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err(), "a fractional index");
+}
+
+#[test]
+fn placement_and_polygon_order_follow_the_fbx() {
+    let text = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,0,1,-5,0,1,-5").replace("a: 0,1\n", "a: 0,1,0\n");
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    let (scene, placements) = doc.scene_with_placements(&Limits::default(), &mut no_external, &options).unwrap();
+    assert_eq!(placements.len(), 1);
+    let mesh = scene.nodes[placements[0].node].mesh.unwrap();
+    let parts = &scene.meshes[mesh].parts;
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].material, parts[2].material);
+    assert_ne!(parts[0].material, parts[1].material);
+}
+
+#[test]
+fn placement_order_follows_connections_not_model_declarations() {
+    let text = with("Model: 201, \"Model::Later\", \"Mesh\" {}\n", "").replace("C: \"OO\",100,300", "C: \"OO\",100,201\n C: \"OO\",100,300");
+    let doc = document(text.as_bytes());
+    let (scene, placements) = doc.scene_with_placements(&Limits::default(), &mut no_external, &Default::default()).unwrap();
+    let names: Vec<_> = placements.iter().map(|i| scene.nodes[i.node].name.as_str()).collect();
+    assert_eq!(names, ["Later", "Shape geometry"]);
+    assert_eq!(scene.nodes[placements[1].model.unwrap()].name, "Shape");
+}
