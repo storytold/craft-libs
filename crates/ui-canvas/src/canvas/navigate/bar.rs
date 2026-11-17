@@ -110,7 +110,7 @@ impl<'a> NavigateBar<'a> {
         let mut invalid_zoom = None;
         let row = Row::new().gap(Gap::Item);
         let shown = match members {
-            Members::Zoom { mut view, target, options, mut out, all_windows } => row.show(ui, |ui, cx| {
+            Members::Zoom { mut view, target, options, mut out, mut all_windows } => row.show(ui, |ui, cx| {
                 let directions = [
                     Entry::new(false, words.navigate_zoom_in.clone()).icon(IconId::new("zoom_in")),
                     Entry::new(true, words.navigate_zoom_out.clone()).icon(IconId::new("zoom_out")),
@@ -123,8 +123,8 @@ impl<'a> NavigateBar<'a> {
                 }
                 Divider::vertical().show(ui);
                 Checkbox::new(Bind::bound(&mut options.zoom_resizes_windows)).label(words.navigate_resize_windows.clone()).show(ui);
-                if let Some(value) = all_windows {
-                    Checkbox::new(value).label(words.navigate_zoom_all.clone()).tooltip(words.navigate_zoom_all_tip.clone()).show(ui);
+                if let Some(value) = all_windows.as_mut() {
+                    Checkbox::new(value.reborrowed()).label(words.navigate_zoom_all.clone()).tooltip(words.navigate_zoom_all_tip.clone()).show(ui);
                 }
                 Checkbox::new(Bind::bound(&mut options.scrubby_zoom)).label(words.navigate_scrubby_zoom.clone()).show(ui);
                 Divider::vertical().show(ui);
