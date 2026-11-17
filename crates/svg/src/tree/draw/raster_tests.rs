@@ -46,6 +46,18 @@ fn gray_jpeg(bits: u8, entropy: &[u8]) -> Vec<u8> {
     data
 }
 
+fn corrupt_jpeg() -> Vec<u8> {
+    let mut data = gray_jpeg(8, &[0x3f]);
+    let scan = data.windows(2).position(|marker| marker == b"\xff\xda").unwrap();
+    // Keep the complete scan header and valid entropy, but reference table 1
+    // while DHT defines only table 0. The renderer accepts these headers, then
+    // fails pixel decoding when checking the selected Huffman tables. Random
+    // all-one entropy is tolerated by its default policy and is not this guard.
+    assert_eq!(data[scan + 6], 0);
+    data[scan + 6] = 0x11;
+    data
+}
+
 fn crc32(bytes: &[u8]) -> u32 {
     let mut value = !0u32;
     for byte in bytes {
@@ -112,9 +124,8 @@ fn renderer_validator_accepts_complete_png_jpeg_gif_and_webp_at_exact_pixel_allo
 fn renderer_validator_rejects_corrupt_pixels_after_valid_dimensions_without_refunding_work() {
     let cases = [
         (Format::Png, corrupt_png(), (2, 2)),
-        // One-bit tables have no code starting with1. Stuffed all-one bits
-        // are an invalid entropy code, while SOF/DQT/DHT/SOS remain valid.
-        (Format::Jpeg, gray_jpeg(8, &[0xff, 0, 0xff, 0, 0xff, 0]), (8, 8)),
+        // Header-only admission cannot detect this missing scan-table dependency.
+        (Format::Jpeg, corrupt_jpeg(), (8, 8)),
         (Format::Gif, corrupt_gif(), (2, 2)),
         (Format::WebP, corrupt_webp(), (2, 2)),
     ];
@@ -123,7 +134,7 @@ fn renderer_validator_rejects_corrupt_pixels_after_valid_dimensions_without_refu
         match format {
             Format::Jpeg => {
                 let mut headers = zune_jpeg::JpegDecoder::new(Cursor::new(&data));
-                headers.decode_headers().expect("intact JPEG scan headers before corrupt entropy");
+                headers.decode_headers().expect("intact JPEG scan headers before unavailable pixel-decode table");
             }
             Format::Gif => {
                 gif::DecodeOptions::new().read_info(data.as_slice()).expect("intact GIF headers before corrupt LZW pixels");
