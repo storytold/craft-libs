@@ -562,6 +562,17 @@ pub fn margins(e: &El) -> [f32; 4] {
     margin_sides(e).map(|side| side.unwrap_or(0.0))
 }
 
+/// Word's own cell margins (the Normal Table style): 0.08" left and right, none above or below.
+pub const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
+
+/// A table's `w:tblCellMar` over the margins it would have without one (its
+/// style's, else Word's). A side the element leaves out keeps the underlying margin, as in Word:
+/// a form table that sets only `w:left` keeps its style's right margin, not none.
+pub fn margins_over(e: &El, base: [f32; 4]) -> [f32; 4] {
+    let sides = margin_sides(e);
+    std::array::from_fn(|i| sides.get(i).copied().flatten().or_else(|| base.get(i).copied()).unwrap_or(0.0))
+}
+
 fn margin_sides(e: &El) -> [Option<f32>; 4] {
     let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).map(|v| v.clamp(0.0, 1584.0));
     [get(&["w:top"]), get(&["w:left", "w:start"]), get(&["w:bottom"]), get(&["w:right", "w:end"])]

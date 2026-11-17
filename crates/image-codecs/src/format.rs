@@ -19,7 +19,7 @@ pub enum Format {
     Pcx,
     /// X PixMap icons (XPM2 plain text and XPM3 C-string arrays).
     Xpm,
-    /// DirectDraw Surface: a 2D texture, uncompressed or BC1–BC3. Reading takes the top mip
+    /// DirectDraw Surface: a 2D texture, uncompressed or BC1–BC5. Reading takes the top mip
     /// level; writing can add the full mip chain ([`crate::DdsOptions`]).
     Dds,
     Qoi,

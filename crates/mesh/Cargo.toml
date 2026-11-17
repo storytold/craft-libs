@@ -1,6 +1,6 @@
 [package]
 name = "craft-mesh"
-description = "3D mesh file formats behind one neutral model: STL, Wavefront OBJ/MTL, PLY and glTF 2.0 / GLB readers and writers and FBX and 3MF readers, bounded on hostile input"
+description = "3D mesh file formats behind one neutral model: STL and Wavefront OBJ/MTL readers and writers, a glTF 2.0 / GLB reader and GLB writer, and PLY, FBX and 3MF readers, bounded on hostile input"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
