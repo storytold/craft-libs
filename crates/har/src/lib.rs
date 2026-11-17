@@ -1,5 +1,10 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
 //! HTTP Archive (HAR 1.2) captures, read into typed records. No redaction happens here; callers
-//! decide what to keep (see the analysis crate's web capture inspector).
+//! decide what to keep. Capture headers and bodies can contain secrets: redact before display or sharing.
+//! `parse` preserves compatibility and parses the whole JSON before limiting returned entries.
+//! Use `parse_bounded` to cap admitted bytes; this is not a precise allocator or output-byte limit.
 
 use serde_json::Value;
 
@@ -96,7 +101,9 @@ pub fn parse(json: &[u8], max_entries: usize) -> Result<Har, HarError> {
     let entries = log.get("entries").and_then(Value::as_array).ok_or(HarError::NotHar("no \"log.entries\" array"))?;
     let mut har = Har {
         version: s(log, "version"),
-        creator: log.get("creator").map(|c| format!("{} {}", s(c, "name").unwrap_or_default(), s(c, "version").unwrap_or_default()).trim().to_string()),
+        creator: log
+            .get("creator")
+            .map(|c| format!("{} {}", s(c, "name").unwrap_or_default(), s(c, "version").unwrap_or_default()).trim().to_string()),
         pages: log.get("pages").and_then(Value::as_array).map_or(0, Vec::len),
         declared_entries: entries.len(),
         ..Default::default()
@@ -118,8 +125,11 @@ pub fn parse(json: &[u8], max_entries: usize) -> Result<Har, HarError> {
                 .map(|a| a.iter().filter_map(|x| Some((x.get("name")?.as_str()?.to_string(), s(x, "value")))).collect())
                 .unwrap_or_default(),
         });
-        let timings =
-            e.get("timings").and_then(Value::as_object).map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()?))).collect()).unwrap_or_default();
+        let timings = e
+            .get("timings")
+            .and_then(Value::as_object)
+            .map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()?))).collect())
+            .unwrap_or_default();
         har.entries.push(HarEntry {
             ordinal: i,
             started: s(e, "startedDateTime"),
@@ -189,5 +199,32 @@ mod tests {
         assert!(parse(b"{}", 1).is_err());
         assert!(parse(b"nope", 1).is_err());
         assert!(parse(br#"{"log":{"entries":[1,null,"x"]}}"#, 10).is_ok());
+    }
+}
+
+/// Reject oversized input before parsing its JSON. `max_entries` only limits returned records.
+pub fn parse_bounded(json: &[u8], max_entries: usize, max_bytes: usize) -> Result<Har, HarError> {
+    if json.len() > max_bytes {
+        return Err(HarError::NotHar("input byte limit exceeded"));
+    }
+    parse(json, max_entries)
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    #[test]
+    fn input_admission_and_entry_limits_are_independent() {
+        let input = br#"{"log":{"entries":[null,{}]}}"#;
+        assert_eq!(parse_bounded(input, 2, input.len()).unwrap(), parse(input, 2).unwrap());
+        assert_eq!(parse_bounded(b"bad JSON", 1, 0), Err(HarError::NotHar("input byte limit exceeded")));
+        let empty = parse_bounded(input, 0, input.len()).unwrap();
+        assert!(empty.truncated && empty.entries.is_empty());
+        assert_eq!(empty.declared_entries, 2);
+        let one = parse_bounded(input, 1, input.len()).unwrap();
+        assert!(one.truncated);
+        assert_eq!(one.entries.len(), 1);
+        assert_eq!(one.entries[0].ordinal, 0);
+        assert!(!parse_bounded(input, 2, input.len()).unwrap().truncated);
     }
 }
