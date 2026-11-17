@@ -32,26 +32,42 @@ cargo compiles a crate once per distinct feature set, and every crate above it o
 
 Four manifest facts keep this true, and `cl doctor` checks them: `feature-root` lists every optional domain crate of the gallery with the gallery's features, and depends on the gallery without its default features (so the gallery lib's own features stay each command's: `apps` for the gallery, one crate for a render); the story renderer asks its shared dependencies for no feature the gallery's lines lack; dev-dependency lines ask egui for no features (a feature there differs between a crate's tests and everything else); the proc-macro crate pins syn's and proc-macro2's features to everything other derive crates may add, so the one syn every proc macro shares is the same with or without design-lint in the graph. `cl` names any new build of a framework crate in the target directory after each command; after a manifest change one is expected, otherwise run `cl doctor`.
 
-## PhotoCraft
+## App workspaces
 
-`tools/cl` finds its workspace with `git rev-parse --show-toplevel` from the current directory, so `/path/to/worktree/tools/cl` run inside a PhotoCraft tree builds and tests that tree. A workspace that has `photocraft-ui-egui` gets one fixed selection: `-p photocraft-ui-egui -p photocraft-engine -p photocraft -p photocraft-algo -p photocraft-automation -p photocraft-text -p photocraft-tablet -p photocraft-cli -p photocraft-paint -p photocraft-io -p photocraft-gpu`, in test mode, without `--features` (the test features come from the dev-dependencies). Each package brings features the others lack, so a command that drops one builds a second copy of egui, photocraft-io or craft-affinity and everything above them. The craft-libs workspace is unchanged.
+`tools/cl` finds its workspace with `git rev-parse --show-toplevel` from the current directory, so `/path/to/craft-libs/tools/cl` run inside an app's tree builds and tests that tree. An app workspace is one whose root `Cargo.toml` has a `[workspace.metadata.cl]` table. There every command selects the same packages (`selection`), in test mode, without `--features` (the test features come from the dev-dependencies). Each package brings features the others lack, so a command that drops one builds a second copy of the shared crates below it (in PhotoCraft egui, photocraft-io and craft-affinity) and of everything above them. The craft-libs workspace has no such table and keeps the commands above.
 
 | to | run | what it does |
 | --- | --- | --- |
-| test one crate | `cl test <crate> [-- <filters>]` | builds `--lib --tests` over the 11 packages, then runs only that crate's test binaries |
-| test a ui-egui change fast | `cl test ui-egui --unit [-- <filters>]` | builds and runs the lib binaries only |
-| the integration round | `cl test all [-- <filters>]` | builds all, runs every binary of the 11 packages three at a time, longest first |
-| check | `cl check <crate>` | `cargo check --lib --tests` over the same 11 packages (the selection is fixed, so every package is checked) |
-| the snapshot example | `cl build snapshot` | `cargo test --no-run --example snapshot` over the same selection |
-| the packages and builds | `cl doctor` | the 11 packages exist; the target holds one build of each pinned crate with the expected features |
+| test one crate | `cl test <crate> [-- <filters>]` | builds `--lib --tests` over the selection, then runs only that crate's test binaries |
+| test a crate's lib fast | `cl test <crate> --unit [-- <filters>]` | builds and runs the lib binaries only |
+| the integration round | `cl test all [-- <filters>]` | builds all, runs every binary of the selection `run_slots` at a time, longest first |
+| check | `cl check <crate>` | `cargo check --lib --tests` over the selection (the selection is fixed, so every package is checked) |
+| an example | `cl build <example>` | `cargo test --no-run --example <example>` over the selection |
+| the packages and builds | `cl doctor` | the selected packages exist; the target holds one build of each `expected_features` crate, with those features |
 
-`<crate>` is the package name with or without `photocraft-` (`ui-egui`, `engine`, `photocraft` for the app). `--no-run` builds only.
+`<crate>` is the package name, or the name without its first word (`ui-egui` and `engine` in PhotoCraft; `photocraft` for the app). `--no-run` builds only.
 
-The environment is the same for every command: `TMPDIR=/tmp` (PhotoCraft's tests keep a scratch reserve that a larger default TMPDIR can trip); `RUST_MIN_STACK`, `CARGO_INCREMENTAL` and `CRAFT_FONTS_DIR` unset (the text crate's build script tracks the fonts directory, so any change rebuilds it and everything above). In a PhotoCraft workspace every cargo command runs through the command in `CL_PC_LAUNCHER` when it is set, and each test binary through the command in `CL_PC_RUNNER` when it is set, with `--test-threads 4`; they play the roles `CL_LAUNCHER` and `CL_RUNNER` play in craft-libs, which do not apply there. Without them cargo and the binaries run directly.
+The keys of `[workspace.metadata.cl]`; cl refuses a table with an unknown key or a value of the wrong type:
 
-`cl test all` orders the binaries by the times of the previous run (`<target>/cl-test-times.json`), else ui-egui's lib, ui-egui's `it`, then engine first. Without filters, the photocraft-ui-egui lib binary runs as three shards chosen by top-level module from the binary's `--list` (a module over a third of the tests is split by its submodules); each test runs in exactly one shard. The last line is `N passed, M failed, B binaries, K overflowed stacks, T s`; failures follow as `binary test_name`.
+| key | type | default | what it does |
+| --- | --- | --- | --- |
+| `selection` | list of packages | required | the packages every command selects |
+| `tracked` | list of crates | none | crates whose new builds in the target directory are named after each command, besides the framework's |
+| `expected_features` | table: crate = list of features | none | the features of the one build of each crate that `cl doctor` expects in the target directory |
+| `unset_env` | list of variable names | none | removed from every command's environment: variables that change a build input, so a command run with another value rebuilds |
+| `set_env` | table: name = value | none | set in every command's environment |
+| `shard` | table: `"<package>/<test target>"` = count | none | runs that test binary as that many shards when no filter is given |
+| `default_seconds` | table: `"<package>/<test target>"` = seconds | none | orders the first `cl test all` run, longest first; later runs use the times recorded in `<target>/cl-test-times.json` |
+| `run_slots` | integer | 1 | test binaries run at once |
+| `test_threads` | integer | libtest's | `--test-threads` for each test binary, unless the command passes its own |
 
-Refused in a PhotoCraft workspace, with the reason: one `-p <crate>` (or none) through `cl cargo`, `--features`/`-F`/`--no-default-features`, `--all-features`, `--workspace`, and a `cargo test` without `--lib`, `--tests` or `--example`. After every command, a new build of egui, eframe, photocraft-ui-egui, photocraft-io, craft-affinity or a framework crate is named with its feature set. `CL_DRY_RUN=1` prints the composed cargo command and the environment and runs nothing.
+PhotoCraft's root `Cargo.toml` is the worked example: 11 packages selected, `TMPDIR=/tmp` set (its tests keep a scratch reserve that a TMPDIR on a nearly full disk trips), `RUST_MIN_STACK`, `CARGO_INCREMENTAL` and `CRAFT_FONTS_DIR` unset (the text crate's build script tracks the fonts directory), three binaries at a time with four test threads each, and the ui-egui lib binary in three shards.
+
+A shard is chosen by top-level module from the binary's `--list` (a module over a shard's share of the tests is split by its submodules); each test runs in exactly one shard. The last line of `cl test` is `N passed, M failed, B binaries, K overflowed stacks, T s`; failures follow as `binary test_name`.
+
+`CL_LAUNCHER` and `CL_RUNNER` play the same roles as in craft-libs (see [The job pool](#the-job-pool)): every cargo command runs through `CL_LAUNCHER`, every test binary through `CL_RUNNER`.
+
+Refused in an app workspace, with the reason: a selection other than the whole of `selection` (one `-p <crate>`, or none, through `cl cargo`), `--features`/`-F`/`--no-default-features`, `--all-features`, `--workspace`, and a `cargo test` without `--lib`, `--tests` or `--example`. After every command, a new build of a `tracked` or framework crate is named with its feature set. `CL_DRY_RUN=1` prints the composed cargo command and the environment and runs nothing.
 
 ## What not to run locally
 
@@ -84,7 +100,7 @@ Frame-time numbers come from the gallery profile, the build a developer runs on 
 
 ## The job pool
 
-cargo gives each build a jobserver with one token per core, so a build alone uses the whole machine, but several builds at once (worktrees, agents) each take every core and slow each other down. To share one job pool between them, set `CL_LAUNCHER` to a command that runs its arguments with a shared jobserver in `MAKEFLAGS` (cargo joins a jobserver it finds there). `cl` runs every cargo command through that command; without `CL_LAUNCHER` it runs cargo directly.
+cargo gives each build a jobserver with one token per core, so a build alone uses the whole machine, but several builds at once (worktrees, agents) each take every core and slow each other down. To share one job pool between them, set `CL_LAUNCHER` to a command that runs its arguments with a shared jobserver in `MAKEFLAGS` (cargo joins a jobserver it finds there). `cl` runs every cargo command through that command, in craft-libs and in every app workspace; without `CL_LAUNCHER` it runs cargo directly.
 
 Test binaries take no tokens: each starts its own test threads, and screen tests a software renderer's threads as well. `cl test` therefore builds with `cargo test --no-run` through `CL_LAUNCHER` and then runs each test binary itself, as cargo would (from its package's directory, the lib's unit tests first, stopping at the first that fails), through `CL_RUNNER` when it is set: a command that limits how many test binaries run at once. `cl render` runs the story renderer through `CL_RUNNER` too. Keep the two apart: a limit held for a whole build only queues the builds behind it, and the job pool already shares the cores between builds.
 
