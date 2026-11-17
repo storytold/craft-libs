@@ -758,6 +758,29 @@ mod tests {
         assert!(!is_straight(&c, 1e-6));
     }
 
+    /// The edges of the rules the fit is held to: points exactly 1e-12 apart are one, and what they are held back from the room is exactly their
+    /// distance; a tolerance exactly that distance has none to spare and still holds it; the chord of a loop is a point; a chord of exactly 1e-12 is a
+    /// chord (the handles are measured from it, not from its start).
+    #[test]
+    fn the_edges_of_the_rules_of_the_fit_are_where_they_are_said_to_be() {
+        let up = Vec2::new(0.0, 1.0);
+        let mut work = usize::MAX;
+        let (kept, dropped) = dedup(&[Point::new(0.0, 0.0), Point::new(1e-12, 0.0)]);
+        assert_eq!((kept.len(), dropped), (1, 1e-12));
+        assert_eq!(dedup(&[Point::new(0.0, 0.0), Point::new(1.000_000_1e-12, 0.0)]).0.len(), 2);
+        // Two points 5e-13 apart, at a tolerance of exactly that: nothing is spare and nothing is over.
+        let near = [Point::new(0.0, 0.0), Point::new(5e-13, 0.0)];
+        assert_eq!(fit_cubics(&near, up, up, (5e-13, 0.0), &mut work), Ok(Vec::new()));
+        assert_eq!(fit_cubics(&near, up, up, (4.999e-13, 0.0), &mut work), Err(FitStop::Depth));
+        // The handles of a loop are held to the point it comes back to.
+        let loop_ = CubicBez::new((0.0, 0.0), (3.0, 4.0), (-3.0, -4.0), (0.0, 0.0));
+        assert_eq!(chord_distance(&loop_), 5.0);
+        // A chord of exactly 1e-12, with a handle 0.9e-13 off it (within a tolerance of 1e-13 of it, and further than that from its start).
+        let short = CubicBez::new((0.0, 0.0), (1e-12, 0.9e-13), (1e-12, 0.0), (1e-12, 0.0));
+        assert!(is_straight(&short, 1e-13));
+        assert!(!is_straight(&CubicBez::new((0.0, 0.0), (1e-12, 2e-13), (1e-12, 0.0), (1e-12, 0.0)), 1e-13));
+    }
+
     /// A cubic taken for straight is within the tolerance of its chord: each handle is, by its distance to the chord's segment (the allowances for how
     /// far across the chord a handle is, and how far along it beyond the ends, were each the tolerance, which together are 1.4 times it at the
     /// corner of their box: handles at (-0.1, 0.1) of a chord of 1e-7 at a tolerance of 0.1 gave a curve 0.106 from it).
