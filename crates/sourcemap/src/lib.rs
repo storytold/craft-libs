@@ -217,23 +217,30 @@ fn b64(c: u8) -> Option<i64> {
 
 /// Decode one VLQ field from `bytes` at `*pos`.
 fn vlq(bytes: &[u8], pos: &mut usize) -> Option<i64> {
-    let mut result: i64 = 0;
+    let mut result = 0u32;
     let mut shift = 0u32;
     loop {
-        let d = b64(*bytes.get(*pos)?)?;
+        let d = b64(*bytes.get(*pos)?)? as u32;
         *pos += 1;
-        if shift > 35 {
-            return None;
+        let bits = d & 31;
+        if bits != 0 {
+            if bits > u32::MAX.checked_shr(shift)? {
+                return None;
+            }
+            result |= bits << shift;
         }
-        result |= (d & 31) << shift;
         if d & 32 == 0 {
             break;
         }
-        shift += 5;
+        // Redundant zero groups do not change the value.
+        shift = shift.saturating_add(5);
     }
-    let neg = result & 1 == 1;
-    let v = result >> 1;
-    Some(if neg { -v } else { v })
+    let magnitude = i64::from(result >> 1);
+    Some(match (result & 1, magnitude) {
+        (1, 0) => i64::from(i32::MIN),
+        (1, n) => -n,
+        _ => magnitude,
+    })
 }
 
 fn decode_mappings(m: &str, map: &mut SourceMap, budget: &mut usize) -> Result<(), SourceMapError> {
