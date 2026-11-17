@@ -228,3 +228,37 @@ fn average_bitrate_reaches_its_target() {
         assert!(err.abs() < 0.10, "{kbps} kbit/s target: got {got:.0} kbit/s ({:+.1}%)", 100.0 * err);
     }
 }
+
+#[test]
+fn constant_bitrate_streams_hold_their_rate() {
+    let Some(ff) = craft_media_testkit::ffmpeg_or_skip("mpeg2 encoder constant bitrate") else { return };
+    // a small buffer, so what it holds at the start and end moves the average little
+    let vbv = 16384 * 16;
+    for (kbps, b) in [(1500u32, 2), (3000, 0)] {
+        let frames = 100;
+        let c = Case {
+            name: if b == 0 { "cif_cbr_3000_ip" } else { "cif_cbr_1500" },
+            cfg: EncoderConfig { rate: RateControl::Cbr { kbps }, vbv_buffer_bits: Some(vbv), b_pictures: b, ..EncoderConfig::new(352, 288, 25, 1) },
+            frames,
+            probe: "mpeg2video,Main,10,yuv420p",
+            min_psnr: 28.0,
+        };
+        let (_, got) = check(&ff, &c);
+        // the stream is the bit rate times its duration, give or take one buffer
+        let slack = f64::from(vbv) / (frames as f64 / 25.0) / 1000.0;
+        assert!((got - f64::from(kbps)).abs() <= slack, "{kbps} kbit/s: got {got:.0} kbit/s (±{slack:.0})");
+    }
+}
+
+#[test]
+fn ffmpeg_decodes_a_dvd_like_variable_bitrate_stream() {
+    let Some(ff) = craft_media_testkit::ffmpeg_or_skip("mpeg2 encoder variable bitrate") else { return };
+    // DVD-Video's limits: 9.8 Mbit/s into a 224 KiB buffer
+    let cfg = EncoderConfig {
+        rate: RateControl::Vbr { kbps: 5000, max_kbps: 9800 },
+        vbv_buffer_bits: Some(1_835_008),
+        gop_size: 12,
+        ..EncoderConfig::new(720, 576, 25, 1)
+    };
+    check(&ff, &Case { name: "sd_vbr_dvd", cfg, frames: 13, probe: "mpeg2video,Main,8,yuv420p", min_psnr: 30.0 });
+}
