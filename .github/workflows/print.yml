@@ -45,6 +45,8 @@ jobs:
         run: |
           Start-Service Spooler
           Add-PrinterDriver -Name 'Generic / Text Only'
+      # The build has no limit of its own (the job's covers it); the run's limit catches a hung print queue.
+      - run: cargo test -p craft-print --locked --no-run
       - run: cargo test -p craft-print --locked -- --nocapture
         timeout-minutes: 10
         env:
