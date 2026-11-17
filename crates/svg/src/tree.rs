@@ -167,6 +167,7 @@ pub fn root_unitless_size(svg: &str, limits: &Limits) -> Result<Option<(f64, f64
 /// SVG text after shared byte, entity, attribute, XML and expansion-depth checks.
 /// Keep it opaque so consumers use the same checked tree and don't reparse XML locally.
 pub struct Preflight<'s> {
+    #[cfg(feature = "tree-render")]
     limits: Limits,
     xml: roxmltree::Document<'s>,
     depth: usize,
@@ -248,7 +249,13 @@ pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Err
     let Some(height) = height(&xml, limits.tree_depth)? else {
         return Err(Error::TooDeep(limits.tree_depth));
     };
-    Ok(Preflight { limits: *limits, xml, depth, height })
+    Ok(Preflight {
+        #[cfg(feature = "tree-render")]
+        limits: *limits,
+        xml,
+        depth,
+        height,
+    })
 }
 
 /// Dimensions of an SVG viewport in SVG user units.
