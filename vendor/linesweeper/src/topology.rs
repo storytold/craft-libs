@@ -64,6 +64,9 @@ pub trait WindingNumber:
 thread_local! {
     /// The number of scan-west links that `Topology::west_boundary` has followed on this thread.
     static WEST_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The number of path elements that `contours_for_positions` has run winding tests over
+    /// on this thread, to find the piece that holds a loop split off a contour walk.
+    static CONTAINER_TEST_ELEMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Winding numbers for binary set operations.
@@ -1960,17 +1963,20 @@ impl<W: WindingNumber> Topology<W> {
                 .iter()
                 .map(|piece| self.segs_to_path(piece, &positions))
                 .collect();
+            let boxes: Vec<Rect> = paths.iter().map(|path| path.bounding_box()).collect();
             // The area is measured from the piece's own corner, so that large coordinates
             // do not swamp its sign.
-            let clockwise = |path: &BezPath| {
+            let clockwise = |path: &BezPath, bbox: &Rect| {
                 let mut local = path.clone();
-                local.apply_affine(Affine::translate(-path.bounding_box().origin().to_vec2()));
+                local.apply_affine(Affine::translate(-bbox.origin().to_vec2()));
                 local.area() > 0.0
             };
             let same_kind: Vec<bool> = paths
                 .iter()
-                .map(|path| clockwise(path) == walked_outer)
+                .zip(&boxes)
+                .map(|(path, bbox)| clockwise(path, bbox) == walked_outer)
                 .collect();
+            let same_kind_count = same_kind.iter().filter(|&&s| s).count();
             let keep = same_kind.iter().position(|&s| s).unwrap_or(0);
             let mut idxs = vec![contour_idx; pieces.len()];
             for (i, idx) in idxs.iter_mut().enumerate() {
@@ -1989,11 +1995,34 @@ impl<W: WindingNumber> Topology<W> {
                         // No piece winds like the walked contour, so the loops stay
                         // children of the rest of the walk.
                         (Some(contour_idx), !walked_outer)
+                    } else if same_kind_count == 1 {
+                        // Craft patch (touching holes): `keep` is the only piece that can
+                        // hold the loop, as for holes touching their outer contour, so no
+                        // winding test runs.
+                        (Some(contour_idx), !walked_outer)
                     } else {
+                        // Craft patch (touching holes): a piece whose bounding box does not
+                        // hold the probe has a winding number of 0 around it, so the winding
+                        // test runs only for the pieces whose box holds it.
                         let probe = path.segments().next().map(|s| s.eval(0.5));
-                        let container = (0..paths.len())
-                            .filter(|&j| same_kind[j])
-                            .find(|&j| probe.is_some_and(|pt| paths[j].winding(pt) != 0))
+                        let container = probe
+                            .and_then(|pt| {
+                                (0..paths.len())
+                                    .filter(|&j| {
+                                        let b = &boxes[j];
+                                        same_kind[j]
+                                            && b.x0 <= pt.x
+                                            && pt.x <= b.x1
+                                            && b.y0 <= pt.y
+                                            && pt.y <= b.y1
+                                    })
+                                    .find(|&j| {
+                                        #[cfg(test)]
+                                        CONTAINER_TEST_ELEMENTS
+                                            .with(|n| n.set(n.get() + paths[j].elements().len()));
+                                        paths[j].winding(pt) != 0
+                                    })
+                            })
                             .unwrap_or(keep);
                         (Some(idxs[container]), !walked_outer)
                     }
@@ -3917,6 +3946,46 @@ mod tests {
             + &rect_path(40.0, 50.0, 60.0, 70.0, true);
         let contours = consistent_contours(&svg, 1e-6);
         assert_eq!(contours.len(), 5);
+    }
+
+    // A diamond hole 6 wide and 6 tall whose top corner is at (cx, y).
+    fn diamond_hole(cx: f64, y: f64) -> String {
+        let (l, r) = (cx - 3.0, cx + 3.0);
+        format!(
+            "M{cx},{y} L{l},{} L{cx},{} L{r},{} Z ",
+            y + 3.0,
+            y + 6.0,
+            y + 3.0
+        )
+    }
+
+    // Craft patch (touching holes). Each of `n` diamond holes touches the top edge of the
+    // square at its own point, so the walk of the square splits off every hole. Only the
+    // rest of the walk winds like the square, so no hole needs a winding test to find its
+    // parent. Testing each hole against the whole square takes time growing like `n^2`.
+    #[test]
+    fn holes_touching_their_outer_contour_need_no_winding_test() {
+        let n = 200;
+        let mut svg = rect_path(0.0, 0.0, 10.0 * n as f64, 100.0, false);
+        for i in 0..n {
+            svg += &diamond_hole(10.0 * i as f64 + 5.0, 0.0);
+        }
+        super::CONTAINER_TEST_ELEMENTS.with(|c| c.set(0));
+        let contours = consistent_contours(&svg, 1e-6);
+        assert_eq!(super::CONTAINER_TEST_ELEMENTS.with(|c| c.get()), 0);
+        assert_eq!(contours.len(), n + 1);
+        let outer: Vec<ContourIdx> = (0..contours.len())
+            .map(ContourIdx)
+            .filter(|&i| contours[i].outer)
+            .collect();
+        assert_eq!(outer.len(), 1);
+        assert_eq!(contours[outer[0]].parent, None);
+        for i in (0..contours.len())
+            .map(ContourIdx)
+            .filter(|&i| i != outer[0])
+        {
+            assert_eq!(contours[i].parent, Some(outer[0]));
+        }
     }
 
     // Checks that all output segments intersect one another only at endpoints.
