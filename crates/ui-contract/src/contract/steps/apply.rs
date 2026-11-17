@@ -84,13 +84,13 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
             }
             _ => {}
         }
-        let carries = matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. });
+        // Every event that changes the value counts: a proposal, commit or set, and a cancel that restores.
         if bind.is_given()
-            && let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
+            && let Some(value) = event.landed()
         {
             given |= bind.get() != Some(Mixed::Same(value.clone()));
         }
-        written |= bind.apply(event) != Applied::Unchanged && carries;
+        written |= bind.apply(event) != Applied::Unchanged;
         if let Some(value) = event.landed() {
             landing = Some(value.clone());
         }
