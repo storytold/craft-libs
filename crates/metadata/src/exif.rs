@@ -51,8 +51,18 @@ fn pos(v: Option<f64>) -> Option<f64> {
 /// the Exif's tag 700 states; a viewer displays a photo by the Exif's alone, so that one can't tell how a photo
 /// is stored.
 pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
+    ifd0_orientation_value(bytes).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif)
+}
+
+fn ifd0_orientation_value(bytes: &[u8]) -> Option<u16> {
     let tiff = Tiff::parse_with(strip_exif_header(bytes), &ParseOptions::default()).ok()?;
-    tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif)
+    tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION))
+}
+
+/// Read the first IFD's orientation, treating out-of-range values as normal.
+/// Missing or malformed values return `None`.
+pub fn ifd0_orientation_compat(bytes: &[u8]) -> Option<Orientation> {
+    ifd0_orientation_value(bytes).map(Orientation::from_exif)
 }
 
 /// The ISO an Exif IFD states beyond the 16-bit ISOSpeedRatings: RecommendedExposureIndex, else

@@ -4,7 +4,7 @@
 //! - **Files:** [SubRip](srt) (`.srt`), [WebVTT](vtt) (`.vtt`), [Scenarist SCC](scc) (`.scc`,
 //!   CEA-608 pop-on, roll-up and paint-on on read; pop-on on write), [MacCaption MCC](mcc)
 //!   (`.mcc`, SMPTE ST 334-2 packets with CEA-608 and CEA-708), [EBU STL](stl) (`.stl`, EBU
-//!   Tech 3264) and [TTML](ttml) (`.ttml` IMSC1 Text profile, `.dfxp` DFXP) parse into a
+//!   Tech 3264), [ASS/SSA](ass) (`.ass`, `.ssa`) and [TTML](ttml) (`.ttml` IMSC1 Text profile, `.dfxp` DFXP) parse into a
 //!   [`Document`] of [`Cue`]s and write back. Readers are forgiving (BOM, UTF-16, Windows-1252
 //!   fallback, CRLF/CR, missing SRT indexes, `,` or `.` milliseconds, missing hours, no blank
 //!   line between cues); writers are strict. WebVTT cue identifiers, cue settings, `<v Speaker>`
@@ -32,8 +32,12 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+pub mod ass;
 pub mod cea608;
+pub mod jacosub;
 pub mod mcc;
+pub mod pjs;
+pub mod realtext;
 pub mod scc;
 pub mod srt;
 pub mod stl;
@@ -69,10 +73,30 @@ pub enum Format {
     Ttml,
     /// DFXP (TTML1).
     Dfxp,
+    /// Advanced SubStation Alpha (also reads SubStation Alpha).
+    Ass,
+    /// Phoenix Japanimation Society (PJS) subtitles.
+    Pjs,
+    /// RealText streaming timed text markup.
+    RealText,
+    /// JACOsub scriptable subtitles.
+    JacoSub,
 }
 
 impl Format {
-    pub const ALL: [Format; 7] = [Format::Srt, Format::WebVtt, Format::Scc, Format::Mcc, Format::Stl, Format::Ttml, Format::Dfxp];
+    pub const ALL: [Format; 11] = [
+        Format::Srt,
+        Format::WebVtt,
+        Format::Scc,
+        Format::Mcc,
+        Format::Stl,
+        Format::Ttml,
+        Format::Dfxp,
+        Format::Ass,
+        Format::Pjs,
+        Format::RealText,
+        Format::JacoSub,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Format::Srt => "SubRip (SRT)",
@@ -82,6 +106,10 @@ impl Format {
             Format::Stl => "EBU STL",
             Format::Ttml => "TTML (IMSC1)",
             Format::Dfxp => "DFXP (TTML1)",
+            Format::Ass => "Advanced SubStation Alpha (ASS)",
+            Format::Pjs => "PJS",
+            Format::RealText => "RealText",
+            Format::JacoSub => "JACOsub",
         }
     }
     pub fn extension(self) -> &'static str {
@@ -93,6 +121,10 @@ impl Format {
             Format::Stl => "stl",
             Format::Ttml => "ttml",
             Format::Dfxp => "dfxp",
+            Format::Ass => "ass",
+            Format::Pjs => "pjs",
+            Format::RealText => "rt",
+            Format::JacoSub => "jss",
         }
     }
     pub fn from_name(s: &str) -> Option<Format> {
@@ -104,6 +136,10 @@ impl Format {
             "stl" | "ebu-stl" | "ebustl" | "ebu" => Some(Format::Stl),
             "ttml" | "imsc" | "imsc1" | "xml" => Some(Format::Ttml),
             "dfxp" => Some(Format::Dfxp),
+            "ass" | "ssa" => Some(Format::Ass),
+            "pjs" => Some(Format::Pjs),
+            "rt" | "realtext" => Some(Format::RealText),
+            "jss" | "js" | "jacosub" => Some(Format::JacoSub),
             _ => None,
         }
     }
@@ -251,6 +287,19 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if head.starts_with("File Format=MacCaption_MCC") {
         return Some(Format::Mcc);
     }
+    if head.starts_with("[Script Info]") {
+        return Some(Format::Ass);
+    }
+    if realtext::is_realtext(head) {
+        return Some(Format::RealText);
+    }
+    let first_lines: Vec<&str> = head.lines().map(str::trim).filter(|l| !l.is_empty()).take(3).collect();
+    if first_lines.first().is_some_and(|l| pjs::split_cue(l).is_some()) {
+        return Some(Format::Pjs);
+    }
+    if first_lines.iter().any(|l| jacosub::is_timed_line(l)) || (head.starts_with('#') && (head.contains("TimeRes") || head.contains("#T"))) {
+        return Some(Format::JacoSub);
+    }
     let ext = ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase());
     if (head.starts_with('<') && (head.contains("<tt ") || head.contains("<tt>") || head.contains(":tt ")))
         && (head.contains("ns/ttml") || head.contains("ttaf1"))
@@ -262,7 +311,7 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     match ext.as_deref() {
         Some("srt") if has_arrow_timing || head.is_empty() => Some(Format::Srt),
         Some("vtt") if has_arrow_timing => Some(Format::WebVtt),
-        Some("srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml") => None,
+        Some("srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml" | "ass" | "ssa" | "pjs" | "rt" | "jss" | "js") => None,
         _ if has_arrow_timing => Some(Format::Srt),
         _ => None,
     }
@@ -296,6 +345,10 @@ fn parse_unbounded(bytes: &[u8], format: Format) -> Result<Document> {
         Format::Scc => scc::parse(&text),
         Format::Mcc => mcc::parse(&text),
         Format::Ttml | Format::Dfxp => ttml::parse(&text),
+        Format::Ass => ass::parse(&text),
+        Format::Pjs => pjs::parse(&text),
+        Format::RealText => realtext::parse(&text),
+        Format::JacoSub => jacosub::parse(&text),
         Format::Stl => stl::parse(bytes),
     }
 }
@@ -333,6 +386,10 @@ pub fn write(doc: &Document, format: Format, opts: WriteOptions) -> Vec<u8> {
         Format::Stl => stl::write(doc, opts.rate, opts.program),
         Format::Ttml => ttml::write(doc, ttml::Flavor::Imsc1, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
         Format::Dfxp => ttml::write(doc, ttml::Flavor::Dfxp, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
+        Format::Ass => ass::write(doc).into_bytes(),
+        Format::Pjs => pjs::write(doc).into_bytes(),
+        Format::RealText => realtext::write(doc).into_bytes(),
+        Format::JacoSub => jacosub::write(doc).into_bytes(),
     }
 }
 
