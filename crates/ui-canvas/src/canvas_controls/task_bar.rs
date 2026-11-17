@@ -9,8 +9,8 @@ use crate::buttons::IconButton;
 use crate::canvas::canvas_space;
 use crate::contract::overlay::{Anchor, Place, PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad,
-    PopupKind, Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad, PopupKind,
+    Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
 };
 use crate::display::Icon;
 use crate::menu::{Menu, MenuItem};
@@ -169,10 +169,13 @@ impl<'a> TaskBar<'a> {
             _ => TaskBarPlace::default(),
         };
         let hang = shows.then(|| hang_rect(bounds, env.tokens.space.gap.section));
-        let layer = TaskBarLayer::new(label, words.task_bar_move.clone(), layer_overlay(&held, hang, area), shows);
+        let layer = TaskBarLayer::new(label, layer_overlay(&held, hang, area), shows);
         let mut menu = MoreMenu { words: Arc::clone(&words), placed: false, pick: None };
+        let grip = words.task_bar_move.clone();
         let mut shown = layer.show(ui, |ui, _| {
-            Bar::new(Label::Empty, BarKind::Tool).show(ui, |ui, _| {
+            // The bar is the one surface: the grip is its first member, on the members' line inside its padding.
+            Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+                let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
                 menu.placed = false;
                 let inner = body(ui, &mut TaskBarCx { menu: &mut menu });
                 menu.place(ui);
@@ -265,8 +268,9 @@ impl Outcome for TaskBarLayerOutput {
     }
 }
 
-/// The task bar's layer: a floating surface whose line starts with the grip and holds the bar. The move band lies
-/// under the whole line, so the grip and every free point between the members move the layer.
+/// The task bar's layer: it holds the bar, which paints the one floating surface and starts with the grip. The layer
+/// paints nothing of its own, so the bar reads as one rounded shape. Its inline header is empty: it is there for its
+/// move band, which lies under the whole line, so the grip and every free point between the members move the layer.
 #[derive(crate::contract::Component)]
 #[component(container, unregistered)]
 struct TaskBarLayer {
@@ -274,21 +278,19 @@ struct TaskBarLayer {
     common: Common,
     #[container]
     props: ContainerProps,
-    grip: Label,
     /// Open while the bar shows; the caller shows the bar again each pass it wants it.
     open: Bind<'static, bool>,
     moved: Option<Rect>,
 }
 
 impl TaskBarLayer {
-    fn new(label: Label, grip: Label, overlay: Overlay, open: bool) -> Self {
+    fn new(label: Label, overlay: Overlay, open: bool) -> Self {
         let props = ContainerProps::new()
             .mount(Mount::Layer(overlay))
-            .surface(SurfaceKind::Floating)
             .pad(Pad::None)
             .sizing(Sizing::Content)
             .header(HeaderRegion::new().band(DragBand::Move).inline(true));
-        TaskBarLayer { common: Common::new(), props, grip, open: Bind::given(open), moved: None }.label(label).id_salt("task-bar")
+        TaskBarLayer { common: Common::new(), props, open: Bind::given(open), moved: None }.label(label).id_salt("task-bar")
     }
 }
 
@@ -315,11 +317,6 @@ impl Component for TaskBarLayer {
 impl Container for TaskBarLayer {
     fn open(&mut self) -> Option<BindMut<'_, bool>> {
         Some(self.open.reborrow())
-    }
-
-    /// The grip glyph, named for the move it offers.
-    fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(self.grip.clone()).show(ui);
     }
 
     fn placement_changed(&mut self, change: &PlacementChange) {
