@@ -204,19 +204,24 @@ impl Pen<'_> {
         if self.steps > MAX_STEPS { Err(Broken) } else { Ok(()) }
     }
 
-    /// Widen the extent to `p`.
-    fn reach(&mut self, p: Point) {
+    /// Widen the extent to `p`. Too many points break the glyph, as too many strokes do,
+    /// so `extent` is always the box of `extent_points`.
+    fn reach(&mut self, p: Point) -> Res {
         if !p.is_finite() {
-            return;
+            return Ok(());
         }
         // Consecutive runs share their ends; keep each point once in a row.
-        if self.extent_points.last() != Some(&p) && self.extent_points.len() < MAX_POINTS {
+        if self.extent_points.last() != Some(&p) {
+            if self.extent_points.len() >= MAX_POINTS {
+                return Err(Broken);
+            }
             self.extent_points.push(p);
         }
         self.extent = Some(match self.extent {
             Some((lo, hi)) => (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y))),
             None => (p, p),
         });
+        Ok(())
     }
 
     fn flush(&mut self) {
@@ -233,8 +238,8 @@ impl Pen<'_> {
             return Err(Broken);
         }
         if self.down && !self.in_arc {
-            self.reach(self.pos);
-            self.reach(target);
+            self.reach(self.pos)?;
+            self.reach(target)?;
         }
         if self.down {
             if self.active.is_empty() {
@@ -283,7 +288,7 @@ impl Pen<'_> {
                 let (p, q, m) = (at(a), at(a + step), at(a + step / 2.0));
                 let sag = m - (p + q) * 0.5;
                 for corner in [p, q, p + sag, q + sag] {
-                    self.reach(corner);
+                    self.reach(corner)?;
                 }
                 a += step;
             }
@@ -631,5 +636,9 @@ mod instruction_tests {
             assert!(outline(&fixture(program), 0, false).is_err());
         }
         assert!(outline(&fixture(vec![0]), 1, false).is_err());
+        // Tiny fractional arcs: one stroke point but four extent points each.
+        let mut tiny: Vec<u8> = [11, 0, 1, 0, 10, 0x01].repeat(MAX_POINTS / 4 + 1);
+        tiny.push(0);
+        assert!(outline(&fixture(tiny), 0, false).is_err());
     }
 }
