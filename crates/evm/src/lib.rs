@@ -283,7 +283,7 @@ fn split_metadata(code: &[u8]) -> (usize, Option<EvmMetadata>) {
     }
     let start = n - 2 - len;
     let Some(cbor) = code.get(start..n - 2) else { return (n, None) };
-    if !matches!(cbor.first(), Some(0xa1..=0xb7 | 0xbf)) {
+    if !matches!(cbor.first(), Some(0xa1..=0xb8 | 0xbf)) {
         return (n, None);
     }
     let mut pos = 0usize;
@@ -583,6 +583,9 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         if n < 4 && extraction.is_none() {
             continue;
         }
+        // Duplicate identities still advance the end of the recognized dispatcher.
+        // Otherwise the fallback scan starts inside a later comparison, not after it.
+        last_jumpi = Some(jumpi_k);
         if !selectors.insert(sel) {
             continue;
         }
@@ -592,7 +595,6 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         } else {
             vyper_like += 1;
         }
-        last_jumpi = Some(jumpi_k);
         let di = index_of(dest);
         let jumpdest_valid = pattern != "eq-jumpi" || di.and_then(at).is_some_and(|x| x.op == 0x5b);
         let (mutability, reason) = if !jumpdest_valid {

@@ -66,3 +66,28 @@ fn equal_keys_in_separate_maps_are_independent() {
     assert_eq!(entries["a"]["x"], 0);
     assert_eq!(entries["b"]["x"], 1);
 }
+
+#[test]
+fn extended_length_metadata_maps_respect_the_pair_limit() {
+    let map = |count: u8| {
+        let mut cbor = vec![0xb8, count];
+        for index in 0..count {
+            let key = format!("k{index:02}");
+            cbor.push(0x63);
+            cbor.extend_from_slice(key.as_bytes());
+            cbor.push(0);
+        }
+        cbor
+    };
+    for count in [24, 32] {
+        let code = contract_with_trailer(&map(count));
+        let report = analyze(&code).unwrap();
+        assert_eq!(report.analysed_size, 2);
+        assert_eq!(report.metadata.unwrap().entries.as_object().unwrap().len(), usize::from(count));
+    }
+    assert_unrecognized(&map(33));
+    assert_unrecognized(&[0xb8]);
+    let mut truncated = map(24);
+    truncated.pop();
+    assert_unrecognized(&truncated);
+}

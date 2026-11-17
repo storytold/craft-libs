@@ -68,3 +68,17 @@ fn selector_cap_counts_unique_matches() {
     assert_eq!(capped.functions.last().unwrap().selector, "0x00000fff");
     assert!(capped.warnings.iter().any(|warning| warning == "stopped at 4096 selectors"));
 }
+
+#[test]
+fn repeated_comparisons_keep_fallback_scan_after_the_last_dispatch() {
+    for (ending, expected) in [(&[0x5f, 0x5f, 0xfd][..], "absent"), (&[0x00][..], "present")] {
+        let mut code = prefix();
+        comparison(&mut code, 0xfeed0001, 4, 0);
+        comparison(&mut code, 0xfeed0001, 4, 1);
+        code.extend_from_slice(ending);
+        let report = evm::analyze(&code).unwrap();
+        assert_eq!(report.functions.len(), 1);
+        assert_eq!(report.functions[0].bytecode_offset, 0);
+        assert_eq!(report.fallback, expected);
+    }
+}
