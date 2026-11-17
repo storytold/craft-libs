@@ -40,6 +40,9 @@ pub(crate) struct Edit<'a> {
     /// The text laid out already, as a run is painted: the widget shows this galley, which never scrolls, so the text
     /// is not clipped to `rect`.
     pub galley: Option<std::sync::Arc<egui::Galley>>,
+    /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
+    /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
+    pub baseline: Option<f32>,
 }
 
 /// What the widget did in one pass.
@@ -81,6 +84,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         caret_visible,
         underline,
         galley,
+        baseline,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
     let env = crate::runtime::env::Env::of(ui);
@@ -127,13 +131,11 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     };
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
     // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, placed so the
-    // text's baseline is the line's (`text::line_baseline`): the mono digits of a number field sit on the baseline of
-    // the body text beside them. egui centres the row in the rect, whatever row it allocates from the rect's top.
+    // text's baseline is `baseline`, else centred on the part's centre line. egui centres the row in the rect, whatever
+    // row it allocates from the rect's top.
     let rect = if multiline || galley.is_some() {
         rect
     } else {
-        let text_env = crate::primitives::text::TextEnv { tokens, direction: env.direction, ink, fonts: facts };
-        let baseline = crate::primitives::text::line_baseline(ui.ctx(), &text_env, role, rect.center().y);
         let probe = {
             let mut format = TextFormat::simple(font_id.clone(), ink);
             if let Some(size) = optical_size {
@@ -141,11 +143,15 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
             }
             let mut job = LayoutJob::default();
             job.append("x", 0.0, format);
-            crate::primitives::text::TextLayout::new(super::text_layout::layout(ui.ctx(), job), false, String::new())
+            super::text_layout::layout(ui.ctx(), job)
         };
         let row = probe.size().y;
-        let top = baseline - probe.first_baseline;
-        Rect::from_center_size(egui::pos2(rect.center().x, top + row / 2.0), egui::vec2(rect.width(), rect.height().max(row)))
+        let first_baseline = probe.rows.first().and_then(|placed| placed.row.glyphs.first().map(|glyph| placed.pos.y + glyph.pos.y));
+        let centre = match baseline.zip(first_baseline) {
+            Some((baseline, first)) => baseline - first + row / 2.0,
+            None => rect.center().y,
+        };
+        Rect::from_center_size(egui::pos2(rect.center().x, centre), egui::vec2(rect.width(), rect.height().max(row)))
     };
     // The component's root took its place in the flow already: the editor runs in a child that takes none, so the
     // parent's cursor stays past the root, not past the text part inside it.
