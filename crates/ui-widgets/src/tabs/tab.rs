@@ -419,7 +419,9 @@ impl Component for Tab<'_> {
         }
         let label = self.label_run(style, cx.resolved.label).color(cx.resolve(&style.label.color));
         if self.kind.clips_label() {
-            draw.clipped(placed.label, |draw| draw.text(placed.label, &label));
+            draw.clipped(placed.label, |draw| {
+                draw.text(placed.label, &label);
+            });
         } else {
             draw.text(placed.label, &label.elide());
         }
