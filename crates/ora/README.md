@@ -29,6 +29,7 @@ means. `SVG_COMPOSITE_OPS` lists the names the specification defines.
 | Elements under the root stack | 8192 (`MAX_NODES`) |
 | `stack.xml` | 16 MiB, 512 levels of nesting, no document type declaration |
 | An entry | the caller's limit; `MAX_ENTRY` (512 MiB) is the suggested one for a layer image |
+| All entries read from one archive | 4 GiB (`MAX_TOTAL`) |
 
 ## ZIP
 

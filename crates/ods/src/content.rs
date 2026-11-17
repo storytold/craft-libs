@@ -187,15 +187,17 @@ impl Import<'_> {
                 let name = self.attr(attrs, "table:name")?.unwrap_or_default();
                 self.sheet = Some(SheetDraft { sheet: Sheet { name, ..Sheet::default() }, depth, row: 0, keep });
             }
+            // Once the text is cut short, nothing after it is kept: its rows and cells are not read.
             Tag::Row
-                if self
-                    .sheet
-                    .as_ref()
-                    .is_some_and(|s| s.keep && self.stack.get(s.depth + 1..).is_some_and(|p| p.iter().all(|t| *t == Tag::Rows))) =>
+                if !self.wb.text_truncated
+                    && self
+                        .sheet
+                        .as_ref()
+                        .is_some_and(|s| s.keep && self.stack.get(s.depth + 1..).is_some_and(|p| p.iter().all(|t| *t == Tag::Rows))) =>
             {
                 self.row = Some(RowDraft { depth, repeat: self.count(attrs, "table:number-rows-repeated", u32::MAX)?, col: 0, cells: vec![] });
             }
-            Tag::Cell | Tag::Covered if self.row.as_ref().is_some_and(|r| depth == r.depth + 1) => {
+            Tag::Cell | Tag::Covered if !self.wb.text_truncated && self.row.as_ref().is_some_and(|r| depth == r.depth + 1) => {
                 let value_type = if self.attr(attrs, "calcext:value-type")?.as_deref() == Some("error") {
                     Some(ValueType::Error)
                 } else {
@@ -320,6 +322,24 @@ impl Import<'_> {
         Ok(())
     }
 
+    /// With [`Options::truncate_text`], how many of `copies` copies of `each` bytes of text fit
+    /// in what is left of `max_text`; fewer than `copies` marks the workbook truncated, and none
+    /// fit once it is.
+    fn fit(&mut self, copies: u32, each: u64) -> u32 {
+        if self.wb.text_truncated {
+            return 0;
+        }
+        if each == 0 {
+            return copies;
+        }
+        let room = self.options.max_text.saturating_sub(self.text) / each;
+        if room < u64::from(copies) {
+            self.wb.text_truncated = true;
+            return u32::try_from(room).unwrap_or(0);
+        }
+        copies
+    }
+
     fn charge_text(&mut self, bytes: u64) -> Result<(), Error> {
         self.text = self.text.saturating_add(bytes);
         if self.text > self.options.max_text {
@@ -342,9 +362,13 @@ impl Import<'_> {
         row.col = end;
         if kept {
             let len = draft.cell.text.len() + draft.cell.raw.as_ref().map_or(0, String::len);
-            self.charge_text(u64::from(draft.repeat).saturating_mul(len as u64))?;
+            let repeat = if self.options.truncate_text { self.fit(draft.repeat, len as u64) } else { draft.repeat };
+            if repeat == 0 {
+                return Ok(());
+            }
+            self.charge_text(u64::from(repeat).saturating_mul(len as u64))?;
             if let Some(row) = self.row.as_mut() {
-                row.cells.push(RepeatedCell { col: start, repeat: draft.repeat, width, height, cell: draft.cell });
+                row.cells.push(RepeatedCell { col: start, repeat, width, height, cell: draft.cell });
             }
         }
         Ok(())
@@ -360,49 +384,100 @@ impl Import<'_> {
         };
         let first_row = sheet.row;
         sheet.row = end;
-        for entry in row.cells {
-            let count = u64::from(entry.repeat) * u64::from(row.repeat);
-            if !entry.cell.is_blank() {
-                self.cells = self.cells.saturating_add(count);
-                let len = entry.cell.text.len() + entry.cell.raw.as_ref().map_or(0, String::len);
-                // The first row's copies were charged with the cell.
-                self.text = self.text.saturating_add(count.saturating_sub(u64::from(entry.repeat)).saturating_mul(len as u64));
+        // The first copy of the row was charged cell by cell. With truncation, keep the further
+        // copies whose text fits, then the cells of the next copy that fit.
+        let row_repeat = row.repeat;
+        let mut partial = vec![];
+        let repeat = if self.options.truncate_text && row.repeat > 1 && !self.wb.text_truncated {
+            let each = row.cells.iter().map(|e| u64::from(e.repeat).saturating_mul(charged(&e.cell))).fold(0u64, u64::saturating_add);
+            let full = 1 + self.fit(row.repeat - 1, each);
+            if full < row.repeat {
+                let room = self.options.max_text.saturating_sub(self.text).saturating_sub(each.saturating_mul(u64::from(full - 1)));
+                partial = cells_that_fit(&row.cells, room);
             }
-            let merged = entry.width > 1 || entry.height > 1;
-            if merged {
-                self.merges = self.merges.saturating_add(count);
+            full
+        } else if self.options.truncate_text && self.wb.text_truncated {
+            1
+        } else {
+            row.repeat
+        };
+        let kept_end = first_row.saturating_add(repeat).min(end);
+        // The first copy's text was charged in `finish_cell`; the partial copy's was not.
+        for (cells, rows, first_charged) in [(row.cells, first_row..kept_end, true), (partial, kept_end..kept_end + 1, false)] {
+            for entry in cells {
+                self.place(&entry, rows.clone(), first_charged, end, row_repeat)?;
             }
-            if self.cells > self.options.max_cells || self.merges > self.options.max_merges || self.text > self.options.max_text {
-                return Err(Error::TooLarge(format!(
-                    "more than {} cells, {} merged ranges or {} MiB of text",
-                    self.options.max_cells,
-                    self.options.max_merges,
-                    self.options.max_text >> 20
-                )));
-            }
-            let last_col = entry.col.checked_add(entry.repeat - 1).and_then(|c| c.checked_add(entry.width - 1));
-            let last_row = end.checked_add(entry.height - 1);
-            if last_col.is_none_or(|c| c >= MAX_COLS) || last_row.is_none_or(|r| r > MAX_ROWS) {
-                return Err(Error::TooLarge("a merged cell reaches outside the grid".into()));
-            }
-            if merged && ((entry.repeat > 1 && entry.width > 1) || (row.repeat > 1 && entry.height > 1)) {
-                return Err(Error::Invalid("repeated cells have overlapping merges".into()));
-            }
-            let Some(sheet) = self.sheet.as_mut() else { return Ok(()) };
-            for r in first_row..end {
-                for c in entry.col..entry.col + entry.repeat {
-                    let at = CellRef::new(r, c);
-                    if !entry.cell.is_blank() {
-                        sheet.sheet.cells.insert(at, entry.cell.clone());
-                    }
-                    if merged {
-                        sheet.sheet.merges.push(Range::new(at, CellRef::new(r + entry.height - 1, c + entry.width - 1)));
-                    }
+        }
+        Ok(())
+    }
+
+    /// Counts, checks and stores one cell entry over `rows`.
+    fn place(&mut self, entry: &RepeatedCell, rows: std::ops::Range<u32>, first_charged: bool, end: u32, row_repeat: u32) -> Result<(), Error> {
+        let count = u64::from(entry.repeat) * u64::from(rows.end.saturating_sub(rows.start));
+        if !entry.cell.is_blank() {
+            self.cells = self.cells.saturating_add(count);
+            // The first row's copies were charged with the cell.
+            let copies = if first_charged { count.saturating_sub(u64::from(entry.repeat)) } else { count };
+            self.text = self.text.saturating_add(copies.saturating_mul(charged(&entry.cell)));
+        }
+        let merged = entry.width > 1 || entry.height > 1;
+        if merged {
+            self.merges = self.merges.saturating_add(count);
+        }
+        if self.cells > self.options.max_cells || self.merges > self.options.max_merges || self.text > self.options.max_text {
+            return Err(Error::TooLarge(format!(
+                "more than {} cells, {} merged ranges or {} MiB of text",
+                self.options.max_cells,
+                self.options.max_merges,
+                self.options.max_text >> 20
+            )));
+        }
+        let last_col = entry.col.checked_add(entry.repeat - 1).and_then(|c| c.checked_add(entry.width - 1));
+        let last_row = end.checked_add(entry.height - 1);
+        if last_col.is_none_or(|c| c >= MAX_COLS) || last_row.is_none_or(|r| r > MAX_ROWS) {
+            return Err(Error::TooLarge("a merged cell reaches outside the grid".into()));
+        }
+        if merged && ((entry.repeat > 1 && entry.width > 1) || (row_repeat > 1 && entry.height > 1)) {
+            return Err(Error::Invalid("repeated cells have overlapping merges".into()));
+        }
+        let Some(sheet) = self.sheet.as_mut() else { return Ok(()) };
+        for r in rows {
+            for c in entry.col..entry.col + entry.repeat {
+                let at = CellRef::new(r, c);
+                if !entry.cell.is_blank() {
+                    sheet.sheet.cells.insert(at, entry.cell.clone());
+                }
+                if merged {
+                    sheet.sheet.merges.push(Range::new(at, CellRef::new(r + entry.height - 1, c + entry.width - 1)));
                 }
             }
         }
         Ok(())
     }
+}
+
+/// Bytes of text a kept cell is charged: its displayed text and its value attribute.
+fn charged(cell: &Cell) -> u64 {
+    if cell.is_blank() { 0 } else { (cell.text.len() + cell.raw.as_ref().map_or(0, String::len)) as u64 }
+}
+
+/// The leading entries of a row copy whose text fits in `room` bytes, the last one with only
+/// the repeats that fit.
+fn cells_that_fit(cells: &[RepeatedCell], mut room: u64) -> Vec<RepeatedCell> {
+    let mut out = vec![];
+    for e in cells {
+        let len = charged(&e.cell);
+        let n = room.checked_div(len).map_or(e.repeat, |fit| u32::try_from(fit).unwrap_or(u32::MAX).min(e.repeat));
+        if n == 0 {
+            break;
+        }
+        room -= u64::from(n) * len;
+        out.push(RepeatedCell { col: e.col, repeat: n, width: e.width, height: e.height, cell: e.cell.clone() });
+        if n < e.repeat {
+            break;
+        }
+    }
+    out
 }
 
 fn push_text(out: &mut String, text: &str, max: usize) -> Result<(), Error> {

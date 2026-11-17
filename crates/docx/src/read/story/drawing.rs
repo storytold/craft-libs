@@ -12,23 +12,7 @@ impl Reader<'_> {
     /// text and drawing ids are carried into the object. Returns `None` when the frame or payload
     /// cannot be read. Ink written by WordCraft keeps its tool's caps rather than an outline cap.
     pub(super) fn read_drawing(&mut self, sc: &mut StoryCtx, d: &El, rels: &Rels) -> Option<InlineObject> {
-        let (c, anchored) = match d.child("wp:inline") {
-            Some(c) => (c, false),
-            None => (d.child("wp:anchor")?, true),
-        };
-        let ext = c.child("wp:extent");
-        let dim = |n: &str| ext.and_then(|e| e.attr(n)).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
-        let (w, h) = (dim("cx"), dim("cy"));
-        let (alt, meta) = nv_alt(c.child("wp:docPr"));
-        let mut float = if anchored { anchor_float(c) } else { Float::default() };
-        float.alt = meta;
-        float.hidden = c.child("wp:docPr").is_some_and(|p| on_off_attr(p, "hidden"));
-        if let Some(e) = c.child("wp:effectExtent") {
-            for (slot, n) in float.effect.iter_mut().zip(["l", "t", "r", "b"]) {
-                // Negative for a rotated object narrower than its frame; settled below.
-                *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(-1584.0, 1584.0);
-            }
-        }
+        let Frame { c, anchored, w, h, alt, mut float } = drawing_frame(d)?;
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
         // Checked by URI before the blip search: a diagram's data can hold a blip further down.
         let uri = gd.attr("uri").unwrap_or("");
@@ -82,6 +66,10 @@ impl Reader<'_> {
             self.read_canvas(sc, c, rels, w, h, float)
         } else if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
+        } else if let Some(lc) = gd.child("lc:lockedCanvas") {
+            // Word 2007's shapes, pictures and text in a drawing: read as the group they are.
+            let g = super::locked_canvas::as_group(lc, &self.doc.settings.theme_colors);
+            self.read_group(sc, &g, rels, w, h, float)?
         } else if direct_shape.is_none() && gd.find("a:blip").is_some() {
             self.read_pic(gd, rels, w, h, alt.clone(), float)?
         } else {
@@ -188,10 +176,35 @@ impl Reader<'_> {
         let fallback = ac.child("mc:Fallback")?;
         let kept = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
         let source = self.keep_embedded(&kept, rels, &[])?;
-        let Some(InlineObject::Image { media, w, h, alt, float, .. }) = self.read_drawing(sc, fallback.child("w:drawing")?, rels) else {
-            return None;
+        let picture = fallback.child("w:drawing").and_then(|d| self.read_drawing(sc, d, rels));
+        let Some(InlineObject::Image { media, w, h, alt, float, .. }) = picture else {
+            return self.chartex_placeholder(choice, fallback, rels, source);
         };
         let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media }];
+        let graphic = Arc::new(Graphic { kind: GraphicKind::Chart, items, w, h, source: Some(source), ..Default::default() });
+        Some(InlineObject::Graphic { w, h, alt, float, graphic })
+    }
+
+    /// An Office 2016 chart whose fallback holds no picture (only text, say "Chart not
+    /// available"): a placeholder of the chart's own size (the `wp:extent` of its `mc:Choice`),
+    /// so the page breaks where they do with the chart drawn. The fallback is written back as it
+    /// was. `None` when the fallback has a picture or another drawing (read as before), or
+    /// holds runs or paragraphs, which a writer can't put inside the run that holds the object.
+    fn chartex_placeholder(&mut self, choice: &El, fallback: &El, rels: &Rels, source: Arc<Embedded>) -> Option<InlineObject> {
+        const RUN_CONTENT: [&str; 6] = ["w:t", "w:tab", "w:br", "w:cr", "w:noBreakHyphen", "w:softHyphen"];
+        if fallback.find("a:graphic").is_some() || !fallback.els().all(|e| RUN_CONTENT.contains(&e.name.as_str())) {
+            return None;
+        }
+        let Frame { c, w, h, alt, mut float, .. } = drawing_frame(choice.child("w:drawing")?)?;
+        let part = c
+            .child("a:graphic")
+            .and_then(|g| g.child("a:graphicData"))
+            .and_then(|gd| gd.child("cx:chart"))
+            .and_then(|cx| cx.attr("r:id"))
+            .and_then(|id| crate::read::part_of(rels, id, "chartEx"));
+        let space = part.and_then(|p| self.graphic_part(&p));
+        let items = crate::read::chart::chartex_items(space.as_deref(), w, h);
+        float.effect = float.effect.map(|e| e.max(0.0));
         let graphic = Arc::new(Graphic { kind: GraphicKind::Chart, items, w, h, source: Some(source), ..Default::default() });
         Some(InlineObject::Graphic { w, h, alt, float, graphic })
     }
@@ -526,12 +539,17 @@ impl Reader<'_> {
             outline_fill: paint.outline_fill,
             ..ShapeExtra::default()
         };
-        // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56); other presets drawn as
-        // rounded rectangles keep the default.
-        if prst == "roundRect" {
+        // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56), a frame's own border
+        // width (`adj1`); other presets drawn as rounded rectangles keep the default.
+        let adj = match prst {
+            "roundRect" => Some("adj"),
+            "frame" => Some("adj1"),
+            _ => None,
+        };
+        if let Some(adj) = adj {
             extra.corner = sppr
                 .and_then(|s| s.child("a:prstGeom"))
-                .and_then(|g| preset_adj(g, "adj"))
+                .and_then(|g| preset_adj(g, adj))
                 .and_then(|v| u32::try_from(v.clamp(0, i64::from(craft_wordmodel::connector::MAX_CORNER))).ok());
         }
         // Arrowheads: any end type but `none` (ECMA-376 §20.1.10.33) is drawn as a triangle of its
@@ -596,6 +614,38 @@ impl Reader<'_> {
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
     }
+}
+
+/// The frame of a `w:drawing`: its `wp:inline` or `wp:anchor` element, the size in points,
+/// the alternative text, and the placement with its effect extent (rotation not yet settled).
+struct Frame<'a> {
+    c: &'a El,
+    anchored: bool,
+    w: f32,
+    h: f32,
+    alt: String,
+    float: Float,
+}
+
+fn drawing_frame(d: &El) -> Option<Frame<'_>> {
+    let (c, anchored) = match d.child("wp:inline") {
+        Some(c) => (c, false),
+        None => (d.child("wp:anchor")?, true),
+    };
+    let ext = c.child("wp:extent");
+    let dim = |n: &str| ext.and_then(|e| e.attr(n)).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
+    let (w, h) = (dim("cx"), dim("cy"));
+    let (alt, meta) = nv_alt(c.child("wp:docPr"));
+    let mut float = if anchored { anchor_float(c) } else { Float::default() };
+    float.alt = meta;
+    float.hidden = c.child("wp:docPr").is_some_and(|p| on_off_attr(p, "hidden"));
+    if let Some(e) = c.child("wp:effectExtent") {
+        for (slot, n) in float.effect.iter_mut().zip(["l", "t", "r", "b"]) {
+            // Negative for a rotated object narrower than its frame; settled below.
+            *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(-1584.0, 1584.0);
+        }
+    }
+    Some(Frame { c, anchored, w, h, alt, float })
 }
 
 /// The `mc:Choice` holding an Office 2016 chart (`cx:chart`) in an `mc:AlternateContent`.

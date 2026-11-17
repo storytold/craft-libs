@@ -331,9 +331,11 @@ impl Reader<'_> {
         for a in root.children("w:abstractNum").take(10_000) {
             let Some(id) = a.attr("w:abstractNumId").and_then(u32_of) else { continue };
             let mut levels: Vec<Level> = (0..9).map(default_level).collect();
+            let mut explicit_levels = [false; 9];
             for l in a.children("w:lvl") {
                 let Some(i) = numbering_level_index(l.attr("w:ilvl")) else { continue };
                 levels[i] = self.level(l, i);
+                explicit_levels[i] = true;
             }
             if let Some(link) = a.child_val("w:numStyleLink") {
                 links.push((id, link.to_string()));
@@ -343,6 +345,7 @@ impl Reader<'_> {
                 id,
                 name: a.child_val("w:name").map(str::to_string),
                 levels,
+                explicit_levels: Some(explicit_levels),
                 nsid: a.child_val("w:nsid").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 tmpl: a.child_val("w:tmpl").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 multi_level_type: a
@@ -376,9 +379,13 @@ impl Reader<'_> {
         for (aid, style) in links {
             let num = self.doc.styles.get(&self.pc.style_id(&style)).and_then(|s| s.para.numbering).map(|n| n.num);
             let src = num.and_then(|n| nums.iter().find(|x: &&Num| x.id == n)).map(|x| x.abstract_id);
-            let levels = src.filter(|s| *s != aid).and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s)).map(|a| a.levels.clone());
-            if let (Some(levels), Some(a)) = (levels, abstracts.iter_mut().find(|a| a.id == aid)) {
+            let source = src
+                .filter(|s| *s != aid)
+                .and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s))
+                .map(|a| (a.levels.clone(), a.explicit_levels));
+            if let (Some((levels, explicit_levels)), Some(a)) = (source, abstracts.iter_mut().find(|a| a.id == aid)) {
                 a.levels = levels;
+                a.explicit_levels = explicit_levels;
             }
         }
         Arc::make_mut(&mut self.doc.numbering).abstracts = abstracts;
