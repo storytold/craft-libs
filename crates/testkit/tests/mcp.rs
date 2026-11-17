@@ -424,6 +424,21 @@ fn a_message_with_an_invalid_id_is_a_protocol_error() {
 }
 
 #[test]
+fn a_malformed_reply_to_another_id_is_a_protocol_error() {
+    let replies = [
+        json!({"jsonrpc": "2.0", "id": 9999, "result": 1, "error": {"code": 1, "message": "both"}}),
+        json!({"jsonrpc": "2.0", "id": "other"}),
+        json!({"jsonrpc": "2.0", "id": null, "error": {"code": "x", "message": "m"}}),
+    ];
+    for msg in replies {
+        let mut c = fake(move |_, _| Some(vec![msg.to_string()]));
+        let err = c.request_within("x", json!({}), LONG).unwrap_err();
+        assert!(matches!(err, McpError::Protocol(_)), "{err}");
+        assert!(c.closed().is_some());
+    }
+}
+
+#[test]
 fn a_tool_error_result_is_returned_unchanged() {
     let mut c = fake(|_, req| Some(vec![result(req, json!({"content": [{"type": "text", "text": "no document"}], "isError": true}))]));
     let r = c.call_tool("doc.save", json!({})).unwrap();

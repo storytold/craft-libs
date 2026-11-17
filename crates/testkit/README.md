@@ -215,7 +215,7 @@ The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The
 | Call | What it does |
 |---|---|
 | `initialize(version)` | Sends `initialize` with `version` (`mcp::PROTOCOL_VERSION` is `2025-06-18`), waits for the reply, then sends `notifications/initialized`. A reply with another version returns `UnsupportedVersion` and closes the connection. |
-| `request(method, params)`, `request_within(.., timeout)` | Sends a request with a new numeric id and returns the `result` of the reply with that id. Replies with other ids are skipped. An error reply returns `Rpc` with its code, message and data, and the connection stays usable. |
+| `request(method, params)`, `request_within(.., timeout)` | Sends a request with a new numeric id and returns the `result` of the reply with that id. Well-formed replies with other ids are skipped. An error reply returns `Rpc` with its code, message and data, and the connection stays usable. |
 | `call_tool(name, args)`, `call_tool_within(.., timeout)` | Sends `tools/call` and returns the tool result unchanged, `content` and `isError` included. |
 | `list_tools()` | Reads `tools/list` pages through `nextCursor` and returns the tools as sent. More than `max_pages` pages returns `TooManyPages`, and tools that add up to more than `max_line_bytes` of JSON return `ToolListTooLarge`. |
 | `notify(method, params)` | Sends a notification, which has no id and gets no reply. |

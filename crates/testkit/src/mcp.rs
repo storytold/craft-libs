@@ -298,6 +298,16 @@ fn read_line_capped(r: &mut impl BufRead, cap: usize) -> Result<Option<Vec<u8>>,
     }
 }
 
+/// Whether `v` holds exactly one of `result` and an `error` object with an integer `code` and a
+/// string `message`.
+fn is_reply(v: &Value) -> bool {
+    match (v.get("result"), v.get("error")) {
+        (Some(_), None) => true,
+        (None, Some(error)) => error.get("code").and_then(Value::as_i64).is_some() && error.get("message").is_some_and(Value::is_string),
+        _ => false,
+    }
+}
+
 /// Parses one stdout line as a JSON-RPC 2.0 message object.
 fn parse_line(line: &[u8]) -> Incoming {
     let preview = || String::from_utf8_lossy(&line[..line.len().min(PREVIEW)]).into_owned();
@@ -537,7 +547,7 @@ impl McpChild {
     ///
     /// While it waits, it answers the child's `ping` requests with an empty result and its other
     /// requests with error -32601, keeps notifications for [`McpChild::take_notifications`], and
-    /// skips replies with another id. None of these extend the deadline.
+    /// skips well-formed replies with another id. None of these extend the deadline.
     pub fn request_within(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value, McpError> {
         self.check_open()?;
         check_timeout("the request deadline", timeout)?;
@@ -701,8 +711,8 @@ impl McpChild {
         }))
     }
 
-    /// Handles one message: answers a request from the child, keeps a notification, skips a reply
-    /// to another id, and returns the reply to `waiting`.
+    /// Handles one message: answers a request from the child, keeps a notification, skips a
+    /// well-formed reply to another id, and returns the reply to `waiting`.
     fn route(&mut self, v: Value, waiting: Option<u64>) -> Result<Option<Value>, McpError> {
         if v.get("id").is_some_and(|id| !matches!(id, Value::String(_) | Value::Number(_) | Value::Null)) {
             return Err(self.fail(McpError::Protocol("a message has an `id` that is not a string, a number or null".into())));
@@ -727,7 +737,11 @@ impl McpChild {
                 Ok(None)
             }
             (Some(_), _) => Err(self.fail(McpError::Protocol("a message has a `method` that is not a string".into()))),
-            (None, Some(id)) => Ok((waiting.is_some() && id.as_u64() == waiting).then_some(v)),
+            (None, Some(id)) if waiting.is_some() && id.as_u64() == waiting => Ok(Some(v)),
+            (None, Some(_)) if is_reply(&v) => Ok(None),
+            (None, Some(_)) => {
+                Err(self.fail(McpError::Protocol("a reply to another id does not hold exactly one of `result` and a valid `error`".into())))
+            }
             (None, None) => Err(self.fail(McpError::Protocol("a message has neither `method` nor `id`".into()))),
         }
     }
