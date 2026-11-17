@@ -14,6 +14,7 @@
 //! [`hostile::hammer`] runs a parser over every truncation and mutations of a valid input and fails
 //! on a panic or a case that does not finish in time; `CRAFT_MEDIA_HOSTILE_MULT=10` runs ten times
 //! the iterations. It and [`with_deadline`] call `craft_testkit`.
+//! [`vmd`] writes Sierra VMD fixtures, which ffmpeg can read but not write.
 //!
 //! [`smacker`] builds synthetic Smacker trees, streams and files for the tests of the demuxer and
 //! the decoders.
@@ -23,6 +24,7 @@
 
 pub mod hostile;
 pub mod smacker;
+pub mod vmd;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

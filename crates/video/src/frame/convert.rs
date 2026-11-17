@@ -385,9 +385,21 @@ impl TryFrom<&crate::smacker::Decoder> for VideoFrame {
     }
 }
 
+#[cfg(feature = "vmd-decode")]
+impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
+    type Error = FrameError;
+
+    /// The decoder's current picture, its palette indices looked up in its palette: 8-bit R, G, B
+    /// planes at full size (the samples are copied, as VMD stores none of them as planes). VMD
+    /// signals no colour description beyond RGB, nor timing.
+    fn try_from(d: &crate::vmd::Decoder) -> Result<Self, FrameError> {
+        paletted(d.width(), d.height(), d.indices(), d.palette())
+    }
+}
+
 /// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity), the
 /// other colour tags unspecified.
-#[cfg(feature = "smacker-decode")]
+#[cfg(any(feature = "smacker-decode", feature = "vmd-decode"))]
 fn paletted(width: usize, height: usize, indices: &[u8], palette: &[[u8; 3]; 256]) -> Result<VideoFrame, FrameError> {
     let too_large = FrameError::Shape("picture size does not fit in u32");
     let (w, h) = (u32::try_from(width).map_err(|_| too_large.clone())?, u32::try_from(height).map_err(|_| too_large)?);

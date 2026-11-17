@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Smacker."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Smacker, Sierra VMD."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -65,6 +65,9 @@ av1-large-encode = ["av1-encode", "dep:rav1e"]
 # Smacker video (the 8-bit paletted game video format): decoder; `smacker` turns it on too.
 smacker = ["smacker-decode"]
 smacker-decode = ["craft-media/smacker"]
+# Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
+vmd = ["vmd-decode"]
+vmd-decode = []
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon", "rav1e?/threading"]
 
@@ -80,8 +83,12 @@ rav1e = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
-# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test.
-craft-media = { workspace = true, features = ["avi"] }
+# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test, and the VMD demuxer for the VMD decoder's.
+craft-media = { workspace = true, features = ["avi", "vmd"] }
+
+[[test]]
+name = "vmd"
+required-features = ["vmd-decode"]
 
 [[test]]
 name = "hap"

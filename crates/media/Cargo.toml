@@ -24,6 +24,8 @@ avi = []
 mxf = ["dep:chrono"]
 # MPEG-2 Systems demuxer: transport streams and program streams (`craft_media::mpegts`).
 mpegts = []
+# Sierra VMD (Video and Music Data) demuxer (`craft_media::vmd`).
+vmd = []
 # Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
 ogg = []
 # Smacker (SMK) demuxer (`craft_media::smacker`).
@@ -80,6 +82,10 @@ required-features = ["mxf"]
 [[test]]
 name = "oracle_ogg"
 required-features = ["ogg"]
+
+[[test]]
+name = "oracle_vmd"
+required-features = ["vmd"]
 
 [[test]]
 name = "roundtrip"

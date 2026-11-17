@@ -46,6 +46,8 @@ pub enum Container {
     MpegPs,
     /// Smacker (SMK).
     Smacker,
+    /// Sierra VMD (Video and Music Data).
+    Vmd,
 }
 
 impl Container {
@@ -69,6 +71,7 @@ impl Container {
             Container::MpegTs => "MPEG-TS",
             Container::MpegPs => "MPEG-PS",
             Container::Smacker => "Smacker",
+            Container::Vmd => "VMD",
         }
     }
 }
@@ -139,6 +142,10 @@ pub enum CodecId {
     SmackerAudio,
     /// Smacker video.
     SmackerVideo,
+    /// Sierra VMD video (8-bit paletted).
+    VmdVideo,
+    /// Sierra VMD audio (8-bit PCM or 16-bit DPCM).
+    VmdAudio,
     /// A codec this crate has no identifier for.
     Unknown,
 }
@@ -177,6 +184,8 @@ impl CodecId {
             CodecId::Apv => "APV",
             CodecId::SmackerAudio => "Smacker audio",
             CodecId::SmackerVideo => "Smacker video",
+            CodecId::VmdVideo => "VMD video",
+            CodecId::VmdAudio => "VMD audio",
             CodecId::Unknown => "unknown",
         }
     }
@@ -202,6 +211,7 @@ impl CodecId {
                 | CodecId::Vorbis
                 | CodecId::Speex
                 | CodecId::SmackerAudio
+                | CodecId::VmdAudio
         )
     }
 
@@ -222,6 +232,7 @@ impl CodecId {
                 | CodecId::Dnxhd
                 | CodecId::Apv
                 | CodecId::SmackerVideo
+                | CodecId::VmdVideo
         )
     }
 }
@@ -272,6 +283,7 @@ impl PcmFormat {
 /// | VP9 | the MP4 `vpcC` payload, or Matroska's codec feature metadata |
 /// | APV | the `apvC` record |
 /// | Smacker video | the four tree table sizes (little-endian `u32`s), then the Huffman tree data |
+/// | VMD video, VMD audio | the 816-byte VMD file header |
 ///
 /// `sample_rate` and `channels` are what the container declares (for HE-AAC with implicit
 /// signalling, usually the core rate), except that Opus is always 48 kHz, the rate it decodes at;
@@ -371,13 +383,14 @@ mod tests {
 
     #[test]
     fn audio_and_video_are_disjoint() {
-        for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3, CodecId::Speex] {
+        for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3, CodecId::Speex, CodecId::VmdAudio] {
             assert!(c.is_audio() && !c.is_video(), "{c:?}");
         }
-        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv] {
+        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv, CodecId::VmdVideo] {
             assert!(c.is_video() && !c.is_audio(), "{c:?}");
         }
         assert!(!CodecId::Unknown.is_audio() && !CodecId::Unknown.is_video());
+        assert_eq!((CodecId::VmdVideo.name(), CodecId::VmdAudio.name(), Container::Vmd.name()), ("VMD video", "VMD audio", "VMD"));
     }
 
     #[test]
