@@ -843,13 +843,25 @@ fn styles_as_read(doc: &Document, kept: Option<&craft_wordmodel::kept::KeptXml>,
             used.2.entry(name.to_string()).or_insert_with(|| d.clone());
         }
     }
+    let (changed, rewritten) = common_changes(doc, k);
+    let ours = |id: &str| super::writer::odf_name(id);
+    let read = super::kept::file_names(&k.style_ids, &ours);
+    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten, &read)
+}
+
+/// The keys of the file's style definitions `doc` has changed since they were read, and what
+/// becomes of those written from the model under the file's names ([`super::kept::rewritten_defs`]).
+/// The others are written as read.
+fn common_changes(
+    doc: &Document,
+    k: &craft_wordmodel::kept::KeptXml,
+) -> (std::collections::BTreeSet<String>, std::collections::BTreeMap<String, Option<String>>) {
     let now = model_styles(doc);
     let changed = super::kept::changed(&k.style_prints, &super::kept::prints(&now));
     // The name WordCraft writes a style id under (`My_20_Custom` was read as `MyCustom`).
     let ours = |id: &str| super::writer::odf_name(id);
     let rewritten = super::kept::rewritten_defs(&now, &k.defs, &changed, &k.style_ids, &ours);
-    let read = super::kept::file_names(&k.style_ids, &ours);
-    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten, &read)
+    (changed, rewritten)
 }
 
 /// The package files the file's own definitions refer to, and those the markup written as read
@@ -867,20 +879,16 @@ fn with_kept_files(
     let Some(k) = kept else { return };
     let mut wanted = w.kept_files_used.clone();
     let pages_kept = k.pages_as_read(doc);
-    let styles_kept = k.styles_as_read(doc);
+    let (changed, rewritten) = common_changes(doc, k);
     for (key, d) in &k.defs {
         if !pages_kept && (key.starts_with("sauto:") || key.starts_with("master:")) {
             continue;
         }
         if key.starts_with("common:") {
-            // The file's definition is written back whole (`styles_as_read`, non-`draw:`
-            // definitions win), or this one is restored for markup naming it. WordCraft's own
-            // definition takes a drawing definition's place: its href is no longer used.
-            let written = if styles_kept {
-                !(super::kept::drawing_def(d) && super::kept::defined(styles, d))
-            } else {
-                key.strip_prefix("common:").is_some_and(|n| w.kept_used.1.contains_key(n)) && !super::kept::defined(styles, d)
-            };
+            // The file's definition is written back as read unless the document changed it
+            // (`styles_as_read`): then WordCraft's takes its place, or none does. WordCraft's own
+            // definition takes a drawing definition's place too. Its href is then no longer used.
+            let written = !changed.contains(key) && !rewritten.contains_key(key) && !(super::kept::drawing_def(d) && super::kept::defined(styles, d));
             if !written {
                 continue;
             }
