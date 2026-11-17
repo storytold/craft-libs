@@ -219,3 +219,36 @@ fn invalid_children_are_counted_once_per_copy_not_queued() {
     let bad = format!("{} ", 50_000 * copies);
     assert!(out.warnings.iter().any(|w| w.starts_with(&bad) && w.contains("node")), "{bad}: {:?}", out.warnings);
 }
+
+#[test]
+fn a_non_finite_colour_reaches_the_writer_unrepaired() {
+    let bad = [f32::INFINITY, f32::NEG_INFINITY, f32::NAN];
+    for (i, v) in bad.into_iter().enumerate() {
+        for field in 0..3 {
+            let mut m = Material::plain("m", [0.5, 0.5, 0.5, 0.5]);
+            match field {
+                0 => m.base_color[i] = v,
+                1 => m.emissive[i] = v,
+                _ => (m.alpha_mode, m.base_color[3]) = (AlphaMode::Mask(0.5), v),
+            }
+            let scene = Scene::from_meshes(vec![triangle(Some(0))], vec![m]);
+            let out = mesh_scene_from(&scene, 1.0, UpAxis::Z);
+            let written = write_prc(&out.scene);
+            assert!(matches!(written, Err(super::PrcWriteError::BadNumber(_))), "{v} in field {field}: {written:?}");
+        }
+    }
+}
+
+#[test]
+fn an_image_shared_by_many_materials_is_probed_once() {
+    // A JPEG whose frame header follows 4 MiB of fill bytes: probing it per material took
+    // 20,000 walks of the fill (before, about 80 billion steps).
+    let mut jpeg = vec![0xFF, 0xD8];
+    jpeg.resize(4 << 20, 0xFF);
+    jpeg.extend_from_slice(&[0xFF, 0xC0, 0, 11, 8, 0, 2, 0, 1, 1, 1, 0x11, 0]);
+    let mut scene = with_image(Scene::from_meshes(vec![triangle(Some(0))], Vec::new()), &jpeg);
+    scene.materials = vec![textured(AlphaMode::Opaque); 20_000];
+    let out = mesh_scene_from(&scene, 1.0, UpAxis::Z);
+    assert_eq!(out.scene.textures.len(), 1);
+    assert_eq!(out.scene.materials.iter().filter(|m| m.texture == Some(0)).count(), 20_000);
+}

@@ -115,20 +115,24 @@ impl Counts {
 /// Fills `out.materials` and `out.textures`; returns each material's kept texture slot.
 fn materials(scene: &Scene, out: &mut MeshScene, counts: &mut Counts) -> Vec<Option<TextureRef>> {
     let mut seen: HashMap<(usize, [Wrap; 2], bool), usize> = HashMap::new();
+    // Each image is probed once however many materials name it: a JPEG probe walks its fill bytes.
+    let mut probed: HashMap<usize, Option<&[u8]>> = HashMap::new();
     let mut slots = Vec::with_capacity(scene.materials.len());
     for m in &scene.materials {
         let [r, g, b, a] = m.base_color.map(f64::from);
         let alpha = match m.alpha_mode {
             AlphaMode::Opaque => 1.0,
             AlphaMode::Blend => a,
+            AlphaMode::Mask(_) if !a.is_finite() => a,
             AlphaMode::Mask(cutoff) => f64::from(u8::from(a >= f64::from(cutoff))),
         };
         let others = [m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture];
         counts.other_maps = counts.other_maps.saturating_add(u64::from(others.iter().any(Option::is_some)));
-        let slot = m.base_color_texture.filter(|t| embedded(scene, t.image).is_some());
+        let image = m.base_color_texture.and_then(|t| *probed.entry(t.image).or_insert_with(|| embedded(scene, t.image)));
+        let slot = m.base_color_texture.filter(|_| image.is_some());
         counts.no_texture = counts.no_texture.saturating_add(u64::from(m.base_color_texture.is_some() && slot.is_none()));
         counts.masks = counts.masks.saturating_add(u64::from(slot.is_some() && matches!(m.alpha_mode, AlphaMode::Mask(_))));
-        let texture = slot.and_then(|t| texture(scene, &t, m, &mut seen, out));
+        let texture = slot.zip(image).map(|(t, image)| texture(image, &t, m, &mut seen, out));
         out.materials.push(SceneMaterial {
             name: name(&m.name),
             rgba: [srgb(r), srgb(g), srgb(b), alpha],
@@ -141,23 +145,16 @@ fn materials(scene: &Scene, out: &mut MeshScene, counts: &mut Counts) -> Vec<Opt
 }
 
 /// The index of `slot`'s texture in `out.textures`, adding it the first time.
-fn texture(
-    scene: &Scene,
-    slot: &TextureRef,
-    m: &Material,
-    seen: &mut HashMap<(usize, [Wrap; 2], bool), usize>,
-    out: &mut MeshScene,
-) -> Option<usize> {
+fn texture(image: &[u8], slot: &TextureRef, m: &Material, seen: &mut HashMap<(usize, [Wrap; 2], bool), usize>, out: &mut MeshScene) -> usize {
     let alpha = m.alpha_mode == AlphaMode::Blend;
     let key = (slot.image, slot.wrap, alpha);
     if let Some(i) = seen.get(&key) {
-        return Some(*i);
+        return *i;
     }
-    let image = embedded(scene, slot.image)?.to_vec();
     let i = out.textures.len();
-    out.textures.push(SceneTexture { image, wrap: slot.wrap.map(wrap), alpha });
+    out.textures.push(SceneTexture { image: image.to_vec(), wrap: slot.wrap.map(wrap), alpha });
     seen.insert(key, i);
-    Some(i)
+    i
 }
 
 /// Image `i`'s bytes when the writer can embed them: a PNG or JPEG file with a size.
@@ -307,6 +304,10 @@ fn name(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_owned())
 }
 
+/// A linear colour component as a display value; a non-finite one is passed on for `write_prc` to refuse.
 fn srgb(c: f64) -> f64 {
+    if !c.is_finite() {
+        return c;
+    }
     f64::from(craft_mesh::linear_to_srgb(c.clamp(0.0, 1.0) as f32))
 }
