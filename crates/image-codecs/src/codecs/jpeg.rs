@@ -198,6 +198,15 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
     data_end_mode(b, false)
 }
 
+/// Whether JPEG `b` holds too little scan data for a `w` × `h` frame to be worth decoding: no scan
+/// data at all, or under one byte for every [`MAX_PIXELS_PER_BYTE`] pixels (counted on the scan
+/// data the marker walk crosses, so APP padding doesn't count). `zune-jpeg` allocates the whole
+/// output before it reads a scan, so a few bytes could otherwise ask for a frame of any size.
+pub(crate) fn scan_too_short(b: &[u8], w: u32, h: u32) -> bool {
+    let (end, scan_bytes) = data_end(b);
+    end == DataEnd::Empty || u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
+}
+
 /// Whether the marker walk actually reaches the first EOI, with malformed segment lengths refused.
 pub(crate) fn reaches_eoi(b: &[u8]) -> bool {
     data_end_mode(b, true).0 == DataEnd::Complete
@@ -322,6 +331,40 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Whether the first frame header of `b` samples its first component below the largest
+/// horizontal or vertical sampling factor of the frame. zune-jpeg 0.5 sizes its upsampler's
+/// scratch row from the first component and asserts on some such frames (jpeg-encoder writes
+/// CMYK that way: C, M and Y at 1×1, K larger). `false` when no frame header can be read.
+fn first_component_subsampled(b: &[u8]) -> bool {
+    if b.get(..2) != Some(&[0xFF, 0xD8]) {
+        return false;
+    }
+    let mut i = 2;
+    while let (Some(&0xFF), Some(&m)) = (b.get(i), b.get(i + 1)) {
+        match m {
+            0xFF => i += 1,
+            0x01 | 0xD0..=0xD8 => i += 2,
+            0xD9 | 0xDA => return false,
+            _ => {
+                let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
+                if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+                    let Some(seg) = b.get(i + 4..i + 2 + len.max(2)) else { return false };
+                    let n = usize::from(seg.get(5).copied().unwrap_or(0));
+                    let factors: Vec<(u8, u8)> = (0..n).filter_map(|c| seg.get(6 + c * 3 + 1)).map(|f| (f >> 4, f & 0x0F)).collect();
+                    let (Some(&(h0, v0)), Some(hmax), Some(vmax)) =
+                        (factors.first(), factors.iter().map(|f| f.0).max(), factors.iter().map(|f| f.1).max())
+                    else {
+                        return false;
+                    };
+                    return h0 < hmax || v0 < vmax;
+                }
+                i += 2 + len;
+            }
+        }
+    }
+    false
+}
+
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
 /// (SOF9–SOF11), lossless (SOF3), or a DCT frame whose precision isn't 8 bits (#4934, #5003).
 /// This includes 12-bit progressive Huffman (SOF2), which `craft-jpeg` supports.
@@ -389,6 +432,30 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>,
 /// truncated or not, are far above this.
 const MAX_PIXELS_PER_BYTE: u64 = 2048;
 
+/// Decode with craft-jpeg: the files [`uses_craft_jpeg`] routes away from `zune-jpeg`, and the
+/// ones `zune-jpeg` panics on.
+fn decode_whole(bytes: &[u8], limits: &Limits, meta: JpegMeta, end: DataEnd, scan_bytes: u64) -> Result<Image, CodecError> {
+    // craft-jpeg sizes its buffers from the frame header before it reads a scan.
+    if scan_bytes == 0 {
+        return Err(err("the file has no scan data"));
+    }
+    if let Some((w, h, _)) = meta.frame
+        && end == DataEnd::Truncated
+        // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
+        // a flat block, so a complete scan may be shorter than this bound.
+        && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
+    {
+        return Err(err("the truncated scan is too short for the frame it declares"));
+    }
+    let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
+    img.icc = meta.icc;
+    img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
+    if end == DataEnd::Truncated || damaged {
+        img.warnings.push(DecodeWarning::Truncated { format: F });
+    }
+    Ok(img)
+}
+
 /// The stored size and EXIF block [`decode`] would find, from the marker segments before the
 /// first scan: the first frame header's size, checked against `limits`, and the APP1 EXIF block.
 pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
@@ -407,26 +474,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     if let Some((w, h, nc)) = meta.frame {
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
     }
-    if uses_craft_jpeg(bytes) {
-        // craft-jpeg sizes its buffers from the frame header before it reads a scan.
-        if scan_bytes == 0 {
-            return Err(err("the file has no scan data"));
-        }
-        if let Some((w, h, _)) = meta.frame
-            && end == DataEnd::Truncated
-            // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
-            // a flat block, so a complete scan may be shorter than this bound.
-            && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
-        {
-            return Err(err("the truncated scan is too short for the frame it declares"));
-        }
-        let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
-        img.icc = meta.icc;
-        img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
-        if end == DataEnd::Truncated || damaged {
-            img.warnings.push(DecodeWarning::Truncated { format: F });
-        }
-        return Ok(img);
+    // Where a panic aborts (wasm32), the frames zune-jpeg may panic on can't be caught below.
+    if uses_craft_jpeg(bytes) || (cfg!(panic = "abort") && first_component_subsampled(bytes)) {
+        return decode_whole(bytes, limits, meta, end, scan_bytes);
     }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(65535).set_max_height(65535);
     let stripped = without_extended_xmp(bytes);
@@ -452,7 +502,12 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         return Err(err(format!("{what} is too short for the frame it declares")));
     }
     dec.set_options(dec.options().jpeg_set_out_colorspace(out_cs));
-    let mut px = dec.decode().map_err(err)?;
+    // zune-jpeg 0.5 asserts on some subsampled four-component frames whose first component isn't
+    // the largest (its upsampler's scratch row is sized from that component): craft-jpeg reads them.
+    let Ok(decoded) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dec.decode())) else {
+        return decode_whole(bytes, limits, meta, end, scan_bytes);
+    };
+    let mut px = decoded.map_err(err)?;
     let expected = w as usize * h as usize * layout.channels();
     if px.len() < expected {
         return Err(err("short pixel buffer"));
@@ -1016,6 +1071,25 @@ mod tests {
 
     fn twelve_bit(v: f32) -> u16 {
         (v * 65535.0 / 4095.0).round() as u16
+    }
+
+    #[test]
+    fn first_component_subsampling() {
+        let sof = |comps: &[(u8, u8)]| {
+            let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
+            for (i, &(h, v)) in comps.iter().enumerate() {
+                s.extend([i as u8 + 1, (h << 4) | v, 0]);
+            }
+            s
+        };
+        assert!(first_component_subsampled(&sof(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
+        assert!(first_component_subsampled(&sof(&[(1, 2), (1, 2), (2, 1)])));
+        assert!(!first_component_subsampled(&sof(&[(2, 2), (1, 1), (1, 1)])));
+        assert!(!first_component_subsampled(&sof(&[(1, 1); 4])));
+        assert!(!first_component_subsampled(&sof(&[])));
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]));
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 20, 8]));
+        assert!(!first_component_subsampled(b"not a jpeg"));
     }
 
     #[test]

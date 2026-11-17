@@ -183,18 +183,70 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
     o
 }
 
+/// Formatted code inline spans inside `<pre><code>`: preserves formatting tags while keeping
+/// raw whitespace semantics (spaces and tabs are preserved, not converted to `&nbsp;` or `<br>`).
+fn code_inlines_html(inlines: &[Inline]) -> String {
+    let mut o = String::new();
+    for i in inlines {
+        match i {
+            Inline::Text(t, f) => {
+                let (open, close) = fmt_tags(f);
+                o.push_str(&open);
+                o.push_str(&esc(t));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
+            Inline::Ruby { base, ruby, fmt } => {
+                let (open, close) = fmt_tags(fmt);
+                o.push_str(&open);
+                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", esc(base), esc(ruby)));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
+            Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            Inline::Image(img) => {
+                o.push_str(&format!(
+                    "<img src=\"data:{};base64,{}\" alt=\"{}\" width=\"{}\" height=\"{}\">",
+                    mime_of(&img.ext),
+                    base64_encode(&img.data),
+                    esc(&img.alt),
+                    (img.w / 0.75).round(),
+                    (img.h / 0.75).round()
+                ));
+            }
+            Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
+                let (open, close) = fmt_tags(fmt);
+                o.push_str(&open);
+                o.push_str(&esc(result));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
+            Inline::Figure(alt) | Inline::Chart(craft_flow::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
+            Inline::Equation { linear, display } => o.push_str(&craft_math::mathml::linear_to_mathml(linear, *display)),
+            _ => {}
+        }
+    }
+    o
+}
+
 fn trim_num(v: f32) -> String {
     let s = format!("{:.2}", v);
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn para_attrs(p: &Para) -> String {
-    let mut css: Vec<&str> = Vec::new();
+    let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
-        css.push(a);
+        css.push(a.to_string());
     }
     if p.page_break {
-        css.push("break-before:page;page-break-before:always");
+        css.push("break-before:page;page-break-before:always".to_string());
+    }
+    if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
+        css.push(format!("background-color:#{}", bg.hex()));
     }
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
 }
@@ -309,7 +361,11 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
                 css.push(format!("background-color:#{}", s.hex()));
             }
             let single = match c.blocks.as_slice() {
-                [FBlock::Para(p)] if p.kind == Kind::Normal && p.list.is_none() && !p.page_break => Some(p),
+                [FBlock::Para(p)]
+                    if p.kind == Kind::Normal && p.list.is_none() && !p.page_break && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
+                {
+                    Some(p)
+                }
                 _ => None,
             };
             if let Some(a) = single.and_then(|p| align_css(p.align)) {
@@ -379,17 +435,20 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 out.push('\n');
             }
             FBlock::Para(p) if p.kind == Kind::Code => {
-                out.push_str("<pre><code>");
+                // One `<pre>` per run of code paragraphs whose attributes match: they share the
+                // `<pre>`'s shading, so a different background starts a new block.
+                let attrs = para_attrs(p);
+                out.push_str(&format!("<pre{attrs}><code>"));
                 let mut first = true;
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
-                    if q.kind != Kind::Code || q.list.is_some() {
+                    if q.kind != Kind::Code || q.list.is_some() || para_attrs(q) != attrs {
                         break;
                     }
                     if !first {
                         out.push('\n');
                     }
                     first = false;
-                    out.push_str(&esc(&q.text()));
+                    out.push_str(&code_inlines_html(&q.inlines));
                     i += 1;
                 }
                 out.push_str("</code></pre>\n");
@@ -426,14 +485,14 @@ fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
 
 /// A complete HTML document.
 pub fn export(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     export_flow(&flow, doc.styles.default_chr.lang.as_deref().unwrap_or("en"))
 }
 
 /// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
 /// clipboard beside its text, equations as MathML (#816).
 pub fn export_fragment(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     let mut out = String::from("<meta charset=\"utf-8\">");
     blocks_html(&flow.blocks, &mut out, 0);
     out

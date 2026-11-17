@@ -63,3 +63,23 @@ fn oversized_or_cut_directories_are_skipped() {
     cut.truncate(20);
     assert!(!legacy_tiff_raw_hint(&cut));
 }
+
+#[test]
+fn a_subifds_array_without_its_offset_is_skipped() {
+    // IFD0 at 64 holds one SubIFDs entry (LONG, count 3) whose offset field is cut off. A DNG
+    // directory sits at 32, and the bytes at 8 point to it. Reading the missing offset as 0
+    // would treat the TIFF header as the pointer array and follow 8 -> 32.
+    let mut b = vec![0u8; 64];
+    b[..8].copy_from_slice(b"II\x2a\0\x40\0\0\0");
+    b[8..12].copy_from_slice(&32u32.to_le_bytes());
+    b[32..34].copy_from_slice(&1u16.to_le_bytes());
+    b[34..46].copy_from_slice(&[0x12, 0xc6, 1, 0, 4, 0, 0, 0, 1, 4, 0, 0]);
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&[0x4a, 0x01, 4, 0, 3, 0, 0, 0]);
+    assert_eq!(b.len(), 74);
+    assert!(!legacy_tiff_raw_hint(&b));
+    // With the offset present (the array at 8), the same SubIFD is followed.
+    let mut whole = b.clone();
+    whole.extend_from_slice(&8u32.to_le_bytes());
+    assert!(legacy_tiff_raw_hint(&whole));
+}

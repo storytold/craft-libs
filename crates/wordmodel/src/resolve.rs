@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::props::{
-    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+    Align, Border, Borders, CharProps, Highlight, Kashida, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
 };
 use crate::styles::{StyleKind, StyleSheet};
 
@@ -173,6 +173,9 @@ fn default_adjust_right_indent() -> bool {
 pub struct ResolvedPara {
     pub style: String,
     pub align: Align,
+    /// Kashida length when `align` is Justify; ignored for other alignments.
+    #[serde(default)]
+    pub kashida: Kashida,
     pub indent_left: f32,
     pub indent_right: f32,
     pub indent_first: f32,
@@ -268,6 +271,7 @@ impl ResolvedPara {
         ResolvedPara {
             style: style.to_string(),
             align: p.align.unwrap_or_default(),
+            kashida: p.kashida.unwrap_or_default(),
             indent_left: clampi(p.indent_left),
             indent_right: clampi(p.indent_right),
             indent_first: clampi(p.indent_first),
@@ -633,5 +637,34 @@ mod tests {
         let back: ResolvedPara = serde_json::from_value(v).unwrap();
         assert_eq!(back.padding, [0.0; 4]);
         assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
+    }
+
+    /// A style's kashida length is inherited, and a direct `both` / `justify` cancels it.
+    #[test]
+    fn kashida_length_follows_the_style_chain_and_direct_formatting() {
+        use crate::styles::{Style, StyleKind};
+        let mut styles = StyleSheet::builtin();
+        styles.upsert(Style {
+            id: "Body".into(),
+            name: "Body".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Normal".into()),
+            para: ParaProps { align: Some(Align::Justify), kashida: Some(Kashida::Short), ..Default::default() },
+            ..Default::default()
+        });
+        let inherited = styles.resolve_para(&ParaProps { style: Some("Body".into()), ..Default::default() });
+        assert_eq!(inherited.align, Align::Justify);
+        assert_eq!(inherited.kashida, Kashida::Short);
+
+        let cleared = styles.resolve_para(&ParaProps {
+            style: Some("Body".into()),
+            align: Some(Align::Justify),
+            kashida: Some(Kashida::None),
+            ..Default::default()
+        });
+        assert_eq!(cleared.kashida, Kashida::None);
+
+        let longer = styles.resolve_para(&ParaProps { style: Some("Body".into()), kashida: Some(Kashida::Long), ..Default::default() });
+        assert_eq!(longer.kashida, Kashida::Long);
     }
 }

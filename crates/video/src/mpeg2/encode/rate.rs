@@ -58,8 +58,14 @@ impl RateCtl {
         self.nb = 0;
     }
 
-    /// quantiser_scale for the next picture of type `ptype`.
-    pub fn qscale(&self, ptype: PictureType) -> f64 {
+    /// Bits spent beyond the coded pictures (stuffing).
+    pub fn spend(&mut self, bits: u64) {
+        self.remaining -= bits as f64;
+    }
+
+    /// quantiser_scale for the next picture of type `ptype`, its bit target kept within
+    /// `(min, max)` (the VBV buffer's bounds).
+    pub fn qscale(&self, ptype: PictureType, (min, max): (f64, f64)) -> f64 {
         let floor = self.bps / (8.0 * self.fps);
         let (np, nb) = (f64::from(self.np), f64::from(self.nb));
         let (target, x) = match ptype {
@@ -67,7 +73,7 @@ impl RateCtl {
             PictureType::B => (self.remaining / (nb.max(1.0) + np * KB * self.xp / self.xb), self.xb),
             _ => (self.remaining / (np.max(1.0) + nb * self.xb / (KB * self.xp)), self.xp),
         };
-        (x / target.max(floor)).clamp(self.q_min, self.q_max)
+        (x / target.max(floor).min(max).max(min).max(1.0)).clamp(self.q_min, self.q_max)
     }
 
     /// A picture of type `ptype` used `bits` at average quantiser_scale `avg_q`.
@@ -109,7 +115,7 @@ mod tests {
         for _ in 0..gops {
             rc.start_gop(np, 11 - np);
             for &t in &types {
-                let q = rc.qscale(t);
+                let q = rc.qscale(t, (0.0, f64::MAX));
                 let bits = c[t as usize] / q;
                 rc.update(t, bits as u64, q);
                 total += bits;
@@ -134,7 +140,7 @@ mod tests {
             // a GOP of 12 that ends after its I picture and two P pictures
             rc.start_gop(11, 0);
             for t in [PictureType::I, PictureType::P, PictureType::P] {
-                let q = rc.qscale(t);
+                let q = rc.qscale(t, (0.0, f64::MAX));
                 rc.update(t, (1e7 / q) as u64, q);
             }
             rc.end_gop(9);
@@ -150,11 +156,11 @@ mod tests {
         // a picture far larger than its budget pushes the next quantiser to the top
         rc.update(PictureType::I, 50_000_000, 10.0);
         rc.start_gop(1, 0);
-        assert_eq!(rc.qscale(PictureType::I), 62.0);
+        assert_eq!(rc.qscale(PictureType::I, (0.0, f64::MAX)), 62.0);
         // and a tiny one to the bottom
         let mut rc = RateCtl::new(1e6, 25.0, (2.0, 62.0));
         rc.start_gop(1, 0);
         rc.update(PictureType::I, 10, 2.0);
-        assert_eq!(rc.qscale(PictureType::I), 2.0);
+        assert_eq!(rc.qscale(PictureType::I, (0.0, f64::MAX)), 2.0);
     }
 }
