@@ -10,10 +10,13 @@ publish = false
 
 [features]
 # Pinned-corpus manifests and the `corpus::pinned` test gate (native only).
-corpus = ["dep:sha2"]
+corpus = ["dep:sha2", "dep:libc"]
 
 [dependencies]
 sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [lints]
 workspace = true

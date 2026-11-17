@@ -158,7 +158,7 @@ impl Manifest {
         if !std::fs::metadata(path).map_err(ManifestError::Io)?.is_file() {
             return Err(ManifestError::NotAFile);
         }
-        let file = File::open(path).map_err(ManifestError::Io)?;
+        let file = open_for_reading(path).map_err(ManifestError::Io)?;
         if !file.metadata().map_err(ManifestError::Io)?.is_file() {
             return Err(ManifestError::NotAFile);
         }
@@ -422,7 +422,7 @@ fn verify_entry(root: &Path, entry: &Entry, limits: &Limits, buf: &mut [u8]) -> 
     if !kind.is_file() {
         return Err(VerifyError::NotAFile { path: path() });
     }
-    let file = File::open(&target).map_err(|error| VerifyError::Read { path: path(), error })?;
+    let file = open_for_reading(&target).map_err(|error| VerifyError::Read { path: path(), error })?;
     let meta = file.metadata().map_err(|error| VerifyError::Read { path: path(), error })?;
     if !meta.is_file() {
         return Err(VerifyError::NotAFile { path: path() });
@@ -450,6 +450,20 @@ fn verify_entry(root: &Path, entry: &Entry, limits: &Limits, buf: &mut [u8]) -> 
         return Err(VerifyError::Modified { path: path() });
     }
     Ok(())
+}
+
+/// Opens `path` for reading. On Unix the file is opened with `O_NONBLOCK`, so a path that was
+/// replaced by a named pipe after its type was checked opens at once instead of waiting for a
+/// writer; the caller checks the opened file's type. Reads from a regular file are not affected.
+fn open_for_reading(path: &Path) -> io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    options.open(path)
 }
 
 /// The corpus folder the variable `var` names (default [`DEFAULT_VAR`]), after every file
@@ -747,6 +761,21 @@ mod tests {
         assert!(made.success(), "mkfifo failed");
         assert!(matches!(Manifest::read(&scratch.0, &Limits::default()), Err(ManifestError::NotAFile)));
         assert!(matches!(Manifest::read(&fifo, &Limits::default()), Err(ManifestError::NotAFile)));
+    }
+
+    /// Files are opened with `O_NONBLOCK`, read back from the open file's status flags in
+    /// `/proc/self/fdinfo`, so a path replaced by a named pipe after its type was checked opens at
+    /// once instead of waiting for a writer.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn files_are_opened_with_o_nonblock() {
+        use std::os::fd::AsRawFd;
+        let (scratch, _) = hello_corpus();
+        let file = open_for_reading(&scratch.0.join("hello.txt")).expect("open");
+        let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", file.as_raw_fd())).expect("read fdinfo");
+        let flags = info.lines().find_map(|line| line.strip_prefix("flags:")).map(str::trim).expect("flags line");
+        let flags = i32::from_str_radix(flags, 8).expect("octal flags");
+        assert_ne!(flags & libc::O_NONBLOCK, 0, "flags {flags:o}");
     }
 
     #[test]
