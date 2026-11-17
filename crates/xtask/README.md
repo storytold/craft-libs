@@ -157,7 +157,8 @@ error before any file is opened. Next to each
 held lock file, an owner file holds the owner label, which waiting runs print; `holders` reads at
 most 4096 bytes of each and leaves out an owner file whose slot is free, such as one a killed run left
 behind. An owner entry that is a link, or on Unix a file with more than one name, is also left
-out, and a link is not followed. Where the lock files live, the environment variables that set them, and
+out, and a link is not followed. On Unix, a lock or owner open does not wait on a FIFO: a FIFO
+lock file counts as a free slot to `holders`, and taking it is a lock error. Where the lock files live, the environment variables that set them, and
 whether a run uses a lock at all are the app's choice.
 
 ## Report
