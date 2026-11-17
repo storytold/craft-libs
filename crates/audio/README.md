@@ -367,7 +367,9 @@ rate, so read it after `finish`. `bitrate()` is the constant rate used (`None` f
 quality); `bit_depth()` is ALAC's.
 
 `encode` refuses a block without one slice per channel, or with a slice shorter than `frames`,
-and encodes nothing. After `finish`, or after an encode that failed, every call returns an error.
+and encodes nothing; the encoder stays usable, so the caller can correct the block and call again.
+After `finish`, or after encoding itself failed (the block's packets are lost), every call returns
+an error.
 E-AC-3 7.1 is encoded as 7.1, and this crate's `TrackDecoder` plays its 5.1 substream (see
 [Limits](#limits)).
 
