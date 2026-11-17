@@ -216,6 +216,12 @@ pub fn d50_quantized() -> [f64; 3] {
     [s15f16_round(D50[0]), s15f16_round(D50[1]), s15f16_round(D50[2])]
 }
 
+/// Whether ICC s15Fixed16 encoding can round this value without saturation.
+pub(crate) fn fits_s15f16(v: f64) -> bool {
+    let scaled = (v * 65536.0).round();
+    scaled.is_finite() && scaled >= f64::from(i32::MIN) && scaled <= f64::from(i32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
