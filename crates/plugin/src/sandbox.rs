@@ -2,11 +2,16 @@
 //! memory cap, and sees the outside world only through the host functions below. There is no WASI:
 //! no file system, network, clock or randomness.
 //!
-//! # ABI (version 4; version 1 is the first seven imports, version 2 adds panels and settings,
-//! version 3 widgets, version 4 `save_file`)
+//! # ABI (version 6; version 1 is the first seven imports, version 2 adds panels and settings,
+//! version 3 widgets, version 4 `save_file`; 5 and 6 add widget features, not imports)
 //!
-//! The module exports its `memory` and `figcraft_run(input_len: i32) -> i32`. Host functions are
-//! imported from the module `figcraft`; strings are UTF-8 `(ptr, len)` pairs in the plugin's memory.
+//! The module exports its `memory` and `craft_run(input_len: i32) -> i32`. Host functions are
+//! imported from the module `craft`; strings are UTF-8 `(ptr, len)` pairs in the plugin's memory.
+//!
+//! FigCraft's modules, written before the ABI was shared, import from `figcraft` and export
+//! `figcraft_run`. Both names keep working: every host function is also linked under
+//! [`LEGACY_IMPORT_MODULE`], and [`LEGACY_ENTRY`] is called when a module has no [`ENTRY`]. A module
+//! may mix the two import modules; they are the same functions.
 //!
 //! | Import | Signature | Does |
 //! |---|---|---|
@@ -25,7 +30,7 @@
 //! | `widget_render` | `(ptr, len) -> i32` | Draws the widget being called back: a [`WidgetRender`] as JSON. 1: invalid, the reply says why. |
 //! | `save_file` | `(name_ptr, name_len, mime_ptr, mime_len, data_ptr, data_len) -> i32` | Offers a file to save (needs `permissions.saveFile`). The host asks the user where it goes; the plugin never gets a path. 0: accepted, 1: refused, the reply says why. |
 //!
-//! When `figcraft_run` starts, the reply holds the input JSON (`input_len` bytes):
+//! When the entry point starts, the reply holds the input JSON (`input_len` bytes):
 //! `{"api", "command", "params", "selection"}`, plus `event` and `values` when a panel calls the
 //! plugin back, or `widget` (`{id, state, event}`) when a widget does. It returns 0 on success; anything else fails the run.
 //!
@@ -41,9 +46,15 @@ use crate::manifest::Panel;
 use crate::widget::WidgetRender;
 
 /// The module host functions are imported from.
-pub const IMPORT_MODULE: &str = "figcraft";
+pub const IMPORT_MODULE: &str = "craft";
+/// The import module of FigCraft's ABI before it was shared; linked too, to the same functions.
+pub const LEGACY_IMPORT_MODULE: &str = "figcraft";
+/// Every import module a plug-in may name.
+pub const IMPORT_MODULES: [&str; 2] = [IMPORT_MODULE, LEGACY_IMPORT_MODULE];
 /// The exported entry point.
-pub const ENTRY: &str = "figcraft_run";
+pub const ENTRY: &str = "craft_run";
+/// FigCraft's entry point before the ABI was shared, called when a module exports no [`ENTRY`].
+pub const LEGACY_ENTRY: &str = "figcraft_run";
 
 /// The host functions: (name, params, results), all i32.
 const IMPORTS: &[(&str, usize, usize)] = &[
@@ -273,13 +284,14 @@ fn func_type(params: usize, results: usize) -> FuncType {
     FuncType::new(vec![ValType::I32; params], vec![ValType::I32; results])
 }
 
-/// Compile and check a module: its size, that it imports only FigCraft's host functions (no WASI)
-/// and exports `memory` and `figcraft_run`.
+/// Compile and check a module: its size, that it imports only the host functions above (no WASI)
+/// and exports `memory` and `craft_run` (or `figcraft_run`).
 pub fn check_module(bytes: &[u8], limits: &Limits) -> Result<(), PluginError> {
     compile(&engine(), bytes, limits).map(|_| ())
 }
 
-fn compile(engine: &Engine, bytes: &[u8], limits: &Limits) -> Result<Module, PluginError> {
+/// The compiled module and the name of the entry point it exports.
+fn compile(engine: &Engine, bytes: &[u8], limits: &Limits) -> Result<(Module, &'static str), PluginError> {
     if bytes.len() > limits.module_bytes {
         return Err(PluginError::InvalidModule(format!("larger than {} MB", limits.module_bytes / (1024 * 1024))));
     }
@@ -288,7 +300,7 @@ fn compile(engine: &Engine, bytes: &[u8], limits: &Limits) -> Result<Module, Plu
     }
     let module = Module::new(engine, bytes).map_err(|e| PluginError::InvalidModule(e.to_string()))?;
     for imp in module.imports() {
-        let known = IMPORTS.iter().find(|(n, ..)| imp.module() == IMPORT_MODULE && *n == imp.name());
+        let known = IMPORTS.iter().find(|(n, ..)| IMPORT_MODULES.contains(&imp.module()) && *n == imp.name());
         match (known, imp.ty().func()) {
             (Some((_, p, r)), Some(ty)) if *ty == func_type(*p, *r) => {}
             (Some(_), _) => {
@@ -296,7 +308,7 @@ fn compile(engine: &Engine, bytes: &[u8], limits: &Limits) -> Result<Module, Plu
             }
             (None, _) => {
                 return Err(PluginError::InvalidModule(format!(
-                    "it imports `{}.{}`, which FigCraft doesn't provide (plugins get no file system, network or clock)",
+                    "it imports `{}.{}`, which the app doesn't provide (plugins get no file system, network or clock)",
                     imp.module(),
                     imp.name()
                 )));
@@ -307,13 +319,14 @@ fn compile(engine: &Engine, bytes: &[u8], limits: &Limits) -> Result<Module, Plu
     if export("memory").is_none_or(|t| t.memory().is_none()) {
         return Err(PluginError::InvalidModule("it doesn't export its `memory`".into()));
     }
-    if export(ENTRY).is_none_or(|t| t.func() != Some(&func_type(1, 1))) {
+    let entry = if export(ENTRY).is_some() { ENTRY } else { LEGACY_ENTRY };
+    if export(entry).is_none_or(|t| t.func() != Some(&func_type(1, 1))) {
         return Err(PluginError::InvalidModule(format!("it doesn't export `{ENTRY}(input_len: i32) -> i32`")));
     }
-    Ok(module)
+    Ok((module, entry))
 }
 
-/// Run a plugin module once: `input` is the JSON handed to `figcraft_run`.
+/// Run a plugin module once: `input` is the JSON handed to its entry point.
 pub fn run(bytes: &[u8], input: &str, limits: &Limits, host: &mut dyn Host) -> Result<RunOutput, PluginError> {
     Instance::new(bytes, limits)?.call(input, host)
 }
@@ -334,7 +347,7 @@ impl Instance {
     /// Compile, check and start a module. A start function can't call host functions.
     pub fn new(bytes: &[u8], limits: &Limits) -> Result<Self, PluginError> {
         let engine = engine();
-        let module = compile(&engine, bytes, limits)?;
+        let (module, entry) = compile(&engine, bytes, limits)?;
         let store_limits =
             StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
         let state = State { limits: *limits, store_limits, reply: Vec::new(), out: RunOutput::default(), log_bytes: 0, abort: None, request: None };
@@ -343,11 +356,11 @@ impl Instance {
         store.set_fuel(limits.fuel).map_err(|e| PluginError::Trap(e.to_string()))?;
         let linker = linker(&engine)?;
         let instance = linker.instantiate_and_start(&mut store, &module).map_err(|e| classify(&mut store, &e, true))?;
-        let entry = instance.get_typed_func::<i32, i32>(&store, ENTRY).map_err(|e| PluginError::InvalidModule(e.to_string()))?;
+        let entry = instance.get_typed_func::<i32, i32>(&store, entry).map_err(|e| PluginError::InvalidModule(e.to_string()))?;
         Ok(Self { store, entry })
     }
 
-    /// Call `figcraft_run` with `input`, with the full limits. Host calls that need `host` pause
+    /// Call the entry point (`craft_run`, or `figcraft_run`) with `input`, with the full limits. Host calls that need `host` pause
     /// the plugin, are answered here and resume it.
     pub fn call(&mut self, input: &str, host: &mut dyn Host) -> Result<RunOutput, PluginError> {
         let limits = self.store.data().limits;
@@ -412,11 +425,11 @@ fn abort(caller: &mut Ctx<'_>, err: PluginError) -> wasmi::Error {
 }
 
 /// Pause the plugin until the host answers `request`.
-// shortcut: a host function tail-called (`return_call`) from `figcraft_run` itself can't be
+// shortcut: a host function tail-called (`return_call`) from the entry point itself can't be
 // resumed and fails the run; fine for compiled plugins, which don't do that.
 fn ask(caller: &mut Ctx<'_>, request: Request) -> wasmi::Error {
     caller.data_mut().request = Some(request);
-    wasmi::Error::new("a host function was called outside figcraft_run")
+    wasmi::Error::new("a host function was called outside the entry point")
 }
 
 /// Charge a host call: fuel and the call count.
@@ -484,10 +497,19 @@ fn read_log(caller: &mut Ctx<'_>, ptr: i32, len: i32) -> Result<String, wasmi::E
     Ok(line)
 }
 
+/// A linker with every host function under each of [`IMPORT_MODULES`].
 fn linker(engine: &Engine) -> Result<Linker<State>, PluginError> {
     let mut l = <Linker<State>>::new(engine);
+    for module in IMPORT_MODULES {
+        link(&mut l, module)?;
+    }
+    Ok(l)
+}
+
+/// Link the host functions under `module`.
+fn link(l: &mut Linker<State>, module: &str) -> Result<(), PluginError> {
     let err = |e: wasmi::errors::LinkerError| PluginError::InvalidModule(e.to_string());
-    l.func_wrap(IMPORT_MODULE, "call", |mut c: Ctx<'_>, cp: i32, cl: i32, pp: i32, pl: i32| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "call", |mut c: Ctx<'_>, cp: i32, cl: i32, pp: i32, pl: i32| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         let cmd = read_str(&mut c, cp, cl)?;
         let params = read_str(&mut c, pp, pl)?;
@@ -495,17 +517,17 @@ fn linker(engine: &Engine) -> Result<Linker<State>, PluginError> {
         Err(ask(&mut c, Request::Call(cmd, params)))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "selection", |mut c: Ctx<'_>| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "selection", |mut c: Ctx<'_>| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         Err(ask(&mut c, Request::Selection))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "reply_len", |mut c: Ctx<'_>| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "reply_len", |mut c: Ctx<'_>| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         Ok(i32::try_from(c.data().reply.len()).unwrap_or(i32::MAX))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "reply_read", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "reply_read", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         let (ptr, want) = (ptr as u32 as usize, len as u32 as usize);
         let n = want.min(c.data().reply.len());
@@ -520,27 +542,27 @@ fn linker(engine: &Engine) -> Result<Linker<State>, PluginError> {
         Ok(i32::try_from(n).unwrap_or(i32::MAX))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "log", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
+    l.func_wrap(module, "log", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
         charge(&mut c)?;
         let line = read_log(&mut c, ptr, len)?;
         Err(ask(&mut c, Request::Log(line)))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "notify", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
+    l.func_wrap(module, "notify", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
         charge(&mut c)?;
         let msg = read_str(&mut c, ptr, len)?;
         let msg: String = msg.chars().filter(|ch| !ch.is_control()).take(200).collect();
         Err(ask(&mut c, Request::Notify(msg)))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "set_output", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
+    l.func_wrap(module, "set_output", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
         charge(&mut c)?;
         let out = read_str(&mut c, ptr, len)?;
         c.data_mut().out.output = out;
         Ok(())
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "ui_show", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "ui_show", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         let spec = read_str(&mut c, ptr, len)?;
         let st = c.data_mut();
@@ -556,7 +578,7 @@ fn linker(engine: &Engine) -> Result<Linker<State>, PluginError> {
         })
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "widget_render", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "widget_render", |mut c: Ctx<'_>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         let spec = read_str(&mut c, ptr, len)?;
         let st = c.data_mut();
@@ -572,32 +594,32 @@ fn linker(engine: &Engine) -> Result<Linker<State>, PluginError> {
         })
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "ui_close", |mut c: Ctx<'_>| -> Result<(), wasmi::Error> {
+    l.func_wrap(module, "ui_close", |mut c: Ctx<'_>| -> Result<(), wasmi::Error> {
         charge(&mut c)?;
         c.data_mut().out.ui = Some(UiChange::Close);
         Ok(())
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "setting_get", |mut c: Ctx<'_>, kp: i32, kl: i32| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "setting_get", |mut c: Ctx<'_>, kp: i32, kl: i32| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         let key = read_str(&mut c, kp, kl)?;
         Err(ask(&mut c, Request::SettingGet(key)))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "setting_set", |mut c: Ctx<'_>, kp: i32, kl: i32, vp: i32, vl: i32| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "setting_set", |mut c: Ctx<'_>, kp: i32, kl: i32, vp: i32, vl: i32| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         let key = read_str(&mut c, kp, kl)?;
         let value = read_str(&mut c, vp, vl)?;
         Err(ask(&mut c, Request::SettingSet(key, value)))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "setting_delete", |mut c: Ctx<'_>, kp: i32, kl: i32| -> Result<(), wasmi::Error> {
+    l.func_wrap(module, "setting_delete", |mut c: Ctx<'_>, kp: i32, kl: i32| -> Result<(), wasmi::Error> {
         charge(&mut c)?;
         let key = read_str(&mut c, kp, kl)?;
         Err(ask(&mut c, Request::SettingDelete(key)))
     })
     .map_err(err)?;
-    l.func_wrap(IMPORT_MODULE, "save_file", |mut c: Ctx<'_>, np: i32, nl: i32, mp: i32, ml: i32, dp: i32, dl: i32| -> Result<i32, wasmi::Error> {
+    l.func_wrap(module, "save_file", |mut c: Ctx<'_>, np: i32, nl: i32, mp: i32, ml: i32, dp: i32, dl: i32| -> Result<i32, wasmi::Error> {
         charge(&mut c)?;
         let name = read_str(&mut c, np, nl)?;
         let mime = read_str(&mut c, mp, ml)?;
@@ -610,5 +632,5 @@ fn linker(engine: &Engine) -> Result<Linker<State>, PluginError> {
         Err(ask(&mut c, Request::SaveFile(name, mime, data)))
     })
     .map_err(err)?;
-    Ok(l)
+    Ok(())
 }

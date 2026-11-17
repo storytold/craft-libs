@@ -13,9 +13,14 @@ mod sandbox;
 pub mod widget;
 
 pub use manifest::{API_VERSION, Access, MANIFEST_FILE, Manifest, Panel, Param, ParamKind, Permissions, PluginCommand};
-pub use sandbox::{ENTRY, Host, IMPORT_MODULE, Instance, Limits, PluginError, RunOutput, UiChange, check_module, run};
+pub use sandbox::{
+    ENTRY, Host, IMPORT_MODULE, IMPORT_MODULES, Instance, LEGACY_ENTRY, LEGACY_IMPORT_MODULE, Limits, PluginError, RunOutput, UiChange, check_module,
+    run,
+};
 pub use widget::{MenuItem, MenuKind, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 
+#[cfg(test)]
+mod abi_names_tests;
 #[cfg(test)]
 mod bundle_tests;
 #[cfg(test)]
