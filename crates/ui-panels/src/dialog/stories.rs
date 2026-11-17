@@ -7,7 +7,7 @@ use crate::choice::Checkbox;
 use crate::contract::{Bind, FooterSlot, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::display::Text;
 use crate::layout::GridFit;
-use crate::layout_components::Grid;
+use crate::layout_components::{Grid, Row};
 use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -156,8 +156,9 @@ fn dialog_with_body_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Grid::new(TWO_COLUMNS).fit(GridFit::Fixed).show(ui, |ui, _| {
                 Text::new("Lines every 10 mm, in 4 subdivisions.").show(ui);
                 let _ = FooterSlot::new().show(ui);
-                Checkbox::new(Bind::bound(snap)).label("Snap to grid").show(ui);
-                Checkbox::new(Bind::bound(rulers)).label("Show rulers").show(ui);
+                // A labelled control in a grid takes a cell for its label: each check box is a row, one cell.
+                Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut *snap)).label("Snap to grid").show(ui));
+                Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut *rulers)).label("Show rulers").show(ui));
             });
         })
         .into();

@@ -295,8 +295,9 @@ fn body_buttons_stand_in_the_slot_the_body_keeps_and_keep_their_keys() {
                     Grid::new(COLUMNS).fit(GridFit::Fixed).show(ui, |ui, _| {
                         Text::new("Lines every 10 mm").show(ui);
                         let _ = FooterSlot::new().show(ui);
-                        Checkbox::new(Bind::bound(&mut snap)).label("Snap to the grid").show(ui);
-                        Checkbox::new(Bind::bound(&mut rulers)).label("Show rulers").show(ui);
+                        // A labelled control in a grid takes a cell for its label: each check box is a row, one cell.
+                        Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut snap)).label("Snap to the grid").show(ui));
+                        Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut rulers)).label("Show rulers").show(ui));
                     });
                 });
             if shown.output.closed.is_some() {

@@ -190,6 +190,17 @@ impl FullParts {
     }
 }
 
+/// Every part a Full picker shows, found by role and name without requiring any: what a narrow room leaves of it.
+fn fixture_parts(fixture: &Fixture) -> Vec<Rect> {
+    let labelled = ["Saturation and brightness", "New color", "Hex color", "Only Web Colors", "Sample color from the screen"];
+    let named = labelled.iter().filter_map(|label| fixture.by_label(label)).map(|t| t.rect);
+    let roles = [Role::SLIDER, Role::RADIO_BUTTON, Role::SPIN_BUTTON].into_iter().flat_map(|role| fixture.by_role(role)).map(|t| t.rect);
+    let texts = fixture.texts().iter().filter(|run| ["#", "\u{b0}", "%"].contains(&run.text.as_str())).map(|run| run.rect);
+    let mut all: Vec<Rect> = named.chain(roles).chain(texts).collect();
+    all.sort_by(|a, b| a.min.x.total_cmp(&b.min.x).then(a.min.y.total_cmp(&b.min.y)));
+    all
+}
+
 /// A Full picker with HSB, RGB, Lab and OKLCH in a room `width` wide, at `density` in `theme`, with the first
 /// `warnings` of the out-of-gamut and web-colour warnings.
 fn full_picker(width: f32, (density, theme): (Size, &str), warnings: usize) -> Fixture {
@@ -221,10 +232,14 @@ fn full_picker(width: f32, (density, theme): (Size, &str), warnings: usize) -> F
 #[trial]
 fn the_full_picker_keeps_photoshops_arrangement_in_every_room_density_and_theme() {
     for look in LOOKS {
-        let parts = FullParts::of(&full_picker(600.0, look, 2), 2);
-        for width in [320.0, 1200.0] {
-            assert_eq!(FullParts::of(&full_picker(width, look, 2), 2), parts, "{look:?}: the same arrangement in a room {width} wide");
-        }
+        let wide = full_picker(600.0, look, 2);
+        let parts = FullParts::of(&wide, 2);
+        assert_eq!(FullParts::of(&full_picker(1200.0, look, 2), 2), parts, "{look:?}: the same arrangement in a room 1200 wide");
+        // A room narrower than the picker clips it: every part it shows stands where it stands in a wide room.
+        let inside = |rects: Vec<Rect>| rects.into_iter().filter(|r| r.right() <= 320.0).collect::<Vec<_>>();
+        let narrow = inside(fixture_parts(&full_picker(320.0, look, 2)));
+        assert!(!narrow.is_empty(), "{look:?}: a narrow room shows the picker's start");
+        assert_eq!(narrow, inside(fixture_parts(&wide)), "{look:?}: the same arrangement in a room 320 wide, clipped");
         let FullParts { area, strip, block, current, new_caption, ref radios, ref fields, hex, hash, web, sample, ref warnings, ref units } = parts;
 
         assert!(near(area.width(), area.height()), "{look:?}: the area is square: {area:?}");
