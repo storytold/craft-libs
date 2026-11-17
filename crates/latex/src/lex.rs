@@ -107,6 +107,16 @@ impl Lexer<'_> {
             }
         }
     }
+    /// After a comment or a control word has taken its line end: when the next line is blank,
+    /// skip the blank lines and end the paragraph, as TeX does.
+    fn blank_line_after_line_end(&mut self) {
+        if self.peek() == Some('\n') {
+            while matches!(self.peek(), Some(' ' | '\t' | '\n')) {
+                self.bump();
+            }
+            self.out.push(Tok::Par);
+        }
+    }
     /// After `\begin` / `\end`: the `{name}`, if well formed.
     fn env_name(&mut self) -> Option<String> {
         let save = self.i;
@@ -225,10 +235,16 @@ impl Lexer<'_> {
                                     break;
                                 }
                             }
+                            if newline {
+                                self.blank_line_after_line_end();
+                            }
                         }
                     }
                 }
-                '%' => self.comment(),
+                '%' => {
+                    self.comment();
+                    self.blank_line_after_line_end();
+                }
                 '{' => {
                     self.bump();
                     self.out.push(Tok::Open);
@@ -278,6 +294,14 @@ impl Lexer<'_> {
 }
 
 pub(super) fn tokenize(src: &str) -> Vec<Tok> {
+    // TeX ends a line at LF, CR or CRLF alike; the lexer reads LF only.
+    let lf;
+    let src = if src.contains('\r') {
+        lf = src.replace("\r\n", "\n").replace('\r', "\n");
+        lf.as_str()
+    } else {
+        src
+    };
     Lexer { s: src, i: 0, out: Vec::new() }.run()
 }
 
