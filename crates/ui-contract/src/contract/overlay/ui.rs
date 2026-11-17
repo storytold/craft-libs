@@ -106,11 +106,13 @@ impl<'a> OverlayUi<'a> {
             forget_layer(self.ctx, popup.id, owner);
             return None;
         }
-        // A popup with no opener hangs from the owner's rect, which the container's layer reads as a rect anchor.
+        // A popup with no opener hangs from the owner's rect, which the container's layer reads as a rect anchor. Its
+        // body does not scroll: a list in it (a menu's, a dropdown's) scrolls itself within the room.
         let overlay = match (&overlay.opener, &overlay.place) {
             (None, Place::Anchored { anchor: Anchor::Response, .. }) => overlay.anchor(Anchor::Rect(self.anchor)),
             _ => overlay,
-        };
+        }
+        .body_scroll(false);
         let label = self.resolved.label_value.clone();
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).mount(Mount::Layer(overlay));
         let container = PopupBody { common: Common::new(), props: ContainerProps { owner: Some(owner), ..props } }.label(label);
