@@ -180,7 +180,7 @@ struct RootInfo {
     rect: Rect,
     /// The part of `rect` inside the root's clip: where its own background lies.
     shown: Rect,
-    /// The root's clip: where its parts and members can be seen, so pressed.
+    /// The root's clip: where its parts and members can be seen.
     clip: Rect,
     own_sense: Sense,
 }
@@ -379,11 +379,16 @@ pub(crate) fn members(ctx: &Context, viewport: ViewportId, arena: ArenaId) -> Sm
     })
 }
 
-/// The clip the root `root` registered in its latest run, in the current viewport: where its parts and members can be
-/// seen, so where a press egui names no target for can start. `None` for a root that has not run.
+/// The clip of the arena `component` is in (its own, or the one of the root it is a member of), as that root
+/// registered it in its latest run in the current viewport: where its parts and members can be seen. `None` for a
+/// component in no arena that has run.
 #[cfg(feature = "testing")]
-pub(crate) fn root_clip(ctx: &Context, root: Id) -> Option<Rect> {
-    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| arenas.by_root.get(&root).and_then(|state| state.root).map(|info| info.clip))
+pub(crate) fn arena_clip(ctx: &Context, component: Id) -> Option<Rect> {
+    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| {
+        let joined = |state: &ArenaState| state.members.iter().chain(&state.previous).any(|member| member.id == component);
+        let state = arenas.by_root.get(&component).or_else(|| arenas.by_root.values().find(|state| joined(state)))?;
+        state.root.map(|info| info.clip)
+    })
 }
 
 /// Whether a member of the arena root `arena` (a canvas control in a canvas, say) has a running gesture, in
@@ -765,6 +770,27 @@ fn resolve_in(state: &ArenaState, members: bool, xf: Option<LayerMap>, point: Po
     won.map(|winner| Hit { owner: winner.owner, part: winner.part, sense: winner.sense, local: winner.local })
 }
 
+/// The press's winner at `point`. Past the root's clip, where only automation presses (a document point an agent
+/// names off the window), the winner takes the press only when some of it shows inside the clip: a part the clip hides
+/// wholly (a handle past the window's edge) is not pressed, and nothing under it is either.
+fn resolve_press_in(state: &ArenaState, members: bool, xf: Option<LayerMap>, point: Pos2, target: f32) -> Option<Hit> {
+    let shapes = candidates(state, members, target);
+    let won = resolve_mapped(&shapes, point, ResolveFor::Press, |p| xf.map_or(p, |map| map.to_layer(p)))?;
+    let clip = state.root.map_or(Rect::NOTHING, |root| root.clip);
+    if !clip.contains(point) {
+        let shape = &shapes[won.index];
+        let bounds = shape.shape.bounds();
+        let bounds = match xf.filter(|_| shape.local) {
+            Some(map) => Rect::from_two_pos(map.to_screen(bounds.min), map.to_screen(bounds.max)),
+            None => bounds,
+        };
+        if !bounds.intersects(clip) {
+            return None;
+        }
+    }
+    Some(Hit { owner: won.owner, part: won.part, sense: won.sense, local: won.local })
+}
+
 /// Runs the press lifecycle for this pass, once: later calls in the pass return the same outcome. A repeated
 /// pass has no events, so phases hold and a release, click or activation does not repeat. `union_sense` is
 /// what the root's egui widgets sense.
@@ -805,15 +831,12 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         let step = machine.step(input, |at| {
             // The press-target rule: egui's click target decides, its drag target only for a drag-only root; the
             // root starts a press when that target is its own or there is none, and a root whose widgets sense
-            // neither, which egui never names, as where there is none. A press with no target starts only inside the
-            // root's clip: a part beyond it (a handle past the window's edge) is not seen, so not pressed. A root under
-            // a modal layer starts none.
+            // neither, which egui never names, as where there is none. A root under a modal layer starts none.
             let root = state.root.map(|root| root.id);
             let takes = |untargeted| crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted);
-            let in_clip = state.root.is_some_and(|root| root.clip.contains(at));
             let mine = |id: Option<Id>| match id {
                 Some(id) => state.widgets.contains(&id) || member_widget_of(&state.previous, id),
-                None => in_clip && takes(true),
+                None => takes(true),
             };
             let targets = pass_pointer.press_targets;
             let allowed = if union_sense.contains(Sense::CLICK) {
@@ -835,7 +858,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             // egui gives no click target where a drag-only widget is on top (a resize grip over a layer's or a
             // window's edge): a root under it keeps its click there, but a drag is that widget's.
             let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| !mine(Some(id)));
-            resolve_in(state, members, xf, at, ResolveFor::Press, target)
+            resolve_press_in(state, members, xf, at, target)
                 .map(|hit| (hit, if drag_elsewhere { hit.sense.difference(Sense::DRAG) } else { hit.sense }))
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));

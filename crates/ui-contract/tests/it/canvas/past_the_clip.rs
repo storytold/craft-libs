@@ -1,5 +1,6 @@
-//! A part reaching past its root's clip: a press on the part where the clip hides it is no press on it (a handle past
-//! the window's edge); where it shows, the press is the part's.
+//! A press past its root's clip, which only automation makes (a document point an agent names off the window): a part
+//! that shows inside the clip takes it, as a tool takes an agent's press anywhere on the document; a part the clip hides
+//! wholly (a handle past the window's edge) does not.
 
 use craft_behavior::{HitShape, PartKey, PressPhase, Sense};
 use craft_ui::contract::{Common, Component, Cx, PartsCx, Pointer as _, Role, Show as _};
@@ -12,11 +13,12 @@ use std::cell::Cell;
 
 const HANDLE: PartKey = PartKey::new("handle");
 
-/// A leaf whose one part covers its whole rect.
+/// A leaf with one part over `part` of its rect.
 #[derive(Component)]
 struct Handle<'a> {
     #[common]
     common: Common,
+    part: Rect,
     pressed: &'a Cell<bool>,
 }
 
@@ -42,8 +44,8 @@ impl Component for Handle<'_> {
         Sense::empty()
     }
 
-    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        cx.part(HANDLE, HitShape::Rect(rect)).sense(Sense::DRAG | Sense::CLICK);
+    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        cx.part(HANDLE, HitShape::Rect(self.part)).sense(Sense::DRAG | Sense::CLICK);
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -57,12 +59,13 @@ impl Component for Handle<'_> {
     }
 }
 
-fn pressed_at(at: Pos2) -> bool {
+/// Whether a press at `at` is the press of a part over `part`.
+fn pressed_at(part: Rect, at: Pos2) -> bool {
     let pressed = Cell::new(false);
     let mut frames = Frames::new();
     let mut show = |ui: &mut egui::Ui| {
         ui.set_clip_rect(clip());
-        Handle { common: Common::new(), pressed: &pressed }.show_at(ui, area());
+        Handle { common: Common::new(), part, pressed: &pressed }.show_at(ui, area());
     };
     frames.frame(vec![moved(at)], &mut show);
     frames.frame(vec![press(at)], &mut show);
@@ -70,7 +73,10 @@ fn pressed_at(at: Pos2) -> bool {
 }
 
 #[trial]
-fn a_press_where_the_clip_hides_a_part_is_not_the_parts() {
-    assert!(pressed_at(clip().center()), "where the part shows the press is its");
-    assert!(!pressed_at(Pos2::new(clip().right() + 40.0, clip().center().y)), "past the clip the part is not pressed");
+fn past_the_clip_only_a_part_that_shows_takes_a_press() {
+    let past = Pos2::new(clip().right() + 40.0, clip().center().y);
+    assert!(pressed_at(area(), clip().center()), "where the part shows the press is its");
+    assert!(pressed_at(area(), past), "a part that shows inside the clip takes a press past it");
+    let hidden = Rect::from_center_size(past, Vec2::splat(12.0));
+    assert!(!pressed_at(hidden, past), "a handle the clip hides wholly is not pressed");
 }

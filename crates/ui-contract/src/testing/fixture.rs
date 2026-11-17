@@ -541,10 +541,11 @@ impl Fixture {
         crate::runtime::pointer::part_bounds(self.ctx(), owner, part.into())
     }
 
-    /// The part of `target` the shown component's root can be seen in (`target` ∩ the root's clip), where a press on
-    /// it lands; `None` when none of it is visible. A part past the window's edge is pressed on its visible part.
+    /// The piece of `target` that can be seen (`target` ∩ the clip of the arena the shown component is in), where a
+    /// press on it lands; `None` when none of it is visible. A part past the window's edge is pressed on its visible
+    /// piece, and one wholly past it cannot be pressed.
     pub fn visible(&self, target: &Target) -> Option<Target> {
-        let clip = self.root_id().and_then(|root| crate::primitives::sensing::root_clip(self.ctx(), root));
+        let clip = self.root_id().and_then(|root| crate::primitives::sensing::arena_clip(self.ctx(), root));
         let rect = clip.map_or(target.rect, |clip| target.rect.intersect(clip));
         (rect.width() >= 0.0 && rect.height() >= 0.0).then_some(Target { node: target.node, rect })
     }
