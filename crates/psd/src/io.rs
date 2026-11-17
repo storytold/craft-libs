@@ -440,6 +440,18 @@ pub(crate) fn write_unicode_units(out: &mut Vec<u8>, units: &[u16]) {
 
 #[cfg(test)]
 mod tests {
+    /// A section length that does not fit the file's 32-bit field is refused, not truncated:
+    /// this is what keeps every `as u32` on a length inside a serialized file from ever wrapping,
+    /// and it is why an over-large PSD fails the write instead of producing a short length.
+    #[test]
+    fn a_length_that_does_not_fit_32_bits_is_refused() {
+        let mut out = Vec::new();
+        assert!(out.put_len(u64::from(u32::MAX), false).is_ok(), "the largest 32-bit length fits");
+        assert!(matches!(out.put_len(u64::from(u32::MAX) + 1, false), Err(PsdError::LimitExceeded(_))));
+        // A PSB length field is 64 bits, so the same value is written there.
+        assert!(out.put_len(u64::from(u32::MAX) + 1, true).is_ok(), "PSB has room for it");
+    }
+
     use super::*;
 
     #[test]

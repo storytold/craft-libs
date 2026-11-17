@@ -92,6 +92,11 @@ fn hostile_headers_fail_without_allocating() {
     assert_eq!(dec(&f), Err(Error::LimitExceeded("pixel count")));
     let mut f = header(10, 16384, 16384, 32, 0);
     f.extend_from_slice(&[0xFF, 1, 2, 3, 4]);
+    // The aggregate decoded-storage budget rejects this before any allocation.
+    assert_eq!(dec(&f), Err(Error::LimitExceeded("decode allocation bytes")));
+    // Under budget, an incomplete RLE stream must still fail as truncated.
+    let mut f = header(10, 16, 16, 32, 0);
+    f.extend_from_slice(&[0xFF, 1, 2, 3, 4]); // only 128 of 256 pixels
     assert_eq!(dec(&f), Err(Error::Malformed("truncated run-length data")));
     let mut f = header(2, 4, 4, 24, 0);
     f.extend_from_slice(&[0; 10]);
@@ -116,8 +121,8 @@ fn hostile_headers_fail_without_allocating() {
 fn the_pixel_limit_is_checked() {
     let mut f = header(3, 2, 2, 8, 0);
     f.extend_from_slice(&[0; 4]);
-    assert!(decode(&f, &Limits { max_pixels: 4 }).is_ok());
-    assert_eq!(decode(&f, &Limits { max_pixels: 3 }), Err(Error::LimitExceeded("pixel count")));
+    assert!(decode(&f, &Limits { max_pixels: 4, ..Limits::default() }).is_ok());
+    assert_eq!(decode(&f, &Limits { max_pixels: 3, ..Limits::default() }), Err(Error::LimitExceeded("pixel count")));
 }
 
 #[test]
@@ -234,4 +239,31 @@ fn written_files_read_back() {
             .collect();
         assert_eq!(r.rgba, want, "{layout:?}");
     }
+}
+
+#[test]
+fn aggregate_decode_budget_applies_before_rle_expansion() {
+    let mut file = header(10, 16, 16, 32, 0x28);
+    file.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0, 255, 255]);
+    let mut limits = Limits { max_decoded_bytes: 2047, ..Limits::default() };
+    assert_eq!(decode(&file, &limits), Err(Error::LimitExceeded("decode allocation bytes")));
+    limits.max_decoded_bytes = 2048;
+    assert_eq!(decode(&file, &limits).unwrap().rgba.len(), 1024);
+}
+#[test]
+fn default_budget_rejects_large_rle_header_without_large_fixture() {
+    let file = header(10, 16384, 16384, 32, 0x28);
+    assert_eq!(decode(&file, &Limits::default()), Err(Error::LimitExceeded("decode allocation bytes")));
+}
+#[test]
+fn aggregate_decode_budget_counts_raw_and_palette_storage() {
+    let mut file = header(1, 1, 1, 8, 0x20);
+    file[1] = 1;
+    file[5] = 1;
+    file[7] = 24;
+    file.extend_from_slice(&[0, 0, 255, 0]);
+    let mut limits = Limits { max_decoded_bytes: 8, ..Limits::default() };
+    assert_eq!(decode(&file, &limits), Err(Error::LimitExceeded("decode allocation bytes")));
+    limits.max_decoded_bytes = 9;
+    assert_eq!(decode(&file, &limits).unwrap().rgba, [255, 0, 0, 255]);
 }
