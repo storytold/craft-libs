@@ -33,13 +33,17 @@ pub use decode::{decode_text, decode_utf8};
 /// Picks comma, semicolon or tab by consistent field counts in the first non-blank records.
 /// Quotes start only at a candidate field boundary; candidates with incoherent quoted fields
 /// are discarded when another coherent candidate separates the records. Ties prefer tab,
-/// then comma, then semicolon. Comma is the fallback when no candidate separates the text.
+/// then comma, then semicolon. When no candidate separates the records that hold other text,
+/// the same rules pick among the candidates whose records hold only their delimiters and
+/// whitespace, such as an exported row of empty cells; a candidate that finds a record with
+/// other text is left out of that pick. Comma is the fallback when neither pick finds one.
 /// Only the first 64 KiB are read. A record cut off at the end of that sample is left out,
 /// except when no candidate finds coherent complete records with a delimiter in each. Then a candidate
-/// that finds no complete record counts the delimiters read so far in the first record, and that
-/// record is incoherent when it has a quote inside a field that does not start with one. When one
-/// of those candidates ends the sample inside a quoted field, each of them counts only up to that
-/// field's opening quote.
+/// that finds no complete record with other text counts the delimiters read so far in the first
+/// such record, unless it found rows of its empty cells and that record has none of its
+/// delimiters. That record is incoherent when it has a quote inside a field that does not start
+/// with one. When one of those candidates ends the sample inside a quoted field, each of them
+/// counts only up to that field's opening quote.
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
     const SAMPLE_BYTES: usize = 64 * 1024;
     let mut sample_end = text.len().min(SAMPLE_BYTES);
@@ -64,7 +68,15 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
                 (scan.count, scan.record_has_content, scan.record_coherent, scan.record_bare_quote) =
                     (before_cut.count, before_cut.record_has_content, before_cut.record_coherent, before_cut.record_bare_quote);
             }
-            if scan.record_has_content {
+            if scan.delimiter_only_counts.is_empty() {
+                if scan.record_has_content {
+                    scan.coherent &= scan.record_coherent && !scan.record_bare_quote;
+                    scan.counts.push(scan.count);
+                } else {
+                    scan.push_delimiter_only_record();
+                }
+            } else if scan.record_has_content && scan.count > 0 {
+                // After rows of empty cells, a cut record without this delimiter is left out.
                 scan.coherent &= scan.record_coherent && !scan.record_bare_quote;
                 scan.counts.push(scan.count);
             }
@@ -79,6 +91,8 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
             } else if scan.record_has_content {
                 scan.coherent &= scan.record_coherent;
                 scan.counts.push(scan.count);
+            } else {
+                scan.push_delimiter_only_record();
             }
         }
     }
@@ -86,23 +100,34 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
 }
 
 fn pick_delimiter(scans: [DelimiterScan; 3]) -> u8 {
-    let candidates =
-        scans.map(|scan| (scan.delimiter, scan.counts.iter().copied().min().unwrap_or(0), scan.counts.iter().sum::<usize>(), scan.coherent));
+    let with_text = scans.each_ref().map(|scan| (scan.delimiter, scan.counts.as_slice(), scan.coherent));
+    // Records of delimiters alone have no quotes, so they are coherent.
+    let delimiters_only =
+        scans.each_ref().map(|scan| (scan.delimiter, if scan.counts.is_empty() { scan.delimiter_only_counts.as_slice() } else { &[] }, true));
+    best_delimiter(with_text).or_else(|| best_delimiter(delimiters_only)).unwrap_or(b',')
+}
+
+fn best_delimiter(candidates: [(u8, &[usize], bool); 3]) -> Option<u8> {
+    let candidates = candidates
+        .map(|(delimiter, counts, coherent)| (delimiter, counts.iter().copied().min().unwrap_or(0), counts.iter().sum::<usize>(), coherent));
     let prefer_coherent = candidates.iter().any(|(_, min, _, coherent)| *min > 0 && *coherent);
-    let mut best = (b',', 0usize, 0usize);
+    let mut best: Option<(u8, usize, usize)> = None;
     for (delimiter, min, total, coherent) in candidates {
-        if min > 0 && (!prefer_coherent || coherent) && (min, total) > (best.1, best.2) {
-            best = (delimiter, min, total);
+        if min > 0 && (!prefer_coherent || coherent) && best.is_none_or(|(_, best_min, best_total)| (min, total) > (best_min, best_total)) {
+            best = Some((delimiter, min, total));
         }
     }
-    best.0
+    best.map(|(delimiter, _, _)| delimiter)
 }
 
 /// One candidate delimiter's pass over the sample in [`sniff_delimiter`].
 struct DelimiterScan {
     delimiter: u8,
-    /// Delimiter counts of the complete non-blank records, at most 20.
+    /// Delimiter counts of the complete records that hold other text, at most 20.
     counts: Vec<usize>,
+    /// Delimiter counts of the complete records that hold only this candidate's delimiters and
+    /// whitespace, at most 20. They do not count toward the 20 records above.
+    delimiter_only_counts: Vec<usize>,
     /// Whether every counted record had coherent quoted fields.
     coherent: bool,
     reached_record_limit: bool,
@@ -117,10 +142,21 @@ struct DelimiterScan {
     open_quote: Option<usize>,
 }
 
+impl DelimiterScan {
+    /// Keeps the open record's delimiter count when the record has no other text and at least
+    /// one delimiter.
+    fn push_delimiter_only_record(&mut self) {
+        if !self.record_has_content && self.count > 0 && self.delimiter_only_counts.len() < 20 {
+            self.delimiter_only_counts.push(self.count);
+        }
+    }
+}
+
 fn scan_delimiter(sample: &str, delimiter: u8, quote: char) -> DelimiterScan {
     let mut scan = DelimiterScan {
         delimiter,
         counts: Vec::new(),
+        delimiter_only_counts: Vec::new(),
         coherent: true,
         reached_record_limit: false,
         count: 0,
@@ -158,6 +194,8 @@ fn scan_delimiter(sample: &str, delimiter: u8, quote: char) -> DelimiterScan {
                     scan.reached_record_limit = true;
                     break;
                 }
+            } else {
+                scan.push_delimiter_only_record();
             }
             scan.count = 0;
             after_quote = false;
@@ -401,6 +439,64 @@ mod tests {
         // off at the end is left out.
         assert_eq!(sniff_delimiter(&format!("a;\"hello,\";b\n{}", "x;y;z\n".repeat(12_000)), '"'), b';');
         assert_eq!(sniff_delimiter(&format!("a,b,c;\"hello,\";d\n{}", "x;y;z\n".repeat(12_000)), '"'), b';');
+    }
+
+    // A sheet whose only value is far down exports rows of empty cells that fill the whole sample.
+    #[test]
+    fn delimiter_sniffing_reads_a_sparse_semicolon_export() {
+        assert_eq!(sniff_delimiter(&format!("{};7\n", ";\n".repeat(40_000)), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_reads_a_sparse_semicolon_export_with_crlf() {
+        assert_eq!(sniff_delimiter(&format!("{};7\r\n", ";\r\n".repeat(40_000)), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_reads_a_sparse_tab_export() {
+        assert_eq!(sniff_delimiter(&format!("{}\t7\r\n", "\t\r\n".repeat(40_000)), '"'), b'\t');
+    }
+
+    #[test]
+    fn delimiter_sniffing_reads_a_short_file_of_empty_semicolon_cells() {
+        assert_eq!(sniff_delimiter(";;\n;;\n", '"'), b';');
+        assert_eq!(sniff_delimiter(";;\r\n;;", '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_reads_empty_semicolon_cells_padded_with_whitespace() {
+        assert_eq!(sniff_delimiter(&"; ;  \n".repeat(20_000), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_reads_a_first_record_of_empty_cells_longer_than_the_sample() {
+        assert_eq!(sniff_delimiter(&format!("{}\n1;2\n", ";".repeat(70_000)), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_leaves_out_a_cut_record_after_a_row_of_empty_cells() {
+        assert_eq!(sniff_delimiter(&format!(";\n{};7\n", "x".repeat(70_000)), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_counts_a_long_record_after_a_row_of_empty_cells() {
+        // Delimiters inside the long record's quoted field are text for every candidate.
+        assert_eq!(sniff_delimiter(&format!("\t\nname\t\"{}\"\n", "x,y".repeat(30_000)), '"'), b'\t');
+        assert_eq!(sniff_delimiter(&format!(";\nname;\"{}\"\n", "x,y\t".repeat(20_000)), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_lets_records_with_text_outweigh_records_of_delimiters_alone() {
+        // Rows of tabs alone are blank to the other candidates and do not outweigh them.
+        assert_eq!(sniff_delimiter(&format!("{}a;b\nc;d\n", "\t\n".repeat(25)), '"'), b';');
+        assert_eq!(sniff_delimiter(&format!("{}a;b\nc;d\n", "\t\t\n".repeat(25)), '"'), b';');
+        // The same holds for a record with text cut off at the end of the sample.
+        assert_eq!(sniff_delimiter(&format!("\t\n{}", "x;".repeat(40_000)), '"'), b';');
+        // A candidate with a record of other text is judged on those records alone.
+        assert_eq!(sniff_delimiter(&format!("title\n{}", ";\n".repeat(25)), '"'), b',');
+        // Rows of empty cells in a comma file; comma is also the fallback.
+        assert_eq!(sniff_delimiter("a,b,c,d\n,,,\n,,,\n1,2,3,4\n", '"'), b',');
+        assert_eq!(sniff_delimiter(&format!("{}x;y\n", ",,,\n".repeat(20_000)), '"'), b',');
     }
 
     #[test]
