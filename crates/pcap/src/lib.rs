@@ -1091,8 +1091,10 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
             s.last_ts_ns = Some(s.last_ts_ns.map_or(t, |x| x.max(t)));
         }
         let d = decode(f.link_type, f.data);
-        for p in &d.protocols {
-            protocols.add((*p).to_string());
+        for (i, p) in d.protocols.iter().enumerate() {
+            if !d.protocols[..i].contains(p) {
+                protocols.add((*p).to_string());
+            }
         }
         stacks.add(d.stack());
         let Some(ip) = &d.ip else {
@@ -1387,6 +1389,19 @@ mod tests {
         assert_eq!(summarize(&pcap(&frames), &|| false).unwrap().format, "pcap");
         assert_eq!(iso8601(1_700_000_000_000_000_500), "2023-11-14T22:13:20.000000500Z");
         assert_eq!(iso8601(0), "1970-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn qinq_frames_count_vlan_once_per_frame() {
+        let mut payload = vec![0x00, 0x0a, 0x81, 0x00, 0x00, 0x14, 0x08, 0x00];
+        payload.extend(ipv4_pkt(17, [10, 0, 0, 1], [10, 0, 0, 2], &udp(40000, 9999, b"ping")));
+        let frame = eth(0x88a8, &payload);
+        let s = summarize(&pcap(&[frame.clone(), frame.clone(), frame]), &|| false).unwrap();
+        let count = |name: &str| s.protocols.iter().find(|c| c.value == name).map(|c| c.count);
+        assert_eq!(s.stacks[0].value, "eth:vlan:vlan:ipv4:udp");
+        assert_eq!(count("vlan"), Some(3));
+        assert_eq!(count("eth"), Some(3));
+        assert_eq!(count("ipv4"), Some(3));
     }
 
     #[test]
