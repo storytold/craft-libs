@@ -7,7 +7,7 @@ use craft_behavior::Mixed;
 use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorReadout, PickedColor};
 use craft_host::{AppInfo, Host};
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Rgba, Srgba};
-use craft_ui::contract::{Bind, Role, Show as _};
+use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, vec2};
