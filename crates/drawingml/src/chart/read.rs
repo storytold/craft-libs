@@ -143,6 +143,7 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
     c.legend = ch.child(Local("legend")).map(|l| l.child(Local("legendPos")).and_then(|c| c.attr_local("val")).unwrap_or("r").to_string());
     c.legend_overlay =
         ch.child(Local("legend")).and_then(|l| l.child(Local("overlay"))).and_then(|o| o.attr_local("val").and_then(value::to_bool)).unwrap_or(false);
+    c.legend_entries = legend_entries(ch.child(Local("legend")));
     c.chart_fill = simple_fill(root.child(Local("spPr")));
     c.plot_fill = simple_fill(pa.child(Local("spPr")));
 
@@ -542,6 +543,52 @@ fn text_color(e: Option<&El>) -> Option<crate::style::ColorRef> {
                 && let Some(Fill::Solid { color }) = simple_fill(Some(c))
             {
                 return Some(color);
+            }
+            if let Some(v) = rec(c, depth + 1) {
+                return Some(v);
+            }
+        }
+        None
+    }
+    rec(e?, 0)
+}
+
+/// Legend entries read from one chart; a legend lists at most one per series or category.
+const MAX_LEGEND_ENTRIES: usize = 1024;
+
+/// The legend's entries with text of their own (`c:legendEntry/c:txPr`), over the legend's.
+fn legend_entries(legend: Option<&El>) -> Vec<crate::chart::LegendEntry> {
+    legend
+        .into_iter()
+        .flat_map(|l| l.children(Local("legendEntry")))
+        .take(MAX_LEGEND_ENTRIES)
+        .filter_map(|e| {
+            // The paragraph's own run properties first, then the list style's defaults
+            // (`a:lstStyle` comes before `a:p`, and is the less specific of the two).
+            let tx = e.child(Local("txPr"));
+            let para = tx.and_then(|t| t.child(Local("p")));
+            let entry = crate::chart::LegendEntry {
+                idx: e.child(Local("idx")).and_then(|i| i.attr_local("val")).and_then(|v| v.parse().ok())?,
+                size: text_size(para).or_else(|| text_size(tx)),
+                bold: text_bold(para).or_else(|| text_bold(tx)),
+                color: text_color(para).or_else(|| text_color(tx)),
+            };
+            (entry.size.is_some() || entry.bold.is_some() || entry.color.is_some()).then_some(entry)
+        })
+        .collect()
+}
+
+/// The weight (`b`) of the first `a:defRPr` or `a:rPr` that sets one under `e`.
+fn text_bold(e: Option<&El>) -> Option<bool> {
+    fn rec(e: &El, depth: usize) -> Option<bool> {
+        if depth > 8 {
+            return None;
+        }
+        for c in e.elements() {
+            if (c.is(Local("defRPr")) || c.is(Local("rPr")))
+                && let Some(b) = c.attr_local("b").and_then(value::to_bool)
+            {
+                return Some(b);
             }
             if let Some(v) = rec(c, depth + 1) {
                 return Some(v);
