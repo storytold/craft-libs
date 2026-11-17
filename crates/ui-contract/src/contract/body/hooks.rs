@@ -1012,11 +1012,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     if props.arena {
                         crate::primitives::sensing::set_layer(&ctx, ArenaId::new(id), layer);
                     }
-                    let forward = areas::Forward {
-                        id: sub(id, "transform"),
-                        sense: response::to_egui(cx.core.root_sense),
-                        rect: rect.intersect(ui.clip_rect()),
-                    };
+                    let forward = areas::Forward { root: id, sense: response::to_egui(cx.core.root_sense), rect: rect.intersect(ui.clip_rect()) };
                     let body_layer = areas::BodyLayer {
                         parent,
                         layer,

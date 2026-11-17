@@ -4391,8 +4391,9 @@ Relation assertions between rects and lengths: the tests compare layouts to each
 Probe components for the sensing core: roots, members and parts described as data, shown through the same
 
 - `craft_ui::testing::sensing::PartReport`: `pub struct PartReport { pub key: PartKey, pub index: Option<u64>, pub press: PressState, pub hovered: bool }`. What one part read this pass.
-- `craft_ui::testing::sensing::ProbeMember`: `pub struct ProbeMember`. A member of a probe arena, or a body child that is a root of its own in a probe that is no arena.
+- `craft_ui::testing::sensing::ProbeMember`: `pub struct ProbeMember`. A member of a probe arena, or a body child that is a root of its own: in a probe that is no arena, or `nested`.
   - `pub fn new(name: &'static str, rect: Rect, sense: Sense) -> Self`. A member named `name` over `rect` sensing `sense`.
+  - `pub fn nested(mut self) -> Self`. Shows the child in an arena's body as a root of its own, not a member: a text editor over a canvas.
   - `pub fn part(mut self, part: ProbePart) -> Self`. Adds a part.
 - `craft_ui::testing::sensing::ProbePart`: `pub struct ProbePart`. A part of a probe.
   - `pub fn new(key: PartKey, rect: Rect, sense: Sense) -> Self`. A part `key` over `rect` sensing `sense`.

@@ -37,6 +37,10 @@ impl Log {
         self.frames.iter().flat_map(|reports| press_phases(&reports[root].root, key)).collect()
     }
 
+    fn member_phases(&self, root: usize, member: &'static str, key: Option<PartKey>) -> Vec<PressPhase> {
+        self.frames.iter().filter_map(|reports| reports[root].member(member)).flat_map(|report| press_phases(report, key)).collect()
+    }
+
     fn member_clicks(&self, root: usize, member: &'static str) -> usize {
         self.frames.iter().filter_map(|reports| reports[root].member(member)).filter(|report| report.clicked).count()
     }
@@ -300,4 +304,77 @@ fn a_rerun_pass_delivers_none_of_the_frames_input_again() {
     assert_eq!(log.iter().map(|pass| pass.moves).sum::<usize>(), 1, "the key's intent arrived once");
     assert_eq!(log.iter().filter(|pass| pass.injected).count(), 1, "the injected step entered once");
     assert!(log[0].stirred && log[0].injected && !log[1].stirred && !log[1].injected, "the first pass carries the input");
+}
+
+fn downs(phases: &[PressPhase]) -> usize {
+    phases.iter().filter(|phase| matches!(phase, PressPhase::Down { .. })).count()
+}
+
+/// A press that enters and goes down in one frame, as an automation click does, then its release.
+fn enter_and_click(frames: &mut Frames, at: Pos2, show: &mut impl FnMut(&mut Ui)) {
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut *show);
+    frames.frame(vec![pointer::release(at)], &mut *show);
+    frames.idle(1, show);
+}
+
+/// A control in a panel body takes its press though egui's click target there is a later widget over the whole body
+/// (a container whose own click part lies in its header) with no shape that takes a press at that point: the press
+/// goes to the shape on top under it, whatever egui's widget order says.
+#[trial]
+fn a_control_takes_its_press_under_a_later_body_sized_widget() {
+    const TAB: PartKey = PartKey::new("tab");
+    let panel = ProbeRoot::new("panel", rect(100.0, 100.0, 300.0, 300.0), Sense::empty())
+        .member(ProbeMember::new("well", rect(150.0, 200.0, 40.0, 20.0), Sense::CLICK))
+        .member(ProbeMember::new("body", rect(100.0, 100.0, 300.0, 300.0), Sense::HOVER).part(ProbePart::new(
+            TAB,
+            rect(100.0, 100.0, 80.0, 24.0),
+            Sense::CLICK,
+        )));
+    let (mut show_frame, log) = scene(vec![panel]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    log.borrow_mut().clear();
+
+    let well = Pos2::new(170.0, 210.0);
+    enter_and_click(&mut frames, well, &mut show_frame);
+    assert_eq!(egui_click_target(&frames.ctx), Some(ProbeRoot::id("body")), "egui's click target over the well is the body's widget");
+    let log = log.borrow();
+    assert_eq!(log.member_clicks(0, "well"), 1, "the well takes the click");
+    assert_eq!(log.member_clicks(0, "body"), 0, "the body is not clicked");
+    assert!(log.member_phases(0, "body", Some(TAB)).is_empty(), "the body's part saw no press");
+    assert!(log.member_phases(0, "body", None).is_empty(), "the body's own shape saw no press");
+}
+
+/// Over a canvas's background part, a root nested in its body (a text editor) and a member shown after it (a text
+/// frame with a corner handle at the editor's corner): exactly one of them starts each press, the one whose shape is
+/// on top under it.
+#[trial]
+fn one_root_starts_a_press_where_roots_overlap_on_a_layer() {
+    const CORNER: PartKey = PartKey::new("corner");
+    let canvas = ProbeRoot::new("canvas", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
+        .arena()
+        .part(ProbePart::new(BACKGROUND, rect(100.0, 100.0, 500.0, 300.0), Sense::CLICK | Sense::DRAG).level(HitLevel::Background, 0))
+        .member(ProbeMember::new("editor", rect(200.0, 150.0, 200.0, 100.0), Sense::CLICK | Sense::DRAG).nested())
+        .member(
+            ProbeMember::new("frame", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
+                .part(ProbePart::new(CORNER, rect(194.0, 144.0, 12.0, 12.0), Sense::DRAG).level(HitLevel::Handle, 1)),
+        );
+    let (mut show_frame, log) = scene(vec![canvas]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+
+    let corner = Pos2::new(202.0, 152.0);
+    let inside = Pos2::new(300.0, 200.0);
+    let free = Pos2::new(150.0, 350.0);
+    for (at, expected) in [(corner, [0, 0, 1]), (inside, [0, 1, 0]), (free, [1, 0, 0])] {
+        log.borrow_mut().clear();
+        enter_and_click(&mut frames, at, &mut show_frame);
+        let log = log.borrow();
+        let started = [
+            downs(&log.root_phases(0, Some(BACKGROUND))),
+            downs(&log.member_phases(0, "editor", None)),
+            downs(&log.member_phases(0, "frame", Some(CORNER))),
+        ];
+        assert_eq!(started, expected, "at {at:?}: presses started on [canvas background, editor, frame corner]");
+    }
 }

@@ -240,10 +240,6 @@ struct ArenaState {
     widgets: Vec<Id>,
     machine: PressMachine<Hit>,
     outcome: Option<Outcome>,
-    /// The rects of the roots shown in the arena's body this pass that are not its members and take a press. Their
-    /// egui widgets lie over the members shown before them; a member shown after one of them over its rect gets an
-    /// egui widget of its own, so egui's press target there is the member's (8.3).
-    nested: Vec<Rect>,
     /// The host asked to end the open press (`cancel_press_of`): the arena's next lifecycle run ends it.
     host_cancel: bool,
 }
@@ -285,7 +281,6 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
         state.previous_own_over_at = state.own_over_at;
         state.own_over_at = u32::MAX;
         state.previous_union_sense = std::mem::take(&mut state.union_sense);
-        state.nested.clear();
         state.pass = pass_nr;
     }
 }
@@ -354,17 +349,6 @@ fn candidates(state: &ArenaState, members: bool, target: f32) -> Vec<Shape<Id>> 
     shapes
 }
 
-/// Whether `widget` is the egui widget of a member that joined last pass or of one of its press-taking `over` parts:
-/// such widgets stand for the arena root, as its own do.
-fn member_widget_of(members: &[MemberDecl], widget: Id) -> bool {
-    members.iter().any(|member| member_widget(member.id) == widget || over_parts(&member.parts).any(|part| over_widget(member.id, part) == widget))
-}
-
-/// The egui widget of a member shown over a root that is not a member of its arena.
-fn member_widget(member: Id) -> Id {
-    sub(member, "member")
-}
-
 /// The members of `arena` in `viewport` as of its latest run: while the root's run of this pass is under way, the
 /// members of last pass and those registered so far; empty for an arena that has not run. A read creates no arena.
 pub(crate) fn members(ctx: &Context, viewport: ViewportId, arena: ArenaId) -> SmallVec<[Id; 8]> {
@@ -411,16 +395,6 @@ pub fn cancel_press_of(ctx: &Context, owner: Id) {
                 state.host_cancel = true;
             }
         }
-    });
-}
-
-/// Notes a root shown in the body of `arena` that is not one of its members and takes a press, over `rect`: the
-/// members shown after it over that rect stack above it.
-pub(crate) fn note_nested(ctx: &Context, arena: ArenaId, rect: Rect) {
-    let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
-    with_arena(ctx, arena, pass_nr, |state| {
-        rotate(state, pass_nr);
-        state.nested.push(rect);
     });
 }
 
@@ -568,7 +542,7 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         }
         known_in(state, spec.id)
     });
-    pointer::record_shapes_in(ctx, read.viewport, layer, spec.id, own_shapes(spec.own, spec.id, read.target()).chain(background));
+    pointer::record_shapes_in(ctx, read.viewport, layer, spec.id, clip, own_shapes(spec.own, spec.id, read.target()).chain(background));
     let mut response = response;
     let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled, sense);
     // The root is hovered while the arena's hover resolve finds anything under the pointer: its background, its parts
@@ -602,7 +576,7 @@ fn over_parts(own: &[PartDecl]) -> impl Iterator<Item = &PartDecl> {
 }
 
 /// Whether a root's own `part` is an edge or handle part, not `over`, that reaches outside the root's `rect`: it gets
-/// an egui widget of its own, so egui's press target reaches it there.
+/// an egui widget of its own, so egui's hit test names the root there and not a raw egui widget beneath.
 fn reaches_out(rect: Rect, part: &PartDecl) -> bool {
     !part.over && part.priority.level >= HitLevel::Edge && !rect.contains_rect(part.shape.bounds())
 }
@@ -611,11 +585,11 @@ fn over_widget(root: Id, part: &PartDecl) -> Id {
     sub(root, ("over", part.key, part.index))
 }
 
-/// Registers the egui widgets of the component's `over` parts after its body ran and before its `paint_over`. egui
-/// picks the later widget, so a press on such a part goes to the component's arena and not to a root nested in the
-/// body, and a child `paint_over` shows afterwards stacks above it: one rule for the stacking order (8.3). A root's
-/// ids are part of its widgets from step 8. The `over` parts of a root or a member take their stack position here,
-/// above every member its body showed; a member's widgets stand for the arena root.
+/// Records the shapes of the component's `over` parts after its body ran and before its `paint_over`, so they stand
+/// above everything the body showed and below what a later `paint_over` shows: one paint order for presses (8.3).
+/// Each part gets an egui widget there too, so egui's hit test names the component over its body's widgets. A
+/// root's ids are part of its widgets from step 8. The `over` parts of a root or a member take their stack position
+/// here, above every member its body showed; a member's widgets stand for the arena root.
 pub(crate) fn place_over_widgets(ui: &Ui, id: Id, member: Option<ArenaId>, decls: &[PartDecl]) {
     let (ctx, clip) = (ui.ctx(), ui.clip_rect());
     let widgets: Vec<Id> = over_parts(decls)
@@ -643,7 +617,7 @@ pub(crate) fn place_over_widgets(ui: &Ui, id: Id, member: Option<ArenaId>, decls
         Some(member_over_shapes(joined, read.target()).collect::<Vec<_>>())
     });
     let Some(shapes) = shapes else { return };
-    pointer::record_shapes_in(ctx, read.viewport, layer, arena.0, shapes);
+    pointer::record_shapes_in(ctx, read.viewport, layer, arena.0, clip, shapes);
     // A root's widgets are in its widget record from step 8.
     if member.is_some() && !widgets.is_empty() {
         pointer::record_widgets_in(ctx, read.viewport, layer, arena.0, &widgets, decls.iter().any(|part| part.sense.contains(Sense::CLICK)));
@@ -699,7 +673,6 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
         rotate(state, pass_nr);
         for spec in specs {
             let mut decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
-            let covers = state.nested.iter().any(|nested| nested.intersects(spec.rect));
             decl.local = state.layer == Some(layer);
             let position = member_position(state.members.len());
             decl.over_at = position + 1;
@@ -708,30 +681,16 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
             for part in &decl.parts {
                 state.union_sense |= part.sense;
             }
-            joined.push((decl.local, known_in(state, spec.id), covers));
+            joined.push((decl.local, known_in(state, spec.id)));
             state.members.push(decl);
         }
         state.outcome.filter(|outcome| outcome.pass == pass_nr).unwrap_or_default()
     });
-    pointer::record_shapes(ctx, layer, arena.0, shapes);
+    pointer::record_shapes(ctx, layer, arena.0, ui.clip_rect(), shapes);
     specs
         .iter()
         .zip(joined)
-        .map(|(spec, (local, known, covers))| {
-            let presses = spec
-                .parts
-                .iter()
-                .filter(|part| !part.over)
-                .fold(spec.sense, |sense, part| sense | part.sense)
-                .intersection(Sense::CLICK | Sense::DRAG);
-            // A member shown over an earlier root that is not a member takes egui's press there through a widget that
-            // stands for the arena root; egui picks the later widget.
-            if covers && spec.enabled && !presses.is_empty() {
-                let widget = member_widget(spec.id);
-                response::widget(ui, widget, spec.rect.intersect(ui.clip_rect()), presses);
-                crate::runtime::egui::access::hide(ctx, widget);
-                pointer::record_widgets_in(ctx, pass::current_viewport(ctx), layer, arena.0, &[widget], presses.contains(Sense::CLICK));
-            }
+        .map(|(spec, (local, known))| {
             let view = member_view(&outcome, spec.id, local, pointer_pos);
             MemberResult {
                 response: response::member(ui, spec.id, spec.rect, spec.enabled, view),
@@ -829,35 +788,27 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         .cancel(cancel);
         let mut machine = std::mem::take(&mut state.machine);
         let step = machine.step(input, |at| {
-            // The press-target rule: egui's click target decides, its drag target only for a drag-only root; the
-            // root starts a press when that target is its own or there is none, and a root whose widgets sense
-            // neither, which egui never names, as where there is none. A root under a modal layer starts none.
+            // The press-target rule (8.3): exactly one root starts a press, the one whose shape is on top under it
+            // (`pointer::press_winner`). A root under a modal layer starts none; where egui names no target of the
+            // root's kind (its click target, its drag target for a drag-only root; a root whose widgets sense neither
+            // is never named), only a root the modal's canvas admits does.
             let root = state.root.map(|root| root.id);
-            let takes = |untargeted| crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted);
-            let mine = |id: Option<Id>| match id {
-                Some(id) => state.widgets.contains(&id) || member_widget_of(&state.previous, id),
-                None => takes(true),
-            };
             let targets = pass_pointer.press_targets;
-            let allowed = if union_sense.contains(Sense::CLICK) {
-                mine(targets.click)
+            let untargeted = if union_sense.contains(Sense::CLICK) {
+                targets.click.is_none()
             } else if union_sense.contains(Sense::DRAG) {
-                mine(targets.drag)
+                targets.drag.is_none()
             } else {
-                mine(None)
+                true
             };
-            // A root whose own widget is not the click target still starts the press its parts win under it.
-            let allowed = takes(false)
-                && (allowed
-                    || state.root.is_some_and(|own| {
-                        own.rect.contains(at) && pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own.id)
-                    }));
+            let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted)
+                && root.is_some_and(|own| pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own));
             if !enabled || !allowed {
                 return None;
             }
             // egui gives no click target where a drag-only widget is on top (a resize grip over a layer's or a
-            // window's edge): a root under it keeps its click there, but a drag is that widget's.
-            let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| !mine(Some(id)));
+            // window's edge): a root under a raw egui one keeps its click there, but a drag is that widget's.
+            let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| pointer::foreign_target(ctx, id));
             let won = resolve_press_in(state, members, xf, at, target);
             if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
                 eprintln!(

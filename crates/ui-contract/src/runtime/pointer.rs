@@ -104,18 +104,38 @@ pub(crate) struct Memory {
 #[derive(Clone, Default)]
 struct RootRecord {
     shapes: Vec<Shape<Id>>,
+    /// Where each shape of `shapes` stands, at the same index.
+    placed: Vec<Placed>,
     /// The root's egui widgets: the click and drag targets that stand for it.
     widgets: Vec<Id>,
     /// The root's widgets sense a click.
     click: bool,
 }
 
+/// Where a recorded shape stands: its place in the pass's paint order (the registration that recorded it; later is on
+/// top) and the clip it shows through, in its layer's space.
+#[derive(Clone, Copy)]
+struct Placed {
+    order: u32,
+    clip: Rect,
+}
+
 type LayerRecord = HashMap<Layer, IdMap<RootRecord>>;
+
+/// The transformed body layers of a pass: each layer's root and the layer the root itself is shown on.
+type BodyRecord = HashMap<Layer, (Id, Layer)>;
 
 #[derive(Default)]
 pub(crate) struct Shapes {
     this: LayerRecord,
     last: LayerRecord,
+    this_bodies: BodyRecord,
+    last_bodies: BodyRecord,
+    /// The paint order the running pass's next registration takes.
+    next: u32,
+    /// The press winner found over `last`, for the point and targets it was asked for: every root asks for the
+    /// same press.
+    winner: Option<(Pos2, PressTargets, Option<(Winner<Id>, Id)>)>,
 }
 
 /// The begin hook (H5): converts the pass's pointer input.
@@ -180,7 +200,12 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         stirred: read.stirred,
     };
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
-    PerViewport::<Shapes>::with(ctx, viewport, |shapes| shapes.last = std::mem::take(&mut shapes.this));
+    PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
+        shapes.last = std::mem::take(&mut shapes.this);
+        shapes.last_bodies = std::mem::take(&mut shapes.this_bodies);
+        shapes.next = 0;
+        shapes.winner = None;
+    });
 }
 
 /// The modifiers `held` with the app's `latched` ones added, field by field: `Mods` has no operator for it.
@@ -296,20 +321,36 @@ pub(crate) fn cancel_of_pass(ctx: &Context) -> Option<PressCancel> {
     requested.or_else(|| with_pass_pointer(ctx, |pointer| pointer.focus_lost).then_some(PressCancel::FocusLost))
 }
 
-/// Writes `shapes` of the arena rooted at `root` into the running pass's shape record under `layer`. Stack
-/// positions are per arena, so each root's shapes stay apart.
-pub(crate) fn record_shapes(ctx: &Context, layer: Layer, root: Id, shapes: impl IntoIterator<Item = Shape<Id>>) {
-    record_shapes_in(ctx, pass::current_viewport(ctx), layer, root, shapes);
+/// Writes `shapes` of the arena rooted at `root`, shown through `clip` (layer space), into the running pass's shape
+/// record under `layer`, above every shape recorded before them in the pass. Stack positions are per arena, so each
+/// root's shapes stay apart.
+pub(crate) fn record_shapes(ctx: &Context, layer: Layer, root: Id, clip: Rect, shapes: impl IntoIterator<Item = Shape<Id>>) {
+    record_shapes_in(ctx, pass::current_viewport(ctx), layer, root, clip, shapes);
 }
 
 /// `record_shapes` for a caller that already read the running viewport.
-pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, shapes: impl IntoIterator<Item = Shape<Id>>) {
+pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: impl IntoIterator<Item = Shape<Id>>) {
     let shapes: Vec<Shape<Id>> = shapes.into_iter().collect();
     crate::runtime::replay::journal(ctx, || {
         let shapes = shapes.clone();
-        move |ctx: &Context| record_shapes(ctx, layer, root, shapes.iter().cloned())
+        move |ctx: &Context| record_shapes(ctx, layer, root, clip, shapes.iter().cloned())
     });
-    PerViewport::<Shapes>::with(ctx, viewport, |record| record.this.entry(layer).or_default().entry(root).or_default().shapes.extend(shapes));
+    PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        let order = record.next;
+        record.next += 1;
+        let entry = record.this.entry(layer).or_default().entry(root).or_default();
+        entry.shapes.extend(shapes);
+        entry.placed.resize(entry.shapes.len(), Placed { order, clip });
+    });
+}
+
+/// Records that `layer` shows the transformed body of the root `root`, which is itself shown on `parent`: a press on
+/// the body layer reaches the root's own shapes beneath the body's.
+pub(crate) fn record_body_layer(ctx: &Context, layer: Layer, parent: Layer, root: Id) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| record_body_layer(ctx, layer, parent, root));
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record.this_bodies.insert(layer, (root, parent));
+    });
 }
 
 /// Records the egui widgets that stand for the root at `root` (`click` when they sense a click): the root's own at
@@ -488,32 +529,76 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
     })
 }
 
-/// The winner of a press at `at` among last pass's shapes of the root egui hands the press to, on the topmost
-/// layer under it, with that root: what the focus service classifies the press by (8.3, H7). A press whose egui
-/// target is no root's widget has no winner. A root's widget covers its whole rect, so when no shape of the click
-/// root lies under the press (a title row between its parts), the press goes to the drag root below it. Shapes of
-/// transformed bodies lie on their own layers.
+/// The root a press at `at` (screen points) belongs to, with the shape of it that wins the press: what the sensing
+/// core starts the press on and the focus service classifies it by (8.3, H7). On the topmost layer under the press,
+/// each root recorded there in the last pass resolves its own shapes by the arena rule, and the root whose winning
+/// shape was recorded last in the pass, the one painted on top, takes the press. A transformed body's layer shows
+/// its root's own shapes beneath everything on it. A shape counts only where its clip shows it; at a point no clip
+/// on the layer holds (one automation names past the window), a shape counts when some of it shows inside its clip.
+/// A press egui's hit test gives to a widget no component registered (a raw egui widget on top) has no winner.
 pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {
-    let layer = areas::layer_at(ctx, at)?;
     let viewport = pass::current_viewport(ctx);
-    let candidates = PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        let roots = || record.last.values().flat_map(|roots| roots.iter());
-        let root_of = |widget: Option<Id>| {
-            let widget = widget?;
-            roots().find(|(_, root)| root.widgets.contains(&widget)).map(|(id, _)| *id)
-        };
-        let mut found: Vec<(Id, Vec<Shape<Id>>)> = Vec::new();
-        for root in [root_of(targets.click), root_of(targets.drag)].into_iter().flatten() {
-            if found.iter().all(|(seen, _)| *seen != root)
-                && let Some(shapes) = record.last.get(&layer).and_then(|roots| roots.get(&root))
-            {
-                found.push((root, shapes.shapes.clone()));
-            }
-        }
-        found
+    let found = PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record.winner.filter(|(point, asked, _)| *point == at && *asked == targets).map(|(_, _, found)| found)
     });
-    let at = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
-    candidates.into_iter().find_map(|(root, shapes)| resolve(&shapes, at, ResolveFor::Press).map(|winner| (winner, root)))
+    if let Some(found) = found {
+        return found;
+    }
+    let found = find_press_winner(ctx, viewport, at, targets);
+    PerViewport::<Shapes>::with(ctx, viewport, |record| record.winner = Some((at, targets, found)));
+    found
+}
+
+fn find_press_winner(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {
+    let layer = areas::layer_at(ctx, at)?;
+    let to_layer = |layer: Layer| areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
+    let body = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last_bodies.get(&layer).copied());
+    let beneath = body.map(|(root, parent)| (root, parent, to_layer(parent)));
+    let on_layer = to_layer(layer);
+    PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        if targets.click.is_some_and(|widget| !registered_in(&record.last, widget)) {
+            return None;
+        }
+        // Bottom to top: the body layer's root on its own layer, then the roots on the layer in paint order.
+        let mut stack: Vec<(u8, Id, &RootRecord, Pos2)> = Vec::new();
+        if let Some((root, parent, point)) = beneath
+            && let Some(entry) = record.last.get(&parent).and_then(|roots| roots.get(&root))
+        {
+            stack.push((0, root, entry, point));
+        }
+        if let Some(roots) = record.last.get(&layer) {
+            stack.extend(roots.iter().map(|(root, entry)| (1, *root, entry, on_layer)));
+        }
+        let shown = stack.iter().any(|(_, _, entry, point)| entry.placed.iter().any(|placed| placed.clip.contains(*point)));
+        stack
+            .into_iter()
+            .filter_map(|(tier, root, entry, point)| {
+                let shows = |index: usize| {
+                    let (shape, placed) = (&entry.shapes[index], entry.placed[index]);
+                    if shown { placed.clip.contains(point) } else { shape.shape.bounds().intersects(placed.clip) }
+                };
+                let kept: Vec<usize> = (0..entry.shapes.len())
+                    .filter(|&index| entry.shapes[index].sense.takes_press() && entry.shapes[index].hits(point) && shows(index))
+                    .collect();
+                let shapes: Vec<Shape<Id>> = kept.iter().map(|&index| entry.shapes[index].clone()).collect();
+                let mut winner = resolve(&shapes, point, ResolveFor::Press)?;
+                winner.index = kept[winner.index];
+                Some(((tier, entry.placed[winner.index].order), winner, root))
+            })
+            .max_by_key(|(rank, ..)| *rank)
+            .map(|(_, winner, root)| (winner, root))
+    })
+}
+
+/// Whether some root registered the egui widget `widget` in `layers`.
+fn registered_in(layers: &LayerRecord, widget: Id) -> bool {
+    layers.values().any(|roots| roots.values().any(|root| root.widgets.contains(&widget)))
+}
+
+/// Whether the egui widget `widget`, one of the latest press's targets, is one no component registered in the pass
+/// the press was hit-tested against: a raw egui widget.
+pub(crate) fn foreign_target(ctx: &Context, widget: Id) -> bool {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| !registered_in(&record.last, widget))
 }
 
 /// Every shape of the last pass on the topmost layer at `at` (screen points) whose area contains it, as
@@ -521,7 +606,7 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
 /// classified on, for rules that ask what lies under a point rather than who wins it.
 pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
     let Some(layer) = areas::layer_at(ctx, at) else { return Vec::new() };
-    // Every shape recorded on a layer lies in that layer's space, as in `press_winner`.
+    // Every shape recorded on a layer lies in that layer's space.
     let at = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record

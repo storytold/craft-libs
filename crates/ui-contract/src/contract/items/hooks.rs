@@ -486,8 +486,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let mut stripe: Option<(usize, usize)> = None;
         let transform = comp.props(Internal::new()).transform;
         let (parent, clip) = (ui.layer_id(), rect.intersect(ui.clip_rect()));
-        let forward =
-            areas::Forward { id: sub(id, "transform"), sense: response::to_egui(cx.core.root_sense), rect: cx.core.rect.intersect(ui.clip_rect()) };
+        let forward = areas::Forward { root: id, sense: response::to_egui(cx.core.root_sense), rect: cx.core.rect.intersect(ui.clip_rect()) };
         let placed = self.selection.placed(self.source);
         let mut row_groups = Vec::with_capacity(order.len());
         let mut shown_rows: Vec<ShownRow<C::Key>> = Vec::with_capacity(order.len());

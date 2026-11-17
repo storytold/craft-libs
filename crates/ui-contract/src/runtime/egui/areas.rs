@@ -122,9 +122,10 @@ pub(crate) fn body_layer(parent: LayerId, root: Id) -> LayerId {
     LayerId::new(parent.order, crate::runtime::memory::sub(root, "body_layer"))
 }
 
-/// What a transformed body's forwarding widget carries: the root's sense and interact rect, in screen space.
+/// What a transformed body's forwarding widget carries: the root it stands for, the root's sense and interact rect, in
+/// screen space.
 pub(crate) struct Forward {
-    pub id: Id,
+    pub root: Id,
     pub sense: egui::Sense,
     pub rect: Rect,
 }
@@ -155,8 +156,10 @@ pub(crate) fn show_body_layer<R>(ctx: &Context, body_layer: BodyLayer, body: imp
         .sense(egui::Sense::hover())
         .show(ctx, |ui| {
             if let Some(forward) = forward {
-                ui.interact(transform.inverse() * forward.rect, forward.id, forward.sense);
-                super::access::hide(ctx, forward.id);
+                let id = crate::runtime::memory::sub(forward.root, "transform");
+                ui.interact(transform.inverse() * forward.rect, id, forward.sense);
+                super::access::hide(ctx, id);
+                crate::runtime::pointer::record_body_layer(ctx, layer, parent, forward.root);
             }
             ui.set_clip_rect(transform.inverse() * clip);
             ui.expand_to_include_rect(transform.inverse() * clip);

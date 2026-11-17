@@ -947,15 +947,6 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         let shown = response.rect.intersect(rect);
         response.rect = Rect::from_min_max(shown.min, shown.max.max(shown.min));
     }
-    // A root in an arena's body that is not one of its members lies over the members shown before it, and under those
-    // shown after it (8.3).
-    if member.is_none()
-        && enabled
-        && root_sense.intersects(Sense::CLICK | Sense::DRAG)
-        && let Some(outer) = env.arena
-    {
-        sensing::note_nested(&ctx, outer, hit.intersect(ui.clip_rect()));
-    }
     // The node exists before any child `Ui` runs, so the children find their parent (12.2). A member has no egui
     // widget, so it first registers the `Ui` it sits in as its parent.
     let node = create_node(&ctx, ui, id, member.is_some(), facts.role);

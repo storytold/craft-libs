@@ -29,7 +29,7 @@ pub fn egui_focused(ctx: &Context) -> Option<Id> {
 pub fn press_shape(ui: &Ui, rect: Rect, sense: Sense, owner: Id) {
     let shape = Shape::new(rect.into(), sense, owner, None, HitPriority::new(HitLevel::Background, 0), 0);
     let layer = fixture::layer_of(ui);
-    pointer::record_shapes(ui.ctx(), layer, owner, [shape]);
+    pointer::record_shapes(ui.ctx(), layer, owner, ui.clip_rect(), [shape]);
     pointer::record_widgets(ui.ctx(), layer, owner, &[owner], sense.contains(Sense::CLICK));
 }
 

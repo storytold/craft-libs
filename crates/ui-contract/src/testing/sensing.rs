@@ -65,19 +65,26 @@ impl ProbePart {
     }
 }
 
-/// A member of a probe arena, or a body child that is a root of its own in a probe that is no arena.
+/// A member of a probe arena, or a body child that is a root of its own: in a probe that is no arena, or `nested`.
 #[derive(Clone, Debug)]
 pub struct ProbeMember {
     name: &'static str,
     rect: Rect,
     sense: Sense,
     parts: Vec<ProbePart>,
+    nested: bool,
 }
 
 impl ProbeMember {
     /// A member named `name` over `rect` sensing `sense`.
     pub fn new(name: &'static str, rect: Rect, sense: Sense) -> Self {
-        ProbeMember { name, rect, sense, parts: Vec::new() }
+        ProbeMember { name, rect, sense, parts: Vec::new(), nested: false }
+    }
+
+    /// Shows the child in an arena's body as a root of its own, not a member: a text editor over a canvas.
+    pub fn nested(mut self) -> Self {
+        self.nested = true;
+        self
     }
 
     /// Adds a part.
@@ -269,6 +276,9 @@ fn show_members(ui: &mut Ui, arena: ArenaId, root: &ProbeRoot, ctx: &Context) ->
     root.members
         .iter()
         .map(|member| {
+            if member.nested {
+                return show_leaf(ui, root, member, ctx);
+            }
             let decls = member_decls(&member.parts);
             let id = id_of(member.name);
             let result =
@@ -287,23 +297,23 @@ fn show_members(ui: &mut Ui, arena: ArenaId, root: &ProbeRoot, ctx: &Context) ->
 }
 
 fn show_leaves(ui: &mut Ui, root: &ProbeRoot, ctx: &Context) -> Vec<SenseReport> {
-    root.members
-        .iter()
-        .map(|member| {
-            let decls = member_decls(&member.parts);
-            let id = id_of(member.name);
-            let result = sensing::sense_root(ui, RootSpec { id, rect: member.rect, own_sense: member.sense, own: &decls, enabled: root.enabled });
-            request_cursor(ctx, &decls, &result.parts);
-            SenseReport {
-                id,
-                press: result.press,
-                parts: parts_report(&decls, &result.parts),
-                activated: result.activation || fixture::clicked(&result.response),
-                clicked: fixture::clicked(&result.response),
-                hovered: result.response.hovered(),
-            }
-        })
-        .collect()
+    root.members.iter().map(|member| show_leaf(ui, root, member, ctx)).collect()
+}
+
+/// A body child shown as a root of its own.
+fn show_leaf(ui: &mut Ui, root: &ProbeRoot, member: &ProbeMember, ctx: &Context) -> SenseReport {
+    let decls = member_decls(&member.parts);
+    let id = id_of(member.name);
+    let result = sensing::sense_root(ui, RootSpec { id, rect: member.rect, own_sense: member.sense, own: &decls, enabled: root.enabled });
+    request_cursor(ctx, &decls, &result.parts);
+    SenseReport {
+        id,
+        press: result.press,
+        parts: parts_report(&decls, &result.parts),
+        activated: result.activation || fixture::clicked(&result.response),
+        clicked: fixture::clicked(&result.response),
+        hovered: result.response.hovered(),
+    }
 }
 
 /// Shows `roots` in order on `ui`, each through the sensing core, and reads back what each saw.
@@ -333,7 +343,7 @@ fn show_root(ui: &mut Ui, ctx: &Context, root: &ProbeRoot) -> RootReport {
         body = Some(map);
         sensing::set_layer(ctx, arena, layer);
         let visible = root.rect.intersect(ui.clip_rect());
-        let forward = Forward { id: sub(id, "transform"), sense: response::to_egui(result.sense), rect: visible };
+        let forward = Forward { root: id, sense: response::to_egui(result.sense), rect: visible };
         let body_layer = areas::BodyLayer { parent, layer, transform: map, at: root.rect.min, clip: visible, forward: Some(forward) };
         areas::show_body_layer(ctx, body_layer, |body_ui| {
             if let Some(size) = root.blocker {
@@ -367,8 +377,8 @@ pub fn egui_click_target(ctx: &Context) -> Option<Id> {
 }
 
 /// How the focus service classifies a press at `at`, from last pass's shape record and egui's hit test at the
-/// latest pointer position, so the pointer must have moved to `at` in a frame before; `None` when no shape of the
-/// root egui hands the press to takes it.
+/// latest pointer position, so the pointer must have moved to `at` in a frame before; `None` when no shape under it
+/// takes it.
 pub fn press_focus(ctx: &Context, at: Pos2) -> Option<PressFocus> {
     let (click, drag) = crate::runtime::egui::input::hit_targets(ctx);
     pointer::press_winner(ctx, at, pointer::PressTargets { click, drag }).map(|(winner, _)| classify_press(Some(winner.sense)))
