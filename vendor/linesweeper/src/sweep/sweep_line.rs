@@ -3082,7 +3082,8 @@ mod tests {
         path
     }
 
-    /// Sweeps `path` and asserts that each comparison cache stores at most `max` comparisons.
+    /// Sweeps `path` and asserts that each comparison cache stores at most `max` comparisons
+    /// after every sweep line.
     ///
     /// The `slow-asserts` checks compare every pair of segments on the sweep line with the
     /// regular comparisons, so with that feature only the conservative ones are counted.
@@ -3092,13 +3093,16 @@ mod tests {
 
         let mut sweeper = Sweeper::new(&segs, 1e-6);
         let mut bufs = SweepLineBuffers::default();
-        while sweeper.next_line(&mut bufs).is_some() {}
-        let regular = sweeper.comparisons.borrow().len();
-        let conservative = sweeper.conservative_comparisons.borrow().len();
-        assert!(
-            (cfg!(feature = "slow-asserts") || regular <= max) && conservative <= max,
-            "{regular} regular and {conservative} conservative comparisons stored"
-        );
+        let mut lines = 0;
+        while sweeper.next_line(&mut bufs).is_some() {
+            lines += 1;
+            let regular = sweeper.comparisons.borrow().len();
+            let conservative = sweeper.conservative_comparisons.borrow().len();
+            assert!(
+                (cfg!(feature = "slow-asserts") || regular <= max) && conservative <= max,
+                "{regular} regular and {conservative} conservative stored after line {lines}"
+            );
+        }
     }
 
     #[test]
