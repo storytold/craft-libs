@@ -1,6 +1,6 @@
 //! `CanvasScrollbars`: the scroll bars of a canvas (20.6): a horizontal bar along the bottom of the view and a vertical
-//! one along the right, always shown, in the floating look every scroll area has (`ScrollBarLook`): a thin line at rest
-//! over the view's edge, the whole bar under the pointer. The thumb is the visible fraction of
+//! one along the right, always shown, in the docked look (`ScrollBarKind::Docked`): the thumb has the track's whole
+//! thickness at rest and under the pointer. The thumb is the visible fraction of
 //! the scrollable extent (the document, plus wherever the view has been scrolled past it); drag it to scroll, or press
 //! the track to page by one screenful. With overscroll on, a document smaller than the window can also be scrolled from
 //! one edge of the window to the other. With overscroll off the app clamps the view before it draws
@@ -20,7 +20,7 @@ use crate::contract::{
 use crate::runtime::access::Numeric;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, ScrollBarLook, StyleCx};
+use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleCx};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase};
@@ -242,7 +242,7 @@ impl Component for CanvasScrollbars<'_> {
     type Output = CanvasScrollbarsOutput;
 
     fn style(cx: &StyleCx<'_>, _: CanvasScrollbarsStyleKey) -> ScrollbarsStyle {
-        ScrollbarsStyle { metrics: Metrics::new(), look: cx.scroll_bar() }
+        ScrollbarsStyle { metrics: Metrics::new(), look: cx.scroll_bar_of(ScrollBarKind::Docked) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
