@@ -21,6 +21,9 @@ pub enum Wrap {
     Line,
     /// Wraps at the room's width.
     Wrap,
+    /// One line, cut at the room's edge with no ellipsis, as many characters as fit: tabs that shrink to their first
+    /// letters. The full text is the tooltip and accessible name, as for an elided run.
+    Clip,
     /// One line, cut with an ellipsis at the end: names, titles, labels beside fixed controls.
     Elide,
     /// One line, cut with an ellipsis at the start: anything whose end says the most.
@@ -267,14 +270,16 @@ impl TextRun<'_> {
 
     fn job<'s>(&self, env: &TextEnv<'_>, parts: impl Iterator<Item = (&'s Span<'s>, &'s str)>, max_width: f32) -> LayoutJob {
         let elide = self.wrap.cuts();
+        let clip = self.wrap == Wrap::Clip;
         let wrap = TextWrapping {
             max_width: if self.wrap == Wrap::Line { f32::INFINITY } else { max_width },
             max_rows: match self.wrap {
                 Wrap::Clamp(lines) => usize::from(lines.max(1)),
-                _ if elide => 1,
+                _ if elide || clip => 1,
                 _ => usize::MAX,
             },
-            break_anywhere: elide,
+            break_anywhere: elide || clip,
+            overflow_character: if clip { None } else { TextWrapping::default().overflow_character },
             ..TextWrapping::default()
         };
         let mut job = paragraph_job(env.direction, self.ltr, wrap);
