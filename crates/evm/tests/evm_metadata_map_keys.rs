@@ -1,4 +1,4 @@
-use craft_anything_formats::evm::analyze;
+use craft_evm::analyze;
 
 fn contract_with_trailer(cbor: &[u8]) -> Vec<u8> {
     let mut code = vec![0x5b, 0x00];

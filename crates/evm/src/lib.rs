@@ -1,9 +1,28 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
 //! EVM bytecode: the public function selectors a contract's dispatcher compares against, where
 //! each one jumps, whether it refuses payments, fallback/receive presence, and the compiler
 //! metadata (CBOR) appended to the code. Nothing is executed; this is a linear sweep that
 //! respects PUSH data plus pattern matching over the instruction stream.
 
-use crate::FormatError;
+use EvmError as FormatError;
+
+/// Neutral inspection failure; no code is executed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EvmError {
+    #[error("truncated input: {0}")]
+    Truncated(String),
+    #[error("malformed input: {0}")]
+    Malformed(String),
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+    #[error("input too large: {0}")]
+    TooLarge(String),
+}
+
+#[cfg(test)]
+mod test_support;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -446,7 +465,9 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
                 {
                     Some("div-2^224")
                 }
-                0x63 if imm(body, n) == [0xff, 0xff, 0xff, 0xff] && (op_at(k + d + 1) == Some(0x16) || op_at(k + d + 2) == Some(0x16)) => Some("and-mask"),
+                0x63 if imm(body, n) == [0xff, 0xff, 0xff, 0xff] && (op_at(k + d + 1) == Some(0x16) || op_at(k + d + 2) == Some(0x16)) => {
+                    Some("and-mask")
+                }
                 _ => None,
             };
             if let Some(kind) = kind {
@@ -720,7 +741,7 @@ fn reverts_soon(code: &[u8], ins: &[Ins], mut k: usize, index_of: &dyn Fn(usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_anything_testkit::formats as fx;
+    use crate::test_support::formats as fx;
 
     #[test]
     fn hex_signs_are_not_hex_digits() {
@@ -796,8 +817,9 @@ mod tests {
     #[test]
     fn vyper_style_fallthrough() {
         // PUSH1 0 CALLDATALOAD PUSH1 0xe0 SHR PUSH1 0 MSTORE PUSH4 sel PUSH1 0 MLOAD EQ ISZERO PUSH2 next JUMPI <body: CALLVALUE ...>
-        let mut c =
-            vec![0x60, 0x00, 0x35, 0x60, 0xe0, 0x1c, 0x60, 0x00, 0x52, 0x63, 0x12, 0x34, 0x56, 0x78, 0x60, 0x00, 0x51, 0x14, 0x15, 0x61, 0x00, 0x20, 0x57];
+        let mut c = vec![
+            0x60, 0x00, 0x35, 0x60, 0xe0, 0x1c, 0x60, 0x00, 0x52, 0x63, 0x12, 0x34, 0x56, 0x78, 0x60, 0x00, 0x51, 0x14, 0x15, 0x61, 0x00, 0x20, 0x57,
+        ];
         let body = c.len();
         c.extend_from_slice(&[0x34, 0x15, 0x00]);
         let r = analyze(&c).unwrap();
@@ -835,14 +857,14 @@ mod tests {
     #[test]
     fn hostile_inputs_do_not_panic() {
         let (code, _) = fx::evm_runtime();
-        for m in craft_anything_testkit::mutations(&code) {
+        for m in crate::test_support::mutations(&code) {
             let _ = analyze(&m);
         }
         for n in 0..code.len() {
             let _ = analyze(&code[..n]);
         }
         for seed in 0..200 {
-            let n = craft_anything_testkit::noise(seed, 300);
+            let n = crate::test_support::noise(seed, 300);
             let _ = analyze(&n);
             let _ = decode_input(&n, Encoding::Auto);
         }
