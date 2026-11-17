@@ -957,7 +957,6 @@ fn hostile_style_sheets_never_panic() {
     }
 }
 
- fix/1785-table-structure-vmerge
 #[test]
 fn conflicting_mso_vmerge_declarations_last_wins() {
     let html_restart_wins = "<table><tr><td style='mso-yfti-vmerge: continue; mso-yfti-vmerge: restart'>A</td></tr></table>";
@@ -1116,6 +1115,7 @@ fn html_roundtrip_preserves_fully_covered_row_and_single_column_table() {
     let doc2 = model::to_doc(&f2);
     let craft_wordmodel::Block::Table(tb2) = &*doc2.body[0] else { panic!() };
     assert_single_col_vmerge_table(tb2);
+}
 
 /// Ensure container elements (such as `div` and `p`) with background colors do not leak
 /// character shading onto their child text runs (#1786).
@@ -1946,5 +1946,4 @@ fn zero_alpha_colors_with_none_channels() {
     let doc2 = import(html2);
     let craft_wordmodel::Block::Para(p2) = &*doc2.body[0] else { panic!("expected Para") };
     assert_eq!(p2.props.shading, None);
- main
 }
