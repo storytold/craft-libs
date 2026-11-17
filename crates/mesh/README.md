@@ -77,13 +77,13 @@ point cloud (positions, no parts).
 `TRIANGLE_FAN`, indexed or not; POSITION, NORMAL, every TEXCOORD_n (up to 8), COLOR_0, JOINTS_0,
 WEIGHTS_0 in any component type the specification or `KHR_mesh_quantization` allows; strided
 buffer views; accessors without a buffer view (zeros); sparse accessors; materials with their
-texture slots, UV set and sampler wrap modes, `KHR_materials_emissive_strength`,
+texture slots, UV set, sampler wrap modes and `KHR_texture_transform`, `KHR_materials_emissive_strength`,
 `KHR_materials_unlit`, `KHR_materials_pbrSpecularGlossiness` (diffuse colour and texture, no
 metal, roughness from the glossiness); textures whose image is in `EXT_texture_webp`; images embedded
 in a buffer view or a `data:` URI, or named; skins; translation, rotation and scale animations;
 cameras; `KHR_lights_punctual`. Primitives of a mesh that name the same accessors share their
-vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials and
-images.
+vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials with
+their texture transforms, and images. The other formats' writers do not write texture transforms.
 
 **3MF.** The package is opened with `craft-opc` and the model part found through its `3dmodel`
 relationship; `threemf::read_model_part` reads a model part's XML on its own. Mesh objects,
