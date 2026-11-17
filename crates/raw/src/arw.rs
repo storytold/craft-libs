@@ -852,6 +852,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
         wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         // only validated components become opcodes (see `arw_lens`, and `arw_lens_rm6` for the ILCE-7RM6)
         opcodes: OpcodeLists { list3: warp.into_iter().chain(rm6).collect(), ..Default::default() },
