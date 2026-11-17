@@ -1268,6 +1268,7 @@ impl Body<'_> {
                     self.group = Some(OpenGroup {
                         anchor: get(a, "text:anchor-type").map(String::from),
                         page: get(a, "text:anchor-page-number").map(String::from),
+                        z: crate::text::frames::z_of(a),
                         style: get(a, "draw:style-name").map(String::from),
                         members: Vec::new(),
                     });
