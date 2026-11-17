@@ -49,24 +49,25 @@ jobs:
       cache-paths: .test-inputs/photocraft/corpus
       cache-key: photocraft-corpus
       cache-key-files: scripts/ci-test-inputs.sh
-      command: |
-        python3 scripts/test-workspace-concurrency.py
-        python3 scripts/test-workspace-tests.py
+      # A `lint (<os>)` leg beside each `gate (<os>)` leg, so clippy is off the tests' critical path.
+      lint-command: |
+        if [ "$RUNNER_OS" = Linux ]; then
+          python3 scripts/test-workspace-concurrency.py
+          python3 scripts/test-workspace-tests.py
+        fi
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      command: |
         # The tests run once, with every feature, in parallel across test binaries; nextest skips
-        # doctests, so `cargo test --doc` runs them. The default-feature compile is the first
-        # clippy run's; the second command runs the crates whose tests check behaviour with a
+        # doctests, so `cargo test --doc` runs them. The default-feature compile is the lint leg's
+        # first clippy run; the last command runs the crates whose tests check behaviour with a
         # feature off, which an all-features build cannot reach.
         cargo nextest run --workspace --all-features --locked --profile ci
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
       windows-command: |
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
-        cargo fmt --check
-        cargo clippy --workspace --all-targets --locked -- -D warnings
-        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
         cargo nextest run --workspace --all-features --locked --profile ci
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
