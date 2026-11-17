@@ -71,7 +71,13 @@ pub fn samples_per_block(block_align: usize, channels: usize) -> Option<usize> {
     }
     let header = 4 * channels;
     let body = block_align.checked_sub(header)?;
-    if body > 0 && body.is_multiple_of(4 * channels) { (body / channels).checked_mul(2)?.checked_add(1) } else { None }
+    if body == 0 || !body.is_multiple_of(4 * channels) {
+        return None;
+    }
+    let per = (body / channels).checked_mul(2)?.checked_add(1)?;
+    // Callers size interleaved buffers from this value; the full count must fit too.
+    per.checked_mul(channels)?;
+    Some(per)
 }
 
 /// Decode one block, appending its samples interleaved by channel to `out`.
@@ -221,6 +227,14 @@ mod tests {
         assert_eq!(samples_per_block(4, 1), None);
         assert_eq!(samples_per_block(100, 0), None);
         assert_eq!(samples_per_block(258, 2), None);
+    }
+
+    #[test]
+    fn unrepresentable_interleaved_layout_is_rejected() {
+        let align = usize::MAX - 7;
+        assert_eq!(samples_per_block(align, 2), None);
+        assert!(encode(&[], 2, align).is_err());
+        assert!(encode_block(&[], 2, align).is_err());
     }
 
     #[test]

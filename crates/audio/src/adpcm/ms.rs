@@ -61,7 +61,10 @@ pub fn samples_per_block(block_align: usize, channels: usize) -> Option<usize> {
     }
     let body = block_align.checked_sub(7 * channels).filter(|&b| b > 0)?;
     // codes pair up across channels
-    body.checked_mul(2).map(|b| b / channels + 2)
+    let per = (body.checked_mul(2)? / channels).checked_add(2)?;
+    // Include the header samples and all channels before callers size their buffers.
+    per.checked_mul(channels)?;
+    Some(per)
 }
 
 /// Decode one block, appending its samples interleaved by channel to `out`.
@@ -208,6 +211,15 @@ mod tests {
         assert_eq!(samples_per_block(512, 2), Some(500));
         assert_eq!(samples_per_block(7, 1), None);
         assert_eq!(samples_per_block(100, 3), None);
+    }
+
+    #[test]
+    fn unrepresentable_layouts_are_rejected() {
+        for (align, channels) in [(usize::MAX / 2 + 7, 1), (usize::MAX / 2 + 14, 2)] {
+            assert_eq!(samples_per_block(align, channels), None);
+            assert!(encode(&[], channels, align).is_err());
+            assert!(encode_block(&[], channels, align).is_err());
+        }
     }
 
     #[test]
