@@ -369,3 +369,55 @@ impl TryFrom<crate::ffv1::Frame> for VideoFrame {
         Ok(f)
     }
 }
+
+#[cfg(feature = "theora-decode")]
+impl TryFrom<crate::theora::Picture> for VideoFrame {
+    type Error = FrameError;
+
+    fn try_from(p: crate::theora::Picture) -> Result<Self, FrameError> {
+        let (sub, cw, ch, cx, cy) = match p.pixel_format {
+            crate::theora::PixelFormat::Yuv420 => (Subsampling::S420, p.pic_width.div_ceil(2), p.pic_height.div_ceil(2), p.pic_x / 2, p.pic_y / 2),
+            crate::theora::PixelFormat::Yuv422 => (Subsampling::S422, p.pic_width.div_ceil(2), p.pic_height, p.pic_x / 2, p.pic_y),
+            crate::theora::PixelFormat::Yuv444 => (Subsampling::S444, p.pic_width, p.pic_height, p.pic_x, p.pic_y),
+        };
+
+        let mut y_cropped = Vec::with_capacity((p.pic_width * p.pic_height) as usize);
+        for row in 0..p.pic_height {
+            let py = p.pic_y + (p.pic_height - 1 - row);
+            let start = py as usize * p.y_stride + p.pic_x as usize;
+            y_cropped.extend_from_slice(&p.y[start..start + p.pic_width as usize]);
+        }
+
+        let mut u_cropped = Vec::with_capacity((cw * ch) as usize);
+        let mut v_cropped = Vec::with_capacity((cw * ch) as usize);
+        for row in 0..ch {
+            let py = cy + (ch - 1 - row);
+            let start = py as usize * p.uv_stride + cx as usize;
+            u_cropped.extend_from_slice(&p.u[start..start + cw as usize]);
+            v_cropped.extend_from_slice(&p.v[start..start + cw as usize]);
+        }
+
+        let planes = vec![
+            Plane::packed(p.pic_width, p.pic_height, 8, Samples::U8(y_cropped))?,
+            Plane::packed(cw, ch, 8, Samples::U8(u_cropped))?,
+            Plane::packed(cw, ch, 8, Samples::U8(v_cropped))?,
+        ];
+
+        let mut f = VideoFrame::new(p.pic_width, p.pic_height, ColorFamily::YCbCr, sub, planes, None)?;
+        match p.color_space {
+            crate::theora::ColorSpace::Rec470M => {
+                f.color.matrix = 6;
+                f.color.primaries = 6;
+                f.color.transfer = 6;
+            }
+            crate::theora::ColorSpace::Rec470Bg => {
+                f.color.matrix = 5;
+                f.color.primaries = 5;
+                f.color.transfer = 5;
+            }
+            _ => {}
+        }
+        f.pts = p.pts;
+        Ok(f)
+    }
+}

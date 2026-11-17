@@ -1,0 +1,266 @@
+//! Clean-room pure-Rust Theora video tests (headers, codec roundtrips, hostile inputs, and FFmpeg oracle).
+
+use craft_video::frame::VideoFrame;
+use craft_video::theora::{ColorSpace, Decoder, Encoder, EncoderConfig, Error, IdentificationHeader, Picture, PixelFormat, SetupHeader};
+use std::process::Command;
+
+fn test_picture(w: usize, h: usize) -> Picture {
+    let mut y = vec![0u8; w * h];
+    let cw = w.div_ceil(2);
+    let ch = h.div_ceil(2);
+    let mut u = vec![128u8; cw * ch];
+    let mut v = vec![128u8; cw * ch];
+
+    for r in 0..h {
+        for c in 0..w {
+            let val = ((r * 255 / h) ^ (c * 255 / w)) as u8;
+            y[r * w + c] = val;
+        }
+    }
+    for r in 0..ch {
+        for c in 0..cw {
+            u[r * cw + c] = (128 + ((r as i32 - ch as i32 / 2) * 2)) as u8;
+            v[r * cw + c] = (128 + ((c as i32 - cw as i32 / 2) * 2)) as u8;
+        }
+    }
+
+    Picture {
+        width: w as u32,
+        height: h as u32,
+        pic_width: w as u32,
+        pic_height: h as u32,
+        pic_x: 0,
+        pic_y: 0,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        keyframe: true,
+        pts: Some(0),
+        y,
+        u,
+        v,
+        y_stride: w,
+        uv_stride: cw,
+    }
+}
+
+fn psnr(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let mse = a.iter().zip(b).map(|(x, y)| (f64::from(*x) - f64::from(*y)).powi(2)).sum::<f64>() / a.len().max(1) as f64;
+    if mse == 0.0 { 99.0 } else { 10.0 * (255.0f64 * 255.0 / mse).log10() }
+}
+
+#[test]
+fn test_theora_headers_roundtrip() {
+    let cfg = EncoderConfig {
+        width: 320,
+        height: 240,
+        pic_width: 320,
+        pic_height: 240,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 30,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Rec470M,
+        quality: 48,
+        keyframe_distance: 64,
+    };
+    let enc = Encoder::new(cfg).expect("encoder");
+    let (id_pkt, comm_pkt, setup_pkt) = enc.headers();
+
+    assert_eq!(id_pkt.len(), 42);
+    assert_eq!(&id_pkt[0..7], &[0x80, b't', b'h', b'e', b'o', b'r', b'a']);
+    assert_eq!(&comm_pkt[0..7], &[0x81, b't', b'h', b'e', b'o', b'r', b'a']);
+    assert_eq!(&setup_pkt[0..7], &[0x82, b't', b'h', b'e', b'o', b'r', b'a']);
+
+    let dec = Decoder::from_headers(&id_pkt, &comm_pkt, &setup_pkt).expect("decoder from headers");
+    assert_eq!(dec.info.frame_width, 320);
+    assert_eq!(dec.info.frame_height, 240);
+    assert_eq!(dec.info.pic_width, 320);
+    assert_eq!(dec.info.pic_height, 240);
+    assert_eq!(dec.info.fps_num, 30);
+    assert_eq!(dec.info.fps_den, 1);
+    assert_eq!(dec.info.pixel_format, PixelFormat::Yuv420);
+    assert_eq!(dec.info.color_space, ColorSpace::Rec470M);
+}
+
+#[test]
+fn test_theora_encode_decode_intra_frame() {
+    let (w, h) = (64, 64);
+    let cfg = EncoderConfig {
+        width: w as u32,
+        height: h as u32,
+        pic_width: w as u32,
+        pic_height: h as u32,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 48,
+        keyframe_distance: 64,
+    };
+    let mut enc = Encoder::new(cfg).expect("encoder");
+    let (id_pkt, comm_pkt, setup_pkt) = enc.headers();
+    let mut dec = Decoder::from_headers(&id_pkt, &comm_pkt, &setup_pkt).expect("decoder");
+
+    let original = test_picture(w, h);
+    let packet = enc.encode_frame(&original, true).expect("encode");
+    assert!(!packet.is_empty());
+
+    let decoded = dec.decode_packet(&packet).expect("decode");
+    assert!(decoded.keyframe);
+    assert_eq!(decoded.width, w as u32);
+    assert_eq!(decoded.height, h as u32);
+
+    let p_y = psnr(&original.y, &decoded.y);
+    let p_u = psnr(&original.u, &decoded.u);
+    let p_v = psnr(&original.v, &decoded.v);
+
+    assert!(p_y >= 25.0, "Luma PSNR too low: {p_y:.2} dB");
+    assert!(p_u >= 30.0, "Chroma U PSNR too low: {p_u:.2} dB");
+    assert!(p_v >= 30.0, "Chroma V PSNR too low: {p_v:.2} dB");
+}
+
+#[test]
+fn test_theora_empty_packet_inter_frame() {
+    let (w, h) = (32, 32);
+    let cfg = EncoderConfig {
+        width: w as u32,
+        height: h as u32,
+        pic_width: w as u32,
+        pic_height: h as u32,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    let mut enc = Encoder::new(cfg).expect("encoder");
+    let (id_pkt, comm_pkt, setup_pkt) = enc.headers();
+    let mut dec = Decoder::from_headers(&id_pkt, &comm_pkt, &setup_pkt).expect("decoder");
+
+    let pic = test_picture(w, h);
+    let key_pkt = enc.encode_frame(&pic, true).expect("encode keyframe");
+    let first_dec = dec.decode_packet(&key_pkt).expect("decode keyframe");
+    assert!(first_dec.keyframe);
+
+    // 0-byte packet is a repeat frame
+    let repeat_dec = dec.decode_packet(&[]).expect("decode empty packet");
+    assert!(!repeat_dec.keyframe);
+    assert_eq!(first_dec.y, repeat_dec.y);
+    assert_eq!(first_dec.u, repeat_dec.u);
+    assert_eq!(first_dec.v, repeat_dec.v);
+}
+
+#[test]
+fn test_theora_video_frame_conversion() {
+    let pic = test_picture(32, 32);
+    let vf = VideoFrame::try_from(pic).expect("convert to VideoFrame");
+    assert_eq!(vf.width(), 32);
+    assert_eq!(vf.height(), 32);
+    assert_eq!(vf.planes().len(), 3);
+}
+
+#[test]
+fn test_hostile_theora_packets_do_not_panic() {
+    // 1. Truncated identification header
+    assert!(IdentificationHeader::parse(&[]).is_err());
+    assert!(IdentificationHeader::parse(&[0x80, b't', b'h', b'e', b'o', b'r', b'a']).is_err());
+
+    // 2. Corrupted setup header
+    assert!(SetupHeader::parse(&[0x82, b't', b'h', b'e', b'o', b'r', b'a', 0xFF, 0xFF]).is_err());
+
+    // 3. Decoder on random / fuzzed packets
+    let (id, comm, setup) = Encoder::new(EncoderConfig::default()).unwrap().headers();
+    let mut dec = Decoder::from_headers(&id, &comm, &setup).expect("decoder");
+
+    // Inter frame before keyframe must fail cleanly
+    assert!(matches!(dec.decode_packet(&[0x40, 0x00]), Err(Error::MissingReference)));
+
+    // Fuzzed inputs
+    let fuzz_cases: &[&[u8]] = &[
+        &[0x00],
+        &[0x00, 0x00, 0x00, 0x00],
+        &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        &[0x80, 0x00, 0x00], // Header bit set in data packet
+    ];
+
+    for case in fuzz_cases {
+        let _ = dec.decode_packet(case);
+    }
+}
+
+#[test]
+fn test_theora_ffmpeg_oracle_roundtrip() {
+    let Some(ff) = craft_media_testkit::ffmpeg() else {
+        return;
+    };
+    let dir = craft_media_testkit::fixture_subdir("theora");
+    let (w, h) = (64, 64);
+    let cfg = EncoderConfig {
+        width: w as u32,
+        height: h as u32,
+        pic_width: w as u32,
+        pic_height: h as u32,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 45,
+        keyframe_distance: 64,
+    };
+    let mut enc = Encoder::new(cfg).expect("encoder");
+    let (id_pkt, comm_pkt, setup_pkt) = enc.headers();
+
+    let pic = test_picture(w, h);
+    let video_pkt = enc.encode_frame(&pic, true).expect("encode");
+
+    // Write an Ogg Theora file using craft-media PageWriter
+    let ogv_path = dir.join("cleanroom_test.ogv");
+    let mut pw = craft_media::ogg::PageWriter::new(0x12345678);
+
+    let mut file_bytes = Vec::new();
+    file_bytes.extend(pw.header(&id_pkt));
+    file_bytes.extend(pw.header(&comm_pkt));
+    file_bytes.extend(pw.header(&setup_pkt));
+    file_bytes.extend(pw.packet(&video_pkt, 1 << 6));
+    file_bytes.extend(pw.finish(None));
+
+    std::fs::write(&ogv_path, &file_bytes).expect("write ogv");
+
+    // Run ffmpeg to decode our Ogg Theora file to raw YUV
+    let raw_out = dir.join("ffmpeg_decoded.raw");
+    let status = Command::new(&ff)
+        .args(["-v", "error", "-i", ogv_path.to_str().unwrap(), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-y", raw_out.to_str().unwrap()])
+        .status()
+        .expect("ffmpeg run");
+
+    assert!(status.success(), "ffmpeg failed to decode our Theora file");
+
+    let ff_raw = std::fs::read(&raw_out).expect("read ffmpeg output");
+    assert_eq!(ff_raw.len(), w * h * 3 / 2);
+
+    // Decode with our pure-Rust decoder
+    let mut dec = Decoder::from_headers(&id_pkt, &comm_pkt, &setup_pkt).expect("decoder");
+    let our_pic = dec.decode_packet(&video_pkt).expect("decode");
+
+    // FFmpeg outputs top-to-bottom YUV, while Theora Picture is bottom-to-top internal storage
+    // Convert our Picture to VideoFrame to get top-to-bottom raster!
+    let vf = VideoFrame::try_from(our_pic).expect("to VideoFrame");
+    let our_y = match vf.planes()[0].samples() {
+        craft_video::frame::Samples::U8(v) => v.as_slice(),
+        _ => panic!("u8 expected"),
+    };
+
+    let ff_y = &ff_raw[0..w * h];
+    let p = psnr(ff_y, our_y);
+    println!("Oracle PSNR against FFmpeg decode: {p:.2} dB");
+    assert!(p >= 35.0, "FFmpeg decode differs noticeably: {p:.2} dB");
+}
