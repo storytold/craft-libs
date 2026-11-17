@@ -1,0 +1,62 @@
+//! Screen Video (FLV codec 3 / SWF SCREENVIDEOPACKET) key-frame decoding.
+//! The packet excludes the FLV video-tag codec byte. Blocks and rows are bottom-up;
+//! output is straight RGBA8 in top-down row order. No inter-frame state or container I/O.
+
+/// One decoded top-down RGBA8 picture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frame {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Four bytes per pixel, alpha always 255.
+    pub rgba: Vec<u8>,
+}
+
+/// Decodes a complete key frame within caller axis and RGBA allocation limits.
+/// Returns `None` for malformed/truncated data, unchanged blocks or exceeded limits.
+/// Format dimensions are at most 4095 per axis; each block inflation is capped to
+/// exactly its expected BGR byte count. Legacy trailing packet bytes are tolerated.
+pub fn decode_keyframe(p: &[u8], max_edge: u32, max_rgba_bytes: usize) -> Option<Frame> {
+    let h0 = u16::from_be_bytes([*p.first()?, *p.get(1)?]);
+    let h1 = u16::from_be_bytes([*p.get(2)?, *p.get(3)?]);
+    let (bw, w) = ((usize::from(h0 >> 12) + 1) * 16, usize::from(h0 & 0x0fff));
+    let (bh, h) = ((usize::from(h1 >> 12) + 1) * 16, usize::from(h1 & 0x0fff));
+    if w == 0 || h == 0 || w > max_edge as usize || h > max_edge as usize {
+        return None;
+    }
+    let bytes = w.checked_mul(h)?.checked_mul(4)?;
+    if bytes > max_rgba_bytes {
+        return None;
+    }
+    let mut rgba = vec![0u8; bytes];
+    let mut at = 4usize;
+    // Block rows from the bottom of the picture.
+    for by in 0..h.div_ceil(bh) {
+        for bx in 0..w.div_ceil(bw) {
+            let (x0, y0) = (bx * bw, by * bh);
+            let (cw, ch) = (bw.min(w - x0), bh.min(h - y0));
+            let size = usize::from(u16::from_be_bytes([*p.get(at)?, *p.get(at + 1)?]));
+            let packed = p.get(at + 2..at + 2 + size)?;
+            at += 2 + size;
+            if size == 0 {
+                // An unchanged block can't be in a key frame.
+                return None;
+            }
+            let want = cw * ch * 3;
+            let bgr = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(packed, want).ok()?;
+            if bgr.len() != want {
+                return None;
+            }
+            for (row, line) in bgr.chunks_exact(cw * 3).enumerate() {
+                // Rows count up from the bottom; the bitmap's rows count down from the top.
+                let y = h - 1 - (y0 + row);
+                for (col, px) in line.as_chunks::<3>().0.iter().enumerate() {
+                    let i = (y * w + x0 + col) * 4;
+                    rgba.get_mut(i..i + 4)?.copy_from_slice(&[px[2], px[1], px[0], 255]);
+                }
+            }
+        }
+    }
+    Some(Frame { width: w as u32, height: h as u32, rgba })
+}
