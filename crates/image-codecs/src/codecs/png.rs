@@ -27,6 +27,26 @@ pub(crate) fn dpi_of_ppm(ppm: u32) -> f32 {
 }
 
 /// Decodes a whole PNG, by driving a [`PngDecodeRows`] to its end.
+/// The stored size and EXIF block [`decode`] would find, from the chunks before the image data:
+/// the same header checks (limits, a file too small for its image) and the same frame (an fcTL
+/// before the IDAT overrides the header's size), without inflating any pixels or text.
+pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
+    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.alloc_usize() });
+    decoder.set_ignore_text_chunk(true);
+    {
+        let info = decoder.read_header_info().map_err(map_png_err)?;
+        let (w, h) = info.size();
+        limits.check_size(w, h)?;
+        let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.bits_per_pixel() as u64).div_ceil(8);
+        Limits::check_plausible(stored, bytes.len(), 1100)?;
+    }
+    let reader = decoder.read_info().map_err(map_png_err)?;
+    let info = reader.info();
+    let (w, h) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
+    limits.check_size(w, h)?;
+    Ok((w, h, info.exif_metadata.as_ref().map(|c| c.to_vec())))
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     PngDecodeRows::new(bytes, limits)?.step(&mut || true)?.ok_or_else(|| err("the decoder stopped before the image ended"))
 }

@@ -20,25 +20,62 @@ use crate::metadata::Metadata;
 /// budget, not this ordinary materialization limit. `Page::page_stream` materializes that
 /// same stream and does use this limit, so the two paths can produce different lengths.
 /// These limits do not impose a total document memory or execution-time limit.
+///
+/// The image limits bound one image `XObject` or mask of known size: the bytes its last Flate,
+/// LZW or RunLength filter may produce, and the pixels the interpreter decodes, whatever its
+/// filters. Their defaults are 1 GiB and 2^28 pixels. A caller that can hold larger images
+/// raises them; where pointers are narrower than 64 bits, a raise is clamped to the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecodeLimits {
     max_decoded_stream: usize,
+    max_decoded_image: u64,
+    max_image_pixels: u64,
 }
 
 impl DecodeLimits {
-    /// The existing ordinary stream limit, 256 MiB.
-    pub const DEFAULT: Self = Self { max_decoded_stream: crate::filter::MAX_DECODED_STREAM };
+    /// The existing limits: 256 MiB for an ordinary stream, 1 GiB and 2^28 pixels for an image.
+    pub const DEFAULT: Self = Self {
+        max_decoded_stream: crate::filter::MAX_DECODED_STREAM,
+        max_decoded_image: crate::filter::MAX_DECODED_IMAGE,
+        max_image_pixels: crate::filter::MAX_IMAGE_PIXELS,
+    };
 
     /// Lower the maximum expanded bytes per ordinary stream. Requests above the existing
     /// 256 MiB ceiling are clamped; zero permits no ordinary materialized expansion.
     /// This does not lower the separate incremental page-content budget.
     pub const fn with_max_decoded_stream(self, max: usize) -> Self {
-        Self { max_decoded_stream: if max < self.max_decoded_stream { max } else { self.max_decoded_stream } }
+        Self { max_decoded_stream: if max < self.max_decoded_stream { max } else { self.max_decoded_stream }, ..self }
     }
 
     /// The maximum expanded bytes per ordinary stream.
     pub const fn max_decoded_stream(self) -> usize {
         self.max_decoded_stream
+    }
+
+    /// Set the most bytes the last Flate, LZW or RunLength filter of an image of known size may
+    /// produce, lower or (with 64-bit pointers) higher than the 1 GiB default. The filter also
+    /// stops at twice the image's own pixel bytes.
+    pub const fn with_max_decoded_image(self, max: u64) -> Self {
+        Self { max_decoded_image: narrow_clamp(max, crate::filter::MAX_DECODED_IMAGE), ..self }
+    }
+
+    /// The most bytes the last Flate, LZW or RunLength filter of an image of known size may
+    /// produce.
+    pub const fn max_decoded_image(self) -> u64 {
+        self.max_decoded_image
+    }
+
+    /// Set the most pixels an image or mask may have for the interpreter to decode it, lower or
+    /// (with 64-bit pointers) higher than the 2^28 default, up to 2^32. A larger image is
+    /// skipped with an image decode warning.
+    pub const fn with_max_image_pixels(self, max: u64) -> Self {
+        let max = if max > MAX_RAISED_IMAGE_PIXELS { MAX_RAISED_IMAGE_PIXELS } else { max };
+        Self { max_image_pixels: narrow_clamp(max, crate::filter::MAX_IMAGE_PIXELS), ..self }
+    }
+
+    /// The most pixels an image or mask may have for the interpreter to decode it.
+    pub const fn max_image_pixels(self) -> u64 {
+        self.max_image_pixels
     }
 }
 
@@ -46,6 +83,16 @@ impl Default for DecodeLimits {
     fn default() -> Self {
         Self::DEFAULT
     }
+}
+
+/// The most pixels [`DecodeLimits::with_max_image_pixels`] sets: the sample and byte counts of
+/// such an image (up to 32 components of 4 bytes) fit a 64-bit `usize`.
+const MAX_RAISED_IMAGE_PIXELS: u64 = 1 << 32;
+
+/// `max`, or `default` when `max` is higher and pointers are narrower than 64 bits: the sizes
+/// derived from a larger image overflow `usize` there.
+const fn narrow_clamp(max: u64, default: u64) -> u64 {
+    if usize::BITS < 64 && max > default { default } else { max }
 }
 
 /// A PDF file.

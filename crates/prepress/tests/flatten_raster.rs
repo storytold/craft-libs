@@ -204,7 +204,17 @@ fn solid(r: Rect, tints: &[(InkId, f32)]) -> Item {
 }
 
 fn group(opacity: f32, blend: BlendMode, children: Vec<Item>) -> Item {
-    Item::Group(GroupItem { opacity, blend, isolated: false, knockout: false, clip: None, mask: None, actual_text: None, children })
+    Item::Group(GroupItem {
+        opacity,
+        blend,
+        isolated: false,
+        knockout: false,
+        clip: None,
+        clip_rule: FillRule::NonZero,
+        mask: None,
+        actual_text: None,
+        children,
+    })
 }
 
 fn ramp(r: Rect, from: InkColor, to: InkColor) -> Item {

@@ -710,6 +710,7 @@ fn make_picture(o: &Output<FrameRef>) -> Picture {
         chroma_height: cch as u32,
         chroma,
         bit_depth: bd,
+        bit_depth_chroma: o.frame.bit_depth_c,
         y,
         u,
         v,
