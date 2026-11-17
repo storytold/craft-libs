@@ -40,7 +40,7 @@ fn themed<R>(ui: &mut Ui, dark: bool, mut content: impl FnMut(&mut Ui) -> R) -> 
     if !dark {
         return Some(content(ui));
     }
-    Stack::new().theme(ThemeScope::mode(Mode::Dark)).show(ui, |ui, _| content(ui)).inner
+    Stack::new().theme(ThemeScope::new().mode(Mode::Dark)).show(ui, |ui, _| content(ui)).inner
 }
 
 /// Photoshop's Histogram panel and Camera Raw's scope in one widget.
