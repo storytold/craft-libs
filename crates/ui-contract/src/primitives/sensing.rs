@@ -880,6 +880,15 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();
         let open = machine.target();
+        if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            eprintln!(
+                "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: arena {:?} step {:?} open {:?} button {:?}",
+                arena.0,
+                step.phase,
+                open.as_ref().map(|target| (target.owner, target.part)),
+                machine.button()
+            );
+        }
         let dragging = step.dragging;
         state.machine = machine;
         let under = pass_pointer.hover.filter(|_| hover_layer_ok).and_then(|at| resolve_in(state, members, xf, at, ResolveFor::Hover, target));
