@@ -700,6 +700,7 @@ fn audio_specific_configs_become_adts_fields() {
     assert!(asc([0x17, 0x80]).is_err(), "explicit sampling frequency");
     assert!(asc([0x29, 0x90]).is_err(), "SBR");
     assert!(asc([0x11, 0x80]).is_err(), "channel configuration 0");
+    assert!(asc([0x11, 0x94]).is_err(), "frameLengthFlag 1");
     assert!(Codec::aac_from_asc(&[0x11]).is_err());
 }
 

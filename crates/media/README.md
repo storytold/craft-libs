@@ -677,7 +677,8 @@ assert_eq!(bytes.len() % 188, 0);
   | `Eac3` | 0x87 | 0xBD | E-AC-3 sync frames (bsid 11 to 16) |
   | `MpegAudio { low_sample_rate }` | 0x03 or 0x04 | 0xC0 | MPEG audio frames, layers I to III, whose version matches the stream type |
 
-  `Codec::aac_from_asc` turns an AudioSpecificConfig into the `Aac` fields.
+  `Codec::aac_from_asc` turns an AudioSpecificConfig into the `Aac` fields, and refuses one that
+  an ADTS header cannot carry (frameLengthFlag 1, for one).
 - Descriptors in the program map section: a registration descriptor `AC-3` or `EAC3` on AC-3 and
   E-AC-3 streams; a registration descriptor `Opus` and an extension descriptor (tag 0x7F,
   extension tag 0x80) on Opus streams, whose channel_config_code is the channel count for
@@ -686,7 +687,8 @@ assert_eq!(bytes.len() % 188, 0);
   from `Av1Config` (`Av1Config::from_av1c` reads an AV1CodecConfigurationRecord); and an
   ISO 639 language descriptor on any stream that has a language.
 - For AV1, each OBU follows the start code 0x000001 with emulation prevention bytes, temporal
-  delimiters are left out, and each PES packet holds one temporal unit. A keyframe must carry a
+  delimiters and padding OBUs that end with a zero byte are left out, and each PES packet holds
+  one temporal unit. A keyframe must carry a
   sequence header, and tile list OBUs are refused.
 - For Opus, `Muxer::write_frame_with_trim` writes the control header's start and end trims (each
   at most 8 191 samples, `MAX_OPUS_TRIM`). A start trim is allowed only while every earlier frame

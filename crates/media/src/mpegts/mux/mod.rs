@@ -278,7 +278,8 @@ pub enum Codec {
     Mpeg4Part2,
     /// AV1 temporal units in the low overhead bitstream format (every OBU with its size field),
     /// with a sequence header on keyframes. Each OBU is written after a start code with emulation
-    /// prevention, and temporal delimiters are left out (Carriage of AV1 in MPEG-2 TS).
+    /// prevention. Temporal delimiters, and padding OBUs that end with a zero byte, are left out
+    /// (Carriage of AV1 in MPEG-2 TS).
     Av1(Av1Config),
     /// AAC frames that already carry their ADTS headers; one call may pass several frames.
     AacAdts,
@@ -351,7 +352,8 @@ impl Codec {
 
     /// Raw AAC described by an AudioSpecificConfig (ISO/IEC 14496-3 §1.6.2.1). Configurations
     /// that an ADTS header cannot carry are refused: an object type outside 1 to 4 (SBR and PS
-    /// signaled explicitly included), an explicit sampling frequency, and channel configuration 0.
+    /// signaled explicitly included), an explicit sampling frequency, channel configuration 0,
+    /// and frameLengthFlag 1 (960-sample frames).
     pub fn aac_from_asc(asc: &[u8]) -> Result<Codec> {
         let &[a, b, ..] = asc else { return Err(Error::Config("an AudioSpecificConfig has at least two bytes".into())) };
         let object_type = a >> 3;
@@ -359,6 +361,10 @@ impl Codec {
         let channels = (b >> 3) & 0x0F;
         let codec = Codec::Aac { object_type, sample_rate_index, channels };
         codec.check().map_err(Error::Config)?;
+        // GASpecificConfig's frameLengthFlag follows the channel configuration (ISO/IEC 14496-3 §4.4.1).
+        if b & 0x04 != 0 {
+            return Err(Error::Config("AAC frameLengthFlag 1 (960-sample frames) cannot be carried by an ADTS header".into()));
+        }
         Ok(codec)
     }
 
