@@ -704,6 +704,9 @@ impl McpChild {
     /// Handles one message: answers a request from the child, keeps a notification, skips a reply
     /// to another id, and returns the reply to `waiting`.
     fn route(&mut self, v: Value, waiting: Option<u64>) -> Result<Option<Value>, McpError> {
+        if v.get("id").is_some_and(|id| !matches!(id, Value::String(_) | Value::Number(_) | Value::Null)) {
+            return Err(self.fail(McpError::Protocol("a message has an `id` that is not a string, a number or null".into())));
+        }
         match (v.get("method"), v.get("id")) {
             (Some(Value::String(method)), Some(id)) => {
                 let reply = if method == "ping" {
