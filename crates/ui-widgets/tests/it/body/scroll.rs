@@ -1,12 +1,13 @@
 //! A scrolling body: the wheel and the thumb move it in the frame that carries them, and its content size and
 //! scroll offset follow the content.
 
-use craft_behavior::ColumnWidth;
+use craft_behavior::{ColumnWidth, PartKey};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Grid;
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::testing::layout::{Block, in_region};
+use craft_ui::testing::text::widget_id;
 use craft_ui::testing::{Frames, pointer, trial};
 use craft_ui::text::TextField;
 use craft_ui_test_kit::body::Slab;
@@ -565,7 +566,8 @@ fn a_pressed_field_in_part_view_stays_put_and_tab_to_it_reveals_it() {
                     }
                     let out = TextField::new(format!("Field {at}"), Bind::given(String::new())).id_salt(("field", at)).show(ui);
                     if !ui.is_sizing_pass() {
-                        field.set((out.response.id, out.response.rect));
+                        // Focus lands on the field's text part.
+                        field.set((widget_id(out.response.id, PartKey::new("text")), out.response.rect));
                     }
                 }
                 Block::new(Vec2::new(LINE.x, VIEW.y)).show(ui);
