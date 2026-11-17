@@ -441,10 +441,13 @@ pub(crate) fn second_difference(c: &CubicBez) -> f64 {
 }
 
 /// The parameter of each of `pts` by the length of the polyline through them, from 0 at the first to 1
-/// at the last (all 0 when the polyline has no length).
+/// at the last (all 0 when the polyline has no length, and none for no points).
 fn chord_params(pts: &[Point]) -> Vec<f64> {
     let mut u = Vec::with_capacity(pts.len());
     let mut acc = 0.0;
+    if pts.is_empty() {
+        return u;
+    }
     u.push(0.0);
     for w in pts.windows(2) {
         acc += w[0].distance(w[1]);
@@ -738,6 +741,22 @@ mod tests {
         assert!(is_straight(&CubicBez::new((0.0, 0.0), (0.3, 0.0), (0.7, 0.0), (1.0, 0.0)), 1e-9));
         assert!(is_straight(&CubicBez::new((0.0, 0.0), (1e-10, 0.0), (0.0, 1e-10), (0.0, 0.0)), 1e-9));
         assert!(!is_straight(&CubicBez::new((0.0, 0.0), (1e-8, 0.0), (0.0, 1e-10), (0.0, 0.0)), 1e-9));
+    }
+
+    /// No points are no parameters, and a fit of them is a cubic that is nothing, with no error (it was a parameter for no point, and the
+    /// round of reparameterisation read the first of none).
+    #[test]
+    fn a_fit_of_no_points_is_nothing_and_not_a_panic() {
+        let (t0, t1) = (Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0));
+        assert!(chord_params(&[]).is_empty());
+        let (c, err, _) = fit_single(&[], t0, t1);
+        assert_eq!((c, err), (CubicBez::new(Point::ZERO, Point::ZERO, Point::ZERO, Point::ZERO), 0.0));
+        let (_, err, rest) = fit_single_bounded(&[], t0, t1, 0.25);
+        assert_eq!((err, rest), (0.0, 0.25));
+        let (_, err, _) = fit_single_from(&[], Vec::new(), t0, t1);
+        assert_eq!(err, 0.0);
+        // One point is a parameter, 0.
+        assert_eq!(chord_params(&[Point::new(3.0, 4.0)]), [0.0]);
     }
 
     /// A fit held to its path gives the cubic and its error at the points as a plain fit does, and apart
