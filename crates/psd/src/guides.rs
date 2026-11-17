@@ -27,7 +27,7 @@ impl GuideV1 {
 /// Encode a legacy resource header. Grid cycles and count are caller supplied.
 pub fn header_v1(horizontal_cycle: u32, vertical_cycle: u32, count: u32) -> [u8; 16] {
     let mut out = [0; 16];
-    for (chunk, value) in out.chunks_exact_mut(4).zip([1u32, horizontal_cycle, vertical_cycle, count]) {
+    for (chunk, value) in out.as_chunks_mut::<4>().0.iter_mut().zip([1u32, horizontal_cycle, vertical_cycle, count]) {
         chunk.copy_from_slice(&value.to_be_bytes());
     }
     out
@@ -40,7 +40,9 @@ pub fn parse_v1_prefix(data: &[u8]) -> impl Iterator<Item = GuideV1> + '_ {
     let count = be_u32(data, 12).unwrap_or(0);
     data.get(16..)
         .unwrap_or_default()
-        .chunks_exact(5)
+        .as_chunks::<5>()
+        .0
+        .iter()
         .zip(0..count)
         .map(|(g, _)| GuideV1 { location: i32::from_be_bytes([g[0], g[1], g[2], g[3]]), direction: g[4] })
 }
