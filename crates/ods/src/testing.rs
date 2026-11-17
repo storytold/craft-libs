@@ -10,14 +10,39 @@ pub fn content(tables: &str) -> String {
     )
 }
 
-/// An `.ods` package around [`content`].
-pub fn spreadsheet(tables: &str) -> Vec<u8> {
+/// An `.ods` package around [`content`]. A package that cannot be written returns the writer's
+/// error.
+pub fn spreadsheet(tables: &str) -> Result<Vec<u8>, craft_odf::Error> {
     package(content(tables).as_bytes())
 }
 
-/// An `.ods` package with this `content.xml`.
-pub fn package(content: &[u8]) -> Vec<u8> {
+/// An `.ods` package with this `content.xml`. A package that cannot be written returns the
+/// writer's error.
+pub fn package(content: &[u8]) -> Result<Vec<u8>, craft_odf::Error> {
+    files(&[("content.xml", content)])
+}
+
+/// An `.ods` package with these XML files, in order.
+fn files(files: &[(&str, &[u8])]) -> Result<Vec<u8>, craft_odf::Error> {
     let mut w = craft_odf::PackageWriter::new(craft_odf::mime::SPREADSHEET);
-    w.file("content.xml", "text/xml", content);
-    w.finish().unwrap_or_default()
+    for (path, data) in files {
+        w.file(path, "text/xml", data);
+    }
+    w.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_package_that_cannot_be_written_returns_the_writer_error() {
+        let xml = content("");
+        let twice = files(&[("content.xml", xml.as_bytes()), ("content.xml", xml.as_bytes())]);
+        match twice {
+            Err(craft_odf::Error::Zip(message)) => assert!(message.contains("content.xml"), "{message}"),
+            other => panic!("expected the writer's error, got {other:?}"),
+        }
+        assert!(crate::is_ods(&package(xml.as_bytes()).unwrap()));
+    }
 }

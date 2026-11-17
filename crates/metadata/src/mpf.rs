@@ -113,7 +113,40 @@ pub fn images(jpeg: &[u8]) -> Vec<MpfImage> {
     };
     // offsets count from the byte-order field, which follows the signature
     let Some(base) = segs.iter().find(|s| jpeg.get(s.1..s.2) == Some(payload)).map(|s| s.1 + SIGNATURE.len()) else { return Vec::new() };
-    let Some(tiff) = payload.get(SIGNATURE.len()..).and_then(|t| Tiff::parse(t).ok()) else { return Vec::new() };
+    let Some(index) = payload.get(SIGNATURE.len()..) else { return Vec::new() };
+    parse_index(index, base)
+}
+
+/// Read an already located MPF TIFF index. `base` is the index's offset in the containing file.
+/// Entries are bounded to [`MAX_ENTRIES`] and returned without reading image payloads.
+pub fn images_from_index(index: &[u8], base: usize) -> Vec<MpfImage> {
+    // The bounded legacy reader requires a complete classic first IFD, while the generic TIFF
+    // parser can salvage partial directories. Preserve that refusal for located MPF indices.
+    let le = match index.get(..2) {
+        Some(b"II") => true,
+        Some(b"MM") => false,
+        _ => return Vec::new(),
+    };
+    let read16 =
+        |at: usize| index.get(at..at.checked_add(2)?).map(|b| if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) });
+    let read32 = |at: usize| {
+        index
+            .get(at..at.checked_add(4)?)
+            .map(|b| if le { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) } else { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) })
+    };
+    if read16(2) != Some(42) {
+        return Vec::new();
+    }
+    let Some(at) = read32(4).and_then(|v| usize::try_from(v).ok()) else { return Vec::new() };
+    let Some(count) = read16(at).map(usize::from).filter(|n| *n <= 4096) else { return Vec::new() };
+    if at.checked_add(2).and_then(|p| count.checked_mul(12).and_then(|n| p.checked_add(n))).is_none_or(|end| end > index.len()) {
+        return Vec::new();
+    }
+    parse_index(index, base)
+}
+
+fn parse_index(index: &[u8], base: usize) -> Vec<MpfImage> {
+    let Some(tiff) = Tiff::parse(index).ok() else { return Vec::new() };
     let Some(list) = tiff.ifds.first().and_then(|i| i.bytes(MP_ENTRY)) else { return Vec::new() };
     let u32_at = |rec: &[u8], at: usize| rec.get(at..at + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(|s| tiff.order.u32(s) as usize);
     let mut out = Vec::new();
@@ -226,6 +259,7 @@ mod tests {
         let segs = segments(&file).unwrap();
         assert_eq!(segs.iter().map(|s| s.0).collect::<Vec<_>>(), [0xe0, 0xe1, 0xe2, 0xdb]);
         let (_, a, e) = segs[2];
+        assert_eq!(images_from_index(&file[a + SIGNATURE.len()..e], a + SIGNATURE.len()), found);
         let mut without = file[..a - 4].to_vec();
         without.extend_from_slice(&file[e..found[0].offset]);
         assert_eq!(without, primary);

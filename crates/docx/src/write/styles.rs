@@ -184,7 +184,13 @@ fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
     let para_change = st.para_change.as_deref().filter(|ch| ch.old.formatting() != st.para.formatting());
     if (!st.para.is_empty() || para_change.is_some()) && st.kind != StyleKind::Character {
         w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false, None);
+        let mut ppr = st.para.clone();
+        if ppr.align == Some(craft_wordmodel::props::Align::Justify) && ppr.kashida.is_none() {
+            let mut probe = ppr.clone();
+            probe.style = Some(st.id.clone());
+            ppr.kashida = Some(wr.styles().resolve_para(&probe).kashida);
+        }
+        props::ppr_inner(w, &ppr, false, None);
         if let Some(ch) = para_change {
             let a = wr.change_attrs(ch.rev);
             open_change(w, "w:pPrChange", &a);
