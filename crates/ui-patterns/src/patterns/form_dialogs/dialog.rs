@@ -773,7 +773,6 @@ type Build = dyn for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send;
 /// A [`ParamDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: the host keeps the values, and `build` makes
 /// the dialog over them each pass.
 ///
-/// - The host keeps the dialog's open state, so a dialog opened again under the same key opens.
 /// - The host keeps the Preview check box of a dialog that [`previews`](ParamDialog::previews): it starts on, so
 ///   [`is_previewing`](HostedParamDialog::is_previewing) holds from construction, before the first pass.
 /// - The preview picture comes from [`set_preview`](HostedParamDialog::set_preview) between passes, since `build` cannot
@@ -799,9 +798,6 @@ pub struct HostedParamDialog {
     /// The last range alert a row raised, with its title and the env the dialog showed in (which words it), until the
     /// host takes it.
     range_alert: Option<(Label, RangeAlert, Env)>,
-    /// Whether the dialog is open: bound to the dialog's `opened` prop, so the dialog's own open state, kept under
-    /// its id, cannot hold a dialog closed that the host opened again.
-    open: bool,
     /// The values the dialog opened with, passed to the form as the values Reset restores.
     opening: DialogFields,
     /// Whether the dialog has the Preview check box ([`ParamDialog::previews`] of `build`).
@@ -853,7 +849,6 @@ impl HostedParamDialog {
             build: Box::new(build),
             requests: HostRequests::new(),
             range_alert: None,
-            open: true,
             previews,
             preview_on: true,
             picture: None,
@@ -1126,7 +1121,6 @@ impl StackDialog for HostedParamDialog {
             .preview_on(Bind::bound(&mut self.preview_on))
             .values_opened(self.opening.clone())
             .answers(answers)
-            .opened(Bind::bound(&mut self.open))
             .hold_ok(self.hold)
             .finish_held(finish)
             .preview_colors(self.requests.previewed_colors().to_vec());

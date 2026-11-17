@@ -19,6 +19,13 @@ fn open_slot<'s>(stage: &'s mut MemoryStage, id: Id, save: Option<&SaveKey>) -> 
     }
 }
 
+/// Forgets the open state the container `id` keeps for the session, so its next show starts at its initial state. A
+/// dialog host calls it for each layer of a dialog it removed (`overlay::end_stack_dialog`): a dialog that closed
+/// itself and opens again under the same id opens. A binding or a save key keeps the state elsewhere and is untouched.
+pub(crate) fn forget_open(ctx: &Context, id: Id) {
+    crate::runtime::memory::forget(ctx, sub(id, "open"));
+}
+
 /// Whether the container is open this pass: its binding, else its opener's state, else its slot.
 pub(super) fn open_now<C: Container>(comp: &mut C, stage: &mut MemoryStage, id: Id, props: &ContainerProps) -> bool {
     // A popup's layer (`OverlayUi::show_container`) is open while the popup is: the popup's slot is the one owner.

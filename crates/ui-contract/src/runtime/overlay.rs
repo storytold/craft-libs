@@ -641,14 +641,16 @@ pub fn take_keys_for_new_dialog(ctx: &Context) {
 }
 
 /// A dialog host removed `dialog`: the layers it showed for it (`stack_place`) in the running or the last pass end
-/// their shown life at once (`memory::end_shown`), as a container that shows nothing does, so the next open of the
-/// dialog is a first pass.
+/// their shown life at once (`memory::end_shown`), as a container that shows nothing does, and forget the open state
+/// they kept for the session (`body::forget_open`), so the next open of the dialog is a first pass and starts open: the
+/// close that ended the dialog wrote that state closed.
 #[doc(hidden)]
 pub fn end_stack_dialog(ctx: &Context, dialog: Id) {
     let shown: Vec<Id> =
         with_pass(ctx, |pass| pass.current.iter().chain(&pass.last).filter(|entry| entry.dialog == Some(dialog)).map(|entry| entry.id).collect());
     for id in shown {
         crate::runtime::memory::end_shown(ctx, id);
+        crate::contract::body::forget_open(ctx, id);
     }
 }
 
