@@ -523,8 +523,21 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
     let follow = |dock: &mut NativeDock, at: &mut Rect, frames: usize| {
         let mut sent = Vec::new();
         for _ in 0..frames {
+            // The OS clamps a size to the maximum in force when it takes the command: the one the previous frames
+            // left, then each limit command of this frame in order.
+            let mut max = dock.builder.as_ref().and_then(|builder| builder.max_inner_size);
             let commands = dock.frame(vec![]).1;
-            *at = placed_by(&commands, *at);
+            for command in &commands {
+                match command {
+                    ViewportCommand::MaxInnerSize(limit) => max = Some(*limit),
+                    ViewportCommand::InnerSize(size) => {
+                        let size = max.map_or(*size, |max| size.min(max));
+                        *at = Rect::from_min_size(at.min, size);
+                    }
+                    ViewportCommand::OuterPosition(to) => *at = Rect::from_min_size(*to, at.size()),
+                    _ => {}
+                }
+            }
             dock.windows.child_info(info(true, *at));
             sent.extend(commands);
         }
@@ -552,6 +565,7 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
     let sent = follow(&mut dock, &mut at, 3);
     assert!(sent.contains(&ViewportCommand::InnerSize(expanded)), "the window takes its expanded size back: {:?}", placing(&sent));
     assert_eq!(at.min, dropped.min, "it opens from the strip's place, against the start edge");
+    assert_eq!(at.size(), expanded, "the OS window grows although the strip's limits capped it when the size was sent");
     let max = dock.builder.as_ref().and_then(|builder| builder.max_inner_size);
     assert!(max.is_none_or(|max| max.x >= expanded.x && max.y >= expanded.y), "the OS lets it take that size: max {max:?}");
 }
