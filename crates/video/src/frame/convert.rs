@@ -370,7 +370,7 @@ impl TryFrom<crate::ffv1::Frame> for VideoFrame {
     }
 }
 
-#[cfg(feature = "vmd")]
+#[cfg(feature = "vmd-decode")]
 impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
     type Error = FrameError;
 
@@ -384,7 +384,7 @@ impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
 
 /// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity), the
 /// other colour tags unspecified.
-#[cfg(feature = "vmd")]
+#[cfg(feature = "vmd-decode")]
 fn paletted(width: usize, height: usize, indices: &[u8], palette: &[[u8; 3]; 256]) -> Result<VideoFrame, FrameError> {
     let too_large = FrameError::Shape("picture size does not fit in u32");
     let (w, h) = (u32::try_from(width).map_err(|_| too_large.clone())?, u32::try_from(height).map_err(|_| too_large)?);

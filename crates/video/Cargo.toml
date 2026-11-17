@@ -62,8 +62,9 @@ av1-decode = []
 av1-encode = ["craft-media/isobmff"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
-# Sierra VMD video (8-bit paletted): decoder.
-vmd = []
+# Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
+vmd = ["vmd-decode"]
+vmd-decode = []
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon", "rav1e?/threading"]
 
@@ -84,7 +85,7 @@ craft-media = { workspace = true, features = ["avi", "vmd"] }
 
 [[test]]
 name = "vmd"
-required-features = ["vmd"]
+required-features = ["vmd-decode"]
 
 [[test]]
 name = "hap"
