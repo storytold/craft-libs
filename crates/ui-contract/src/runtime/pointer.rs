@@ -687,7 +687,7 @@ pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(
 }
 
 /// Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
-/// what lies under the pointer ([`Under`]): it takes the press there, or it is the topmost shape and takes none. A
+/// what lies under the pointer: it takes the press there, or it is the topmost shape and takes none. A
 /// container reads it for the components in its body before they run. While a press is open it holds for none: only
 /// the press's target hovers, and that target reads it from its press.
 pub fn hovers(ctx: &Context, id: Id) -> bool {
