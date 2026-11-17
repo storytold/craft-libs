@@ -1,9 +1,9 @@
 //! `AppearancePage`: the Appearance group of Preferences over the suite's shared selection.
 
 use super::chip::ThemeChip;
-use crate::{SelectionChange, SuiteView};
 #[cfg(doc)]
 use crate::SuiteClient;
+use crate::{SelectionChange, SuiteView};
 use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Size, TextSize, ThemeDef, ThemeId, TypeRole, Variants, variant::Tone};
 use craft_ui::choice::RadioGroup;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};

@@ -531,7 +531,8 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
         let title: Label = FullWindowTitle::new(name).subject(self.subject.clone()).zoom(self.view.zoom_percent()).label(&env);
         // A held OK files its answer for the app and keeps the workspace open until the app answers; the buttons that finish wait meanwhile.
         let finishing = |button: FooterButton| button.stays_open(hold_ok).enabled(!ok_waits);
-        let mut plan = vec![(Footer::Finish(self.target.accept()), finishing(FooterButton::new(self.target_label(&words, &common), DialogRole::Accept)))];
+        let mut plan =
+            vec![(Footer::Finish(self.target.accept()), finishing(FooterButton::new(self.target_label(&words, &common), DialogRole::Accept)))];
         if self.target == RawTarget::OpenRaw {
             plan.push((Footer::Finish(RawFinish::Done), finishing(FooterButton::new(words.done.clone(), DialogRole::Other))));
         }

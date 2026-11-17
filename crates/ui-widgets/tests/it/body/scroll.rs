@@ -579,7 +579,11 @@ fn a_pressed_field_in_part_view_stays_put_and_tab_to_it_reveals_it() {
     gap.set(gap.get() + view.get().bottom() - second.height() / 2.0 - second.top());
     frames.idle(3, &mut show);
     let (second_id, second) = fields[1].get();
-    assert!(second.top() < view.get().bottom() && second.bottom() > view.get().bottom(), "the second field shows in part: {second:?} in {:?}", view.get());
+    assert!(
+        second.top() < view.get().bottom() && second.bottom() > view.get().bottom(),
+        "the second field shows in part: {second:?} in {:?}",
+        view.get()
+    );
     pointer::click(&mut frames, Pos2::new(second.center().x, (second.top() + view.get().bottom()) / 2.0), &mut show);
     frames.idle(2, &mut show);
     assert_eq!(frames.ctx.memory(|memory| memory.focused()), Some(second_id), "the press focused the field");

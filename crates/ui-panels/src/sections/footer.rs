@@ -3,8 +3,8 @@
 use super::words::SectionWords;
 use crate::buttons::{Button, IconButton, PopupMark};
 use crate::contract::{
-    Access, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, LeastWidth, NoValue, Outcome, Pad,
-    PaintUi, Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
+    Access, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, LeastWidth, NoValue, Outcome,
+    Pad, PaintUi, Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
 };
 use crate::layout_components::Row;
 use crate::primitives::{IconSpec, RectSide};
@@ -628,42 +628,43 @@ impl FooterBar {
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 let mut place = |ui: &mut Ui, shown: &mut Shown| {
-                for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
-                    let button = &buttons[at];
-                    let variant = match button.role {
-                        DialogRole::Accept => Variant::PRIMARY,
-                        DialogRole::Destructive => Variant::DANGER,
-                        DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
-                    };
-                    let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
-                    if column {
-                        widget = widget.sizing(Sizing::FillWidth);
-                    }
-                    let tip = if button.enabled { button.tooltip.clone() } else { button.disabled_reason.clone().or_else(|| button.tooltip.clone()) };
-                    if let Some(tip) = tip {
-                        widget = widget.tooltip(TooltipSpec::new(tip.clone()).disabled_text(tip));
-                    }
-                    if let Some(letter) = button.letter {
-                        widget = widget.access_key(letter.to_ascii_uppercase());
-                    }
-                    if default_at == Some(at) {
-                        widget = widget.default_stop();
-                    }
-                    if crate::contract::clicked(&widget.show(ui)) {
-                        shown.picked = Some(at);
-                    }
-                    // The capture, renewed each pass, holds the chord from every other component from the next input
-                    // hook on; `take_claimed` consumes the held press, so a second pass of the frame finds nothing
-                    // left and does not press the button again.
-                    let letter = button.letter.and_then(Key::from_char).map(Chord::plain).filter(|_| lettered);
-                    let modified = button.chord.filter(|_| chorded);
-                    for chord in letter.into_iter().chain(modified).filter(|_| button.enabled && !ui.is_sizing_pass()) {
-                        keys::capture(&ctx, owner, chord);
-                        if keys::take_claimed(&ctx, owner, chord) {
+                    for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
+                        let button = &buttons[at];
+                        let variant = match button.role {
+                            DialogRole::Accept => Variant::PRIMARY,
+                            DialogRole::Destructive => Variant::DANGER,
+                            DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
+                        };
+                        let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
+                        if column {
+                            widget = widget.sizing(Sizing::FillWidth);
+                        }
+                        let tip =
+                            if button.enabled { button.tooltip.clone() } else { button.disabled_reason.clone().or_else(|| button.tooltip.clone()) };
+                        if let Some(tip) = tip {
+                            widget = widget.tooltip(TooltipSpec::new(tip.clone()).disabled_text(tip));
+                        }
+                        if let Some(letter) = button.letter {
+                            widget = widget.access_key(letter.to_ascii_uppercase());
+                        }
+                        if default_at == Some(at) {
+                            widget = widget.default_stop();
+                        }
+                        if crate::contract::clicked(&widget.show(ui)) {
                             shown.picked = Some(at);
                         }
+                        // The capture, renewed each pass, holds the chord from every other component from the next input
+                        // hook on; `take_claimed` consumes the held press, so a second pass of the frame finds nothing
+                        // left and does not press the button again.
+                        let letter = button.letter.and_then(Key::from_char).map(Chord::plain).filter(|_| lettered);
+                        let modified = button.chord.filter(|_| chorded);
+                        for chord in letter.into_iter().chain(modified).filter(|_| button.enabled && !ui.is_sizing_pass()) {
+                            keys::capture(&ctx, owner, chord);
+                            if keys::take_claimed(&ctx, owner, chord) {
+                                shown.picked = Some(at);
+                            }
+                        }
                     }
-                }
                 };
                 if let Some(leading) = leading.as_mut() {
                     // The leading controls stand at the start edge of the buttons' line; the buttons fill the rest and
