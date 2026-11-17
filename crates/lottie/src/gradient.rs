@@ -56,3 +56,24 @@ impl Gradient {
     }
 }
 
+#[cfg(test)]
+mod raw_tests {
+    use super::*;
+
+    #[test]
+    fn raw_values_keep_order_precision_and_opaque_alpha() {
+        let g = Gradient { colors: vec![(0.123456789, [0.2, 0.3, 0.4]), (1.0, [0.5, 0.6, 0.7])], opacities: vec![(0.0, 1.0), (1.0, 1.0)] };
+        assert_eq!(g.flat_values().collect::<Vec<_>>(), vec![0.123456789, 0.2, 0.3, 0.4, 1.0, 0.5, 0.6, 0.7, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(g.to_flat(), json!([0.123457, 0.2, 0.3, 0.4, 1.0, 0.5, 0.6, 0.7]));
+    }
+
+    #[test]
+    fn raw_values_keep_nonfinite_signed_zero_and_unpaired_lists() {
+        let g = Gradient { colors: vec![], opacities: vec![(-0.0, f64::NAN), (f64::INFINITY, f64::NEG_INFINITY)] };
+        let bits: Vec<_> = g.flat_values().map(f64::to_bits).collect();
+        assert_eq!(bits, [-0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY].map(f64::to_bits));
+        assert_eq!(Gradient::default().flat_values().count(), 0);
+        let g = Gradient { colors: vec![(1e303, [1.0, 0.0, 0.0])], opacities: vec![] };
+        assert_eq!(g.flat_values().collect::<Vec<_>>(), [1e303, 1.0, 0.0, 0.0]);
+    }
+}
