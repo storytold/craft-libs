@@ -33,5 +33,6 @@ bytemuck = { workspace = true, optional = true }
 
 [dev-dependencies]
 png-encoder = { package = "png", version = "0.18" }
+half = "2"
 dds = { version = "0.2.0", default-features = false }
 bytemuck = { workspace = true }

@@ -33,6 +33,10 @@
 //!
 //! The `png`, `tiff`, `hdr` and `exr` features add the `decode` module, which turns those files'
 //! bytes into planes without reducing 16-bit or float samples to 8 bits.
+//!
+//! [`normal`] makes tangent-space normal maps from a height plane, and [`packing`] packs
+//! occlusion, roughness and metallic into one RGBA image. Both read a [`ScalarSource`] one row at
+//! a time, so a tiled surface is read in place instead of copied into a float plane.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -46,6 +50,13 @@ use rayon::prelude::*;
 
 #[cfg(any(feature = "png", feature = "tiff", feature = "hdr", feature = "exr"))]
 pub mod decode;
+pub mod normal;
+pub mod packing;
+mod source;
+#[cfg(test)]
+mod tiled_tests;
+
+pub use source::{ScalarSource, SourceError, TextureOpError};
 
 /// Largest side the clamping constructors make, and the default [`Limits::max_side`].
 pub const MAX_SIDE: u32 = 8192;

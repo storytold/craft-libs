@@ -12,7 +12,7 @@ fn png(w: u32, h: u32, tag: u8) -> Vec<u8> {
 }
 
 fn new_doc() -> Document {
-    Document::read(&workbook(&[("S", r#"<row r="1"><c r="A1" vm="1" t="e"><v>#VALUE!</v></c></row>"#)], &[]), &Limits::default()).unwrap()
+    Document::read(&workbook(&[("S", r#"<row r="1"><c r="A1" vm="1" t="e"><v>#VALUE!</v></c></row>"#)], &[]).unwrap(), &Limits::default()).unwrap()
 }
 
 fn part(doc: &Document, name: &str) -> String {
