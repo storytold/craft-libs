@@ -79,6 +79,8 @@ pub use worker::{
     use_worker,
 };
 #[cfg(not(no_dwg_bridge))]
+mod contexts;
+#[cfg(not(no_dwg_bridge))]
 mod proxy_transport;
 
 #[cfg(not(no_dwg_bridge))]
@@ -165,7 +167,9 @@ mod native {
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        Ok((add_header_vars(out.buf, &doc.header), notes))
+        // Annotation scale contexts as AutoCAD's DXF has them (see `contexts`).
+        let dxf = super::contexts::contexts(&out.buf, false).unwrap_or(out.buf);
+        Ok((add_header_vars(dxf, &doc.header), notes))
     }
 
     /// acadrust 0.6.6's ASCII writer treats a caret followed by a literal space as already
@@ -1294,6 +1298,16 @@ mod native {
             Some((k, d)) => (d, k >= acadrust::DxfVersion::AC1021),
             None => (dxf.to_vec(), false),
         };
+        // Annotation scale contexts as acadrust reads them (see `contexts`). The markers and
+        // braces it adds can grow the text, so the limit applies again.
+        let data = super::contexts::contexts(&data, true).unwrap_or(data);
+        if data.len() > Limits::DEFAULT.max_dxf_bytes {
+            return Err(format!(
+                "DXF: the input is {} with its annotation contexts, larger than the {} accepted for DWG conversion",
+                mb(data.len() as u64),
+                mb(Limits::DEFAULT.max_dxf_bytes as u64)
+            ));
+        }
         let (classes, source, legacy) = guarded(AssertUnwindSafe(|| {
             let legacy = if legacy { legacy_field_formats(&data) } else { Vec::new() };
             (dxf_class_names(&data), super::proxy_transport::source_classes(&data), legacy)
@@ -2174,6 +2188,53 @@ mod tests {
         }
         let (_, unwritten) = dxf_to_dwg_noted(dxf(line).as_bytes(), "AC1032").unwrap();
         assert!(unwritten.is_empty(), "{unwritten:?}");
+    }
+
+    /// An annotative block reference's scale context, in a DXF as AutoCAD writes it, reaches the
+    /// DWG with its rotation, insertion and scale (acadrust alone read zeros, and AutoCAD draws a
+    /// reference at scale 0 as nothing), and comes back from the DWG as AutoCAD writes it.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn a_block_reference_scale_context_survives_dxf_to_dwg_and_back() {
+        use acadrust::objects::{ObjectContextData, ObjectContextKind, ObjectType};
+        use acadrust::types::Vector3;
+        let mut doc = acadrust::CadDocument::new();
+        let scale = doc.allocate_handle();
+        let h = doc.allocate_handle();
+        let kind = ObjectContextKind::BlkRef {
+            rotation: std::f64::consts::FRAC_PI_2,
+            insertion: Vector3::new(1.0, 2.0, 0.0),
+            scale_factor: Vector3::new(2.0, 2.0, 2.0),
+        };
+        let context = ObjectContextData {
+            handle: h,
+            owner_handle: doc.header.named_objects_dict_handle,
+            reactors: Vec::new(),
+            xdictionary_handle: None,
+            class_version: 4,
+            is_default: true,
+            scale,
+            kind,
+        };
+        doc.objects.insert(h, ObjectType::ObjectContextData(context));
+        let mut ours = Vec::new();
+        acadrust::DxfWriter::new(&doc).write_to_writer(&mut ours).unwrap();
+        let autocad = contexts::contexts(&ours, false).unwrap();
+        let text = String::from_utf8(autocad.clone()).unwrap();
+        assert!(text.contains("ACDB_BLKREFOBJECTCONTEXTDATA_CLASS") && !text.contains("AcDbBlkRefObjectContextData"), "AutoCAD's DXF has no marker");
+
+        let dwg = dxf_to_dwg_as(&autocad, "AC1032").unwrap();
+        let back = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg.clone())).read().unwrap();
+        let read = back.objects.values().find_map(|o| match o {
+            ObjectType::ObjectContextData(c) => Some(c.kind.clone()),
+            _ => None,
+        });
+        let Some(ObjectContextKind::BlkRef { rotation, insertion, scale_factor }) = read else { panic!("no block reference context: {read:?}") };
+        assert!((rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9, "{rotation}");
+        assert_eq!((insertion.x, insertion.y, scale_factor.x, scale_factor.y, scale_factor.z), (1.0, 2.0, 2.0, 2.0, 2.0));
+
+        let dxf = String::from_utf8(dwg_to_dxf(&dwg).unwrap()).unwrap();
+        assert!(dxf.contains("ACDB_BLKREFOBJECTCONTEXTDATA_CLASS") && !dxf.contains("AcDbBlkRefObjectContextData"), "back as AutoCAD writes it");
     }
 
     /// An OLE2FRAME, which CADCraft keeps as its DXF groups without modelling it, is written to
