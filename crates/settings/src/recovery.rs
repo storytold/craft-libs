@@ -37,23 +37,28 @@ pub fn backup_path(path: &Path) -> PathBuf {
 /// Writes `text`, the last version that parsed, to the backup file atomically.
 ///
 /// The caller decides what is safe to keep: a blank or unparsable file must never replace the
-/// previous backup. On Unix the backup always gets the same mode as `path` (`0600` when there is
-/// none), so it is never readable by more people than the settings themselves.
+/// previous backup. On Unix the backup always gets the same mode and group as `path` (`0600`
+/// when there is none), so it is never readable by more people than the settings themselves;
+/// when it cannot be put in the config's group, it keeps the owner bits only.
 pub fn write_backup(path: &Path, text: &str) -> io::Result<()> {
     let backup = backup_path(path);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(path).map(|m| m.permissions().mode() & 0o777).unwrap_or(0o600);
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let config = std::fs::metadata(path).ok();
+        let mode = config.as_ref().map(|m| m.permissions().mode() & 0o777).unwrap_or(0o600);
         // An atomic replace keeps the existing file's mode, so narrow an old, broader backup
         // before new contents go into it, then match the config once written.
         if backup.exists() {
-            std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(mode))?;
+            std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(mode & 0o700))?;
         }
         craft_atomic::WriteOptions::default()
             .with_new_file_permissions(craft_atomic::NewFilePermissions::Private)
             .atomic_write(&backup, text.as_bytes())?;
-        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(mode))
+        // The group bits were granted to the config's group; the new file may have been created
+        // in another (a setgid directory, a different primary group).
+        let grouped = config.as_ref().is_some_and(|m| std::os::unix::fs::chown(&backup, None, Some(m.gid())).is_ok());
+        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(if grouped { mode } else { mode & 0o700 }))
     }
     #[cfg(not(unix))]
     {

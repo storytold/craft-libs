@@ -247,3 +247,83 @@ fn read_le24(bytes: &[u8], at: usize) -> Option<u32> {
     let b = bytes.get(at..at.checked_add(3)?)?;
     Some(u32::from_le_bytes([b[0], b[1], b[2], 0]))
 }
+
+/// Probe the stored dimensions of the first PNG, JPEG, BMP or TIFF image, without decoding
+/// pixels or applying orientation. TIFF uses the first directory even if it is a thumbnail.
+/// The caller's limits bound both the header decoder and the declared output dimensions.
+pub fn probe_stored_size(bytes: &[u8], limits: &crate::Limits) -> Result<(u32, u32), CodecError> {
+    use std::io::Cursor;
+    let format = crate::detect(bytes).ok_or(CodecError::UnknownFormat)?;
+    if !matches!(format, Format::Png | Format::Jpeg | Format::Bmp | Format::Tiff) {
+        return Err(CodecError::unsupported(format, "stored-size probe is not available for this format"));
+    }
+    // The JPEG header reader owns a copy of its input before applying image limits.
+    if format == Format::Jpeg && u64::try_from(bytes.len()).map_or(true, |len| len > limits.max_alloc) {
+        return Err(CodecError::malformed(format, "JPEG input exceeds the allocation budget"));
+    }
+    let image_format = match format {
+        Format::Png => image::ImageFormat::Png,
+        Format::Jpeg => image::ImageFormat::Jpeg,
+        Format::Bmp => image::ImageFormat::Bmp,
+        Format::Tiff => image::ImageFormat::Tiff,
+        _ => return Err(CodecError::unsupported(format, "stored-size probe is not available for this format")),
+    };
+    // Preserve detect's BigTIFF selection; image's signature guesser only knows classic TIFF.
+    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), image_format);
+    let mut image_limits = image::Limits::default();
+    image_limits.max_image_width = Some(limits.max_width);
+    image_limits.max_image_height = Some(limits.max_height);
+    image_limits.max_alloc = Some(limits.max_alloc);
+    reader.limits(image_limits);
+    let (w, h) = reader.into_dimensions().map_err(|e| CodecError::malformed(format, e))?;
+    limits.check_size(w, h)?;
+    Ok((w, h))
+}
+
+#[cfg(test)]
+mod stored_size_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn stored_probe_uses_caller_limits_without_decoding() {
+        let mut bmp = Cursor::new(Vec::new());
+        image::write_buffer_with_format(&mut bmp, &vec![0; 60_000 * 3], 1, 60_000, image::ExtendedColorType::Rgb8, image::ImageFormat::Bmp).unwrap();
+        let bytes = bmp.into_inner();
+        let limits = crate::Limits::new(u32::MAX, u32::MAX, 128_000_000, 2_048_000_000);
+        assert_eq!(probe_stored_size(&bytes, &limits).unwrap(), (1, 60_000));
+        assert!(probe_stored_size(&bytes, &crate::Limits::new(u32::MAX, 50_000, u64::MAX, 2_048_000_000)).is_err());
+        assert!(probe_stored_size(&bytes[..20], &limits).is_err());
+    }
+
+    #[test]
+    fn bigtiff_stored_dimensions_preserve_detected_format() {
+        let mut out = Cursor::new(Vec::new());
+        tiff::encoder::TiffEncoder::new_big(&mut out).unwrap().write_image::<tiff::encoder::colortype::RGB8>(3, 2, &[10; 18]).unwrap();
+        let bytes = out.into_inner();
+        assert_eq!(crate::detect(&bytes), Some(Format::Tiff));
+        assert_eq!(probe_stored_size(&bytes, &crate::Limits::default()).unwrap(), (3, 2));
+    }
+
+    #[test]
+    fn jpeg_input_copy_is_bounded_by_allocation_budget() {
+        let mut out = Cursor::new(Vec::new());
+        image::write_buffer_with_format(&mut out, &[10; 18], 3, 2, image::ExtendedColorType::Rgb8, image::ImageFormat::Jpeg).unwrap();
+        let bytes = out.into_inner();
+        let mut limits = crate::Limits { max_alloc: bytes.len() as u64, ..Default::default() };
+        assert_eq!(probe_stored_size(&bytes, &limits).unwrap(), (3, 2));
+        limits.max_alloc -= 1;
+        assert!(probe_stored_size(&bytes, &limits).is_err());
+    }
+
+    #[test]
+    fn common_stored_headers_are_probed() {
+        let limits = crate::Limits::new(100, 100, 10_000, 1 << 20);
+        for format in [image::ImageFormat::Png, image::ImageFormat::Jpeg, image::ImageFormat::Bmp, image::ImageFormat::Tiff] {
+            let mut out = Cursor::new(Vec::new());
+            image::write_buffer_with_format(&mut out, &[10; 18], 3, 2, image::ExtendedColorType::Rgb8, format).unwrap();
+            assert_eq!(probe_stored_size(&out.into_inner(), &limits).unwrap(), (3, 2), "{format:?}");
+        }
+    }
+}

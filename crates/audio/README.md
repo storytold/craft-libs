@@ -29,14 +29,16 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
 | `decode-native` | the same, native formats only (others are `Unsupported`); `wav_pcm`, `aiff_pcm` (a file's integer PCM bit for bit, as `RawPcm`) | the six decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
-| `encode` | every encoder, and every format of `encode` and `FileEncoder` | `lossless-encode`, `aac-encode`, `alac-encode`, `ac3-encode`, `eac3-encode`, `mp3-encode`, `opus-encode` |
+| `encode` | every encoder, and every format of `encode` and `FileEncoder` | `lossless-encode`, `aac-encode`, `alac-encode`, `ac3-encode`, `eac3-encode`, `mp3-encode`, `opus-encode`, `vorbis-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header`; `pcm_wav_file`, `pcm_wav_header`, `pcm_aiff_file`, `pcm_aiff_header` (minimal files around integer PCM bytes, for essence embedded in AAF / OMF) | none |
+| `flac-decode` | `flac::decode` (whole `.flac` files) and `flac::Decoder` (single frames, for callers that demux FLAC themselves); native, CRC-checked, 4 to 32 bits. `decode` still uses symphonia for FLAC files | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC; `flac::Encoder`, the packet encoder for callers that mux FLAC themselves | craft-media `bitstream` |
 | `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder`; with `aac-decode`, `aac::latm_config` / `latm_split` for LOAS / LATM frames (AAC in MPEG transport streams); with `aac-encode`, `encode`, `FileEncoder` for AAC in M4A | craft-media `bitstream`; `aac-encode` also `isobmff` |
 | `alac-decode` | `alac::Decoder` | none |
 | `alac-encode` | `alac::Encoder`; `encode`, `FileEncoder` for ALAC in M4A | craft-media `isobmff` |
 | `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::Encoder` | none |
+| `vorbis-encode` | `vorbis::encoder::Encoder` (pure Rust); `encode_ogg_vorbis`, `encode_ogg` and `encode` for Ogg Vorbis files (whole buffer; not `FileEncoder`) | craft-media `ogg` |
 | `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | craft-media `bitstream` |
 | `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder`; `encode`, `FileEncoder` for AC-3 and E-AC-3 streams | craft-media `bitstream` |
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
@@ -355,8 +357,12 @@ let pre_skip = enc.pre_skip();  // samples the player drops at the start
 
 The encoder takes 48 kHz only, and craft-audio has no resampler.
 
-craft-media has no Ogg muxer, so `.opus` files cannot be written yet; Opus goes into
-Matroska/WebM or MP4:
+Opus goes into Ogg, Matroska/WebM or MP4:
+
+- **Ogg (`.opus`):** `craft_media::ogg::PageWriter` with `head` and `opus_tags` as the two header
+  packets, each packet's granule position the samples decoded so far (pre-skip included, as
+  the input above starts with it), and `finish(Some(pre_skip + length))` to trim the end
+  (RFC 7845 §4).
 
 - **Matroska/WebM:** `head` is the track's `CodecPrivate`, and the pre-skip goes in
   `TrackSpec::codec_delay_ns` (in nanoseconds at 48 kHz). The Matroska muxer cannot write
@@ -367,6 +373,27 @@ Matroska/WebM or MP4:
   `Edit` instead, which replaces the edit `media_start` makes: `media_time` the pre-skip (track
   timescale), `segment_duration` the audio's length (movie timescale), `media_rate`
   `0x0001_0000`.
+
+### Encode Ogg Vorbis
+
+```rust
+use craft_audio::{OggVorbisOptions, encode_ogg_vorbis};
+
+// 1–8 channels in Vorbis order (5.1: L C R Ls Rs LFE), any sample rate.
+let opts = OggVorbisOptions::new(6.0).with_tag("TITLE", "Take 3").with_tag("ARTIST", "Me");
+let ogg: Vec<u8> = encode_ogg_vorbis(&buf, &opts)?;
+```
+
+The encoder is pure Rust (`vorbis::encoder`, from FilmCraft #4481) and builds for wasm32. Quality
+runs from -1 to 10 at a variable bit rate: about 18 kbit/s per channel at -1, 100 at 6 and 140
+at 10 on music. `encode` with `EncodeFormat::Ogg` takes a WAV-order layout and writes it in
+Vorbis order; its `RateControl::Bitrate` (64–500 kbit/s) picks the quality whose nominal rate
+that is (`quality_for_bitrate`), and `RateControl::Quality` 0.0–1.0 is quality -1 to 10. For
+streaming, feed `vorbis::encoder::Encoder` and write its packets with `craft_media::ogg::PageWriter`
+(identification, `vorbis_comment`, setup, then the audio with each packet's granule position).
+
+Not yet: short blocks (transients may pre-echo), channel coupling (stereo costs
+about twice mono) and bit-rate management.
 
 ### Waveform overviews
 
@@ -704,6 +731,7 @@ the full tests with ffmpeg and the vectors required.
 | MP3 encoder | FilmCraft `filmcraft-mp3enc` [4bec22b](https://github.com/storytold/filmcraft/commit/4bec22bd03bd1d995c9cf72e02a284f96d3d72cd) |
 | ALAC | Apple's reference implementation [macosforge/alac@c38887c](https://github.com/macosforge/alac/tree/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec), Copyright © 2011 Apple Inc., Apache-2.0; ported to Rust and modified (see the `alac` module docs and [NOTICE](../../NOTICE)) |
 | Opus encoder | EffectCraft `effectcraft-opusenc` [c618429](https://github.com/storytold/effectcraft/commit/c618429252587525a2a6d4b5bccbe4ec5261e1b9) |
+| Vorbis encoder | FilmCraft `filmcraft-vorbis` by @JordyUSA ([storytold/filmcraft#4481](https://github.com/storytold/filmcraft/pull/4481)), with partitions of whole sample frames so libvorbis reads surround |
 
 Where apps had overlapping implementations, the one that measured better was kept, with the
 tests of both:
@@ -761,3 +789,8 @@ The codec modules' public items keep their names, so apps can re-export them
   CAF.
   MP4 and Matroska files decode to presentation length. A packet that fails is concealed, not
   dropped. A failed source read is `AudioError::Io`.
+
+WAV timestamps use `bext` when present, including a zero timestamp. Otherwise a bounded iXML
+`BWFXML/BEXT` time reference supplies the timestamp (two unsigned 32-bit words; an omitted high
+word is zero). Only the first iXML chunk is considered. Invalid or oversized optional XML is
+ignored without rejecting the audio. This works for byte-backed and streaming sources.
