@@ -126,10 +126,13 @@ impl BodyHooks<'_> {
         if scroll.is_some() || props.scroll_owner {
             scoped.scroll_owner = Some(ScrollOwner { id, view: scroll.is_none() });
         }
-        match scroll {
-            Some(scroll) => scoped.unbounded = (scroll.horizontal_on(), scroll.vertical_on()),
-            // A container that sized an axis itself (a rect it was shown at, a fixed layer) bounds the room along it.
-            None => scoped.unbounded = (scoped.unbounded.0 && !self.room.x.is_finite(), scoped.unbounded.1 && !self.room.y.is_finite()),
-        }
+        // A container that sized an axis itself (a rect it was shown at, a fixed layer) bounds the room along it; one
+        // measured in a room unbounded along an axis it does not scroll (a row's probe for its units' leasts) leaves
+        // that axis unbounded, so its children never take a width from an infinite rect.
+        let (x, y) = (scoped.unbounded.0 && !self.room.x.is_finite(), scoped.unbounded.1 && !self.room.y.is_finite());
+        scoped.unbounded = match scroll {
+            Some(scroll) => (scroll.horizontal_on() || x, scroll.vertical_on() || y),
+            None => (x, y),
+        };
     }
 }
