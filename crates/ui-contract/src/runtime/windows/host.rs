@@ -77,6 +77,13 @@ impl WindowHost {
         base_shell(&self.ctx).caps.contains(Caps::VIEWPORTS) && viewports::available(&self.ctx)
     }
 
+    /// Whether a viewport mount opened in the running viewport's pass shows in an OS window of its own, and not in
+    /// its fallback layer: OS viewports are available and the running window is neither full screen nor, on Wayland,
+    /// maximized.
+    pub fn opens_windows(&self) -> bool {
+        super::opens_over(&self.ctx, pass::current_viewport(&self.ctx))
+    }
+
     /// Whether the platform reports where windows are on the desktop and moves them there; false on Wayland.
     pub fn positions_reported(&self) -> bool {
         base_shell(&self.ctx).window_positions()

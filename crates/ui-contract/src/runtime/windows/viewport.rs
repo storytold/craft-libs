@@ -83,7 +83,9 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         // A tool window has no OS caption buttons; its panel's title row carries a close action.
         os_buttons: !(spec.kind == WindowKind::Tool && captions.is_none() && chrome != WindowChrome::Native),
         min_size: open.limits.0,
-        max_size: open.limits.1,
+        // egui sends a limit only when it has one: an open window always carries its maximum, unbounded when the
+        // caller has none, so a lifted maximum reaches the OS.
+        max_size: open.limits.1.or(opened.then_some(Vec2::INFINITY)),
         level,
         resizable: open.resizable,
         taskbar: spec.taskbar,

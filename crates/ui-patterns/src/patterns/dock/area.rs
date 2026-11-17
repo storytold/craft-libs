@@ -1113,7 +1113,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// double arrow sits at that end, and its collapsed column shows against that edge of its rect. A move or resize
     /// keeps the edge the window had when it began, so nothing jumps while the window crosses the middle. A collapsed
     /// window's move ends at the edge nearer the strip where it was dropped, with the rect that shows the strip there
-    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect.
+    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. An OS window is measured
+    /// where it would sit in the app window ([`native::in_app`]), and the end of each of its moves and resizes records
+    /// that rect and edge; its placement keeps its expanded rect while its column is collapsed ([`WindowColumn::kept`]).
     ///
     /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
     /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
@@ -1141,10 +1143,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
             let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
-            let mut actions = vec![HeaderAction::Menu];
-            if rights.iter().all(|rights| rights.movable) {
-                actions.push(HeaderAction::Float);
-            }
+            let movable = rights.iter().all(|rights| rights.movable);
+            // The title row is the column's bar: its double arrow and Close; the menu opens from a context request on
+            // its band.
+            let mut actions = Vec::new();
             if scene.config.close_button && rights.iter().all(|rights| rights.closable) {
                 actions.push(HeaderAction::Close);
             }
@@ -1162,7 +1164,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let mut commands = Vec::new();
             let spec = scene.spec(&active);
             let began = started.and_then(|layout| layout.floating.iter().find(|began| began.id == window.id));
-            let (began_rect, began_edge) = began.map_or((opening.rect, window.edge), |began| (began.rect, began.edge));
+            // The window's rect in the app window: for an OS window, where it would sit there.
+            let in_app = opening.spec.as_ref().and_then(|_| native::in_app(&ctx, opening.rect)).unwrap_or(opening.rect);
+            let (began_rect, began_edge) = began.map_or((in_app, window.edge), |began| (began.rect, began.edge));
             let edge = began_edge.unwrap_or_else(|| WindowColumn::nearer_edge(began_rect, scene.bounds, scene.rtl));
             let width = scene.sizes.expanded_width(&window.column, &spec_of);
             let shape = if window.column.iconic {
@@ -1226,7 +1230,22 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         native::place(&ctx, viewport, opening.rect, rect);
                     }
                     self.report.windows.push((anchor.clone(), viewport));
-                    self.report.actions.extend(native::reported(&ctx, window, viewport));
+                    // A move or resize that ends records where the window would sit in the app window, and the edge it
+                    // keeps to: a collapsed window's the edge nearer its strip where it was dropped, as for a window
+                    // in the app window ([`WindowColumn::dropped`]). The window's placement keeps the rect the
+                    // collapsed column shows against that edge.
+                    let mut kept = shape;
+                    if movable
+                        && let Some(change) = output.placed.filter(|change| change.phase == GesturePhase::Commit)
+                        && let Some(rect) = native::in_app(&ctx, change.rect)
+                    {
+                        let (rect, keeps) = shape.dropped(rect, scene.bounds, scene.rtl);
+                        kept.edge = keeps.unwrap_or(kept.edge);
+                        self.report.actions.push(Action::move_floating_with_edge(anchor.clone(), rect, keeps));
+                    }
+                    let title_row = scene.sizes.title_row;
+                    let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, title_row, scene.rtl));
+                    self.report.actions.extend(reported);
                 }
             } else if let Some(mut change) = output.placed {
                 // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
@@ -1243,18 +1262,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 }
                 moved = Some((anchor.clone(), change, keeps));
             }
-            match output.action {
-                // The OS close of a native window arrives here as well, also where the title row offers no Close.
-                Some(HeaderAction::Close) if rights.iter().all(|rights| rights.closable) => {
-                    self.report.actions.push(Action::close_window(anchor.clone()));
-                }
-                Some(HeaderAction::Float) => {
-                    let commands = DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated);
-                    if let Ok(docked) = move_actions(&commands, &DragUnit::Window(anchor.clone()), DockTo::Docked) {
-                        self.report.actions.extend(docked);
-                    }
-                }
-                _ => {}
+            // The OS close of a native window arrives here as well, also where the title row offers no Close.
+            if output.action == Some(HeaderAction::Close) && rights.iter().all(|rights| rights.closable) {
+                self.report.actions.push(Action::close_window(anchor.clone()));
             }
             if let Some(item) = picked.get() {
                 self.pick(&active, item);

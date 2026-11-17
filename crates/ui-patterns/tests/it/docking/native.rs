@@ -1,10 +1,10 @@
 //! Native dock windows: when a float gets an OS window, what the dock records when the OS moves it, the OS close, and
 //! docking the whole window by dragging its title row.
 
-use craft_behavior::dock::{Action, Column, Floating, Group, Layout, Node, Permissions, Workspace};
+use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
-use craft_ui::contract::{Bind, BodyCx, DropMark, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, DropMark, Show as _, ShowContainer as _, SizeLimits};
 use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockGrid, DockPanels, PanelSpec};
 use craft_ui::patterns::dock::DockArea;
@@ -16,7 +16,7 @@ use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui_test_kit::windows::Windows;
-use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
+use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
 /// The root window and the palette overlap; the palette is the larger.
@@ -203,6 +203,9 @@ struct NativeDock {
     windows: Windows,
     workspace: Workspace<u32>,
     stepped: bool,
+    /// The palette window's builder as the integration keeps it: each frame's builder patched onto it, which sends the
+    /// window only the limits a builder carries.
+    builder: Option<ViewportBuilder>,
 }
 
 impl NativeDock {
@@ -222,7 +225,8 @@ impl NativeDock {
         let windows = Windows::with(InstallSpec::new(shell, system));
         windows.root_info(info(true, MAIN_AT));
         windows.child_info(info(true, FLOAT_AT));
-        let mut dock = NativeDock { windows, workspace: Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])), stepped };
+        let workspace = Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette]));
+        let mut dock = NativeDock { windows, workspace, stepped, builder: None };
         for _ in 0..3 {
             dock.frame(vec![]);
         }
@@ -243,6 +247,14 @@ impl NativeDock {
         let out = self.windows.frame(root, child, |ui| {
             actions.extend(DockArea::new("Native dock", Bind::bound(workspace), &mut *panels, DockConfig::default()).show(ui).actions);
         });
+        for (_, builder) in out.builders.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT) {
+            match self.builder.as_mut() {
+                Some(kept) => {
+                    let _ = kept.patch(builder);
+                }
+                None => self.builder = Some(builder),
+            }
+        }
         let commands = out.commands.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, command)| command).collect();
         (actions, commands)
     }
@@ -484,6 +496,145 @@ fn an_app_change_of_a_native_floats_place_moves_its_window_once() {
     }
     let placing = placing(&sent);
     assert_eq!(placing, [&ViewportCommand::OuterPosition(to.min), &ViewportCommand::InnerSize(to.size())], "one move and one size");
+}
+
+/// The size and place an OS window takes from `commands`, starting at `at`.
+fn placed_by(commands: &[ViewportCommand], at: Rect) -> Rect {
+    commands.iter().fold(at, |at, command| match command {
+        ViewportCommand::OuterPosition(to) => Rect::from_min_size(*to, at.size()),
+        ViewportCommand::InnerSize(size) => Rect::from_min_size(at.min, *size),
+        _ => at,
+    })
+}
+
+/// A native palette collapsed to icons keeps its expanded size in the model while its OS window shows the strip of
+/// icons. Moved across the main window, the strip stays where it was dropped and keeps to the edge nearer it. Expanded
+/// again, the window takes its expanded size back and the OS lets it: the strip's size limits are lifted.
+#[trial]
+fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
+    let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
+    let expanded = FLOAT_AT.size();
+    // The OS follows the window commands of each frame, and the window reports where it is.
+    let follow = |dock: &mut NativeDock, at: &mut Rect, frames: usize| {
+        let mut sent = Vec::new();
+        for _ in 0..frames {
+            let commands = dock.frame(vec![]).1;
+            *at = placed_by(&commands, *at);
+            dock.windows.child_info(info(true, *at));
+            sent.extend(commands);
+        }
+        sent
+    };
+    let mut at = FLOAT_AT;
+    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    follow(&mut dock, &mut at, 3);
+    let strip = at;
+    assert!(strip.width() < expanded.x, "the OS window shows the strip: {strip:?}");
+    let recorded = |dock: &NativeDock| dock.workspace.layout.floating[0].native.clone().expect("the model records the window");
+    assert_eq!(Vec2::from(recorded(&dock).normal.size), expanded, "collapsed, the model keeps the expanded size");
+
+    // The OS moves the strip over the start half of the main window.
+    let dropped = Rect::from_min_size(Pos2::new(MAIN_AT.min.x + 50.0, strip.min.y), strip.size());
+    at = dropped;
+    dock.windows.child_info(info(true, at));
+    let sent = follow(&mut dock, &mut at, 4);
+    assert!(placing(&sent).is_empty(), "the strip stays where it was dropped: {:?}", placing(&sent));
+    assert_eq!(at, dropped);
+    assert_eq!(dock.workspace.layout.floating[0].edge, Some(DockEdge::Start), "it keeps to the edge nearer the strip");
+    assert_eq!(Vec2::from(recorded(&dock).normal.size), expanded, "moved, the model keeps the expanded size");
+
+    dock.workspace.apply(Action::set_iconic(1, false), false, |_| Permissions::ALL).expect("the column expands");
+    let sent = follow(&mut dock, &mut at, 3);
+    assert!(sent.contains(&ViewportCommand::InnerSize(expanded)), "the window takes its expanded size back: {:?}", placing(&sent));
+    assert_eq!(at.min, dropped.min, "it opens from the strip's place, against the start edge");
+    let max = dock.builder.as_ref().and_then(|builder| builder.max_inner_size);
+    assert!(max.is_none_or(|max| max.x >= expanded.x && max.y >= expanded.y), "the OS lets it take that size: max {max:?}");
+}
+
+/// Palettes no smaller than `PALETTE_LEAST`.
+struct Least;
+
+const PALETTE_LEAST: Vec2 = Vec2::new(240.0, 160.0);
+
+impl DockPanels<u32> for Least {
+    fn spec(&self, _: &u32) -> PanelSpec {
+        PanelSpec::new(PALETTE_TITLE).limits(SizeLimits::at_least(PALETTE_LEAST))
+    }
+
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+}
+
+/// A model place smaller than the palette's limits sizes its OS window within them: the window is never asked for a
+/// size the OS would clamp, so the size the model records is the one the window has.
+#[trial]
+fn a_native_palette_is_never_sized_below_its_limits() {
+    let windows = Windows::new();
+    windows.root_info(info(true, MAIN_AT));
+    windows.child_info(info(true, FLOAT_AT));
+    let mut window = Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
+    let mut saved = Placement::new(FLOAT_AT.size().into(), 1.0);
+    saved.position_px = Some([FLOAT_AT.min.x as i32, FLOAT_AT.min.y as i32]);
+    window.native = Some(saved);
+    let mut workspace = Workspace::new(Layout::new(None, vec![window]));
+    let mut run = |workspace: &mut Workspace<u32>| {
+        let out = windows.frame(vec![], vec![], |ui| {
+            let _ = DockArea::new("Native dock", Bind::bound(workspace), &mut Least, DockConfig::default().native_windows(true)).show(ui);
+        });
+        out.commands.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, command)| command).collect::<Vec<_>>()
+    };
+    for _ in 0..3 {
+        run(&mut workspace);
+    }
+    let mut small = Placement::new([80.0, 60.0], 1.0);
+    small.position_px = Some([FLOAT_AT.min.x as i32, FLOAT_AT.min.y as i32]);
+    workspace.apply(Action::set_native(1, Some(small)), false, |_| Permissions::ALL).expect("the model takes the place");
+    let mut sent = Vec::new();
+    for _ in 0..3 {
+        sent.extend(run(&mut workspace));
+    }
+    let sizes: Vec<Vec2> =
+        sent.iter().filter_map(|command| if let ViewportCommand::InnerSize(size) = command { Some(*size) } else { None }).collect();
+    assert!(!sizes.is_empty(), "the window is sized to the model's place");
+    assert!(sizes.iter().all(|size| size.x >= PALETTE_LEAST.x && size.y >= PALETTE_LEAST.y), "within the limits: {sizes:?}");
+}
+
+/// While the main window is full screen, an OS window opened over it would cover it, so a float shows in the app
+/// window instead, at its own rect there, and a drag of its title row moves it.
+#[trial]
+fn a_float_shows_and_moves_in_the_app_window_while_the_main_window_is_full_screen() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { fullscreen: Some(true), ..info(true, MAIN_AT) });
+    windows.child_info(info(true, FLOAT_AT));
+    let start = float().rect;
+    let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+    let mut child = false;
+    let mut run = |workspace: &mut Workspace<u32>, events: Vec<Event>| {
+        let out = windows.frame(events, vec![], |ui| {
+            let _ = DockArea::new("Native dock", Bind::bound(workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+        });
+        child |= out.builders.iter().any(|(viewport, _)| *viewport != ViewportId::ROOT);
+    };
+    for _ in 0..3 {
+        run(&mut workspace, vec![]);
+    }
+    let row = start.min + ROW_AT.to_vec2();
+    let by = Vec2::new(60.0, 40.0);
+    run(&mut workspace, vec![moved(row)]);
+    run(&mut workspace, vec![press(row)]);
+    for step in 1..=3 {
+        run(&mut workspace, vec![moved(row + by * step as f32 / 3.0)]);
+    }
+    run(&mut workspace, vec![release(row + by)]);
+    for _ in 0..2 {
+        run(&mut workspace, vec![]);
+    }
+    assert!(!child, "no OS window opens over the full-screen window");
+    let moved_to = workspace.layout.floating[0].rect.min;
+    assert!(
+        (moved_to - (start.min + by)).length() <= by.length() / 2.0,
+        "the drag moved the float with the pointer: {moved_to:?} from {:?}",
+        start.min
+    );
 }
 
 /// Palettes whose body is a veil over the window: a target inside the window that takes dropped files.

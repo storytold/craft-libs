@@ -27,7 +27,7 @@ pub(crate) struct Spec<'a> {
     pub os_buttons: bool,
     /// The smallest inner size.
     pub min_size: Option<Vec2>,
-    /// The largest inner size.
+    /// The largest inner size; `Vec2::INFINITY` lifts an earlier one.
     pub max_size: Option<Vec2>,
     /// The window level.
     pub level: WindowLevel,

@@ -2,8 +2,9 @@
 //!
 //! The group is a movable, resizable container on a layer (or in an OS window) whose rect the caller owns: the
 //! caller places it with the rect the dock model keeps and takes the rect the output reports after each step of
-//! a gesture. The title row carries the active panel's title and the Menu, Float and Close actions; the Menu action
-//! opens the `menu` rows. The body step supplies the move band, the edge grips and the keyboard Move and Size modes.
+//! a gesture. The title row carries the Close action; a context request on its band opens the `menu` rows, as the
+//! Menu action does where `actions` asks for one. The body step supplies the move band, the edge grips and the
+//! keyboard Move and Size modes.
 //! A dock window's title row is also the bar of the column the window holds, with the column's double arrow.
 
 use super::dock_column::{CHEVRON, ColumnArrow, describe_chevron, paint_chevron};
@@ -38,8 +39,9 @@ pub(crate) fn title_row(tokens: &UiTokens) -> f32 {
     tokens.size.panel_header
 }
 
-/// The actions a floating group's title row shows unless `actions` says otherwise.
-const ACTIONS: [HeaderAction; 3] = [HeaderAction::Menu, HeaderAction::Float, HeaderAction::Close];
+/// The actions a floating group's title row shows unless `actions` says otherwise: Close alone, as a floating panel's
+/// title bar has beside its double arrow; the menu opens from the band.
+const ACTIONS: [HeaderAction; 1] = [HeaderAction::Close];
 
 /// The style of a floating group: the surface and padding come from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -88,6 +90,21 @@ impl WindowColumn {
     pub fn arrow(mut self, arrow: ColumnArrow) -> Self {
         self.arrow = arrow;
         self
+    }
+
+    /// Where a window that keeps `rect` shows while its column is collapsed: the collapsed column under a title row
+    /// `header` tall, at the top of `rect` and against the edge the window keeps to. `None` while the column is
+    /// expanded.
+    pub fn shown(self, rect: Rect, header: f32, rtl: bool) -> Option<Rect> {
+        let size = self.collapsed? + Vec2::new(0.0, header);
+        let left = if at_left(self.edge, rtl) { rect.left() } else { rect.right() - size.x };
+        Some(Rect::from_min_size(Pos2::new(left, rect.top()), size))
+    }
+
+    /// The rect a window that keeps `rect` keeps when it shows at `shown`: while collapsed, `rect` moved with the
+    /// collapsed column ([`Self::shown`]), so it keeps its expanded size; while expanded, `shown`.
+    pub fn kept(self, shown: Rect, rect: Rect, header: f32, rtl: bool) -> Rect {
+        self.shown(rect, header, rtl).map_or(shown, |at| rect.translate(shown.min - at.min))
     }
 
     /// The edge of `bounds`, in reading order, nearer the window at `rect`: the start edge when the window's centre is
@@ -205,7 +222,7 @@ pub struct FloatingGroup<'a> {
     /// Opens the group in an OS window of this kind.
     #[prop]
     native: Option<WindowSpec>,
-    /// The rows of the menu the Menu action opens.
+    /// The rows of the menu a context request on the title row, or the Menu action, opens.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     menu: Option<MenuRows<'a>>,
     actions: Vec<HeaderAction>,
@@ -236,7 +253,7 @@ type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>
 type TakeDrop<'a> = Box<dyn for<'b, 'c> FnMut(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
 
 impl<'a> FloatingGroup<'a> {
-    /// A floating group titled `title` at `rect`, with the Menu, Float and Close actions.
+    /// A floating group titled `title` at `rect`, with the Close action.
     pub fn new(title: impl Into<Label>, rect: Rect) -> Self {
         let props = ContainerProps::new()
             .surface(SurfaceKind::Floating)
@@ -356,10 +373,7 @@ impl<'a> FloatingGroup<'a> {
     /// Where the group shows while its column is collapsed: the collapsed column under the title row, at the top of
     /// the rect and against its edge the window keeps to. `None` while the column is expanded.
     fn collapsed_rect(&self) -> Option<Rect> {
-        let column = self.column?;
-        let size = column.collapsed? + Vec2::new(0.0, self.header);
-        let left = if at_left(column.edge, self.rtl) { self.rect.left() } else { self.rect.right() - size.x };
-        Some(Rect::from_min_size(Pos2::new(left, self.rect.top()), size))
+        self.column?.shown(self.rect, self.header, self.rtl)
     }
 
     /// The double arrow's square at the end of the title row the window keeps to.
@@ -483,9 +497,9 @@ impl Container for FloatingGroup<'_> {
     fn placement_changed(&mut self, change: &PlacementChange) {
         let mut change = *change;
         let fitted = self.column.is_some_and(|column| column.fitted.is_some());
-        if let Some(shown) = self.collapsed_rect() {
+        if let Some(column) = self.column.filter(|column| column.collapsed.is_some()) {
             // The collapsed window moves; the rect keeps its expanded size.
-            change.rect = self.rect.translate(change.rect.min - shown.min);
+            change.rect = column.kept(change.rect, self.rect, self.header, self.rtl);
         } else if fitted && change.kind == PlacementKind::Move {
             // A window its content sizes moves; the rect keeps its size.
             change.rect = Rect::from_min_size(change.rect.min, self.rect.size());
