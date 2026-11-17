@@ -2940,6 +2940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-scopes"
+version = "0.1.0"
+dependencies = [
+ "craft-color",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-scraft-format"
 version = "0.1.0"
 dependencies = [

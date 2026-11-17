@@ -1,0 +1,9 @@
+craft-scopes
+Licensed under the MIT license or the Apache License, Version 2.0, at your option.
+
+The scope math, summaries and trace painting come from FilmCraft's `crates/scopes`
+(https://github.com/storytold/filmcraft, commit 3f137a7ed420cac79b32145f5243b7f98b31f71c),
+MIT OR Apache-2.0, Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+The HDR histogram bins come from LightCraft's `crates/raster/src/histogram.rs`
+(https://github.com/storytold/lightcraft, commit aa08a77060c0cca737dcc29b5db814cbc07ae611),
+MIT OR Apache-2.0, Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
