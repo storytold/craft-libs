@@ -152,6 +152,8 @@ pub struct OutlineDraft {
     document: Option<u64>,
     /// A ⇧ freehand drag's line: where it began and the unit direction it locked to (the nearest of eight).
     lock: Option<(Point, Vec2)>,
+    /// Whether ⇧ holds a freehand drag to one line ([`locking_drags`](Self::locking_drags)).
+    locks_drag: bool,
 }
 
 impl OutlineDraft {
@@ -168,7 +170,17 @@ impl OutlineDraft {
             alt_from_press: false,
             document: None,
             lock: None,
+            locks_drag: false,
         }
+    }
+
+    /// Whether a Mixed draft's freehand drag with ⇧ held stays on one line ([`drag_step`](Self::drag_step)). Off, ⇧
+    /// leaves a freehand drag alone: a selection Lasso's ⇧ at the press adds to the selection, and a drag keeps the
+    /// pointer's path. The Freeform Pen turns it on.
+    #[must_use]
+    pub fn locking_drags(mut self, on: bool) -> Self {
+        self.locks_drag = on;
+        self
     }
 
     /// The rules this draft follows.
@@ -274,7 +286,7 @@ impl OutlineDraft {
         Some(DraftEvent::Changed)
     }
 
-    /// Where a freehand point of `at` goes. With ⇧ held a Mixed draft's drag follows one line: once the pointer has
+    /// Where a freehand point of `at` goes. With ⇧ held a [locking](Self::locking_drags) Mixed draft's drag follows one line: once the pointer has
     /// travelled [`LOCK_DISTANCE`] screen points from the last vertex, the nearest of eight directions from there
     /// is locked and every later point is the pointer's projection onto it, however the pointer wanders, until ⇧ is
     /// released. Before the lock the point stays at the vertex. Otherwise [`shift_step`](Self::shift_step).
@@ -282,6 +294,10 @@ impl OutlineDraft {
         if self.kind != DraftKind::Mixed || !at.mods.shift || self.polygonal {
             self.lock = None;
             return self.shift_step(at);
+        }
+        if !self.locks_drag {
+            self.lock = None;
+            return at.at;
         }
         let Some(&last) = self.points.last() else { return at.at };
         let (origin, direction) = match self.lock {
