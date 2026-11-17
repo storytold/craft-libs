@@ -255,6 +255,7 @@ fn vlq(bytes: &[u8], pos: &mut usize) -> Option<i64> {
     })
 }
 
+/// Decode mapping deltas, rejecting fields that cannot name a declared source or symbol.
 fn decode_mappings(m: &str, map: &mut SourceMap, budget: &mut usize, line_budget: &mut usize, line_limit: usize) -> Result<(), SourceMapError> {
     let bytes = m.as_bytes();
     let (mut src, mut ol, mut oc, mut name) = (0i64, 0i64, 0i64, 0i64);
@@ -299,7 +300,11 @@ fn decode_mappings(m: &str, map: &mut SourceMap, budget: &mut usize, line_budget
                 name += vlq(bytes, &mut pos).ok_or(SourceMapError::BadMappings(count))?;
                 n = Some(to_u32(name, count)?);
             }
-            seg.original = Some((to_u32(src, count)?, to_u32(ol, count)?, to_u32(oc, count)?, n));
+            let source = to_u32(src, count)?;
+            if source as usize >= map.sources.len() || n.is_some_and(|index| index as usize >= map.names.len()) {
+                return Err(SourceMapError::BadMappings(count));
+            }
+            seg.original = Some((source, to_u32(ol, count)?, to_u32(oc, count)?, n));
         }
         if !matches!(bytes.get(pos), None | Some(b',') | Some(b';')) {
             return Err(SourceMapError::BadMappings(count));
