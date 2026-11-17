@@ -354,6 +354,25 @@ pub struct Insn {
 
 /// Most entries decoded from one payload.
 const MAX_PAYLOAD: usize = 65_536;
+/// Maximum payload bytes retained by one decoded method, including copies attached to users.
+pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 64 << 20;
+
+impl Payload {
+    fn retained_bytes(&self) -> usize {
+        match self {
+            Self::PackedSwitch { targets, .. } => targets.len().saturating_mul(4),
+            Self::SparseSwitch { keys, targets } => keys.len().saturating_add(targets.len()).saturating_mul(4),
+            Self::FillArrayData { data, .. } => data.len(),
+        }
+    }
+
+    fn complete(&self) -> bool {
+        match self {
+            Self::FillArrayData { element_width, count, data } => u64::from(*element_width) * u64::from(*count) == data.len() as u64,
+            _ => true,
+        }
+    }
+}
 
 fn u32_at(code: &[u16], i: usize) -> Option<u32> {
     Some(u32::from(*code.get(i)?) | (u32::from(*code.get(i + 1)?) << 16))
@@ -552,19 +571,36 @@ pub fn decode_one(code: &[u16], pc: usize) -> Option<Insn> {
 }
 
 /// Decode a whole method body, attaching each switch/array payload to the instruction that
-/// references it. Stops at `max` instructions.
+/// references it. Stops at `max` instructions and caps all retained payload copies together.
 pub fn decode(code: &[u16], max: usize) -> (Vec<Insn>, bool) {
+    decode_with_payload_limit(code, max, DEFAULT_MAX_PAYLOAD_BYTES)
+}
+
+/// Decode with an explicit aggregate payload byte budget. Payloads that do not fit are omitted;
+/// their instruction metadata remains and the returned completeness flag is false. A source
+/// payload and every attached copy consume the same budget, before the copy is allocated.
+pub fn decode_with_payload_limit(code: &[u16], max: usize, max_payload_bytes: usize) -> (Vec<Insn>, bool) {
     let mut out = Vec::new();
     let mut pc = 0usize;
     let mut complete = true;
+    let mut bytes_left = max_payload_bytes;
     while pc < code.len() {
         if out.len() >= max {
             complete = false;
             break;
         }
         match decode_one(code, pc) {
-            Some(i) => {
+            Some(mut i) => {
                 pc += (i.units as usize).max(1);
+                if let Some(p) = &i.payload {
+                    complete &= p.complete();
+                    if let Some(left) = bytes_left.checked_sub(p.retained_bytes()) {
+                        bytes_left = left;
+                    } else {
+                        i.payload = None;
+                        complete = false;
+                    }
+                }
                 out.push(i);
             }
             None => {
@@ -574,12 +610,20 @@ pub fn decode(code: &[u16], max: usize) -> (Vec<Insn>, bool) {
         }
     }
     // Attach payloads to their users (31t formats).
-    let payloads: Vec<(i64, Payload)> = out.iter().filter_map(|i| i.payload.clone().map(|p| (i64::from(i.offset), p))).collect();
-    for i in out.iter_mut().filter(|i| matches!(i.opcode, 0x26 | 0x2b | 0x2c)) {
-        if let Some(t) = i.target
-            && let Some((_, p)) = payloads.iter().find(|(o, _)| *o == t)
-        {
-            i.payload = Some(p.clone());
+    // The decoder visits offsets in order. Index their positions without copying any payload.
+    let payloads: Vec<(i64, usize)> = out.iter().enumerate().filter(|(_, i)| i.payload.is_some()).map(|(n, i)| (i64::from(i.offset), n)).collect();
+    for n in 0..out.len() {
+        let Some(target) = out.get(n).filter(|i| matches!(i.opcode, 0x26 | 0x2b | 0x2c)).and_then(|i| i.target) else { continue };
+        let Ok(position) = payloads.binary_search_by_key(&target, |(offset, _)| *offset) else { continue };
+        let Some(payload) = payloads.get(position).and_then(|(_, index)| out.get(*index)).and_then(|i| i.payload.as_ref()) else { continue };
+        let Some(left) = bytes_left.checked_sub(payload.retained_bytes()) else {
+            complete = false;
+            continue;
+        };
+        bytes_left = left;
+        let copy = payload.clone();
+        if let Some(instruction) = out.get_mut(n) {
+            instruction.payload = Some(copy);
         }
     }
     (out, complete)
