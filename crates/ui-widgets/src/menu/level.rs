@@ -281,6 +281,17 @@ impl MenuLevel {
         })
     }
 
+    /// Makes the enabled row `under` names, among the rows as the user last saw them, the active row: the row the
+    /// pointer moved onto. Returns whether that changed it.
+    pub(super) fn follow_pointer(&self, under: impl Fn(Id) -> bool) -> bool {
+        self.with(|state| {
+            let Some(row) = state.shown.iter().find(|row| row.enabled && under(row.id)).map(|row| row.id) else { return false };
+            let changed = state.active != Some(row);
+            state.active = Some(row);
+            changed
+        })
+    }
+
     pub(crate) fn active(&self) -> Option<Id> {
         self.with(|state| state.active)
     }

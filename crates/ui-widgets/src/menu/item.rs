@@ -89,6 +89,9 @@ pub struct MenuItemOutput {
     pub opens_submenu: bool,
     /// A submenu row's submenu is the open one of its level: show the `Menu` after the row.
     pub submenu_open: bool,
+    /// The row is its level's active row and paints with the row fill: the pointer moved onto it, or the keyboard
+    /// moved to it.
+    pub active: bool,
     /// The row's rect grown by the menu's padding: where a submenu hangs from, so its first row is level with this one
     /// and it starts at the popup's edge.
     pub(crate) frame: Rect,
@@ -149,7 +152,8 @@ fn label_line(area: Rect, detail: f32) -> Rect {
 /// - [`keep_open`](MenuItem::keep_open) keeps the menus open when the row runs (a check row that toggles).
 /// - The mnemonic is the `&` letter of the label, else the first letter no earlier row of the level uses. The
 ///   underline sits under that letter while Alt is held or the keyboard drives the menu, never on macOS.
-/// - The pointer moves the level's active row; the row under it paints with the shared row fill.
+/// - The level's active row paints with the shared row fill: the row the pointer moved onto (its `Menu` sets it
+///   before the rows run), or the one the keyboard moved to.
 /// - A [`tint`](MenuItem::tint) (a user label colour) fills the row behind its content at a strength the theme keeps
 ///   the text readable on (`MenuTint`); the active, open and disabled looks win over it. The row keeps its text, so the
 ///   colour is never the only cue.
@@ -453,7 +457,7 @@ impl Component for MenuItem<'_> {
         let takes_over = hovered && (!heading || rested >= AIM_REST);
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
-        if enabled && ((hovered && moving) || (focused && keyboard && (focus_gained || key_started))) && level.activate_row(cx.id) {
+        if enabled && focused && keyboard && (focus_gained || key_started) && level.activate_row(cx.id) {
             frame::request_repaint(&ctx);
         }
         // A disabled row is never active.
@@ -607,7 +611,16 @@ impl Component for MenuItem<'_> {
         // The frame is where a submenu hangs: the row with the popup padding, widened by `gap.tight` on both sides so a
         // submenu that flips to the other side keeps the gap.
         let frame = cx.response.rect.expand(level.pad()).expand2(egui::vec2(cx.style.submenu_gap, 0.0));
-        MenuItemOutput { response: cx.response.clone(), ran: self.ran, opens_submenu: self.opens, submenu_open: self.open, frame, level, id: cx.id }
+        MenuItemOutput {
+            response: cx.response.clone(),
+            ran: self.ran,
+            opens_submenu: self.opens,
+            submenu_open: self.open,
+            active: self.active,
+            frame,
+            level,
+            id: cx.id,
+        }
     }
 }
 

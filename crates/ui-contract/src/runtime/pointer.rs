@@ -685,6 +685,19 @@ pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(
     PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
 }
 
+/// Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
+/// what lies under the pointer ([`Under`]): it takes the press there, or it is the topmost shape and takes none. A
+/// container reads it for the components in its body before they run. While a press is open it holds for none: only
+/// the press's target hovers, and that target reads it from its press.
+pub fn hovers(ctx: &Context, id: Id) -> bool {
+    with_hover(ctx, pass::current_viewport(ctx), |under, captured| {
+        !captured
+            && under.is_some_and(|under| {
+                [under.press.click, under.press.drag, under.hover_top].into_iter().flatten().any(|(winner, _)| winner.owner == id)
+            })
+    })
+}
+
 /// The resolutions of what lies under a point the running viewport's latest pass made.
 #[cfg(feature = "testing")]
 pub(crate) fn resolutions(ctx: &Context) -> u32 {
