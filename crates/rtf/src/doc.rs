@@ -46,9 +46,9 @@ mod text;
 mod word;
 
 pub use date::{dttm_to_iso, iso_to_dttm};
+pub use export::{GENERATOR, esc, export, export_with_generator};
 #[cfg(test)]
 use export::{Tables, Writer};
-pub use export::{esc, export};
 pub use parse::{import, parse};
 use reader::Reader;
 #[cfg(test)]

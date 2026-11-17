@@ -88,7 +88,7 @@ pub fn header_with_max_pixels(b: &[u8], max_pixels: u64) -> Result<(u32, u32, u1
     if !after_idat {
         return Err(err("truncated image data"));
     }
-    Ok((w, h, exif.map_or(1, crate::exif_orientation)))
+    Ok((w, h, exif.map_or(1, craft_metadata::compat_orientation::orientation)))
 }
 
 /// Container color declarations preceding image data. Raw values leave color policy to callers.
