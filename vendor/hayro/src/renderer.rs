@@ -452,6 +452,9 @@ pub(crate) struct Renderer {
     /// (nothing is layered while erasing).
     erasing: bool,
     erase_groups: usize,
+    /// Knockout patch (pdfcraft #4898): the knockout groups drawn in blend-mode passes
+    /// (`Device::begin_knockout_pass`), innermost last.
+    knockout_passes: Vec<KnockoutPass>,
     pub(crate) inside_pattern: bool,
     /// Soft masks drawn during this render. PdfCraft note: it belongs to one `Renderer` (one
     /// render, every nested renderer starting empty) and so to one `preview` setting: a mask
@@ -481,6 +484,33 @@ impl Renderer {
         self.knockout.last().copied().unwrap_or(false)
     }
 
+    /// Knockout patch (pdfcraft #4898): the blend-mode pass of the innermost group, when that
+    /// group is a knockout group drawn in passes, so the element now drawn is one of its own
+    /// elements.
+    fn knockout_pass(&mut self) -> Option<&mut KnockoutPass> {
+        let depth = self.knockout.len();
+        if !self.in_knockout() {
+            return None;
+        }
+        self.knockout_passes.last_mut().filter(|pass| pass.depth == depth)
+    }
+
+    /// Knockout patch (pdfcraft #4898): whether an element of blend mode `mode` belongs to
+    /// another pass than the current one, so here it clears what is under its shape instead of
+    /// painting. Records the mode for its own pass.
+    fn knockout_pass_skips(&mut self, mode: BlendMode) -> bool {
+        let Some(pass) = self.knockout_pass() else {
+            return false;
+        };
+        if mode == pass.mode {
+            return false;
+        }
+        if !pass.other_modes.contains(&mode) {
+            pass.other_modes.push(mode);
+        }
+        true
+    }
+
     pub(crate) fn new(
         width: u16,
         height: u16,
@@ -495,6 +525,7 @@ impl Renderer {
             in_annotations: false,
             knockout: Vec::new(),
             erasing: false,
+            knockout_passes: Vec::new(),
             erase_groups: 0,
             inside_pattern: false,
             soft_mask_cache: HashMap::default(),
@@ -599,6 +630,7 @@ impl Renderer {
                 in_annotations: false,
                 knockout: Vec::new(),
                 erasing: false,
+                knockout_passes: Vec::new(),
                 erase_groups: 0,
                 inside_pattern: false,
                 soft_mask_cache: HashMap::default(),
@@ -1105,18 +1137,89 @@ impl Renderer {
     fn set_paint(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> PaintSetup {
         // Knockout patch (pdfcraft #2974): in a knockout erase pass every paint clears what is
         // under its shape (a transparent fill with `Compose::Copy`, weighted by coverage).
-        if self.erasing {
+        // Knockout patch (pdfcraft #4898): so does an element of another pass than the current
+        // one (`Device::begin_knockout_pass`).
+        let element_mode = self.knockout_pass().map(|pass| pass.element_mode);
+        let other_pass =
+            !self.erasing && element_mode.is_some_and(|mode| self.knockout_pass_skips(mode));
+        if self.erasing || other_pass {
+            if is_shading(paint) {
+                self.knockout_shading(paint, path, is_stroke, false);
+                return PaintSetup::Nothing;
+            }
             self.ctx.set_blend_mode(knockout_blend_mode());
             self.ctx.set_paint(AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]));
-            // A shading's `/BBox` clips what it paints, so it clips what it clears too.
-            return PaintSetup::Clip(match paint {
-                Paint::Pattern(p) => match p.as_ref() {
-                    Pattern::Shading(s) => s.shading.clip_path.clone(),
-                    _ => None,
-                },
-                _ => None,
-            });
+            return PaintSetup::Clip(None);
         }
+        if self.in_knockout() && is_shading(paint) {
+            self.knockout_shading(paint, path, is_stroke, true);
+            return PaintSetup::Nothing;
+        }
+        self.paint_setup(paint, path, is_stroke)
+    }
+
+    /// Knockout patch (pdfcraft #4898): a shading in a knockout group replaces what is under it
+    /// where it paints, which a mesh's triangles or the shading's `/BBox` may make less than the
+    /// path, so it can't be copied over the path like other paints. The shading at full opacity,
+    /// composited with `Compose::DestOut`, clears its shape; then, when `paint_it`, the shading
+    /// is painted over the cleared area. A shading that paints nothing clears nothing. The
+    /// caller paints nothing more.
+    fn knockout_shading(
+        &mut self,
+        paint: &Paint<'_>,
+        path: &BezPath,
+        is_stroke: bool,
+        paint_it: bool,
+    ) {
+        let PaintSetup::Clip(clip) = self.paint_setup(&shape_of(paint), path, is_stroke) else {
+            return;
+        };
+        if let Some(clip) = clip.as_ref() {
+            self.push_clip_path_inner(clip, FillRule::NonZero);
+        }
+        self.ctx
+            .set_blend_mode(peniko::BlendMode::new(Mix::Normal, Compose::DestOut));
+        self.draw_shape(path, is_stroke);
+        if paint_it && let PaintSetup::Clip(_) = self.paint_setup(paint, path, is_stroke) {
+            self.ctx
+                .set_blend_mode(peniko::BlendMode::new(Mix::Normal, Compose::SrcOver));
+            self.draw_shape(path, is_stroke);
+        }
+        if clip.is_some() {
+            self.ctx.pop_clip_path();
+        }
+        self.ctx.set_blend_mode(knockout_blend_mode());
+    }
+
+    fn draw_shape(&mut self, path: &BezPath, is_stroke: bool) {
+        if is_stroke {
+            self.ctx.stroke_path(path);
+        } else {
+            self.ctx.fill_path(path);
+        }
+    }
+
+    /// The device-space area a shading painted on `path` covers: the path's bounding box, with
+    /// the stroke width around it for a stroke, on the canvas.
+    fn shading_bbox(&self, path: &BezPath, is_stroke: bool) -> Rect {
+        let path_transform = self.ctx.transform();
+        let mut bbox = (*path_transform * path.clone()).bounding_box();
+        if is_stroke {
+            // Try to account for stroke in bbox.
+            let (a1, a2) = x_y_advances(path_transform);
+            let factor = a1.length().max(a2.length()) * self.ctx.stroke().width;
+            bbox = bbox.inflate(factor, factor);
+        }
+        bbox.intersect(Rect::new(
+            0.0,
+            0.0,
+            self.ctx.width() as f64,
+            self.ctx.height() as f64,
+        ))
+    }
+
+    /// The paint `paint` draws on `path` with, set on the context (see [`PaintSetup`]).
+    fn paint_setup(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> PaintSetup {
         let mut paint_transform = Affine::IDENTITY;
         let mut clip_path = None;
         // PdfCraft patch (#3296): `Extend::Repeat` tiles the texture over the path; a mesh
@@ -1134,21 +1237,7 @@ impl Renderer {
                 match *p {
                     Pattern::Shading(s) => {
                         clip_path = s.shading.clip_path.clone();
-                        let mut bbox = (*path_transform * path.clone()).bounding_box();
-
-                        if is_stroke {
-                            // Try to account for stroke in bbox.
-                            let (a1, a2) = x_y_advances(path_transform);
-                            let factor = a1.length().max(a2.length()) * self.ctx.stroke().width;
-                            bbox = bbox.inflate(factor, factor);
-                        }
-
-                        bbox = bbox.intersect(Rect::new(
-                            0.0,
-                            0.0,
-                            self.ctx.width() as f64,
-                            self.ctx.height() as f64,
-                        ));
+                        let mut bbox = self.shading_bbox(path, is_stroke);
 
                         // PdfCraft patch: mesh shadings are sampled only inside `bbox` (and a
                         // pixel around it: texels at a fractional edge look one pixel further).
@@ -1161,18 +1250,11 @@ impl Renderer {
                         // one-triangle meshes on a plan cost 310 full tiles per tile, and the
                         // watchdog gave the page up. A mesh with no triangle on the canvas
                         // paints nothing at all.
-                        if let Some(extent) = encoded.extent {
-                            // An empty extent (no triangle in the area) is `Rect::ZERO`, which
-                            // sits at the canvas origin: test it before intersecting, or a
-                            // 1 × 1 transparent texture would still be painted over the whole
-                            // path (310 of them cost 230 ms per tile).
-                            if extent.width() <= 0.0 || extent.height() <= 0.0 {
+                        if encoded.extent.is_some() {
+                            let Some(area) = mesh_area(bbox, &encoded) else {
                                 return PaintSetup::Nothing;
-                            }
-                            bbox = bbox.intersect(extent.inflate(1.0, 1.0));
-                            if bbox.width() <= 0.0 || bbox.height() <= 0.0 {
-                                return PaintSetup::Nothing;
-                            }
+                            };
+                            bbox = area;
                             extend = peniko::Extend::Pad;
                         }
 
@@ -1267,6 +1349,7 @@ impl Renderer {
                                 in_annotations: false,
                                 knockout: Vec::new(),
                                 erasing: false,
+                                knockout_passes: Vec::new(),
                                 erase_groups: 0,
                                 cur_mask: None,
                                 inside_pattern: true,
@@ -1324,6 +1407,7 @@ impl Renderer {
                             in_annotations: false,
                             knockout: Vec::new(),
                             erasing: false,
+                            knockout_passes: Vec::new(),
                             erase_groups: 0,
                             cur_mask: None,
                             inside_pattern: true,
@@ -1626,6 +1710,7 @@ impl<'a> Device<'a> for Renderer {
                                         in_annotations: false,
                                         knockout: Vec::new(),
                                         erasing: false,
+                                        knockout_passes: Vec::new(),
                                         erase_groups: 0,
                                         inside_pattern: false,
                                         soft_mask_cache: HashMap::default(),
@@ -1709,6 +1794,15 @@ impl<'a> Device<'a> for Renderer {
             self.erase_groups += 1;
             return;
         }
+        // Knockout patch (pdfcraft #4898): an image or group of another pass than the current
+        // one clears what is under its shape instead of painting: its layer, drawn at full
+        // opacity with no soft mask, composites with `Compose::DestOut`. That clears the coverage
+        // of a masked image's or a stencil's mask too, which `knockout_image` leaves alone.
+        let (opacity, mask, layer_blend) = if self.knockout_pass_skips(blend_mode) {
+            (1.0, None, peniko::BlendMode::new(Mix::Normal, Compose::DestOut))
+        } else {
+            (opacity, mask, convert_blend_mode(blend_mode))
+        };
         let settings = *self.ctx.render_settings();
         let force_images_may_have_transparency = mask.is_some()
             || blend_mode != BlendMode::Normal
@@ -1719,7 +1813,7 @@ impl<'a> Device<'a> for Renderer {
                 .unwrap_or(false);
         self.ctx.push_layer(
             None,
-            Some(convert_blend_mode(blend_mode)),
+            Some(layer_blend),
             Some(opacity),
             // TODO: Deduplicate
             mask.map(|m| {
@@ -1785,6 +1879,32 @@ impl<'a> Device<'a> for Renderer {
         self.erasing = false;
         self.erase_groups = 0;
         self.ctx.set_blend_mode(knockout_blend_mode());
+    }
+
+    fn begin_knockout_pass(&mut self, mode: BlendMode) {
+        if self.in_knockout() && !self.erasing {
+            self.knockout_passes.push(KnockoutPass {
+                depth: self.knockout.len(),
+                mode,
+                element_mode: BlendMode::Normal,
+                other_modes: Vec::new(),
+            });
+        }
+    }
+
+    fn end_knockout_pass(&mut self) -> Vec<BlendMode> {
+        // In an erase pass `begin_knockout_pass` started nothing; the pass at this depth belongs
+        // to the knockout group being erased into, and stays.
+        if self.erasing {
+            return Vec::new();
+        }
+        let depth = self.knockout.len();
+        match self.knockout_passes.last() {
+            Some(pass) if pass.depth == depth => {
+                self.knockout_passes.pop().map(|pass| pass.other_modes).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn in_knockout_group(&mut self) -> bool {
@@ -1928,6 +2048,13 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        // Knockout patch (pdfcraft #4898): the blend mode of the element about to paint, for its
+        // pass (an erase pass paints nothing, and its content's modes are not the element's).
+        if !self.erasing
+            && let Some(pass) = self.knockout_pass()
+        {
+            pass.element_mode = blend_mode;
+        }
         // Knockout patch (pdfcraft #2974): inside a knockout group every element replaces what it
         // covers.
         let mode = if self.in_knockout() {
@@ -2022,6 +2149,7 @@ fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, previe
         in_annotations: false,
         knockout: Vec::new(),
         erasing: false,
+        knockout_passes: Vec::new(),
         erase_groups: 0,
         inside_pattern: false,
         cur_mask: None,
@@ -2161,10 +2289,59 @@ fn convert_fill_rule(fill_rule: FillRule) -> Fill {
     }
 }
 
+/// Knockout patch (pdfcraft #4898): one blend-mode pass over a knockout group
+/// (`Device::begin_knockout_pass`).
+struct KnockoutPass {
+    /// `knockout.len()` with the group pushed: its own elements are drawn at this depth.
+    depth: usize,
+    /// The blend mode whose elements paint in this pass.
+    mode: BlendMode,
+    /// The blend mode of the element painting now (`set_blend_mode`).
+    element_mode: BlendMode,
+    /// The other blend modes this pass's elements used, each once (at most one per mode).
+    other_modes: Vec<BlendMode>,
+}
+
+/// Knockout patch (pdfcraft #4898): `paint` at full opacity, for the shape it covers.
+fn shape_of<'a>(paint: &Paint<'a>) -> Paint<'a> {
+    match paint {
+        Paint::Pattern(p) => match p.as_ref() {
+            Pattern::Shading(s) => {
+                let mut s = s.clone();
+                s.opacity = 1.0;
+                Paint::Pattern(Box::new(Pattern::Shading(s)))
+            }
+            Pattern::Tiling(_) => paint.clone(),
+        },
+        Paint::Color(_) => paint.clone(),
+    }
+}
+
+/// Knockout patch (pdfcraft #4898): whether `paint` is a shading.
+fn is_shading(paint: &Paint<'_>) -> bool {
+    matches!(paint, Paint::Pattern(p) if matches!(p.as_ref(), Pattern::Shading(_)))
+}
+
 /// Knockout patch (pdfcraft #2974): how an element of a knockout group is drawn (see
 /// `set_knockout`).
 fn knockout_blend_mode() -> peniko::BlendMode {
     peniko::BlendMode::new(Mix::Normal, Compose::Copy)
+}
+
+/// PdfCraft patch (#3296): the part of `bbox` a shading encoded within it paints. A mesh paints
+/// only around its triangles, and nothing (`None`) when none is in `bbox`; its empty extent is
+/// `Rect::ZERO`, at the canvas origin, so it is tested before intersecting, or a 1 × 1
+/// transparent texture would still be painted over the whole path (310 of them cost 230 ms per
+/// tile). Any other shading paints all of `bbox`.
+fn mesh_area(bbox: Rect, encoded: &EncodedShadingPattern) -> Option<Rect> {
+    let Some(extent) = encoded.extent else {
+        return Some(bbox);
+    };
+    if extent.width() <= 0.0 || extent.height() <= 0.0 {
+        return None;
+    }
+    let area = bbox.intersect(extent.inflate(1.0, 1.0));
+    (area.width() > 0.0 && area.height() > 0.0).then_some(area)
 }
 
 fn convert_blend_mode(blend_mode: BlendMode) -> peniko::BlendMode {

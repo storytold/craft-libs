@@ -42,7 +42,7 @@ mod mq;
 pub mod predictor;
 pub mod runlength;
 
-pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt_within, encode_g4};
+pub use ccitt::{CcittErrorKind, CcittParams, CcittRawOutput, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt_raw, decode_ccitt_within, encode_g4};
 pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, SharedJbig2, decode_jbig2_within, encode_jbig2, encode_jbig2_generic, encode_jbig2_shared};
 
 /// Parameters of the predictors and of LZW, as a PDF `/DecodeParms` dictionary gives them
