@@ -263,7 +263,7 @@ impl<D: Clone + Eq + Hash> DocumentWindows<D> {
             let rect = *rect;
             match layout.floating.iter().find(|w| w.contains(&panel)) {
                 Some(window) if window.rect == rect => {}
-                Some(_) => actions.push(Action::MoveFloating { panel, rect }),
+                Some(_) => actions.push(Action::move_floating(panel, rect)),
                 None => {
                     if !layout.contains(&panel) {
                         actions.push(Action::Open { panel: panel_of(group.id), anchor: None });

@@ -5,7 +5,7 @@ use crate::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PopupHandle, Role, SizeLimits, Sizing,
 };
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
-use craft_behavior::dock::DockEdge;
+use craft_behavior::overlay::Side;
 use craft_behavior::{Metrics, Sense};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
@@ -63,7 +63,7 @@ pub struct Flyout {
     common: Common,
     #[container]
     props: ContainerProps,
-    edge: DockEdge,
+    opens: Side,
     size: Vec2,
     auto_collapse: bool,
     /// The rect the flyout and every resize of it stay inside.
@@ -76,17 +76,17 @@ pub struct Flyout {
 }
 
 impl Flyout {
-    /// A flyout at least `size` for the column on the window edge `edge`, closing when the focus leaves it if
-    /// `auto_collapse`.
-    pub fn new(edge: DockEdge, size: Vec2, auto_collapse: bool) -> Self {
+    /// A flyout at least `size` that opens on the side `opens` of its column, in reading order (`Side::Start` or
+    /// `Side::End`), closing when the focus leaves it if `auto_collapse`.
+    pub fn new(opens: Side, size: Vec2, auto_collapse: bool) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
-        Flyout { common: Common::new(), props, edge, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
+        Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
     }
 
     /// The layer the flyout shows in, its top left at `top_left`: placed by the caller, resizable on every edge but
     /// the one facing the column. The side away from the column mirrors in a right-to-left layout (`rtl`).
     fn overlay(&self, top_left: Pos2, rtl: bool) -> Overlay {
-        let free = if (self.edge == DockEdge::End) == rtl { ResizeEdges::RIGHT } else { ResizeEdges::LEFT };
+        let free = if (self.opens == Side::End) != rtl { ResizeEdges::RIGHT } else { ResizeEdges::LEFT };
         let bounded = self.within.is_finite();
         let least = if bounded { self.least.min(self.within.size().max(Vec2::ZERO)) } else { self.least };
         // A float place as well as the caller's position: the placement pins no edge, so the edge set alone decides

@@ -4,14 +4,14 @@
 //! the dock model's [`Action`], naming groups by an anchor panel. [`DockDropTarget`] runs the same resolution inside
 //! `DropTarget::accept`, refuses what the model would refuse, so the drag session arbitrates between docks and
 //! windows, and returns the mark the ghost paints. Every drag of a group, a window or a column starts through
-//! [`start_group_drag`].
+//! [`start_group_drag`], or [`start_icon_drag`] out of a collapsed column.
 
-use super::{DockSpot, DockTargets, FloatSpace, GroupDrag, PanelDrag, PanelKey};
+use super::{DockSpot, DockTargets, FloatSpace, GroupDrag, PanelDrag, PanelKey, WindowColumn};
 use crate::contract::{Component, Cx, DropMark, DropOperation, DropTarget, Pointer as _};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::env::{AppValues, EnvValue, EnvView, Label};
 use crate::runtime::pointer;
-use craft_behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, PanelPlace, Permissions, Target};
+use craft_behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, Permissions, Target};
 use craft_behavior::{CancelReason, DockSide};
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::hash::Hash;
@@ -49,6 +49,11 @@ pub trait DockDrag<P> {
     fn source(&self) -> Option<Vec2> {
         None
     }
+    /// The size of the icons of a collapsed column the drag started on, whose float lands collapsed with its strip
+    /// under the pointer; `None` for any other drag.
+    fn strip(&self) -> Option<Vec2> {
+        None
+    }
 }
 
 impl<P: Clone + Eq + Hash> DockDrag<P> for PanelDrag {
@@ -68,6 +73,10 @@ impl<P: Clone> DockDrag<P> for GroupDrag<P> {
 
     fn source(&self) -> Option<Vec2> {
         self.source
+    }
+
+    fn strip(&self) -> Option<Vec2> {
+        self.strip
     }
 }
 
@@ -138,7 +147,7 @@ pub(crate) fn to_target<P: Clone>(unit: &DragUnit<P>, target: Target<P>) -> Acti
 
 /// Whether the model takes `action` and changes the arrangement by it: a dry run on a copy, so no mark shows for a
 /// drop that `Layout::apply_with_permissions` would refuse or that moves nothing.
-fn takes<P: Clone + Eq + Hash>(layout: &Layout<P>, action: &Action<P>, permissions: &dyn Fn(&P) -> Permissions) -> bool {
+pub(crate) fn takes<P: Clone + Eq + Hash>(layout: &Layout<P>, action: &Action<P>, permissions: &dyn Fn(&P) -> Permissions) -> bool {
     let mut copy = layout.clone();
     copy.apply_with_permissions(action.clone(), permissions).is_ok() && !copy.same_arrangement(layout)
 }
@@ -165,10 +174,7 @@ fn spot_action<P: Clone + Eq + Hash>(
         return None;
     }
     let moved = moving_panels(layout, unit);
-    let place = |anchor: P, placement: DockPlacement<P>| {
-        let floating = matches!(layout.place(&anchor), Some(PanelPlace::Floating { .. }));
-        placement.allowed_by(permissions(&anchor), floating).then(|| beside(unit, anchor, placement))
-    };
+    let place = |anchor: P, placement: DockPlacement<P>| placement.allowed_by(permissions(&anchor)).then(|| beside(unit, anchor, placement));
     match spot {
         DockSpot::Tab { anchor, index } => {
             let destination = outside(layout, anchor, &moved)?;
@@ -217,15 +223,40 @@ fn spot_action<P: Clone + Eq + Hash>(
 /// The action that floats `unit` in a window under `at`, inside the area of `space`, at [`FloatSpace::size_of`] with
 /// `source` the size the unit had where the drag started, and the outline the ghost paints for it. The pointer sits in
 /// the middle of the window's title row.
-pub fn float_drop<P: Clone + PartialEq>(unit: &DragUnit<P>, space: &FloatSpace<P>, at: Pos2, source: Option<Vec2>) -> DockDropped<P> {
+///
+/// A unit dragged out of a collapsed column (`strip`, the size of the icons the drag started on) floats collapsed:
+/// its strip, under the title row, lands with the pointer in the middle of the title row above it, the window keeps
+/// to the edge of the area nearer the strip, and its rect shows the strip there ([`WindowColumn::around_strip`]);
+/// the outline is the strip's. `rtl` is the layout direction.
+pub fn float_drop<P: Clone + PartialEq>(
+    unit: &DragUnit<P>,
+    space: &FloatSpace<P>,
+    at: Pos2,
+    source: Option<Vec2>,
+    strip: Option<Vec2>,
+    rtl: bool,
+) -> DockDropped<P> {
     let size = space.size_of(unit, source).min(space.area.size());
-    let min = (at - Vec2::new(size.x * 0.5, space.title_row * 0.5)).min(space.area.max - size).max(space.area.min);
-    let rect = Rect::from_min_size(min, size);
-    let action = match unit {
-        DragUnit::Panel(panel) => Action::float(panel.clone(), rect),
-        _ => to_target(unit, Target::float(rect)),
+    let under = |size: Vec2| {
+        let min = (at - Vec2::new(size.x * 0.5, space.title_row * 0.5)).min(space.area.max - size).max(space.area.min);
+        Rect::from_min_size(min, size)
     };
-    DockDropped { action, mark: DropMark::Into(rect) }
+    let (rect, edge, mark) = match strip.filter(|_| !matches!(unit, DragUnit::Window(_))) {
+        Some(strip) => {
+            let shown = under((strip + Vec2::new(0.0, space.title_row)).min(space.area.size()));
+            let (rect, edge) = WindowColumn::around_strip(shown, size, space.area, rtl);
+            (rect, Some(edge), shown)
+        }
+        None => {
+            let rect = under(size);
+            (rect, None, rect)
+        }
+    };
+    let action = match unit {
+        DragUnit::Panel(panel) if edge.is_none() => Action::float(panel.clone(), rect),
+        _ => to_target(unit, Target::float_with_edge(rect, edge)),
+    };
+    DockDropped { action, mark: DropMark::Into(mark) }
 }
 
 /// The action a release of `drag` at `at` makes in the dock `dock`, by the spots of the previous pass; `None` where
@@ -285,7 +316,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         let unit = drag.unit(self.layout)?;
         let window = matches!(unit, DragUnit::Window(_));
         if pointer::frame(self.ctx).mods.cmd {
-            return if window { None } else { self.float(&unit, at, drag.source()) };
+            return if window { None } else { self.float(&unit, at, drag.source(), drag.strip()) };
         }
         if window && !self.title_bar_docks {
             return None;
@@ -302,13 +333,13 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         if window || !self.float_on_empty {
             return None;
         }
-        self.float(&unit, at, drag.source())
+        self.float(&unit, at, drag.source(), drag.strip())
     }
 
     /// The unit floated under `at`, when it may float and the model takes it; `source` is its size where the drag
-    /// started.
-    fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>) -> Option<DockDropped<P>> {
-        let floated = float_drop(unit, self.space?, at, source);
+    /// started, `strip` the size of the icons it started on ([`float_drop`]).
+    fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>, strip: Option<Vec2>) -> Option<DockDropped<P>> {
+        let floated = float_drop(unit, self.space?, at, source, strip, self.rtl);
         ((self.permissions)(unit.lead()).floatable && takes(self.layout, &floated.action, self.permissions)).then_some(floated)
     }
 }
@@ -391,7 +422,19 @@ where
         None => DragPreview::None,
     };
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source, started }, preview);
+    cx.start_drag(GroupDrag { unit, active, source, strip: None, started }, preview);
+}
+
+/// Starts the drag of `unit` out of a collapsed column, from its icons of size `strip`, whose shown panel is
+/// `active`: the ghost is a frame of that size with `label`, and a float of the unit lands collapsed with its strip
+/// under the pointer ([`float_drop`]).
+pub fn start_icon_drag<P, C>(cx: &mut Cx<'_, C>, unit: DragUnit<P>, active: PanelKey, strip: Vec2, label: Label)
+where
+    P: Clone + Send + Sync + 'static,
+    C: Component,
+{
+    let started = started(&cx.env);
+    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), started }, DragPreview::frame(strip, Some(label)));
 }
 
 /// Ends a running tab or group drag that started on `shown`'s dock under another revision: another arrangement

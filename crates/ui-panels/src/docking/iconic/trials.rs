@@ -3,12 +3,14 @@
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use crate::contract::{Bind, Show as _, ShowContainer as _};
-use crate::docking::{DockHeights, DockSizes, DragUnit, FlyoutResize, GroupAt, GroupGrip, IconicColumn, PanelKey, PanelSpec};
+use crate::docking::{DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupGrip, IconicColumn, PanelKey, PanelSpec};
 use crate::sections::Panel;
 use crate::style::StyleCx;
 use crate::testing::memory::global;
 use crate::testing::{Fixture, trial};
+use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
+use craft_behavior::overlay::Side;
 use egui::{Pos2, Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -145,6 +147,7 @@ impl Flyouts {
             let groups = RefCell::new(Vec::new());
             let output = IconicColumn::new("Panels", global("iconic column", "flyouts"), &column, Bind::bound(&mut now), &named)
                 .edge(edge)
+                .opens(if right { Side::Start } else { Side::End })
                 .within(within)
                 .show_flyouts_at(ui, place, |group, at, ui, _| {
                     let GroupAt::Show(rect) = at else { return None };
@@ -335,4 +338,41 @@ fn a_flyout_with_an_offset_in_a_short_viewport_stays_inside_and_resizes_its_widt
         assert!(near(after.width(), before.width() + 60.0), "{height}: {before:?} -> {after:?}");
         assert!(bounds.contains_rect(after), "{height}: {after:?}");
     }
+}
+
+/// The icon groups take drops as an expanded column's groups do: the middle of a group joins its tabs, the separator
+/// between two groups is the seam between them and wins there, the top of the first group stacks above it, and the
+/// bottom of the last group, down through the column's empty foot, stacks below it.
+#[trial]
+fn icon_groups_take_the_drops_of_an_expanded_columns_groups() {
+    let dock = global("iconic column", "spots");
+    let probes: Rc<RefCell<Vec<Pos2>>> = Rc::default();
+    let found: Rc<RefCell<Vec<Option<DockSpot<u8>>>>> = Rc::default();
+    let (asked, seen) = (Rc::clone(&probes), Rc::clone(&found));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
+        column.iconic = true;
+        let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+        IconicColumn::new("Panels", dock, &column, Bind::kept(), &named).within(screen()).show_flyouts_at(ui, place, |_, _, _, _| None);
+        // The registry a drop reads is the previous pass's.
+        *seen.borrow_mut() = asked.borrow().iter().map(|at| DockTargets::<u8>::resolve(ui.ctx(), dock, *at).map(|(spot, _)| spot)).collect();
+    });
+    fixture.room(SCREEN).settle();
+    let icon = |label: &str| fixture.by_label(label).expect("the panel's icon").rect;
+    let (brushes, layers, swatches) = (icon("Brushes"), icon("Layers"), icon("Swatches"));
+    let x = brushes.center().x;
+    *probes.borrow_mut() = vec![
+        Pos2::new(x, brushes.bottom()),
+        Pos2::new(x, (layers.bottom() + swatches.top()) / 2.0),
+        Pos2::new(x, brushes.top() + 1.0),
+        Pos2::new(x, swatches.center().y),
+        Pos2::new(x, swatches.bottom() + 2.0 * swatches.height()),
+    ];
+    fixture.idle(2);
+    let found = found.borrow().clone();
+    assert_eq!(found[0], Some(DockSpot::group(1, DockSide::Center)), "the middle of a group joins its tabs");
+    assert_eq!(found[1], Some(DockSpot::seam(1, 3)), "the separator is the seam between the groups");
+    assert_eq!(found[2], Some(DockSpot::group(1, DockSide::Top)), "the first group's top stacks above it");
+    assert_eq!(found[3], Some(DockSpot::group(3, DockSide::Center)), "a one-icon group keeps its middle for the join");
+    assert_eq!(found[4], Some(DockSpot::group(3, DockSide::Bottom)), "the foot under the icons stacks below the last group");
 }

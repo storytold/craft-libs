@@ -39,7 +39,9 @@ pub enum DockEvent<P> {
     },
 }
 
-/// Which panels the host hides. Protected panels always stay.
+/// Which panels the host hides. Protected panels always stay. While the shell hides the panels and keeps the tools
+/// (Shift+Tab), the panels `Except` names stay and every other panel hides; while it hides the dock (Tab), every panel
+/// hides.
 #[non_exhaustive]
 pub enum HidePanels<'a, P> {
     /// Hides none.
@@ -67,7 +69,7 @@ pub struct FloatSpace<P> {
     pub area: Rect,
     /// Room between the area's top-left corner and a unit a command floats.
     pub inset: f32,
-    /// The height of a floating window's title row (`DockSizes::bar`), which a drop keeps under the pointer.
+    /// The height of a floating window's title row (`DockSizes::title_row`), which a drop keeps under the pointer.
     pub title_row: f32,
     /// The size a unit floats at when neither its panel nor where it came from gives one. Its height is also the
     /// most a panel, group or column floats at.
@@ -85,7 +87,7 @@ impl<P: PartialEq> FloatSpace<P> {
         FloatSpace {
             area,
             inset: sizes.cascade_inset,
-            title_row: sizes.bar,
+            title_row: sizes.title_row,
             default_size: sizes.float_size,
             panels: Vec::new(),
             side_edge_zones: false,

@@ -1,7 +1,7 @@
 //! The widths of dock columns and the heights of the groups stacked in one.
 
 use crate::contract::SizeLimits;
-use crate::docking::{DockHeights, DockSizes, PanelSpec};
+use crate::docking::{DockGrid, DockHeights, DockSizes, PanelSpec};
 use craft_behavior::dock::Column;
 use egui::{Pos2, Rect};
 
@@ -27,6 +27,14 @@ pub fn fit_widths(columns: &[(f32, Option<f32>)], room: f32) -> Vec<f32> {
     let bounded: Vec<(f32, (f32, f32))> =
         columns.iter().map(|&(width, floor)| (width, (floor.map_or(width, |floor| floor.min(width)), width))).collect();
     scale_widths(&bounded, room)
+}
+
+/// The grid and steps of a stepped column: its [`Column::steps`] and the [`DockGrid`] of its first panel that
+/// declares a valid one. `None` for a column without steps or whose panels declare none, which sizes as any other.
+pub fn stepped<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> Option<(DockGrid, u16)> {
+    let steps = column.steps?;
+    let grid = column.panels().find_map(|panel| spec(panel).grid.filter(|grid| grid.valid()))?;
+    Some((grid, grid.clamp(steps)))
 }
 
 /// Column widths that add up to `total` as far as their bounds allow. Each entry is `(width, (lo, hi))`. The

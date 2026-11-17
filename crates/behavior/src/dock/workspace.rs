@@ -9,9 +9,11 @@ use std::{collections::HashSet, hash::Hash};
 use super::{
     DockSide,
     action::{Action, DockPlacement, Location},
-    groups::PanelPlace,
+    edit::tree_panels,
+    groups::{Column, PanelPlace, Target},
     layout::Layout,
     limits::MAX_PANELS,
+    node::Node,
     policy::{DockError, Permissions},
 };
 
@@ -65,8 +67,9 @@ impl<P> Default for Workspace<P> {
 }
 
 impl<P> Workspace<P> {
-    /// The format version written to files.
-    pub const VERSION: u32 = 3;
+    /// The format version written to files. Version 4 saves a floating window as one column; older floating
+    /// windows load as columns (see [`Floating`](super::Floating)).
+    pub const VERSION: u32 = 4;
 
     /// A workspace of `layout`, with no hidden panels.
     pub fn new(layout: Layout<P>) -> Self {
@@ -211,9 +214,9 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         let allowed = layout
             .location(panel)
             .ok()
-            .and_then(|location| location.anchor.map(|anchor| location.placement.allowed_by(permissions(&anchor), floats(&layout, &anchor))))
+            .and_then(|location| location.anchor.map(|anchor| location.placement.allowed_by(permissions(&anchor))))
             .unwrap_or(true);
-        if !allowed {
+        if !allowed || layout.breaks_columns_beyond(&self.layout, permissions) {
             return Ok(false);
         }
         layout.apply(Action::Activate { panel: panel.clone() })?;
@@ -281,7 +284,10 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
     /// Registered panels in `default` that are neither shown nor hidden go to their default place, or to `hidden` when that place cannot be rebuilt.
     /// A registered panel that `permissions` says cannot close, such as a protected canvas, is
     /// always shown: at its recorded or default place, else at the outer edge of the docked
-    /// area. Pass the panels' own permissions, not [`Permissions::locked`] ones.
+    /// area. A layout that breaks the column rights is repaired: a collapsed column holding a panel that does not
+    /// collapse ([`Permissions::collapses`]) expands, and a panel that shares no column
+    /// ([`Permissions::shares_column`]) moves to a column of its own. Pass the panels' own permissions, not
+    /// [`Permissions::locked`] ones.
     /// `hidden` keeps at most [`MAX_PANELS`] entries, dropping the oldest unregistered ones first.
     pub fn reconcile(&mut self, registered: impl Fn(&P) -> bool, permissions: impl Fn(&P) -> Permissions, default: &Workspace<P>) {
         if self.validate().is_err() {
@@ -329,6 +335,7 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
                 self.hidden.retain(|(p, _)| p != &panel);
             }
         }
+        self.repair_columns(&permissions);
         let mut excess = self.hidden.len().saturating_sub(MAX_PANELS);
         self.hidden.retain(|(p, _)| {
             let drop = excess > 0 && !registered(p);
@@ -337,6 +344,59 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         });
         self.hidden.truncate(MAX_PANELS);
     }
+}
+
+impl<P: Clone + Eq + Hash> Workspace<P> {
+    /// Moves each panel that shares no column but has company to a column of its own: a new dock column beside its
+    /// column, a new window over its window, or a frame beside its node of the docked tree. Then expands each
+    /// collapsed column that holds a panel that does not collapse. A repair the layout refuses leaves it as it was.
+    fn repair_columns(&mut self, permissions: &impl Fn(&P) -> Permissions) {
+        let lonely: Vec<P> = self.layout.panels().into_iter().filter(|p| !permissions(p).shares_column).cloned().collect();
+        for panel in lonely {
+            let Some(place) = self.layout.place(&panel) else { continue };
+            let company = match &place {
+                PanelPlace::Node(_) => self.layout.node_of(&place).map(|node| tree_panels(node).into_iter().cloned().collect()),
+                _ => self.layout.column(&place).map(|column| column.panels().cloned().collect::<Vec<P>>()),
+            };
+            let Some(anchor) = company.unwrap_or_default().into_iter().find(|p| p != &panel) else { continue };
+            let to = match place {
+                PanelPlace::Dock { .. } => Target::At { anchor, placement: DockPlacement::Column { after: false } },
+                PanelPlace::Floating { window, .. } => match self.layout.floating.get(window) {
+                    Some(window) => Target::Float { rect: window.rect, edge: window.edge },
+                    None => continue,
+                },
+                PanelPlace::Node(_) => Target::At { anchor, placement: DockPlacement::Split(DockSide::Start) },
+            };
+            let mut layout = self.layout.clone();
+            if layout.apply_inner(Action::MovePanel { panel, to }, &|p| permissions(p).is_protected()).is_ok() && layout.validate().is_ok() {
+                self.layout = layout;
+            }
+        }
+        let windows = self.layout.floating.iter_mut().map(|w| &mut w.column);
+        let docked = self.layout.root.iter_mut().flat_map(dock_columns_mut);
+        for column in windows.chain(docked) {
+            if column.iconic && column.panels().any(|p| !permissions(p).collapses) {
+                column.iconic = false;
+            }
+        }
+    }
+}
+
+/// The columns of every dock of a docked tree.
+fn dock_columns_mut<P>(root: &mut Node<P>) -> Vec<&mut Column<P>> {
+    let mut out = Vec::new();
+    let mut visit = vec![root];
+    while let Some(node) = visit.pop() {
+        match node {
+            Node::Split { first, second, .. } => {
+                visit.push(second);
+                visit.push(first);
+            }
+            Node::Dock { columns, .. } => out.extend(columns.iter_mut()),
+            Node::Tabs { .. } | Node::Stack { .. } => {}
+        }
+    }
+    out
 }
 
 /// Whether `panel` is in a floating window of `layout`.

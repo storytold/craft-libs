@@ -4,7 +4,7 @@
 //! previous pass's registry, because a drop is decided against what was on screen when the pointer moved. Every
 //! zone is a rect. A spot names a group by an anchor panel, as the dock model does.
 
-use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
+use super::{DragUnit, PanelKey, PanelSpec, scale_widths, stepped, width_bounds};
 use crate::contract::DropMark;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::StyleCx;
@@ -47,6 +47,9 @@ pub struct DockSizes {
     pub strip: f32,
     /// The height of a column bar (a small control).
     pub bar: f32,
+    /// The height of a floating window's title row, which is the bar of the column the window holds: every height of
+    /// a window's body or content is the window's height less this.
+    pub title_row: f32,
     /// The least body size of a column's group and the least width of an expanded column (the panel header height).
     pub least: f32,
     /// How thick a divider is across its boundary (the least hit size).
@@ -84,6 +87,7 @@ impl DockSizes {
             least_pane: size.pane.least,
             strip: size.panel_header,
             bar: size.control.sm,
+            title_row: super::floating::title_row(cx.tokens),
             least: size.panel_header,
             reach: size.hit.target,
             step: cx.control().gap,
@@ -100,18 +104,25 @@ impl DockSizes {
     }
 
     /// The width an expanded column's panels draw at, whether the column is expanded or iconic (its flyout and a
-    /// floated iconic column use it): the stored width kept within the panels' limits.
+    /// floated iconic column use it): the stored width kept within the panels' limits, or a stepped column's width
+    /// at its steps ([`stepped`]).
     pub fn expanded_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
+        if let Some((grid, steps)) = stepped(column, spec) {
+            return grid.width(steps);
+        }
         let (lo, hi) = self.width_bounds(column, spec);
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
     /// The bounds [`width`](Self::width) keeps a column in: an expanded column's [`width_bounds`](Self::width_bounds);
-    /// an iconic column's rail width up to the width it expands to.
+    /// a stepped one's width at one step up to its width at all its grid's columns; an iconic column's rail width up
+    /// to the width it expands to.
     pub fn shown_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
         if column.iconic {
             // Widening an iconic column stops at the width it expands to.
             (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
+        } else if let Some((grid, _)) = stepped(column, spec) {
+            (grid.width(1), grid.width(grid.most))
         } else {
             self.width_bounds(column, spec)
         }
@@ -129,7 +140,8 @@ impl DockSizes {
 
     /// The actions that give the dock on `side` of `layout` the total width `total`, its columns scaled within
     /// their [`shown_bounds`](Self::shown_bounds) ([`scale_widths`]): [`Action::ResizeColumn`] for an expanded column,
-    /// [`Action::ResizeIconic`] for an iconic one, which keeps its expanded width. Apply them together
+    /// [`Action::ResizeIconic`] for an iconic one, which keeps its expanded width. A stepped column keeps its width,
+    /// which only its steps set. Apply them together
     /// ([`Workspace::apply_all`](craft_behavior::dock::Workspace::apply_all)). Empty when the side has no dock or the
     /// columns already add up to the width; a column without panels keeps its width.
     pub fn resize_side<P: Clone + Eq + std::hash::Hash>(
@@ -143,12 +155,19 @@ impl DockSizes {
             Some(Node::Dock { columns, .. }) => columns,
             _ => return Vec::new(),
         };
-        let current: Vec<(f32, (f32, f32))> = columns.iter().map(|column| (self.width(column, spec), self.shown_bounds(column, spec))).collect();
+        let fixed = |column: &Column<P>| !column.iconic && stepped(column, spec).is_some();
+        let current: Vec<(f32, (f32, f32))> = columns
+            .iter()
+            .map(|column| {
+                let width = self.width(column, spec);
+                (width, if fixed(column) { (width, width) } else { self.shown_bounds(column, spec) })
+            })
+            .collect();
         let widths = scale_widths(&current, total);
         columns
             .iter()
             .zip(current.iter().zip(widths))
-            .filter(|(_, ((width, _), scaled))| (scaled - width).abs() >= 0.01)
+            .filter(|(column, ((width, _), scaled))| !fixed(*column) && (scaled - width).abs() >= 0.01)
             .filter_map(|(column, (_, width))| {
                 let panel = column.groups.iter().find_map(|group| group.panels.first())?.clone();
                 Some(if column.iconic { Action::resize_iconic(panel, Some(width)) } else { Action::resize_column(panel, width) })
@@ -157,9 +176,15 @@ impl DockSizes {
     }
 
     /// The `(width, floor)` of every column, for [`fit_widths`](super::fit_widths): an expanded column shrinks down to
-    /// its least width, an iconic one keeps its width.
+    /// its least width, an iconic or stepped one keeps its width.
     pub fn natural<P>(&self, columns: &[Column<P>], spec: &dyn Fn(&P) -> PanelSpec) -> Vec<(f32, Option<f32>)> {
-        columns.iter().map(|column| (self.width(column, spec), (!column.iconic).then(|| self.width_bounds(column, spec).0.max(1.0)))).collect()
+        columns
+            .iter()
+            .map(|column| {
+                let keeps = column.iconic || stepped(column, spec).is_some();
+                (self.width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
+            })
+            .collect()
     }
 }
 
@@ -413,7 +438,8 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
 }
 
 /// What a drag of a whole group, window or column carries, beside `PanelDrag` for one tab. Every such drag starts
-/// through [`start_group_drag`](super::start_group_drag), so the type is `non_exhaustive` and only the crate builds it.
+/// through [`start_group_drag`](super::start_group_drag) or [`start_icon_drag`](super::start_icon_drag), so the type
+/// is `non_exhaustive` and only the crate builds it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupDrag<P> {
@@ -422,6 +448,9 @@ pub struct GroupDrag<P> {
     /// The size of the group, window or column where the drag started, which a float of it takes; `None` where
     /// that size is not the unit's own (an iconic column's cells).
     pub source: Option<Vec2>,
+    /// The size of the icons the drag started on, for a unit dragged out of a collapsed column
+    /// ([`start_icon_drag`](super::start_icon_drag)): a float of it lands collapsed, its strip under the pointer.
+    pub strip: Option<Vec2>,
     /// The panel the unit shows, for the drag's preview.
     pub active: PanelKey,
     /// The arrangement the drag started on, when it started in a dock area.

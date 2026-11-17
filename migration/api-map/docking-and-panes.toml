@@ -599,7 +599,7 @@ name = "GroupGrip"
 old = ""
 new = "craft_ui::docking::GroupGrip"
 status = "replaced"
-note = "The legacy drag bar of a tab group; a double click minimizes the group and a drag starts through `start_group_drag` with a `DragUnit`, carrying a `GroupDrag`."
+note = "The legacy drag bar of a tab group; a double click minimizes the group and a drag starts through `start_group_drag` with a `DragUnit`, carrying a `GroupDrag`. `GroupGrip::icons(true)`, the bar of a collapsed column, starts it through `start_icon_drag`, so a float of the unit lands collapsed under the pointer."
 
 [[type]]
 name = "section_heights"
@@ -638,6 +638,13 @@ status = "replaced"
 note = "A column of a side dock: the column bar over the stacked groups. Replaces the hand-rolled column bar, collapse button and group stacking of the dock renderer."
 
 [[type]]
+name = "ColumnArrow"
+old = ""
+new = "craft_ui::docking::ColumnArrow"
+status = "replaced"
+note = "What a column's double arrow does, which names it and sets where it points: `Collapse`; `Steps(n)` for a stepped column whose panels do not collapse, which switches between one and two steps; `Fixed` for a column that neither collapses nor has steps, which shows no double arrow and no collapse row in its menu. `ColumnArrow::of(&Column<P>, spec, collapses)`; `DockColumn::arrow` and `WindowColumn::arrow` take it. Replaces `ToolRail`'s column toggle."
+
+[[type]]
 name = "IconicColumn"
 old = ""
 new = "craft_ui::docking::IconicColumn"
@@ -649,7 +656,7 @@ name = "Flyout"
 old = ""
 new = "craft_ui::docking::Flyout"
 status = "replaced"
-note = "The popup beside an iconic column, built on `Overlay::popover` and hung from the icon's part."
+note = "The popup beside an iconic column, built on `Overlay::popover` and hung from the icon's part; `Flyout::new(opens: Side, size, auto_collapse)` opens it on that side of the column."
 
 # Drop resolution (dock-drop-a).
 
@@ -1384,14 +1391,14 @@ name = "WindowMenuRows"
 old = ""
 new = "craft_ui::docking::WindowMenuRows"
 status = "replaced"
-note = "The Window menu's check rows over a layout: `WindowMenuRows::new(&Layout<P>, &dyn DockPanels<P>, &[P]).show(ui) -> WindowMenuRowsOutput<P> { action: Option<Action<P>> }`. Replaces a menu's hand-written panel rows."
+note = "The Window menu's check rows over a layout: `WindowMenuRows::new(&Layout<P>, &dyn DockPanels<P>, &[P]).flyout(open).show(ui) -> WindowMenuRowsOutput<P> { action: Option<Action<P>>, flyout: Option<Option<P>> }`; a panel in a collapsed column opens and closes its flyout through `flyout`. Replaces a menu's hand-written panel rows."
 
 [[type]]
 name = "WindowMenuRowsOutput"
 old = ""
 new = "craft_ui::docking::WindowMenuRowsOutput"
 status = "replaced"
-note = "What `WindowMenuRows::show` reports: the action the picked row asks for."
+note = "What `WindowMenuRows::show` reports: the action the picked row asks for, or the open flyout it asks for when its panel is in a collapsed column."
 
 [[type]]
 name = "StackSections"

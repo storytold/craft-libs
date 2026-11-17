@@ -236,3 +236,44 @@ fn a_saved_native_window_that_no_longer_parses_loads_with_default_placement() {
     let back: Layout<u32> = serde_json::from_str(&serde_json::to_string(&placed).unwrap()).unwrap();
     assert_eq!(back, placed);
 }
+
+/// Floating windows saved by format v3 load as columns: a tree split side by side becomes one window per part, side
+/// by side within the saved rect, the first keeping the saved id; stacked frames and accordion sections become groups
+/// (a closed section a minimized group), and a minimized window minimizes every group. The v4 shape round-trips.
+#[test]
+fn a_v3_floating_tree_loads_as_one_column_window_per_side_by_side_part() {
+    let saved = r#"{
+        "root": {"Tabs": {"panels": [1], "active": 0}},
+        "floating": [
+            {"id": 7, "rect": [0.0, 0.0, 400.0, 300.0], "root": {"Split": {"axis": "X", "size": {"Ratio": 0.25},
+                "first": {"Tabs": {"panels": [2, 3], "active": 1}},
+                "second": {"Split": {"axis": "Y", "size": {"Ratio": 0.5},
+                    "first": {"Tabs": {"panels": [4], "active": 0}},
+                    "second": {"Stack": {"entries": [{"panel": 5, "open": false, "height": 80.0}, {"panel": 6, "open": true, "height": null}]}}}}}}},
+            {"id": 8, "rect": [500.0, 0.0, 200.0, 300.0], "minimized": true, "root": {"Split": {"axis": "Y", "size": {"Ratio": 0.5},
+                "first": {"Tabs": {"panels": [9], "active": 0}}, "second": {"Tabs": {"panels": [10], "active": 0}}}}}
+        ]
+    }"#;
+    let layout: Layout<u32> = serde_json::from_str(saved).unwrap();
+    layout.validate().unwrap();
+    let [left, right, stacked] = layout.floating.as_slice() else { panic!("{:?}", layout.floating) };
+    assert_eq!((left.id, stacked.id), (7, 8), "the first part keeps the saved id");
+    assert!(right.id != 7 && right.id != 8);
+    let whole = area(0.0, 0.0, 400.0, 300.0);
+    assert_eq!((left.rect.left(), left.rect.right(), right.rect.right()), (whole.left(), right.rect.left(), whole.right()), "side by side");
+    assert!(left.rect.width() < right.rect.width(), "each part takes its share");
+    assert_eq!((left.rect.height(), right.rect.height()), (whole.height(), whole.height()));
+
+    let members = |window: &Floating<u32>| window.groups().iter().map(|g| (g.panels.clone(), g.minimized)).collect::<Vec<_>>();
+    assert_eq!(members(left), [(vec![2, 3], false)]);
+    assert_eq!(left.groups()[0].active, 1);
+    assert_eq!(members(right), [(vec![4], false), (vec![5], true), (vec![6], false)]);
+    assert_eq!(right.groups()[1].height, Some(80.0), "a section keeps its height");
+    assert_eq!(members(stacked), [(vec![9], true), (vec![10], true)]);
+
+    let written = serde_json::to_value(&layout).unwrap();
+    assert!(written["floating"][1].get("column").is_some(), "{written}");
+    let back: Layout<u32> = serde_json::from_str(&written.to_string()).unwrap();
+    assert_eq!(back, layout);
+    assert_eq!(back.floating.iter().map(|w| w.id).collect::<Vec<_>>(), layout.floating.iter().map(|w| w.id).collect::<Vec<_>>());
+}

@@ -19,6 +19,13 @@ pub struct Permissions {
     /// Other panels may split this panel's frame (`DockPlacement::Split` with a side zone).
     /// Outer-edge frames (`DockPlacement::Edge`) are not splits of the anchor.
     pub accepts_splits: bool,
+    /// The panel's column may collapse to icons: refused are `SetIconic` to icons on a column holding it, and a
+    /// move of it into a collapsed column.
+    pub collapses: bool,
+    /// Other groups may share the panel's column, and the panel may join a column or group that holds other
+    /// panels: refused are tab, center, group and seam placements across that boundary in either direction, while a
+    /// new column, a new dock and a float stay allowed. A toolbar takes its own column.
+    pub shares_column: bool,
 }
 
 impl Default for Permissions {
@@ -28,13 +35,14 @@ impl Default for Permissions {
 }
 
 impl Permissions {
-    /// Every right: the panel moves, floats, closes and takes tabs and splits.
-    pub const ALL: Self = Self { movable: true, floatable: true, closable: true, accepts_tabs: true, accepts_splits: true };
+    /// Every right: the panel moves, floats, closes, takes tabs and splits, collapses and shares its column.
+    pub const ALL: Self =
+        Self { movable: true, floatable: true, closable: true, accepts_tabs: true, accepts_splits: true, collapses: true, shares_column: true };
 
     /// A document canvas: it stays docked and open, and takes neither tabs nor side splits.
     /// A group dropped on it floats there. An application that opens panels beside its canvas
     /// uses `Permissions::PROTECTED.accepts_splits(true)`.
-    pub const PROTECTED: Self = Self { movable: false, floatable: false, closable: false, accepts_tabs: false, accepts_splits: false };
+    pub const PROTECTED: Self = Self { movable: false, floatable: false, closable: false, accepts_tabs: false, accepts_splits: false, ..Self::ALL };
 
     /// These permissions with [`Self::movable`] set to `movable`.
     pub const fn movable(mut self, movable: bool) -> Self {
@@ -66,13 +74,25 @@ impl Permissions {
         self
     }
 
+    /// These permissions with [`Self::collapses`] set to `collapses`.
+    pub const fn collapses(mut self, collapses: bool) -> Self {
+        self.collapses = collapses;
+        self
+    }
+
+    /// These permissions with [`Self::shares_column`] set to `shares_column`.
+    pub const fn shares_column(mut self, shares_column: bool) -> Self {
+        self.shares_column = shares_column;
+        self
+    }
+
     /// A canvas: it can neither move, close nor take tabs. `accepts_splits` and `floatable`
     /// do not matter, so a canvas that opens panels beside it still counts.
     pub fn is_protected(self) -> bool {
         !self.movable && !self.closable && !self.accepts_tabs
     }
 
-    /// Lock Workspace: nothing moves, floats or closes; tab and split drops keep their policy.
+    /// Lock Workspace: nothing moves, floats or closes; tab and split drops and the column rights keep their policy.
     /// A workspace applies this when it is locked; an application with a global lock preference
     /// applies it in its own permissions callback.
     pub fn locked(self) -> Self {
