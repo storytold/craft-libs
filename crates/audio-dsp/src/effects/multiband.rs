@@ -343,6 +343,8 @@ pub struct MultibandCompressor {
     rel: [f32; MB_BANDS],
     lim_rel: f32,
     counter: u32,
+    /// The crossovers were last designed during a ramp, so the end of the ramp needs a design.
+    xo_pending: bool,
 }
 
 const Q_BW: f64 = std::f64::consts::FRAC_1_SQRT_2;
@@ -367,6 +369,7 @@ impl MultibandCompressor {
             rel: [0.0; MB_BANDS],
             lim_rel: 0.0,
             counter: 0,
+            xo_pending: false,
         };
         s.apply_params(true);
         s
@@ -408,6 +411,7 @@ impl MultibandCompressor {
             self.band_gain.iter_mut().for_each(Smoothed::snap);
             self.out.snap();
             self.update_xo();
+            self.xo_pending = false;
         }
     }
 
@@ -453,6 +457,7 @@ impl AudioEffect for MultibandCompressor {
         self.band_gain.iter_mut().for_each(Smoothed::snap);
         self.out.snap();
         self.update_xo();
+        self.xo_pending = false;
         self.state.iter_mut().for_each(|s| *s = XoState::default());
         self.env.iter_mut().for_each(|e| *e = [0.0; MB_BANDS]);
         self.lim_env = 0.0;
@@ -475,8 +480,12 @@ impl AudioEffect for MultibandCompressor {
         }
         let mut bands = [[0.0f64; MB_BANDS]; MB_MAX_CH];
         for i in 0..n {
-            if self.counter == 0 && self.xo.iter().any(Smoothed::is_smoothing) {
-                self.update_xo();
+            if self.counter == 0 {
+                let smoothing = self.xo.iter().any(Smoothed::is_smoothing);
+                if smoothing || self.xo_pending {
+                    self.update_xo();
+                }
+                self.xo_pending = smoothing;
             }
             self.counter = (self.counter + 1) % 16;
             for x in &mut self.xo {
@@ -634,5 +643,27 @@ impl AudioEffect for TubeCompressor {
                 buf[i] = (TUBE_K * y).tanh() / TUBE_K * o;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crossovers_reach_their_target_after_a_ramp() {
+        let sr = 48_000.0;
+        let mut e = MultibandCompressor::new(sr, 2);
+        assert!(e.set_param("xo1", 20.0));
+        e.reset();
+        assert!(e.set_param("xo1", 1000.0));
+        let mut l = vec![0.0f32; 4096];
+        let mut r = vec![0.0f32; 4096];
+        for _ in 0..4 {
+            e.process(&mut [&mut l, &mut r]);
+        }
+        let f = 2f64.powf(e.crossovers()[0].log2() as f64);
+        assert_eq!(e.xc.lp[0], Coeffs::design(FilterType::LowPass, sr as f64, f, Q_BW, 0.0));
+        assert_eq!(e.xc.hp[0], Coeffs::design(FilterType::HighPass, sr as f64, f, Q_BW, 0.0));
     }
 }

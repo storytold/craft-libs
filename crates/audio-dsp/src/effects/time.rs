@@ -137,13 +137,16 @@ const MAX_SIZE_SCALE: f32 = 2.0;
 /// Output tap signs (left, right) for decorrelated stereo.
 const SIGN_L: [f32; FDN] = [1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0];
 const SIGN_R: [f32; FDN] = [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+/// Input signs for the side signal, (SIGN_L − SIGN_R) / 2.
+const SIGN_SIDE: [f32; FDN] = [0.0, -1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 0.0];
 
 fn size_scale(size_pct: f32) -> f32 {
     0.35 + (MAX_SIZE_SCALE - 0.35) * size_pct / 100.0
 }
 
 /// 8×8 feedback-delay-network reverb with a Householder feedback matrix, per-line RT60 gains,
-/// one-pole HF damping in each loop, pre-delay, size and dry/wet mix.
+/// one-pole HF damping in each loop, pre-delay, size and dry/wet mix. With two or more channels
+/// the side signal (even channels minus odd channels) feeds the network as well as the mid.
 pub struct Reverb {
     pv: ParamValues,
     sr: f32,
@@ -157,6 +160,8 @@ pub struct Reverb {
     rt60: Smoothed,
     mix: Smoothed,
     pre: Vec<f32>,
+    /// Pre-delay of the side signal, written at `pre_w` with `pre`.
+    pre_side: Vec<f32>,
     pre_w: usize,
     pre_len: Smoothed,
     counter: u32,
@@ -189,6 +194,7 @@ impl Reverb {
             rt60: sm(1.0),
             mix: sm(0.0),
             pre: vec![0.0; pre_len],
+            pre_side: vec![0.0; pre_len],
             pre_w: 0,
             pre_len: Smoothed::with_ms(1.0, sample_rate, 100.0),
             counter: 0,
@@ -239,6 +245,7 @@ impl AudioEffect for Reverb {
     fn reset(&mut self) {
         self.lines.iter_mut().for_each(|l| l.iter_mut().for_each(|v| *v = 0.0));
         self.pre.iter_mut().for_each(|v| *v = 0.0);
+        self.pre_side.iter_mut().for_each(|v| *v = 0.0);
         self.lp = [0.0; FDN];
         self.w = 0;
         self.pre_w = 0;
@@ -274,16 +281,20 @@ impl AudioEffect for Reverb {
             let mix = self.mix.tick();
             let pd = self.pre_len.tick();
 
-            let mut mono = 0.0;
-            for ch in channels.iter() {
+            let (mut mono, mut side) = (0.0, 0.0);
+            for (c, ch) in channels.iter().enumerate() {
                 mono += ch[i];
+                side += if c % 2 == 0 { ch[i] } else { -ch[i] };
             }
             mono /= nch as f32;
+            side = if nch >= 2 { side / nch as f32 } else { 0.0 };
             self.pre[self.pre_w] = mono;
-            let input = match predelay {
-                Some(delay) => read_prepared(&self.pre, self.pre_w, delay),
-                None => read_frac(&self.pre, self.pre_w, pd),
+            self.pre_side[self.pre_w] = side;
+            let (input, side_in) = match predelay {
+                Some(delay) => (read_prepared(&self.pre, self.pre_w, delay), read_prepared(&self.pre_side, self.pre_w, delay)),
+                None => (read_frac(&self.pre, self.pre_w, pd), read_frac(&self.pre_side, self.pre_w, pd)),
             };
+            let side_in = side_in * std::f32::consts::SQRT_2;
             self.pre_w = if self.pre_w + 1 == pre_len { 0 } else { self.pre_w + 1 };
 
             let mut v = [0.0f32; FDN];
@@ -297,7 +308,7 @@ impl AudioEffect for Reverb {
             let (mut wl, mut wr) = (0.0, 0.0);
             for k in 0..FDN {
                 let fbk = v[k] - hh * sum;
-                self.lines[k][self.w] = flush32(fbk + input * 0.5);
+                self.lines[k][self.w] = flush32(fbk + (input + SIGN_SIDE[k] * side_in) * 0.5);
                 wl += SIGN_L[k] * v[k];
                 wr += SIGN_R[k] * v[k];
             }

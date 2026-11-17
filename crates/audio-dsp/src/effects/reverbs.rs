@@ -413,12 +413,15 @@ const CHUNK: usize = 256;
 
 /// Early reflections (8 taps, alternating sides) plus the 8-line FDN late field, with
 /// low/high cut on the wet signal, wet width, and separate dry/wet levels. The center input
-/// level controls how much of the mid (L+R) signal feeds the reverb.
+/// level controls how much of the mid (L+R) signal feeds the late reverb; the side (L−R)
+/// signal always feeds both the early reflections and the late reverb.
 pub struct SurroundReverb {
     pv: ParamValues,
     sr: f32,
     late: Reverb,
     er: DelayLine,
+    /// Early-reflection line for the side (L−R) signal.
+    er_side: DelayLine,
     lc: [OnePole; 2],
     hc: [OnePole; 2],
     scratch: [[f32; CHUNK]; 2],
@@ -455,6 +458,7 @@ impl SurroundReverb {
             sr: sample_rate,
             late,
             er: DelayLine::new((0.1 * sample_rate) as usize),
+            er_side: DelayLine::new((0.1 * sample_rate) as usize),
             lc: [OnePole::default(); 2],
             hc: [OnePole::default(); 2],
             scratch: [[0.0; CHUNK]; 2],
@@ -498,6 +502,7 @@ impl AudioEffect for SurroundReverb {
     fn reset(&mut self) {
         self.late.reset();
         self.er.reset();
+        self.er_side.reset();
         self.lc = [OnePole::default(); 2];
         self.hc = [OnePole::default(); 2];
         for s in [&mut self.dry, &mut self.wet, &mut self.early, &mut self.width, &mut self.center, &mut self.size] {
@@ -530,12 +535,17 @@ impl AudioEffect for SurroundReverb {
             }
             for i in 0..len {
                 let x = if nch == 2 { 0.5 * (channels[0][start + i] + channels[1][start + i]) } else { channels[0][start + i] };
+                let xs = if nch == 2 { 0.5 * (channels[0][start + i] - channels[1][start + i]) } else { 0.0 };
                 let size = self.size.tick();
                 self.er.push(x);
+                self.er_side.push(xs);
                 let (mut el, mut er) = (0.0, 0.0);
                 for k in 0..ER_TAPS {
-                    let v = ER_GAIN[k] * self.er.read(ER_MS[k] * size * ms);
-                    if k % 2 == 0 { el += v } else { er += v }
+                    let d = ER_MS[k] * size * ms;
+                    let v = ER_GAIN[k] * self.er.read(d);
+                    // The side reflects with opposite signs on the two sides.
+                    let vs = ER_GAIN[k] * self.er_side.read(d);
+                    if k % 2 == 0 { el += v + vs } else { er += v - vs }
                 }
                 let early = self.early.tick();
                 let (dry, wet, width) = (self.dry.tick(), self.wet.tick(), self.width.tick());

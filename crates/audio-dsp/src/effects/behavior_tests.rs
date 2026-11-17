@@ -420,6 +420,61 @@ fn surround_reverb_tail_decays() {
 }
 
 #[test]
+fn reverbs_reverberate_the_side_signal() {
+    let n = SR as usize / 2;
+    let imp: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+    let neg: Vec<f32> = imp.iter().map(|v| -v).collect();
+    // Opposite channels: the mid is silent, so everything heard comes from the side.
+    for (id, params) in [
+        ("surround_reverb", &[("center_input", 0.0), ("dry", 0.0), ("wet", 100.0)][..]),
+        ("surround_reverb", &[("center_input", 0.0), ("early", 0.0), ("dry", 0.0), ("wet", 100.0)][..]),
+        ("surround_reverb", &[("dry", 0.0), ("wet", 100.0)][..]),
+        ("reverb", &[("mix", 100.0)][..]),
+    ] {
+        let mut e = fx(id, params);
+        let (l, r) = run(e.as_mut(), &imp, &neg);
+        let late = SR as usize / 10;
+        assert!(rms(&l[late..]) > 1e-4, "{id} {params:?}: left {}", rms(&l[late..]));
+        assert!(rms(&r[late..]) > 1e-4, "{id} {params:?}: right {}", rms(&r[late..]));
+    }
+}
+
+#[test]
+fn analog_delay_tail_covers_the_spread_channel() {
+    let mut e = fx("analog_delay", &[("delay", 100.0), ("feedback", 0.0), ("spread", 100.0), ("dry", 0.0), ("wet", 100.0)]);
+    let tail = e.tail_samples();
+    let n = SR as usize / 2;
+    let mut x = vec![0.0f32; n];
+    x[0] = 1.0;
+    let (a, b) = run(e.as_mut(), &x, &x);
+    let last = |s: &[f32]| s.iter().rposition(|v| v.abs() > 1e-6).unwrap_or(0);
+    let last = last(&a).max(last(&b));
+    assert!(last > SR as usize / 10, "the second channel's echo at {last}");
+    assert!(last <= e.latency() + tail, "echo at {last} after a tail of {tail}");
+}
+
+#[test]
+fn mastering_reverb_fades_out_and_restarts_from_silence() {
+    let mut e = fx("mastering", &[("reverb", 100.0)]);
+    let n = SR as usize / 2;
+    let x = noise(21, n, 0.3);
+    run(e.as_mut(), &x, &x);
+    assert!(e.set_param("reverb", 0.0));
+    assert!(e.tail_samples() > 0, "the fade still has a tail");
+    let quiet = vec![0.0f32; SR as usize / 200];
+    let (fade, _) = run(e.as_mut(), &quiet, &quiet);
+    assert!(fade.iter().any(|v| v.abs() > 1e-4), "the reverb stopped at once instead of fading");
+    let rest = vec![0.0f32; SR as usize / 10];
+    run(e.as_mut(), &rest, &rest);
+    run(e.as_mut(), &rest, &rest);
+    assert_eq!(e.tail_samples(), 0);
+    assert!(e.set_param("reverb", 100.0));
+    let (again, _) = run(e.as_mut(), &rest, &rest);
+    let peak = again.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    assert!(peak < 1e-6, "the old reverb came back at {peak}");
+}
+
+#[test]
 fn click_remover_repairs_clicks() {
     let n = SR as usize * 2;
     let clean: Vec<f32> = sine(440.0, 0.3, SR as f64, n, 0.0).iter().zip(noise(9, n, 0.01)).map(|(a, b)| a + b).collect();

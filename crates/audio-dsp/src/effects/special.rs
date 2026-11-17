@@ -357,6 +357,8 @@ pub struct Mastering {
     scratch: [[f32; CHUNK]; 2],
     hp: Vec<OnePole>,
     lim_env: f32,
+    /// The reverb ran in the last block.
+    rev_on: bool,
     rev_amt: Smoothed,
     exc: Smoothed,
     width: Smoothed,
@@ -395,6 +397,7 @@ impl Mastering {
             scratch: [[0.0; CHUNK]; 2],
             hp: vec![OnePole::default(); ch],
             lim_env: 0.0,
+            rev_on: false,
             rev_amt: sm(0.0, sample_rate),
             exc: sm(0.0, sample_rate),
             width: sm(1.0, sample_rate),
@@ -428,9 +431,9 @@ impl Mastering {
 
 impl AudioEffect for Mastering {
     param_plumbing!("mastering");
-    /// The reverb's tail while the reverb is on.
+    /// The reverb's tail while the reverb is on or fading out.
     fn tail_samples(&self) -> usize {
-        if self.pv.v("reverb") > 0.0 { self.rev.tail_samples() } else { 0 }
+        if self.pv.v("reverb") > 0.0 || self.rev_amt.is_smoothing() { self.rev.tail_samples() } else { 0 }
     }
     fn response_db(&self, freq: f64) -> Option<f64> {
         Some(self.eq.iter().map(|c| c.magnitude_db(freq, self.sr as f64)).sum::<f64>() + self.pv.v("output") as f64)
@@ -440,6 +443,7 @@ impl AudioEffect for Mastering {
         self.rev.reset();
         self.hp.iter_mut().for_each(OnePole::reset);
         self.lim_env = 0.0;
+        self.rev_on = false;
         for s in [&mut self.rev_amt, &mut self.exc, &mut self.width, &mut self.boost, &mut self.out] {
             s.snap();
         }
@@ -451,7 +455,12 @@ impl AudioEffect for Mastering {
             return;
         }
         let loud = self.pv.v("loudness") > 0.0;
-        let use_rev = self.pv.v("reverb") > 0.0;
+        // The reverb runs until its amount has faded to 0, then starts from silence next time.
+        let use_rev = self.pv.v("reverb") > 0.0 || self.rev_amt.is_smoothing();
+        if self.rev_on && !use_rev {
+            self.rev.reset();
+        }
+        self.rev_on = use_rev;
         let mode = self.pv.idx("exciter_mode");
         let ahp = OnePole::alpha(3000.0, self.sr);
         let ceiling = db_to_gain(-0.3);
