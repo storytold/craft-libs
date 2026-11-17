@@ -247,7 +247,7 @@ pub enum Action<P> {
     SetMinimized {
         /// The panel the action applies to.
         panel: P,
-        /// Only the title bar or tab strip shows.
+        /// Only the tab strip shows.
         minimized: bool,
     },
     /// Collapse the panel's column to icons, or expand it, docked or floating. Refused
