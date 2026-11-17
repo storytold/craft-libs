@@ -5,7 +5,7 @@
 //! starts there. Lines are 0-based here (callers add one for display); columns are 0-based UTF-16
 //! code units as the format defines.
 
-use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::cell::Cell;
 use std::fmt;
 
@@ -19,14 +19,15 @@ pub struct Limits {
     pub max_lines: usize,
     /// Deepest section nesting (the format allows one level; we tolerate a few).
     pub max_depth: usize,
-    /// Most `sources`, `sourcesContent`, `names` and ignore-list entries across the whole map,
-    /// counted while the JSON is read, so a map of tiny entries is refused before it is kept.
+    /// Most `sources`, `sourcesContent`, `names` and ignore-list entries and index-map sections
+    /// across the whole map, counted while the JSON is read, so a map of tiny entries is refused
+    /// before it is kept. An entry a repeated key replaces gives its slot back.
     pub max_entries: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_bytes: 64 * 1024 * 1024, max_segments: 4_000_000, max_lines: 1_000_000, max_depth: 8, max_entries: 2_000_000 }
+        Limits { max_bytes: 64 * 1024 * 1024, max_segments: 4_000_000, max_lines: 1_000_000, max_depth: 8, max_entries: 4_000_000 }
     }
 }
 
@@ -72,7 +73,7 @@ pub enum SourceMapError {
     LineAllocationFailed,
     #[error("source map sections nest deeper than {0}")]
     TooDeep(usize),
-    #[error("source map has more than {0} source, content, name and ignore-list entries")]
+    #[error("source map has more than {0} source, content, name, ignore-list and section entries")]
     TooManyEntries(usize),
 }
 
@@ -263,7 +264,7 @@ fn from_raw(raw: Option<RawMap>, depth: usize, limits: Limits, budget: &mut usiz
                 return Err(SourceMapError::BadSections);
             }
             let sub = match (section.map, section.url) {
-                (Some(m), None) => from_raw(m, depth + 1, limits, budget, line_budget)?,
+                (Some(m), None) => from_raw(m.map(|m| *m), depth + 1, limits, budget, line_budget)?,
                 // External maps are never fetched here. Retain their start so a lookup
                 // cannot leak through to the previous inline map.
                 (None, Some(true)) => SourceMap::default(),
@@ -293,6 +294,12 @@ impl Entries {
         self.left.set(left);
         Ok(())
     }
+
+    /// Return the slots of entries that won't be kept after all. Callers drop those entries
+    /// first, so a replaced list and its replacement are never held together.
+    fn give_back(&self, n: usize) {
+        self.left.set(self.left.get().saturating_add(n));
+    }
 }
 
 /// The fields a map is built from, read without keeping anything else. Any JSON value is
@@ -313,11 +320,28 @@ struct RawMap {
     sections: Option<Option<Vec<RawSection>>>,
 }
 
+impl RawMap {
+    /// The entry slots this map and its sections hold.
+    fn held(&self) -> usize {
+        let lists = |l: &Option<Vec<Option<u64>>>| l.as_ref().map_or(0, Vec::len);
+        self.sources.len()
+            + self.sources_content.len()
+            + self.names.len()
+            + lists(&self.ignore_list)
+            + lists(&self.google_ignore_list)
+            + held_by(&self.sections)
+    }
+}
+
+fn held_by(sections: &Option<Option<Vec<RawSection>>>) -> usize {
+    sections.iter().flatten().flatten().map(|s| 1 + s.map.iter().flatten().map(|m| m.held()).sum::<usize>()).sum()
+}
+
 #[derive(Default)]
 struct RawSection {
     offset: Option<(Option<u64>, Option<u64>)>,
-    /// `Some(None)`: present but not an object.
-    map: Option<Option<RawMap>>,
+    /// `Some(None)`: present but not an object. Boxed, so a section that isn't a map stays small.
+    map: Option<Option<Box<RawMap>>>,
     /// Whether the URL is a string.
     url: Option<bool>,
 }
@@ -332,17 +356,39 @@ macro_rules! skip {
     ($de:lifetime; unit) => { fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(Default::default()) } };
     ($de:lifetime; seq) => {
         fn visit_seq<A: SeqAccess<$de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            while seq.next_element::<IgnoredAny>()?.is_some() {}
+            while seq.next_element_seed(Skip)?.is_some() {}
             Ok(Default::default())
         }
     };
     ($de:lifetime; map) => {
         fn visit_map<A: MapAccess<$de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+            while map.next_key_seed(Skip)?.is_some() {
+                map.next_value_seed(Skip)?;
+            }
             Ok(Default::default())
         }
     };
     ($de:lifetime; $($kind:ident),+) => { $(skip!($de; $kind);)+ };
+}
+
+/// Read a value the map doesn't keep, with the checks a full read makes (string escapes and
+/// UTF-8, number range, nesting depth), so skipping it can't let a broken map through.
+#[derive(Clone, Copy)]
+struct Skip;
+
+impl<'de> DeserializeSeed<'de> for Skip {
+    type Value = ();
+    fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Skip {
+    type Value = ();
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    skip!('de; bool, i64, u64, f64, str, unit, seq, map);
 }
 
 /// A string, or `None` for any other value.
@@ -431,16 +477,35 @@ impl<'de> Visitor<'de> for RawMapSeed<'_> {
                 Field::Version => raw.version = fields.next_value_seed(Any(MaybeU64))?,
                 Field::File => raw.file = fields.next_value_seed(Any(MaybeStr))?,
                 Field::SourceRoot => raw.source_root = fields.next_value_seed(Any(MaybeStr))?,
-                Field::Sources => raw.sources = fields.next_value_seed(EntryList(self.0, MaybeStr))?,
-                Field::SourcesContent => raw.sources_content = fields.next_value_seed(EntryList(self.0, MaybeStr))?,
-                Field::Names => raw.names = fields.next_value_seed(EntryList(self.0, MaybeStr))?,
-                Field::IgnoreList => raw.ignore_list = Some(fields.next_value_seed(EntryList(self.0, MaybeU64))?),
-                Field::GoogleIgnoreList => raw.google_ignore_list = Some(fields.next_value_seed(EntryList(self.0, MaybeU64))?),
-                Field::Mappings => raw.mappings = fields.next_value_seed(Any(MaybeStr))?,
-                Field::Sections => raw.sections = Some(fields.next_value_seed(Any(Sections(self.0)))?),
-                Field::Other => {
-                    fields.next_value::<IgnoredAny>()?;
+                Field::Sources => {
+                    self.0.give_back(std::mem::take(&mut raw.sources).len());
+                    raw.sources = fields.next_value_seed(EntryList(self.0, MaybeStr))?;
                 }
+                Field::SourcesContent => {
+                    self.0.give_back(std::mem::take(&mut raw.sources_content).len());
+                    raw.sources_content = fields.next_value_seed(EntryList(self.0, MaybeStr))?;
+                }
+                Field::Names => {
+                    self.0.give_back(std::mem::take(&mut raw.names).len());
+                    raw.names = fields.next_value_seed(EntryList(self.0, MaybeStr))?;
+                }
+                // `ignoreList` wins over `x_google_ignoreList` wherever either appears.
+                Field::IgnoreList => {
+                    let unused = raw.ignore_list.take().into_iter().chain(raw.google_ignore_list.take());
+                    self.0.give_back(unused.map(|l| l.len()).sum());
+                    raw.ignore_list = Some(fields.next_value_seed(EntryList(self.0, MaybeU64))?);
+                }
+                Field::GoogleIgnoreList if raw.ignore_list.is_some() => fields.next_value_seed(Skip)?,
+                Field::GoogleIgnoreList => {
+                    self.0.give_back(raw.google_ignore_list.take().map_or(0, |l| l.len()));
+                    raw.google_ignore_list = Some(fields.next_value_seed(EntryList(self.0, MaybeU64))?);
+                }
+                Field::Mappings => raw.mappings = fields.next_value_seed(Any(MaybeStr))?,
+                Field::Sections => {
+                    self.0.give_back(held_by(&raw.sections.take()));
+                    raw.sections = Some(fields.next_value_seed(Any(Sections(self.0)))?);
+                }
+                Field::Other => fields.next_value_seed(Skip)?,
             }
         }
         Ok(Some(raw))
@@ -493,7 +558,7 @@ impl<'de> Visitor<'de> for Sections<'_> {
     }
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
         let mut out = Vec::new();
-        while let Some(section) = seq.next_element_seed(Any(Section(self.0)))? {
+        while let Some(section) = seq.next_element_seed(Entry(self.0, Section(self.0)))? {
             out.push(section);
         }
         Ok(Some(out))
@@ -514,11 +579,12 @@ impl<'de> Visitor<'de> for Section<'_> {
         while let Some(key) = fields.next_key::<SectionField>()? {
             match key {
                 SectionField::Offset => section.offset = Some(fields.next_value_seed(Any(Offset))?),
-                SectionField::Map => section.map = Some(fields.next_value_seed(RawMapSeed(self.0))?),
-                SectionField::Url => section.url = Some(fields.next_value_seed(Any(MaybeStr))?.is_some()),
-                SectionField::Other => {
-                    fields.next_value::<IgnoredAny>()?;
+                SectionField::Map => {
+                    self.0.give_back(section.map.take().flatten().map_or(0, |m| m.held()));
+                    section.map = Some(fields.next_value_seed(RawMapSeed(self.0))?.map(Box::new));
                 }
+                SectionField::Url => section.url = Some(fields.next_value_seed(Any(MaybeStr))?.is_some()),
+                SectionField::Other => fields.next_value_seed(Skip)?,
             }
         }
         Ok(section)
@@ -550,9 +616,7 @@ impl<'de> Visitor<'de> for Offset {
             match key {
                 OffsetField::Line => line = fields.next_value_seed(Any(MaybeU64))?,
                 OffsetField::Column => column = fields.next_value_seed(Any(MaybeU64))?,
-                OffsetField::Other => {
-                    fields.next_value::<IgnoredAny>()?;
-                }
+                OffsetField::Other => fields.next_value_seed(Skip)?,
             }
         }
         Ok((line, column))
