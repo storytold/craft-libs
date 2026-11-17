@@ -18,11 +18,7 @@ pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Document → Flow
 
-/// Is this a monospace family name?
-pub fn is_mono(font: &str) -> bool {
-    let f = font.to_ascii_lowercase();
-    f.contains("courier") || f.contains("mono") || f.contains("consolas") || f.contains("menlo") || f.contains("code") || f == "monaco"
-}
+pub use craft_wordmodel::font_kind::is_mono;
 
 fn is_code_style(doc: &Document, id: &str) -> bool {
     let names = |s: &str| {
