@@ -32,9 +32,7 @@ resvg = { version = "=0.48.1", default-features = false, features = ["text", "ra
 
 data-url = { version = "0.3.2", optional = true }
 # Renderer-specific validation uses the same resolved backends as resvg0.48.1.
-# zune-jpeg is used under its MIT licence option. The locked edge-alignment
-# regression must pass when changing this renderer/backend dependency group.
-zune-jpeg = { version = "=0.5.15", optional = true }
+# JPEG validation uses the existing backend in craft-image-codecs.
 gif = { version = "=0.14.2", optional = true }
 image-webp = { version = "=0.2.4", optional = true }
 
@@ -52,7 +50,7 @@ tree-text = ["tree", "usvg/text"]
 # The system's fonts in `usvg::fontdb`.
 tree-system-fonts = ["tree-text", "usvg/system-fonts"]
 # Bounded rendering of a parsed tree through the matching resvg/tiny-skia versions.
-tree-render = ["tree", "dep:resvg", "dep:zune-jpeg", "dep:gif", "dep:image-webp"]
+tree-render = ["tree", "dep:resvg", "dep:gif", "dep:image-webp"]
 tree-render-system-fonts = ["tree-render", "resvg/system-fonts"]
 
 [dev-dependencies]

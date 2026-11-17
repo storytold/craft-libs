@@ -6,7 +6,7 @@
 use std::io::Cursor;
 use std::num::NonZeroU64;
 
-use crate::tree::{draw::tiny_skia, usvg};
+use crate::tree::{SvgRaster, draw::tiny_skia, usvg};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RasterValidationFailure {
@@ -20,28 +20,41 @@ pub enum RasterValidationFailure {
 /// Failed attempted decodes keep their pixel charge. No decoded pixels are retained. SVG
 /// children use the same wrapped resolver and need no second recursive walk.
 pub fn validate_raster(kind: &usvg::ImageKind, max_pixels: u64, pixels_left: &mut u64) -> Result<(), RasterValidationFailure> {
-    let data = match kind {
-        usvg::ImageKind::PNG(data) | usvg::ImageKind::JPEG(data) | usvg::ImageKind::GIF(data) | usvg::ImageKind::WEBP(data) => data,
+    let (format, data) = match kind {
+        usvg::ImageKind::PNG(data) => (SvgRaster::Png, data),
+        usvg::ImageKind::JPEG(data) => (SvgRaster::Jpeg, data),
+        usvg::ImageKind::GIF(data) => (SvgRaster::Gif, data),
+        usvg::ImageKind::WEBP(data) => (SvgRaster::WebP, data),
         usvg::ImageKind::SVG(_) => return Ok(()),
     };
-    // The allocation probe includes oversized GIF/WebP frames, not merely their
-    // canvas. Reserve before asking any rendering decoder to allocate pixels.
+    let pixels = probe_raster_pixels(data, max_pixels)?;
+    *pixels_left = pixels_left.checked_sub(pixels).ok_or(RasterValidationFailure::Limit)?;
+    decode_raster(format, data, pixels)
+}
+
+pub(in crate::tree) fn probe_raster_pixels(data: &[u8], max_pixels: u64) -> Result<u64, RasterValidationFailure> {
+    // The allocation probe accounts for oversized GIF/WebP frames as well as the canvas.
     let (width, height) = craft_image_codecs::probe_allocation_size(data).map_err(|_| RasterValidationFailure::Invalid)?;
     let pixels = area(width, height)?;
     if pixels > max_pixels {
         return Err(RasterValidationFailure::Limit);
     }
-    *pixels_left = pixels_left.checked_sub(pixels).ok_or(RasterValidationFailure::Limit)?;
-    match kind {
-        usvg::ImageKind::PNG(data) => {
+    Ok(pixels)
+}
+
+pub(in crate::tree) fn decode_raster(format: SvgRaster, data: &[u8], pixels: u64) -> Result<(), RasterValidationFailure> {
+    match format {
+        SvgRaster::Png => {
             let decoded = tiny_skia::Pixmap::decode_png(data).map_err(|_| RasterValidationFailure::Invalid)?;
             rgba_bytes(decoded.width(), decoded.height(), pixels)?;
             Ok(())
         }
-        usvg::ImageKind::JPEG(data) => jpeg(data, pixels),
-        usvg::ImageKind::GIF(data) => gif(data, pixels),
-        usvg::ImageKind::WEBP(data) => webp(data, pixels),
-        usvg::ImageKind::SVG(_) => Ok(()),
+        SvgRaster::Jpeg => craft_image_codecs::validate_jpeg_rgba8(data, pixels).map_err(|error| match error {
+            craft_image_codecs::CodecError::LimitExceeded(_) => RasterValidationFailure::Limit,
+            _ => RasterValidationFailure::Invalid,
+        }),
+        SvgRaster::Gif => gif(data, pixels),
+        SvgRaster::WebP => webp(data, pixels),
     }
 }
 
@@ -66,24 +79,6 @@ fn buffer(length: usize) -> Result<Vec<u8>, RasterValidationFailure> {
     output.try_reserve_exact(length).map_err(|_| RasterValidationFailure::Limit)?;
     output.resize(length, 0);
     Ok(output)
-}
-
-fn jpeg(data: &[u8], admitted: u64) -> Result<(), RasterValidationFailure> {
-    use zune_jpeg::zune_core::colorspace::ColorSpace;
-    use zune_jpeg::zune_core::options::DecoderOptions;
-
-    // Preserve the rendering decoder's default limits and RGBA conversion; a
-    // general photo decoder may accept formats the SVG renderer cannot draw.
-    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
-    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(Cursor::new(data), options);
-    decoder.decode_headers().map_err(|_| RasterValidationFailure::Invalid)?;
-    let info = decoder.info().ok_or(RasterValidationFailure::Invalid)?;
-    let length = rgba_bytes(u32::from(info.width), u32::from(info.height), admitted)?;
-    if decoder.output_colorspace() != Some(ColorSpace::RGBA) || decoder.output_buffer_size() != Some(length) {
-        return Err(RasterValidationFailure::Invalid);
-    }
-    let mut output = buffer(length)?;
-    decoder.decode_into(&mut output).map_err(|_| RasterValidationFailure::Invalid)
 }
 
 fn gif(data: &[u8], admitted: u64) -> Result<(), RasterValidationFailure> {
@@ -115,19 +110,12 @@ fn webp(data: &[u8], admitted: u64) -> Result<(), RasterValidationFailure> {
     let (width, height) = decoder.dimensions();
     let rgba = rgba_bytes(width, height, admitted)?;
     let channels = if decoder.has_alpha() { 4 } else { 3 };
-    let expected = usize::try_from(area(width, height)?.checked_mul(channels).ok_or(RasterValidationFailure::Limit)?)
-        .map_err(|_| RasterValidationFailure::Limit)?;
-    if expected > rgba {
-        return Err(RasterValidationFailure::Limit);
-    }
+    let expected = rgba / 4 * channels;
     if decoder.output_buffer_size() != Some(expected) {
         return Err(RasterValidationFailure::Invalid);
     }
-    // A small valid image can have a compressed chunk larger than its pixels.
-    // Bound decoder scratch without rejecting that ordinary encoding overhead.
-    let admitted_bytes =
-        usize::try_from(admitted.checked_mul(4).ok_or(RasterValidationFailure::Limit)?).map_err(|_| RasterValidationFailure::Limit)?;
-    decoder.set_memory_limit(admitted_bytes.max(data.len()));
+    // The decoder's metadata memory limit does not cap read_image scratch.
+    // Admit the frame and exact output buffer before calling read_image.
     let mut output = buffer(expected)?;
     decoder.read_image(&mut output).map_err(webp_error)
 }

@@ -73,9 +73,15 @@ impl LockGraph {
 pub(crate) fn assert_renderer_edges(graph: &LockGraph, svg: &PackageId) {
     let renderer = graph.dependency(svg, "resvg");
     assert_eq!(graph.dependency(svg, "usvg"), graph.dependency(&renderer, "usvg"), "shared and renderer trees must be the same resolved package");
-    for codec in ["gif", "image-webp", "zune-jpeg"] {
+    for codec in ["gif", "image-webp"] {
         assert_eq!(graph.dependency(svg, codec), graph.dependency(&renderer, codec), "validator and selected renderer differ for {codec}");
     }
+    let codecs = graph.dependency(svg, "craft-image-codecs");
+    assert_eq!(
+        graph.dependency(&codecs, "zune-jpeg"),
+        graph.dependency(&renderer, "zune-jpeg"),
+        "JPEG validator and renderer must use the same backend"
+    );
 }
 
 #[test]
@@ -116,7 +122,10 @@ dependencies = ["codec"]
 fn selected_renderer_graph_rejects_a_split_validator_backend() {
     use std::fmt::Write;
     let make = |split: bool| {
-        let mut text = String::from("[[package]]\nname='craft-svg'\nversion='1'\ndependencies=['resvg', 'usvg', 'gif', 'image-webp', '");
+        let mut text = String::from(
+            "[[package]]\nname='craft-svg'\nversion='1'\ndependencies=['resvg', 'usvg', 'gif', 'image-webp', 'craft-image-codecs']\n\
+             [[package]]\nname='craft-image-codecs'\nversion='1'\ndependencies=['",
+        );
         text.push_str(if split { "zune-jpeg 2" } else { "zune-jpeg 1" });
         text.push_str(
             "']\n[[package]]\nname='resvg'\nversion='1'\nsource='registry+one'\ndependencies=['usvg', 'gif', 'image-webp', 'zune-jpeg 1']\n",

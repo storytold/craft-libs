@@ -46,6 +46,36 @@ pub(crate) struct JpegMeta {
     pub held_coefficients: u64,
 }
 
+/// Validate a JPEG by decoding the 8-bit RGBA output used by renderers.
+///
+/// This deliberately uses the existing zune backend's default decode policy.
+/// Unlike general JPEG import it does not fall back to additional JPEG modes,
+/// apply orientation, or retain pixels. The caller supplies the admitted pixel count.
+pub fn validate_jpeg_rgba8(bytes: &[u8], max_pixels: u64) -> Result<(), CodecError> {
+    let decode = || {
+        let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+        let mut decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), options);
+        decoder.decode_headers().map_err(|error| CodecError::malformed(F, format_args!("{error:?}")))?;
+        let info = decoder.info().ok_or_else(|| CodecError::malformed(F, "missing frame dimensions"))?;
+        let pixels = u64::from(info.width) * u64::from(info.height);
+        if pixels == 0 {
+            return Err(CodecError::malformed(F, "empty frame"));
+        }
+        if pixels > max_pixels {
+            return Err(CodecError::LimitExceeded("JPEG exceeds the admitted pixel count".into()));
+        }
+        let length = usize::try_from(pixels * 4).map_err(|_| CodecError::LimitExceeded("JPEG RGBA output is too large".into()))?;
+        if decoder.output_colorspace() != Some(ColorSpace::RGBA) || decoder.output_buffer_size() != Some(length) {
+            return Err(CodecError::malformed(F, "unexpected RGBA output"));
+        }
+        let mut output = Vec::new();
+        output.try_reserve_exact(length).map_err(|_| CodecError::LimitExceeded("could not allocate JPEG RGBA output".into()))?;
+        output.resize(length, 0);
+        decoder.decode_into(&mut output).map_err(|error| CodecError::malformed(F, format_args!("{error:?}")))
+    };
+    std::panic::catch_unwind(decode).map_err(|_| CodecError::malformed(F, "JPEG decoder failed on this frame"))?
+}
+
 /// The first frame of `b` as [`crate::JpegInfo`], from its markers alone (see [`crate::jpeg_info`]).
 pub(crate) fn info(b: &[u8]) -> Option<crate::JpegInfo> {
     let m = scan_metadata(b);

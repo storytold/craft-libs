@@ -33,6 +33,8 @@ pub use resvg::tiny_skia;
 mod raster;
 #[cfg(feature = "tree-render")]
 pub use raster::{RasterValidationFailure, validate_raster};
+#[cfg(feature = "tree-render")]
+pub(super) use raster::{decode_raster, probe_raster_pixels};
 
 /// Filter primitives per filter. A result of every primitive is kept; real filters have 1 to 12
 /// (Inkscape's drop shadow has 5), and 64 leaves headroom for generated ones.

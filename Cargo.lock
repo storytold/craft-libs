@@ -3103,7 +3103,6 @@ dependencies = [
  "usvg 0.48.1",
  "vectorcraft-geom",
  "vectorcraft-pathops",
- "zune-jpeg",
 ]
 
 [[package]]

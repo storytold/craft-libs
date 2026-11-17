@@ -26,20 +26,19 @@ raster validation. Existing `ImageResolver::new`/`resolver` and legacy parse ent
 points retain their behavior. Opt in explicitly:
 
 ```rust
-# #[cfg(feature = "tree-render")]
-# fn example() -> Result<(), craft_svg::tree::Error> {
-use craft_svg::tree::{self, Limits, ValidatedImageResolver, usvg};
-let images = ValidatedImageResolver::new(Limits::default());
-let checked = tree::preflight(
-    "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>",
-    &images.limits(),
-)?;
-let drawing = images.parse_preflight(checked, usvg::Options::default())?;
-let usage = images.usage();
-// Importers disclose usage's invalid_* and *_limit_images; strict consumers refuse them.
-# let _ = (drawing, usage);
-# Ok(())
-# }
+fn example() -> Result<(), craft_svg::tree::Error> {
+    use craft_svg::tree::{self, Limits, ValidatedImageResolver, usvg};
+    let images = ValidatedImageResolver::new(Limits::default());
+    let checked = tree::preflight(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>",
+        &images.limits(),
+    )?;
+    let drawing = images.parse_preflight(checked, usvg::Options::default())?;
+    let usage = images.usage();
+    // Importers disclose usage's invalid_* and *_limit_images; strict consumers refuse them.
+    let _ = (drawing, usage);
+    Ok(())
+}
 ```
 
 The caller supplies fonts and a sufficient stack/worker for its depth policy.
@@ -53,11 +52,14 @@ An overlapping root conversion on the same context is refused.
 
 Unchanged XML converts from its original checked DOM. A modified data URL requires
 one checked replacement DOM. Invalid URLs become bounded resolver-visible image
-failures; hidden, unused and foreign elements do not acquire omission counts.
+failures. The normal path counts only resolved images. If a repair cannot fit,
+the checked original can still convert when all its MIME headers meet the work
+limit. In that case malformed image declarations are counted conservatively.
 Original UTF-8 child bytes are charged before XML conversion or shorter repairs,
-with per-document and aggregate bounds. Failed inflation/text work is not refunded;
-separate bounded retry-classification work never admits another child. Encoded
-raster callbacks spend at most `limits.bytes + limits.embedded_bytes` cumulatively,
+with per-document and aggregate bounds. A malformed plain encoding spends its
+input bytes and leaves the remaining work for siblings. Failed inflation can
+exhaust its attempted allowance, and the separate bounded retry classification
+never admits another child. Encoded raster callbacks spend at most `limits.bytes + limits.embedded_bytes` cumulatively,
 without retaining their sources. Pixel work and decoder allocation are admitted
 before decoding; attempted failures keep their charge. An oversized unattempted
 image does not prevent a later smaller image from fitting.
@@ -67,9 +69,6 @@ context, rather than an unchecked DOM or a precharged-budget override. `usage()`
 reports omissions and work after conversion. The context is for one drawing, not a
 global rendering cache.
 
-The renderer has no public decoded-pixel or decode-result hook. Validation therefore
-still decodes raster pixels before later renderer painting. The shared validator
-owns the backend dependencies; locked dependency-edge tests in both the shared
-workspace and consumers must keep them aligned with the selected resvg/usvg graph.
-This is a fail-fast maintenance check, not automatic access to private renderer
-code or a decode-once performance claim. Direct zune-jpeg use selects its MIT option.
+The validator uses the existing JPEG backend in craft-image-codecs. The lockfile
+test checks that it and the other validation backends match the selected resvg
+dependency edges. resvg decodes the image again when it paints.

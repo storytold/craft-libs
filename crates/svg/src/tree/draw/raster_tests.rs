@@ -132,10 +132,6 @@ fn renderer_validator_rejects_corrupt_pixels_after_valid_dimensions_without_refu
     for (format, data, dimensions) in cases {
         assert_eq!(craft_image_codecs::probe_allocation_size(&data).unwrap(), dimensions, "{format:?}");
         match format {
-            Format::Jpeg => {
-                let mut headers = zune_jpeg::JpegDecoder::new(Cursor::new(&data));
-                headers.decode_headers().expect("intact JPEG scan headers before unavailable pixel-decode table");
-            }
             Format::Gif => {
                 gif::DecodeOptions::new().read_info(data.as_slice()).expect("intact GIF headers before corrupt LZW pixels");
             }

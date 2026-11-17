@@ -1,6 +1,10 @@
 //! Opt-in complete image validation and checked-DOM normalization.
 //! Legacy ImageResolver entry points retain their existing behavior.
-use super::{Error, ImageUsage, Limits, Preflight, image_href, preflight, raster_format, usvg};
+use super::draw::{RasterValidationFailure, decode_raster, probe_raster_pixels};
+use super::{
+    ChildRefusal, Error, ImageUsage, Limits, Preflight, child_total_depth, declared_raster, embedded_text, image_href, preflight, preflight_child,
+    usvg,
+};
 use crate::svgz;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -125,33 +129,6 @@ impl State {
             self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
         }
     }
-
-    fn raster(&mut self, kind: &usvg::ImageKind) -> bool {
-        let encoded = match kind {
-            usvg::ImageKind::SVG(_) => return true,
-            usvg::ImageKind::PNG(data) | usvg::ImageKind::JPEG(data) | usvg::ImageKind::GIF(data) | usvg::ImageKind::WEBP(data) => data,
-        };
-        // usvg supplies a fresh Arc for every data-URL resolution, including
-        // repeated <use> instances. Charge each actual validation, never retain
-        // encoded buffers in an address-keyed memo that cannot hit this boundary.
-        let Some(left) = self.encoded_left.checked_sub(encoded.len()) else {
-            self.raster_limits = self.raster_limits.saturating_add(1);
-            return false;
-        };
-        self.encoded_left = left;
-        let result = super::draw::validate_raster(kind, self.pixel_limit, &mut self.pixels_left);
-        match result {
-            Ok(()) => true,
-            Err(super::draw::RasterValidationFailure::Invalid) => {
-                self.invalid_raster = self.invalid_raster.saturating_add(1);
-                false
-            }
-            Err(super::draw::RasterValidationFailure::Limit) => {
-                self.raster_limits = self.raster_limits.saturating_add(1);
-                false
-            }
-        }
-    }
 }
 
 /// One opt-in drawing's image work, normalization and exact rendering validation.
@@ -196,7 +173,7 @@ impl ValidatedImageResolver {
         // contributes its complete checked height, as in legacy child admission.
         let _scope = self.root_scope(checked.height.saturating_sub(1))?;
         options.image_href_resolver = self.resolver();
-        convert_checked(checked, &options)
+        self.convert_checked(checked, &options)
     }
 
     /// Resolve an already-decoded child SVG, charging original text before XML
@@ -224,24 +201,8 @@ impl ValidatedImageResolver {
         usvg::ImageHrefResolver {
             resolve_string: Box::new(|_, _| None),
             resolve_data: Box::new(move |mime, data, options| {
-                let detected = raster_format(&data);
-                let format = match mime {
-                    "image/jpg" | "image/jpeg" => (detected == Some(craft_image_codecs::Format::Jpeg)).then_some(craft_image_codecs::Format::Jpeg),
-                    "image/png" => (detected == Some(craft_image_codecs::Format::Png)).then_some(craft_image_codecs::Format::Png),
-                    "image/gif" => (detected == Some(craft_image_codecs::Format::Gif)).then_some(craft_image_codecs::Format::Gif),
-                    "image/webp" => (detected == Some(craft_image_codecs::Format::WebP)).then_some(craft_image_codecs::Format::WebP),
-                    "text/plain" => detected,
-                    _ => None,
-                };
-                if let Some(format) = format {
-                    let kind = match format {
-                        craft_image_codecs::Format::Png => usvg::ImageKind::PNG(data),
-                        craft_image_codecs::Format::Jpeg => usvg::ImageKind::JPEG(data),
-                        craft_image_codecs::Format::Gif => usvg::ImageKind::GIF(data),
-                        craft_image_codecs::Format::WebP => usvg::ImageKind::WEBP(data),
-                        _ => return None,
-                    };
-                    return this.state.lock().unwrap_or_else(PoisonError::into_inner).raster(&kind).then_some(kind);
+                if let Some(format) = declared_raster(mime, &data) {
+                    return this.raster_with(&data, |pixels| decode_raster(format, &data, pixels)).then(|| format.image_kind(data));
                 }
                 if !matches!(mime, "image/svg+xml" | "text/plain") {
                     if mime.starts_with("image/") {
@@ -253,6 +214,33 @@ impl ValidatedImageResolver {
                 this.embedded_bytes(&data, options)
             }),
         }
+    }
+
+    fn raster_with(&self, data: &[u8], decode: impl FnOnce(u64) -> Result<(), RasterValidationFailure>) -> bool {
+        let result = self.reserve_raster(data).and_then(decode);
+        if let Err(error) = result {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            match error {
+                RasterValidationFailure::Invalid => state.invalid_raster = state.invalid_raster.saturating_add(1),
+                RasterValidationFailure::Limit => state.raster_limits = state.raster_limits.saturating_add(1),
+            }
+            return false;
+        }
+        true
+    }
+
+    fn reserve_raster(&self, data: &[u8]) -> Result<u64, RasterValidationFailure> {
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            // usvg uses a fresh Arc for each data-URL callback. Each actual validation
+            // spends encoded work, including when the header or decoder refuses it.
+            state.encoded_left = state.encoded_left.checked_sub(data.len()).ok_or(RasterValidationFailure::Limit)?;
+        }
+        let pixels = probe_raster_pixels(data, self.limits.embedded_raster_pixels)?;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.pixels_left = state.pixels_left.checked_sub(pixels).ok_or(RasterValidationFailure::Limit)?;
+        // The caller decodes after releasing the mutex. The work stays charged.
+        Ok(pixels)
     }
 
     fn can_start_child(&self) -> bool {
@@ -277,15 +265,24 @@ impl ValidatedImageResolver {
             }
             state.svg_bytes_left
         };
-        let text = match svgz::text(data, room.min(self.limits.bytes)) {
-            Ok(text) if text.len() <= room => text,
-            error => {
+        let text = match embedded_text(data, room, &self.limits) {
+            Ok(text) => text,
+            Err(error) => {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                if matches!(error, svgz::Error::Encoding) && !crate::sniff::is_svgz(data) {
+                    // Plain text validation can spend at most the input's bytes.
+                    // An invalid encoding does not exhaust a later sibling's room.
+                    state.svg_bytes_left = state.svg_bytes_left.saturating_sub(data.len());
+                    state.invalid_svg = state.invalid_svg.saturating_add(1);
+                    return None;
+                }
                 state.svg_bytes_left = 0;
-                if matches!(error, Err(svgz::Error::TooLarge(_))) || error.is_ok() {
+                if matches!(error, svgz::Error::TooLarge(_)) {
                     state.svg_limits = state.svg_limits.saturating_add(1);
                     state.svg_resource_limits = state.svg_resource_limits.saturating_add(1);
                 } else {
+                    // An unreadable compressed stream may have used the entire
+                    // allowed inflation work. Later callbacks can only classify.
                     state.invalid_svg = state.invalid_svg.saturating_add(1);
                     state.svg_failure_exhausted = true;
                     state.classification_content_left = room;
@@ -316,24 +313,24 @@ impl ValidatedImageResolver {
             // an attribute or conversion subsequently fails.
             state.svg_bytes_left = left;
         }
-        let checked = match preflight(text, &self.limits) {
+        let checked = match preflight_child(text, &self.limits) {
             Ok(checked) => checked,
             Err(error) => {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 match error {
-                    Error::TooDeep(_) => state.svg_limits = state.svg_limits.saturating_add(1),
-                    Error::Text(svgz::Error::TooLarge(_)) => {
+                    ChildRefusal::Depth => state.svg_limits = state.svg_limits.saturating_add(1),
+                    ChildRefusal::Bytes => {
                         state.svg_limits = state.svg_limits.saturating_add(1);
                         state.svg_resource_limits = state.svg_resource_limits.saturating_add(1);
                     }
-                    _ => state.invalid_svg = state.invalid_svg.saturating_add(1),
+                    ChildRefusal::Invalid => state.invalid_svg = state.invalid_svg.saturating_add(1),
                 }
                 return None;
             }
         };
         let scope = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let Some(total) = state.xml_depth.checked_add(checked.height).filter(|depth| *depth <= self.limits.tree_depth) else {
+            let Some(total) = child_total_depth(state.xml_depth, &checked, &self.limits) else {
                 state.svg_limits = state.svg_limits.saturating_add(1);
                 return None;
             };
@@ -345,7 +342,7 @@ impl ValidatedImageResolver {
             state.svg_depth = state.svg_depth.max(state.depth);
             Scope { state: Arc::clone(&self.state), previous, child: true }
         };
-        let result = convert_checked(checked, options);
+        let result = self.convert_checked(checked, options);
         drop(scope);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         match result {
@@ -356,6 +353,25 @@ impl ValidatedImageResolver {
             Err(_) => {
                 state.invalid_svg = state.invalid_svg.saturating_add(1);
                 None
+            }
+        }
+    }
+    fn convert_checked(&self, checked: Preflight<'_>, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
+        match image_href::normalize(&checked) {
+            Ok(std::borrow::Cow::Borrowed(_)) => checked.parse(options),
+            Ok(std::borrow::Cow::Owned(text)) => {
+                let limits = checked.limits;
+                drop(checked);
+                preflight(&text, &limits)?.parse(options)
+            }
+            Err(repair_error) => {
+                // Keep the original checked DOM if its URLs are safe to pass to
+                // usvg. Malformed optional URLs are dropped by its parser.
+                let omitted = image_href::unrepaired_image_omissions(&checked).ok_or(repair_error)?;
+                let tree = checked.parse(options)?;
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                state.invalid_raster = state.invalid_raster.saturating_add(omitted);
+                Ok(tree)
             }
         }
     }
@@ -374,17 +390,6 @@ impl Drop for Scope {
             state.depth = state.depth.saturating_sub(1);
         } else {
             state.root_active = false;
-        }
-    }
-}
-
-fn convert_checked(checked: Preflight<'_>, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
-    match image_href::normalize(&checked)? {
-        std::borrow::Cow::Borrowed(_) => checked.parse(options),
-        std::borrow::Cow::Owned(text) => {
-            let limits = checked.limits;
-            drop(checked);
-            preflight(&text, &limits)?.parse(options)
         }
     }
 }

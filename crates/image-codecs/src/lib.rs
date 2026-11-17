@@ -45,6 +45,7 @@ pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
+pub use crate::codecs::jpeg::validate_jpeg_rgba8;
 pub use crate::codecs::png::{
     PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed,
     encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,

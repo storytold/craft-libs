@@ -15,9 +15,6 @@ fn test_limits(pixels: u64) -> Limits {
         ..Default::default()
     }
 }
-fn test_state(pixels: u64) -> State {
-    State::new(test_limits(pixels))
-}
 fn wrapped_options(pixels: u64) -> (usvg::Options<'static>, Arc<Mutex<State>>, Arc<ValidatedImageResolver>) {
     let resolver = Arc::new(ValidatedImageResolver::new(test_limits(pixels)));
     let options = usvg::Options { image_href_resolver: resolver.resolver(), ..Default::default() };
@@ -184,40 +181,51 @@ fn failed_raster_callbacks_release_sources_and_keep_every_decode_charge() {
     let idat = broken.windows(4).position(|bytes| bytes == b"IDAT").unwrap();
     broken[idat + 4] ^= 1;
     assert_eq!(craft_image_codecs::probe_allocation_size(&broken).unwrap(), (2, 2));
-    let mut state = test_state(8);
-    let encoded_before = state.encoded_left;
+    let (options, state, resolver) = wrapped_options(8);
+    let encoded_before = state.lock().unwrap().encoded_left;
     for attempt in 1..=2 {
         // Match usvg's actual callback boundary: each href gets a new Arc.
         let encoded = Arc::new(broken.clone());
         let weak = Arc::downgrade(&encoded);
-        let kind = usvg::ImageKind::PNG(Arc::clone(&encoded));
-        assert!(!state.raster(&kind));
-        assert_eq!(state.pixels_left, 8 - attempt * 4);
-        assert_eq!(state.encoded_left, encoded_before - attempt as usize * encoded.len());
-        assert_eq!(state.invalid_raster, attempt as usize);
-        drop(kind);
+        assert!((options.image_href_resolver.resolve_data)("image/png", Arc::clone(&encoded), &options).is_none());
+        let usage = resolver.usage();
+        assert_eq!(usage.raster_pixels, attempt * 4);
+        assert_eq!(state.lock().unwrap().encoded_left, encoded_before - attempt as usize * encoded.len());
+        assert_eq!(usage.invalid_raster_images, attempt as usize);
         drop(encoded);
         assert!(weak.upgrade().is_none(), "validation must not retain failed callback buffers until parse completion");
     }
-    assert!(!state.raster(&usvg::ImageKind::PNG(Arc::new(png()))));
-    assert_eq!((state.invalid_raster, state.raster_limits), (2, 1));
-    assert_eq!(state.usage().raster_pixels, 8);
+    assert!((options.image_href_resolver.resolve_data)("image/png", Arc::new(png()), &options).is_none());
+    let usage = resolver.usage();
+    assert_eq!((usage.invalid_raster_images, usage.raster_limit_images, usage.raster_pixels), (2, 1, 8));
 }
 
 #[test]
 fn valid_raster_callbacks_spend_exact_pixel_and_encoded_allowances_per_call() {
     let encoded = Arc::new(png());
-    let kind = usvg::ImageKind::PNG(Arc::clone(&encoded));
-    let mut state = test_state(8);
-    state.encoded_left = encoded.len() * 2;
-    assert!(state.raster(&kind));
-    assert_eq!((state.pixels_left, state.encoded_left), (4, encoded.len()));
-    assert!(state.raster(&kind), "even a directly reused Arc is a new actual validation call");
-    assert_eq!((state.pixels_left, state.encoded_left), (0, 0));
-    assert!(!state.raster(&kind));
-    assert_eq!((state.invalid_raster, state.raster_limits), (0, 1));
-    let usage = state.usage();
-    assert_eq!((usage.raster_pixels, usage.raster_limit_images), (8, 1));
+    let (options, state, resolver) = wrapped_options(8);
+    let call = || (options.image_href_resolver.resolve_data)("image/png", Arc::clone(&encoded), &options);
+    state.lock().unwrap().encoded_left = encoded.len() * 2;
+    assert!(call().is_some());
+    assert_eq!(resolver.usage().raster_pixels, 4);
+    assert_eq!(state.lock().unwrap().encoded_left, encoded.len());
+    assert!(call().is_some(), "even a directly reused Arc is a new actual validation call");
+    assert_eq!(state.lock().unwrap().encoded_left, 0);
+    assert!(call().is_none());
+    let usage = resolver.usage();
+    assert_eq!((usage.raster_pixels, usage.invalid_raster_images, usage.raster_limit_images), (8, 0, 1));
+}
+
+#[test]
+fn raster_decode_happens_after_the_work_is_charged_and_mutex_released() {
+    let (_, state, resolver) = wrapped_options(4);
+    let image = png();
+    assert!(resolver.raster_with(&image, |admitted| {
+        assert_eq!(admitted, 4);
+        assert!(state.try_lock().is_ok(), "a usage snapshot must not wait for the raster decode");
+        assert_eq!(resolver.usage().raster_pixels, 4);
+        Ok(())
+    }));
 }
 
 #[test]
@@ -237,13 +245,14 @@ fn encoded_raster_refusal_is_per_image_and_does_not_consume_unattempted_work() {
     let bytes = png();
     let mut oversized = bytes.clone();
     oversized.extend([0; 32]);
-    let mut state = test_state(4);
-    state.encoded_left = bytes.len();
-    assert!(!state.raster(&usvg::ImageKind::PNG(Arc::new(oversized))));
-    assert_eq!((state.encoded_left, state.pixels_left), (bytes.len(), 4));
-    assert!(state.raster(&usvg::ImageKind::PNG(Arc::new(bytes))));
-    assert_eq!((state.encoded_left, state.pixels_left), (0, 0));
-    let usage = state.usage();
+    let (options, state, resolver) = wrapped_options(4);
+    state.lock().unwrap().encoded_left = bytes.len();
+    assert!((options.image_href_resolver.resolve_data)("image/png", Arc::new(oversized), &options).is_none());
+    assert_eq!(state.lock().unwrap().encoded_left, bytes.len());
+    assert_eq!(resolver.usage().raster_pixels, 0);
+    assert!((options.image_href_resolver.resolve_data)("image/png", Arc::new(bytes), &options).is_some());
+    assert_eq!(state.lock().unwrap().encoded_left, 0);
+    let usage = resolver.usage();
     assert_eq!((usage.raster_pixels, usage.raster_limit_images, usage.invalid_raster_images), (4, 1, 0));
 }
 
@@ -285,7 +294,10 @@ fn plain_legacy_encoding_rechecks_have_a_separate_bounded_work_allowance() {
                     bytes.to_vec()
                 }
             };
-            assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(encode(&[0xff])), &options).is_none());
+            // A failed compressed decode exhausts the primary pool. The
+            // callbacks under test may use plain or compressed encodings.
+            let invalid = Arc::new(crate::svgz::compress(&[0xff]));
+            assert!((options.image_href_resolver.resolve_data)("image/svg+xml", invalid, &options).is_none());
             state.lock().unwrap_or_else(PoisonError::into_inner).classification_text_bytes_left = xml.len();
             assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(encode(xml)), &options).is_none());
             {

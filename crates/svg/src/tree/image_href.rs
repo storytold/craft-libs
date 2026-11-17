@@ -36,11 +36,7 @@ pub(super) fn normalize<'a>(checked: &super::Preflight<'a>) -> Result<Cow<'a, st
     // Expanded values fit source + entity work. Twelve linear passes cover URL
     // scans/streaming decode, full attribute projection and worst-case XML escaping;
     // parameter compaction never allocates one record per original parameter.
-    let mut work = text
-        .len()
-        .checked_add(limits.entity_bytes)
-        .and_then(|n| n.checked_mul(12))
-        .ok_or_else(|| invalid("SVG data-URL validation work exceeds its limit"))?;
+    let mut work = text.len().saturating_add(limits.entity_bytes).saturating_mul(12);
     let max_patches = (limits.bytes / std::mem::size_of::<Patch>()).min(usize::try_from(limits.xml_nodes).unwrap_or(usize::MAX));
     let mut patches: Vec<Patch> = Vec::new();
     for node in xml.descendants().filter(|node| node.is_element()) {
@@ -97,6 +93,30 @@ pub(super) fn normalize<'a>(checked: &super::Preflight<'a>) -> Result<Cow<'a, st
     }
     result.push_str(text.get(cursor..).ok_or_else(|| invalid("invalid SVG data-URL source range"))?);
     Ok(Cow::Owned(result))
+}
+
+/// Fall back to the original, checked DOM when a repair cannot be projected.
+/// Only MIME headers already safe for usvg's parser can take this route. Count
+/// malformed declarations conservatively because usvg may drop them before
+/// invoking a callback.
+pub(super) fn unrepaired_image_omissions(checked: &super::Preflight<'_>) -> Option<usize> {
+    let mut work = checked.xml.input_text().len().saturating_add(checked.limits.entity_bytes).saturating_mul(6);
+    let mut omitted = 0usize;
+    for node in checked.xml.descendants().filter(|node| node.is_element() && matches!(node.tag_name().name(), "image" | "feImage")) {
+        for href in node.attributes().filter(|a| a.name() == "href" && matches!(a.namespace(), None | Some(XLINK_NS))) {
+            let value = href.value();
+            work = work.checked_sub(value.len())?;
+            if !mime_header_admitted(value) {
+                return None;
+            }
+        }
+        if let Some(value) = node.attribute((XLINK_NS, "href")).or_else(|| node.attribute("href"))
+            && malformed_data_url_replacement(value, &mut work).ok()? == Some(INVALID_IMAGE)
+        {
+            omitted = omitted.saturating_add(1);
+        }
+    }
+    Some(omitted)
 }
 
 // The pinned MIME parser searches all earlier parameters for each new name.
@@ -293,6 +313,16 @@ mod tests {
 
     fn limits() -> Limits {
         Limits { bytes: 1 << 20, depth: 32, tree_depth: 32, entity_bytes: 65_536, ..Default::default() }
+    }
+
+    #[test]
+    fn original_dom_fallback_does_not_bypass_mime_admission() {
+        let ordinary = "<svg><image href='data:;base64'/></svg>";
+        assert_eq!(unrepaired_image_omissions(&super::super::preflight(ordinary, &limits()).unwrap()), Some(1));
+
+        let header = "a=b;".repeat(MAX_MIME_SEPARATORS + 1);
+        let excessive = format!("<svg><image href='data:image/png;{header}base64,A'/></svg>");
+        assert!(unrepaired_image_omissions(&super::super::preflight(&excessive, &limits()).unwrap()).is_none());
     }
 
     #[test]

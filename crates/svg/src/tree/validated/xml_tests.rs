@@ -43,6 +43,36 @@ fn parse_count(text: &str, limits: Limits) -> (super::super::ImageUsage, usize) 
 }
 
 #[test]
+fn malformed_plain_child_leaves_work_for_valid_siblings() {
+    let child = drawing("<rect width='4' height='4' fill='red'/>");
+    for invalid in [&[0xff][..], &[0xff, 0xfe, 0xd8][..]] {
+        let contents = format!("{}{}", image(&url(invalid)), image(&url(child.as_bytes())));
+        let root = drawing(&contents);
+        let limits = Limits { embedded_bytes: invalid.len() + child.len(), ..Default::default() };
+        let context = ValidatedImageResolver::new(limits);
+        let tree = context.parse_preflight(preflight(&root, &limits).unwrap(), usvg::Options::default()).unwrap();
+        let usage = context.usage();
+        assert_eq!((usage.invalid_svg_images, usage.embedded_svg_count, usage.svg_limit_images), (1, 1, 0));
+        assert_eq!(usage.embedded_svg_bytes, limits.embedded_bytes);
+        let mut pixmap = super::super::draw::tiny_skia::Pixmap::new(4, 4).unwrap();
+        super::super::draw::resvg::render(&tree, Default::default(), &mut pixmap.as_mut());
+        assert_eq!(pixmap.pixel(2, 2).unwrap().red(), 255);
+    }
+}
+
+#[test]
+fn a_malformed_image_at_the_svg_byte_cap_does_not_drop_the_drawing() {
+    let root = drawing("<rect width='4' height='4' fill='red'/><image width='4' height='4' href='data:;base64'/>");
+    let limits = Limits { bytes: root.len(), ..Default::default() };
+    let context = ValidatedImageResolver::new(limits);
+    let tree = context.parse_preflight(preflight(&root, &limits).unwrap(), usvg::Options::default()).unwrap();
+    assert_eq!(context.usage().invalid_raster_images, 1);
+    let mut pixmap = super::super::draw::tiny_skia::Pixmap::new(4, 4).unwrap();
+    super::super::draw::resvg::render(&tree, Default::default(), &mut pixmap.as_mut());
+    assert_eq!(pixmap.pixel(2, 2).unwrap().red(), 255);
+}
+
+#[test]
 fn validated_root_reuses_checked_xml_and_rechecks_only_changed_attributes() {
     let ordinary = drawing("<rect width='4' height='4' fill='red'/>");
     let repaired = drawing("<rect width='4' height='4' fill='red'/><image width='1' height='1' href='data:image/png;base64,A'/>");
