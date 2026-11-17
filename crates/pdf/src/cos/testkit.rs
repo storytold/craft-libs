@@ -14,8 +14,9 @@
 //!     .build();
 //! ```
 //!
-//! Test scaffolding: compiled into the unit tests (`cfg(test)`) and into the `cos` integration
-//! test binary, never into the library.
+//! Test scaffolding: compiled into the unit tests (`cfg(test)`), into the `cos` integration test
+//! binary, and into the library only with the `test-support` feature, which exports [`Pdf`] as
+//! `craft_pdf::testing::Pdf`.
 #![allow(dead_code)]
 
 /// A small PDF with a classic cross-reference table, built one object at a time.
@@ -80,7 +81,7 @@ impl Pdf {
     /// The number the next object added will get, so a caller can refer forward to it.
     ///
     /// ```
-    /// # use crate::cos::testkit::Pdf;
+    /// # use craft_pdf::testing::Pdf;
     /// let mut p = Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>");
     /// assert_eq!(p.next_obj(), 2);
     /// ```

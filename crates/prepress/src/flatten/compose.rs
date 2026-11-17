@@ -303,6 +303,7 @@ fn flatten_group(
             isolated: false,
             knockout: false,
             clip: None,
+            clip_rule: FillRule::NonZero,
             mask: None,
             actual_text: Some(text),
             children,
@@ -614,7 +615,7 @@ impl<'a> Builder<'a> {
                 let outer = self.push_tag(g.actual_text.as_deref());
                 if let Some(clip) = &g.clip {
                     self.clip_stack.push(self.clips.len());
-                    self.clips.push(ClipPath { path: clip.clone(), rule: FillRule::NonZero });
+                    self.clips.push(ClipPath { path: clip.clone(), rule: g.clip_rule });
                 }
                 let masked = masked || g.mask.is_some();
                 let (plain_path, knockout_path) = (self.plain_path, self.knockout_path);
@@ -900,7 +901,17 @@ mod tests {
     }
 
     fn group(opacity: f32, blend: BlendMode, children: Vec<Item>) -> GroupItem {
-        GroupItem { opacity, blend, isolated: false, knockout: false, clip: None, mask: None, actual_text: None, children }
+        GroupItem {
+            opacity,
+            blend,
+            isolated: false,
+            knockout: false,
+            clip: None,
+            clip_rule: FillRule::NonZero,
+            mask: None,
+            actual_text: None,
+            children,
+        }
     }
 
     fn list(inks: InkSet, items: Vec<Item>) -> DisplayList {
@@ -1015,6 +1026,18 @@ mod tests {
         };
         let g = GroupItem { knockout: true, ..group(1.0, BlendMode::Normal, vec![Item::Group(clip)]) };
         assert_eq!(at(&flat(&list(InkSet::new(), vec![Item::Group(g)])), 75.0, 50.0, &[C, M]).1, [0.0, 0.5]);
+    }
+
+    #[test]
+    fn even_odd_clip_leaves_its_hole_unpainted() {
+        // Two nested squares drawn in the same direction: filled even-odd, the inner one is a hole.
+        let mut ring = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.1);
+        ring.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.1));
+        let half_black = Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(K, 1.0)])]));
+        let clip = GroupItem { clip: Some(ring), clip_rule: FillRule::EvenOdd, ..group(1.0, BlendMode::Normal, vec![half_black]) };
+        let f = flat(&list(InkSet::new(), vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), Item::Group(clip)]));
+        assert_eq!(at(&f, 10.0, 50.0, &[C, K]).1, [0.5, 0.5]);
+        assert_eq!(at(&f, 50.0, 50.0, &[C, K]).1, [1.0, 0.0], "the hole shows the cyan under it");
     }
 
     #[test]
