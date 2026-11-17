@@ -32,6 +32,10 @@ impl Default for Limits {
 }
 
 impl Limits {
+    /// Construct explicit bounds for a caller-owned format adapter.
+    pub const fn new(max_width: u32, max_height: u32, max_pixels: u64, max_alloc: u64) -> Self {
+        Limits { max_width, max_height, max_pixels, max_alloc }
+    }
     /// For a decoder that writes a band of rows at a time into the document's tiles instead of
     /// one buffer (TIFF, #8169): the largest document size, 300,000 px a side, on 64-bit
     /// targets, with `max_alloc` bounding each group of bands. 32-bit targets keep the
@@ -85,7 +89,7 @@ impl Limits {
     /// never beats `max_ratio`:1. Called before the output buffer is allocated, so a
     /// header-only hostile file cannot make the decoder reserve gigabytes. A fixed 1 MiB of
     /// slack keeps tiny images and headers with large metadata unaffected.
-    pub(crate) fn check_plausible(declared_bytes: u64, file_len: usize, max_ratio: u64) -> Result<(), CodecError> {
+    pub fn check_plausible(declared_bytes: u64, file_len: usize, max_ratio: u64) -> Result<(), CodecError> {
         let capacity = (file_len as u64).saturating_mul(max_ratio).saturating_add(1 << 20);
         if declared_bytes > capacity {
             return Err(CodecError::LimitExceeded(format!("a {file_len} byte file cannot hold {declared_bytes} bytes of image data")));
@@ -231,60 +235,8 @@ impl DpxBits {
     }
 }
 
-/// How a DDS texture stores its pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DdsCompression {
-    /// Uncompressed, 8 bits per channel: BGRA (BGRX without alpha), or luminance with or
-    /// without alpha for grayscale. Lossless.
-    #[default]
-    None,
-    /// BC1 (DXT1): 4 bits per pixel. Alpha is on or off: texels under half opacity become
-    /// transparent black.
-    Bc1,
-    /// BC2 (DXT3): 8 bits per pixel, with 4 bits of explicit alpha per texel.
-    Bc2,
-    /// BC3 (DXT5): 8 bits per pixel, with smooth interpolated alpha.
-    Bc3,
-}
-
-impl DdsCompression {
-    pub const ALL: [DdsCompression; 4] = [DdsCompression::None, DdsCompression::Bc1, DdsCompression::Bc2, DdsCompression::Bc3];
-
-    /// The name scripts and the CLI use: `none`, `bc1`, `bc2` or `bc3`.
-    pub fn name(self) -> &'static str {
-        match self {
-            DdsCompression::None => "none",
-            DdsCompression::Bc1 => "bc1",
-            DdsCompression::Bc2 => "bc2",
-            DdsCompression::Bc3 => "bc3",
-        }
-    }
-
-    /// [`Self::name`] back to a compression, also taking the DXT names (`dxt1`, `dxt3`,
-    /// `dxt5`), in any case. Anything else is `None`.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "none" => Some(DdsCompression::None),
-            "bc1" | "dxt1" => Some(DdsCompression::Bc1),
-            "bc2" | "dxt3" => Some(DdsCompression::Bc2),
-            "bc3" | "dxt5" => Some(DdsCompression::Bc3),
-            _ => None,
-        }
-    }
-
-    /// A block compression (lossy), not uncompressed pixels.
-    pub fn is_block(self) -> bool {
-        self != DdsCompression::None
-    }
-}
-
-/// What a DDS file is written with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DdsOptions {
-    pub compression: DdsCompression,
-    /// Write the full mip chain down to 1×1, each level a box filter of the one above.
-    pub mipmaps: bool,
-}
+/// How a DDS texture stores its pixels and whether it carries a mip chain, from [`craft_dds`].
+pub use craft_dds::{DdsCompression, DdsOptions};
 
 /// The longer side, in pixels, at which a TIFF image pyramid stops: the last level written is
 /// the first one no longer than this ([`EncodeOptions::tiff_pyramid`]).
