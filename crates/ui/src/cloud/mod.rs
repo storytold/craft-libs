@@ -216,8 +216,9 @@ pub struct CloudFiles {
     /// stay set after a failed sign-in.
     sign_in_from_menu: bool,
     /// Bumped on sign-out and on a new sign-in. Stamped onto every [`Post`]
-    /// handed out by [`submit`] so a reply to a job issued before the bump is
-    /// dropped rather than applied to the session that replaced it.
+    /// handed out by [`submit`] and onto every answer it queues. [`pump`]
+    /// drops an answer to a job issued before the bump rather than applying
+    /// it to the session that replaced it.
     account_generation: Arc<AtomicU64>,
     /// The document Save As must act on, when it is not the active one.
     ///
@@ -372,8 +373,8 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     cloud.link = None;
     cloud.status = Some(working);
     // A new session. A job the previous one left outstanding may never
-    // answer, and if it does, that answer is not about this account: see
-    // `Post::send`. Busy goes with it, or a stuck read from before this
+    // answer, and if it does, that answer is not about this account: `pump`
+    // drops it. Busy goes with it, or a stuck read from before this
     // sign-in would leave Save refused for a session that never asked for it.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
@@ -397,7 +398,7 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     cloud.status = Some(signed_out);
     // The session this window had ends here. A job it started may never
     // answer, and a reply that does arrive late must not land on whatever
-    // comes next: see `Post::send`. Busy goes with it, so an open or a save
+    // comes next: `pump` drops it. Busy goes with it, so an open or a save
     // that never heard back does not refuse every one after it forever.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;

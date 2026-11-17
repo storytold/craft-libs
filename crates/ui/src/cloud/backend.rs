@@ -105,12 +105,14 @@ impl Post {
         Post { tx: self.tx.clone(), generation: self.generation.clone(), issued: self.issued }
     }
 
-    /// Delivers the event, unless the window has signed out or signed in
-    /// again since the job this answers was issued. Silently dropping it
-    /// there, rather than delivering it, is what keeps a late reply from
-    /// restoring the previous session's account, files or busy state on top
-    /// of whatever replaced it. An event sent just before the change still
-    /// carries its generation, and [`super::pump`] drops it there.
+    /// Queues the event with the generation its job was issued in.
+    ///
+    /// [`super::pump`] holds the check that keeps a late reply from restoring
+    /// the previous session's account, files or busy state on top of whatever
+    /// replaced it: it drops every event whose generation is not the current
+    /// one, including an event sent here just before a sign-out or a new
+    /// sign-in. This method only skips the send when the generation has
+    /// already moved on, so an answer that `pump` would drop is not queued.
     pub fn send(&self, event: Event) {
         if self.generation.load(Ordering::Relaxed) != self.issued {
             return;
