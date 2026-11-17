@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 craft-audio-dsp = { path = "crates/audio-dsp" }
+craft-har = { path = "crates/har" }
 craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
