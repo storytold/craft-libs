@@ -397,7 +397,7 @@ fn hostile_input_never_panics() {
         let split = seed.len();
         seed.extend(palette);
         seed.extend(&video);
-        craft_media_testkit::hostile::hammer("smacker video", &seed, 20_000, |d| {
+        craft_media_testkit::hostile::hammer("smacker video", &seed, 20_000, move |d| {
             let (trees, rest) = d.split_at(split.min(d.len()));
             let (pal, video) = rest.split_at(palette.len().min(rest.len()));
             if let Ok(mut dec) = Decoder::new(&params.clone().with_extradata(trees)) {
