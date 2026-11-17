@@ -41,6 +41,9 @@ struct OpenSubmenu {
     rect: Option<Rect>,
 }
 
+/// A level's letters (each row's mnemonic, or none) with the folder and labels they were assigned for.
+type KeptLetters = (Folder, Vec<String>, Vec<Option<(char, usize)>>);
+
 #[derive(Default)]
 struct LevelState {
     /// The rows of the pass `pass`, in the order they registered.
@@ -68,7 +71,7 @@ struct LevelState {
     /// The last assignment of letters, with the labels and folder it was made for. Every row of a level asks for its
     /// letter in every pass, and assigning them all for each row made opening a long menu or submenu cost many times
     /// a plain row's frame: the letters are assigned again only when the labels or the folder change.
-    letters: Option<(Folder, Vec<String>, Vec<Option<(char, usize)>>)>,
+    letters: Option<KeptLetters>,
 }
 
 impl LevelState {
