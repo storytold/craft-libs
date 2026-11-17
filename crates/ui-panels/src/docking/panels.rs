@@ -16,8 +16,8 @@ use egui::{Context, Id, Ui};
 /// 2. Otherwise `group_header` once, inside the group's header region before its tab strip, then `spec` for each of
 ///    its panels, then `body` for the panels whose bodies are shown. `panel_rows` runs when a panel's menu opens.
 ///
-/// A panel's `spec` is read every pass, so a host may change a label or a limit between passes. The dock's actions
-/// name a group by one of its panels.
+/// A panel's `spec` is read every pass, so a host may change a label or a limit between passes; a host whose chrome
+/// settles (`spec_version`) changes that version with it. The dock's actions name a group by one of its panels.
 pub trait DockPanels<P> {
     /// What the dock reads of `panel`.
     fn spec(&self, panel: &P) -> PanelSpec;
@@ -39,6 +39,16 @@ pub trait DockPanels<P> {
     /// version, its room or something the framework tracks in it changed, the pointer is over it or focus is in it, and
     /// otherwise repaints its last run. `None` (the default) runs the body every pass.
     fn content(&self, _panel: &P) -> Option<u64> {
+        None
+    }
+
+    /// The version of what the dock's chrome shows of the host's panels: every panel's `spec` (its name, icon and
+    /// limits), its `permissions` and what `group_header` shows. With one, each group's header and tab strip and each
+    /// column's bar settle (`Lazy::settles` with `Lazy::content`): they run only when this version, the arrangement,
+    /// their room or something the framework tracks in them changed, the pointer is over them or focus is in them, and
+    /// otherwise repaint their last run. A group settles only when its shown panel's body has a [`content`](Self::content)
+    /// version too. `None` (the default) runs the chrome every pass.
+    fn spec_version(&self) -> Option<u64> {
         None
     }
 
