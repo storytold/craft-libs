@@ -52,11 +52,11 @@ pub struct CmykParams {
     pub k_max: f64,
     /// Exponent of the black generation curve above `gcr_start`.
     pub gcr_gamma: f64,
-    /// Linear part of the black generation curve: with `x` the gray component above
-    /// `gcr_start` (scaled to `[0, 1]`), black is `gcr_linear·x + (k_max − gcr_linear)·x^gcr_gamma`,
-    /// so light and mid neutrals get black in proportion and the curve still ends at `k_max`.
-    /// 0 by default (the curve of the shipped Photocraft profile).
-    pub gcr_linear: f64,
+    /// Black generation as a curve of `[gray component, black]` points with increasing gray
+    /// components in `[0, 1]`, interpolated linearly and held flat beyond the ends. Empty by
+    /// default: black is then `k_max` times the ramp of `gcr_start` and `gcr_gamma` (the curve
+    /// of the shipped Photocraft profile).
+    pub gcr_curve: Vec<[f64; 2]>,
     /// Tone value increase at 50 % for C, M, Y, K.
     pub tvi: [f64; 4],
     /// Grid points of the AToB (4D) and BToA (3D) tables.
@@ -105,7 +105,7 @@ impl Default for CmykParams {
             gcr_start: 0.2,
             k_max: 0.95,
             gcr_gamma: 1.1,
-            gcr_linear: 0.0,
+            gcr_curve: Vec::new(),
             tvi: [0.14, 0.14, 0.14, 0.17],
             grid_a2b: 11,
             grid_b2a: 21,
@@ -315,12 +315,21 @@ const SEEDS: [[f64; 3]; 5] = [[0.3, 0.3, 0.3], [0.05, 0.05, 0.05], [0.8, 0.8, 0.
 
 /// Black for a gray component `g` (the smallest of C, M, Y without black).
 fn gcr(p: &CmykParams, g: f64) -> f64 {
-    if g <= p.gcr_start {
-        0.0
-    } else {
-        let x = (g - p.gcr_start) / (1.0 - p.gcr_start);
-        (p.gcr_linear * x + (p.k_max - p.gcr_linear) * x.powf(p.gcr_gamma)).clamp(0.0, p.k_max.max(0.0))
+    let Some(first) = p.gcr_curve.first() else {
+        // The Photocraft profile's curve.
+        return if g <= p.gcr_start { 0.0 } else { p.k_max * ((g - p.gcr_start) / (1.0 - p.gcr_start)).powf(p.gcr_gamma) };
+    };
+    let mut k = first[1];
+    for w in p.gcr_curve.windows(2) {
+        let ([g0, k0], [g1, k1]) = (w[0], w[1]);
+        if g >= g1 {
+            k = k1;
+        } else if g > g0 {
+            k = k0 + (k1 - k0) * (g - g0) / (g1 - g0);
+            break;
+        }
     }
+    k.clamp(0.0, 1.0)
 }
 
 /// Colorimetric separation of a relative Lab target: GCR black generation then a CMY solve.
@@ -548,11 +557,28 @@ impl<'a, F: Forward + ?Sized> OklabMapper<'a, F> {
         let loss = if c0 > 1e-9 { (1.0 - o[1].hypot(o[2]) / c0).clamp(0.0, 1.0) } else { 0.0 };
         let w = CLIP_WEIGHT * (1.0 + CLIP_WEIGHT_GROWTH * loss * loss);
         let free = solve(w, 0.0, first);
-        // Black from the clip's gray component, then the clip again with that black: inks the
-        // clip drives to 100 % stay there and black replaces the rest.
-        let k = gcr(self.p, free[0].min(free[1]).min(free[2]));
-        let cmy = solve(w, k, free);
-        [cmy[0], cmy[1], cmy[2], k]
+        let norm = |c: [f64; 4]| residual(w)(self.model.lab(c)).iter().map(|v| v * v).sum::<f64>();
+        // Candidates, the closest kept: the separation itself (a colour it nearly reaches stays
+        // continuous with its in-gamut neighbours), the clip with the separation's black, and
+        // the clip with black generated from the black-free clip's gray component (inks the
+        // clip drives to 100 % stay there and black replaces the rest).
+        let mut best = (norm(cmyk), cmyk);
+        for k in [cmyk[3], gcr(self.p, free[0].min(free[1]).min(free[2]))] {
+            for from in [[cmyk[0], cmyk[1], cmyk[2]], free] {
+                let cmy = solve(w, k, from);
+                let c = [cmy[0], cmy[1], cmy[2], k];
+                let n = norm(c);
+                if n < best.0 {
+                    best = (n, c);
+                }
+            }
+        }
+        // Near paper white the gamut narrows to a point: the separation's closest colour keeps
+        // light tints' chroma where holding lightness would drop them toward bare paper, and
+        // the table nodes there carry the in-gamut tints between them. The inks blend from the
+        // clip at L* 85 to the separation at L* 95.
+        let clip_share = ((95.0 - lab[0]) / 10.0).clamp(0.0, 1.0);
+        std::array::from_fn(|i| clip_share * best.1[i] + (1.0 - clip_share) * cmyk[i])
     }
 
     /// Maps the v4 perceptual reference black onto the device black, linearly in XYZ, for
@@ -679,6 +705,10 @@ fn check_grids(p: &CmykParams) -> Result<(), CmsError> {
     }
     if p.white_on_node && p.grid_b2a.is_multiple_of(2) {
         return Err(invalid_arg(format!("white on a node needs an odd BToA grid, not {}", p.grid_b2a)));
+    }
+    let valid = |v: &[f64; 2]| v.iter().all(|x| (0.0..=1.0).contains(x));
+    if !p.gcr_curve.iter().all(valid) || p.gcr_curve.windows(2).any(|w| w[1][0] <= w[0][0]) {
+        return Err(invalid_arg(format!("black generation curve {:?} needs points in [0, 1] with increasing gray components", p.gcr_curve)));
     }
     if let GamutMapping::Oklab { knee, saturation } = p.mapping
         && !((0.0..1.0).contains(&knee) && saturation.is_finite() && saturation > 0.0)
@@ -818,6 +848,18 @@ mod tests {
         for (knee, saturation) in [(1.0, 1.0), (-0.1, 1.0), (f64::NAN, 1.0), (0.5, 0.0), (0.5, f64::INFINITY), (0.5, f64::NAN)] {
             let p = CmykParams { grid_a2b: 2, grid_b2a: 2, mapping: GamutMapping::Oklab { knee, saturation }, ..CmykParams::default() };
             assert!(cmyk_profile(&p).is_err(), "knee {knee}, saturation {saturation}");
+        }
+    }
+
+    #[test]
+    fn black_generation_curve() {
+        let p = CmykParams { gcr_curve: vec![[0.0, 0.0], [0.5, 0.2], [1.0, 0.9]], ..CmykParams::default() };
+        for (g, k) in [(-1.0, 0.0), (0.0, 0.0), (0.25, 0.1), (0.5, 0.2), (0.75, 0.55), (1.0, 0.9), (2.0, 0.9)] {
+            assert!((gcr(&p, g) - k).abs() < 1e-12, "g {g}: {} != {k}", gcr(&p, g));
+        }
+        for curve in [vec![[0.5, 0.2], [0.5, 0.3]], vec![[0.5, 0.2], [0.2, 0.3]], vec![[0.0, 1.5]], vec![[f64::NAN, 0.0]]] {
+            let p = CmykParams { grid_a2b: 2, grid_b2a: 2, gcr_curve: curve.clone(), ..CmykParams::default() };
+            assert!(cmyk_profile(&p).is_err(), "{curve:?}");
         }
     }
 
