@@ -381,7 +381,12 @@ fn a_palette_drag_resolves_the_main_windows_drops_at_the_system_pointer_not_wher
         docked |= docks_window(&dock.frame(vec![]).0);
     }
     let mark = drag::mark(&dock.windows.ctx);
-    assert!(matches!(mark, Some(DropMark::Into(_))), "the middle of the group under the system pointer is marked: {mark:?}");
+    // The group fills the main window: a drop in its middle joins it, so the mark is the whole group.
+    let group = Rect::from_min_size(Pos2::ZERO, MAIN_AT.size());
+    assert!(
+        matches!(mark, Some(DropMark::Region { area, .. }) if area == group),
+        "the middle of the group under the system pointer is marked, the whole group: {mark:?}"
+    );
     system.set_primary_held(Some(false));
     for _ in 0..3 {
         docked |= docks_window(&dock.frame(vec![]).0);

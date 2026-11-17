@@ -4,8 +4,8 @@ use craft_behavior::{ColumnWidth, IconId, Metrics, Mixed, NavShape, Sense};
 use craft_theme::{ColorModel, HsbModel, OklchModel, RgbModel, Srgba};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
-    Bind, BodyCx, Common, Component, Cx, FieldLayout, LabelKind, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _,
-    SideLabel, Sizing,
+    Bind, Common, Component, Cx, FieldLayout, LabelKind, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel,
+    Sizing,
 };
 use craft_ui::display::{Icon, Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
@@ -258,9 +258,9 @@ impl<'a> Body<'a> {
                     for (column, models) in columns.iter().enumerate() {
                         // Each model column is its own grid of radio, letter and field cells, so the fields of a
                         // column share one x whether or not their row has a radio.
-                        Grid::new(THREE_COLUMNS).show(ui, |ui, cx| {
+                        Grid::new(THREE_COLUMNS).show(ui, |ui, _| {
                             for model in models {
-                                self.model_fields(ui, cx, pass, *model, ModelChoice { visible, offered: &offered, words }, got);
+                                self.model_fields(ui, pass, *model, ModelChoice { visible, offered: &offered, words }, got);
                             }
                             if column == 0 {
                                 Text::new(Label::from("")).show(ui);
@@ -279,15 +279,7 @@ impl<'a> Body<'a> {
 
     /// The rows of one model's channels, three cells each: the radio that chooses the area mode (an empty cell where the
     /// channel offers none), the channel's letter and its number field. The radio's name stays its accessible name.
-    fn model_fields(
-        &self,
-        ui: &mut Ui,
-        cx: &mut BodyCx<'_>,
-        pass: &Pass<'a>,
-        model: &'a dyn ColorModel,
-        choice: ModelChoice<'_>,
-        got: &mut Collected,
-    ) {
+    fn model_fields(&self, ui: &mut Ui, pass: &Pass<'a>, model: &'a dyn ColorModel, choice: ModelChoice<'_>, got: &mut Collected) {
         let ModelChoice { visible, offered, words } = choice;
         let values = pass.shown.values_in(model);
         for (i, channel) in model.channels().iter().enumerate() {
@@ -297,8 +289,16 @@ impl<'a> Body<'a> {
             let mode = offered.iter().find(|mode| mode.model().id() == model.id() && mode.strip() == i).copied();
             match mode {
                 Some(mode) => {
-                    let side = SideLabel::new().layout(FieldLayout::After).kind(LabelKind::Hidden);
-                    cx.labelled(ui, (model.id(), i), name.clone(), side, Radio::new(mode));
+                    // A grid cell takes one child that is a component: the Row is the cell, the labelled radio its content.
+                    Row::new().show(ui, |ui, cx| {
+                        cx.labelled(
+                            ui,
+                            (model.id(), i),
+                            name.clone(),
+                            SideLabel::new().layout(FieldLayout::After).kind(LabelKind::Hidden),
+                            Radio::new(mode),
+                        );
+                    });
                 }
                 None => {
                     Text::new(Label::from("")).show(ui);

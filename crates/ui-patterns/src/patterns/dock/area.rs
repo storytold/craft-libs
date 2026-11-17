@@ -663,15 +663,18 @@ fn register_bands<P: Clone + Eq + Hash + Send + 'static>(scene: &Scene<'_, P>, c
     }
     let canvas = |panel: &P| scene.spec(panel).canvas;
     let bands = frame::edge_bands(scene.layout, leaves, &canvas, scene.config, &scene.sizes, scene.rtl);
-    frame::register_edge_bands::<P>(ctx, scene.dock, &bands);
+    frame::register_edge_bands::<P>(ctx, scene.dock, &bands, scene.sizes.strip_reach);
     if scene.config.new_dock_zones {
         let flow = Flow::new(area, scene.rtl);
         let band = scene.sizes.new_dock_band;
         let start = Rect::from_min_size(area.min, Vec2::new(band, area.height()));
         let end = Rect::from_min_max(Pos2::new(area.right() - band, area.top()), area.max);
-        for (side, edge, rect) in [(DockSide::Start, DockEdge::Start, start), (DockSide::End, DockEdge::End, end)] {
+        let edge_line = |x: f32| Rect::from_x_y_ranges(x..=x, area.y_range());
+        let lines = [edge_line(area.left()), edge_line(area.right())];
+        for ((side, edge, rect), line) in [(DockSide::Start, DockEdge::Start, start), (DockSide::End, DockEdge::End, end)].into_iter().zip(lines) {
             if scene.layout.dock_path(edge).is_none() {
-                DockTargets::<P>::register(ctx, scene.dock, DockSpot::NewDock(side), flow.to_physical(rect));
+                let (rect, line) = (flow.to_physical(rect), flow.to_physical(line));
+                DockTargets::<P>::register_band(ctx, scene.dock, DockSpot::NewDock(side), rect, line, scene.sizes.strip_reach);
             }
         }
     }
