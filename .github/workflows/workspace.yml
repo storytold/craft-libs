@@ -30,7 +30,12 @@ jobs:
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
-      windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
+      # No debuginfo on Windows: writing PDBs for every test binary is a large part of its link
+      # time. A panic still names its file and line; only backtrace frames lose theirs, and the
+      # Linux and macOS legs keep line tables.
+      windows-env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+        CARGO_PROFILE_DEV_DEBUG=0
       # The fuzz-style tests run a fraction of their cases here: every hostile-input hammer and
       # sweep 1/8 (craft-testkit's CRAFT_HOSTILE_DIVISOR), every proptest without its own case
       # count 64 cases instead of 256. nightly.yml runs them all in full.
