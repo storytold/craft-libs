@@ -673,7 +673,8 @@ fn decode_context<'a>(
 ) -> Option<DecodeContext<'a>> {
     // PdfCraft patch: images and masks over `MAX_IMAGE_PIXELS` are not decoded at all (the
     // renderer skips them anyway): a fuzzed `/W 4294967295` stencil mask allocated gigabytes here.
-    if !image_size_ok(obj.width, obj.height) {
+    // The document's decode limits may set another pixel count.
+    if !image_size_within(obj.width, obj.height, obj.stream.decode_limits().max_image_pixels()) {
         (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
         return None;
     }
@@ -711,6 +712,11 @@ fn decode_context<'a>(
             (d.width, d.height)
         })
         .unwrap_or((obj.width, obj.height));
+    // Craft patch: the size an image codec decoded to is held to the same limit.
+    if !image_size_within(width, height, obj.stream.decode_limits().max_image_pixels()) {
+        (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+        return None;
+    }
 
     let color_space = color_space
         .or_else(|| {
@@ -810,6 +816,7 @@ fn decode_raster(
             .color_space
             .inverted_default_decode_arr(ctx.bits_per_component as f32);
 
+    let mut rgb_moved = false;
     let image_data = if ctx.bits_per_component == 8
         && ctx.color_space.supports_u8()
         && obj.transfer_function.is_none()
@@ -836,6 +843,17 @@ fn decode_raster(
 
         if ctx.color_space.is_device_gray() {
             Some(ImageData::Luma(LumaData {
+                data: core::mem::take(&mut ctx.decoded.data).into_owned(),
+                width: ctx.width,
+                height,
+                interpolate: obj.interpolate,
+                scale_factors: ctx.scale_factors,
+            }))
+        } else if ctx.color_space.is_device_rgb() {
+            // Craft patch: `DeviceRGB` samples are taken as they are, without a second buffer
+            // of the image's size (`fix_image_length` made them whole rows).
+            rgb_moved = true;
+            Some(ImageData::Rgb(RgbData {
                 data: core::mem::take(&mut ctx.decoded.data).into_owned(),
                 width: ctx.width,
                 height,
@@ -944,6 +962,7 @@ fn decode_raster(
             obj,
             &mut ctx.decoded,
             Some(&image),
+            rgb_moved,
             &ctx.color_space,
             ctx.bits_per_component,
             ctx.width,
@@ -994,6 +1013,7 @@ pub(crate) fn decode_inks(
         obj,
         &mut ctx.decoded,
         None,
+        false,
         &cs,
         bpc,
         ctx.width,
@@ -1115,10 +1135,14 @@ fn decode_mask_bytes(
     Some(data)
 }
 
+/// Craft patch: `rgb_moved` says that `image_data` holds the image's own 8-bit `DeviceRGB`
+/// samples, moved out of `decoded` (see `decode_raster`).
+#[allow(clippy::too_many_arguments)]
 fn resolve_alpha(
     obj: &ImageXObject<'_>,
     decoded: &mut FilterResult<'_>,
     image_data: Option<&ImageData>,
+    rgb_moved: bool,
     color_space: &ColorSpace,
     bits_per_component: u8,
     width: u32,
@@ -1158,6 +1182,7 @@ fn resolve_alpha(
         // TODO: Make this less ugly.
         let raw_data = match image_data {
             Some(ImageData::Luma(d)) => &d.data,
+            Some(ImageData::Rgb(d)) if rgb_moved => &d.data,
             _ => decoded.data.as_ref(),
         };
 
@@ -1486,7 +1511,13 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
 /// PdfCraft patch: whether an image or mask of `width` × `height` may be decoded (at most
 /// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
 pub fn image_size_ok(width: u32, height: u32) -> bool {
-    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
+    image_size_within(width, height, 1 << 28)
+}
+
+/// Whether an image or mask of `width` × `height` has at most `max_pixels` pixels and is not
+/// empty.
+fn image_size_within(width: u32, height: u32, max_pixels: u64) -> bool {
+    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= max_pixels
 }
 
 #[cfg(test)]
