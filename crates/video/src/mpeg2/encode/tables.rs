@@ -4,7 +4,7 @@
 use std::sync::OnceLock;
 
 use crate::mpeg2::vlc::{
-    CBP, DC_CHROMA, DC_LUMA, DCT_EOB, DCT_ESCAPE, DCT_ONE, DCT_ZERO, DCT_ZERO_LONG, MBA, MBA_ESCAPE, MBTYPE_I, MBTYPE_P, MOTION, dct_table,
+    CBP, DC_CHROMA, DC_LUMA, DCT_EOB, DCT_ESCAPE, DCT_ONE, DCT_ZERO, DCT_ZERO_LONG, MBA, MBA_ESCAPE, MBTYPE_B, MBTYPE_I, MBTYPE_P, MOTION, dct_table,
     parse_code,
 };
 
@@ -38,9 +38,10 @@ pub(crate) struct EncTables {
     /// macroblock_address_increment 1..=33 (index 0 unused) and the escape.
     pub mba: [Code; 34],
     pub mba_escape: Code,
-    /// macroblock_type by flags: I pictures, P pictures (index: flags, 0..32).
+    /// macroblock_type by flags: I, P and B pictures (index: flags, 0..32).
     pub mbtype_i: [Option<Code>; 32],
     pub mbtype_p: [Option<Code>; 32],
+    pub mbtype_b: [Option<Code>; 32],
     /// coded_block_pattern_420 (the first six blocks).
     pub cbp: [Code; 64],
     /// motion_code -16..=16 at index code + 16.
@@ -105,6 +106,7 @@ pub(crate) fn enc_tables() -> &'static EncTables {
             mba_escape,
             mbtype_i: mb_types(MBTYPE_I),
             mbtype_p: mb_types(MBTYPE_P),
+            mbtype_b: mb_types(MBTYPE_B),
             cbp: by_value(CBP, 0),
             motion: by_value(MOTION, 16),
             dc_luma: by_value(DC_LUMA, 0),
@@ -185,11 +187,25 @@ mod tests {
     use super::*;
     use crate::mpeg2::bits::Bits;
     use crate::mpeg2::slice::wrap_vector;
-    use crate::mpeg2::vlc::{MB_FWD, MB_INTRA, MB_PATTERN, MB_QUANT, rl, tables};
+    use crate::mpeg2::vlc::{MB_BWD, MB_FWD, MB_INTRA, MB_PATTERN, MB_QUANT, rl, tables};
 
-    /// Macroblock types the encoder sends (frame pictures, frame prediction, no B pictures).
+    /// Macroblock types the encoder sends in P pictures (frame pictures, frame prediction).
     const ENC_MB_TYPES: [i16; 7] =
         [MB_INTRA, MB_INTRA | MB_QUANT, MB_FWD | MB_PATTERN, MB_PATTERN, MB_FWD, MB_QUANT | MB_FWD | MB_PATTERN, MB_QUANT | MB_PATTERN];
+    /// And in B pictures: every combination of directions, with and without a residual.
+    const ENC_MB_TYPES_B: [i16; 11] = [
+        MB_INTRA,
+        MB_INTRA | MB_QUANT,
+        MB_FWD,
+        MB_BWD,
+        MB_FWD | MB_BWD,
+        MB_FWD | MB_PATTERN,
+        MB_BWD | MB_PATTERN,
+        MB_FWD | MB_BWD | MB_PATTERN,
+        MB_QUANT | MB_FWD | MB_PATTERN,
+        MB_QUANT | MB_BWD | MB_PATTERN,
+        MB_QUANT | MB_FWD | MB_BWD | MB_PATTERN,
+    ];
 
     #[test]
     fn every_code_decodes_to_its_value() {
@@ -222,6 +238,9 @@ mod tests {
                 check(c, &d.mbtype[0], f);
             }
             check(t.mbtype_p[f as usize].unwrap_or_default(), &d.mbtype[1], f);
+        }
+        for f in ENC_MB_TYPES_B {
+            check(t.mbtype_b[f as usize].unwrap_or_default(), &d.mbtype[2], f);
         }
         for (k, vlc) in [&d.dct_zero, &d.dct_one].into_iter().enumerate() {
             for run in 0..=MAX_RUN {

@@ -1,0 +1,17 @@
+[package]
+name = "craft-frame"
+description = "Compositor and display VideoFrame (RGBA and planar Y'CbCr) with ColorInfo, distinct from craft-video decoder pictures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-color = { workspace = true }
+craft-time = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
