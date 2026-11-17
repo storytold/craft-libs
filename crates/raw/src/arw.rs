@@ -756,7 +756,22 @@ fn high_resolution_pixel_shift_crop(raw: &Ifd, w: usize, h: usize) -> Result<Rec
     Ok(Rect::new(2 * crop.x, 2 * crop.y, 2 * crop.width, 2 * crop.height))
 }
 
-/// The image crop: Sony's crop tags, else the default crop (MakerNote, Exif size), else the old `SR2SubIFD`'s.
+/// Sony's crop tags placed with the DNG-style default crop: along an axis they do not narrow, the default crop's
+/// origin stands. The A7R III, IIIA, IV and IVA record a horizontal origin of 0 in `0x74c7` beside a default origin of
+/// 8 or 32 for the same width; the camera JPEG, Sony's converter and Adobe's all frame the image at the default
+/// origin (measured by registering each on the raw). An in-camera aspect ratio still narrows its own axis.
+fn sony_crop_on_default(sony: Rect, default: Option<Rect>) -> Rect {
+    let Some(default) = default else { return sony };
+    Rect::new(
+        if sony.width == default.width { default.x } else { sony.x },
+        if sony.height == default.height { default.y } else { sony.y },
+        sony.width,
+        sony.height,
+    )
+}
+
+/// The image crop: Sony's crop tags (see [`sony_crop_on_default`]), else the default crop (MakerNote, Exif size),
+/// else the old `SR2SubIFD`'s.
 fn image_crop(
     raw: &Ifd,
     exif: Option<&Ifd>,
@@ -766,7 +781,9 @@ fn image_crop(
     packed12: bool,
 ) -> Rect {
     match (raw.u64s(CROP_TOP_LEFT).as_deref(), raw.u64s(CROP_SIZE).as_deref()) {
-        (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h),
+        (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => {
+            sony_crop_on_default(Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize), dng_default_crop(raw, w, h)).clipped(w, h)
+        }
         _ => {
             let exif_size = exif.and_then(|e| Some((e.u64(t::PIXEL_X_DIMENSION)?, e.u64(t::PIXEL_Y_DIMENSION)?)));
             let crop = default_crop(raw, note, exif_size, w, h, packed12);
@@ -933,9 +950,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // a 16-shot composite frames its doubled single-shot default crop
     let crop = high_res_crop.unwrap_or(image_crop);
     // The lens-correction record. The distortion table is centred on the DNG-style default crop when the file has
-    // one: on the ILCE-7RM4A it starts at x = 32 where Sony's crop tags (the image crop, unchanged) start at 0, and
-    // the warp was validated against Sony's exports with that centre. The opcode's centre is in active-area
-    // coordinates, so it stays on the optical centre whichever crop frames the image.
+    // one: on the ILCE-7RM4A it starts at x = 32 where Sony's crop tags start at 0, and the warp was validated
+    // against Sony's exports with that centre (the image crop takes the same origin, see `sony_crop_on_default`).
+    // The opcode's centre is in active-area coordinates, so it stays on the optical centre whichever crop frames
+    // the image.
     let reference = high_res_crop.unwrap_or_else(|| lens_reference(raw, &model, crop, w, h, info.compression));
     let geometry = SonyLensGeometry {
         storage_width: w,
@@ -1096,6 +1114,20 @@ mod tests {
         };
         assert_eq!(&pixels[..3], &[1140, 929, 1000]);
         assert_eq!(full.info().developed_size(), (4, 4));
+    }
+
+    #[test]
+    fn sony_crop_takes_the_default_origin_on_axes_it_does_not_narrow() {
+        let default = Some(Rect::new(32, 20, 9504, 6336));
+        // A7R IV / IVA and A7R III: the same size recorded at x = 0
+        assert_eq!(sony_crop_on_default(Rect::new(0, 20, 9504, 6336), default), Rect::new(32, 20, 9504, 6336));
+        assert_eq!(sony_crop_on_default(Rect::new(0, 8, 7952, 5304), Some(Rect::new(8, 8, 7952, 5304))), Rect::new(8, 8, 7952, 5304));
+        // an in-camera aspect ratio narrows one axis and keeps the default origin on the other (A7R IIIA 16:9)
+        assert_eq!(sony_crop_on_default(Rect::new(0, 422, 7952, 4472), Some(Rect::new(8, 8, 7952, 5304))), Rect::new(8, 422, 7952, 4472));
+        assert_eq!(sony_crop_on_default(Rect::new(560, 20, 8448, 6336), default), Rect::new(560, 20, 8448, 6336));
+        // agreeing tags and files without a default crop are unchanged
+        assert_eq!(sony_crop_on_default(Rect::new(32, 20, 9504, 6336), default), Rect::new(32, 20, 9504, 6336));
+        assert_eq!(sony_crop_on_default(Rect::new(0, 20, 9504, 6336), None), Rect::new(0, 20, 9504, 6336));
     }
 
     #[test]

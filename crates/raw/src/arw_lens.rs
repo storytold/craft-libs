@@ -1426,17 +1426,17 @@ mod tests {
                 let s = sony(&img).clone();
                 (s, img)
             };
-            // Sony's crop at x = 0 and the default crop at x = 2 (the A7R IVA's 0 versus 32): the image keeps Sony's
-            // crop, the table is centred on and normalised to the default crop
+            // Sony's crop at x = 0 and the default crop at x = 2 (the A7R IVA's 0 versus 32) for the same width: the
+            // image takes the default origin, and the table is centred on and normalised to the default crop
             let mut arw = Arw::new("ILCE-7RM4A", order);
             arw.sony_crop = Some([0, 2, 30, 20]);
             let (s, img) = run(&arw);
             let g = &s.geometry;
             assert_eq!(
                 (g.sony_crop, g.default_crop, g.image_crop, g.reference),
-                (Some(r(0, 2, 30, 20)), Some(r(2, 2, 30, 20)), r(0, 2, 30, 20), r(2, 2, 30, 20))
+                (Some(r(0, 2, 30, 20)), Some(r(2, 2, 30, 20)), r(2, 2, 30, 20), r(2, 2, 30, 20))
             );
-            assert_eq!((img.crop, s.distortion.status), (r(0, 2, 30, 20), Applied));
+            assert_eq!((img.crop, s.distortion.status), (r(2, 2, 30, 20), Applied));
             let Some(Opcode::WarpRectilinear { center, .. }) = img.opcodes.list3.first() else { panic!("warp") };
             assert!((center[0] - 16.5 / 31.0).abs() < 1e-12 && (center[1] - 11.5 / 23.0).abs() < 1e-12, "{center:?}");
             // agreeing crops (the A7CR's case), in a frame padded beyond them (lossless L): the storage is recorded,
@@ -1838,8 +1838,9 @@ mod tests {
                     let full = crate::arw::decode(&file, crate::Mode::Full, &Limits::default()).unwrap();
                     assert_eq!(header.info(), full.info());
                     assert_eq!(full.opcodes.list3.len(), expected, "{model} {order:?} height={height}");
-                    // the image keeps Sony's crop tags; the warp is centred on the DNG default crop (x 2..32 of 32)
-                    assert_eq!(full.crop, Rect::new(0, 2, 30, height as usize));
+                    // the image sits at the DNG default origin along the width Sony's tags do not narrow, and the
+                    // warp is centred on the DNG default crop (x 2..32 of 32)
+                    assert_eq!(full.crop, Rect::new(2, 2, 30, height as usize));
                     if let Some(Opcode::WarpRectilinear { center, .. }) = full.opcodes.list3.first() {
                         assert!((center[0] - 16.5 / 31.0).abs() < 1e-12 && (center[1] - 11.5 / 23.0).abs() < 1e-12, "{center:?}");
                     }
