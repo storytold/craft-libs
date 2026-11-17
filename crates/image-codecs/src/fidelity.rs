@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use crate::codecs::dpx;
+use crate::codecs::{dds, dpx};
 use crate::format::{Format, caps};
 use crate::image::{ChannelLayout, Image, SampleType};
 use crate::options::{DdsCompression, EncodeOptions};
@@ -45,7 +45,8 @@ pub enum FidelityWarning {
     ColorToGray,
     /// The image will be quantized to a 256-colour palette.
     PaletteQuantized,
-    /// The format's encoder is lossy.
+    /// The format's encoder is lossy. DDS BC5 also keeps only red and green: blue is dropped and
+    /// reads back as 0 (for a normal map, the renderer rebuilds Z from X and Y).
     LossyCompression,
     IccDropped,
     ExifDropped,
@@ -175,8 +176,12 @@ pub(crate) fn plan(image: &Image, format: Format, opts: &EncodeOptions) -> Plan 
         },
         // CIELab has no float form: float Lab is written with 16 bits.
         Format::Tiff if layout.is_lab() && sample.is_float() => Plan { layout: pick_layout(layout, c.layouts, c.alpha), sample: SampleType::U16 },
-        // A block-compressed DDS stores RGBA whatever the source; uncompressed keeps gray and RGB.
-        Format::Dds if opts.dds.compression.is_block() => Plan { layout: ChannelLayout::Rgba, sample: SampleType::U8 },
+        // A block-compressed DDS stores what its compression holds whatever the source: gray for
+        // BC4, red and green for BC5 (written from RGB, blue dropped), RGBA for BC1 to BC3.
+        // Uncompressed keeps gray and RGB.
+        Format::Dds if opts.dds.compression.is_block() => {
+            Plan { layout: opts.dds.compression.layout().map_or(ChannelLayout::Rgba, dds::channel_layout), sample: SampleType::U8 }
+        }
         _ => Plan { layout: pick_layout(layout, c.layouts, c.alpha), sample: pick_sample(sample, c.depths) },
     }
 }

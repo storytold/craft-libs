@@ -10,9 +10,16 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `testing`: writers of small workbooks and packages, for the tests of crates that read them.
+test-support = []
+
 [dependencies]
 craft-drawingml = { workspace = true }
 craft-opc = { workspace = true }
 craft-sheet = { workspace = true }
 craft-xml = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-xlsx = { path = ".", features = ["test-support"] }
