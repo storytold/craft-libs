@@ -12,10 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
-  group: ecproj-format-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: ecproj-format-${{ github.ref }}
+  cancel-in-progress: true
 
 # fmt, clippy and the tests run in the Workspace gate on every OS; this checks what it does not.
 jobs:

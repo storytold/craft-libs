@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: cms-${{ github.ref }}
+  cancel-in-progress: true
+
 # clippy and the debug tests run in the Workspace gate; this runs the release build of the tests.
 jobs:
   cms:
