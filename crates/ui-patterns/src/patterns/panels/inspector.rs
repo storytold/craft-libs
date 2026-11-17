@@ -5,7 +5,7 @@ use crate::contract::{BodyCx, LabelScheme, Pad, Props as _, Show as _, ShowConta
 use crate::notices::{Notice, NoticeLayout};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
-use crate::sections::{HeaderAction, MenuRows, Panel, PanelOutput};
+use crate::sections::{HeaderAction, HeaderStrength, MenuRows, Panel, PanelOutput};
 use craft_theme::variant::Tone;
 use egui::{AsIdSalt, IdSalt, Ui};
 
@@ -61,7 +61,7 @@ impl<'a> Inspector<'a> {
         self
     }
 
-    /// The target's kind, at the header's end in muted caption text; a header too narrow for both drops it first.
+    /// The target's kind, at the header's end in faint caption text; a header too narrow for both drops it first.
     #[must_use]
     pub fn kind(mut self, kind: impl Into<Label>) -> Self {
         self.kind = Some(kind.into());
@@ -94,7 +94,8 @@ impl<'a> Inspector<'a> {
         let Inspector { label, target, icon, name, kind, empty, actions, menu } = self;
         let shown = target.is_some();
         let title = if shown { name.unwrap_or(label) } else { label };
-        let mut panel = Panel::new(title).titled().actions(actions).labels(LabelScheme::Inspector).pad(Pad::None);
+        // The target's name carries a section heading's weight, as the headings of the sections under it do.
+        let mut panel = Panel::new(title).titled().strength(HeaderStrength::Section).actions(actions).labels(LabelScheme::Inspector).pad(Pad::None);
         if shown {
             if let Some(icon) = icon {
                 panel = panel.icon(icon);

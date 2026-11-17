@@ -4,7 +4,6 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
-use craft_theme::ControlSize;
 use craft_theme::Srgba;
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::choice::{Checkbox, Swatch};
@@ -349,12 +348,7 @@ impl<M: Value> Pass<'_, M> {
 
     /// A pen toggle over a flag: an icon button that stays pressed while on, named `caption`; a click is one `Set`.
     fn toggle(&mut self, ui: &mut Ui, icon: &'static str, caption: &Label, enabled: bool, current: bool, set: fn(&mut PaintValues<M>, bool)) {
-        let shown = ToggleButton::new(caption.clone(), Bind::given(current))
-            .icon(IconId::new(icon))
-            .icon_only()
-            .size(ControlSize::Md)
-            .enabled(enabled)
-            .show(ui);
+        let shown = ToggleButton::new(caption.clone(), Bind::given(current)).icon(IconId::new(icon)).icon_only().enabled(enabled).show(ui);
         if let Some(next) = shown.value().copied() {
             self.set_with(caption, |v| set(v, next));
         }
