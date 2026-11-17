@@ -940,6 +940,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
 
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
     body.raw = &content;
+    body.markup = &content;
     body.spaces_left = spaces_left;
     super::xml::events_at(&content, |ev, at| body.feed_at(ev, at));
     let mut blocks = body.take_blocks();

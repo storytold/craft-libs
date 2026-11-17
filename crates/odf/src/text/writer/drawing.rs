@@ -53,7 +53,13 @@ pub(in crate::text) fn fill_attrs(
         }
         Some(f) => {
             let c = hex(f.main_color());
-            format!("{} draw:fill=\"solid\" draw:fill-color=\"{c}\"", background(&c))
+            let opacity = match f {
+                Fill::Solid { transparency, .. } if *transparency > 0.0 => {
+                    format!(" draw:opacity=\"{:.0}%\"", (100.0 - transparency).clamp(0.0, 100.0))
+                }
+                _ => String::new(),
+            };
+            format!("{} draw:fill=\"solid\" draw:fill-color=\"{c}\"{opacity}", background(&c))
         }
         None => format!("{} draw:fill=\"none\"", background("transparent")),
     }

@@ -2,6 +2,7 @@
 
 mod bidi;
 mod embed;
+mod font_table;
 mod glossary;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
