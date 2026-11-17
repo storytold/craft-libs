@@ -8,6 +8,9 @@ use egui::{Context, Id};
 /// Makes `owner` the receiver of the requests that target the node of `node` (registered by `register_node`) and names
 /// `part` as the target: the row of a collection is a node of the row's component, and the collection acts on it.
 pub(crate) fn redirect_node(ctx: &Context, node: Id, owner: Id, part: PartRef) {
+    // Journaled after the `register_node` it amends, so a settled region's replay leaves the row's node with the
+    // collection, as a run does.
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| redirect_node(ctx, node, owner, part));
     current(ctx, |stage| {
         if let Some(entry) = stage.nodes.get_mut(&node_key(node)) {
             entry.owner = owner;
