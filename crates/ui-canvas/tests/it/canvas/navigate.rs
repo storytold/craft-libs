@@ -6,7 +6,7 @@ use craft_behavior::{Axis, CanvasView, GESTURE_GAP, MotionMode, Wheel, WheelPhas
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasSpace, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide, ViewCommands,
-    WheelNavigation,
+    ViewRequest, WheelNavigation,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
@@ -316,14 +316,16 @@ fn the_view_commands_a_canvas_runs_are_in_the_frame_output_whatever_fired_them()
 fn a_canvas_runs_the_view_commands_its_app_queues_before_the_fired_ones_and_reports_only_the_fired() {
     const DOCUMENT: Size = Size::new(4000.0, 4000.0);
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
-    let queue = Rc::new(RefCell::new(Vec::<ViewCommands>::new()));
-    let (shown, asked) = (Rc::clone(&view), Rc::clone(&queue));
+    let on_screen = Rc::new(Cell::new(None::<CanvasView>));
+    let queue = Rc::new(RefCell::new(Vec::<ViewRequest>::new()));
+    let (shown, seen, asked) = (Rc::clone(&view), Rc::clone(&on_screen), Rc::clone(&queue));
     let mut fixture = Fixture::new(move |ui| {
         let mut given = shown.get();
         given.rect = ui.available_rect_before_wrap();
         let commands = asked.borrow().clone();
         let canvas = Canvas::new("Document").document(DOCUMENT).view(given).queued(&commands).show(ui, |_, _| {});
         shown.set(canvas.output.view.unwrap_or(given));
+        seen.set(canvas.output.space.map(|space| space.view));
         // As an app does: the queue is dropped once a pass showed the canvas.
         asked.borrow_mut().clear();
     });
@@ -331,16 +333,20 @@ fn a_canvas_runs_the_view_commands_its_app_queues_before_the_fired_ones_and_repo
     frame::take_output(fixture.ctx());
     let ppp = fixture.ctx().pixels_per_point();
 
-    // Fit on Screen leaves room around the whole document.
-    queue.borrow_mut().push(ViewCommands::FitOnScreen);
+    // The app placing the view jumps there, also while a zoom the user asked for eases, and Fit on Screen leaves room
+    // around the document.
+    queue.borrow_mut().push(ViewRequest::Command(ViewCommands::ZoomIn));
+    fixture.frame(vec![]);
+    queue.borrow_mut().push(ViewRequest::Place(ViewCommands::FitOnScreen));
     fixture.frame(vec![]);
     let fitted = view.get();
+    assert_eq!(on_screen.get().map(|shown| (shown.zoom, shown.center)), Some((fitted.zoom, fitted.center)), "a placed view jumps");
     let extent = fitted.extent(craft_behavior::kurbo::Rect::from_origin_size(Point::ORIGIN, DOCUMENT));
     assert!(extent.x < fitted.rect.width() && extent.y < fitted.rect.height(), "the fit leaves room on every side");
 
-    // Two queued Zoom Ins and a fired Zoom Out: the queue runs first, in order, then the fired command.
+    // Two asked Zoom Ins and a fired Zoom Out: the queue runs first, in order, then the fired command.
     let start = zoom::device(&fitted, ppp);
-    queue.borrow_mut().extend([ViewCommands::ZoomIn, ViewCommands::ZoomIn]);
+    queue.borrow_mut().extend([ViewRequest::Command(ViewCommands::ZoomIn), ViewRequest::Command(ViewCommands::ZoomIn)]);
     assert!(commands::fire(fixture.ctx(), ViewCommands::ZoomOut, FireSource::Menu));
     fixture.frame(vec![]);
     let one_in = ZoomLadder::step(start, 1, DOCUMENT);
