@@ -31,6 +31,7 @@ log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-plist = { path = "crates/plist" }
 craft-wasm = { path = "crates/wasm" }
+craft-gpu-yuv = { path = "crates/gpu-yuv" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
