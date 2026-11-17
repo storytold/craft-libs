@@ -686,3 +686,21 @@ fn a_definition_with_a_command_in_its_parameter_text_shows_nothing() {
         assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
     }
 }
+
+#[test]
+fn let_takes_the_token_after_its_equals_sign() {
+    // `\let\a=\relax` showed the `=`, and `\let\a=x` showed the `x` that `\a` takes the meaning of.
+    for src in [
+        "\\let\\a=\\relax{word}",
+        "\\let\\a = \\relax word",
+        "\\let\\a\\relax word",
+        "\\let\\a=xword",
+        "\\let\\a= xword",
+        "\\let\\a xword",
+        "\\let\\a==word",
+        "\\let\\bgroup={word",
+        "\\let\\egroup=}word",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
