@@ -185,3 +185,22 @@ fn a_subtree_shared_too_often_stops_at_the_copy_limit() {
     assert!(out.warnings.iter().any(|w| w.contains("past the copy or depth limit")), "{:?}", out.warnings);
     write_prc(&out.scene).unwrap();
 }
+
+#[test]
+fn a_node_listing_itself_many_times_is_cut_without_queueing_every_reference() {
+    // Before the queue was bounded this took about ten billion discarded visits.
+    let mut scene = Scene::from_meshes(vec![triangle(None)], Vec::new());
+    scene.nodes[0].children = vec![0; 100_000];
+    let out = mesh_scene_from(&scene, 1.0, UpAxis::Z);
+    assert!(out.scene.nodes.len() <= super::MAX_NODE_COPIES);
+    assert!(out.warnings.iter().any(|w| w.contains("past the copy or depth limit")), "{:?}", out.warnings);
+}
+
+#[test]
+fn more_roots_than_the_copy_limit_are_cut() {
+    let mut scene = Scene::from_meshes(vec![triangle(None)], Vec::new());
+    scene.roots = vec![0; super::MAX_NODE_COPIES + 5];
+    let out = mesh_scene_from(&scene, 1.0, UpAxis::Z);
+    assert_eq!(out.scene.nodes.len(), super::MAX_NODE_COPIES);
+    assert!(out.warnings.iter().any(|w| w.starts_with("5 subtree(s)")), "{:?}", out.warnings);
+}

@@ -234,7 +234,7 @@ fn nodes(scene: &Scene, up: UpAxis, out: &mut MeshScene, counts: &mut Counts) {
             counts.bad_nodes += 1;
             continue;
         };
-        if depth > MAX_NODE_DEPTH || out.nodes.len() >= MAX_NODE_COPIES {
+        if out.nodes.len() >= MAX_NODE_COPIES {
             counts.cut += 1;
             continue;
         }
@@ -248,7 +248,12 @@ fn nodes(scene: &Scene, up: UpAxis, out: &mut MeshScene, counts: &mut Counts) {
             Some(p) => p.children.push(copy),
             None => out.roots.push(copy),
         }
-        stack.extend(n.children.iter().rev().map(|c| (*c, Some(copy), depth + 1)));
+        // Children are queued only within the depth and copy budgets, so the work stays bounded by
+        // them even when a node lists itself many times.
+        let room = if depth < MAX_NODE_DEPTH { MAX_NODE_COPIES.saturating_sub(out.nodes.len().saturating_add(stack.len())) } else { 0 };
+        let queued = n.children.len().min(room);
+        counts.cut += n.children.len() - queued;
+        stack.extend(n.children.iter().take(queued).rev().map(|c| (*c, Some(copy), depth + 1)));
     }
 }
 
