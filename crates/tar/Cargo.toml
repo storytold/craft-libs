@@ -1,0 +1,18 @@
+[package]
+name = "craft-tar"
+description = "TAR (v7, ustar, GNU long names and base-256 sizes, pax overrides) and cpio (newc, crc, odc) member walkers for hostile input: list members and where their data lies, without extracting. From Craft Anything."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# `serde`: `Serialize` on the listing types, for apps that report listings as JSON.
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
