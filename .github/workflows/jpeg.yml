@@ -19,7 +19,8 @@ concurrency:
 
 jobs:
   check:
-    timeout-minutes: 10
+    # Uncached: the wasm check builds its dependencies on every run (about 10 minutes with setup).
+    timeout-minutes: 20
     # fmt, clippy and the tests run in the Workspace gate on every OS.
     name: JPEG WASM
     runs-on: ubuntu-latest
