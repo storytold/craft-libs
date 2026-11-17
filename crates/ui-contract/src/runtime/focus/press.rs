@@ -2,9 +2,8 @@
 //! classified focus move applies at the end hook.
 
 use super::{Act, State, StopKey};
-use crate::runtime::egui::areas;
 use crate::runtime::egui::focus as egui_focus;
-use crate::runtime::{overlay, pointer, sampler};
+use crate::runtime::{pointer, sampler};
 use craft_behavior::PartRef;
 use craft_behavior::Winner;
 use craft_behavior::focus::{PressFocus, classify_press};
@@ -39,9 +38,7 @@ pub(crate) fn press_at(ctx: &Context) -> Option<PressAt> {
         let targets = pointer::pass_pointer(ctx).press_targets;
         let (winner, root) = pointer::press_winner(ctx, pos, targets).unzip();
         let under = pointer::shapes_at(ctx, pos);
-        // The focused widget's layer is egui's last-pass record of it; a stop records no layer of its own.
-        let focus_layer = egui_focus::focused(ctx).and_then(|widget| ctx.read_response(widget)).map(|response| response.layer_id);
-        let over_focus = areas::layer_at(ctx, pos).zip(focus_layer).is_some_and(|(layer, below)| overlay::popup_above(ctx, layer, below));
+        let over_focus = super::popup_above_focus(ctx, pos);
         PressAt { winner, root, target: targets.click, under, over_focus }
     })
 }

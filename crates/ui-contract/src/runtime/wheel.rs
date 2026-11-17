@@ -58,6 +58,8 @@ pub(crate) fn begin(ctx: &Context) {
     // A text field the app drew itself holds key focus: it reads its own wheel.
     let app_field = wheel_in.is_some() && focus::record(ctx, viewport).host_text;
     let hover = pass_pointer.hover.or(frame.as_ref().and_then(|frame| frame.pos));
+    // A popup the pointer is over, opened above the focused field's layer, takes the wheel by position.
+    let over_popup = wheel_in.is_some() && hover.is_some_and(|at| focus::popup_above_focus(ctx, at));
     let pressed_on = pass_pointer
         .events
         .iter()
@@ -114,7 +116,7 @@ pub(crate) fn begin(ctx: &Context) {
                     .rotation(frame.rotation)
                     .touch_rotation(touch_rotation)
                     .at(at);
-                let focus = WheelFocus::new(focused).app_field(app_field);
+                let focus = WheelFocus::new(focused).app_field(app_field).over_popup(over_popup);
                 // The device's lines and pages become points of each taker: the notch is the scroll owner's to choose.
                 for (owner, mut share) in split(&state.last, at, share, focus, state.armed, &mut state.gesture, now) {
                     if let Some(taker) = state.last.iter().find(|taker| taker.owner == owner) {

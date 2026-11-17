@@ -382,18 +382,28 @@ pub struct WheelFocus<O> {
     pub taker: Option<O>,
     /// Key focus is in a text field the app drew itself, which reads its own wheel: its share goes to no taker.
     pub app_field: bool,
+    /// The pointer is over a popup layer opened above the layer of the focused field: the field takes no share, and
+    /// the wheel goes by position.
+    pub over_popup: bool,
 }
 
 impl<O> WheelFocus<O> {
     /// Focus on `taker`, or on nothing that takes the wheel.
     pub const fn new(taker: Option<O>) -> Self {
-        WheelFocus { taker, app_field: false }
+        WheelFocus { taker, app_field: false, over_popup: false }
     }
 
     /// The same focus, in a text field the app drew itself when `on`.
     #[must_use]
     pub const fn app_field(mut self, on: bool) -> Self {
         self.app_field = on;
+        self
+    }
+
+    /// The same focus, with the pointer over a popup layer opened above the focused field's layer when `on`.
+    #[must_use]
+    pub const fn over_popup(mut self, on: bool) -> Self {
+        self.over_popup = on;
         self
     }
 }
@@ -417,8 +427,9 @@ const fn scroll_only(wheel: Wheel) -> Wheel {
 }
 
 /// The split rule. A focused field (a `WheelTaker::field` taker that holds `focus`, or an app's own text field) takes
-/// the field's share of the scroll wherever the pointer is: a vertical or Shift wheel without Alt or Cmd/Ctrl; an app's
-/// field reads it itself, so no taker gets it. A running `gesture` (an event at `now` less than [`GESTURE_GAP`] after
+/// the field's share of the scroll wherever the pointer is, except over a popup opened above it
+/// (`WheelFocus::over_popup`): a vertical or Shift wheel without Alt or Cmd/Ctrl; an app's field reads it itself, so
+/// no taker gets it. A running `gesture` (an event at `now` less than [`GESTURE_GAP`] after
 /// its last one, inside its device phase) keeps the taker it started on: each scroll axis that taker takes goes to it
 /// wherever the pointer is, and the rest by position to a taker that is no value control (`WheelTaker::value`), so a
 /// control the pointer passes over does not take the scroll over. A value control that is not the focused field keeps
@@ -447,7 +458,8 @@ pub fn split<O: Copy + PartialEq>(
     if !running {
         *gesture = WheelGesture::default();
     }
-    let field = focus.taker.filter(|focused| takers.iter().any(|taker| taker.field && taker.owner == *focused));
+    let field = focus.taker.filter(|focused| !focus.over_popup && takers.iter().any(|taker| taker.field && taker.owner == *focused));
+    let app_field = focus.app_field && !focus.over_popup;
     // A value control keeps its gesture only while the pointer is over it: once the pointer leaves, the gesture goes
     // on by position as a running one (value controls excluded) and the control hears its end now, so its edit run
     // commits and coming back in the same gesture does not step it again.
@@ -459,7 +471,7 @@ pub fn split<O: Copy + PartialEq>(
         gesture.owner = None;
     }
     let latch = running.then_some(gesture.owner);
-    let mut shares = if (field.is_some() || focus.app_field) && wheel.scroll != Vec2::ZERO && for_field(&wheel) {
+    let mut shares = if (field.is_some() || app_field) && wheel.scroll != Vec2::ZERO && for_field(&wheel) {
         let mut shares =
             if pinches(&wheel) { split_at(takers, at, Wheel { scroll: Vec2::ZERO, ..wheel }, focus.taker, armed, latch) } else { Vec::new() };
         if let Some(owner) = field {
@@ -610,6 +622,8 @@ mod tests {
         assert_eq!(owners(wheel(5.0, 0.0), focused), [1], "a sideways swipe stays the view's");
         assert_eq!(owners(wheel(0.0, 5.0), WheelFocus::new(None).app_field(true)), [] as [u8; 0], "an app's field reads its own");
         assert_eq!(owners(alt, WheelFocus::new(None).app_field(true)), [1]);
+        assert_eq!(owners(wheel(0.0, 5.0), focused.over_popup(true)), [1], "over a popup above the field: by position");
+        assert_eq!(owners(wheel(0.0, 5.0), WheelFocus::new(None).app_field(true).over_popup(true)), [1]);
     }
 
     #[test]

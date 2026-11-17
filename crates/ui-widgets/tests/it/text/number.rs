@@ -661,3 +661,39 @@ fn a_popup_slider_drag_on_a_given_value_runs_one_pass_a_frame() {
     assert!(model.get() > before, "the drag moved the app's value");
     assert!(passes.iter().all(|&n| n == 1), "slider drag frames ran {passes:?} passes");
 }
+
+/// The wheel over a field's open presets list scrolls the list, though the field keeps focus after Enter: the focused
+/// field's share of the wheel stops at a popup opened above it.
+#[trial]
+fn the_wheel_over_an_open_presets_list_scrolls_the_list_while_the_field_keeps_focus() {
+    use craft_ui::contract::Role;
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::pointer::{moved, wheel_lines};
+    let value = std::rc::Rc::new(Cell::new(Some(START)));
+    let held = value.clone();
+    let presets: Vec<Entry<NumberPick>> = (1..=60).map(|n| Entry::new(NumberPick::Number(f64::from(n)), format!("{n} px"))).collect();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        NumberField::new("Size", Bind::bound(&mut now)).id_salt("size").presets(&presets).show(ui);
+        held.set(now);
+    });
+    fixture.settle();
+    let field = fixture.by_label("Size").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("500").key(Key::Enter, Modifiers::NONE).settle();
+    let focus = fixture.focused_stop();
+    assert!(focus.is_some(), "the field keeps focus after Enter");
+    let chevron = fixture.by_role(Role::BUTTON).first().expect("the presets chevron").center();
+    fixture.click_at(chevron).settle();
+    assert_eq!(fixture.focused_stop(), focus, "opening the list leaves focus on the field");
+    let first_row = |fixture: &Fixture| fixture.by_label("1 px").map(|row| row.rect);
+    let before = first_row(&fixture).expect("the list is open");
+    let committed = value.get();
+    fixture.frame(vec![moved(before.center())]);
+    for _ in 0..3 {
+        fixture.frame(vec![wheel_lines(-1.0)]);
+    }
+    fixture.settle();
+    assert!(first_row(&fixture).is_none_or(|row| row.top() < before.top()), "the list scrolled");
+    assert_eq!(value.get(), committed, "the field's value stays");
+}
