@@ -216,6 +216,15 @@ fn a_docked_scroll_bar_keeps_its_width_at_rest_and_under_the_pointer() {
         assert_eq!(rest, hover, "{axis:?} rtl {rtl}: the thumb is the same at rest and under the pointer");
         let across = |rect: Rect| if axis == Axis::X { rect.height() } else { rect.width() };
         assert!((across(rest) - across(track)).abs() < EPS, "{axis:?}: the thumb fills the track");
+        let fill = |state: State, mix: StateMix| match ScrollBar::shapes(&look, track, axis, rtl, &span, &StateSet::new(state, Flags::empty(), mix))
+            .as_slice()
+        {
+            [Shape::Rect(track), Shape::Rect(thumb)] => (track.fill, thumb.fill),
+            other => panic!("a track and a thumb: {other:?}"),
+        };
+        let (track_fill, thumb_fill) = fill(State::Rest, StateMix::REST);
+        assert_eq!(thumb_fill, tokens.color.line.control_edge.egui(), "{axis:?}: the resting thumb is the quiet edge colour");
+        assert_eq!(track_fill, tokens.color.surface.chrome.egui(), "{axis:?}: the track is the chrome surface");
     }
 }
 

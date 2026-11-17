@@ -180,7 +180,7 @@ pub enum ScrollBarKind {
     #[default]
     Floating,
     /// The bar beside a canvas view, always shown: the thumb has the track's whole thickness in every state, on a
-    /// `surface.chrome` track.
+    /// `surface.chrome` track, quiet at rest (`line.control_edge`).
     Docked,
 }
 
@@ -215,12 +215,21 @@ pub(crate) fn scroll_bar_look(tokens: &UiTokens) -> ScrollBarLook {
 pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> ScrollBarLook {
     let c = &tokens.color;
     let clear = style_color(Rgba::TRANSPARENT);
-    let thumb = Stateful::new(style_color(c.text.faint)).off(craft_theme::States::new(
-        style_color(c.text.faint),
-        style_color(c.text.muted),
-        style_color(c.text.normal),
-        style_color(c.state.disabled_fill),
-    ));
+    let disabled = style_color(c.state.disabled_fill);
+    let thumb = match kind {
+        ScrollBarKind::Floating => Stateful::new(style_color(c.text.faint)).off(craft_theme::States::new(
+            style_color(c.text.faint),
+            style_color(c.text.muted),
+            style_color(c.text.normal),
+            disabled,
+        )),
+        ScrollBarKind::Docked => Stateful::new(style_color(c.line.control_edge)).off(craft_theme::States::new(
+            style_color(c.line.control_edge),
+            style_color(c.text.faint),
+            style_color(c.text.muted),
+            disabled,
+        )),
+    };
     let hover = style_color(c.state.hover);
     let (thickness, thin) = (tokens.size.handle.sm, tokens.stroke.thick);
     let (track, rest) = match kind {
