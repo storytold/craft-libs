@@ -13,6 +13,7 @@
 //!   demuxers and [`TrackDecoder`]; everything else (FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
 //!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the
 //!   same without symphonia.
+//! - [`vorbis::decoder`] (feature `vorbis-decode`): the pure-Rust Vorbis I decoder, packets and Ogg files.
 //! - [`encode_ogg_vorbis`] and [`vorbis::encoder`] (feature `vorbis-encode`): Ogg Vorbis files
 //!   and Vorbis packets from a pure-Rust encoder, 1 to 8 channels, quality -1 to 10, with tags.
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
@@ -58,7 +59,7 @@ pub mod qoa;
 mod read;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
-#[cfg(feature = "vorbis-encode")]
+#[cfg(any(feature = "vorbis-decode", feature = "vorbis-encode"))]
 pub mod vorbis;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
