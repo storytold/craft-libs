@@ -704,9 +704,11 @@ fn layer_past_window(ctx: &Context, viewport: ViewportId, at: Pos2) -> Option<La
         PerViewport::<Shapes>::with(ctx, viewport, |record| {
             record.last.get(layer).is_some_and(|roots| {
                 roots.values().any(|entry| {
-                    entry.shapes.iter().zip(&entry.placed).any(|(shape, placed)| {
-                        shape.sense.takes_press() && shape.hits(point) && shape.shape.bounds().intersects(placed.clip)
-                    })
+                    entry
+                        .shapes
+                        .iter()
+                        .zip(&entry.placed)
+                        .any(|(shape, placed)| shape.sense.takes_press() && shape.hits(point) && shape.shape.bounds().intersects(placed.clip))
                 })
             })
         })
@@ -735,7 +737,9 @@ fn diag_layers(ctx: &Context, viewport: ViewportId, at: Pos2, chosen: Layer, tes
                         .iter()
                         .zip(&entry.placed)
                         .filter(|(shape, _)| shape.hits(point))
-                        .map(|(shape, placed)| format!("{} {:?} {:?} clip_in {}", diag_id(shape.owner), shape.part, shape.sense, placed.clip.contains(point)))
+                        .map(|(shape, placed)| {
+                            format!("{} {:?} {:?} clip_in {}", diag_id(shape.owner), shape.part, shape.sense, placed.clip.contains(point))
+                        })
                         .collect();
                     format!("root {} shapes {} under {under:?}", diag_id(*root), entry.shapes.len())
                 })

@@ -71,9 +71,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 let allowed = policy.movable
                     && match to {
                         Target::Float { .. } => policy.floatable,
-                        Target::At { anchor, placement } => {
-                            placement.allowed_by(permissions(anchor)) && (!floats(anchor) || policy.floatable)
-                        }
+                        Target::At { anchor, placement } => placement.allowed_by(permissions(anchor)) && (!floats(anchor) || policy.floatable),
                         Target::NewDock { .. } => true,
                     };
                 if !allowed {

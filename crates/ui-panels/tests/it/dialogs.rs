@@ -6,8 +6,8 @@ use craft_quit::{CloseAnswer, CloseScope};
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
-    dialog_id,
+    Alert, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
+    UnsavedChangesDialog, dialog_id,
 };
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::sections::{DialogRole, FooterButton};

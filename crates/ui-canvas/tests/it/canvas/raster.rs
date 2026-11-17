@@ -143,7 +143,11 @@ fn the_checkerboard_starts_with_a_light_cell_at_the_document_corner() {
         let at_corner = checker.vertices.iter().find(|vertex| vertex.pos.distance(corner) < 0.5).expect("a checkerboard corner at the document's");
         let whole = |v: f32| (v - v.round()).abs() < 1e-3;
         // The texture repeats every two cells, light first: a whole texture coordinate is a light cell's top-left.
-        assert!(whole(at_corner.uv.x) && whole(at_corner.uv.y), "{width} x {height} at {zoom}: a light cell starts at the document's corner: {:?}", at_corner.uv);
+        assert!(
+            whole(at_corner.uv.x) && whole(at_corner.uv.y),
+            "{width} x {height} at {zoom}: a light cell starts at the document's corner: {:?}",
+            at_corner.uv
+        );
     }
 }
 
