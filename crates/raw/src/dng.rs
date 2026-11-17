@@ -546,7 +546,7 @@ fn extend_understated_strip(bytes: &[u8], info: &mut ImageInfo, raw: &Ifd) {
     }
     let ([offset], [count]) = (&info.offsets[..], &info.byte_counts[..]) else { return };
     let Some([top, left, bottom, right]) = raw.u64s(t::ACTIVE_AREA).and_then(|a| <[u64; 4]>::try_from(a).ok()) else { return };
-    if left != 0 || bottom <= top || right == 0 || right >= u64::from(info.width) {
+    if left != 0 || bottom <= top || bottom > u64::from(info.height) || right == 0 || right >= u64::from(info.width) {
         return;
     }
     let row_bytes = |width: u64| width.checked_mul(u64::from(info.height))?.checked_mul(bits / 8);

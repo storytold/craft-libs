@@ -170,6 +170,8 @@ fn other_short_strips_are_still_refused() {
     assert!(refused(understated_strip_dng(8, 4, 6 * 4 * 2, None)));
     // the count is not exactly the area's bytes
     assert!(refused(understated_strip_dng(8, 4, 5 * 4 * 2, Some([0, 0, 4, 6]))));
+    // the area reaches below the image, so decode would discard it
+    assert!(refused(understated_strip_dng(8, 4, 6 * 4 * 2, Some([4, 0, 5, 6]))));
     // the area does not start at column 0
     assert!(refused(understated_strip_dng(8, 4, 6 * 4 * 2, Some([0, 2, 4, 8]))));
     // the file does not hold the whole raster
