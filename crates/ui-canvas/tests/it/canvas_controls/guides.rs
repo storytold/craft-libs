@@ -226,3 +226,27 @@ fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_cha
     let landed: Vec<f64> = deep.borrow().iter().map(|guide| guide.position).collect();
     assert!(matches!(landed.as_slice(), [tick] if tick.fract() == 0.0), "Shift deep in lands on a whole pixel: {landed:?}");
 }
+
+// Delete on a focused guide removes it, and the focus the removal hands to the next guide selects nothing: no guide is
+// selected after a delete, as in Photoshop.
+#[trial]
+fn a_deleted_guide_hands_focus_on_without_selecting_the_next_guide() {
+    let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(vec![guide(1, Axis::Y, 200.0), guide(2, Axis::Y, 400.0)]));
+    let selected: Shared<Option<GuideKey>> = Rc::default();
+    let (shown, picked) = (Rc::clone(&guides), Rc::clone(&selected));
+    let mut fixture = ToolFixture::with_view("Document", Recorder::default(), view_at(1.0), move |ui, cx| {
+        let mut built = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *shown.borrow_mut())).interactive(true);
+        let current = *picked.borrow();
+        if let Some(key) = current {
+            built = built.selected_guide(key);
+        }
+        if let Some(select) = built.show_at(ui, cx.rect).select {
+            *picked.borrow_mut() = select;
+        }
+    });
+    fixture.press_at(pos2(200.0, 300.0)).release_at(pos2(200.0, 300.0));
+    assert_eq!(*selected.borrow(), Some(GuideKey::new(1)), "a click selects the guide");
+    fixture.fixture().key(Key::Delete, Modifiers::NONE).idle(3);
+    assert!(at(&guides, Axis::Y, 200.0).is_none(), "Delete removes it: {:?}", guides.borrow());
+    assert_eq!(*selected.borrow(), None, "and selects no other guide");
+}

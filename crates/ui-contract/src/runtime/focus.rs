@@ -632,6 +632,9 @@ pub(crate) enum FocusOrigin {
     Press,
     /// The keyboard (Tab, arrows, Page keys) or a focus request.
     Request,
+    /// The focused stop went away and handed focus to its neighbour: neither the keyboard nor a request chose it, so
+    /// it is no arrival by key (a deleted guide selects no other guide).
+    Removal,
 }
 
 /// What a component reads of focus in one pass.

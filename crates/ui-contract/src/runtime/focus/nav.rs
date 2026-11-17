@@ -164,8 +164,13 @@ impl State {
     /// Moves focus to `rec` and asks the enclosing scroll owner to reveal it: the egui widget is its root, and the stop
     /// is recorded under that root.
     pub(super) fn focus_stop(&mut self, rec: StopRec) -> Vec<Act> {
+        self.focus_stop_from(rec, FocusOrigin::Request)
+    }
+
+    /// [`focus_stop`](Self::focus_stop) with what moved focus there.
+    fn focus_stop_from(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         let key = rec.stop.key();
-        let acts = self.enter_stop(rec, FocusOrigin::Request);
+        let acts = self.enter_stop(rec, origin);
         self.revealed = Some(key);
         acts
     }
@@ -684,9 +689,12 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         acts.clear();
     }
     if acts.is_empty() {
-        let next = state.restored_focus(focused).or_else(|| state.removed_focus(focused));
-        if let Some(rec) = next {
-            acts = state.focus_stop(rec);
+        let next = state
+            .restored_focus(focused)
+            .map(|rec| (rec, FocusOrigin::Request))
+            .or_else(|| state.removed_focus(focused).map(|rec| (rec, FocusOrigin::Removal)));
+        if let Some((rec, origin)) = next {
+            acts = state.focus_stop_from(rec, origin);
         }
     }
     let now = acts.last().map_or(focused, |act| match act {
