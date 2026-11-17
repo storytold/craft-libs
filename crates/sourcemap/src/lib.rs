@@ -83,7 +83,10 @@ impl SourceMap {
     pub fn source_path(&self, index: u32) -> Option<String> {
         let s = self.sources.get(index as usize)?.as_ref()?;
         Some(match self.source_root.as_deref().filter(|r| !r.is_empty()) {
-            Some(root) if !s.contains("://") && !s.starts_with('/') => format!("{}/{}", root.trim_end_matches('/'), s),
+            Some(root) if !s.contains("://") && !s.starts_with('/') => {
+                let join = if root.ends_with('/') { "" } else { "/" };
+                format!("{root}{join}{s}")
+            }
             _ => s.clone(),
         })
     }
