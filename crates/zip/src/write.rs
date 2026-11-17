@@ -44,6 +44,26 @@ impl Writer {
 
     /// Adds an entry from a byte slice. A name the archive already has is an error.
     pub fn add(&mut self, name: &str, data: &[u8], compression: Compression) -> Result<(), Error> {
+        self.add_entry(name, data, compression, 1, data.len() as u64 >= u64::from(u32::MAX) / 2)
+    }
+
+    /// Adds a stored entry whose payload starts on an `alignment`-byte boundary.
+    ///
+    /// Entries use ordinary ZIP headers, matching the USDZ writer this replaces;
+    /// oversized entries fail rather than opting into ZIP64 headers.
+    /// USDZ uses 64. Only powers of two from 1 through 4096 are accepted, bounding
+    /// per-entry padding. This does not impose a total archive-size budget; callers
+    /// retain their format-specific size and name policies. Discard the writer after
+    /// a write error, just as for [`Self::add`]. Invalid alignment is rejected before
+    /// starting an entry.
+    pub fn add_stored_aligned(&mut self, name: &str, data: &[u8], alignment: u16) -> Result<(), Error> {
+        if !alignment.is_power_of_two() || alignment > 4096 {
+            return Err(Error::Write("alignment must be a power of two between 1 and 4096".into()));
+        }
+        self.add_entry(name, data, Compression::Stored, alignment, false)
+    }
+
+    fn add_entry(&mut self, name: &str, data: &[u8], compression: Compression, alignment: u16, large_file: bool) -> Result<(), Error> {
         let (method, level) = match compression {
             Compression::Stored => (zip::CompressionMethod::Stored, None),
             Compression::Deflated => (zip::CompressionMethod::Deflated, Some(6)),
@@ -53,7 +73,8 @@ impl Writer {
             .compression_method(method)
             .compression_level(level)
             .last_modified_time(zip::DateTime::default())
-            .large_file(data.len() as u64 >= u64::from(u32::MAX) / 2);
+            .large_file(large_file)
+            .with_alignment(alignment);
         let fail = |e: &dyn std::fmt::Display| Error::Write(format!("{name}: {e}"));
         self.zip.start_file(name, options).map_err(|e| fail(&e))?;
         self.zip.write_all(data).map_err(|e| fail(&e))
