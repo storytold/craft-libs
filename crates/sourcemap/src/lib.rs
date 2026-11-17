@@ -33,6 +33,8 @@ pub enum SourceMapError {
     BadVersion,
     #[error("source map mappings are malformed at segment {0}")]
     BadMappings(usize),
+    #[error("source map index has invalid sections")]
+    BadSections,
     #[error("source map has more than {0} segments")]
     TooManySegments(usize),
     #[error("source map sections nest deeper than {0}")]
@@ -176,18 +178,25 @@ fn from_value(v: &Value, depth: usize, limits: Limits, budget: &mut usize) -> Re
             .unwrap_or_default(),
         ..Default::default()
     };
-    if let Some(sections) = v.get("sections").and_then(Value::as_array) {
-        for s in sections {
-            let line = s.pointer("/offset/line").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
-            let col = s.pointer("/offset/column").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
-            // Only inline maps; a `url` section would need a fetch, which a parser never does.
-            if let Some(m) = s.get("map") {
-                let sub = from_value(m, depth + 1, limits, budget)?;
-                map.segments = map.segments.saturating_add(sub.segments);
-                map.sections.push((line, col, sub));
+    if let Some(sections) = v.get("sections") {
+        let sections = sections.as_array().ok_or(SourceMapError::BadSections)?;
+        for section in sections {
+            let offset = |key: &str| section.get("offset")?.get(key)?.as_u64().and_then(|n| u32::try_from(n).ok());
+            let line = offset("line").ok_or(SourceMapError::BadSections)?;
+            let col = offset("column").ok_or(SourceMapError::BadSections)?;
+            if map.sections.last().is_some_and(|(l, c, _)| (*l, *c) > (line, col)) {
+                return Err(SourceMapError::BadSections);
             }
+            let sub = match (section.get("map"), section.get("url")) {
+                (Some(m), None) => from_value(m, depth + 1, limits, budget)?,
+                // External maps are never fetched here. Retain their start so a lookup
+                // cannot leak through to the previous inline map.
+                (None, Some(Value::String(_))) => SourceMap::default(),
+                _ => return Err(SourceMapError::BadSections),
+            };
+            map.segments = map.segments.saturating_add(sub.segments);
+            map.sections.push((line, col, sub));
         }
-        map.sections.sort_by_key(|(l, c, _)| (*l, *c));
         return Ok(map);
     }
     let mappings = v.get("mappings").and_then(Value::as_str).unwrap_or_default();
