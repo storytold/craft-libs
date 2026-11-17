@@ -672,14 +672,17 @@ assert_eq!(bytes.len() % 188, 0);
   | `Av1(Av1Config)` | 0x06 | 0xBD | temporal units in the low overhead format (every OBU has `obu_size`) |
   | `AacAdts` | 0x0F | 0xC0 | ADTS frames; their `frame_length` fields must tile the frame |
   | `Aac { .. }` | 0x0F | 0xC0 | raw AAC frames; the writer adds the ADTS header |
-  | `Opus { channels }` | 0x06 | 0xBD | Opus packets, 1 to 8 channels; the writer adds the Opus control header |
+  | `Opus { channels }` | 0x06 | 0xBD | Opus access units, 1 to 8 channels; the writer adds the Opus control header |
   | `OpusMapped(OpusMapping)` | 0x06 | 0xBD | Opus multistream access units with an explicit channel mapping |
   | `Ac3` | 0x81 | 0xBD | AC-3 sync frames |
   | `Eac3` | 0x87 | 0xBD | E-AC-3 sync frames (bsid 11 to 16) |
   | `MpegAudio { low_sample_rate }` | 0x03 or 0x04 | 0xC0 | MPEG audio frames, layers I to III, whose version matches the stream type |
 
   `Codec::aac_from_asc` turns an AudioSpecificConfig into the `Aac` fields, and refuses one that
-  an ADTS header cannot carry (frameLengthFlag 1, for one).
+  an ADTS header cannot carry (frameLengthFlag 1, for one). An `Opus { channels }` access unit is
+  one Opus packet for 1 or 2 channels. For 3 to 8 channels it holds the streams of mapping family 1
+  in the order that table 4-3 of the Opus transport draft gives, and every stream but the last uses
+  the self-delimited framing of RFC 6716 Appendix B. `OpusMapped` takes any other layout.
 - Descriptors in the program map section: a registration descriptor `AC-3` or `EAC3` on AC-3 and
   E-AC-3 streams; a registration descriptor `Opus` and an extension descriptor (tag 0x7F,
   extension tag 0x80) on Opus streams, whose channel_config_code is the channel count for
@@ -733,9 +736,10 @@ per PES packet.
 
 Specifications: the ones above, and Opus Interactive Audio Codec Transport Multiplexing Standard,
 draft TS V0.1.3 (2015-10), for the Opus control header and descriptors; RFC 6716 for Opus packet
-durations; Carriage of AV1 in MPEG-2 TS (Alliance for Open Media working draft) and the AV1
-Bitstream & Decoding Process Specification for AV1; ISO/IEC 14496-3 for the AudioSpecificConfig;
-ATSC A/52 for the AC-3 and E-AC-3 stream types and registration descriptors.
+durations and self-delimited framing; Carriage of AV1 in MPEG-2 TS (Alliance for Open Media
+working draft) and the AV1 Bitstream & Decoding Process Specification for AV1; ISO/IEC 14496-3
+for the AudioSpecificConfig; ATSC A/52 for the AC-3 and E-AC-3 stream types and registration
+descriptors.
 
 Tests: `tests/mpegts_mux_readback.rs` reads the output back with the demuxer: streams, codecs,
 languages, every frame's bytes, PTS and DTS, keyframes and the PCR range, with no continuity or
