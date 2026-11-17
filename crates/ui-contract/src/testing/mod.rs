@@ -23,6 +23,7 @@ pub mod memory;
 pub mod pictures;
 pub mod pointer;
 pub mod relations;
+mod replay_trials;
 pub mod sensing;
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub mod snapshot;
