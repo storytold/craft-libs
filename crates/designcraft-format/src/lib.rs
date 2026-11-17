@@ -302,33 +302,30 @@ fn pin_unstyled_paragraphs(value: &mut Value, known_styles: &HashSet<String>, de
 mod tests;
 
 fn has_legacy_baseline(document: &Value) -> bool {
-    let mut stack = vec![(document, 0usize)];
-    let mut visited = 0usize;
-    while let Some((value, depth)) = stack.pop() {
-        // If the inspection budget is exhausted, require the newest reader rather than
-        // claiming old-reader compatibility for data we have not checked.
-        if depth > 256 || visited >= 1_000_000 {
+    // Retain only the active ancestor iterators, not every sibling in a wide document.
+    // Width does not imply a new format feature. Uninspected excessive depth still
+    // requires the newest reader, so a hidden flag cannot silently change text layout.
+    let mut stack: Vec<(Box<dyn Iterator<Item = &Value>>, usize)> = vec![(Box::new(std::iter::once(document)), 0)];
+    while let Some((values, depth)) = stack.last_mut() {
+        let Some(value) = values.next() else {
+            stack.pop();
+            continue;
+        };
+        let depth = *depth;
+        if depth > 256 {
             return true;
         }
-        visited += 1;
-        match value {
+        let children: Box<dyn Iterator<Item = &Value>> = match value {
             Value::Object(object) => {
                 if object.get("legacyFirstBaseline").and_then(Value::as_bool) == Some(true) {
                     return true;
                 }
-                if object.len() > 1_000_000usize.saturating_sub(visited).saturating_sub(stack.len()) {
-                    return true;
-                }
-                stack.extend(object.values().map(|child| (child, depth + 1)));
+                Box::new(object.values())
             }
-            Value::Array(children) => {
-                if children.len() > 1_000_000usize.saturating_sub(visited).saturating_sub(stack.len()) {
-                    return true;
-                }
-                stack.extend(children.iter().map(|child| (child, depth + 1)));
-            }
-            _ => {}
-        }
+            Value::Array(children) => Box::new(children.iter()),
+            _ => continue,
+        };
+        stack.push((children, depth + 1));
     }
     false
 }

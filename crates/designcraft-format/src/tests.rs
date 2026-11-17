@@ -211,7 +211,26 @@ fn ambiguous_format_one_documents_do_not_silently_switch_baseline_metrics() -> R
 }
 
 #[test]
-fn an_uninspected_wide_document_conservatively_requires_the_newest_reader() {
-    let wide = Value::Array(vec![Value::Null; 1_000_001]);
-    assert_eq!(required_version(&wide, &[]), VERSION);
+fn wide_documents_keep_content_derived_versions_and_late_flags_are_found() {
+    let mut wide = Value::Array(vec![Value::Null; 1_000_001]);
+    // Preserve the pre-existing version-4 scan-budget fallback, not capability 6.
+    assert_eq!(required_version(&wide, &[]), 4);
+    assert_eq!(required_version(&wide, &[Asset { id: "1", mime: "application/postscript", data: b"%!PS-Adobe-3.0 EPSF-3.0" }]), 4);
+    let entries = wide.as_array_mut().unwrap();
+    entries.push(json!({"layerOptions":{}}));
+    assert_eq!(required_version(&wide, &[]), 4);
+    let linked = json!({"assets":{"1":{"storage":"linked"}},"items":wide});
+    assert_eq!(required_version(&linked, &[]), 5);
+    let mut flagged = linked;
+    flagged.get_mut("items").unwrap().as_array_mut().unwrap().push(json!({"legacyFirstBaseline":true}));
+    assert_eq!(required_version(&flagged, &[]), 6);
+}
+
+#[test]
+fn deeply_nested_uninspected_data_still_requires_the_newest_reader() {
+    let mut deep = Value::Null;
+    for _ in 0..258 {
+        deep = Value::Array(vec![deep]);
+    }
+    assert_eq!(required_version(&deep, &[]), VERSION);
 }
