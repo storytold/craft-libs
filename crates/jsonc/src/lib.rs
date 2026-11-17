@@ -78,7 +78,7 @@ fn tokenize(text: &str, strict: bool) -> Result<Vec<Token>, String> {
                     return Err(format!("comment at byte {i} is not allowed in strict JSON"));
                 }
                 while let Some(&c) = b.get(i) {
-                    if c == b'\n' {
+                    if matches!(c, b'\r' | b'\n') {
                         break;
                     }
                     i += 1;
@@ -499,6 +499,17 @@ mod tests {
             assert_eq!(out.matches('\n').count(), out.matches("\r\n").count(), "mixed line endings: {out:?}");
             assert_eq!(parse(&out, true).unwrap().get(&["z", "k"]), Some(json!([1])));
         }
+    }
+
+    #[test]
+    fn a_carriage_return_ends_a_line_comment() {
+        let text = "// editor settings\r{\r  \"keep\": 1, // explanation\r  \"port\": 2\r}\r";
+        let doc = parse(text, false).unwrap();
+        assert_eq!(doc.get(&["keep"]), Some(json!(1)));
+        let updated = doc.set(&["port"], &json!(3)).unwrap();
+        assert_eq!(updated, text.replace('2', "3"));
+        assert_eq!(parse(&updated, false).unwrap().get(&["port"]), Some(json!(3)));
+        assert!(parse(text, true).is_err());
     }
 
     #[test]
