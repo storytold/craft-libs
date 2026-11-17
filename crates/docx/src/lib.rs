@@ -38,6 +38,7 @@ mod smart_art;
 #[cfg(test)]
 mod test_log;
 mod units;
+pub mod vba;
 mod wordml2003;
 mod wordml2003_write;
 mod write;
