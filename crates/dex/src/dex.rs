@@ -18,6 +18,9 @@ const MAX_MEMBERS: usize = 65_536;
 /// Most try blocks / handlers per method.
 const MAX_TRIES: usize = 4096;
 const MAX_HANDLERS: usize = 256;
+/// Most handler descriptor bytes retained while reading one code item, however many try blocks
+/// share a handler list.
+const MAX_HANDLER_DESCRIPTOR_BYTES: usize = 1 << 20;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Header {
@@ -469,10 +472,11 @@ impl<'a> Dex<'a> {
         }
         let n = r.u32_le(set_off as usize).unwrap_or(0) as usize;
         for i in 0..n.min(256) {
-            let Some(item) = r.u32_le(set_off as usize + 4 + i * 4) else { break };
+            let Some(item_at) = (set_off as usize).checked_add(4).and_then(|base| base.checked_add(i * 4)) else { break };
+            let Some(item) = r.u32_le(item_at) else { break };
             // visibility u8, then encoded_annotation: uleb type_idx …
-            let vis = r.u8(item as usize).unwrap_or(0);
-            if let Some((t, _)) = r.uleb128(item as usize + 1) {
+            let (Some(vis), Some(annotation_at)) = (r.u8(item as usize), (item as usize).checked_add(1)) else { continue };
+            if let Some((t, _)) = r.uleb128(annotation_at) {
                 let v = match vis {
                     0 => "build",
                     1 => "runtime",
@@ -500,8 +504,8 @@ impl<'a> Dex<'a> {
         };
         let (Some(sf), Some(inf), Some(dm), Some(vm)) = (next(&mut pos), next(&mut pos), next(&mut pos), next(&mut pos)) else { return cd };
         let remaining = self.data.len().saturating_sub(pos);
-        let total = [sf, inf, dm, vm].iter().map(|&x| x as usize).sum::<usize>();
-        if total > remaining || total > MAX_MEMBERS * 4 {
+        let total: u64 = [sf, inf, dm, vm].iter().map(|&x| u64::from(x)).sum();
+        if total > remaining as u64 || total > MAX_MEMBERS as u64 * 4 {
             return cd;
         }
         for (count, is_method, slot) in [(sf, false, 0), (inf, false, 1), (dm, true, 2), (vm, true, 3)] {
@@ -559,7 +563,8 @@ impl<'a> Dex<'a> {
             t_off += 2;
         }
         let handlers_base = t_off + tries_size * 8;
-        for i in 0..tries_size.min(MAX_TRIES) {
+        let mut retained = 0usize;
+        'tries: for i in 0..tries_size.min(MAX_TRIES) {
             let at = t_off + i * 8;
             let (Some(start), Some(count), Some(h_off)) = (r.u32_le(at), r.u16_le(at + 4), r.u16_le(at + 6)) else { break };
             let mut handlers = Vec::new();
@@ -570,7 +575,13 @@ impl<'a> Dex<'a> {
                     let Some((t, k1)) = r.uleb128(p) else { break };
                     let Some((addr, k2)) = r.uleb128(p + k1) else { break };
                     p += k1 + k2;
-                    handlers.push(Handler { exception: Some(self.type_desc(t as u32)), address: addr as u32 });
+                    let desc = self.type_desc(t as u32);
+                    let Some(next) = retained.checked_add(desc.len()) else { break 'tries };
+                    if next > MAX_HANDLER_DESCRIPTOR_BYTES {
+                        break 'tries;
+                    }
+                    retained = next;
+                    handlers.push(Handler { exception: Some(desc), address: addr as u32 });
                 }
                 if size <= 0
                     && handlers.len() as u64 == size.unsigned_abs()
@@ -811,5 +822,109 @@ mod tests {
                 walk(&d);
             }
         }
+    }
+
+    fn bare_dex<'a>(data: &'a [u8], strings: Vec<String>, types: Vec<u32>) -> Dex<'a> {
+        Dex {
+            data,
+            header: Header {
+                version: "035".into(),
+                checksum: String::new(),
+                checksum_ok: false,
+                signature: String::new(),
+                file_size: data.len() as u32,
+                header_size: 0x70,
+                endian_tag: String::new(),
+                string_ids: 0,
+                type_ids: 0,
+                proto_ids: 0,
+                field_ids: 0,
+                method_ids: 0,
+                class_defs: 0,
+                data_size: 0,
+            },
+            strings,
+            types,
+            protos: Vec::new(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+            classes: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn repeated_handler_lists_stop_at_the_descriptor_budget() {
+        let desc = format!("L{};", "a".repeat(16 * 1024));
+        let mut data = vec![0u8; 4];
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&(MAX_TRIES as u16).to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..MAX_TRIES {
+            data.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(&1u16.to_le_bytes());
+            data.extend_from_slice(&0u16.to_le_bytes());
+        }
+        data.push(0x01); // sleb128: one typed handler
+        data.push(0x00); // type index 0
+        data.push(0x00); // handler address
+        let d = bare_dex(&data, vec![desc.clone()], vec![0]);
+        let code = d.code(4).expect("code item");
+        assert!(!code.tries.is_empty());
+        assert!(code.tries.len() < MAX_TRIES, "read {} tries", code.tries.len());
+        assert_eq!(code.tries[0].handlers[0].exception.as_deref(), Some(desc.as_str()));
+        let retained: usize = code.tries.iter().flat_map(|t| &t.handlers).filter_map(|h| h.exception.as_ref()).map(String::len).sum();
+        assert!(retained <= MAX_HANDLER_DESCRIPTOR_BYTES, "{retained}");
+    }
+
+    #[test]
+    fn annotations_reject_an_unrepresentable_item_offset() {
+        let mut data = vec![0u8; 4];
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&u32::MAX.to_le_bytes());
+        let d = bare_dex(&data, Vec::new(), Vec::new());
+        let c = ClassDef {
+            class_idx: 0,
+            access: 0,
+            superclass_idx: 0,
+            interfaces_off: 0,
+            source_file_idx: 0,
+            annotations_off: 4,
+            class_data_off: 0,
+            static_values_off: 0,
+        };
+        assert!(d.annotations(&c).is_empty());
+    }
+
+    #[test]
+    fn class_data_counts_do_not_overflow() {
+        let mut data = vec![0u8; 4];
+        for mut x in [u32::MAX, 1, 0, 0] {
+            loop {
+                let b = (x & 0x7f) as u8;
+                x >>= 7;
+                if x == 0 {
+                    data.push(b);
+                    break;
+                }
+                data.push(b | 0x80);
+            }
+        }
+        let d = bare_dex(&data, Vec::new(), Vec::new());
+        let c = ClassDef {
+            class_idx: 0,
+            access: 0,
+            superclass_idx: 0,
+            interfaces_off: 0,
+            source_file_idx: 0,
+            annotations_off: 0,
+            class_data_off: 4,
+            static_values_off: 0,
+        };
+        assert!(!d.class_data(&c).complete);
     }
 }
