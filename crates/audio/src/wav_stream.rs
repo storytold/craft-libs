@@ -4,7 +4,7 @@
 //! Unlike `FileEncoder`, these primitives do not require `Seek` and leave final lengths,
 //! chunk padding and sink error handling to the caller. The caller must supply a complete
 //! frame count and append exactly that many frames. For odd-length data, append a pad byte
-//! and account for it in the RIFF size; current AniCraft output is always stereo (even).
+//! (the header includes that padding in the RIFF size); current AniCraft output is always stereo (even).
 //! Non-finite samples become silence, including float output. This deliberately differs
 //! from the general encoder's infinity handling. Prefer `FileEncoder` for new seekable sinks.
 
@@ -33,7 +33,7 @@ const FLOAT: u16 = 3;
 pub fn header(rate: u32, channels: u16, bits: Bits, frames: u64) -> Option<Vec<u8>> {
     let b = bits.bytes();
     let data = u32::try_from(frames.checked_mul(u64::from(b) * u64::from(channels))?).ok()?;
-    let riff = data.checked_add(36)?;
+    let riff = data.checked_add(36)?.checked_add(data & 1)?;
     let block = channels.checked_mul(b)?;
     let tag = if bits == Bits::Float32 { FLOAT } else { PCM };
     let mut h = Vec::with_capacity(44);
@@ -69,3 +69,39 @@ pub fn append(out: &mut Vec<u8>, samples: &[f32], bits: Bits) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_header_and_odd_padding() {
+        let h = header(48_000, 2, Bits::Int16, 1).unwrap();
+        assert_eq!(h.len(), 44);
+        assert_eq!(&h[..12], b"RIFF\x28\0\0\0WAVE");
+        assert_eq!(&h[28..36], &[0, 238, 2, 0, 4, 0, 16, 0]);
+        let h = header(8_000, 1, Bits::Int24, 1).unwrap();
+        assert_eq!(&h[4..8], &40u32.to_le_bytes());
+        assert_eq!(&h[40..44], &3u32.to_le_bytes());
+        assert!(header(48_000, 2, Bits::Float32, u64::MAX).is_none());
+        assert!(header(48_000, u16::MAX, Bits::Float32, 0).is_none());
+    }
+
+    #[test]
+    fn samples_preserve_rounding_clipping_silence_and_chunk_boundaries() {
+        let samples = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        let mut pcm = Vec::new();
+        append(&mut pcm, &samples, Bits::Int16);
+        let expected = [-32768i16, -32768, -16384, 0, 16384, 32767, 32767, 0, 0, 0];
+        assert_eq!(pcm, expected.iter().flat_map(|s| s.to_le_bytes()).collect::<Vec<_>>());
+        for bits in [Bits::Int16, Bits::Int24, Bits::Float32] {
+            let mut whole = Vec::new();
+            append(&mut whole, &samples, bits);
+            let mut blocks = Vec::new();
+            for block in samples.chunks(3) {
+                append(&mut blocks, block, bits);
+            }
+            assert_eq!(whole, blocks);
+            assert_eq!(&whole[whole.len() - 3 * usize::from(bits.bytes())..], vec![0; 3 * usize::from(bits.bytes())]);
+        }
+    }
+}
