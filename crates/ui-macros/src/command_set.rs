@@ -1,8 +1,9 @@
-//! `#[derive(CommandSet)]` with `#[command(prefix = "..", scope = "..", story)]` on the enum and
+//! `#[derive(CommandSet)]` with `#[command(prefix = "..", scope = "..", typing, story)]` on the enum and
 //! `#[command(label = "..", icon = "..", kind = "..", group = "..", modal = "..", edit = "..", holds = "..", default = "..", path = "..", alias = "..")]`
 //! on variants.
 //! `edit = ".."` links the command to the `EditCommand` a focused component takes it as.
 //! `holds = ".."` on a `kind = "momentary"` command names the scope whose keys work while the command's key is held.
+//! `typing` on the enum makes the set's scope a typing scope: a text component's own keys, which work while it types.
 //! `default(mac = "..")` (or `windows`, `linux`) is a default of one platform: it replaces the unqualified defaults there.
 
 use crate::util::ui_crate;
@@ -14,6 +15,7 @@ use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Variant};
 struct SetAttrs {
     prefix: Option<LitStr>,
     scope: Option<LitStr>,
+    typing: bool,
     story: bool,
 }
 
@@ -216,6 +218,8 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             set.prefix = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("scope") {
             set.scope = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("typing") {
+            set.typing = true;
         } else if meta.path.is_ident("story") {
             set.story = true;
         } else {
@@ -229,6 +233,10 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     if let Some(scope) = &set.scope {
         check_scope(scope)?;
     }
+    if set.typing && set.scope.is_none() {
+        return Err(syn::Error::new_spanned(ident, "`typing` belongs to a set with its own `scope`"));
+    }
+    let typing = set.typing;
     let scope = match &set.scope {
         Some(scope) => quote!(#k::runtime::commands::CommandScope::new(#scope)),
         None => quote!(#k::runtime::commands::CommandScope::APP),
@@ -286,6 +294,7 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     Ok(quote! {
         impl #k::runtime::commands::CommandSet for #ident {
             const SCOPE: #k::runtime::commands::CommandScope = #scope;
+            const TYPING: bool = #typing;
 
             fn from_ref(command: &#k::runtime::commands::CommandRef) -> ::core::option::Option<Self> {
                 match command.id.as_str() {

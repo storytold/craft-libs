@@ -23,6 +23,8 @@ pub struct SetEntry {
     pub edits: fn() -> Vec<(&'static str, EditCommand)>,
     /// The momentary commands of the set whose held key makes a scope's keys work.
     pub holds: fn() -> Vec<(&'static str, CommandScope)>,
+    /// The set's scope when its keys are meant for typing (`CommandSet::TYPING`).
+    pub typing: Option<CommandScope>,
     /// The defaults of one platform, which replace the command's other defaults there.
     pub platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
     /// A story's set (`#[command(story)]`): loaded only by an install that shows stories.
@@ -37,9 +39,10 @@ impl SetEntry {
         no_default_on: fn() -> Vec<(&'static str, Platform)>,
         edits: fn() -> Vec<(&'static str, EditCommand)>,
         holds: fn() -> Vec<(&'static str, CommandScope)>,
+        typing: Option<CommandScope>,
         platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
     ) -> Self {
-        SetEntry { name, defs, no_default_on, edits, holds, platform_defaults, story: false }
+        SetEntry { name, defs, no_default_on, edits, holds, typing, platform_defaults, story: false }
     }
 
     /// The entry as a story's set.
@@ -79,6 +82,11 @@ macro_rules! __register_command_set {
                     <$ty as $crate::runtime::commands::CommandSet>::no_default_on,
                     <$ty as $crate::runtime::commands::CommandSet>::edits,
                     <$ty as $crate::runtime::commands::CommandSet>::holds,
+                    if <$ty as $crate::runtime::commands::CommandSet>::TYPING {
+                        ::core::option::Option::Some(<$ty as $crate::runtime::commands::CommandSet>::SCOPE)
+                    } else {
+                        ::core::option::Option::None
+                    },
                     <$ty as $crate::runtime::commands::CommandSet>::platform_defaults,
                 ))
             }
@@ -168,6 +176,8 @@ pub(crate) struct Registry {
     platform_defaults: Vec<(String, Platform, Binding)>,
     /// The scope each momentary command's held key makes work, by the command's id.
     holds: HashMap<String, &'static str>,
+    /// The scopes whose keys are meant for typing (`CommandSet::TYPING`).
+    typing: HashSet<&'static str>,
     /// Whether the stories' sets are loaded.
     stories: bool,
 }
@@ -183,6 +193,7 @@ impl Registry {
             registry.no_default.extend((entry.no_default_on)().into_iter().map(|(id, platform)| (id.to_owned(), platform)));
             registry.edits.extend((entry.edits)().into_iter().map(|(id, edit)| (id.to_owned(), edit)));
             registry.holds.extend((entry.holds)().into_iter().map(|(id, scope)| (id.to_owned(), scope.name())));
+            registry.typing.extend(entry.typing.map(CommandScope::name));
             registry
                 .platform_defaults
                 .extend((entry.platform_defaults)()?.into_iter().map(|(id, platform, binding)| (id.to_owned(), platform, binding)));
@@ -235,6 +246,12 @@ impl Registry {
     /// the application, as no instance is ever of it.
     pub(crate) fn is_held_scope(&self, scope: &str) -> bool {
         self.holds.values().any(|held| *held == scope)
+    }
+
+    /// Whether `scope` is a typing scope (`CommandSet::TYPING`): its keys work while an instance of it is around the
+    /// focus, typing included.
+    pub(crate) fn is_typing_scope(&self, scope: &str) -> bool {
+        self.typing.contains(scope)
     }
 
     pub(crate) fn defs(&self) -> &[CommandDef] {

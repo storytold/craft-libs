@@ -116,6 +116,29 @@ fn tab_toggles_from_a_pressed_component_and_moves_focus_from_a_requested_one() {
     assert_ne!(egui_focused(&frames.ctx), Some(id("other")), "focus left the component");
 }
 
+/// A text field keeps Tab for going to the next field however it got the focus: clicking into a value, typing and
+/// pressing Tab commits it and moves on, as in Photoshop.
+#[trial]
+fn tab_moves_focus_from_a_pressed_text_field() {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut show = move |ui: &mut Ui| {
+        let rect = widget(ui, id("field"));
+        register_stop(ui.ctx(), Stop::new(id("field"), KeyUse::of(Input::Text)));
+        press_shape(ui, rect, Sense::CLICK | Sense::TAKE_FOCUS, id("field"));
+        seen.set(rect);
+        stop(ui, "other", KeyUse::of(Input::Pointer));
+        stop(ui, "canvas", KeyUse::CANVAS);
+    };
+    let mut frames = shown(true, &mut show);
+    click(&mut frames, at.get().center(), &mut show);
+    take_output(&frames.ctx);
+    assert_eq!(egui_focused(&frames.ctx), Some(id("field")), "the press focused the field");
+    assert!(focus_holds(&frames.ctx, Chord::plain(craft_keymap::Key::Tab)), "the field's Tab moves focus");
+    assert!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE).is_empty(), "a pressed text field toggles nothing");
+    assert_ne!(egui_focused(&frames.ctx), Some(id("field")), "focus left the field");
+}
+
 #[trial]
 fn tab_in_a_window_without_a_canvas_moves_focus() {
     let mut show = without_canvas;
