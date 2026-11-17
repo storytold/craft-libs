@@ -34,7 +34,13 @@ use crate::{guard, svgz};
 
 pub mod document;
 pub mod draw;
+#[cfg(feature = "tree-render")]
+mod image_href;
 pub mod primitive;
+#[cfg(feature = "tree-render")]
+mod validated;
+#[cfg(feature = "tree-render")]
+pub use validated::ValidatedImageResolver;
 
 /// What one import may use. The defaults suit a desktop app that parses on a thread with a
 /// large stack (see the module text).
@@ -161,6 +167,7 @@ pub fn root_unitless_size(svg: &str, limits: &Limits) -> Result<Option<(f64, f64
 /// SVG text after shared byte, entity, attribute, XML and expansion-depth checks.
 /// Keep it opaque so consumers use the same checked tree and don't reparse XML locally.
 pub struct Preflight<'s> {
+    limits: Limits,
     xml: roxmltree::Document<'s>,
     depth: usize,
     /// [`height`]: the nesting usvg converts, references followed.
@@ -219,6 +226,8 @@ const UNSUPPORTED: &[&str] = &[
 
 /// Checks already-decoded SVG text once, retaining the parsed XML for both depth policy and tree conversion.
 pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Error> {
+    #[cfg(test)]
+    PREFLIGHT_PASSES.with(|count| count.set(count.get().saturating_add(1)));
     let preflight_limits = crate::preflight::Limits {
         bytes: limits.bytes,
         depth: limits.depth,
@@ -239,7 +248,7 @@ pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Err
     let Some(height) = height(&xml, limits.tree_depth)? else {
         return Err(Error::TooDeep(limits.tree_depth));
     };
-    Ok(Preflight { xml, depth, height })
+    Ok(Preflight { limits: *limits, xml, depth, height })
 }
 
 /// Dimensions of an SVG viewport in SVG user units.
@@ -432,9 +441,12 @@ struct Used {
 /// What resolving one drawing's embedded images used or refused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ImageUsage {
-    /// Unique decoded raster pixels reserved before decode.
+    /// Decoded raster pixel work reserved before decode. The legacy resolver
+    /// shares a charge across repeated data; the validated context charges each
+    /// attempted decode, including failures.
     pub raster_pixels: u64,
-    /// Unpacked SVG bytes consumed by embedded SVG data URLs.
+    /// Decoded SVG text work charged to embedded data URLs, including the
+    /// remaining allowance consumed by a failed inflation attempt.
     pub embedded_svg_bytes: usize,
     /// Embedded SVG images parsed, including nested images.
     pub embedded_svg_count: usize,
@@ -730,3 +742,8 @@ fn image_resolver_for(limits: Limits, used: Arc<Used>) -> usvg::ImageHrefResolve
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+    static PREFLIGHT_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
