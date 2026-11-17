@@ -480,6 +480,10 @@ impl BodyHooks<'_> {
     /// are never its.
     pub(super) fn window_os<C: Container>(&mut self, viewport: ViewportId, props: &ContainerProps, cx: &mut Cx<'_, C>) {
         let by_caller = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
+        // DIAG FW-280
+        if by_caller {
+            eprintln!("DIAG FW-280 window_os: viewport={viewport:?}");
+        }
         if by_caller {
             let limits = overlay_of(props).map(|overlay| Limits::new(overlay, window_min(props, cx.style.metrics().min_size)));
             if let Some(limits) = limits {
@@ -524,6 +528,12 @@ impl BodyHooks<'_> {
             let (dx, dy, _) = GRIPS[sizing.grip];
             limits.resized(sizing.start, dx, dy, desktop - sizing.pressed)
         };
+        // DIAG FW-280
+        eprintln!(
+            "DIAG FW-280 window_resize: sizing={:?} phases={:?} outer={outer:?}",
+            self.mode.sizing.map(|sizing| (sizing.grip, sizing.start, sizing.at)),
+            (0..GRIPS.len()).map(|index| phase(index).map(|phase| format!("{phase:?}"))).collect::<Vec<_>>()
+        );
         let Some(mut sizing) = self.mode.sizing else {
             let started = (0..GRIPS.len()).find_map(|index| match phase(index)? {
                 PressPhase::DragStart { start, pos, .. } => Some((index, start.origin, pos)),
@@ -722,6 +732,10 @@ impl BodyHooks<'_> {
             Mount::Window { resize } => (resize.edges, handle / 2.0),
             _ => (ResizeEdges::NONE, 0.0),
         };
+        // DIAG FW-280
+        if overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller) {
+            eprintln!("DIAG FW-280 move_parts: os={os:?} edges={edges:?} grips={} rect={rect:?} handle={handle} held={held:?}", stands.grips);
+        }
         if edges == ResizeEdges::NONE || !stands.grips {
             return;
         }
