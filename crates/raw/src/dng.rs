@@ -539,7 +539,7 @@ fn extend_understated_strip(bytes: &[u8], info: &mut ImageInfo, raw: &Ifd) {
         || info.compression != t::compression::NONE
         || info.samples_per_pixel != 1
         || info.planar == 2
-        || info.sample_format == 3
+        || !matches!(info.sample_format, 1 | 2)
         || !matches!(bits, 8 | 16)
     {
         return;

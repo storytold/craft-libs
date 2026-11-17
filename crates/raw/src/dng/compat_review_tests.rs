@@ -122,7 +122,15 @@ fn decoded_notices_record_actual_crop_gain_table_and_cfa_decisions() {
 /// A 16-bit CFA DNG of `width` x `height` whose strip holds every row in full but whose `StripByteCounts` says
 /// `counted` bytes.
 fn understated_strip_dng(width: u32, height: u32, counted: u32, active_area: Option<[u32; 4]>) -> Vec<u8> {
+    understated_strip_dng_with(width, height, counted, active_area, &[])
+}
+
+/// [`understated_strip_dng`] with `extra` tags set on the raw IFD.
+fn understated_strip_dng_with(width: u32, height: u32, counted: u32, active_area: Option<[u32; 4]>, extra: &[(u16, Value)]) -> Vec<u8> {
     let mut raw = IfdBuilder::new();
+    for (tag, value) in extra {
+        raw.set(*tag, value.clone());
+    }
     for (tag, value) in [
         (t::IMAGE_WIDTH, Value::Long(vec![width])),
         (t::IMAGE_LENGTH, Value::Long(vec![height])),
@@ -170,6 +178,8 @@ fn other_short_strips_are_still_refused() {
     assert!(refused(understated_strip_dng(8, 4, 6 * 4 * 2, None)));
     // the count is not exactly the area's bytes
     assert!(refused(understated_strip_dng(8, 4, 5 * 4 * 2, Some([0, 0, 4, 6]))));
+    // samples that are neither integer nor absent-format (SampleFormat 4 is undefined)
+    assert!(refused(understated_strip_dng_with(8, 4, 6 * 4 * 2, Some([0, 0, 4, 6]), &[(t::SAMPLE_FORMAT, Value::Short(vec![4]))])));
     // the area reaches below the image, so decode would discard it
     assert!(refused(understated_strip_dng(8, 4, 6 * 4 * 2, Some([4, 0, 5, 6]))));
     // the area does not start at column 0
