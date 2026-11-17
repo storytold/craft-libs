@@ -78,7 +78,7 @@ pub fn placed_rect<P: Clone + Eq + Hash>(layout: &Layout<P>, moved: &[P], room: 
             with_area_rules(&placing.sizes, placing.spec, |rules| {
                 for frame in tree::frames(root, room, &placing.sizes, &rules, rtl).groups {
                     match frame.node {
-                        Node::Dock { side, columns } => {
+                        Node::Dock { side, columns, .. } => {
                             for (column, cell) in columns.iter().zip(column_cells(columns, frame.rect, *side, flow, &placing.sizes, placing.spec)) {
                                 column_rects(column, cell, ColumnBar::Own, placing, moved, &mut rects)?;
                             }
