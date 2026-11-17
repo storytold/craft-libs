@@ -14,7 +14,7 @@ mod words;
 use craft_behavior::geometry::{SelectionOperation, axis_or_diagonal};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
-    Axis, CanvasView, CursorPriority, EditCommand, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape,
+    Axis, CanvasView, Cursor, CursorPriority, EditCommand, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape,
     PartKey, PartRef, PointerButton, PressPhase, PressStart, Roving, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
@@ -41,7 +41,8 @@ pub use model::{AnchorDelete, EditPath, EditSubpath, HandleSide, Knot, KnotRef, 
 pub use style::BezierStyle;
 pub use words::BezierWords;
 
-use super::PathOptionsSettings;
+use super::anchor_tool::cursor_of;
+use super::{PathOptionsSettings, PathTool};
 
 /// Insert on a picked anchor adds one halfway along the segment leaving it.
 const INSERT: Chord = Chord::plain(Key::Insert);
@@ -831,9 +832,16 @@ impl<'a> BezierOverlay<'a> {
         }
         if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor)
             && let Some(result) = cx.part_if_declared(EMPTY)
-            && matches!(result.press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary)
         {
-            self.report.pressed_empty = true;
+            // The part covers the canvas background, so it owns the cursor the host tool shows off the paths too.
+            if result.hover_pos.is_some() {
+                let tool = if self.tool == BezierTool::AddAnchor { PathTool::AddAnchor } else { PathTool::DeleteAnchor };
+                let cursor = cursor_of(tool, result.press.mods, space.precise());
+                cx.cursor(Cursor::Painted(cursor), CursorPriority::Part);
+            }
+            if matches!(result.press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary) {
+                self.report.pressed_empty = true;
+            }
         }
         // A press none of the parts carries any more (its part went with the paths) is over for the overlay.
         if !pressed && cx.press_slot::<Held>().is_some() {
