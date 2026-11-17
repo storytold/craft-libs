@@ -139,8 +139,8 @@ fn fit_cubics_to_depth(
         return Ok(Vec::new());
     }
     // What is left of the tolerance for the cubic's own distance from the polyline; none, and no
-    // cubic is close enough.
-    let room = tol.max(1e-9) - between.max(0.0);
+    // cubic is close enough (the tolerance asked for is the one held: it is not raised, nor is a fit given that is further than it).
+    let room = tol - between.max(0.0);
     if room.is_nan() || room <= 0.0 {
         return Err(FitStop::Depth);
     }
@@ -998,6 +998,32 @@ mod tests {
         let handle = out[0].0.p1 - a;
         assert!(handle.hypot() < 0.1 && handle.hypot() > 0.1 * (1.0 - 1e-6), "{handle:?}");
         assert!(out[0].1 <= 0.1, "{}", out[0].1);
+    }
+
+    /// A fit is within the tolerance asked for, however small: where no cubic is, there is none. (The tolerance was raised to a billionth where it
+    /// was less: two points with upward tangents gave a handle of a billionth, a curve 2.8e-10 from the chord at a tolerance of 1e-12, and
+    /// its bound said so.) A tolerance that is not a number, or none that is more than what the points are from their polyline, is no room.
+    #[test]
+    fn a_fit_is_never_further_from_its_points_than_the_tolerance_asked_for() {
+        let (a, b) = (Point::new(0.0, 0.0), Point::new(1.0, 0.0));
+        let up = Vec2::new(0.0, 1.0);
+        let mut work = usize::MAX;
+        for tol in [1e-12, 1e-11, 1e-10, 5e-10, 1e-9, 1e-8, 1e-6] {
+            let fits = fit_cubics(&[a, b], up, up, (tol, 0.0), &mut work).unwrap_or_else(|stop| panic!("no fit at {tol:e}: {stop:?}"));
+            assert_eq!(fits.len(), 1, "{tol:e}");
+            let (c, bound) = fits[0];
+            assert!(bound <= tol, "a bound of {bound:e} at a tolerance of {tol:e}");
+            // The curve itself, a point at a time (the first handle goes up and the second down, so it is furthest from the chord near a quarter).
+            let far = (0..=100).map(|k| c.eval(f64::from(k) / 100.0).y.abs()).fold(0.0, f64::max);
+            assert!(far <= tol, "a curve {far:e} from the chord at a tolerance of {tol:e}");
+        }
+        for tol in [f64::NAN, 0.0, -1.0] {
+            assert_eq!(fit_cubics(&[a, b], up, up, (tol, 0.0), &mut work), Err(FitStop::Depth), "{tol}");
+        }
+        // The reserve for what lies between the points is held out of the tolerance as before.
+        assert_eq!(fit_cubics(&[a, b], up, up, (1e-12, 1e-12), &mut work), Err(FitStop::Depth));
+        let out = fit_cubics(&[a, b], up, up, (3e-12, 1e-12), &mut work).expect("a fit in what is left");
+        assert!(out[0].1 <= 3e-12, "{:e}", out[0].1);
     }
 
     /// The pieces `fit_rec` makes (before any are joined) follow each other from the first point to the last, each ending at the point the
