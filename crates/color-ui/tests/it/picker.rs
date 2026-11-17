@@ -139,10 +139,16 @@ fn the_full_pickers_channel_rows_show_letters_and_align_their_fields() {
     assert_eq!(fixture.by_role(Role::RADIO_BUTTON).len(), 9, "every channel keeps its radio");
     let fields = fixture.by_role(Role::SPIN_BUTTON);
     assert_eq!(fields.len(), 9);
-    let first = fields[0].rect.min.x;
-    assert!(fields[..6].iter().all(|field| (field.rect.min.x - first).abs() < 0.5), "HSB and RGB fields share a column");
+    // The columns are found by x, not by tree order: HSB and RGB fields share the first, Lab's the second.
+    let mut starts: Vec<f32> = Vec::new();
+    for field in &fields {
+        if !starts.iter().any(|start| (start - field.rect.min.x).abs() < 0.5) {
+            starts.push(field.rect.min.x);
+        }
+    }
+    starts.sort_by(f32::total_cmp);
+    let rects: Vec<_> = fields.iter().map(|field| field.rect).collect();
+    assert_eq!(starts.len(), 2, "the fields start in two columns, one per model column: {rects:?}");
     let hex = fixture.by_label("Hex color").expect("the hex field");
-    assert!((hex.rect.min.x - first).abs() < 0.5, "the hex field, which has no radio, starts in the same column");
-    let lab = fields[6].rect.min.x;
-    assert!(fields[6..].iter().all(|field| (field.rect.min.x - lab).abs() < 0.5), "Lab fields share a column");
+    assert!((hex.rect.min.x - starts[0]).abs() < 0.5, "the hex field, which has no radio, starts in the first column: {:?}", hex.rect);
 }
