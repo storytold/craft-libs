@@ -135,7 +135,9 @@ fn on_canvas(
 /// the keyboard), ⌥ on the rectangle changes one corner, ⌥-click cycles the kind, a double click asks for the Corners
 /// dialog. Story values: the kinds, the widest inner angle that shows a widget, and whether the path's corners take
 /// their own radius.
-#[story(CornerWidgets<'static>, covers = [Default], drive = Drive::Drag(Grip::part(WIDGET.at(0)).toward(vec2(1.0, 1.0))))]
+// The drive grips the rectangle's top-right widget: the page shows at 100 %, and a fixture narrower than the page puts
+// the top-left widget past its left edge, where no press reaches it.
+#[story(CornerWidgets<'static>, covers = [Default], drive = Drive::Drag(Grip::part(WIDGET.at(1)).toward(vec2(-1.0, 1.0))))]
 fn edit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<CornerStoryWords>();
     let kinds = *data.value("kinds", true);
