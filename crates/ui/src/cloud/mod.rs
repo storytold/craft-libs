@@ -178,7 +178,8 @@ pub struct Guest {
 /// exists.
 pub struct CloudFiles {
     backend: Option<Box<dyn CloudBackend>>,
-    events: (Sender<Event>, Receiver<Event>),
+    /// Each answer with the account generation its job was issued in.
+    events: (Sender<backend::Stamped>, Receiver<backend::Stamped>),
     /// The badge and its menu. Signing in is the only way into any of this.
     /// The badge is the only control that offers it. It lives here. An
     /// application declares no field for it.
@@ -636,7 +637,13 @@ pub fn pump<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
     while let Ok(event) = app.cloud().events.1.try_recv() {
         arrived.push(event);
     }
-    for event in arrived {
+    for (issued, event) in arrived {
+        // A worker that sent just before a sign-out or a new sign-in passed
+        // `Post::send`'s check, and its answer waited here while the session
+        // changed. It is about the session that is gone.
+        if issued != app.cloud().account_generation.load(Ordering::Relaxed) {
+            continue;
+        }
         apply(app, event);
     }
     poll_link(app);
