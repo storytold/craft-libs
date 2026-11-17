@@ -95,60 +95,90 @@ pub(crate) fn decode(sample: &[u8], config: &Cr3Compression) -> Result<Vec<u16>>
     let count = image_size(config)?;
     let tiles = layout(sample, config)?;
     validate_planes(&tiles, config)?;
-    // Allocated once the first plane decodes: a tiny crafted file can claim a huge image.
-    let mut output = Vec::new();
+    // A tile's QP map error is reported by its first plane, so errors keep tile, then plane order.
+    let qp: Vec<Result<Option<QpMap>>> = tiles.iter().map(|tile| tile_qp(sample, tile)).collect();
     let midpoint = 1i32 << (config.bit_depth - 1);
     let maximum = (1i32 << config.bit_depth) - 1;
-    for tile in tiles {
-        let qp = tile_qp(sample, &tile)?;
-        // Each plane is its own entropy stream: decode a tile's planes in parallel.
-        let planes: Vec<Result<Vec<i32>>> = tile
-            .planes
-            .par_iter()
-            .enumerate()
-            .map(|(p, plane)| {
-                if config.levels == 0 {
-                    let band = plane.bands.first().ok_or_else(|| corrupt("missing lossless band"))?;
-                    lossless_plane(band_bytes(sample, band)?, tile.width / 2, tile.height / 2)
-                } else {
-                    let edges = TileEdges { left: tile.x > 0, right: tile.x + tile.width < width, top: false, bottom: false };
-                    wavelet_plane(sample, plane, tile.width / 2, tile.height / 2, edges, qp.as_ref())
-                }
-                .map_err(|error| RawError::Corrupt(format!("Canon CRX tile ({}, {}), plane {p}: {error}", tile.x, tile.y)))
-            })
-            .collect();
-        for (p, decoded) in planes.into_iter().enumerate() {
-            let decoded = decoded?;
-            if output.is_empty() {
-                output.try_reserve_exact(count).map_err(|_| RawError::Limit("CRX sample allocation"))?;
-                output.resize(count, 0);
-            }
-            for (i, &value) in decoded.iter().enumerate() {
-                let sensor_value = sensor_sample(value, midpoint, maximum, config.levels != 0)?;
-                let (x, y) = (tile.x + 2 * (i % (tile.width / 2)) + p % 2, tile.y + 2 * (i / (tile.width / 2)) + p / 2);
-                let slot = y
-                    .checked_mul(width)
-                    .and_then(|n| n.checked_add(x))
-                    .and_then(|n| output.get_mut(n))
-                    .ok_or_else(|| corrupt("tile writes outside image"))?;
-                *slot = sensor_value;
-            }
-        }
-    }
+    // Every plane of every tile is its own entropy stream: decode them all in parallel, each straight
+    // to sensor samples, so a task holds only its own plane as i32. The first error in tile and plane
+    // order is reported, as when the tiles were decoded one after another.
+    let jobs: Vec<(&Tile, &Result<Option<QpMap>>, usize, &Plane)> =
+        tiles.iter().zip(&qp).flat_map(|(tile, qp)| tile.planes.iter().enumerate().map(move |(p, plane)| (tile, qp, p, plane))).collect();
+    let planes: Vec<Result<Vec<u16>>> = jobs
+        .par_iter()
+        .map(|&(tile, qp, p, plane)| {
+            let qp = qp.as_ref().map_err(Clone::clone)?.as_ref();
+            let decoded = decode_plane(sample, config, width, tile, plane, qp)
+                .map_err(|error| RawError::Corrupt(format!("Canon CRX tile ({}, {}), plane {p}: {error}", tile.x, tile.y)))?;
+            sensor_plane(&decoded, midpoint, maximum, config.levels != 0)
+        })
+        .collect();
+    let planes = planes.into_iter().collect::<Result<Vec<_>>>()?;
+    // Allocated once every plane has decoded: a tiny crafted file can claim a huge image.
+    let mut output = Vec::new();
+    output.try_reserve_exact(count).map_err(|_| RawError::Limit("CRX sample allocation"))?;
+    output.resize(count, 0);
+    interleave(&mut output, width, &tiles, &planes)?;
     Ok(output)
 }
 
-/// A decoded plane value as a sensor sample of the CMP1 bit depth.
+fn decode_plane(sample: &[u8], config: &Cr3Compression, width: usize, tile: &Tile, plane: &Plane, qp: Option<&QpMap>) -> Result<Vec<i32>> {
+    if config.levels == 0 {
+        let band = plane.bands.first().ok_or_else(|| corrupt("missing lossless band"))?;
+        lossless_plane(band_bytes(sample, band)?, tile.width / 2, tile.height / 2)
+    } else {
+        let edges = TileEdges { left: tile.x > 0, right: tile.x + tile.width < width, top: false, bottom: false };
+        wavelet_plane(sample, plane, tile.width / 2, tile.height / 2, edges, qp)
+    }
+}
+
+/// Decoded plane values as sensor samples of the CMP1 bit depth.
 ///
 /// Lossless planes reproduce the sensor exactly, so a value outside the bit depth is corrupt data.
 /// Wavelet (C-RAW) planes are quantized: next to clipped highlights the reconstruction overshoots
 /// the sensor's range by up to a few quantization steps (measured on 17 CC0 files: at most 36 codes
 /// above 16383 at 14 bits, never below 0), while lossless files of the same bodies clip at exactly
-/// 16383. Those samples are clamped to the range the sensor can record.
-fn sensor_sample(value: i32, midpoint: i32, maximum: i32, quantized: bool) -> Result<u16> {
-    let sample = value.checked_add(midpoint).ok_or_else(|| corrupt("decoded sample outside its bit depth"))?;
-    let sample = if quantized { sample.clamp(0, maximum) } else { sample };
-    u16::try_from(sample).ok().filter(|_| sample <= maximum).ok_or_else(|| corrupt("decoded sample outside its bit depth"))
+/// 16383. Those samples are clamped to the range the sensor can record. The range is checked once,
+/// on the plane's extremes; `midpoint` is positive, so only the largest sum can overflow.
+fn sensor_plane(values: &[i32], midpoint: i32, maximum: i32, quantized: bool) -> Result<Vec<u16>> {
+    let outside = || corrupt("decoded sample outside its bit depth");
+    let (Some(&low), Some(&high)) = (values.iter().min(), values.iter().max()) else { return Ok(Vec::new()) };
+    let high = high.checked_add(midpoint).ok_or_else(outside)?;
+    if !quantized && (low.saturating_add(midpoint) < 0 || high > maximum) {
+        return Err(outside());
+    }
+    let mut samples = Vec::new();
+    samples.try_reserve_exact(values.len()).map_err(|_| RawError::Limit("CRX sample allocation"))?;
+    // Every sum fits (the largest did), and the clamp leaves in-range lossless samples unchanged.
+    samples.extend(values.iter().map(|&value| (value + midpoint).clamp(0, maximum) as u16));
+    Ok(samples)
+}
+
+/// Writes each tile's four planes (`planes`: four per tile, in tile order) into the Bayer mosaic.
+/// Plane `p` holds the samples at row parity `p / 2` and column parity `p % 2`. Runs in parallel
+/// over pairs of output rows.
+fn interleave(output: &mut [u16], width: usize, tiles: &[Tile], planes: &[Vec<u16>]) -> Result<()> {
+    let outside = || corrupt("tile writes outside image");
+    if width == 0 || planes.len() != tiles.len() * 4 {
+        return Err(outside());
+    }
+    output.par_chunks_mut(2 * width).enumerate().try_for_each(|(pair, rows)| -> Result<()> {
+        let y = 2 * pair;
+        for (tile, planes) in tiles.iter().zip(planes.as_chunks::<4>().0).filter(|(tile, _)| (tile.y..tile.y + tile.height).contains(&y)) {
+            let half = tile.width / 2;
+            let start = (y - tile.y) / 2 * half;
+            for (row, [even, odd]) in rows.chunks_exact_mut(width).zip(planes.as_chunks::<2>().0) {
+                let target = row.get_mut(tile.x..tile.x + tile.width).ok_or_else(outside)?;
+                let even = even.get(start..start + half).ok_or_else(outside)?;
+                let odd = odd.get(start..start + half).ok_or_else(outside)?;
+                for ([a, b], (&left, &right)) in target.as_chunks_mut::<2>().0.iter_mut().zip(even.iter().zip(odd)) {
+                    *a = left;
+                    *b = right;
+                }
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Header-only probing must reject the same unsupported coding variants as full decoding.
@@ -413,22 +443,56 @@ fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edge
     for high in high_dimensions.iter().rev() {
         shapes.extend_from_slice(high);
     }
-    let mut bands = Vec::with_capacity(10);
-    for (i, (&(w, h), band)) in shapes.iter().zip(&plane.bands).enumerate() {
-        let bytes = band_bytes(sample, band)?;
-        let mut data = if i == 0 { lossless_plane(bytes, w, h)? } else { coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h)? };
-        for (position, value) in data.iter_mut().enumerate() {
-            let step = match band.quant {
-                Quantization::Uniform(value) => quant_step(value, MAX_UNIFORM_QUANT)?,
-                Quantization::Adaptive { base, gain } => {
-                    adaptive_step(qp.ok_or_else(|| corrupt("missing QP map"))?, i, position % w, position / w, base, gain)?
-                }
-            };
-            *value = value.checked_mul(step).ok_or_else(|| corrupt("dequantized coefficient overflow"))?;
-        }
-        bands.push(WaveletBand { width: w, height: h, data });
-    }
+    // Each subband is its own entropy stream: decode and dequantize them in parallel. The first error
+    // in band order is reported, as when they were decoded one after another.
+    let bands: Vec<Result<WaveletBand>> = shapes
+        .par_iter()
+        .zip(plane.bands.par_iter())
+        .enumerate()
+        .map(|(i, (&(w, h), band))| {
+            let bytes = band_bytes(sample, band)?;
+            let mut data = if i == 0 { lossless_plane(bytes, w, h)? } else { coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h)? };
+            dequantize(&mut data, i, w, &band.quant, qp)?;
+            Ok(WaveletBand { width: w, height: h, data })
+        })
+        .collect();
+    let bands = bands.into_iter().collect::<Result<Vec<_>>>()?;
     crx_wavelet::reconstruct(&bands, width, height, 3, edges)
+}
+
+/// Multiplies the coefficients of subband `band` (`width` columns) by their quantization step.
+///
+/// The step is constant per subband, except for adaptive quantization with a gain, where it is
+/// constant per QP cell: 2 coefficients wide in bands 4-6 and 4 wide in bands 7-9 (see
+/// [`adaptive_step`]), so it is looked up once per cell rather than per coefficient.
+fn dequantize(data: &mut [i32], band: usize, width: usize, quant: &Quantization, qp: Option<&QpMap>) -> Result<()> {
+    let (map, base, gain) = match *quant {
+        Quantization::Uniform(value) => return scale(data, quant_step(value, MAX_UNIFORM_QUANT)?),
+        Quantization::Adaptive { base, gain } => (qp.ok_or_else(|| corrupt("missing QP map"))?, base, gain),
+    };
+    if gain == 0 {
+        return scale(data, adaptive_step(map, band, 0, 0, base, gain)?);
+    }
+    if width == 0 {
+        return Err(corrupt("empty subband row"));
+    }
+    let cell = if (4..=6).contains(&band) { 2 } else { 4 };
+    for (y, row) in data.chunks_exact_mut(width).enumerate() {
+        for (column, values) in row.chunks_mut(cell).enumerate() {
+            scale(values, adaptive_step(map, band, column * cell, y, base, gain)?)?;
+        }
+    }
+    Ok(())
+}
+
+fn scale(values: &mut [i32], step: i32) -> Result<()> {
+    let mut overflow = false;
+    for value in values.iter_mut() {
+        let (product, wrapped) = value.overflowing_mul(step);
+        *value = product;
+        overflow |= wrapped;
+    }
+    if overflow { Err(corrupt("dequantized coefficient overflow")) } else { Ok(()) }
 }
 
 fn adaptive_step(map: &QpMap, band: usize, x: usize, y: usize, base: u32, gain: u32) -> Result<i32> {
@@ -502,17 +566,60 @@ fn be32(src: &[u8], at: usize) -> Result<u32> {
     Ok(u32::from_be_bytes(bytes))
 }
 
+/// An MSB-first bit reader over one entropy stream.
+///
+/// Up to 64 stream bits are held in `cache`, left-aligned: the top `count` bits are the next unread
+/// ones. A refill loads 8 bytes at once and keeps whole bytes only, so the bits below `count` are
+/// either zero or the stream's own next bits at their final positions, which a later refill ORs in
+/// again unchanged. Reads never trust those bits: they are checked against `count`.
 struct Bits<'a> {
     src: &'a [u8],
-    at: usize,
+    /// The next byte to load into `cache`.
+    next: usize,
+    cache: u64,
+    count: u32,
 }
 
-impl Bits<'_> {
-    /// The next 32 bits, MSB first, when at least that many remain before the end of the stream.
-    fn peek32(&self) -> Option<u32> {
-        let bytes = self.src.get(self.at / 8..self.at / 8 + 5)?;
-        let word = u64::from_be_bytes([0, 0, 0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]]);
-        Some((word >> (8 - self.at % 8)) as u32)
+impl<'a> Bits<'a> {
+    fn new(src: &'a [u8]) -> Self {
+        Self { src, next: 0, cache: 0, count: 0 }
+    }
+
+    /// The number of bits consumed so far.
+    fn position(&self) -> usize {
+        self.next * 8 - self.count as usize
+    }
+
+    /// Loads whole bytes until more than 56 bits are cached or the stream ends.
+    fn refill(&mut self) {
+        if self.count > 56 {
+            return;
+        }
+        if let Some(bytes) = self.src.get(self.next..self.next + 8).and_then(|s| <[u8; 8]>::try_from(s).ok()) {
+            self.cache |= u64::from_be_bytes(bytes) >> self.count;
+            let loaded = (63 - self.count) / 8;
+            self.next += loaded as usize;
+            self.count += loaded * 8;
+            return;
+        }
+        // The last 7 bytes: one at a time.
+        while self.count <= 56 {
+            let Some(&byte) = self.src.get(self.next) else { break };
+            self.cache |= u64::from(byte) << (56 - self.count);
+            self.next += 1;
+            self.count += 8;
+        }
+    }
+
+    /// Drops `count` bits (at most `self.count`, below 64).
+    fn consume(&mut self, count: u32) {
+        self.cache <<= count;
+        self.count -= count;
+    }
+
+    /// The top `count` cached bits (0 to 32) as a number; `>> 1 >> (63 - count)` is 0 for `count` 0.
+    fn top(&self, count: u32) -> u32 {
+        (self.cache >> 1 >> (63 - count)) as u32
     }
 
     fn take(&mut self, count: u32) -> Result<u32> {
@@ -522,27 +629,34 @@ impl Bits<'_> {
         if count == 0 {
             return Ok(0);
         }
-        if let Some(window) = self.peek32() {
-            self.at += count as usize;
-            return Ok(window >> (32 - count));
+        if self.count < count {
+            self.refill();
+            if self.count < count {
+                return Err(corrupt("truncated entropy stream"));
+            }
         }
-        // Near the end of the stream: bit by bit, so truncation is reported exactly.
-        let mut value = 0;
-        for _ in 0..count {
-            let byte = self.src.get(self.at / 8).ok_or_else(|| corrupt("truncated entropy stream"))?;
-            value = (value << 1) | u32::from((byte >> (7 - self.at % 8)) & 1);
-            self.at += 1;
-        }
+        let value = self.top(count);
+        self.consume(count);
         Ok(value)
     }
 
     fn rice(&mut self, k: u32) -> Result<u32> {
-        // Common case: the unary prefix and its terminating 1 lie within the next 32 bits.
-        if let Some(window) = self.peek32().filter(|&w| w != 0) {
-            let zeros = window.leading_zeros();
-            self.at += zeros as usize + 1;
-            return if k <= 20 { Ok((zeros << k) | self.take(k)?) } else { Err(corrupt("Rice parameter exceeds sample precision")) };
+        // Common case: the unary prefix (shorter than the 41-zero escape), its terminating 1 and the k
+        // low bits are all cached.
+        if k <= 20 {
+            let mut zeros = self.cache.leading_zeros();
+            if zeros + 1 + k > self.count {
+                self.refill();
+                zeros = self.cache.leading_zeros();
+            }
+            if zeros < 41 && zeros + 1 + k <= self.count {
+                self.consume(zeros + 1);
+                let low = self.top(k);
+                self.consume(k);
+                return Ok((zeros << k) | low);
+            }
         }
+        // Escapes, k above 20 and the end of the stream: bit by bit, so truncation is reported exactly.
         let mut zeros = 0;
         while self.take(1)? == 0 {
             zeros += 1;
@@ -580,11 +694,12 @@ impl Bits<'_> {
 
     fn finish(&self) -> Result<()> {
         let bits = self.src.len().checked_mul(8).ok_or(RawError::Limit("CRX entropy length"))?;
-        if bits.saturating_sub(self.at) > 7 {
+        let at = self.position();
+        if bits.saturating_sub(at) > 7 {
             return Err(corrupt("unconsumed entropy data"));
         }
         if let Some(&last) = self.src.last() {
-            let remaining = (bits - self.at) as u32;
+            let remaining = (bits - at) as u32;
             if u32::from(last) & ((1 << remaining) - 1) != 0 {
                 return Err(corrupt("nonzero entropy alignment bits"));
             }
@@ -653,7 +768,7 @@ fn lossless_plane(src: &[u8], width: usize, height: usize) -> Result<Vec<i32>> {
     current.try_reserve_exact(width).map_err(|_| RawError::Limit("CRX row allocation"))?;
     current.resize(width, 0i32);
     let (mut k, mut run_index) = (0u32, 0usize);
-    let mut bits = Bits { src, at: 0 };
+    let mut bits = Bits::new(src);
     for y in 0..height {
         let mut x = 0;
         let mut left = previous.first().copied().ok_or_else(|| corrupt("empty plane row"))?;
@@ -716,7 +831,7 @@ fn high_frequency_band(src: &[u8], width: usize, height: usize) -> Result<Vec<i3
     let (mut previous, mut current) = (row()?, row()?);
     let (mut previous_k, mut current_k) = (row()?, row()?);
     let (mut k, mut run_index) = (0u32, 0usize);
-    let mut bits = Bits { src, at: 0 };
+    let mut bits = Bits::new(src);
     for y in 0..height {
         let (mut x, mut left) = (0, 0);
         while x < width {
@@ -780,7 +895,7 @@ fn qp_map(src: &[u8], width: usize, height: usize) -> Result<QpMap> {
         Ok(values)
     };
     let (mut previous, mut current) = (row()?, row()?);
-    let mut bits = Bits { src, at: 0 };
+    let mut bits = Bits::new(src);
     let mut k = 0;
     for y in 0..height {
         let mut left = *previous.first().ok_or_else(|| corrupt("empty QP row"))?;
@@ -879,11 +994,11 @@ mod tests {
 
     #[test]
     fn partial_final_run_segment_keeps_its_index() {
-        let mut bits = Bits { src: &[0xc0], at: 0 };
+        let mut bits = Bits::new(&[0xc0]);
         let mut index = 11;
         assert_eq!(run(&mut bits, &mut index, 6).unwrap(), 6);
         assert_eq!(index, 12);
-        assert_eq!(bits.at, 2);
+        assert_eq!(bits.position(), 2);
     }
 
     #[test]
@@ -1043,14 +1158,22 @@ mod tests {
 
     #[test]
     fn only_quantized_planes_clamp_out_of_range_samples() {
-        assert_eq!(sensor_sample(8200, 8192, 16383, true).unwrap(), 16383);
-        assert_eq!(sensor_sample(-8300, 8192, 16383, true).unwrap(), 0);
-        assert_eq!(sensor_sample(8191, 8192, 16383, false).unwrap(), 16383);
-        assert_eq!(sensor_sample(-8192, 8192, 16383, false).unwrap(), 0);
+        assert_eq!(sensor_plane(&[8200], 8192, 16383, true).unwrap(), [16383]);
+        assert_eq!(sensor_plane(&[-8300], 8192, 16383, true).unwrap(), [0]);
+        assert_eq!(sensor_plane(&[-8300, 0, 8200], 8192, 16383, true).unwrap(), [0, 8192, 16383]);
+        assert_eq!(sensor_plane(&[8191], 8192, 16383, false).unwrap(), [16383]);
+        assert_eq!(sensor_plane(&[-8192], 8192, 16383, false).unwrap(), [0]);
+        assert_eq!(sensor_plane(&[-8192, 5, 8191], 8192, 16383, false).unwrap(), [0, 8197, 16383]);
         // Lossless planes reproduce the sensor exactly: outside the bit depth is corrupt data.
-        assert!(matches!(sensor_sample(8192, 8192, 16383, false), Err(RawError::Corrupt(_))));
-        assert!(matches!(sensor_sample(-8193, 8192, 16383, false), Err(RawError::Corrupt(_))));
-        assert!(matches!(sensor_sample(i32::MAX, 8192, 16383, true), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[8192], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[-8193], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[0, 8192, 0], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[0, -8193, 0], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[i32::MAX], 8192, 16383, true), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[0, i32::MAX], 8192, 16383, true), Err(RawError::Corrupt(_))));
+        // The lowest i32 cannot overflow below: it is clamped in a quantized plane and corrupt in a lossless one.
+        assert_eq!(sensor_plane(&[i32::MIN], 8192, 16383, true).unwrap(), [0]);
+        assert!(matches!(sensor_plane(&[i32::MIN], 8192, 16383, false), Err(RawError::Corrupt(_))));
     }
 
     #[test]
@@ -1081,14 +1204,14 @@ mod tests {
     #[test]
     fn qp_escape_and_average_precede_the_quantization_table() {
         // 23 zeros, the terminating 1, then the symbol in 8 bits.
-        let mut bits = Bits { src: &[0, 0, 1, 0x18], at: 0 };
+        let mut bits = Bits::new(&[0, 0, 1, 0x18]);
         assert_eq!(bits.qp_rice(0).unwrap(), 24);
-        assert_eq!(bits.at, 32);
+        assert_eq!(bits.position(), 32);
         // 22 zeros are an ordinary Rice prefix.
-        let mut bits = Bits { src: &[0, 0, 2, 0], at: 0 };
+        let mut bits = Bits::new(&[0, 0, 2, 0]);
         assert_eq!(bits.qp_rice(0).unwrap(), 22);
-        assert_eq!(bits.at, 23);
-        assert!(Bits { src: &[0, 0, 0, 0x80, 0], at: 0 }.qp_rice(0).is_err());
+        assert_eq!(bits.position(), 23);
+        assert!(Bits::new(&[0, 0, 0, 0x80, 0]).qp_rice(0).is_err());
         // The map's first symbol is a 32-bit literal (300 = QP 150 from prediction 0).
         let map = qp_map(&[0, 0, 1, 0x2c, 0x94], 1, 4).unwrap();
         assert_eq!(map.data, [150; 4]);
@@ -1187,11 +1310,17 @@ mod tests {
         for end in 0..sample.len() {
             assert!(decode(&sample[..end], &config).is_err());
         }
+        // A corrupt QP map (nonzero alignment bits) is reported as such, not as a plane error.
+        let at = sample.windows(5).position(|bytes| bytes == [0, 0, 1, 0x2c, 0x94]).unwrap() + 4;
+        sample[at] ^= 1;
+        let error = decode(&sample, &config).unwrap_err().to_string();
+        assert!(error.contains("alignment") && !error.contains("plane"), "{error}");
     }
 
     #[test]
     fn optional_cc0_samples_match_external_oracle() {
         let Some(directory) = std::env::var_os("LIGHTCRAFT_CR3_CORPUS") else { return };
+        let mut checked = 0;
         for (name, expected) in [
             ("cr3-canon-r100-raw.cr3", 0xcbe5299ab9c52630u64),
             ("cr3-canon-m50-raw.cr3", 0x62261f0ba81cfcd2u64),
@@ -1203,9 +1332,18 @@ mod tests {
             ("cr3-canon-rp-craw.cr3", 0xf48df06ca1d67382u64),
             ("cr3-canon-rp-raw-crop.cr3", 0x46808a9de3b3dcc7u64),
             ("cr3-canon-rp-craw-crop.cr3", 0x39a60c4efed4e1f4u64),
+            // EOS R5 Mark II (version 0x200 C-RAW and its lossless pair): pinned to this decoder's
+            // own output, see docs/cr3.md.
+            ("cr3-canon-r5m2-raw.cr3", 0xff716fb30248496fu64),
+            ("cr3-canon-r5m2-craw.cr3", 0xaf32b45357b534e5u64),
+            ("cr3-canon-r5m2-raw-crop.cr3", 0x31cf630afe868958u64),
+            ("cr3-canon-r5m2-craw-crop.cr3", 0x4721605b20339332u64),
         ] {
             let path = std::path::Path::new(&directory).join(name);
-            let bytes = std::fs::read(path).unwrap();
+            let Ok(bytes) = std::fs::read(&path) else {
+                eprintln!("skipped {}: not in LIGHTCRAFT_CR3_CORPUS", path.display());
+                continue;
+            };
             let container = craft_metadata::cr3::parse_cr3(&bytes).unwrap();
             let mut candidates = container
                 .tracks
@@ -1224,6 +1362,285 @@ mod tests {
                 .flat_map(|value| value.to_le_bytes())
                 .fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3));
             assert_eq!(hash, expected, "{name}");
+            checked += 1;
         }
+        assert!(checked > 0, "LIGHTCRAFT_CR3_CORPUS holds none of the pinned files");
+    }
+
+    /// The bit reader before the 64-bit cache: a checked 5-byte window per read, bit by bit near the end.
+    struct ReferenceBits<'a> {
+        src: &'a [u8],
+        at: usize,
+    }
+
+    impl ReferenceBits<'_> {
+        fn peek32(&self) -> Option<u32> {
+            let bytes = self.src.get(self.at / 8..self.at / 8 + 5)?;
+            let word = u64::from_be_bytes([0, 0, 0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]]);
+            Some((word >> (8 - self.at % 8)) as u32)
+        }
+
+        fn take(&mut self, count: u32) -> Result<u32> {
+            if count > 24 {
+                return Err(corrupt("invalid Rice parameter"));
+            }
+            if count == 0 {
+                return Ok(0);
+            }
+            if let Some(window) = self.peek32() {
+                self.at += count as usize;
+                return Ok(window >> (32 - count));
+            }
+            let mut value = 0;
+            for _ in 0..count {
+                let byte = self.src.get(self.at / 8).ok_or_else(|| corrupt("truncated entropy stream"))?;
+                value = (value << 1) | u32::from((byte >> (7 - self.at % 8)) & 1);
+                self.at += 1;
+            }
+            Ok(value)
+        }
+
+        fn rice(&mut self, k: u32) -> Result<u32> {
+            if let Some(window) = self.peek32().filter(|&w| w != 0) {
+                let zeros = window.leading_zeros();
+                self.at += zeros as usize + 1;
+                return if k <= 20 { Ok((zeros << k) | self.take(k)?) } else { Err(corrupt("Rice parameter exceeds sample precision")) };
+            }
+            let mut zeros = 0;
+            while self.take(1)? == 0 {
+                zeros += 1;
+                if zeros > 41 {
+                    return Err(corrupt("Rice escape prefix exceeds 41 bits"));
+                }
+            }
+            if zeros == 41 {
+                self.take(21)
+            } else if k <= 20 {
+                Ok((zeros << k) | self.take(k)?)
+            } else {
+                Err(corrupt("Rice parameter exceeds sample precision"))
+            }
+        }
+
+        fn qp_rice(&mut self, k: u32) -> Result<u32> {
+            let mut zeros = 0;
+            while self.take(1)? == 0 {
+                zeros += 1;
+                if zeros > QP_ESCAPE_ZEROS {
+                    return Err(corrupt("QP Rice escape prefix exceeds 23 bits"));
+                }
+            }
+            if zeros == QP_ESCAPE_ZEROS {
+                self.take(8)
+            } else if k <= 20 {
+                Ok((zeros << k) | self.take(k)?)
+            } else {
+                Err(corrupt("QP Rice parameter exceeds precision"))
+            }
+        }
+
+        fn finish(&self) -> bool {
+            let bits = self.src.len() * 8;
+            bits.saturating_sub(self.at) <= 7 && self.src.last().is_none_or(|&last| u32::from(last) & ((1u32 << (bits - self.at)) - 1) == 0)
+        }
+    }
+
+    /// A xorshift generator: deterministic pseudo-random test input without a dependency.
+    fn xorshift(seed: &mut u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    }
+
+    #[test]
+    fn cached_bit_reader_matches_the_bitwise_reference() {
+        let mut seed = 0x2545_f491_4f6c_dd1d;
+        for round in 0..400 {
+            let length = (xorshift(&mut seed) % 48) as usize;
+            // Mostly zero and small bytes, so long unary prefixes and both escapes occur.
+            let stream: Vec<u8> = (0..length)
+                .map(|_| match xorshift(&mut seed) % 4 {
+                    0 | 1 => 0,
+                    2 => (xorshift(&mut seed) & 0x0f) as u8,
+                    _ => xorshift(&mut seed) as u8,
+                })
+                .collect();
+            let ops: Vec<(u64, u32)> = (0..48).map(|_| (xorshift(&mut seed) % 3, (xorshift(&mut seed) % 26) as u32)).collect();
+            // Every truncation of the stream, so reads meet the end at every offset.
+            for end in 0..=stream.len() {
+                let src = &stream[..end];
+                let (mut cached, mut reference) = (Bits::new(src), ReferenceBits { src, at: 0 });
+                let mut complete = true;
+                for &(op, n) in &ops {
+                    let (a, b) = match op {
+                        0 => (cached.take(n), reference.take(n)),
+                        1 => (cached.rice(n), reference.rice(n)),
+                        _ => (cached.qp_rice(n % 22), reference.qp_rice(n % 22)),
+                    };
+                    assert_eq!(a.as_ref().ok(), b.as_ref().ok(), "round {round}, end {end}, op {op} {n}, stream {stream:02x?}");
+                    assert_eq!(
+                        a.as_ref().err().map(ToString::to_string),
+                        b.as_ref().err().map(ToString::to_string),
+                        "round {round}, end {end}, op {op} {n}"
+                    );
+                    if a.is_err() {
+                        complete = false;
+                        break;
+                    }
+                    assert_eq!(cached.position(), reference.at, "round {round}, end {end}, op {op} {n}");
+                }
+                if complete {
+                    assert_eq!(cached.finish().is_ok(), reference.finish(), "round {round}, end {end}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rice_escape_is_an_error_when_cut_at_any_byte() {
+        // 41 zeros, the terminating 1 and the 21-bit literal 16400 (+8200): the whole stream is one escape.
+        let src = [0, 0, 0, 0, 0, 0x40, 0x80, 0x20];
+        assert_eq!(lossless_plane(&src, 1, 1).unwrap(), [8200]);
+        for end in 0..src.len() {
+            assert!(lossless_plane(&src[..end], 1, 1).is_err(), "prefix {end}");
+        }
+        // The same escape read from the cache, 9 bytes into a longer stream.
+        let mut long = vec![0xff; 9];
+        long.extend(src);
+        let mut bits = Bits::new(&long);
+        for _ in 0..72 {
+            assert_eq!(bits.rice(0).unwrap(), 0);
+        }
+        assert_eq!(bits.rice(0).unwrap(), 16400);
+        bits.finish().unwrap();
+    }
+
+    #[test]
+    fn dequantization_per_cell_matches_a_step_per_coefficient() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15;
+        // Odd map heights as on the EOS R7, and band sizes that fit the map and that overrun it by one.
+        for (map_width, map_height) in [(1, 1), (2, 3), (3, 4), (5, 7)] {
+            let map = QpMap {
+                width: map_width,
+                height: map_height,
+                data: (0..map_width * map_height).map(|_| 131 + (xorshift(&mut seed) % 45) as i32).collect(),
+            };
+            for band in 0..10 {
+                for (width, height) in [
+                    (1, 1),
+                    (3, 2),
+                    (2 * map_width - 1, map_height.div_ceil(2)),
+                    (2 * map_width + 1, map_height),
+                    (4 * map_width, map_height),
+                    (4 * map_width + 1, map_height + 1),
+                ] {
+                    for quant in [
+                        Quantization::Uniform(4 + 4 * band as u8),
+                        Quantization::Adaptive { base: 0, gain: 0 },
+                        Quantization::Adaptive { base: 3, gain: 0 },
+                        Quantization::Adaptive { base: 1, gain: 8 },
+                        Quantization::Adaptive { base: 0, gain: 16 },
+                    ] {
+                        let data: Vec<i32> = (0..width * height).map(|_| (xorshift(&mut seed) % 2001) as i32 - 1000).collect();
+                        let mut cells = data.clone();
+                        let cells_result = dequantize(&mut cells, band, width, &quant, Some(&map));
+                        let mut reference = data;
+                        let reference_result = reference.iter_mut().enumerate().try_for_each(|(position, value)| -> Result<()> {
+                            let step = match quant {
+                                Quantization::Uniform(uniform) => quant_step(uniform, MAX_UNIFORM_QUANT)?,
+                                Quantization::Adaptive { base, gain } => adaptive_step(&map, band, position % width, position / width, base, gain)?,
+                            };
+                            *value = value.checked_mul(step).ok_or_else(|| corrupt("dequantized coefficient overflow"))?;
+                            Ok(())
+                        });
+                        let case = format!("map {map_width}x{map_height}, band {band}, {width}x{height}, {quant:?}");
+                        assert_eq!(cells_result.is_ok(), reference_result.is_ok(), "{case}");
+                        assert_eq!(
+                            cells_result.as_ref().err().map(ToString::to_string),
+                            reference_result.as_ref().err().map(ToString::to_string),
+                            "{case}"
+                        );
+                        if cells_result.is_ok() {
+                            assert_eq!(cells, reference, "{case}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(dequantize(&mut [1 << 30], 1, 1, &Quantization::Uniform(10), None).is_err());
+        assert!(dequantize(&mut [1], 4, 1, &Quantization::Adaptive { base: 0, gain: 0 }, None).is_err());
+    }
+
+    #[test]
+    fn interleave_places_every_plane_of_every_tile_like_a_per_sample_scatter() {
+        // A 2 x 2 tile grid whose right column is narrower, as at the right edge of a real image.
+        let (width, height) = (12, 8);
+        let tile = |x, y, width, height| Tile { x, y, width, height, planes: Vec::new(), qp: None };
+        let tiles = [tile(0, 0, 8, 4), tile(8, 0, 4, 4), tile(0, 4, 8, 4), tile(8, 4, 4, 4)];
+        let planes: Vec<Vec<u16>> = tiles
+            .iter()
+            .enumerate()
+            .flat_map(|(t, tile)| {
+                (0..4).map(move |p| (0..tile.width * tile.height / 4).map(|i| ((t * 4 + p) * 100 + i) as u16).collect::<Vec<u16>>())
+            })
+            .collect();
+        let mut expected = vec![0u16; width * height];
+        for (t, tile) in tiles.iter().enumerate() {
+            for p in 0..4 {
+                for (i, &value) in planes[t * 4 + p].iter().enumerate() {
+                    let (x, y) = (tile.x + 2 * (i % (tile.width / 2)) + p % 2, tile.y + 2 * (i / (tile.width / 2)) + p / 2);
+                    expected[y * width + x] = value;
+                }
+            }
+        }
+        let mut output = vec![0u16; width * height];
+        interleave(&mut output, width, &tiles, &planes).unwrap();
+        assert_eq!(output, expected);
+        // A plane shorter than its tile is an error, not a partial image.
+        let mut short = planes.clone();
+        short[5].pop();
+        assert!(interleave(&mut output, width, &tiles, &short).is_err());
+        assert!(interleave(&mut output, width, &tiles, &planes[..12]).is_err());
+    }
+
+    #[test]
+    fn lossless_tile_grid_decodes_each_plane_to_its_place() {
+        // Four 4 x 4 tiles in a 2 x 2 grid (horizontal and vertical tile boundaries). Each 2 x 2 plane
+        // is flat at value 1, 2 or 3, chosen per tile and plane. Bitstreams per value: row 0 has a
+        // zero-run flag 0, the Rice-coded first sample and a 0 symbol; row 1 is one run to the row end.
+        let stream = |value: usize| -> &'static [u8] {
+            match value {
+                1 => &[0x1e],       // 0, 001 (k 0), 1 (k 0), 1, 1
+                2 => &[0x06, 0xc0], // 0, 00001 (k 0), 10 (k 1), 1, 1
+                _ => &[0x01, 0x98], // 0, 0000001 (k 0), 100 (k 2), 1, 1
+            }
+        };
+        let value = |t: usize, p: usize| 1 + (t + p) % 3;
+        let mut config = coding();
+        config.width = 8;
+        config.height = 8;
+        config.header_size = 432;
+        let mut sample = Vec::new();
+        let mut data = Vec::new();
+        for t in 0..4 {
+            let sizes: Vec<u32> = (0..4).map(|p| stream(value(t, p)).len() as u32).collect();
+            marker(&mut sample, 0xff01, sizes.iter().sum(), (t as u32) << 16);
+            for (p, &size) in sizes.iter().enumerate() {
+                marker(&mut sample, 0xff02, size, ((p as u32) << 28) | 0x0800_0000);
+                marker(&mut sample, 0xff03, size, 0x0020_0000);
+                data.extend_from_slice(stream(value(t, p)));
+            }
+        }
+        assert_eq!(sample.len(), 432);
+        sample.extend(data);
+        validate(&sample, &config).unwrap();
+        let expected: Vec<u16> =
+            (0..64).map(|i| (i % 8, i / 8)).map(|(x, y)| 8192 + value((y / 4) * 2 + x / 4, (y % 2) * 2 + x % 2) as u16).collect();
+        assert_eq!(decode(&sample, &config).unwrap(), expected);
+        // A corrupt plane in the last tile still fails the whole image.
+        let mut broken = sample.clone();
+        *broken.last_mut().unwrap() ^= 1;
+        assert!(decode(&broken, &config).is_err());
     }
 }

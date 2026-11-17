@@ -1,11 +1,11 @@
 [package]
 name = "craft-testkit"
-description = "Shared test support for the Craft apps: a reentrant test lock and other helpers. Test support only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+description = "Source-level platform regression guards, test deadlines, hostile-input helpers and a reentrant test lock for the Craft application suite"
 publish = false
 
 [dependencies]

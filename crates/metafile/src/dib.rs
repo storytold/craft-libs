@@ -13,6 +13,7 @@ const BI_PNG: u32 = 5;
 const CORE_HEADER: usize = 12;
 /// Most palette entries a DIB can carry (the colour table never exceeds 2^8).
 const MAX_PALETTE: usize = 256;
+const ROP_SRCCOPY: u32 = 0x00CC_0020;
 const ROP_SRCAND: u32 = 0x0088_00C6;
 const ROP_SRCPAINT: u32 = 0x00EE_0086;
 const ROP_SRCINVERT: u32 = 0x0066_0046;
@@ -107,6 +108,17 @@ fn compression(info: Bytes) -> Option<u32> {
     (info.u32(0)? >= 40).then(|| info.u32(16)).flatten().filter(|c| matches!(*c, BI_JPEG | BI_PNG))
 }
 
+/// The width and height a JPEG or PNG file's header gives, without decoding any pixel. Unlike
+/// [`decode_compressed`] it takes any side, with the same cap on what the decoder allocates.
+pub(crate) fn compressed_size(bytes: &[u8]) -> Option<(usize, usize)> {
+    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some((MAX_PIXELS * 4) as u64);
+    r.limits(limits);
+    let (w, h) = r.into_dimensions().ok()?;
+    Some((w as usize, h as usize))
+}
+
 /// Decodes a JPEG or PNG file (the bits of a BI_JPEG or BI_PNG DIB, an EMF+ image) to top-down
 /// RGBA. The size comes from the file's header first, so an image over the side or pixel cap is
 /// refused before any pixel is decoded, and the decoder's own allocations are capped too.
@@ -191,6 +203,51 @@ pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64;
         kind.decode_row(row, clip.x0..clip.x1, line.as_chunks_mut::<4>().0)?;
     }
     Some((Rgba { w: ow, h: oh, px }, out))
+}
+
+/// The width, height and row order (true for bottom-up) a DIB's header gives, whatever its depth or
+/// compression. A BI_JPEG or BI_PNG bitmap is measured by the image file in `bits`, as
+/// [`decode_clip`] crops it, counted from the top. None when the header is not readable.
+fn header_size(info: Bytes, bits: Option<Bytes>) -> Option<(usize, usize, bool)> {
+    match info.u32(0)? {
+        n if n as usize == CORE_HEADER => info.u16(4).zip(info.u16(6)).map(|(w, h)| (usize::from(w), usize::from(h), true)),
+        _ if compression(info).is_some() => bits.and_then(|b| compressed_size(b.0)).map(|(w, h)| (w, h, false)),
+        n if n >= 40 => info.i32(4).zip(info.i32(8)).and_then(|(w, h)| Some((usize::try_from(w).ok()?, h.unsigned_abs() as usize, h > 0))),
+        _ => None,
+    }
+}
+
+/// True when the header of `info` is readable and the source rectangle `src` (as [`decode_clip`]
+/// takes it) covers none of the bitmap's pixels, or the bitmap has none: such a bitmap draws nothing,
+/// so it is not counted as left out. The size comes from [`header_size`], so a bitmap the decoder
+/// does not read is measured too.
+pub(crate) fn crop_misses(info: Bytes, bits: Option<Bytes>, src: [i64; 4]) -> bool {
+    header_size(info, bits).is_some_and(|(w, h, bottom_up)| w == 0 || h == 0 || clip_rect(w, h, bottom_up, src, [0.0, 0.0, 1.0, 1.0]).is_none())
+}
+
+/// True when a DIB's header is readable and gives it no pixels.
+pub(crate) fn has_no_pixels(info: Bytes, bits: Option<Bytes>) -> bool {
+    header_size(info, bits).is_some_and(|(w, h, _)| w == 0 || h == 0)
+}
+
+/// True when a `w` x `h` top-down image has no pixels, or the source rectangle `src` (as
+/// [`clip_blit`] takes it) covers none of them.
+pub(crate) fn src_misses(w: usize, h: usize, src: [i64; 4]) -> bool {
+    w == 0 || h == 0 || clip_rect(w, h, false, src, [0.0, 0.0, 1.0, 1.0]).is_none()
+}
+
+/// Whether a ternary raster operation reads the source bitmap. Its index byte (bits 16 to 23) is the
+/// operation's truth table over pattern, source and destination bits; the source does not matter
+/// when the table is the same with the source bit set and clear.
+pub(crate) fn uses_source(rop: u32) -> bool {
+    let table = (rop >> 16) & 0xFF;
+    ((table >> 2) ^ table) & 0x33 != 0
+}
+
+/// Whether a bitmap drawn with raster operation `rop` is drawn as a plain copy without being one:
+/// [`prepare`] plays SRCCOPY, SRCAND, SRCPAINT and SRCINVERT, and copies the source for every other.
+pub(crate) fn copies_for(rop: u32) -> bool {
+    !matches!(rop, ROP_SRCCOPY | ROP_SRCAND | ROP_SRCPAINT | ROP_SRCINVERT)
 }
 
 /// Decodes a whole DIB (rows top-down); see [`decode_clip`].
