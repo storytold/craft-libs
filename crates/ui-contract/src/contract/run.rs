@@ -992,6 +992,15 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     // A key or AccessKit activation of a member reaches its arena root, which names the member.
     let keyed = member.is_some_and(|arena| keys::activated_member(&ctx, arena.0) == Some(id));
     core.activation = activation_of(&ctx, ui, hit, resolved, keyed, root_sense, activation);
+    if activation && let Some(test) = crate::runtime::pointer::diag_test() {
+        eprintln!(
+            "DIAG {test}: {} activation {:?} takes {} member {}",
+            crate::runtime::pointer::diag_id(id),
+            core.activation,
+            steps::takes_activation(resolved),
+            member.is_some(),
+        );
+    }
     core.activated_member = activated_member.or_else(|| arena.then(|| keys::activated_member(&ctx, id)).flatten());
     // A session member with no focused part takes the canvas's and the window's Enter, Escape and arrows first.
     if let Some(arena) = session.filter(|_| !inert && !core.focus.focused) {

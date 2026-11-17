@@ -779,6 +779,18 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
         .zip(joined)
         .map(|(spec, (local, known))| {
             let view = member_view(&outcome, spec.id, local, pointer_pos);
+            if let Some(test) = pointer::diag_test()
+                && outcome.activated.is_some_and(|hit| hit.owner == spec.id)
+            {
+                eprintln!(
+                    "DIAG {test}: member {} of {} reads the activation: clicked {} enabled {} pass {pass_nr} outcome pass {}",
+                    pointer::diag_id(spec.id),
+                    pointer::diag_id(arena.0),
+                    view.press.clicked,
+                    spec.enabled,
+                    outcome.pass,
+                );
+            }
             MemberResult {
                 response: response::member(ui, spec.id, spec.rect, spec.enabled, view),
                 parts: part_results_in(&outcome, &known, (mods, sample, pointer_pos), spec.id, spec.parts),
@@ -909,6 +921,15 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             // window's edge): a root under a raw egui one keeps its click there, but a drag is that widget's.
             let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| pointer::foreign_target(ctx, id));
             let won = resolve_press_in(state, members, xf, at, target);
+            if let Some(test) = pointer::diag_test() {
+                eprintln!(
+                    "DIAG {test}: start resolve root {:?} members {members} previous {} xf {} won {:?}",
+                    root.map(pointer::diag_id),
+                    state.previous.len(),
+                    xf.is_some(),
+                    won.map(|hit| (pointer::diag_id(hit.owner), hit.part.is_some(), hit.sense)),
+                );
+            }
             // The kinds of press another root won are not this one's.
             let lost = (Sense::CLICK | Sense::DRAG).difference(won_kinds);
             won.map(|hit| {
@@ -916,6 +937,20 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
                 (hit, if drag_elsewhere { sense.difference(Sense::DRAG) } else { sense })
             })
         });
+        if let Some(test) = pointer::diag_test()
+            && (step.target.is_some() || step.activated.is_some())
+        {
+            eprintln!(
+                "DIAG {test}: step root {:?} pass {pass_nr} events {} held {} cancel {cancel:?} phase {:?} target {:?} activated {:?} open {}",
+                state.root.map(|root| pointer::diag_id(root.id)),
+                pass_pointer.events.len(),
+                pass_pointer.primary_down,
+                step.phase,
+                step.target.map(|hit| pointer::diag_id(hit.owner)),
+                step.activated.map(|hit| pointer::diag_id(hit.owner)),
+                machine.target().is_some(),
+            );
+        }
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();
         let open = machine.target();
@@ -956,6 +991,15 @@ fn sweep_undrawn(ctx: &Context) {
                 })
             };
             if orphaned(state) {
+                if let Some(test) = pointer::diag_test() {
+                    eprintln!(
+                        "DIAG {test}: sweep ends the press of root {:?} target {:?} root ran {} members {}",
+                        state.root.map(|root| pointer::diag_id(root.id)),
+                        state.machine.target().map(|target| pointer::diag_id(target.owner)),
+                        state.pass == pass_nr,
+                        state.members.len(),
+                    );
+                }
                 state.machine = PressMachine::default();
                 state.host_cancel = false;
                 gone = true;
