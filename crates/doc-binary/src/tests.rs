@@ -10,6 +10,7 @@ use super::read;
 mod drawing;
 mod encrypted;
 mod metadata;
+mod word6;
 
 /// Offset in the WordDocument stream where test text pieces are placed (past the FIB).
 const TEXT_FC: u32 = 0x600;
@@ -176,12 +177,15 @@ fn wrong_magic_rejected() {
 }
 
 #[test]
-fn word_6_95_rejected() {
-    let mut fib = fib_bytes(&FibSpec::default());
+fn word_6_95_magic_goes_to_the_word6_reader() {
+    // A Word 6.0/95 signature is no longer refused: the stream is read as that version (here an
+    // empty document, since a Word 97 FIB holds no Word 6 text length). The flags are cleared:
+    // the Word 97 default sets fExtChar, which the Word 6 reader refuses.
+    let mut fib = fib_bytes(&FibSpec { flags: 0, ..FibSpec::default() });
     fib[0] = 0xDC;
     fib[1] = 0xA5;
     let f = cfb_file(&[("WordDocument", &fib)]);
-    assert!(matches!(read(&f), Err(super::DocbinError::NotWord(m)) if m.contains("6.0/95")));
+    assert!(read(&f).is_ok());
 }
 
 #[test]
@@ -882,8 +886,6 @@ fn corpus_files_open() {
                 let bytes = std::fs::read(&p).expect("read");
                 let doc = match super::read(&bytes) {
                     Ok(d) => d,
-                    // Word 6/95 files are a documented, intentional rejection.
-                    Err(super::DocbinError::NotWord(m)) if m.contains("6.0/95") => continue,
                     Err(e) => panic!("{}: {e}", p.display()),
                 };
                 assert!(!doc.styles.styles.is_empty(), "{}: no styles", p.display());
@@ -2107,6 +2109,29 @@ fn one_section(text: &'static str, sepx: Vec<u8>, papx_entries: Vec<(u32, u16, V
 }
 
 #[test]
+fn piece_prm_paragraph_formatting_applies_to_the_marks_paragraph() {
+    // [MS-DOC] §2.4.6.1 step 5: the Prm of the piece holding the paragraph mark adds its paragraph
+    // sprms after the PAPX's. Prm1 -> a Prc with sprmPDxaLeft80 (1440 twips) and sprmPJc80
+    // (centred); Prm0 isprm 0x05 (sprmPJc) with operand 2 (right).
+    let prcs = vec![grpprl(&[(0x840F, &1440i16.to_le_bytes()), (0x2403, &[0x01])])];
+    let para = |prm: u16| {
+        let spec = RichSpec {
+            text: "Text\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, Vec::new())],
+            papx_entries: vec![(4, 0, grpprl(&[(0x840F, &360i16.to_le_bytes())]))],
+        };
+        let doc = read(&rich_doc_with(&spec, &RichExtra { prcs: prcs.clone(), prm, ..Default::default() })).expect("opens");
+        let p = para0(&doc);
+        (p.props.indent_left, p.props.align)
+    };
+    assert_eq!(para(0x0000), (Some(18.0), None), "no Prm: the PAPX's indent");
+    assert_eq!(para(0x0001), (Some(72.0), Some(craft_wordmodel::props::Align::Center)), "Prm1: the Prc's sprms override the PAPX's");
+    assert_eq!(para(0x020A), (Some(18.0), Some(craft_wordmodel::props::Align::Right)), "Prm0: sprmPJc right");
+}
+
+#[test]
 fn piece_prm_character_formatting_applied() {
     // #458. Bit 0 of a Prm is fComplex ([MS-DOC] §2.9.215/§2.9.216): Prm0 = isprm in bits
     // 1-7 plus a one-byte operand in bits 8-15 (isprm 0x55 is sprmCFBold); Prm1 = a
@@ -2797,7 +2822,12 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
     // what the copies charge to the work budget, which a busy machine can't skew.
     let mut result = super::FieldResult::default();
     (0..n).for_each(|_| result.push('y', craft_wordmodel::props::CharProps::default()));
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
+    let f = super::FieldBuild {
+        depth: 1,
+        instr: format!("HYPERLINK \"http://{target}\""),
+        sep: Some(result),
+        anchor: craft_wordmodel::props::CharProps::default(),
+    };
     let work = super::Work::new(u64::MAX);
     super::finish_field(&mut super::ParaBuild::default(), f, &work);
     assert_eq!(u64::MAX - work.left.get(), ("http://".len() + n) as u64, "one copy of the target");
@@ -2811,7 +2841,12 @@ fn hyperlink_target_copies_are_charged_to_the_work_budget() {
     let bold = CharProps { bold: Some(true), ..Default::default() };
     let mut result = super::FieldResult::default();
     (0..1000).for_each(|i| result.push('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() }));
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
+    let f = super::FieldBuild {
+        depth: 1,
+        instr: format!("HYPERLINK \"{}\"", "u".repeat(100)),
+        sep: Some(result),
+        anchor: craft_wordmodel::props::CharProps::default(),
+    };
     let mut pb = super::ParaBuild::default();
     let budget = super::Work::new(10_000);
     super::finish_field(&mut pb, f, &budget);
@@ -2876,13 +2911,44 @@ fn prm_grpprls_past_the_work_budget_are_skipped() {
     let work = super::Work::new(g.len() as u64 + 1);
     let base = CharProps::default();
     let mut first = CharProps::default();
-    super::apply_prm(&mut first, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    super::apply_prm(&mut first, crate::piece::PrmRef::Grpprl { index: 0, grpprl: Some(&g) }, &[], &base, &work);
     assert_eq!(first.bold, Some(true));
     let mut second = CharProps::default();
-    super::apply_prm(&mut second, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    super::apply_prm(&mut second, crate::piece::PrmRef::Grpprl { index: 0, grpprl: Some(&g) }, &[], &base, &work);
     assert_eq!(second.bold, None);
     assert_eq!(work.left.get(), 1);
     assert_eq!(work.dropped(), [super::Cost::Formatting]);
+}
+
+/// A piece's Prm grpprl (a Prc of up to 64 KB) was scanned for revision marks again at every
+/// paragraph mark and object anchor, which the per-formatting-change memo (#3692) doesn't
+/// cover. Each Prc's marks are now found once.
+#[test]
+fn a_large_prc_is_scanned_for_revision_marks_once() {
+    // 21,844 bold sprms, then sprmCFRMarkIns: the Prc's marks are only known at its end.
+    let mut prls = vec![(0x0835u16, &[0x01u8][..]); 21_844];
+    prls.push((0x0801, &[0x01]));
+    let prc = grpprl(&prls);
+    // A field and a paragraph mark per paragraph, all in the piece with that Prc.
+    let text: &'static str = Box::leak("\u{13}\u{15}\r".repeat(100_000).into_boxed_str());
+    let spec = RichSpec {
+        text,
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let bytes = rich_doc_with(&spec, &RichExtra { prcs: vec![prc], prm: 0x0001, ..Default::default() });
+    let t = std::time::Instant::now();
+    let doc = read(&bytes).expect("opens");
+    // Well under a second; scanning the Prc at every mark and anchor took 17 s.
+    assert!(t.elapsed().as_secs() < 10, "opened in {:?}", t.elapsed());
+    assert_eq!(doc.body.len(), 100_000);
+    assert_eq!(doc.revisions.len(), 1);
+    for p in doc.body.iter().filter_map(|b| b.as_para()) {
+        assert_eq!(p.mark.ins, Some(0), "the paragraph mark is a tracked insertion");
+        assert_eq!(p.runs.first().and_then(|r| r.props.ins), Some(0), "so is the field");
+    }
 }
 
 /// A field's cached result keeps one `CharProps` per formatting run, not one per character
@@ -2916,7 +2982,7 @@ fn field_results_keep_their_text_and_runs() {
     {
         result.push(c, p);
     }
-    let f = super::FieldBuild { depth: 1, instr: "HYPERLINK \"http://x\"".into(), sep: Some(result) };
+    let f = super::FieldBuild { depth: 1, instr: "HYPERLINK \"http://x\"".into(), sep: Some(result), anchor: CharProps::default() };
     let mut pb = super::ParaBuild::default();
     super::finish_field(&mut pb, f, &super::Work::new(u64::MAX));
     assert_eq!(pb.text, "a\u{e9}\u{20ac}bc");
