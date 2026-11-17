@@ -88,6 +88,8 @@ pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, sam
     let runs = if measuring { with_runs(ctx, |runs| runs.clone()) } else { Vec::new() };
     let samples = Samples::from_slice(samples);
     if measuring && crate::runtime::measure::active(ctx) {
+        // The records open around a measuring run (a measure-only child's) hold the read too.
+        crate::runtime::replay::note_read(ctx, key);
         layout_memory::contribute(ctx, Arc::new(MeasuredRead { key, reader, runs, samples }));
     } else {
         let read = Read { key, reader, measuring, runs, samples };

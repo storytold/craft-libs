@@ -113,6 +113,8 @@ struct Entry {
     decided: Option<(u64, bool)>,
     /// The last real run of a settling child.
     settled: Option<Arc<Settled>>,
+    /// The last measuring run of a measure-only child (`measured`).
+    measured: Option<MeasuredRun>,
     /// Whether this pass replays the settling child's last run, under the pass number that decided it.
     replays: Option<(u64, bool)>,
     /// The last frame that read or wrote the entry.
@@ -128,6 +130,18 @@ pub(crate) struct Place {
     pub(crate) layer: Layer,
     pub(crate) layout: Layout,
     pub(crate) pixels_per_point: f32,
+}
+
+/// The last measuring run of a measure-only child: content a pass measures and never shows, as a page `Pages` holds
+/// out of view.
+#[derive(Clone)]
+struct MeasuredRun {
+    facts: replay::Facts,
+    /// The pass and the frame it ran in.
+    pass: u64,
+    frame: u64,
+    place: Place,
+    size: Vec2,
 }
 
 /// The last real run of a settling child.
@@ -157,6 +171,19 @@ struct Changes {
     scanned: u64,
     /// The values changed in a frame, and the frame.
     edited: (u64, HashSet<BindKey>),
+}
+
+impl Changes {
+    /// Looks at the input of the pass `pass_nr` of `frame` once: input other than pointer motion unsettles the children
+    /// with no content version for this frame and the next.
+    fn scan(&mut self, pass_nr: u64, frame: u64, input: bool) {
+        if self.scanned != pass_nr {
+            self.scanned = pass_nr;
+            if input {
+                self.input_through = self.input_through.max(frame + 1);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -272,12 +299,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
     let now = frame::clock(ctx);
     let held = (input_state::dragged(ctx), focus_state::focused(ctx));
     let settled = with(ctx, |store, pass_nr, frame| {
-        if store.changes.scanned != pass_nr {
-            store.changes.scanned = pass_nr;
-            if input {
-                store.changes.input_through = store.changes.input_through.max(frame + 1);
-            }
-        }
+        store.changes.scan(pass_nr, frame, input);
         let changes = &store.changes;
         // Usually empty: only the values written this frame.
         let edited = (changes.edited.0 == frame).then(|| changes.edited.1.clone());
@@ -292,10 +314,8 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
                         settled.frame < frame
                             && settled.content == content
                             && !settled.engaged
-                            && !facts.unsettled
                             && !facts.blocked
-                            && facts.wake.is_none_or(|at| at > now)
-                            && edited.as_ref().is_none_or(|edited| facts.reads.is_disjoint(edited))
+                            && facts.quiet(now, edited.as_ref())
                             && !settled.record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)))
                             && ![held.0, held.1].iter().flatten().any(|widget| settled.record.widgets.contains(widget))
                     });
@@ -358,6 +378,40 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
         if let Some(entry) = store.entries.get_mut(&id) {
             entry.settled = Some(Arc::new(settled));
         }
+    });
+}
+
+/// Whether the measure-only child `id` takes the size its last measuring run at `place` found, in place of measuring
+/// again, and that size. It does when that run was in this pass, or in an earlier frame and since then none of the
+/// settled rules a measure reads has broken (`settled`): nothing in it moves or asked to be shown again, no value it
+/// read changed, no frame unsettled every child, and the frame and the one before had no input other than pointer
+/// motion. A measure-only child has no place on screen, no stops and no widgets, so the pointer, the focus and what a
+/// replay repeats do not count. Returns the values that run read with the size: the caller notes them as read again,
+/// so an edit of one later in the pass reruns it.
+pub(crate) fn measured(ctx: &Context, id: Id, place: Place) -> Option<(Vec2, Vec<BindKey>)> {
+    let input = ctx.input(|input| {
+        input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
+    });
+    let now = frame::clock(ctx);
+    with(ctx, |store, pass_nr, frame| {
+        store.changes.scan(pass_nr, frame, input);
+        let changes = &store.changes;
+        let edited = (changes.edited.0 == frame).then(|| changes.edited.1.clone());
+        let unsettled = changes.unsettled_through >= frame || changes.input_through >= frame;
+        let run = store.touch(None, id, frame).measured.as_ref()?;
+        let same_pass = run.pass == pass_nr;
+        let quiet = !unsettled && run.frame < frame && run.facts.quiet(now, edited.as_ref());
+        // This pass's measuring run found the size the pass places by: a later run in the pass takes it, whatever room it
+        // has.
+        (same_pass || (run.place == place && quiet)).then(|| (run.size, run.facts.reads.iter().copied().collect()))
+    })
+}
+
+/// Keeps the measuring run of the measure-only child `id` at `place`: what its record found (`replay::close`) and the
+/// size it took.
+pub(crate) fn measured_run(ctx: &Context, id: Id, facts: replay::Facts, place: Place, size: Vec2) {
+    with(ctx, |store, pass_nr, frame| {
+        store.touch(None, id, frame).measured = Some(MeasuredRun { facts, pass: pass_nr, frame, place, size });
     });
 }
 
