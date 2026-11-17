@@ -85,15 +85,17 @@ pub struct OriginalPosition {
 }
 
 impl SourceMap {
-    /// The source path with `sourceRoot` applied.
+    /// The source path with `sourceRoot` prefixed before URL interpretation.
     pub fn source_path(&self, index: u32) -> Option<String> {
         let s = self.sources.get(index as usize)?.as_ref()?;
-        Some(match self.source_root.as_deref().filter(|r| !r.is_empty()) {
-            Some(root) if !s.contains("://") && !s.starts_with('/') => {
+        // Generators commonly emit an empty root to mean no root. Keep those source identities
+        // unchanged even though the literal ECMA-426 prefix algorithm would prepend a slash.
+        Some(match self.source_root.as_deref().filter(|root| !root.is_empty()) {
+            Some(root) => {
                 let join = if root.ends_with('/') { "" } else { "/" };
                 format!("{root}{join}{s}")
             }
-            _ => s.clone(),
+            None => s.clone(),
         })
     }
 
