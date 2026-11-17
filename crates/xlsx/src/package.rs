@@ -12,7 +12,7 @@ use crate::pivot::{CacheRecord, PivotCacheDefinition, PivotTableDefinition, read
 use crate::sheet::{Row, RowReader, SheetPart};
 use crate::strings::StringItem;
 use crate::styles::Styles;
-use crate::workbook::{SheetEntry, Workbook};
+use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings, xlsb};
 
 /// Most bytes of `[Content_Types].xml` read from a binary workbook.
@@ -149,7 +149,12 @@ impl<'a> Package<'a> {
         if self.binary.is_some() {
             let bytes = self.required(&self.workbook_part.clone())?;
             let rels = self.workbook_rels()?;
-            let (wb, links) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
+            let (mut wb, mut links, names) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
+            if let Some(links) = links.as_mut() {
+                self.index_tables(&wb, links)?;
+            }
+            // Names after tables: a name's formula may use a structured reference.
+            xlsb::read_names(&mut wb, names, links.as_mut(), &self.limits, &self.budget, &mut self.warnings);
             self.binary_links = Some(links);
             return Ok(wb);
         }
@@ -314,10 +319,31 @@ impl<'a> Package<'a> {
         Ok(Some((part, Drawing::read(&root), rels)))
     }
 
-    /// The tables of a worksheet read by [`Package::sheet`], in the order of its `tableParts`,
-    /// each with its part name. A table part that does not read is skipped with a warning.
+    /// The tables of a worksheet read by [`Package::sheet`], in the order of its `tableParts`
+    /// (its `BrtListPart`s in a binary workbook), each with its part name. A table part that does
+    /// not read is skipped with a warning.
     pub fn tables(&mut self, sheet: &SheetPart) -> Result<Vec<(String, Table)>, Error> {
         let mut out = Vec::new();
+        if self.binary.is_some() {
+            let rels = self.opc.rels(&sheet.part)?;
+            for id in &sheet.features.table_parts {
+                let Some(rel) = rels.by_id(id).filter(|r| !r.external && r.kind() == "table") else {
+                    self.warn(format!("XLSB: {}: a table part relationship is missing", sheet.part));
+                    continue;
+                };
+                let part = rel.target.clone();
+                let read = self.binary_part(&part, xlsb::TABLE).and_then(|bytes| {
+                    let links = self.binary_links.as_ref().and_then(Option::as_ref);
+                    xlsb::table(&bytes, links, &self.limits, &self.budget, &mut self.warnings)
+                });
+                match read {
+                    Ok(t) => out.push((part, t)),
+                    Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
+                    Err(e) => self.warn(format!("skipped {part}: {e}")),
+                }
+            }
+            return Ok(out);
+        }
         for id in &sheet.features.table_parts {
             let Some(rel) = sheet.rels.by_id(id).filter(|r| !r.external) else { continue };
             let part = rel.target.clone();
@@ -408,6 +434,33 @@ impl<'a> Package<'a> {
         let Some(rel) = rels.first("theme").filter(|r| !r.external) else { return Ok(None) };
         let root = self.optional_xml(&rel.target.clone())?;
         Ok(root.map(|r| craft_drawingml::theme::read_theme(&mut craft_drawingml::part::NoSource, &r)))
+    }
+
+    /// A part of a binary workbook, checked against its content type.
+    fn binary_part(&mut self, part: &str, content_type: &str) -> Result<Vec<u8>, Error> {
+        if let Some(types) = &self.binary {
+            xlsb::check_type(types, part, content_type)?;
+        }
+        self.required(part)
+    }
+
+    /// Indexes the table parts of a binary workbook's worksheets, for the structured references
+    /// in its formulas. A table part that does not read is left out with a warning: formulas
+    /// using it keep their saved results.
+    fn index_tables(&mut self, wb: &Workbook, links: &mut xlsb::Links) -> Result<(), Error> {
+        for entry in wb.sheets.iter().filter(|e| e.kind == SheetKind::Worksheet) {
+            let Some(part) = &entry.part else { continue };
+            let rels = self.opc.rels(part)?;
+            for rel in rels.list.iter().filter(|r| r.kind() == "table" && !r.external) {
+                let read = self.binary_part(&rel.target, xlsb::TABLE).and_then(|bytes| xlsb::index_table(links, &bytes, &self.limits, &self.budget));
+                match read {
+                    Ok(()) => {}
+                    Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
+                    Err(e) => self.warn(format!("XLSB: {} could not be read ({e}); formulas using its table keep their saved results", rel.target)),
+                }
+            }
+        }
+        Ok(())
     }
 
     fn required(&mut self, part: &str) -> Result<Vec<u8>, Error> {

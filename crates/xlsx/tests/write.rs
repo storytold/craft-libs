@@ -75,6 +75,7 @@ fn excel_like() -> Vec<u8> {
         ("xl/drawings/vmlDrawing1.vml", VML.as_bytes()),
         ("xl/vbaProject.bin", &[0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]),
     ])
+    .unwrap()
 }
 
 const COMMENTS: &str = "<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors><author>Ann</author></authors><commentList><comment ref=\"B2\" authorId=\"0\" shapeId=\"0\"><text><r><rPr><b/></rPr><t>Ann:</t></r><r><t xml:space=\"preserve\">\nnote</t></r></text></comment><comment ref=\"bad\"/></commentList></comments>";
