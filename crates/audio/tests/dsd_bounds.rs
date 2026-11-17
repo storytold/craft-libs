@@ -91,3 +91,25 @@ fn encoded_sizes_match_actual_bytes_for_odd_and_even_payloads() {
         }
     }
 }
+
+#[test]
+fn dsf_audio_stops_at_the_declared_data_chunk() {
+    for channels in 1..=2 {
+        let input = vec![&[0x33u8; 8][..]; channels];
+        let mut bytes = encode_dsf(2_822_400, &input, 64, 8).unwrap();
+        // Ask for an additional block without extending the data chunk.
+        bytes[64..72].copy_from_slice(&128u64.to_le_bytes());
+        let expected = read_raw(&bytes).unwrap();
+        for c in &expected.channel_bytes {
+            assert_eq!(&c[..8], &[0x33; 8]);
+            assert_eq!(&c[8..], &[0x69; 8]);
+        }
+        let metadata_offset = bytes.len() as u64;
+        bytes[20..28].copy_from_slice(&metadata_offset.to_le_bytes());
+        bytes.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x00\x00");
+        bytes.extend_from_slice(&[0xff; 32]);
+        let file_size = bytes.len() as u64;
+        bytes[12..20].copy_from_slice(&file_size.to_le_bytes());
+        assert_eq!(read_raw(&bytes).unwrap().channel_bytes, expected.channel_bytes);
+    }
+}

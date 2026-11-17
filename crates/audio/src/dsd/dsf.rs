@@ -99,6 +99,11 @@ fn parse_text_frame(data: &[u8]) -> Option<String> {
 
 /// Parses DSF file metadata, returning the metadata, audio data offset, and block size per channel.
 pub fn parse_dsf_header(bytes: &[u8]) -> Result<(Metadata, usize, u32), Error> {
+    let (metadata, offset, _, block_size) = parse_dsf_header_bounded(bytes)?;
+    Ok((metadata, offset, block_size))
+}
+
+fn parse_dsf_header_bounded(bytes: &[u8]) -> Result<(Metadata, usize, usize, u32), Error> {
     if bytes.len() < 28 + 52 + 12 {
         return Err(Error::UnexpectedEof("DSF file header is truncated"));
     }
@@ -189,12 +194,12 @@ pub fn parse_dsf_header(bytes: &[u8]) -> Result<(Metadata, usize, u32), Error> {
 
     let metadata = Metadata { format: Format::Dsf, sample_rate, channels, sample_count, channel_names, title, artist };
 
-    Ok((metadata, payload_offset, block_size_per_channel))
+    Ok((metadata, payload_offset, payload_size, block_size_per_channel))
 }
 
 /// Parses a DSF file into raw 1-bit planar channel streams.
 pub fn parse_dsf(bytes: &[u8]) -> Result<RawAudio, Error> {
-    let (metadata, payload_offset, block_size) = parse_dsf_header(bytes)?;
+    let (metadata, payload_offset, payload_size, block_size) = parse_dsf_header_bounded(bytes)?;
     let block_size = block_size as usize;
     let channels = metadata.channels as usize;
 
@@ -208,7 +213,9 @@ pub fn parse_dsf(bytes: &[u8]) -> Result<RawAudio, Error> {
         return Err(Error::InvalidHeader("zero slice size"));
     }
 
-    let payload = &bytes[payload_offset..];
+    // The header validated this range. Trailing ID3 or other bytes are not audio,
+    // even if sample_count asks for more samples than the data chunk contains.
+    let payload = &bytes[payload_offset..payload_offset + payload_size];
     let num_slices = payload.len() / slice_size;
 
     let mut channel_bytes: Vec<Vec<u8>> = Vec::with_capacity(channels);
