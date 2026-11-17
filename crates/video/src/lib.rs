@@ -18,6 +18,7 @@
 //! | `hevc` | [`hevc`] | ITU-T H.265 / HEVC: decoder (`hevc-decode`) and encoder (`hevc-encode`) |
 //! | `vp9` | [`vp9`] | VP9: decoder (`vp9-decode`) and encoder (`vp9-encode`) |
 //! | `av1` | [`av1`] | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
+//! | `vmd` | [`vmd`] | Sierra VMD video (8-bit paletted): decoder (`vmd-decode`) |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
@@ -78,3 +79,6 @@ pub mod raw_video;
 /// Bounded Screen Video key-frame decoding (FLV codec 3).
 #[cfg(feature = "screen-video")]
 pub mod screen_video;
+
+#[cfg(feature = "vmd-decode")]
+pub mod vmd;
