@@ -119,6 +119,7 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.
 
+The legacy ZIP Zstandard method-20 mapping and bounded-read regression in `crates/zip/src/lenient` are ported from RRFZ's Craft Anything commit `29badae7c9280fdf4c24795927bf3a91f51694c6` (MIT OR Apache-2.0). RRFZ remains the primary Git author. Firmware scanner detection remains app-owned and is not part of this port.
 ## TAR/CPIO compatibility updates
 
 The old GNU sparse-extension traversal, GNU CRC-symlink compatibility and PAX-size precedence fixes and their regression tests in `crates/tar` are ported from RRFZ's Craft Anything PRs #1973 (`8ea2ec66a1bc80f0420f3695baac877a0cb9b9a5`), #1984 (`b226a475f7dce9710e3af7a069386fe7a9720df7`) and #2007 (`d29465c20b0d570ea4973be512a0cb4e212bb60f`). Source is MIT OR Apache-2.0; RRFZ remains the primary Git author of each port. The PAX update adapts to the shared parser's existing `PaxOverrides` structure without changing the source policy.
@@ -130,6 +131,7 @@ The USDZ alignment requirement and compatibility fixture for `Writer::add_stored
 The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
 AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
 Sanitization, animation fitting and numeric output policy remain caller-owned.
+
 ## Screen Video key frames
 
 `crates/video/src/screen_video.rs` extracts AniCraft `crates/xfl/src/video.rs` codec-3 decoding and its synthetic partial-block fixture, introduced by Tanish Manku in `1f3e603b7ff53a3da364e41ec4da8d43dc83aab0` with pixel-loop cleanup `2b7571363b4b647266df758f95b6e397021cfd4d` (MIT OR Apache-2.0). Import commits preserve Tanish as primary author. Caller-owned bounds and neutral RGBA output separate codec work from the consuming app's FLV first-frame/report policy. Boundary tests and integration are subsequent Dylan M. Taylor changes.
