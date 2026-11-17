@@ -2273,6 +2273,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-jsonc"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-jsonrpc"
 version = "0.1.0"
 dependencies = [
@@ -2896,6 +2903,7 @@ name = "craft-raster-codecs"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-dds",
  "craft-image-codecs",
  "image",
  "thiserror 2.0.21",
@@ -2941,6 +2949,13 @@ dependencies = [
  "encoding_rs",
  "image",
  "proptest",
+]
+
+[[package]]
+name = "craft-score"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
 ]
 
 [[package]]
@@ -3286,6 +3301,7 @@ dependencies = [
  "craft-jpeg",
  "craft-media",
  "craft-media-testkit",
+ "miniz_oxide 0.8.9",
  "rav1e",
  "rayon",
  "thiserror 2.0.21",
