@@ -532,7 +532,15 @@ pub(super) fn register_edges<P: Clone + Send + 'static>(ctx: &Context, dock: Id,
     let band = sizes.column_edge_band.min(rect.width() * 2.0 / 3.0);
     for (side, x) in [(DockSide::Start, rect.left()), (DockSide::End, rect.right())] {
         let edge = Rect::from_x_y_ranges((x - band * 0.5)..=(x + band * 0.5), rect.y_range());
-        DockTargets::register(ctx, dock, DockSpot::column(anchor.clone(), side), flow.to_physical(edge));
+        let line = Rect::from_x_y_ranges(x..=x, rect.y_range());
+        DockTargets::register_band(
+            ctx,
+            dock,
+            DockSpot::column(anchor.clone(), side),
+            flow.to_physical(edge),
+            flow.to_physical(line),
+            sizes.strip_reach,
+        );
     }
 }
 
@@ -547,7 +555,8 @@ impl<P: Value + Hash + 'static> DockColumn<'_, P> {
         for (at, group) in plan.groups.iter().enumerate().skip(1) {
             let Some(after) = self.anchor(at) else { continue };
             let seam = Rect::from_x_y_ranges(rect.x_range(), (group.top() - half)..=(group.top() + half));
-            DockTargets::register(ctx, self.dock, DockSpot::seam(before.clone(), after.clone()), seam);
+            let line = Rect::from_x_y_ranges(rect.x_range(), group.top()..=group.top());
+            DockTargets::register_band(ctx, self.dock, DockSpot::seam(before.clone(), after.clone()), seam, line, sizes.strip_reach);
             before = after;
         }
     }

@@ -41,6 +41,9 @@ pub struct DockSizes {
     pub float_size: Vec2,
     /// The divider between two docked groups or between a dock and its neighbour (the inline gap).
     pub gap: f32,
+    /// How far a band (edge, seam, column edge, new dock) reaches into a tab strip from its drop line (the least hit
+    /// size): the rest of the strip joins the group.
+    pub strip_reach: f32,
     /// The least extent of a pane along a split, and of a dock (the pane's least size).
     pub least_pane: f32,
     /// The height of a group's tab strip or section title row (the panel header height), which every group height includes.
@@ -84,6 +87,7 @@ impl DockSizes {
             cascade_inset: size.window.cascade,
             float_size: Vec2::new(size.float.width, size.float.height),
             gap: cx.tokens.space.gap.inline,
+            strip_reach: size.hit.target,
             least_pane: size.pane.least,
             strip: size.panel_header,
             bar: size.control.sm,
@@ -255,8 +259,8 @@ impl<P> DockSpot<P> {
     }
 
     /// Which spot wins where rects overlap: the outer bands, then seams and columns, then a tab strip, then the
-    /// sides of a group, then its middle. A border band overlaps a tab strip only by its own thickness, so the
-    /// strip keeps the rest of its height.
+    /// sides of a group, then its middle. Over a tab strip a band takes the drop only near its line
+    /// ([`DockTargets::register_band`]), so the strip keeps the rest of its height.
     const fn priority(&self) -> u8 {
         match self {
             DockSpot::Blocked => 0,
@@ -333,6 +337,8 @@ struct Target<P> {
     rect: Rect,
     /// The rect the spot's mark applies to (see [`DockSpot::mark`]).
     applies: Rect,
+    /// The part of `rect` where the spot takes a drop over a tab strip: all of it, except for a band.
+    over_strip: Rect,
 }
 
 /// The spots of one dock in one pass with their hit rects, and the room the dock laid its panels out in. Spots are
@@ -354,23 +360,27 @@ impl<P: Clone> DockTargets<P> {
         DockTargets::default()
     }
 
-    /// Adds `spot`, taking drops over `rect` and marked against `applies`. An empty or non-finite `rect` takes none.
-    fn add(&mut self, spot: DockSpot<P>, rect: Rect, applies: Rect) {
+    /// Adds `spot`, taking drops over `rect`, over a tab strip only in `over_strip`, and marked against `applies`.
+    /// An empty or non-finite `rect` takes none.
+    fn add(&mut self, spot: DockSpot<P>, rect: Rect, applies: Rect, over_strip: Rect) {
         if rect.is_finite() && rect.is_positive() {
-            self.targets.push(Target { spot, rect, applies });
+            self.targets.push(Target { spot, rect, applies, over_strip });
         }
     }
 
     /// The spot a drop at `at` lands on: among the spots whose rect holds `at`, the highest priority (see
     /// [`DockSpot`]), then the one added last. A [`DockSpot::Blocked`] hides the spots added before it, so a rect
-    /// that takes no drop registers after what lies under it, with the rect its mark applies to. `None` where no
-    /// spot holds `at` and where the winner is `Blocked`.
+    /// that takes no drop registers after what lies under it, with the rect its mark applies to. Where a tab strip
+    /// ([`DockSpot::Tab`]) holds `at`, a band holds it only near its line. `None` where no spot holds `at` and where
+    /// the winner is `Blocked`.
     fn at(&self, at: Pos2) -> Option<(DockSpot<P>, Rect)> {
         let hits: Vec<(usize, &Target<P>)> = self.targets.iter().enumerate().filter(|(_, target)| target.rect.contains(at)).collect();
         let hidden_below = hits.iter().rev().find(|(_, target)| matches!(target.spot, DockSpot::Blocked)).map(|(order, _)| *order);
-        let winner = hits
+        let shown: Vec<(usize, &Target<P>)> = hits.into_iter().filter(|(order, _)| hidden_below.is_none_or(|blocked| *order >= blocked)).collect();
+        let on_strip = shown.iter().any(|(_, target)| matches!(target.spot, DockSpot::Tab { .. }));
+        let winner = shown
             .into_iter()
-            .filter(|(order, _)| hidden_below.is_none_or(|blocked| *order >= blocked))
+            .filter(|(_, target)| !on_strip || target.over_strip.contains(at))
             .max_by_key(|(order, target)| (target.spot.priority(), *order))?;
         match &winner.1.spot {
             DockSpot::Blocked => None,
@@ -425,7 +435,18 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_target") {
             return;
         }
-        Self::with_dock(ctx, dock, |targets| targets.add(spot, hit, applies));
+        Self::with_dock(ctx, dock, |targets| targets.add(spot, hit, applies, hit));
+    }
+
+    /// Registers a band `spot` (an edge, seam, column edge or new dock) over `band`, whose drop line is `line`: over a
+    /// tab strip the band takes the drop only within `reach` of the line (`DockSizes::strip_reach`), and the rest of
+    /// the strip joins its group.
+    pub fn register_band(ctx: &Context, dock: Id, spot: DockSpot<P>, band: Rect, line: Rect, reach: f32) {
+        if !crate::runtime::measure::effect(ctx, "dock::register_target") {
+            return;
+        }
+        let near = line.expand(reach).intersect(band);
+        Self::with_dock(ctx, dock, |targets| targets.add(spot, band, band, near));
     }
 
     /// Registers `room`, the rect the dock `dock` lays its panels out in this pass: the docked tree's rect for a dock
