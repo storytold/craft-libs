@@ -191,9 +191,10 @@ impl ValidatedImageResolver {
         if checked.limits != self.limits {
             return Err(Error::Parse("checked SVG limits differ from the validated image resolver".into()));
         }
-        // A shallow source can expand through use/paint references. Reserve the
-        // full checked converted height before any child callback, not source depth.
-        let _scope = self.root_scope(checked.height)?;
+        // A shallow source can expand through use/paint references. Reserve its
+        // expanded ancestor frames, excluding the callback leaf itself. The child
+        // contributes its complete checked height, as in legacy child admission.
+        let _scope = self.root_scope(checked.height.saturating_sub(1))?;
         options.image_href_resolver = self.resolver();
         convert_checked(checked, &options)
     }

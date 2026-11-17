@@ -46,8 +46,10 @@ The caller supplies fonts and a sufficient stack/worker for its depth policy.
 `parse_preflight` accepts only an opaque preflight made with exactly this context's
 limits. It consumes options and installs its own data-only resolver, including for
 all children; unrelated callbacks cannot fetch a linked file or bypass admission.
-The full expanded root height and each child's expanded height share one depth
-allowance. An overlapping root conversion on the same context is refused.
+Expanded root ancestor frames (checked height minus the callback leaf) and each
+child's complete expanded height share one depth allowance. The callback leaf is
+not counted twice; source nesting alone cannot hide expanded reference chains.
+An overlapping root conversion on the same context is refused.
 
 Unchanged XML converts from its original checked DOM. A modified data URL requires
 one checked replacement DOM. Invalid URLs become bounded resolver-visible image

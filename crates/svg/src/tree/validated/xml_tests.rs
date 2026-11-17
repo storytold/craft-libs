@@ -162,7 +162,10 @@ fn expanded_root_references_and_child_share_the_converted_depth_limit() {
     assert!(preflight(&root, &Limits { tree_depth: 5, ..Default::default() }).is_err());
     assert!(preflight(&root, &Limits { tree_depth: 6, ..Default::default() }).is_ok());
     assert!(preflight(&child, &Limits { tree_depth: 3, ..Default::default() }).is_ok());
-    for (depth, admitted) in [(8, false), (9, true)] {
+    // Expanded root height6 includes the callback leaf: reserve5 ancestors,
+    // then admit the child's complete height3. Source depth alone would wrongly
+    // accept the cap7 case, while reserving the leaf twice would reject cap8.
+    for (depth, admitted) in [(7, false), (8, true)] {
         let limits = Limits { tree_depth: depth, ..Default::default() };
         let checked = preflight(&root, &limits).unwrap();
         assert!(checked.depth() < 6, "source nesting is shallower than expanded references");
@@ -172,5 +175,25 @@ fn expanded_root_references_and_child_share_the_converted_depth_limit() {
         assert_eq!(usage.embedded_svg_count, usize::from(admitted));
         assert_eq!(usage.svg_limit_images, usize::from(!admitted));
         assert_eq!(usage.invalid_svg_images, 0);
+    }
+}
+
+#[test]
+fn plain_root_callback_leaf_does_not_spend_the_child_boundary_twice() {
+    let child = drawing("<g><rect width='4' height='4' fill='black'/></g>"); // height3
+    let root = drawing(&image(&url(child.as_bytes()))); // height2, one ancestor
+    for (depth, admitted) in [(3, false), (4, true)] {
+        let limits = Limits { tree_depth: depth, ..Default::default() };
+        assert!(preflight(&root, &limits).is_ok());
+        assert!(preflight(&child, &limits).is_ok());
+        let context = ValidatedImageResolver::new(limits);
+        let tree = context.parse_preflight(preflight(&root, &limits).unwrap(), usvg::Options::default()).unwrap();
+        assert_eq!(context.usage().embedded_svg_count, usize::from(admitted));
+        assert_eq!(context.usage().svg_limit_images, usize::from(!admitted));
+        assert_eq!(context.usage().invalid_svg_images, 0);
+        let pixels = super::super::draw::render(&tree, usvg::Transform::identity(), 4, 4, 0, 1 << 20).unwrap();
+        let sample = pixels.pixel(1, 1).unwrap();
+        assert_eq!((sample.red(), sample.green(), sample.blue()), (0, 0, 0));
+        assert_eq!(sample.alpha(), if admitted { 255 } else { 0 }, "exact-boundary child must actually draw");
     }
 }
