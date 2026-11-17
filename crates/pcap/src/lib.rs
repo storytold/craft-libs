@@ -781,10 +781,27 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str) {
                 (28, 16) => Ipv6Addr::from(<[u8; 16]>::try_from(rd).unwrap_or([0; 16])).to_string(),
                 (2 | 5 | 12, _) => dns_name(msg, rd_off).map(|(n, _)| n).unwrap_or_default(),
                 (15, _) => dns_name(msg, rd_off + 2).map(|(n, _)| n).unwrap_or_default(),
-                (16, _) => rd
-                    .get(1..)
-                    .map(|t| String::from_utf8_lossy(t.get(..usize::from(rd.first().copied().unwrap_or(0))).unwrap_or(t)).into_owned())
-                    .unwrap_or_default(),
+                (16, _) => {
+                    // RFC 1035 §3.3.14: one TXT RDATA holds any number of
+                    // length-prefixed character strings, and a zero-length
+                    // string does not end the record. Consumers join them all
+                    // (RFC 7208 §3.3), so keep every string instead of the
+                    // first one and skip the rest of the RDATA.
+                    let mut txt = String::new();
+                    let mut pos = 0;
+                    while let Some(&len) = rd.get(pos) {
+                        let len = usize::from(len);
+                        let end = (pos + 1).saturating_add(len).min(rd.len());
+                        match rd.get(pos + 1..end) {
+                            Some(part) => {
+                                txt.push_str(&String::from_utf8_lossy(part));
+                                pos = end;
+                            }
+                            None => break,
+                        }
+                    }
+                    txt
+                }
                 (_, n) => format!("<{n} bytes>"),
             };
             out.answers.push(DnsAnswer { name, rtype: qtype_name(rt), ttl, value });
@@ -1185,7 +1202,46 @@ pub fn iso8601(ns: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_anything_testkit::pcap::{dns_query, pcap, pcapng, sample_frames, udp};
+    use craft_anything_testkit::pcap::{dns_query, eth, ipv4_pkt, pcap, pcapng, sample_frames, udp};
+
+    /// One-answer DNS response for `example.com` with a TXT answer carrying `rdata`.
+    fn txt_response(rdata: &[u8]) -> Vec<u8> {
+        let mut m = vec![0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0];
+        m.extend(b"\x07example\x03com\x00\x00\x01\x00\x01");
+        m.extend([0xc0, 12, 0, 16, 0, 1, 0, 0, 0x00, 0x3c]);
+        m.extend((rdata.len() as u16).to_be_bytes());
+        m.extend(rdata);
+        m
+    }
+
+    #[test]
+    fn dns_txt_answer_keeps_every_character_string() {
+        // RFC 1035 §3.3.14: one TXT RDATA holds any number of length-prefixed
+        // character strings. Only the first used to survive (issue #330).
+        let rdata = [
+            5, b'f', b'i', b'r', b's', b't', // "first"
+            6, b's', b'e', b'c', b'o', b'n', b'd', // "second"
+        ];
+        let frame = eth(0x0800, &ipv4_pkt(17, [8, 8, 8, 8], [192, 168, 1, 10], &udp(53, 50000, &txt_response(&rdata))));
+        let d = decode(1, &frame);
+        let dns = d.dns.unwrap();
+        assert_eq!(dns.answers.len(), 1);
+        assert_eq!(dns.answers[0].rtype, "TXT");
+        assert_eq!(dns.answers[0].value, "firstsecond");
+        assert!(!dns.incomplete);
+    }
+
+    #[test]
+    fn dns_txt_empty_first_string_keeps_later_content() {
+        // A zero-length character string does not end the record.
+        let rdata = [0, 6, b's', b'e', b'c', b'o', b'n', b'd'];
+        let frame = eth(0x0800, &ipv4_pkt(17, [8, 8, 8, 8], [192, 168, 1, 10], &udp(53, 50000, &txt_response(&rdata))));
+        let d = decode(1, &frame);
+        let dns = d.dns.unwrap();
+        assert_eq!(dns.answers.len(), 1);
+        assert_eq!(dns.answers[0].value, "second");
+        assert!(!dns.incomplete);
+    }
 
     fn classic_link_word(link_word: u32, le: bool, nanos: bool, trailer: usize) {
         let link = link_word & 0xffff;
