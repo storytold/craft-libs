@@ -341,6 +341,103 @@ fn leading_brackets_stay_text() {
 }
 
 #[test]
+fn a_second_optional_argument_is_not_text() {
+    // Both optional arguments sit in one token (`[3cm][l]`), and the second was left over as text.
+    for src in ["a\\makebox[3cm][l]{x}b", "a\\framebox[3cm][r]{x}b", "a\\makebox[3cm] [l]{x}b"] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["axb".to_string()], "{src}");
+    }
+    let t = texts("\\begin{document}\\begin{minipage}[t][2cm][c]{3cm}x\\end{minipage}\\end{document}");
+    assert_eq!(t, vec!["x".to_string()]);
+}
+
+#[test]
+fn an_optional_argument_after_a_space_is_not_text() {
+    // A space before the `[` kept the whole argument as text.
+    for src in ["\\begin{figure} [h]x\\end{figure}", "\\begin{minipage} [t]{3cm}x\\end{minipage}"] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["x".to_string()], "{src}");
+    }
+    assert_eq!(texts("a\\\\ [2pt]b"), ["a\nb"]);
+}
+
+#[test]
+fn a_definition_with_a_default_argument_shows_nothing() {
+    // `[2][x]`: the default was left over as text, and the definition's body with it.
+    assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2][x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);
+    assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2] [x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);
+}
+
+#[test]
+fn a_box_shows_only_its_text() {
+    // The box's position, size, scale or angle showed before its text.
+    for src in [
+        "a\\parbox{3cm}{x}b",
+        "a\\parbox[t][2cm][s]{3cm}{x}b",
+        "a\\raisebox{2pt}{x}b",
+        "a\\raisebox{2pt}[0pt][0pt]{x}b",
+        "a\\raisebox{2pt} [0pt] [0pt]{x}b",
+        "a\\scalebox{2}{x}b",
+        "a\\scalebox{2}[1]{x}b",
+        "a\\scalebox{2} [1]{x}b",
+        "a\\resizebox{2cm}{!}{x}b",
+        "a\\resizebox*{2cm}{1cm}{x}b",
+        "a\\rotatebox{90}{x}b",
+        "a\\rotatebox[origin=c]{90}{x}b",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["axb".to_string()], "{src}");
+    }
+}
+
+#[test]
+fn settings_that_are_not_text_show_nothing() {
+    for src in [
+        "\\hyphenation{ta-ble}word",
+        "\\addvspace{1ex}word",
+        "\\enlargethispage{2\\baselineskip}word",
+        "\\enlargethispage*{1cm}word",
+        "\\selectlanguage{german}word",
+        "\\newlength{\\gap}\\settowidth{\\gap}{wide}word",
+        "\\newcounter{step}word",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
+
+/// A dropped command takes only its own arguments: `\settowidth{\gap}{wide}{Visible}` keeps `Visible`.
+#[test]
+fn dropped_commands_keep_the_text_after_their_arguments() {
+    for src in [
+        "\\hyphenation{ta-ble}{word}",
+        "\\addvspace{1ex}{word}",
+        "\\enlargethispage{2\\baselineskip}{word}",
+        "\\enlargethispage*{1cm}{word}",
+        "\\selectlanguage{german}{word}",
+        "\\newlength{\\gap}\\settowidth{\\gap}{wide}{word}",
+        "\\settoheight{\\gap}{tall}{word}",
+        "\\settodepth{\\gap}{deep}{word}",
+        "\\newcounter{step}[section]{word}",
+        "\\date{today}{word}",
+        "\\thanks{A note}{word}",
+        "\\captionsetup[figure]{font=it}{word}",
+        "\\fancyhf[LH]{Hidden}word",
+        "\\setlength{\\parskip}{1em}{word}",
+        "\\setlength\\parindent{0pt}word",
+        "\\newcommand\\foo[1][x]{body}{word}",
+        "\\newenvironment{note}[1]{begin}{end}{word}",
+        "\\def\\foo#1{body}{word}",
+        "\\newtheorem{thm}{Theorem}[section]{word}",
+        "\\addcontentsline{toc}{section}{Intro}{word}",
+        "\\bigskip{word}",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+    for (name, args) in crate::parser::DROP_WITH_ARGS {
+        let given: String = args.chars().map(|k| if k == 'o' { "[a]" } else { "{a}" }).collect();
+        let src = format!("\\{name}{given}{{word}}");
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
+
+#[test]
 fn special_characters_round_trip() {
     let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";
     let d = Document::from_text(text);

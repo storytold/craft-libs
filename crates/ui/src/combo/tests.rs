@@ -1,4 +1,7 @@
-use egui_kittest::{Harness, kittest::Queryable as _};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT as _, Queryable as _},
+};
 
 use super::ComboBox;
 
@@ -140,6 +143,117 @@ fn show_index_picks_a_choice_and_marks_the_response_changed() {
     h.run();
     assert_eq!(*h.state(), (2, true));
     assert!(h.query_by_label("Medium").is_none(), "picking closes the menu");
+}
+
+const LONG_NAME: &str = "Artboard 12, back cover with the bleed and the fold marks";
+
+/// A combo box with `LONG_NAME` selected, in room `width` wide, built by `combo`.
+fn long_name_with(labeled: bool, width: f32, combo: impl Fn(ComboBox<'static>) -> ComboBox<'static> + 'static) -> Harness<'static> {
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).with_accessibility_check(false).build_ui(move |ui| {
+        ui.set_max_width(width);
+        let plain = if labeled { ComboBox::new("board", "Board") } else { ComboBox::from_id_salt("board") };
+        let _ = combo(plain.selected_text(LONG_NAME).width(100.0)).show_ui(ui, |ui| ui.label(LONG_NAME));
+    });
+    h.ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    h.run();
+    h
+}
+
+/// A truncating combo box with `LONG_NAME` selected, in room `width` wide.
+fn long_name(labeled: bool, width: f32) -> Harness<'static> {
+    long_name_with(labeled, width, ComboBox::truncate)
+}
+
+/// Whether a tooltip shows `LONG_NAME` in full.
+fn shows_in_full(h: &Harness<'_>) -> bool {
+    h.query_all_by_role(egui::Role::Label).any(|node| node.accesskit_node().value().as_deref() == Some(LONG_NAME))
+}
+
+#[test]
+fn a_selected_text_cut_short_shows_in_full_on_hover() {
+    for labeled in [true, false] {
+        for (width, cut) in [(200.0, true), (600.0, false)] {
+            let mut h = long_name(labeled, width);
+            assert!(!shows_in_full(&h), "labeled {labeled}, {width}: no tooltip before the hover");
+            h.get_by_role(egui::Role::ComboBox).hover();
+            h.run();
+            assert_eq!(shows_in_full(&h), cut, "labeled {labeled}, {width}: a tooltip shows the full text only when it is cut short");
+            let node = h.get_by_role(egui::Role::ComboBox);
+            let node = node.accesskit_node();
+            assert_eq!(node.value().as_deref(), Some(LONG_NAME), "labeled {labeled}, {width}: screen readers receive the full text");
+            assert_eq!(node.description(), None, "labeled {labeled}, {width}: the tooltip does not describe the combo box");
+            if !labeled {
+                assert_eq!(node.label(), None, "{width}: the tooltip does not name an unlabeled combo box");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_selected_text_cut_short_by_the_uis_wrap_mode_shows_in_full_on_hover() {
+    let text = [LONG_NAME; 3].join(", ");
+    let shown = text.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 300.0)).with_accessibility_check(false).build_ui(move |ui| {
+        ui.set_max_width(200.0);
+        let _ = ComboBox::new("board", "Board").selected_text(shown.as_str()).width(100.0).show_ui(ui, |ui| ui.label("Other"));
+    });
+    h.ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.wrap_mode = Some(egui::TextWrapMode::Truncate);
+    });
+    h.run();
+    h.get_by_role(egui::Role::ComboBox).hover();
+    h.run();
+    let button = h.get_by_role(egui::Role::ComboBox).rect();
+    let tooltip = h.query_all_by_role(egui::Role::Label).find(|node| node.accesskit_node().value().as_deref() == Some(text.as_str()));
+    let tooltip = tooltip.map(|node| node.rect());
+    assert!(tooltip.is_some(), "a combo box in a truncating Ui shows its cut text on hover");
+    assert!(
+        tooltip.is_some_and(|rect| rect.height() > button.height()),
+        "the tooltip wraps the text onto several lines rather than cutting it short again: {tooltip:?}, button {button:?}"
+    );
+}
+
+#[test]
+fn the_tooltip_for_a_cut_selected_text_can_be_turned_off() {
+    let mut h = long_name_with(false, 200.0, |combo| combo.truncate().show_tooltip_when_elided(false));
+    h.get_by_role(egui::Role::ComboBox).hover();
+    h.run();
+    assert!(!shows_in_full(&h), "no tooltip when it is turned off");
+}
+
+#[test]
+fn a_callers_tooltip_still_names_and_describes_a_cut_combo_box() {
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).with_accessibility_check(false).build_ui(|ui| {
+        ui.set_max_width(200.0);
+        let combo = ComboBox::from_id_salt("board").selected_text(LONG_NAME).width(100.0).truncate().show_ui(ui, |ui| ui.label(LONG_NAME));
+        let _ = combo.response.on_hover_text("Artboard");
+    });
+    h.ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    h.run();
+    h.get_by_role(egui::Role::ComboBox).hover();
+    h.run();
+    let node = h.get_by_role(egui::Role::ComboBox);
+    let node = node.accesskit_node();
+    assert_eq!(node.label().as_deref(), Some("Artboard"), "the caller's tooltip names the combo box");
+    assert_eq!(node.description().as_deref(), Some("Artboard"), "the caller's tooltip describes the combo box");
+}
+
+#[test]
+fn a_selected_text_of_several_atoms_shows_all_of_them_on_hover() {
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 200.0)).build_ui(|ui| {
+        ui.set_max_width(200.0);
+        let _ = ComboBox::new("board", "Board").selected_text(("12", LONG_NAME)).width(100.0).truncate().show_ui(ui, |ui| ui.label(LONG_NAME));
+    });
+    h.ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    h.run();
+    h.get_by_role(egui::Role::ComboBox).hover();
+    h.run();
+    let full = format!("12 {LONG_NAME}");
+    assert!(
+        h.query_all_by_role(egui::Role::Label).any(|node| node.accesskit_node().value().as_deref() == Some(full.as_str())),
+        "the tooltip shows {full:?}"
+    );
 }
 
 fn sizes(ui: &mut egui::Ui, rows: usize) {

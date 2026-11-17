@@ -354,13 +354,13 @@ fn mixed_headers_with_deep_size(
 }
 
 /// Sample `i` of a flat channel: `R` is 1, 2, 3, …, `G` 10 more and `B` 100 more, top row first.
-fn mixed_flat(channel: f32, i: usize) -> f32 {
+pub(super) fn mixed_flat(channel: f32, i: usize) -> f32 {
     channel + 1.0 + i as f32
 }
 
 /// A mixed file with a 3 × 2 flat part, and its chunk offsets as `offsets[part][chunk]`. The
 /// tiled flat part's chunks hold the tiles at (0, 0) and (1, 0).
-fn mixed_file(deep_first: bool, tiled: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
+pub(super) fn mixed_file(deep_first: bool, tiled: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
     let (w, h) = (3usize, 2usize);
     let mut out = mixed_headers(deep_first, tiled, (w, h));
     let chunks: Vec<Vec<Vec<u8>>> = (0..2i32)

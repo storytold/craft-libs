@@ -345,7 +345,10 @@ pub(crate) const PROTECTION_HASH_ATTRS: [&str; 16] = [
 /// kept; a hostile attribute value can't be longer than a hash needs.
 fn read_protection(k: &El, s: &mut craft_wordmodel::Settings) {
     let on = |v: &str| !matches!(v, "0" | "false" | "off");
-    if !k.attr("w:enforcement").is_some_and(on) {
+    // Word enforces protection when `w:enforcement` is missing ([MS-OI29500] §2.1.402 (c)), the
+    // opposite of the standard's literal reading, so only an explicit off value unlocks the
+    // document; a file whose generator omits the attribute keeps its restriction and its hash.
+    if k.attr("w:enforcement").is_some_and(|v| !on(v)) {
         return;
     }
     let edit = k.attr("w:edit").filter(|e| matches!(*e, "readOnly" | "comments" | "trackedChanges" | "forms"));

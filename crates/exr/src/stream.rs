@@ -262,6 +262,9 @@ impl<R: Read + Seek> Decoder<R> {
             }
             self.source.read_exact(bytes).map_err(invalid)?;
         }
+        // (a DWA chunk's counters can make the crate allocate terabytes: see `crate::dwa_guard`)
+        let lines = self.rows.min((self.info.height as usize).saturating_sub(row as usize));
+        crate::dwa_guard::check_payload(header, (self.info.width as usize, lines), &packed).map_err(invalid)?;
         let chunk = Chunk {
             layer_index: 0,
             compressed_block: CompressedBlock::ScanLine(CompressedScanLineBlock { y_coordinate: y, compressed_pixels_le: packed }),

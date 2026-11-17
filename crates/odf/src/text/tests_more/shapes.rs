@@ -39,7 +39,7 @@ fn open() -> Document {
     );
     let content = format!(
         r##"<office:document-content {NS_T} {NS_D}><office:automatic-styles>
-<style:style style:name="gr1" style:family="graphic"><style:graphic-properties svg:stroke-width="0.5pt" svg:stroke-color="#0000ff" draw:fill="solid" draw:fill-color="#ffcc00"/></style:style>
+<style:style style:name="gr1" style:family="graphic"><style:graphic-properties svg:stroke-width="0.5pt" svg:stroke-color="#0000ff" draw:fill="solid" draw:fill-color="#ffcc00" draw:opacity="50%"/></style:style>
 <style:style style:name="gr2" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#00aa00"/></style:style>
 <style:style style:name="gr3" style:family="graphic"><style:graphic-properties svg:stroke-color="#000080" draw:fill-color="#99ccff" style:wrap="parallel" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" style:vertical-pos="from-top" style:vertical-rel="paragraph"/></style:style>
 <style:style style:name="gr4" style:family="graphic"><style:graphic-properties svg:stroke-width="2pt" svg:stroke-color="#000000" style:wrap="run-through" style:run-through="background"/></style:style>
@@ -88,6 +88,12 @@ fn shapes_open_with_their_kind_size_look_and_text() {
     let Some(InlineObject::Shape { float, .. }) = d.body[2].as_para().unwrap().objects.first() else { panic!() };
     assert_eq!((float.x, float.y), (72.0, 0.0));
     assert_eq!(float.wrap, Wrap::BehindText);
+    let Some(InlineObject::Shape { fill: Some(craft_wordmodel::fill::Fill::Solid { transparency, .. }), .. }) =
+        d.body[0].as_para().unwrap().objects.first()
+    else {
+        panic!("the first shape has a solid fill");
+    };
+    assert_eq!(*transparency, 50.0);
 }
 
 #[test]
@@ -100,6 +106,13 @@ fn shapes_round_trip() {
     }
     let back = import(&bytes).unwrap();
     assert_eq!(shapes(&back), shapes(&d));
+    assert!(c.contains("draw:opacity=\"50%\""));
+    let Some(InlineObject::Shape { fill: Some(craft_wordmodel::fill::Fill::Solid { transparency, .. }), .. }) =
+        back.body[0].as_para().unwrap().objects.first()
+    else {
+        panic!("the first shape has a solid fill");
+    };
+    assert_eq!(*transparency, 50.0);
     assert_eq!(back.body[1].as_para().unwrap().text, d.body[1].as_para().unwrap().text);
 }
 
