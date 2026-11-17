@@ -436,8 +436,22 @@ impl SmartObject {
     /// exceed [`MAX_BAKE_PIXELS`], or the mesh needs more rasterising work than eight times the
     /// output allows (a hostile mesh whose triangles each cover the whole output).
     pub fn render_placed(&self, content: &FloatImage, k: f64, size: Option<(u32, u32)>) -> Option<(FloatImage, [f64; 2])> {
-        let (cw, ch) = (f64::from(content.width), f64::from(content.height));
-        if content.width == 0 || content.height == 0 {
+        self.render_placed_pixels(content.width, content.height, &content.data, k, size)
+    }
+
+    /// Bakes borrowed straight RGBA pixels without copying the source image.
+    /// Uses the same placement, output and work limits as [`Self::render_placed`].
+    /// Missing pixels in a short slice read as transparent; extra pixels are ignored.
+    pub fn render_placed_pixels(
+        &self,
+        width: u32,
+        height: u32,
+        data: &[[f32; 4]],
+        k: f64,
+        size: Option<(u32, u32)>,
+    ) -> Option<(FloatImage, [f64; 2])> {
+        let (cw, ch) = (f64::from(width), f64::from(height));
+        if width == 0 || height == 0 {
             return None;
         }
         // The quad is solved once for the bounds, the size and the whole grid.
@@ -464,7 +478,7 @@ impl SmartObject {
         let mut out: Vec<[f32; 4]> = Vec::new();
         out.try_reserve_exact(count).ok()?;
         out.resize(count, [0.0; 4]);
-        let sampler = Sampler { content, cw, ch };
+        let sampler = Sampler { width, height, data, cw, ch };
         let idx = |i: usize, j: usize| j * (n + 1) + i;
         // A sane mesh's triangles each span about one grid cell (ow/n by oh/n), rounded out to
         // whole pixels. A thin output (16384×1) stacks every grid row onto the same pixel row, so
@@ -498,7 +512,9 @@ impl SmartObject {
 
 /// Bilinear, premultiplied sampling of the content at content-pixel coordinates.
 struct Sampler<'a> {
-    content: &'a FloatImage,
+    width: u32,
+    height: u32,
+    data: &'a [[f32; 4]],
     cw: f64,
     ch: f64,
 }
@@ -506,14 +522,14 @@ struct Sampler<'a> {
 impl Sampler<'_> {
     fn at(&self, x: usize, y: usize) -> [f32; 4] {
         // `data` is a public field: a short one reads as transparent.
-        let p = self.content.data.get(y * self.content.width as usize + x).copied().unwrap_or([0.0; 4]);
+        let p = y.checked_mul(self.width as usize).and_then(|row| row.checked_add(x)).and_then(|i| self.data.get(i)).copied().unwrap_or([0.0; 4]);
         [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]
     }
 
     fn sample(&self, x: f64, y: f64) -> [f32; 4] {
         let (fx, fy) = ((x - 0.5).clamp(0.0, self.cw - 1.0), (y - 0.5).clamp(0.0, self.ch - 1.0));
         let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
-        let (x1, y1) = ((x0 + 1).min(self.content.width as usize - 1), (y0 + 1).min(self.content.height as usize - 1));
+        let (x1, y1) = ((x0 + 1).min(self.width as usize - 1), (y0 + 1).min(self.height as usize - 1));
         let (a, b) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
         let (p00, p10, p01, p11) = (self.at(x0, y0), self.at(x1, y0), self.at(x0, y1), self.at(x1, y1));
         std::array::from_fn(|c| (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b)

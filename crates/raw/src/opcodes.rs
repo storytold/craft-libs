@@ -480,31 +480,27 @@ fn params(op: &Opcode) -> (u32, u32, Vec<u8>) {
     (id, 0, o)
 }
 
-/// Serialise an opcode list (inverse of [`parse_list`]).
+/// Serialise an opcode list (inverse of [`parse_list`]) through the shared envelope encoder
+/// ([`crate::opcode_raw::encode`]). A list the wire format cannot hold (a count or parameter block
+/// past 4 GiB) yields an empty blob rather than a truncated one.
 pub fn write_list(list: &[Opcode]) -> Vec<u8> {
-    let mut out = (list.len() as u32).to_be_bytes().to_vec();
-    for op in list {
-        let (id, flags, p) = params(op);
-        for v in [id, if id == 14 { 0x0106_0000 } else { 0x0103_0000 }, flags, p.len() as u32] {
-            out.extend_from_slice(&v.to_be_bytes());
-        }
-        out.extend_from_slice(&p);
-    }
-    out
+    let records: Vec<crate::opcode_raw::Opcode> = list
+        .iter()
+        .map(|op| {
+            let (id, flags, params) = params(op);
+            crate::opcode_raw::Opcode { id, version: if id == 14 { 0x0106_0000 } else { 0x0103_0000 }, flags, params }
+        })
+        .collect();
+    crate::opcode_raw::encode(&records).unwrap_or_default()
 }
 
 /// Parse an opcode list blob. Malformed opcodes become [`Opcode::Unknown`]; a truncated list stops early.
 pub fn parse_list(d: &[u8]) -> Vec<Opcode> {
-    let mut r = Rd { d, p: 0 };
-    let Some(count) = r.u32() else { return vec![] };
-    let mut out = Vec::new();
-    for _ in 0..count.min(4096) {
-        let (Some(id), Some(_ver), Some(flags), Some(size)) = (r.u32(), r.u32(), r.u32(), r.u32()) else { break };
-        let Some(params) = d.get(r.p..r.p.saturating_add(size as usize)) else { break };
-        r.p += size as usize;
-        out.push(parse_one(id, flags, params).unwrap_or(Opcode::Unknown { id, flags, params: params.to_vec() }));
-    }
-    out
+    let Some(records) = crate::opcode_raw::Records::new(d) else { return vec![] };
+    records
+        .take(4096)
+        .map(|(id, _version, flags, params)| parse_one(id, flags, params).unwrap_or(Opcode::Unknown { id, flags, params: params.to_vec() }))
+        .collect()
 }
 
 /// Radius normaliser: distance from the centre to the farthest image corner.
