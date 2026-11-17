@@ -3074,15 +3074,12 @@ fn a_footer_spelled_out_in_a_comment_before_the_tail_is_passed_over() {
     let mut edited = Document::open(Arc::new(base)).unwrap();
     edited.update_dict(ObjRef::new(1, 0), |dict| dict.set(b"Lang".to_vec(), Object::String(crate::cos::PdfString::literal("en")))).unwrap();
     let saved = crate::cos::write_incremental(&edited, &crate::cos::SaveOptions::default()).unwrap();
-    // `far`: a comment that starts further back than its line is looked at. `glued`: a word
-    // that only starts with the keyword (`startxref+12` is one token to the lexer).
-    let far = format!("%{}startxref {older}", " ".repeat(1100));
+    // `glued`: a word that only starts with the keyword (`startxref+12` is one token to the lexer).
     let footers = [
         ("comment", format!("% startxref {older}")),
         ("tight comment", format!("%startxref {older}")),
         ("comment text", format!("% the old startxref {older}")),
         ("longer word before", format!("nostartxref {older}")),
-        ("far", far),
         ("glued", format!("startxref+{older}")),
         ("longer word after", format!("startxrefs {older}")),
     ];
@@ -3137,4 +3134,37 @@ fn a_comment_in_a_footer_that_mentions_an_object_is_no_object() {
     assert_eq!(doc.revisions().len(), 1);
     assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
     assert_compact_matches_materialized(&doc);
+}
+
+/// Whether a keyword stands in a comment is read from its line, and only so far back. A whole
+/// footer on a longer line than that can be either: a comment that started out of sight, with
+/// the offset of a superseded table, or the newest footer after a long indent, which the lexer
+/// allows. Taking it could read an older table, and so could passing it over for the footer
+/// before it (a revision that only frees an object leaves no object header to give it away). The
+/// search stops there, and the file is rebuilt with a note.
+#[test]
+fn a_footer_on_a_line_too_long_to_judge_stops_the_search() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let older = base.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let older = std::str::from_utf8(&base[older + 9..]).unwrap().split_whitespace().next().unwrap().to_string();
+    let indent = " ".repeat(1100);
+
+    // The newest footer after a long indent, on a revision that only frees object 3.
+    let mut indented = base.clone();
+    indented.push(b'\n');
+    let table = indented.len();
+    indented.extend_from_slice(format!("xref\n3 1\n0000000000 00001 f \ntrailer\n<< /Size 4 /Root 1 0 R /Prev {older} >>\n").as_bytes());
+    indented.extend_from_slice(format!("{indent}startxref\n{table}\n%%EOF\n").as_bytes());
+
+    // A comment that long, spelling out the older footer after the real one.
+    let mut commented = base.clone();
+    commented.extend_from_slice(format!("\n%{indent}startxref {older}\n%%EOF\n").as_bytes());
+
+    for (name, mut bytes) in [("indented", indented), ("commented", commented)] {
+        bytes.extend(std::iter::repeat_n(b' ', 5000));
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert!(doc.revisions().is_empty(), "{name}: rebuilt: {:?}", doc.repair_log());
+        assert!(doc.repair_log().iter().any(|l| l.contains("too long to tell whether it is a comment")), "{name}: {:?}", doc.repair_log());
+        assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{name}: {:?}", doc.repair_log());
+    }
 }

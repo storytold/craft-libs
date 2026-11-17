@@ -933,6 +933,8 @@ const STARTXREF_CANDIDATES: usize = 64;
 ///   its cross-reference section (a save cut short, a second file glued on), whose objects the
 ///   last complete table cannot reach. A newer revision whose own footer is damaged shows this
 ///   way too, since passing over that footer lands on the one before its objects.
+/// - A whole footer on a line too long to tell whether it is a comment (`footer_keyword_at`)
+///   ends the search: it is not taken, and no earlier footer is read in its place.
 ///
 /// In each of those cases the error says which, and the caller rebuilds the table from object
 /// headers as it does for a file with no `startxref` at all.
@@ -949,8 +951,23 @@ pub(super) fn find_startxref(data: &[u8], header_offset: usize) -> Result<usize,
         let Some(sx) = rfind(data.get(..end).unwrap_or(&[]), KEYWORD, 0) else { break };
         last.get_or_insert(sx);
         if let Some((offset, eof)) = footer_offset(data, sx) {
-            footer = Some((sx, offset, eof));
-            break;
+            match footer_keyword_at(data, sx) {
+                Some(true) => {
+                    footer = Some((sx, offset, eof));
+                    break;
+                }
+                Some(false) => {}
+                // Neither taking it nor passing it over for an earlier footer is safe.
+                None => {
+                    let before_end = data.len().saturating_sub(sx);
+                    return Err(CosError::Syntax {
+                        offset: sx,
+                        detail: format!(
+                            "startxref is {before_end} bytes before the end of the file and its line is too long to tell whether it is a comment"
+                        ),
+                    });
+                }
+            }
         }
         end = sx;
     }
@@ -991,13 +1008,10 @@ pub(super) fn find_startxref(data: &[u8], header_offset: usize) -> Result<usize,
 /// offset and `%%EOF`. Whitespace and comments may stand between them, as they may for
 /// `Lexer::skip_ws`, which reads the offset. It can't find the end of the gap here because it
 /// would skip `%%EOF` as a comment too. The offset may have the `+` the lexer accepts on an
-/// integer. The keyword must be a token of its own outside a comment (`footer_keyword_at`).
+/// integer. Whether the keyword itself is one the lexer would read is `footer_keyword_at`'s.
 ///
 /// Returns the offset, `None` for one too large to be a position, and where `%%EOF` starts.
 fn footer_offset(data: &[u8], sx: usize) -> Option<(Option<usize>, usize)> {
-    if !footer_keyword_at(data, sx) {
-        return None;
-    }
     let gap = |mut i: usize| loop {
         while data.get(i).is_some_and(|&b| is_whitespace(b)) {
             i = i.saturating_add(1);
@@ -1020,27 +1034,30 @@ fn footer_offset(data: &[u8], sx: usize) -> Option<(Option<usize>, usize)> {
 }
 
 /// How far back a line is read to see whether a `startxref` stands in a comment. A footer has
-/// the keyword at the start of a line. On a longer line than this the comment could start out of
-/// sight, so the keyword is not taken.
+/// the keyword at the start of a line.
 const COMMENT_LOOKBACK: usize = 1024;
 
 /// Whether the `startxref` at `sx` is one the lexer would read as that keyword: a token of its
 /// own (neither the end nor the start of a longer word, so not `startxref+12` either) with no
 /// `%` before it on its line, which would make it comment text. Trailing data can spell out a
 /// whole footer in a comment, with the offset of a superseded table.
-fn footer_keyword_at(data: &[u8], sx: usize) -> bool {
+///
+/// `None` when the line starts further back than `COMMENT_LOOKBACK` and nothing in sight
+/// settles it: a comment could have started out of sight, or the keyword could follow a long
+/// indent.
+fn footer_keyword_at(data: &[u8], sx: usize) -> Option<bool> {
     let regular = |b: &u8| !is_whitespace(*b) && !crate::cos::parser::is_delimiter(*b);
     let before = data.get(sx.saturating_sub(COMMENT_LOOKBACK)..sx).unwrap_or(&[]);
     if before.last().is_some_and(regular) || data.get(sx.saturating_add(b"startxref".len())).is_some_and(regular) {
-        return false;
+        return Some(false);
     }
-    let line = match before.iter().rposition(|&b| b == b'\n' || b == b'\r') {
-        Some(end) => before.get(end.saturating_add(1)..).unwrap_or(&[]),
-        // The line starts before what was read, unless that was read from the start of the file.
-        None if before.len() < sx => return false,
-        None => before,
-    };
-    !line.contains(&b'%')
+    let line_start = before.iter().rposition(|&b| b == b'\n' || b == b'\r').map(|end| end.saturating_add(1));
+    let line = before.get(line_start.unwrap_or(0)..).unwrap_or(&[]);
+    if line.contains(&b'%') {
+        return Some(false);
+    }
+    // No line break in sight and more of the file before it: the rest of the line is unread.
+    (line_start.is_some() || before.len() == sx).then_some(true)
 }
 
 /// Whether a cross-reference section could start at `off`: the `xref` keyword of a table, or the
