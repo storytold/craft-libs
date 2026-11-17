@@ -148,8 +148,9 @@ Our pipeline renders differently, so **values carry over but the look is approxi
 
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
-`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Only process-version 2012+ field
-names are read (e.g. `Exposure2012`, not the older `Exposure`). `crs:ProcessVersion` itself numbers the other
+`crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Process-version 2012+ field
+names are read (e.g. `Exposure2012`). A packet with none of them has its older (process version 2010) fields, such as
+`Exposure`, `Contrast` and `FillLight`, approximated with today's sliders; beside 2012 fields the older ones are ignored. `crs:ProcessVersion` itself numbers the other
 application's renderer and is ignored: the photo keeps LightCraft's own process, the latest for a newly imported photo
 ([process-versions.md](process-versions.md)).
 

@@ -212,7 +212,9 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
         return current.merged(settings).unwrap_or_else(|_| current.clone());
     }
     let cur = current.to_json();
-    let mut base = original.to_json();
+    // with the settings the stored JSON leaves out at their defaults: a preset's HDR edit at half amount is halfway
+    // from the original's, which is there even when the original never touched it
+    let mut base = original.to_json_for_merge();
     if let (Some(b), Some(c)) = (base.as_object_mut(), cur.as_object()) {
         for k in REPAIR_KEYS {
             if let Some(v) = c.get(k) {
@@ -305,14 +307,29 @@ impl Preset {
             o.remove("masks");
         }
         let mut out = compose_named(current, original, &rest, amount);
-        add_masks(&mut out, masks, amount);
+        let ids = add_masks(&mut out, masks, amount);
+        // Lens Blur's focus mask names a mask by id, and the preset's masks were given the photo's free ids. It is a
+        // discrete setting, taken from the preset at half amount and up (`interpolate_leaf`).
+        let named = rest.get("lens_blur").and_then(|b| b.get("focus_mask")).and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok());
+        if let Some(named) = named
+            && amount >= 0.5
+            && let Some(&id) = ids.get(&named)
+        {
+            out.lens_blur.focus_mask = Some(id);
+        }
         out
     }
 }
 
 /// The preset's masks, added to the photo's own (ones it already has are skipped), their effect
-/// scaled by the amount.
-fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) {
+/// scaled by the amount. At no amount none is added: a mask of no effect would still be in the
+/// photo's list, and would be the one "it already has" when the preset is applied again.
+/// Returns the id each of the preset's masks has in the photo (its own, or the one it was given).
+fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) -> std::collections::HashMap<u32, u32> {
+    let mut ids = std::collections::HashMap::new();
+    if amount.is_nan() || amount <= 0.0 {
+        return ids;
+    }
     // the masks by name, kept up to date: a preset of many masks compares each with its
     // namesakes only, not with every mask added before it
     let mut by_name: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
@@ -323,7 +340,9 @@ fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) {
     let mut used: std::collections::HashSet<u32> = out.masks.iter().map(|q| q.id).collect();
     for m in masks {
         let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
-        if by_name.get(&m.name).is_some_and(|ix| ix.iter().any(|&i| out.masks.get(i).is_some_and(|q| q.components == m.components))) {
+        let had = by_name.get(&m.name).and_then(|ix| ix.iter().filter_map(|&i| out.masks.get(i)).find(|q| q.components == m.components));
+        if let Some(q) = had {
+            ids.entry(m.id).or_insert(q.id);
             continue;
         }
         // ids run on from the first free one, past any a mask already has (a scan for the
@@ -331,12 +350,14 @@ fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) {
         while used.contains(&next_id) {
             next_id = next_id.checked_add(1).unwrap_or(1);
         }
+        ids.entry(m.id).or_insert(next_id);
         m.id = next_id;
         used.insert(next_id);
         m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
         by_name.entry(m.name.clone()).or_default().push(out.masks.len());
         out.masks.push(m);
     }
+    ids
 }
 
 /// Lower-case ASCII slug for ids (`"Warm & Soft"` → `warm-soft`).

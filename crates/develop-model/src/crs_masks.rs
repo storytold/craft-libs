@@ -121,6 +121,15 @@ fn lightness_to_range(l: f64) -> f64 {
     ((y.log2() + 8.0) / 12.0).clamp(0.0, 1.0)
 }
 
+/// The point of one `crs:Dabs` entry (`"d x y"`), or `None` when it has no two finite numbers: `"nan"` and
+/// `"inf"` parse as numbers, and a point of them is JSON `null`, which no settings accept, so one damaged dab
+/// would keep every adjustment in the packet from applying.
+fn dab(d: &str) -> Option<Value> {
+    let mut it = d.split_whitespace().skip(1).filter_map(|v| v.parse::<f64>().ok());
+    let (x, y) = (it.next()?, it.next()?);
+    (x.is_finite() && y.is_finite()).then(|| pt(x, y))
+}
+
 fn pt(x: f64, y: f64) -> Value {
     json!({"x": x, "y": y})
 }
@@ -194,17 +203,8 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
             })
         }
         "Mask/Paint" => {
-            let pts: Vec<Value> = m
-                .field("crs:Dabs")
-                .map(XmpValue::items)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(XmpValue::text)
-                .filter_map(|d| {
-                    let mut it = d.split_whitespace().skip(1).filter_map(|v| v.parse::<f64>().ok());
-                    Some(pt(it.next()?, it.next()?))
-                })
-                .collect();
+            let pts: Vec<Value> =
+                m.field("crs:Dabs").map(XmpValue::items).unwrap_or_default().iter().filter_map(XmpValue::text).filter_map(dab).collect();
             if pts.is_empty() {
                 return Err("empty brush".into());
             }
@@ -274,19 +274,21 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             skipped.extend(unmapped_local(c));
             // brush dabs of one correction are one brush component
             let mut merged: Vec<Value> = Vec::new();
-            // where the brush of each op sits in `merged` (no scan of it per dab)
+            // where the brush of each op and sense sits in `merged` (no scan of it per dab): an inverted run
+            // and a plain one paint different areas, so they stay two components
             let mut brush_at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
             for p in parts {
                 let is_brush = p["shape"]["kind"] == "brush";
+                let key = format!("{} {}", p["op"], p["invert"]);
                 if is_brush
-                    && let Some(prev) = brush_at.get(&p["op"].to_string()).and_then(|&i| merged.get_mut(i))
+                    && let Some(prev) = brush_at.get(&key).and_then(|&i| merged.get_mut(i))
                     && let (Some(a), Some(b)) = (prev["shape"]["strokes"].as_array_mut(), p["shape"]["strokes"].as_array())
                 {
                     a.extend(b.iter().cloned());
                     continue;
                 }
                 if is_brush {
-                    brush_at.insert(p["op"].to_string(), merged.len());
+                    brush_at.insert(key, merged.len());
                 }
                 merged.push(p);
             }
@@ -333,17 +335,8 @@ fn spot(item: &XmpValue, aspect: f64) -> Result<Value, String> {
         }
         // a brushed removal: the dabs are the path
         "Mask/Paint" => {
-            let pts: Vec<Value> = m
-                .field("crs:Dabs")
-                .map(XmpValue::items)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(XmpValue::text)
-                .filter_map(|d| {
-                    let mut it = d.split_whitespace().skip(1).filter_map(|v| v.parse::<f64>().ok());
-                    Some(pt(it.next()?, it.next()?))
-                })
-                .collect();
+            let pts: Vec<Value> =
+                m.field("crs:Dabs").map(XmpValue::items).unwrap_or_default().iter().filter_map(XmpValue::text).filter_map(dab).collect();
             if pts.is_empty() {
                 return Err("empty brushed spot".into());
             }
@@ -396,7 +389,8 @@ fn legacy_spot(line: &str, aspect: f64) -> Option<Value> {
 pub fn spots(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
     let mut out = Vec::new();
     let mut skipped = Vec::new();
-    if let Some(list) = values.get("crs:RetouchAreas") {
+    let current = values.get("crs:RetouchAreas");
+    if let Some(list) = current {
         for item in list.items() {
             match spot(item, aspect) {
                 Ok(v) => out.push(v),
@@ -404,7 +398,9 @@ pub fn spots(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             }
         }
     }
-    if out.is_empty()
+    // the older list is read only from a packet without the current one: beside it, it is what the spots were
+    // before (an emptied `RetouchAreas` means they were removed)
+    if current.is_none()
         && let Some(list) = values.get("crs:RetouchInfo")
     {
         out.extend(list.items().iter().filter_map(XmpValue::text).filter_map(|l| legacy_spot(l, aspect)));

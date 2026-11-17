@@ -41,7 +41,8 @@ pub struct SegMask {
 impl SegMask {
     /// From `side × side` logits over the whole image.
     pub fn from_logits(side: usize, logits: &[f32]) -> SegMask {
-        let q: Vec<u8> = logits.iter().take(side * side).map(|l| ((l * SCALE).round().clamp(-127.0, 127.0) as i8) as u8).collect();
+        // `side` is the caller's: a product past `usize` would panic in a debug build
+        let q: Vec<u8> = logits.iter().take(side.saturating_mul(side)).map(|l| ((l * SCALE).round().clamp(-127.0, 127.0) as i8) as u8).collect();
         let z = miniz_oxide::deflate::compress_to_vec(&q, 8);
         SegMask { side: side as u32, data: base64_encode(&z), rect: None, grid: None }
     }

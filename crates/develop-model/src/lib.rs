@@ -41,14 +41,42 @@ impl DevelopSettings {
         serde_json::from_value(v.clone())
     }
 
-    /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) stated even when off, for JSON that is copied,
-    /// merged, scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON leaves it out when
-    /// off, so settings saved before it keep their hash; a merge needs the `false`, or copying Detail would not turn
-    /// the box off and a preset applied at an amount would not find its base value.
+    /// [`Self::to_json`] with the settings it leaves out at their defaults stated, for JSON that is copied, merged,
+    /// scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON leaves them out (Remove Hot
+    /// Pixels when off, an untouched HDR edit, the default profile, …), so settings saved before they existed keep
+    /// their hash; a merge needs them, or copying a group would not turn them off on the target and a preset applied
+    /// at an amount would not find its base value. Settings inside lists (masks, strokes) are not stated: a list is
+    /// replaced whole. Neither are the process and the white-balance scale, which are not copied by value
+    /// ([`Self::merged`]).
     pub fn to_json_for_merge(&self) -> Value {
+        fn state<T: serde::Serialize>(obj: &mut serde_json::Map<String, Value>, key: &str, field: &T) {
+            if !obj.contains_key(key) {
+                obj.insert(key.into(), serde_json::to_value(field).unwrap_or(Value::Null));
+            }
+        }
         let mut v = self.to_json();
-        if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
-            detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
+        let Some(top) = v.as_object_mut() else { return v };
+        state(top, "profile", &self.profile);
+        state(top, "hdr", &self.hdr);
+        state(top, "curve", &self.curve);
+        if let Some(profile) = top.get_mut("profile").and_then(Value::as_object_mut) {
+            state(profile, "camera_local_tone", &self.profile.camera_local_tone);
+        }
+        if let Some(detail) = top.get_mut("detail").and_then(Value::as_object_mut) {
+            state(detail, "nr_outliers", &self.detail.nr_outliers);
+        }
+        if let Some(enhance) = top.get_mut("enhance").and_then(Value::as_object_mut) {
+            state(enhance, "denoise_on", &self.enhance.denoise_on);
+        }
+        if let Some(blur) = top.get_mut("lens_blur").and_then(Value::as_object_mut) {
+            let b = &self.lens_blur;
+            state(blur, "boost", &b.boost);
+            state(blur, "focus_mask", &b.focus_mask);
+            state(blur, "focus_strokes", &b.focus_strokes);
+            state(blur, "blur_strokes", &b.blur_strokes);
+            state(blur, "transition", &b.transition);
+            state(blur, "shape", &b.shape);
+            state(blur, "area", &b.area);
         }
         v
     }
@@ -90,6 +118,12 @@ impl DevelopSettings {
                 controls::set(self, c.id, v);
             }
         }
+        // the sliders of list entries (point colours, red eyes) have ranges too
+        for (id, _) in controls::indexed_instances(self) {
+            if let Some(v) = controls::get(self, &id) {
+                controls::set(self, &id, v);
+            }
+        }
         let c = &mut self.curve;
         for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
             *p = craft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
@@ -121,7 +155,10 @@ impl DevelopSettings {
     pub fn is_unedited(&self) -> bool {
         let mut a = self.clone();
         let d = DevelopSettings::default();
-        a.wb = d.wb;
+        // as shot, the numbers (and the scale they are on) are the photo's own, not an edit; any other mode is one
+        if a.wb.mode == WbMode::AsShot {
+            a.wb = d.wb;
+        }
         a.process = d.process;
         a == d
     }
@@ -176,11 +213,17 @@ impl DevelopSettings {
         }
     }
 
-    /// Reset every control in `section` to its default, and the settings of the section that are not
-    /// controls (the creative profile, the curve, the white balance mode).
+    /// Reset every control in `section` to its default, the sliders of its list entries (each point colour, each
+    /// red eye) too, and the settings of the section that are not controls (the creative profile, the curve, the
+    /// white balance mode, Upright and its guides, the lens profile and Remove Chromatic Aberration switches).
     pub fn reset_section(&mut self, section: Section) {
         for c in controls::in_section(section) {
             controls::set(self, c.id, c.default);
+        }
+        for (id, spec) in controls::indexed_instances(self) {
+            if spec.section == section {
+                controls::set(self, &id, spec.default);
+            }
         }
         match section {
             Section::Curve => {
@@ -197,6 +240,13 @@ impl DevelopSettings {
             // and so does the camera's own local tone mapping
             Section::Profile => {
                 self.profile = Profile::default();
+            }
+            // Upright, its guides and its solved transform are not sliders
+            Section::Geometry => self.geometry = Geometry::default(),
+            // the two switches are not sliders
+            Section::Optics => {
+                self.optics.remove_ca = false;
+                self.optics.lens_profile = false;
             }
             _ => {}
         }

@@ -70,12 +70,26 @@ impl Homography {
     }
 
     /// The homography mapping `src[i]` → `dst[i]` (4 correspondences, DLT with h33 = 1).
+    ///
+    /// h33 = 1 cannot express a mapping that sends the origin to infinity (h33 = 0), though the quads themselves
+    /// may be finite and well away from it. When the solve fails it is tried again with the origin moved to the
+    /// middle of `src`, which a convex quad maps to a finite point; the result then has whatever h33 it needs.
     pub fn from_quads(src: &[Point; 4], dst: &[Point; 4]) -> Option<Homography> {
         // Failed feature matches and invalid perspective parameters can contain
         // non-finite coordinates. Do not return a transform that poisons rendering.
         if src.iter().chain(dst.iter()).any(|p| !p.x.is_finite() || !p.y.is_finite()) {
             return None;
         }
+        Self::solve_h33_one(src, dst).or_else(|| {
+            let (cx, cy) = (src.iter().map(|p| p.x).sum::<f64>() / 4.0, src.iter().map(|p| p.y).sum::<f64>() / 4.0);
+            let moved = src.map(|p| Point::new(p.x - cx, p.y - cy));
+            let h = Self::solve_h33_one(&moved, dst)?.mul(&Homography([1.0, 0.0, -cx, 0.0, 1.0, -cy, 0.0, 0.0, 1.0]));
+            h.0.iter().all(|v| v.is_finite()).then_some(h)
+        })
+    }
+
+    /// [`Self::from_quads`] for finite points, with h33 fixed at 1.
+    fn solve_h33_one(src: &[Point; 4], dst: &[Point; 4]) -> Option<Homography> {
         let mut a = [[0.0f64; 9]; 8];
         for i in 0..4 {
             let (x, y) = (src[i].x, src[i].y);
@@ -108,6 +122,19 @@ impl Homography {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (x, y) → ((x + 1) / (x + y), y / (x + y)) has h33 = 0: the origin goes to infinity, the quad is nowhere near it.
+    #[test]
+    fn quad_mapping_that_sends_the_origin_to_infinity() {
+        let src = [Point::new(1.0, 1.0), Point::new(2.0, 1.0), Point::new(2.0, 2.0), Point::new(1.0, 2.0)];
+        let f = |p: Point| Point::new((p.x + 1.0) / (p.x + p.y), p.y / (p.x + p.y));
+        let dst = src.map(f);
+        let h = Homography::from_quads(&src, &dst).expect("a convex quad to a convex quad has a mapping");
+        for p in src.into_iter().chain([Point::new(1.5, 1.25), Point::new(1.1, 1.9)]) {
+            let (got, want) = (h.apply(p), f(p));
+            assert!((got.x - want.x).abs() < 1e-9 && (got.y - want.y).abs() < 1e-9, "{p:?}: {got:?} != {want:?}");
+        }
+    }
 
     #[test]
     fn quad_to_quad() {
