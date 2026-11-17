@@ -46,9 +46,11 @@ hayro-interpret = { version = "=0.7.0", default-features = false, features = ["e
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 bytemuck = "1"
 kurbo = "0.13"
-# Robust sweep line and boolean ops on Bezier paths (MIT OR Apache-2.0). The root [patch.crates-io] entry points at
-# vendor/linesweeper; an app that depends on craft-pathops by git adds the same entry or takes the registry copy.
-linesweeper = "0.5"
+# Robust sweep line and boolean ops on Bezier paths (MIT OR Apache-2.0), from vendor/linesweeper, which carries a bound on the
+# sweep's event loop that the registry copy lacks (the README of craft-pathops, "The crossings"). craft-pathops names the vendored copy
+# by path, with the version, so that an app that depends on it by git gets the bounded copy without a [patch.crates-io] entry of its own
+# (a [patch] applies only to the workspace it is in). The [patch.crates-io] entry below is for the crates that name it by version.
+linesweeper = { path = "vendor/linesweeper", version = "0.5" }
 thiserror = "2"
 craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
