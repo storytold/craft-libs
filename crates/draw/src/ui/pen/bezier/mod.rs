@@ -833,13 +833,13 @@ impl<'a> BezierOverlay<'a> {
         if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor)
             && let Some(result) = cx.part_if_declared(EMPTY)
         {
+            let (press, hover) = (result.press, result.hover_pos);
             // The part covers the canvas background, so it owns the cursor the host tool shows off the paths too.
-            if result.hover_pos.is_some() {
+            if hover.is_some() {
                 let tool = if self.tool == BezierTool::AddAnchor { PathTool::AddAnchor } else { PathTool::DeleteAnchor };
-                let cursor = cursor_of(tool, result.press.mods, space.precise());
-                cx.cursor(Cursor::Painted(cursor), CursorPriority::Part);
+                cx.cursor(Cursor::Painted(cursor_of(tool, press.mods, space.precise())), CursorPriority::Part);
             }
-            if matches!(result.press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary) {
+            if matches!(press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary) {
                 self.report.pressed_empty = true;
             }
         }
