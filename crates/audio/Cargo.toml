@@ -45,6 +45,8 @@ opus-decode = []
 qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
 qoa-encode = []
+# ITU-T G.722 wideband sub-band ADPCM speech codec (64 kbit/s).
+g722 = []
 opus-encode = []
 # GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
 gsm = ["gsm-decode", "gsm-encode"]
@@ -112,6 +114,10 @@ required-features = ["gsm"]
 [[test]]
 name = "qoa_oracle"
 required-features = ["qoa"]
+
+[[test]]
+name = "g722_oracle"
+required-features = ["g722"]
 
 [[test]]
 name = "sbc_oracle"
