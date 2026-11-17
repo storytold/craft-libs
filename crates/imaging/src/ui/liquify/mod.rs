@@ -544,7 +544,7 @@ impl LiquifyWorkspace {
                         .fill()
                         .show(ui, |ui, _| {
                             let rail =
-                                ToolRail::new(words.tools.clone(), &slots, &work.edit.settings.tool, &state.last_used).show_rail(ui, |_, _| {});
+                                ToolRail::new(words.tools.clone(), &slots, &work.edit.settings.tool, &state.last_used).show_column(ui, |_, _| {});
                             if let Some(next) = rail.last_used {
                                 state.last_used = next;
                             }
@@ -604,7 +604,7 @@ impl LiquifyWorkspace {
         }
         let result = shown.output.result(|| this.done());
         let events = std::mem::take(&mut this.edit.events);
-        WorkspacePass::new(shown.output.response, events).result(result)
+        WorkspacePass::new(shown.output.response, events).result(result).canvas(this.view.canvas_id)
     }
 
     /// What OK applies.

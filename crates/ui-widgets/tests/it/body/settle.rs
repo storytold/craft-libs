@@ -4,6 +4,7 @@
 
 use crate::values::kit::{AT, INITIAL, Scrub, Seen};
 use craft_ui::buttons::Button;
+use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::{Bind, CommandSet, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::Spinner;
 use craft_ui::layout_components::Stack;
@@ -400,4 +401,33 @@ fn a_command_read_in_a_measured_body_settles_and_runs_when_its_state_changes() {
     scene.settle(&mut frames);
     assert_eq!(scene.frame(&mut frames).1, [0, 0], "it settles again");
     assert!(scene.disabled(&mut frames, 3), "a settled frame keeps Measured disabled");
+}
+
+/// A settled child's replay keeps the arenas it shows: a press that arrives with the pointer, in the frame the pointer
+/// first comes over the child, reaches the radio under it, though the group ran last several frames ago.
+#[trial]
+fn a_press_with_the_pointer_arriving_reaches_a_member_of_a_settled_child() {
+    let mut frames = Frames::new();
+    let picked = Cell::new(1u8);
+    let mut show = |ui: &mut Ui| {
+        let mut value = picked.get();
+        in_region(ui, Rect::from_min_size(ORIGIN, ROOM), |ui| {
+            Lazy::new("radios", 0.0).settles(true).show(ui, |ui| {
+                RadioGroup::new("Size", Bind::bound(&mut value)).show(ui, |ui, _| {
+                    Stack::new().show(ui, |ui, _| {
+                        for (at, label) in [(1u8, "Small"), (2, "Medium"), (3, "Large")] {
+                            Radio::new(at).label(label).show(ui);
+                        }
+                    });
+                })
+            });
+        });
+        picked.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    let medium = frames.texts().iter().find(|run| run.text == "Medium").map(|run| run.rect.center()).expect("Medium is painted");
+    frames.idle(30, &mut show);
+    frames.frame(vec![moved(medium), press(medium)], &mut show);
+    frames.frame(vec![release(medium)], &mut show);
+    assert_eq!(picked.get(), 2, "the press that came with the pointer picks Medium");
 }

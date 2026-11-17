@@ -412,11 +412,13 @@ impl FullWindowWorkspace for FilterGalleryWorkspace {
                 if let Some(checker) = checkerboard {
                     canvas = canvas.checkerboard(checker);
                 }
-                canvas.show(ui);
-                (view, status)
+                let canvas = canvas.show(ui).response.id;
+                (view, status, canvas)
             });
         // Once per pass, after the real run: the view it settled and the render status are stored.
-        dialog.settle(|_, (view, status)| {
+        let mut canvas = None;
+        dialog.settle(|_, (view, status, shown_canvas)| {
+            canvas = Some(*shown_canvas);
             let view = std::mem::take(view);
             let mut workspace = shared.borrow_mut();
             workspace.status = status.clone();
@@ -433,7 +435,7 @@ impl FullWindowWorkspace for FilterGalleryWorkspace {
             events.push(FilterGalleryEvent::Select(workspace.selected));
         }
         let result = dialog.output.result(|| workspace.session.clone());
-        WorkspacePass::new(dialog.output.response, events).result(result)
+        WorkspacePass::new(dialog.output.response, events).result(result).canvas(canvas)
     }
 
     fn json_fields(&self, _source: &Self::Source) -> Option<Value> {

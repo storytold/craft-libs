@@ -3,7 +3,7 @@
 use super::route::layout_of;
 use super::{AltTrack, Batch, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
-use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
+use crate::runtime::egui::input::{self as raw_input, Arrived, KeyEvent, RawInput};
 use crate::runtime::env::Env;
 use crate::runtime::focus::{self, EndKey, KeyUse};
 use crate::runtime::frame::{ChromeToggle, request_chrome_toggle};
@@ -53,8 +53,8 @@ impl Strip<'_> {
     /// Records `event` in `batch` and returns whether egui keeps it.
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
-    /// with the press, in this pass or a later one.
-    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent) -> bool {
+    /// with the press, in this pass or a later one. `at` is the event's arrival time (`Arrived::at`).
+    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent, at: Option<f64>) -> bool {
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
             batch.last_press = None;
@@ -67,7 +67,7 @@ impl Strip<'_> {
                 }
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
-                let kept = self.press(batch, key, &input, repeat);
+                let kept = self.press(batch, key, &input, repeat, at);
                 // The canvas's Space keeps its text from every field, as a claim does.
                 let canvas = batch.presses.get(pushed).is_some_and(|press| press.canvas);
                 batch.last_press = Some(LastPress {
@@ -105,7 +105,7 @@ impl Strip<'_> {
                 if key == Some(Key::Enter) {
                     batch.enter_down = Some(false);
                 }
-                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false });
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at });
                 true
             }
             KeyEvent::Text(text) => {
@@ -150,9 +150,9 @@ impl Strip<'_> {
                     .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == Mods::CMD && shortcut.input.typed == Some(key));
                 if !sent && self.records {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
-                    self.press(batch, key, &input, false);
+                    self.press(batch, key, &input, false, at);
                 } else if !sent {
-                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false });
+                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -244,7 +244,7 @@ impl Strip<'_> {
         }
     }
 
-    fn press(&self, batch: &mut Batch, key: Key, input: &KeyInput, repeat: bool) -> bool {
+    fn press(&self, batch: &mut Batch, key: Key, input: &KeyInput, repeat: bool, at: Option<f64>) -> bool {
         let mods = input.mods;
         match self.use_of(key, input) {
             PressUse::Claimed(chord) => {
@@ -261,7 +261,7 @@ impl Strip<'_> {
                 // keeps its momentary command from firing (production pans under a dialog whatever has focus).
                 batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true });
+                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true, at });
                 }
                 false
             }
@@ -300,7 +300,13 @@ impl Strip<'_> {
             PressUse::Press => {
                 batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: false });
+                    batch.shortcuts.push(Shortcut {
+                        input: *input,
+                        phase: FirePhase::Press,
+                        press: Some(batch.presses.len() - 1),
+                        canvas: false,
+                        at,
+                    });
                 }
                 true
             }
@@ -364,16 +370,39 @@ pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Ve
 /// canvas (a stop with `KeyUse::chrome_key`) in its last pass; `layer` is what the layer stack says about the focus
 /// and `focused` is the `KeyUse` of the focused component, `None` when nothing is focused.
 ///
+/// `pressed` is whether a pointer press moved focus onto the focused component (`focus::origin`).
+///
 /// A modal or dialog layer never toggles: Tab moves focus inside it. In a window with a canvas the toggle is on when
-/// nothing is focused or the canvas is; elsewhere it is on only when the canvas is focused. A component that keeps
-/// Tab never reaches this function: the press is its own.
-fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&KeyUse>) -> bool {
+/// nothing is focused, the canvas is, or a press focused a component other than a text field, as clicking a panel's row
+/// and pressing Tab hides the panels in Photoshop. Tab moves focus from a text field however it got the focus (Tab
+/// commits a typed value and goes to the next field) and from a component the keyboard or a request focused. Elsewhere
+/// it is on only when the canvas is focused. A component that keeps Tab never reaches this function: the press is its
+/// own.
+fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&KeyUse>, pressed: bool) -> bool {
     let closed = matches!(layer, overlay::LayerKeys::Blocked | overlay::LayerKeys::Class(OwnerClass::Dialog));
     if !enabled || closed {
         return false;
     }
     let on_canvas = focused.is_some_and(|keys| keys.chrome_key);
-    if canvas { focused.is_none() || on_canvas } else { on_canvas }
+    let pressed_control = pressed && focused.is_some_and(|keys| keys.owner != OwnerClass::Text);
+    if canvas { focused.is_none() || on_canvas || pressed_control } else { on_canvas }
+}
+
+/// Whether a bare Tab pressed now in the running viewport would toggle its panels rather than move focus, by
+/// [`tab_toggles_chrome`] over the viewport's root env, canvas, layers and focus.
+pub(super) fn tab_toggles_now(ctx: &Context) -> bool {
+    let viewport = crate::runtime::egui::pass::current_viewport(ctx);
+    let enabled = Env::root_for(ctx, viewport).is_some_and(|env| env.tab_toggles_chrome);
+    let focused = focus::focused_rec(ctx);
+    let canvas = focus::canvas_keys(ctx, viewport).is_some();
+    let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
+    let pressed = focused.as_ref().is_some_and(|rec| focus::origin(ctx, rec) == Some(focus::FocusOrigin::Press));
+    tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys), pressed)
+}
+
+/// Whether `chord` is the key of a chrome command (`ChromeCommand`), as the window's keymap binds it.
+pub(super) fn is_chrome_chord(ctx: &Context, chord: &Chord) -> bool {
+    commands::window_shortcuts(ctx).iter().any(|(key, bound)| matches!(key, WindowShortcut::Chrome(_)) && bound == chord)
 }
 
 /// The toggle of the chrome command whose bound chord `input` presses, when that command is enabled.
@@ -387,17 +416,17 @@ pub(super) fn chrome_toggle_of(ctx: &Context, input: &KeyInput) -> Option<Chrome
     commands::resolve(ctx, command).enabled.then_some(command.toggle())
 }
 
-/// The input hook's key steps (H3). Reads only `RawInput` and records keyed by `input.viewport_id`. Returns
-/// whether it removed an event, so the hook asks for a repaint, and the events that wait for the next frame
-/// (`Strip::ends_pass`), in order.
-pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui::Event>) {
+/// The input hook's key steps (H3) on `events`, the input's events with their arrival times. Reads only `RawInput`
+/// and records keyed by `input.viewport_id`. Returns whether it removed an event, so the hook asks for a repaint, and
+/// the events that wait for the next frame (`Strip::ends_pass`), in order.
+pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arrived>) -> (bool, Vec<Arrived>) {
     let viewport = input.viewport_id;
     // The canvas a modal layer keeps open takes the events its reach admits and nothing else (`runtime::sampler`).
-    let (hole, trimmed) = sampler::hook(ctx, input);
+    let (hole, trimmed) = sampler::hook(ctx, input, events);
     // A modal layer in another viewport blocks this one (app-modal, 15.5): nothing below reaches the key stage.
     if overlay::modal_elsewhere(ctx, viewport) {
         let pointer = ctx.input(|state| state.pointer.latest_pos());
-        let (removed, press) = raw_input::drop_under_modal(input, hole.as_ref(), pointer);
+        let (removed, press) = raw_input::drop_under_modal(events, hole.as_ref(), pointer);
         if press {
             overlay::note_dropped_press(ctx, viewport);
         }
@@ -408,13 +437,13 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui
     let record = focus::record(ctx, viewport);
     let keys = record.keys;
     let menu_bar = record.menu_bar && keys.is_none_or(|keys| !matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder));
-    let before = input.events.len();
+    let before = events.len();
     let canvas = focus::canvas_keys(ctx, viewport).filter(|_| keys.is_none() && !record.foreign);
     let lists_edits = |keys: &KeyUse| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit)));
     let edit_chords = if keys.as_ref().or(canvas.as_ref()).is_some_and(lists_edits) { commands::edit_chords(ctx) } else { Arc::default() };
     let window_shortcuts = commands::window_shortcuts(ctx);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
-    let latin = input.latin_layout_chars.clone();
+    let latin = &input.latin_layout_chars;
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let mut claims = focused_claims(&record, stage);
         claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
@@ -442,10 +471,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui
         let mut visible = None;
         let mut later = Vec::new();
         stage.keyed = false;
-        input.events.retain(|event| {
-            let read = raw_input::key_event(event, os, &latin);
+        events.retain(|arrived| {
+            let read = raw_input::key_event(&arrived.event, os, latin);
             if !later.is_empty() || strip.ends_pass(&batch, &read) {
-                later.push(event.clone());
+                later.push(arrived.clone());
                 return false;
             }
             note_down(&mut stage.down, &read);
@@ -455,7 +484,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
                 _ => visible,
             };
-            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, read)
+            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, read, arrived.at)
         });
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);
@@ -471,7 +500,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui
     with(ctx, viewport, |stage| {
         stage.batch = batch;
     });
-    (trimmed || input.events.len() != before, later)
+    (trimmed || events.len() != before, later)
 }
 
 /// Updates the keys held after `event`: a press adds its key, a release removes it, and the window losing focus
@@ -516,11 +545,7 @@ pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
         return nav;
     }
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
-    let enabled = Env::root_for(ctx, viewport).is_some_and(|env| env.tab_toggles_chrome);
-    let focused = focus::focused_rec(ctx);
-    let canvas = focus::canvas_keys(ctx, viewport).is_some();
-    let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
-    let gate = tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys));
+    let gate = tab_toggles_now(ctx);
     for press in tabs {
         match gate.then(|| chrome_toggle_of(ctx, &press.input)).flatten() {
             Some(toggle) if !press.repeat => request_chrome_toggle(ctx, viewport, toggle),

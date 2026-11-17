@@ -156,7 +156,8 @@ pub(crate) struct State {
     pub(crate) press: press::PressState,
     /// The frame whose begin hook ran last; a move in the end hook belongs to the next frame.
     pub(super) frame: u64,
-    /// The stop focus moved onto and the frame whose passes see it.
+    /// The stop focus last moved onto, the frame whose passes see the move, and what moved it there. It stays until focus
+    /// moves again: while the stop keeps the focus, it is how the stop got it (`origin`).
     pub(super) arrived: Option<(u64, StopKey, FocusOrigin)>,
     /// The running pass's begin hook left a Tab to egui (`NavKeys::tab_to_egui`); its end hook takes it.
     pub(super) tab_to_egui: bool,
@@ -669,6 +670,13 @@ pub(crate) fn facts(ctx: &Context, id: Id) -> Facts {
         }
         _ => Facts { at, ..Facts::default() },
     }
+}
+
+/// What moved focus onto the focused stop `rec`, for as long as it keeps the focus; `None` when the focus service did
+/// not move it there (an app's own widget took egui focus).
+pub(crate) fn origin(ctx: &Context, rec: &StopRec) -> Option<FocusOrigin> {
+    let key = rec.stop.key();
+    with(ctx, |state| state.arrived.filter(|(_, arrived, _)| *arrived == key).map(|(.., origin)| origin))
 }
 
 /// `is_focused` and focus arrived by keyboard, so the ring shows.

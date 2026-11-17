@@ -4,13 +4,16 @@ use crate::runtime::commands::{ChromeCommand, CommandInput, CommandSet as _};
 use crate::runtime::env::RootEnv;
 use crate::runtime::focus::{FocusTarget, KeyUse, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
-use crate::runtime::keys::{intents_of, take_shortcuts};
-use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget};
+use crate::runtime::keys::{focus_holds, intents_of, take_shortcuts};
+use crate::testing::focus::{Stop, egui_focused, named_id, press_shape, register_stop, widget};
 use crate::testing::input::{key_press, key_repeat};
+use crate::testing::pointer::click;
 use crate::testing::{Frames, trial};
-use craft_behavior::{Input, Intent};
-use craft_keymap::Overrides;
-use egui::{Id, Key, Modifiers, Ui, ViewportId};
+use craft_behavior::{Input, Intent, Sense};
+use craft_keymap::{Chord, Overrides};
+use egui::{Id, Key, Modifiers, Rect, Ui, ViewportId};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 fn id(name: &str) -> Id {
@@ -82,6 +85,58 @@ fn tab_in_a_window_with_a_canvas_moves_focus_off_a_control() {
     assert_eq!(egui_focused(&frames.ctx), Some(id("canvas")));
     focus_on(&mut frames, &mut show, "field");
     assert!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE).is_empty(), "a text field never loses Tab");
+}
+
+/// In a window with a canvas, a component a press focused leaves Tab to the panels' toggle, as clicking a panel's row and
+/// pressing Tab hides the panels in Photoshop; one the keyboard or a request focused moves focus on Tab. `focus_holds`
+/// names the Tab as the component's exactly when it moves focus.
+#[trial]
+fn tab_toggles_from_a_pressed_component_and_moves_focus_from_a_requested_one() {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut show = move |ui: &mut Ui| {
+        let rect = widget(ui, id("button"));
+        register_stop(ui.ctx(), Stop::new(id("button"), KeyUse::of(Input::Pointer)));
+        press_shape(ui, rect, Sense::CLICK | Sense::TAKE_FOCUS, id("button"));
+        seen.set(rect);
+        stop(ui, "other", KeyUse::of(Input::Pointer));
+        stop(ui, "canvas", KeyUse::CANVAS);
+    };
+    let mut frames = shown(true, &mut show);
+    click(&mut frames, at.get().center(), &mut show);
+    take_output(&frames.ctx);
+    assert_eq!(egui_focused(&frames.ctx), Some(id("button")), "the press focused the button");
+    let tab = Chord::plain(craft_keymap::Key::Tab);
+    assert!(!focus_holds(&frames.ctx, tab), "a pressed component leaves Tab to the toggle");
+    assert_eq!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE), [(ViewportId::ROOT, ChromeToggle::Panels)], "a pressed component");
+    assert_eq!(egui_focused(&frames.ctx), Some(id("button")), "the toggle moved no focus");
+    focus_on(&mut frames, &mut show, "other");
+    assert!(focus_holds(&frames.ctx, tab), "a requested component's Tab moves focus");
+    assert!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE).is_empty(), "a requested component");
+    assert_ne!(egui_focused(&frames.ctx), Some(id("other")), "focus left the component");
+}
+
+/// A text field keeps Tab for going to the next field however it got the focus: clicking into a value, typing and
+/// pressing Tab commits it and moves on, as in Photoshop.
+#[trial]
+fn tab_moves_focus_from_a_pressed_text_field() {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut show = move |ui: &mut Ui| {
+        let rect = widget(ui, id("field"));
+        register_stop(ui.ctx(), Stop::new(id("field"), KeyUse::of(Input::Text)));
+        press_shape(ui, rect, Sense::CLICK | Sense::TAKE_FOCUS, id("field"));
+        seen.set(rect);
+        stop(ui, "other", KeyUse::of(Input::Pointer));
+        stop(ui, "canvas", KeyUse::CANVAS);
+    };
+    let mut frames = shown(true, &mut show);
+    click(&mut frames, at.get().center(), &mut show);
+    take_output(&frames.ctx);
+    assert_eq!(egui_focused(&frames.ctx), Some(id("field")), "the press focused the field");
+    assert!(focus_holds(&frames.ctx, Chord::plain(craft_keymap::Key::Tab)), "the field's Tab moves focus");
+    assert!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE).is_empty(), "a pressed text field toggles nothing");
+    assert_ne!(egui_focused(&frames.ctx), Some(id("field")), "focus left the field");
 }
 
 #[trial]

@@ -203,6 +203,15 @@ pub(crate) struct TextEnv<'a> {
     pub fonts: StackFacts,
 }
 
+/// The baseline of a control's line of `role` whose centre line lies at `centre`: where a one-line text of `role` in
+/// its own face sits with its row centred on the centre line, as `Draw::text` centres a line in a taller rect. Every
+/// text in the line sits on it, whatever its face or size: a select's face, a field's mono digits and the smaller unit
+/// after them.
+pub(crate) fn line_baseline(ctx: &Context, env: &TextEnv<'_>, role: TypeRole, centre: f32) -> f32 {
+    let line = TextRun::new("x").role(role).layout(ctx, env, f32::INFINITY);
+    centre - line.size().y / 2.0 + line.first_baseline
+}
+
 impl TextRun<'_> {
     /// The one text layout behind `MeasureCx::layout`, `PartsCx::layout`, `TextParts::layout` and `Draw::text`: the
     /// paragraph direction comes from the caller's env, so measure and paint agree. `max_width` is the room; a

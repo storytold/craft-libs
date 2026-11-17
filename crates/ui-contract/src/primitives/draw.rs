@@ -290,6 +290,23 @@ impl<'a> Draw<'a> {
         layout
     }
 
+    /// Paints a one-line `run` as `text` does, on the baseline of a line of `line` centred on the middle of `rect`'s
+    /// height ([`line_baseline`](Self::line_baseline)): a field's unit, in a smaller role than the field's text, sits
+    /// on the text's baseline.
+    pub fn text_on_line(&self, rect: Rect, run: &TextRun<'_>, line: TypeRole) -> TextLayout {
+        let layout = run.layout(self.painter.ctx(), &self.text_env(), rect.width());
+        let x = self.text_x(rect, run, &layout);
+        let baseline = self.line_baseline(rect.center().y, line);
+        self.galley(Pos2::new(x, baseline - layout.first_baseline), &layout);
+        layout
+    }
+
+    /// The baseline of a control's line of `role` whose centre line lies at `centre`: every text in the line sits on
+    /// it, whatever its face or size (`text::line_baseline`).
+    pub fn line_baseline(&self, centre: f32, role: TypeRole) -> f32 {
+        super::text::line_baseline(self.painter.ctx(), &self.text_env(), role, centre)
+    }
+
     /// Lays `text` out in `rect`'s width and paints it top aligned, its block placed in `rect` by `text.align` (Start
     /// and End swap sides under right-to-left). Each run keeps its own font, size and colour; a disabled component's
     /// runs paint at `Opacity::DISABLED`, as `data_fill` does.

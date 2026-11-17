@@ -39,6 +39,11 @@ const OUTSIDE: PartKey = PartKey::new("outside");
 /// and the focus ring use. One part key carries one shape, so the side cannot reuse the handle's key.
 const EDGE: PartKey = PartKey::new("edge");
 
+/// The pointer-only parts of a corner along its two sides: `CORNER_REACH.at(2 * k)` is the stretch of side `k`'s band
+/// next to corner `k`, `CORNER_REACH.at(2 * k + 1)` that of the side before it. On the band a press near a corner takes
+/// the corner, as PhotoCraft's box does, beside the corner's round handle `BOX.at(Corner(k))`.
+const CORNER_REACH: PartKey = PartKey::new("cornerReach");
+
 /// The pointer-only move part at the centre of a box whose reference point is hidden.
 const CENTRE: PartKey = PartKey::new("centre");
 
@@ -58,6 +63,7 @@ const RING_SUB: u8 = 1;
 
 /// The keyboard paths of the pointer-only parts: the midpoint handle, and the arrow keys.
 const EDGE_BY_KEY: &str = "the edge's midpoint handle";
+const CORNER_BY_KEY: &str = "the corner's handle";
 const MOVE_BY_KEY: &str = "the arrow keys";
 
 /// The side of the enlarged corner handle of an overflowing text frame, in standard handle sides.
@@ -75,9 +81,10 @@ const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
 
 /// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a handle reaches 8 from its
-/// point, inside the box as outside, each side's band reaches 11 outside it and none inside, the reference point and
-/// the centre reach 12, the rotate pointer shows within 36 of a corner, the rotate band runs from 5 to 18 outside it).
-/// The handle reach and the side bands are PhotoCraft's: inside the box only a handle's own reach is the box's, so a
+/// point, inside the box as outside, each side's band reaches 11 outside it and none inside, and the band's first
+/// quarter of the side from each corner, at most 11 along it, is that corner's; the reference point and the centre
+/// reach 12, the rotate pointer shows within 36 of a corner, the rotate band runs from 5 to 18 outside it). The handle
+/// reach, the side bands and the corners' share of them are PhotoCraft's: inside the box only a handle's own reach is the box's, so a
 /// press there off the handles reaches what lies under the box (a text editor under a paragraph frame).
 const HANDLE_REACH_IN_HANDLES: f32 = 1.0;
 const SIDE_BAND_IN_HANDLES: f32 = 1.375;
@@ -615,6 +622,11 @@ impl<'a> TransformBox<'a> {
             return parts;
         }
         parts.extend((0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))).map(|k| (EDGE.at(u64::from(k)), BoxPart::Edge(k))));
+        parts.extend(
+            (0..4u8)
+                .filter(|&k| self.rules.allows(BoxPart::Corner(k)))
+                .flat_map(|k| [0, 1].map(|end| (CORNER_REACH.at(2 * u64::from(k) + end), BoxPart::Corner(k)))),
+        );
         if self.declares_centre() {
             parts.push((CENTRE.at(0), BoxPart::Inside));
         }
@@ -915,15 +927,20 @@ impl Component for TransformBox<'_> {
 
     /// A host keeps the box in f32 (a layer's transform, a text layer's box) and gives a proposal back rounded to
     /// it: each corner and the pivot within f32 precision of the proposal is the proposal, not a change of the
-    /// document under the drag.
+    /// document under the drag. The host computes every corner from the same box and transform, so a corner near
+    /// the origin holds the precision of the box's largest coordinate, not its own.
     fn same_value(&self, proposed: &BoxState, host: &BoxState) -> bool {
-        let near = |a: Point, b: Point| craft_behavior::same_in_f32(a.x, b.x) && craft_behavior::same_in_f32(a.y, b.y);
+        let points = proposed.quad.iter().chain(&host.quad).chain([&proposed.pivot, &host.pivot]);
+        let magnitude = points.fold(0.0f64, |most, point| most.max(point.x.abs()).max(point.y.abs()));
+        let same = |a: f64, b: f64| craft_behavior::same_in_f32_at(a, b, magnitude);
+        let near = |a: Point, b: Point| same(a.x, b.x) && same(a.y, b.y);
         proposed.quad.iter().zip(&host.quad).all(|(a, b)| near(*a, *b)) && near(proposed.pivot, host.pivot)
     }
 
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
-    /// side as a pointer-only band outside it, the centre and the move strips where declared, and the outside. A
-    /// handle, the reference point and the centre rank alike, so the nearest wins where they overlap on a small box;
+    /// side as a pointer-only band outside it, each corner's stretch of the two bands beside it, the centre and the move
+    /// strips where declared, and the outside. A handle, a corner's stretch, the reference point and the centre rank
+    /// alike, so the nearest wins where they overlap on a small box;
     /// they rank above a side, which ranks above the inside, which ranks above the outside. Every part takes a press's
     /// click with its drag, so a press on the box is the box's alone, not split with what lies under it (8.3). A live
     /// line's controls declare its two ends only.
@@ -976,6 +993,17 @@ impl Component for TransformBox<'_> {
                 .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)))
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
+        }
+        for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Corner(k))) {
+            let corner = usize::from(k);
+            // The side that starts at the corner, then the one that ends there.
+            for (end, side) in [(0u64, corner), (1, (corner + 3) % 4)] {
+                let Some(reach) = corner_reach(&quad, side, corner, style.side_band) else { continue };
+                cx.part(CORNER_REACH.at(2 * u64::from(k) + end), reach)
+                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Corner(k)))
+                    .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
+                    .pointer_only(CORNER_BY_KEY);
+            }
         }
         if self.declares_centre() {
             let centre = quad.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
@@ -1206,15 +1234,38 @@ fn outside_regions(quad: &[Pos2; 4], within: Rect) -> [Vec<Pos2>; 4] {
 /// with no length is its line.
 fn side_band(quad: &[Pos2; 4], side: usize, width: f32) -> HitShape {
     let (a, b) = (quad[side], quad[(side + 1) % 4]);
-    let along = b - a;
+    match outward(quad, side) {
+        Some(out) => band_along(a, b, out, width),
+        None => HitShape::segment(a, b),
+    }
+}
+
+/// The stretch of side `side`'s band next to its end `corner`: a quarter of the side, at most `width` along it, as far
+/// out as the band. `None` for a side with no length.
+fn corner_reach(quad: &[Pos2; 4], side: usize, corner: usize, width: f32) -> Option<HitShape> {
+    let out = outward(quad, side)?;
+    let other = if corner == side { quad[(side + 1) % 4] } else { quad[side] };
+    let from = quad[corner];
+    let along = other - from;
+    let reach = (along.length() * 0.25).min(width);
+    Some(band_along(from, from + along.normalized() * reach, out, width))
+}
+
+/// The unit normal pointing out of the box `quad` from side `side`, `None` for a side with no length.
+fn outward(quad: &[Pos2; 4], side: usize) -> Option<Vec2> {
+    let along = quad[(side + 1) % 4] - quad[side];
     if along.length() < 1e-3 {
-        return HitShape::segment(a, b);
+        return None;
     }
     // The winding tells outside from inside, as `quad::outset` reads it.
     let area: f32 = (0..4).map(|i| quad[i].x * quad[(i + 1) % 4].y - quad[(i + 1) % 4].x * quad[i].y).sum();
     let d = along.normalized();
-    let out = Vec2::new(d.y, -d.x) * if area >= 0.0 { 1.0 } else { -1.0 };
-    // Half a point inside the line still counts as on it.
+    Some(Vec2::new(d.y, -d.x) * if area >= 0.0 { 1.0 } else { -1.0 })
+}
+
+/// The band from `a` to `b` reaching `width` out along `out`, with the line itself: half a point inside the line
+/// still counts as on it.
+fn band_along(a: Pos2, b: Pos2, out: Vec2, width: f32) -> HitShape {
     let (inner, outer) = (out * -SIDE_LINE_INSIDE, out * width);
     HitShape::Polygon(vec![a + inner, b + inner, b + outer, a + outer])
 }

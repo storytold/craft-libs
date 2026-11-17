@@ -104,3 +104,25 @@ fn a_check_box_label_shares_the_line_of_a_face_beside_it() {
     let (label, face) = (baseline_of(&fixture, "Anti-alias"), baseline_of(&fixture, "Layer"));
     assert!((label - face).abs() <= 0.5, "the check box label lines up with the select's text: label {label}, select {face}");
 }
+
+/// In an options bar, a number field's mono digits, its smaller unit and the text of a select beside it share one
+/// baseline. Guards against each run centring its own line box: the mono face's and the caption's lines put their
+/// baselines elsewhere than the body face's, and the "100" and the "%" sat off the select's line.
+#[trial]
+fn a_bar_number_field_sets_its_digits_and_unit_on_the_line_of_a_select() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::contract::Entry;
+    use craft_ui::pickers::Select;
+    use craft_ui::runtime::env::UnitKind;
+    let mut fixture = Fixture::new(|ui| {
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            let entries = [Entry::new(0u8, "Normal"), Entry::new(1, "Multiply")];
+            Select::new("Mode", Bind::given(0u8), &entries).show(ui);
+            NumberField::new("Opacity", Bind::given(Some(100.0))).unit_kind(UnitKind::Percent).show(ui);
+        });
+    });
+    fixture.settle();
+    let (face, digits, unit) = (baseline_of(&fixture, "Normal"), baseline_of(&fixture, "100"), baseline_of(&fixture, "%"));
+    assert!((digits - face).abs() < 0.5, "the digits sit on the select's baseline: digits {digits}, select {face}");
+    assert!((unit - face).abs() < 0.5, "the unit sits on the select's baseline: unit {unit}, select {face}");
+}

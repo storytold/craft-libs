@@ -309,6 +309,7 @@ impl FullWindowWorkspace for WideAngleWorkspace {
         let preview_on = Cell::new(self.preview_on);
         let actions = RefCell::new(Vec::<Action>::new());
         let zoom_percent = Cell::new(self.zoom_percent);
+        let shown_canvas = Cell::new(None);
         let add = Cell::new(self.add_requested);
         let common = env.words::<CommonWords>();
         let ctx = ui.ctx().clone();
@@ -368,7 +369,7 @@ impl FullWindowWorkspace for WideAngleWorkspace {
                 }
 
                 Row::new().fill().show(ui, |ui, _| {
-                    let rail = ToolRail::new(words.tools.clone(), &slots, &body.tool, &body.last_used).show_rail(ui, |_, _| {});
+                    let rail = ToolRail::new(words.tools.clone(), &slots, &body.tool, &body.last_used).show_column(ui, |_, _| {});
                     next = rail.select.or(next);
                     if let Some(last_used) = rail.last_used {
                         body.last_used = last_used;
@@ -406,6 +407,7 @@ impl FullWindowWorkspace for WideAngleWorkspace {
                     let out = canvas.show(ui);
                     zoom_percent.set(view.zoom_percent());
                     body.canvas = Some(out.response.id);
+                    shown_canvas.set(body.canvas);
 
                     let mut queued = actions.borrow_mut();
                     queued.extend(body.constraint.take_edits().into_iter().map(Action::Constraint));
@@ -504,7 +506,7 @@ impl FullWindowWorkspace for WideAngleWorkspace {
             }
         }
         let result = shown.output.result(|| self.session.clone());
-        WorkspacePass::new(shown.output.response.clone(), events).result(result)
+        WorkspacePass::new(shown.output.response.clone(), events).result(result).canvas(shown_canvas.get())
     }
 
     fn json_fields(&self, _source: &Self::Source) -> Option<Value> {

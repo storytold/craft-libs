@@ -11,12 +11,13 @@
     cl doctor                                     check the manifests for drift from the one feature resolution
     cl cargo <args...>                            cargo through the job pool, nothing added
 
-In a PhotoCraft workspace (one with photocraft-ui-egui) the commands are different; see "PhotoCraft" below:
+In an app workspace (one whose root Cargo.toml has `[workspace.metadata.cl]`) the commands are different; see "App
+workspaces" below:
 
     cl test <crate|all> [--unit] [--no-run] [cargo args] [-- test args]
     cl check <crate>                              the same selection, cargo check
-    cl build snapshot                             the snapshot example, on the same selection
-    cl doctor                                     the 11 packages exist; the target holds one build of each pinned crate
+    cl build <example>                            the example, on the same selection
+    cl doctor                                     the selected packages exist; the target holds one build of each expected crate
 
 Every cargo command runs through the command in CL_LAUNCHER when it is set (for example a wrapper that gives several
 builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. The binaries cl runs
@@ -37,21 +38,19 @@ Records: every build cl composes passes cargo's --timings (a report per build in
 200 kept), and every cl command appends one line to <target>/cl.log: when it started, the command, the build's and
 the test runs' wall time, the exit code and the build's report.
 
-PhotoCraft: cl finds its workspace with `git rev-parse --show-toplevel` from the current directory, so
-`/path/to/craft-libs/tools/cl` run inside a PhotoCraft tree works on that tree. There every command selects the same 11
-packages (PC_SELECTION), in test mode and without `--features` (the test features come from dev-dependencies), because
-each package brings features the others lack and a selection that drops one builds a second copy of egui, photocraft-io
-or craft-affinity and everything above it. The environment is fixed too: TMPDIR=/tmp (PhotoCraft's tests keep a scratch
-reserve that a larger default TMPDIR can trip), RUST_MIN_STACK, CARGO_INCREMENTAL and CRAFT_FONTS_DIR unset (the text
-crate's build script tracks the last: any change rebuilds it and everything above). In a PhotoCraft workspace the
-launcher is CL_PC_LAUNCHER and the runner CL_PC_RUNNER (the roles CL_LAUNCHER and CL_RUNNER have in craft-libs, which
-do not apply there); each defaults to running directly. Test binaries run three at a time, longest first.
+App workspaces: cl finds its workspace with `git rev-parse --show-toplevel` from the current directory, so
+`/path/to/craft-libs/tools/cl` run inside an app's tree works on that tree. An app declares its settings in its root
+Cargo.toml's `[workspace.metadata.cl]` (APP_KEYS; docs/development.md "App workspaces" has each key). Every command
+selects the same packages (`selection`), in test mode and without `--features` (the test features come from
+dev-dependencies), because each package brings features the others lack and a selection that drops one builds a second
+copy of the shared crates below them and everything above. Every command runs with `set_env` set and `unset_env`
+removed. Test binaries run `run_slots` at a time, longest first (`default_seconds` before a run has recorded times),
+with `--test-threads <test_threads>`; a binary named in `shard` runs as that many shards.
 
 Guards: `--all-features`, `--bins` and workspace-wide builds are refused with the reason; after every command, a new
-build of a framework crate (in PhotoCraft also egui, eframe, photocraft-ui-egui, photocraft-io, craft-affinity) in the
-target directory is named, with its feature set; CL_DRY_RUN=1 prints the composed cargo command (and the PhotoCraft
-environment) and runs nothing; `cl doctor` (also run before every
-command, it reads a few manifests) reports manifest lines that would bring a second build back.
+build of a framework crate (in an app workspace also of each `tracked` crate) in the target directory is named, with its
+feature set; CL_DRY_RUN=1 prints the composed cargo command (and an app's environment) and runs nothing; `cl doctor`
+(also run before every command, it reads a few manifests) reports manifest lines that would bring a second build back.
 """
 
 import json
@@ -79,33 +78,22 @@ REFUSED = {
     "--all-targets": "it builds every binary and benchmark too; use `cl check` or `cl test` (--tests)",
 }
 TIMING_REPORTS_KEPT = 200
-# PhotoCraft workspace (marked by its UI package): the one selection every command builds with.
-PC_MARKER = "photocraft-ui-egui"
-PC_SELECTION = [
-    "photocraft-ui-egui", "photocraft-engine", "photocraft", "photocraft-algo", "photocraft-automation", "photocraft-text",
-    "photocraft-tablet", "photocraft-cli", "photocraft-paint", "photocraft-io", "photocraft-gpu",
-]
-# Crates whose new builds are named after a PhotoCraft command, besides the framework's.
-PC_TRACKED = ["egui", "eframe", "photocraft-ui-egui", "photocraft-io", "craft-affinity"]
-# The feature sets of round D's one build of each pinned crate (`cl doctor` compares the target's builds with them).
-PC_FEATURES = {
-    "egui": {"bytemuck", "default_fonts", "monochrome_emoji_fonts", "persistence", "ron", "serde"},
-    "photocraft-io": {"pdf-editable", "testgen"},
-    "craft-affinity": {"synth"},
-    "craft-ui-contract": {"default", "snapshot", "testing"},
-    "craft-imaging": {"default", "screen-testing", "ui"},
+# An app workspace's `[workspace.metadata.cl]`: each key, its type and its value when the table leaves it out.
+APP_KEYS = {
+    "selection": (list, None),
+    "tracked": (list, []),
+    "expected_features": (dict, {}),
+    "unset_env": (list, []),
+    "set_env": (dict, {}),
+    "shard": (dict, {}),
+    "default_seconds": (dict, {}),
+    "run_slots": (int, 1),
+    "test_threads": (int, None),
 }
-# Environment removed from every PhotoCraft command: each changes a build input, so a command that differs from the others rebuilds.
-PC_UNSET = ["RUST_MIN_STACK", "CARGO_INCREMENTAL", "CRAFT_FONTS_DIR"]
-PC_RUN_SLOTS = 3
-PC_TEST_THREADS = "4"
-PC_SHARDS = 3
-# Seconds per binary when no earlier run recorded times (round D): orders the first run, longest first.
-PC_DEFAULT_SECONDS = {"photocraft-ui-egui/photocraft_ui_egui": 389.0, "photocraft-ui-egui/it": 221.0, "photocraft-engine/photocraft_engine": 97.0}
-PC_BUILDING = {"test", "check", "build", "run", "bench", "clippy", "doc", "rustc"}
-PC_FEATURE_FLAGS = ("--features", "-F", "--no-default-features")
-# Set by main() when the workspace is a PhotoCraft one.
-PHOTOCRAFT = False
+APP_BUILDING = {"test", "check", "build", "run", "bench", "clippy", "doc", "rustc"}
+APP_FEATURE_FLAGS = ("--features", "-F", "--no-default-features")
+# Set by main() from the workspace's `[workspace.metadata.cl]` in an app workspace; None in craft-libs.
+APP = None
 DRY_RUN = bool(os.environ.get("CL_DRY_RUN"))
 # What cl.log records about this command; filled in as it runs.
 RECORD = {"start": time.time(), "target": None, "build": None, "run": 0.0, "report": ""}
@@ -135,12 +123,38 @@ def worktree():
 
 
 def metadata(top):
+    """The workspace's packages by name, and its `[workspace.metadata.cl]` table (None when it has none)."""
     out = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"], cwd=top, capture_output=True, text=True
     )
     if out.returncode != 0:
         fail("cargo metadata failed:\n" + out.stderr)
-    return {p["name"]: p for p in json.loads(out.stdout)["packages"]}
+    data = json.loads(out.stdout)
+    return {p["name"]: p for p in data["packages"]}, (data.get("metadata") or {}).get("cl")
+
+
+def app_config(table):
+    """The app mode's settings from `[workspace.metadata.cl]`, every key filled in; refuses unknown keys and wrong types."""
+    unknown = sorted(set(table) - set(APP_KEYS))
+    if unknown:
+        fail(f"[workspace.metadata.cl]: unknown keys {unknown}; the keys are {', '.join(APP_KEYS)} (docs/development.md)")
+    config = {}
+    for key, (kind, default) in APP_KEYS.items():
+        value = table.get(key, default)
+        if key == "selection" and value is None:
+            fail("[workspace.metadata.cl]: `selection` is missing; it lists the packages every cl command selects")
+        if value is not None and (not isinstance(value, kind) or isinstance(value, bool)):
+            fail(f"[workspace.metadata.cl]: `{key}` must be {({list: 'a list', dict: 'a table', int: 'an integer'})[kind]}")
+        config[key] = value
+    for key in ("shard", "default_seconds"):
+        for name, value in config[key].items():
+            if "/" not in name or not isinstance(value, (int, float)) or isinstance(value, bool):
+                fail(f"[workspace.metadata.cl.{key}]: `{name}` must be \"<package>/<test target>\" with a number")
+    if any(not isinstance(v, list) for v in config["expected_features"].values()):
+        fail("[workspace.metadata.cl.expected_features]: each crate's value is a list of features")
+    if any(not isinstance(v, str) for v in config["set_env"].values()):
+        fail("[workspace.metadata.cl.set_env]: each value is a string")
+    return config
 
 
 def package(packages, name):
@@ -174,8 +188,8 @@ def own_targets(p):
 
 def doctor(top, packages, quiet=False):
     """Manifest lines that would bring the variant churn back. Returns the number of problems."""
-    if PHOTOCRAFT:
-        return pc_doctor(top, packages, quiet)
+    if APP:
+        return app_doctor(top, packages, quiet)
     problems = []
     for path, pattern, why in PINS:
         text = open(os.path.join(top, path)).read()
@@ -229,7 +243,7 @@ def target_dir(top, env):
 
 
 def tracked():
-    return FRAMEWORK + (PC_TRACKED if PHOTOCRAFT else [])
+    return FRAMEWORK + (APP["tracked"] if APP else [])
 
 
 def variants(target):
@@ -312,21 +326,20 @@ def cargo(top, cargo_args, json_out=False, timings=True):
         if arg in REFUSED:
             fail(f"{arg} refused: {REFUSED[arg]}")
     env = dict(os.environ)
-    if PHOTOCRAFT:
-        pc_guard(cargo_args)
-        pc_env(env)
+    if APP:
+        app_guard(cargo_args)
+        app_env(env)
     target = target_dir(top, env)
     if not DRY_RUN:
         RECORD["target"] = target
     if timings:
         cargo_args = cargo_args[:1] + ["--timings"] + cargo_args[1:]
-    launcher = env.get("CL_PC_LAUNCHER" if PHOTOCRAFT else "CL_LAUNCHER", "")
-    cmd = shlex.split(launcher) + ["cargo"] + cargo_args
+    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()
     if DRY_RUN:
-        if PHOTOCRAFT:
-            print(f"cl: env TMPDIR={env['TMPDIR']}; unset " + " ".join(PC_UNSET), file=sys.stderr)
+        if APP:
+            print("cl: env " + " ".join(f"{k}={v}" for k, v in APP["set_env"].items()) + "; unset " + " ".join(APP["unset_env"]), file=sys.stderr)
         print("cl: CL_DRY_RUN set, nothing run", file=sys.stderr)
         return 0, target, []
     before = variants(target)
@@ -408,34 +421,33 @@ def test(top, packages, cargo_args, test_args):
     sys.exit(0)
 
 
-def is_photocraft(packages):
-    return PC_MARKER in packages
-
-
-def pc_env(env):
-    """The one environment every PhotoCraft command runs in. /tmp for the scratch files: a TMPDIR on a nearly full disk
-    trips PhotoCraft's 5% scratch reserve."""
-    env["TMPDIR"] = "/tmp"
-    for name in PC_UNSET:
+def app_env(env):
+    """The one environment every command of an app workspace runs in: `set_env` set, `unset_env` removed."""
+    env.update(APP["set_env"])
+    for name in APP["unset_env"]:
         env.pop(name, None)
     return env
 
 
-def pc_selected():
-    return [x for p in PC_SELECTION for x in ("-p", p)]
+def app_selected():
+    return [x for p in APP["selection"] for x in ("-p", p)]
 
 
-def pc_package(name):
-    for candidate in (name, "photocraft-" + name):
-        if candidate in PC_SELECTION:
-            return candidate
-    fail(f"{name} is not one of the selected packages: all, " + ", ".join(p.removeprefix("photocraft-") or p for p in PC_SELECTION))
+def app_package(name):
+    """The selected package named `name`, or named `<word>-<name>` (`engine` for `photocraft-engine`)."""
+    selection = APP["selection"]
+    if name in selection:
+        return name
+    matches = [p for p in selection if p.partition("-")[2] == name]
+    if len(matches) == 1:
+        return matches[0]
+    fail(f"{name} {'names several' if matches else 'is not one'} of the selected packages: all, " + ", ".join(matches or selection))
 
 
-def pc_guard(args):
-    """Refuses the PhotoCraft commands that bring a second copy of egui, photocraft-io, craft-affinity or the framework."""
+def app_guard(args):
+    """Refuses the commands that bring a second copy of a shared crate: a selection other than the app's, or features."""
     sub = args[0] if args else ""
-    if sub not in PC_BUILDING:
+    if sub not in APP_BUILDING:
         return
     own = args[:args.index("--")] if "--" in args else args
     named = []
@@ -446,26 +458,26 @@ def pc_guard(args):
             named.append(a.split("=", 1)[1])
         elif a.startswith("-p") and len(a) > 2:
             named.append(a[2:])
-    if set(named) != set(PC_SELECTION):
-        fail("a PhotoCraft cargo command names all 11 packages or none of cl's: one package alone (or the default members) resolves "
-             "egui, eframe, photocraft-io and craft-affinity with other features and builds a second copy of each and of everything "
-             "above them; use `cl test <crate>`, `cl check <crate>`, `cl build snapshot`")
+    if set(named) != set(APP["selection"]):
+        fail(f"a cargo command in this workspace names all {len(APP['selection'])} packages of [workspace.metadata.cl] `selection` "
+             "or none of cl's: one package alone (or the default members) resolves the shared crates with other features and "
+             "builds a second copy of each and of everything above them; use `cl test <crate>`, `cl check <crate>`, `cl build <example>`")
     for a in own:
-        if a in PC_FEATURE_FLAGS or a.startswith("--features=") or a.startswith("-F"):
+        if a in APP_FEATURE_FLAGS or a.startswith("--features=") or a.startswith("-F"):
             fail(f"{a} refused: the test features come from the dev-dependencies; a feature on the command line changes the resolution of every crate above it")
     if sub == "test" and not any(a in ("--lib", "--tests", "--example") for a in own):
         fail("a plain `cargo test` also builds doc tests, bins and examples in a different mode; pass `--lib --tests` (`cl test <crate>`)")
 
 
-def pc_builds(target):
-    """Feature sets of the pinned crates' builds in the target dir: {crate: {frozenset(features): builds}}."""
+def app_builds(target):
+    """Feature sets of the `expected_features` crates' builds in the target dir: {crate: {frozenset(features): builds}}."""
     found = {}
     fp = os.path.join(target, "debug", ".fingerprint")
     if not os.path.isdir(fp):
         return found
     for d in os.listdir(fp):
         m = re.match(r"(.+)-([0-9a-f]{16})$", d)
-        if not m or m.group(1) not in PC_FEATURES:
+        if not m or m.group(1) not in APP["expected_features"]:
             continue
         for f in os.listdir(os.path.join(fp, d)):
             if not (f.startswith("lib-") and f.endswith(".json")):
@@ -481,13 +493,14 @@ def pc_builds(target):
     return found
 
 
-def pc_doctor(top, packages, quiet=False):
-    """The 11 packages exist; unless `quiet`, the target holds one build of each pinned crate with the expected features."""
-    problems = [f"{p}: not a package of this workspace; the selection of every cl command names it" for p in PC_SELECTION if p not in packages]
+def app_doctor(top, packages, quiet=False):
+    """The selected packages exist; unless `quiet`, the target holds one build of each `expected_features` crate, with
+    those features."""
+    problems = [f"{p}: not a package of this workspace; the selection of every cl command names it" for p in APP["selection"] if p not in packages]
     if not quiet:
         target = target_dir(top, dict(os.environ))
-        for crate, sets in sorted(pc_builds(target).items()):
-            expected = PC_FEATURES[crate]
+        for crate, sets in sorted(app_builds(target).items()):
+            expected = APP["expected_features"][crate]
             if len(sets) > 1:
                 problems.append(f"{target}: {len(sets)} builds of {crate} with different features: " +
                                 " | ".join(",".join(sorted(f)) or "-" for f in sets) + "; a second copy of everything above it came with them")
@@ -497,11 +510,12 @@ def pc_doctor(top, packages, quiet=False):
     for problem in problems:
         print(f"cl doctor: {problem}", file=sys.stderr)
     if not problems and not quiet:
-        print("cl doctor: the 11 packages exist and the target holds one build of each pinned crate", file=sys.stderr)
+        print(f"cl doctor: the {len(APP['selection'])} selected packages exist and the target holds one build of each "
+              "expected_features crate", file=sys.stderr)
     return len(problems)
 
 
-def pc_shards(names, n=PC_SHARDS):
+def app_shards(names, n):
     """Splits a test binary's tests into `n` shards of about the same size by module. Returns [(filters, skips)]: shard i
     runs the tests matching its filters and none of its skips (libtest filters are substrings); the last shard has no
     filter and skips every other shard's, so each test runs exactly once. None when no exact split is found."""
@@ -546,11 +560,11 @@ def pc_shards(names, n=PC_SHARDS):
     return plan if len(plan) > 1 else None
 
 
-def pc_times_path(target):
+def app_times_path(target):
     return os.path.join(target, "cl-test-times.json")
 
 
-def pc_run_one(job, env, runner, target_args):
+def app_run_one(job, env, runner, target_args):
     """Runs one binary (or shard) and returns (job, return code, seconds, output)."""
     cmd = shlex.split(runner) + [job["exe"]] + target_args + job["args"]
     started = time.time()
@@ -558,7 +572,7 @@ def pc_run_one(job, env, runner, target_args):
     return job, proc.returncode, time.time() - started, proc.stdout
 
 
-def pc_parse(output):
+def app_parse(output):
     """(passed, failed, failed test names, overflowed stacks) from a libtest output."""
     passed = failed = 0
     for m in re.finditer(r"^test result: [A-Za-z]+\. (\d+) passed; (\d+) failed", output, re.M):
@@ -570,24 +584,28 @@ def pc_parse(output):
     return passed, failed, names, output.count("overflowed its stack")
 
 
-def pc_test(top, packages, rest):
+def app_test(top, packages, rest):
     if not rest:
         fail("cl test <crate|all> [--unit] [--no-run] [cargo args] [-- test args]")
     name, args = rest[0], rest[1:]
     mine, theirs = (args[:args.index("--")], args[args.index("--") + 1:]) if "--" in args else (args, [])
     unit, no_run = "--unit" in mine, "--no-run" in mine
     mine = [a for a in mine if a not in ("--unit", "--no-run")]
-    only = None if name == "all" else pc_package(name)
-    build = ["test", "--no-run", "--message-format=json-render-diagnostics", "--lib"] + ([] if unit else ["--tests"]) + ["--no-fail-fast"] + pc_selected() + mine
+    only = None if name == "all" else app_package(name)
+    build = ["test", "--no-run", "--message-format=json-render-diagnostics", "--lib"] + ([] if unit else ["--tests"]) + ["--no-fail-fast"] + app_selected() + mine
     rc, target, messages = cargo(top, build, json_out=True)
     if rc != 0:
         sys.exit(rc)
-    env = pc_env(dict(os.environ))
-    runner = env.get("CL_PC_RUNNER", "")
+    env = app_env(dict(os.environ))
+    runner = env.get("CL_RUNNER", "")
+    filtered = any(not a.startswith("-") for a in theirs)
+    threads = APP["test_threads"]
+    thread_args = [] if threads is None or any(a.startswith("--test-threads") for a in theirs) else ["--test-threads", str(threads)]
+    slots = APP["run_slots"]
     if DRY_RUN:
-        print(f"cl: would run {only or 'every binary'}{' through `' + runner + '`' if runner else ''} ({PC_RUN_SLOTS} at a time, longest first), "
-              f"arguments: {' '.join(theirs)} --test-threads {PC_TEST_THREADS}"
-              + ("" if any(not a.startswith("-") for a in theirs) else "; the photocraft-ui-egui lib binary in 3 shards"), file=sys.stderr)
+        shards = "" if filtered else "".join(f"; {k} in {n} shards" for k, n in APP["shard"].items() if not only or k.split("/")[0] == only)
+        print(f"cl: would run {only or 'every binary'}{' through `' + runner + '`' if runner else ''} ({slots} at a time, longest first), "
+              f"arguments: {' '.join(theirs + thread_args)}{shards}", file=sys.stderr)
         sys.exit(0)
     by_manifest = {p["manifest_path"]: p["name"] for p in packages.values()}
     binaries = []
@@ -595,7 +613,7 @@ def pc_test(top, packages, rest):
         if m.get("reason") != "compiler-artifact" or not m.get("executable") or not m["profile"]["test"]:
             continue
         package = by_manifest.get(m["manifest_path"], "")
-        if package not in PC_SELECTION or (only and package != only):
+        if package not in APP["selection"] or (only and package != only):
             continue
         lib = any(k in ("lib", "rlib", "proc-macro") for k in m["target"]["kind"])
         binaries.append((package, m["target"]["name"], lib, m["executable"], os.path.dirname(m["manifest_path"])))
@@ -607,40 +625,47 @@ def pc_test(top, packages, rest):
         sys.exit(0)
     run_env = dict(env)
     run_env.setdefault("RUST_BACKTRACE", "1")
-    filtered = any(not a.startswith("-") for a in theirs)
-    thread_args = [] if any(a.startswith("--test-threads") for a in theirs) else ["--test-threads", PC_TEST_THREADS]
     try:
-        times = json.load(open(pc_times_path(target)))
+        times = json.load(open(app_times_path(target)))
     except (OSError, ValueError):
         times = {}
     jobs = []
     for package, tname, lib, exe, cwd in binaries:
         job_env = dict(run_env, CARGO_MANIFEST_DIR=cwd, CARGO_PKG_NAME=package)
         key = f"{package}/{tname}"
-        base = {"exe": exe, "cwd": cwd, "env": job_env, "label": f"{package.removeprefix('photocraft-') if package != 'photocraft' else package} {'lib' if lib else tname}", "key": key, "args": list(theirs)}
+        base = {"exe": exe, "cwd": cwd, "env": job_env, "label": f"{package} {'lib' if lib else tname}", "key": key, "args": list(theirs)}
         plan = None
-        if package == PC_MARKER and lib and not filtered:
+        shards = int(APP["shard"].get(key, 1))
+        if shards > 1 and not filtered:
             listing = subprocess.run([exe, "--list", "--format", "terse"], cwd=cwd, env=job_env, capture_output=True, text=True, errors="replace")
             tests = [l[:-len(": test")] for l in listing.stdout.splitlines() if l.endswith(": test")]
-            plan = pc_shards(tests) if listing.returncode == 0 and tests else None
+            plan = app_shards(tests, shards) if listing.returncode == 0 and tests else None
         if plan:
             for i, (filters, skips) in enumerate(plan):
                 extra = filters + [x for k in skips for x in ("--skip", k)]
                 jobs.append(dict(base, key=f"{key}#{i}", label=f"{base['label']} shard {i + 1}/{len(plan)}", args=extra + list(theirs)))
         else:
             jobs.append(base)
-    jobs.sort(key=lambda j: -times.get(j["key"], PC_DEFAULT_SECONDS.get(j["key"].split("#")[0], 0.0) / (PC_SHARDS if "#" in j["key"] else 1)))
+
+    def expected_seconds(job):
+        key = job["key"]
+        if key in times:
+            return times[key]
+        whole = key.split("#")[0]
+        return APP["default_seconds"].get(whole, 0.0) / (int(APP["shard"].get(whole, 1)) if "#" in key else 1)
+
+    jobs.sort(key=lambda j: -expected_seconds(j))
     started = time.time()
     tests_passed = tests_failed = overflows = 0
     failures = []
     new_times = dict(times)
 
     def work(job):
-        return pc_run_one(job, job["env"], runner, thread_args)
+        return app_run_one(job, job["env"], runner, thread_args)
 
-    with ThreadPoolExecutor(max_workers=PC_RUN_SLOTS) as pool:
+    with ThreadPoolExecutor(max_workers=slots) as pool:
         for job, code, seconds, output in pool.map(work, jobs):
-            passed, failed, names, overflowed = pc_parse(output)
+            passed, failed, names, overflowed = app_parse(output)
             tests_passed, tests_failed, overflows = tests_passed + passed, tests_failed + failed, overflows + overflowed
             new_times[job["key"]] = seconds
             bad = code != 0
@@ -652,7 +677,7 @@ def pc_test(top, packages, rest):
     wall = time.time() - started
     RECORD["run"] = wall
     try:
-        json.dump(new_times, open(pc_times_path(target), "w"))
+        json.dump(new_times, open(app_times_path(target), "w"))
     except OSError:
         pass
     print(f"cl: {tests_passed} passed, {tests_failed} failed, {len(jobs)} binaries, {overflows} overflowed stacks, {wall:.0f} s", file=sys.stderr)
@@ -661,7 +686,7 @@ def pc_test(top, packages, rest):
     sys.exit(1 if failures else 0)
 
 
-def pc_main(top, packages, command, rest):
+def app_main(top, packages, command, rest):
     if command == "cargo":
         run(top, rest, timings=False)
     if command in ("features", "render"):
@@ -670,17 +695,17 @@ def pc_main(top, packages, command, rest):
         fail(f"cl {command} <crate> [args]")
     name, args = rest[0], rest[1:]
     if command == "test":
-        pc_test(top, packages, rest)
+        app_test(top, packages, rest)
     if command == "check":
-        pc_package(name)
-        run(top, ["check", "--lib", "--tests"] + pc_selected() + args)
-    if command == "build" and name == "snapshot":
+        app_package(name)
+        run(top, ["check", "--lib", "--tests"] + app_selected() + args)
+    if command == "build":
         # An example builds in the dev profile with the dev-dependencies' features, the units the test build resolved.
-        rc, target, _ = cargo(top, ["test", "--no-run", "--example", "snapshot"] + pc_selected() + args)
+        rc, target, _ = cargo(top, ["test", "--no-run", "--example", name] + app_selected() + args)
         if rc == 0:
-            print(f"cl: {os.path.join(target, 'debug', 'examples', 'snapshot')}", file=sys.stderr)
+            print(f"cl: {os.path.join(target, 'debug', 'examples', name)}", file=sys.stderr)
         sys.exit(rc)
-    fail("cl build snapshot is the only PhotoCraft build; `cl test <crate>` builds the tests")
+    fail(f"unknown command {command}; see cl --help")
 
 
 def run(top, cargo_args, then=None, timings=True):
@@ -706,15 +731,15 @@ def main():
         sys.exit(0)
     command, rest = sys.argv[1], sys.argv[2:]
     top = worktree()
-    packages = metadata(top)
-    global PHOTOCRAFT
-    PHOTOCRAFT = is_photocraft(packages)
+    packages, table = metadata(top)
+    global APP
+    APP = None if table is None else app_config(table)
     if command == "doctor":
         sys.exit(1 if doctor(top, packages) else 0)
-    if doctor(top, packages, quiet=True) and PHOTOCRAFT:
+    if doctor(top, packages, quiet=True) and APP:
         sys.exit(1)
-    if PHOTOCRAFT:
-        pc_main(top, packages, command, rest)
+    if APP:
+        app_main(top, packages, command, rest)
     if command == "cargo":
         run(top, rest, timings=False)
     if command == "features":

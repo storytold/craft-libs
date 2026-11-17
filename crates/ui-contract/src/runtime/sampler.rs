@@ -15,7 +15,7 @@
 //! sensing read it, and the scrim leaves the canvas clear and unabsorbed.
 
 use crate::runtime::egui::areas::{self, Layer};
-use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
+use crate::runtime::egui::input::{self as raw_input, Arrived, KeyEvent, RawInput};
 use crate::runtime::egui::memory::Service;
 use crate::runtime::egui::pass;
 use crate::runtime::frame::{PerViewport, Stored};
@@ -321,7 +321,7 @@ pub(crate) fn through(ctx: &Context, viewport: ViewportId, modal: Id) -> Option<
 /// canvas that the reach does not admit: egui's modal gate leaves such a canvas with no press target, which would let
 /// any press through that the scrim's clear rect uncovers. Returns the hole as the hook sees it and whether it
 /// removed an event.
-pub(crate) fn hook(ctx: &Context, input: &mut RawInput) -> (Option<Hole>, bool) {
+pub(crate) fn hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arrived>) -> (Option<Hole>, bool) {
     let Some(mut hole) = open_hole(ctx) else {
         Service::<Registry>::run(ctx, |registry| (registry.space, registry.over) = (false, false));
         return (None, false);
@@ -332,18 +332,18 @@ pub(crate) fn hook(ctx: &Context, input: &mut RawInput) -> (Option<Hole>, bool) 
     }
     let barred = here && overlay::top_modal_in(ctx, hole.viewport).is_some();
     let (mut space, mut over) = Service::<Registry>::run(ctx, |registry| (registry.space, registry.over));
-    let before = input.events.len();
+    let before = events.len();
     let os = crate::runtime::windows::os_of(ctx);
-    let latin = input.latin_layout_chars.clone();
+    let latin = &input.latin_layout_chars;
     let is_space = |key: &KeyInput| key.physical.or(key.typed) == Some(craft_keymap::Key::Space);
-    input.events.retain(|event| {
+    events.retain(|Arrived { event, .. }| {
         match event {
             Event::PointerMoved(pos) if here => over = hole.answers(*pos),
             Event::PointerGone if here => over = false,
             Event::PointerButton { pos, .. } if here => over = hole.answers(*pos),
             _ => {}
         }
-        match raw_input::key_event(event, os, &latin) {
+        match raw_input::key_event(event, os, latin) {
             KeyEvent::Press { input: key, .. } if is_space(&key) && (space || over) => {
                 space = true;
                 hole.space = true;
@@ -360,5 +360,5 @@ pub(crate) fn hook(ctx: &Context, input: &mut RawInput) -> (Option<Hole>, bool) 
     });
     hole.space = space;
     Service::<Registry>::run(ctx, |registry| (registry.space, registry.over) = (space, over));
-    (Some(hole), input.events.len() != before)
+    (Some(hole), events.len() != before)
 }

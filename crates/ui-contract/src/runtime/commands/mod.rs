@@ -83,6 +83,11 @@ pub trait CommandSet: Copy + Send + Sync + 'static {
     /// The scope the set's commands belong to.
     const SCOPE: CommandScope;
 
+    /// The set's keys are those of a text component, meant for typing (`#[command(typing)]`): its scope is a keymap
+    /// context, active while an instance of it is around the focus, so its keys come before every other scope's and
+    /// work while the component types, as a type tool's formatting keys do.
+    const TYPING: bool = false;
+
     /// The command of this set that `command` names.
     fn from_ref(command: &CommandRef) -> Option<Self>;
 
@@ -100,6 +105,11 @@ pub trait CommandSet: Copy + Send + Sync + 'static {
     /// command's attribute.
     #[doc(hidden)]
     fn edits() -> Vec<(&'static str, EditCommand)>;
+
+    /// The momentary commands whose held key makes a scope's keys work, as `(id, scope)`: the `holds` option of the
+    /// command's attribute.
+    #[doc(hidden)]
+    fn holds() -> Vec<(&'static str, CommandScope)>;
 
     /// The defaults of one platform, as `(id, platform, binding)`: on that platform they replace the command's other
     /// defaults.
@@ -123,12 +133,17 @@ pub struct Fired {
     pub cycle: bool,
     /// The chord pressed was a bound chord of the command with Alt added, and the command opted in.
     pub alt_variant: bool,
+    /// The input time, in seconds of egui's input clock, of the event that fired it: for a key, when its press or
+    /// release arrived, also when the runtime held the event back to a later frame; the pass time for the other
+    /// sources. A key's hold is the time between its press and its release, however late a frame runs them.
+    pub time: f64,
 }
 
 impl Fired {
-    /// `command` fired from `source` in `phase`, for the app scope (no target), without a group cycle or the Alt variant.
-    pub fn new(command: CommandRef, source: FireSource, phase: FirePhase) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false }
+    /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
+    /// cycle or the Alt variant.
+    pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time }
     }
 }
 

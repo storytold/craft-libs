@@ -92,6 +92,9 @@ pub(crate) struct Shortcut {
     press: Option<usize>,
     /// The press is the canvas's Space ([`Press::canvas`]): it fires its command whatever the focused stop types.
     pub(crate) canvas: bool,
+    /// The input time the event arrived at when an earlier frame held it back; `None` for the pass's own input, which
+    /// arrived at the pass time.
+    pub(crate) at: Option<f64>,
 }
 
 /// What the intent routing did with one press.

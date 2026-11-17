@@ -122,15 +122,16 @@ impl Adornment {
     }
 
     /// Paints the adornment in `rect`, one of `place`'s rects: a glyph or text in `color`, a button as an icon button
-    /// face over its part.
-    pub fn paint(&self, ui: &mut PaintUi<'_>, rect: Rect, color: StyleColor) {
+    /// face over its part. Text sits on the baseline of the field's line, whose text is in `line`
+    /// (`Draw::text_on_line`): a unit in a smaller role than the number shares the number's baseline.
+    pub fn paint(&self, ui: &mut PaintUi<'_>, rect: Rect, color: StyleColor, line: TypeRole) {
         match &self.kind {
             Kind::Glyph(icon) => ui.draw().icon(rect, &Self::spec(icon, Some(color))),
             Kind::Button(part, icon, name) => {
                 ui.face(*part, IconButton::new(Self::spec(icon, None)).label(name.clone()).focusable(false).size(ControlSize::Sm))
             }
             Kind::Text { label, role, mono, .. } => {
-                ui.draw().text(rect, &Self::run(label, *role, *mono).color(color));
+                ui.draw().text_on_line(rect, &Self::run(label, *role, *mono).color(color), line);
             }
         }
     }

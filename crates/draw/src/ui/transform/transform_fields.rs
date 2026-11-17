@@ -363,6 +363,25 @@ static FIELD_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::C
 /// The panel form's columns with the reference point before them.
 static REFERENCE_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
+/// Which form the cells show in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Form {
+    /// The panel's grid of fields.
+    Panel,
+    /// The options bar's strip.
+    Bar,
+}
+
+impl Form {
+    /// A panel field fills its grid cell; a bar field takes its content.
+    fn sizing(self) -> Sizing {
+        match self {
+            Form::Panel => Sizing::FillWidth,
+            Form::Bar => Sizing::Content,
+        }
+    }
+}
+
 /// A grid cell with nothing in it.
 fn empty(ui: &mut Ui) {
     Stack::new().show(ui, |_, _| {});
@@ -395,9 +414,10 @@ impl Cells<'_> {
         self.out.events.push(event);
     }
 
-    /// The field's scrubbing glyph label and its name: the angle's rotate icon inside the field, the other glyphs
-    /// beside theirs.
-    fn side_and_name(&self, field: TransformField) -> (SideLabel, Label) {
+    /// The field's scrubbing glyph label and its name in `form`: every glyph beside its field, so in the panel form the
+    /// angle's rotate icon takes its grid column's label column as W, X and H do; in the bar form the rotate icon sits
+    /// inside the field.
+    fn side_and_name(&self, field: TransformField, form: Form) -> (SideLabel, Label) {
         let words = &self.words;
         let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone())));
         let (side, name) = match field {
@@ -406,7 +426,8 @@ impl Cells<'_> {
             TransformField::W => (beside(&words.w_glyph), &words.w_name),
             TransformField::H => (beside(&words.h_glyph), &words.h_name),
             TransformField::Angle => {
-                (SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("rotate_cw")))).layout(FieldLayout::Inside), &words.angle_name)
+                let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("rotate_cw"))));
+                (if form == Form::Bar { side.layout(FieldLayout::Inside) } else { side }, &words.angle_name)
             }
             TransformField::SkewH => (beside(&words.skew_h_glyph), &words.skew_h_name),
             TransformField::SkewV => (beside(&words.skew_v_glyph), &words.skew_v_name),
@@ -414,9 +435,10 @@ impl Cells<'_> {
         (side.scrub(true), name.clone())
     }
 
-    /// One captioned field at `sizing`. Returns the field's event lifted to the row.
-    fn field(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, field: TransformField, sizing: Sizing) {
-        let (side, name) = self.side_and_name(field);
+    /// One captioned field of `form`. Returns the field's event lifted to the row.
+    fn field(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, field: TransformField, form: Form) {
+        let (side, name) = self.side_and_name(field, form);
+        let sizing = form.sizing();
         let conversion = &pass.conversion;
         let (kind, decimals) = conversion.format(field);
         let bound = conversion.bound(field);
@@ -524,36 +546,35 @@ impl Cells<'_> {
         let mut pass = self.pass(cx);
         let groups = self.groups;
         let columns: &'static [ColumnWidth] = if groups.reference { &REFERENCE_COLUMNS } else { &FIELD_COLUMNS };
-        let fill = Sizing::FillWidth;
         Grid::new(columns).id_salt("fields").fill_width().show(ui, |ui, _| {
             let mut first = true;
             if groups.size {
                 self.lead(ui, cx, &pass, &mut first);
-                self.field(ui, cx, &mut pass, TransformField::W, fill);
+                self.field(ui, cx, &mut pass, TransformField::W, Form::Panel);
                 self.link(ui);
-                self.field(ui, cx, &mut pass, TransformField::H, fill);
+                self.field(ui, cx, &mut pass, TransformField::H, Form::Panel);
             }
             if groups.position || (groups.reference && first) {
                 self.lead(ui, cx, &pass, &mut first);
                 if groups.position {
-                    self.field(ui, cx, &mut pass, TransformField::X, fill);
+                    self.field(ui, cx, &mut pass, TransformField::X, Form::Panel);
                     empty(ui);
-                    self.field(ui, cx, &mut pass, TransformField::Y, fill);
+                    self.field(ui, cx, &mut pass, TransformField::Y, Form::Panel);
                 } else {
                     (0..3).for_each(|_| empty(ui));
                 }
             }
             if groups.angle {
                 self.lead(ui, cx, &pass, &mut first);
-                self.field(ui, cx, &mut pass, TransformField::Angle, fill);
+                self.field(ui, cx, &mut pass, TransformField::Angle, Form::Panel);
                 empty(ui);
                 empty(ui);
             }
             if groups.skew {
                 self.lead(ui, cx, &pass, &mut first);
-                self.field(ui, cx, &mut pass, TransformField::SkewH, fill);
+                self.field(ui, cx, &mut pass, TransformField::SkewH, Form::Panel);
                 empty(ui);
-                self.field(ui, cx, &mut pass, TransformField::SkewV, fill);
+                self.field(ui, cx, &mut pass, TransformField::SkewV, Form::Panel);
             }
         });
         *cx.memory::<Bases>() = pass.bases;
@@ -588,23 +609,23 @@ impl Cells<'_> {
             self.reference(ui, cx, &pass, true);
         }
         if groups.position {
-            self.field(ui, cx, &mut pass, TransformField::X, Sizing::Content);
+            self.field(ui, cx, &mut pass, TransformField::X, Form::Bar);
             self.relative_toggle(ui);
-            self.field(ui, cx, &mut pass, TransformField::Y, Sizing::Content);
+            self.field(ui, cx, &mut pass, TransformField::Y, Form::Bar);
             any.set(true);
         }
         if divide(ui, groups.size) {
-            self.field(ui, cx, &mut pass, TransformField::W, Sizing::Content);
+            self.field(ui, cx, &mut pass, TransformField::W, Form::Bar);
             self.link(ui);
-            self.field(ui, cx, &mut pass, TransformField::H, Sizing::Content);
+            self.field(ui, cx, &mut pass, TransformField::H, Form::Bar);
         }
         if divide(ui, groups.angle || groups.skew) {
             if groups.angle {
-                self.field(ui, cx, &mut pass, TransformField::Angle, Sizing::Content);
+                self.field(ui, cx, &mut pass, TransformField::Angle, Form::Bar);
             }
             if groups.skew {
-                self.field(ui, cx, &mut pass, TransformField::SkewH, Sizing::Content);
-                self.field(ui, cx, &mut pass, TransformField::SkewV, Sizing::Content);
+                self.field(ui, cx, &mut pass, TransformField::SkewH, Form::Bar);
+                self.field(ui, cx, &mut pass, TransformField::SkewV, Form::Bar);
             }
         }
         if self.interpolation.is_some() && divide(ui, groups.interpolation) {

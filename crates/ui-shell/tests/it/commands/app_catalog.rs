@@ -98,6 +98,42 @@ fn an_app_catalog_command_fires_by_its_chord_and_a_focused_text_field_keeps_a_ty
     assert_eq!(*name.borrow(), "q", "the focused field types the letter");
 }
 
+/// A key's press and its release fire with the input times they arrived at, whichever frame runs them: a hold is
+/// read from the key's own times. Keys behind a pointer press wait for the next frame (one press per pass) and keep
+/// the time they arrived at.
+#[trial]
+fn a_keys_press_and_release_fire_with_the_times_they_arrived_at() {
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+    };
+    let mut frames = Frames::new();
+    frames.commands(catalog(1));
+    frames.idle(3, &mut show);
+    let times =
+        |frames: &Frames| take_output(&frames.ctx).fired.into_iter().map(|fired| (fired.command.id, fired.phase, fired.time)).collect::<Vec<_>>();
+    let now = |frames: &Frames| frames.ctx.input(|input| input.time);
+    frames.frame(vec![key_press(Key::J, Modifiers::NONE)], &mut show);
+    let pressed = now(&frames);
+    frames.frame(vec![key_release(Key::J, Modifiers::NONE)], &mut show);
+    let released = now(&frames);
+    assert!(pressed < released);
+    assert_eq!(times(&frames), [(BRUSH.to_owned(), FirePhase::Press, pressed), (BRUSH.to_owned(), FirePhase::Release, released)]);
+
+    let at = egui::pos2(400.0, 300.0);
+    frames.frame(vec![moved(at)], &mut show);
+    let _ = times(&frames);
+    frames.frame(vec![press(at), key_press(Key::J, Modifiers::NONE), key_release(Key::J, Modifiers::NONE)], &mut show);
+    let arrived = now(&frames);
+    assert!(times(&frames).is_empty(), "the keys after the pointer press wait for the next frame");
+    frames.frame(vec![release(at)], &mut show);
+    assert!(now(&frames) > arrived);
+    assert_eq!(
+        times(&frames),
+        [(BRUSH.to_owned(), FirePhase::Press, arrived), (BRUSH.to_owned(), FirePhase::Release, arrived)],
+        "the held keys fire with the time they arrived at"
+    );
+}
+
 /// Count relation: frames given a catalog of the generation already built, even as a new value, build no keymap; a new
 /// generation builds one, in its first frame, and its new command fires by its chord.
 #[trial]

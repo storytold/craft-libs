@@ -40,6 +40,9 @@ pub(crate) struct Edit<'a> {
     /// The text laid out already, as a run is painted: the widget shows this galley, which never scrolls, so the text
     /// is not clipped to `rect`.
     pub galley: Option<std::sync::Arc<egui::Galley>>,
+    /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
+    /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
+    pub baseline: Option<f32>,
 }
 
 /// What the widget did in one pass.
@@ -81,6 +84,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         caret_visible,
         underline,
         galley,
+        baseline,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
     let env = crate::runtime::env::Env::of(ui);
@@ -126,13 +130,28 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         ui.fonts_mut(|fonts| crate::runtime::egui::text_layout::layout_with(fonts, job))
     };
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
-    // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, centred on the
-    // part's centre line: the row's centre is the part's whatever row egui allocates from the top of its rect.
+    // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, placed so the
+    // text's baseline is `baseline`, else centred on the part's centre line. egui centres the row in the rect, whatever
+    // row it allocates from the rect's top.
     let rect = if multiline || galley.is_some() {
         rect
     } else {
-        let row = ui.fonts_mut(|fonts| fonts.row_height(&font_id));
-        Rect::from_center_size(rect.center(), egui::vec2(rect.width(), rect.height().max(row)))
+        let probe = {
+            let mut format = TextFormat::simple(font_id.clone(), ink);
+            if let Some(size) = optical_size {
+                format.coords.push(*b"opsz", size);
+            }
+            let mut job = LayoutJob::default();
+            job.append("x", 0.0, format);
+            super::text_layout::layout(ui.ctx(), job)
+        };
+        let row = probe.size().y;
+        let first_baseline = probe.rows.first().and_then(|placed| placed.row.glyphs.first().map(|glyph| placed.pos.y + glyph.pos.y));
+        let centre = match baseline.zip(first_baseline) {
+            Some((baseline, first)) => baseline - first + row / 2.0,
+            None => rect.center().y,
+        };
+        Rect::from_center_size(egui::pos2(rect.center().x, centre), egui::vec2(rect.width(), rect.height().max(row)))
     };
     // The component's root took its place in the flow already: the editor runs in a child that takes none, so the
     // parent's cursor stays past the root, not past the text part inside it.

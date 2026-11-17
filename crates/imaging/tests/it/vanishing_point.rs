@@ -326,7 +326,7 @@ fn a_command_drag_tears_off_a_plane_and_the_far_edge_sets_depth_or_angle() {
 #[trial]
 fn delete_removes_the_plane_and_escape_drops_a_half_plane_first() {
     let drawn_planes = [
-        VanishingPlane::new([[100.0, 50.0], [300.0, 50.0], [300.0, 100.0], [100.0, 100.0]]),
+        VanishingPlane::new([[300.0, 250.0], [500.0, 250.0], [500.0, 350.0], [300.0, 350.0]]),
         VanishingPlane::new([[0.0; 2]; 4]),
         VanishingPlane::new([[0.0; 2]; 4]),
     ];
@@ -336,9 +336,9 @@ fn delete_removes_the_plane_and_escape_drops_a_half_plane_first() {
     kept.planes.clone_from(&planes);
     kept.torn.clone_from(&torn);
     let (mut fixture, app) = open_with(VanishingTool::EditPlane, kept, Vec::new(), LIMITS);
-    // Select the first plane by clicking inside it: the layer shows at zoom 1, centred on the canvas.
-    let layer_middle = Vec2::new(LAYER[0] as f32, LAYER[1] as f32) / 2.0;
-    let inside_first_plane = at(&fixture, Vec2::new(200.0, 75.0) - layer_middle);
+    // Select the first plane by clicking inside it: it holds the layer's middle, which the fitted view shows at the
+    // canvas's middle whatever zoom fits the canvas.
+    let inside_first_plane = at(&fixture, Vec2::ZERO);
     click(&mut fixture, inside_first_plane);
     assert_eq!(with_workspace(&app, |workspace| workspace.editor().selected()), Some(0));
     fixture.key(Key::Delete, Modifiers::NONE).settle();

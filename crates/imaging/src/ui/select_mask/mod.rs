@@ -590,7 +590,7 @@ impl SelectMaskWorkspace {
                     let preview = falloff.as_ref().and_then(|falloff| work.canvas.resize().preview(falloff));
 
                     let shown = Row::new().fill().show(ui, |ui, _| {
-                        let rail = ToolRail::new(words.tools.clone(), &slots, &work.tool, &work.last_used).show_rail(ui, |_, _| {});
+                        let rail = ToolRail::new(words.tools.clone(), &slots, &work.tool, &work.last_used).show_column(ui, |_, _| {});
                         if let Some(next) = rail.last_used {
                             work.last_used = next;
                         }
@@ -660,7 +660,7 @@ impl SelectMaskWorkspace {
             this.done(&ctx)
         });
         let events = std::mem::take(&mut this.events);
-        WorkspacePass::new(shown.output.response, events).result(result)
+        WorkspacePass::new(shown.output.response, events).result(result).canvas(this.canvas_id)
     }
 
     /// The start of a pass: the first pass reads the stored settings, a change the app made to the settings since the

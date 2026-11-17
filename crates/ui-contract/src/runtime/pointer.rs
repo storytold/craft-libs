@@ -579,7 +579,7 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
 }
 
 fn find_press_winners(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> PressWinners {
-    let Some(layer) = areas::layer_at(ctx, at) else {
+    let Some(layer) = areas::layer_at(ctx, at).or_else(|| layer_past_window(ctx, viewport, at)) else {
         return PressWinners::default();
     };
     let to_layer = |layer: Layer| areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
@@ -652,6 +652,28 @@ fn find_press_winners(ctx: &Context, viewport: ViewportId, at: Pos2, targets: Pr
             }
         }
         winners
+    })
+}
+
+/// The layer a press past the window goes to, where egui has none (only automation names such a point: a document
+/// point off the window): the topmost layer of last pass's shape record with a shape there that takes a press and
+/// shows some of itself inside its clip.
+fn layer_past_window(ctx: &Context, viewport: ViewportId, at: Pos2) -> Option<Layer> {
+    let mut layers: Vec<Layer> = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last.keys().copied().collect());
+    layers.sort_by_key(|layer| std::cmp::Reverse(areas::layer_position(ctx, *layer)));
+    layers.into_iter().find(|layer| {
+        let point = areas::layer_map(ctx, *layer).map_or(at, |map| map.to_layer(at));
+        PerViewport::<Shapes>::with(ctx, viewport, |record| {
+            record.last.get(layer).is_some_and(|roots| {
+                roots.values().any(|entry| {
+                    entry
+                        .shapes
+                        .iter()
+                        .zip(&entry.placed)
+                        .any(|(shape, placed)| shape.sense.takes_press() && shape.hits(point) && shape.shape.bounds().intersects(placed.clip))
+                })
+            })
+        })
     })
 }
 

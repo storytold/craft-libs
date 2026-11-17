@@ -109,12 +109,15 @@ pub struct WorkspacePass<E, R> {
     /// The result OK would give, reported in the pass the Accept button is picked under `cx.hold_ok`; `result`
     /// stays `None` then.
     pub held: Option<R>,
+    /// The canvas the workspace showed its image on this pass (the id of its `FullWindowCanvas`'s response, which
+    /// keys the canvas's tool host): where the app's tool input in document points goes while the workspace is open.
+    pub canvas: Option<egui::Id>,
 }
 
 impl<E, R> WorkspacePass<E, R> {
     /// A pass with `events` that leaves the workspace open.
     pub fn new(response: Response, events: Vec<E>) -> Self {
-        WorkspacePass { response, events, result: None, held: None }
+        WorkspacePass { response, events, result: None, held: None, canvas: None }
     }
 
     /// The result a held OK gives this pass.
@@ -128,6 +131,13 @@ impl<E, R> WorkspacePass<E, R> {
     #[must_use]
     pub fn result(mut self, result: Option<DialogResult<R>>) -> Self {
         self.result = result;
+        self
+    }
+
+    /// The canvas the workspace showed its image on this pass; `None` for a pass that showed none (a measuring run).
+    #[must_use]
+    pub fn canvas(mut self, canvas: Option<egui::Id>) -> Self {
+        self.canvas = canvas;
         self
     }
 }
@@ -172,6 +182,8 @@ pub struct HostedWorkspace<W: FullWindowWorkspace> {
     /// The held OK's answer until the app answers it (the workspace disables its OK meanwhile), and why the app
     /// refused the last one, until OK files again.
     held: HeldAnswer<W::Result>,
+    /// The canvas the workspace shows its image on, as its latest pass that showed one reported it.
+    canvas: Option<egui::Id>,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -188,6 +200,7 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
             revision: 0,
             hold_ok: false,
             held: HeldAnswer::new(),
+            canvas: None,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -273,6 +286,9 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
             ok_waits: self.held.is_waiting(),
         };
         let pass = self.workspace.show(ui, cx);
+        if pass.canvas.is_some() {
+            self.canvas = pass.canvas;
+        }
         #[cfg(feature = "testing")]
         {
             self.facts = crate::contract::Outcome::story_facts(&pass.response);
@@ -291,6 +307,10 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
 
     fn key(&self) -> Option<&str> {
         Some(W::KEY)
+    }
+
+    fn canvas(&self) -> Option<egui::Id> {
+        self.canvas
     }
 
     /// OK as the Accept button: a held workspace files the result and answers none, and answers the held result once

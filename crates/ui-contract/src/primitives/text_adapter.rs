@@ -395,6 +395,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         state.end = Some(End::Rewrite { refuses: true });
     }
     let filter = egui_focus::event_filter(input.keys.keep, false);
+    // A single line sits on the baseline of its control's line, whatever its face: a number field's mono digits on
+    // the body text's.
+    let baseline = (!input.options.multiline()).then(|| {
+        let env = crate::runtime::env::Env::of(input.ui);
+        let text_env = super::text::TextEnv { tokens: &env.tokens, direction: env.direction, ink: input.ink, fonts: crate::fonts::stack_facts(ctx) };
+        super::text::line_baseline(ctx, &text_env, input.options.role, input.rect.center().y)
+    });
     let edit = text_edit::Edit {
         id: widget,
         rect: input.rect,
@@ -417,6 +424,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         caret_visible: input.caret_visible,
         underline: input.underline,
         galley: None,
+        baseline,
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
@@ -530,6 +538,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             caret_visible: false,
             underline: 0.0,
             galley: Some(layout.galley.clone()),
+            baseline: None,
         },
     );
     if crate::runtime::egui::access::enabled(&ctx, widget) {

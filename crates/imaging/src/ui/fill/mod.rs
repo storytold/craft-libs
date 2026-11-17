@@ -432,7 +432,7 @@ impl ContentAwareFillWorkspace {
             (shown.output.result(|| work.command()), None)
         };
         let events = std::mem::take(&mut work.events);
-        WorkspacePass::new(shown.output.response, events).held(held).result(result)
+        WorkspacePass::new(shown.output.response, events).held(held).result(result).canvas(work.canvas_id)
     }
 
     /// The app's colour picker answered a [`FillEvent::PickColor`] request. A key this workspace
@@ -652,7 +652,7 @@ impl ContentAwareFillWorkspace {
             }
 
             Row::new().fill().show(ui, |ui, _| {
-                let rail = ToolRail::new(words.tools.clone(), slots, &self.tool, &self.last_used).show_rail(ui, |_, _| {});
+                let rail = ToolRail::new(words.tools.clone(), slots, &self.tool, &self.last_used).show_column(ui, |_, _| {});
                 if let Some(next) = rail.last_used {
                     self.last_used = next;
                 }
