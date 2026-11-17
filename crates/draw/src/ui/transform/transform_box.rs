@@ -927,9 +927,13 @@ impl Component for TransformBox<'_> {
 
     /// A host keeps the box in f32 (a layer's transform, a text layer's box) and gives a proposal back rounded to
     /// it: each corner and the pivot within f32 precision of the proposal is the proposal, not a change of the
-    /// document under the drag.
+    /// document under the drag. The host computes every corner from the same box and transform, so a corner near
+    /// the origin holds the precision of the box's largest coordinate, not its own.
     fn same_value(&self, proposed: &BoxState, host: &BoxState) -> bool {
-        let near = |a: Point, b: Point| craft_behavior::same_in_f32(a.x, b.x) && craft_behavior::same_in_f32(a.y, b.y);
+        let points = proposed.quad.iter().chain(&host.quad).chain([&proposed.pivot, &host.pivot]);
+        let magnitude = points.fold(0.0f64, |most, point| most.max(point.x.abs()).max(point.y.abs()));
+        let same = |a: f64, b: f64| craft_behavior::same_in_f32_at(a, b, magnitude);
+        let near = |a: Point, b: Point| same(a.x, b.x) && same(a.y, b.y);
         proposed.quad.iter().zip(&host.quad).all(|(a, b)| near(*a, *b)) && near(proposed.pivot, host.pivot)
     }
 

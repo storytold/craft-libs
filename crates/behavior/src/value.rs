@@ -13,7 +13,13 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Value for T {}
 /// Whether `host`, a number an app wrote back, is the proposal `proposed` as a host that keeps it in `f32` stores it:
 /// within `f32` precision of it. Such a write-back is the gesture's own value, not a change of the document under it.
 pub fn same_in_f32(proposed: f64, host: f64) -> bool {
-    proposed == host || (proposed - host).abs() <= 4.0 * f64::from(f32::EPSILON) * proposed.abs().max(host.abs()).max(1.0)
+    same_in_f32_at(proposed, host, 0.0)
+}
+
+/// [`same_in_f32`] for a number the host computes in `f32` from terms as large as `magnitude`: a corner of a box it
+/// transforms lies near zero while the terms it sums do not, and holds their precision, not its own.
+pub fn same_in_f32_at(proposed: f64, host: f64, magnitude: f64) -> bool {
+    proposed == host || (proposed - host).abs() <= 4.0 * f64::from(f32::EPSILON) * magnitude.max(proposed.abs()).max(host.abs()).max(1.0)
 }
 
 /// A value that may differ across a multi-selection.
