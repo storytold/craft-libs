@@ -2,7 +2,7 @@
 
 use super::edit::*;
 use crate::format::ErrorKind;
-use crate::{ColorToken, ContrastIntent, Mode, ModePins, Rgba, ThemeDef, Variants, builtins};
+use crate::{ColorToken, ContrastIntent, IconPackId, Mode, ModePins, Rgba, ThemeDef, Variants, builtins};
 
 fn builtin(id: &str) -> ThemeDef {
     builtins().iter().find(|t| t.id.as_str() == format!("craft.{id}")).unwrap().clone()
@@ -99,6 +99,7 @@ fn meta_and_mode_seed_changes_revert() {
     let mut draft = saved.clone();
     for edit in [
         Edit::SetMeta(Meta::ContrastIntent(ContrastIntent::Low)),
+        Edit::SetMeta(Meta::IconPack(Some(IconPackId::parse("craft.tabler").unwrap()))),
         Edit::SetModeSeed { mode: Mode::Dark, seed: Seed::Neutral, color: Some(Rgba::rgb(40, 40, 50)) },
     ] {
         draft = apply(&draft, &edit).unwrap();
