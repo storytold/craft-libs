@@ -50,11 +50,65 @@ struct El {
     used: bool,
 }
 
+#[derive(Default)]
 struct TableB {
     rows: Vec<Vec<Cell>>,
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
+    /// Its CSS `width` or `width` attribute.
+    width: Option<Size>,
+    /// Each row's height, points (its own `height`, or its tallest cell's): at least that.
+    heights: Vec<Option<f32>>,
+    /// The height of the row being read.
+    height: Option<f32>,
+    /// Each row's cells' percentage widths, one per cell (`None`: it gives none).
+    pcts: Vec<Vec<Option<f32>>>,
+    /// Those of the row being read.
+    pct_row: Vec<Option<f32>>,
+}
+
+impl TableB {
+    /// The row being read is complete: it goes into `rows`, with its height and percentages.
+    fn end_row(&mut self) {
+        if let Some(r) = self.row.take() {
+            self.rows.push(r);
+            self.heights.push(self.height.take());
+            self.pcts.push(std::mem::take(&mut self.pct_row));
+        }
+    }
+
+    /// Row height `h` (points) for the row being read: the tallest one stated.
+    fn grow(&mut self, h: Option<f32>) {
+        if let Some(h) = h {
+            self.height = Some(self.height.map_or(h, |o| o.max(h)));
+        }
+    }
+}
+
+/// A length HTML gives a table, a row or a cell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Size {
+    Pt(f32),
+    /// Percent of the room it is in.
+    Pct(f32),
+}
+
+/// Element `prop` (`width`, `height`) as its CSS states it, else as its attribute of that name
+/// does (a number is pixels, `%` a percentage). Lengths stay within 22 inches, percentages
+/// within 100; anything else states none, a keyword (`medium`, `auto`) too: CSS lengths here
+/// are numbers with a unit.
+fn size(css: &str, attrs: &[(String, String)], prop: &str) -> Option<Size> {
+    let pct = |v: &str| {
+        v.strip_suffix('%').and_then(|n| n.trim().parse::<f32>().ok()).filter(|p| p.is_finite() && *p > 0.0).map(|p| Size::Pct(p.min(100.0)))
+    };
+    let pt = |v: f32| (v.is_finite() && v > 0.0 && v <= 1584.0).then_some(Size::Pt(v));
+    let numeric = |v: &str| v.trim().starts_with(|c: char| c.is_ascii_digit() || c == '.');
+    let from_css = decls(css).filter(|(k, v)| k == prop && numeric(v)).filter_map(|(_, v)| pct(v).or_else(|| css_len_pt(v).and_then(pt))).last();
+    from_css.or_else(|| {
+        let v = attr(attrs, prop)?.trim();
+        pct(v).or_else(|| v.trim_end_matches("px").trim().parse::<f32>().ok().and_then(|px| pt(px * 0.75)))
+    })
 }
 
 struct ElementStyle {
@@ -135,6 +189,8 @@ pub(super) struct Builder<'r> {
     images: ImageLoader<'r>,
     containers: Vec<Vec<FBlock>>,
     cells: Vec<Cell>,
+    /// The percentage width of each cell in `cells` (`None`: it gives none).
+    cell_pcts: Vec<Option<f32>>,
     tables: Vec<TableB>,
     stack: Vec<El>,
     para: Option<Para>,
@@ -518,18 +574,42 @@ fn cell_borders(css: &str) -> Option<craft_wordmodel::props::Borders> {
 /// Most columns given widths in one table.
 const MAX_TABLE_COLS: usize = 63;
 
-/// A cell's width, points: its CSS `width`, else its `width` attribute (pixels); percentages
-/// and widths that don't parse give none.
-fn cell_width(css: &str, attrs: &[(String, String)]) -> Option<f32> {
-    let from_css = decls(css).filter(|(k, v)| k == "width" && !v.ends_with('%')).filter_map(|(_, v)| css_len_pt(v));
-    let from_attr = || {
-        attr(attrs, "width")
-            .map(str::trim)
-            .filter(|v| !v.ends_with('%'))
-            .and_then(|v| v.trim_end_matches("px").trim().parse::<f32>().ok())
-            .map(|px| px * 0.75)
+/// The sizes an HTML table states (storytold/wordcraft#6925), as `ft`'s [`model::TableExtra`]:
+/// its width (points, or its percentage of the text width), each row's height (at least: a CSS
+/// or attribute height is a minimum), and its columns' percentage widths, from the first row that
+/// gives every column one, when no column has a width in points (they are then proportions,
+/// scaled to the table's width). A table that states none of them has none, and reads as before.
+/// It keeps the default table style: its borders come from it.
+fn table_sizes(ft: &mut FTable, width: Option<Size>, heights: Vec<Option<f32>>, pcts: &[Vec<Option<f32>>]) -> Option<model::TableExtra> {
+    let cols = ft.cols();
+    let mut relative = false;
+    // A cell with a width in points, even in a row that doesn't give every column one, rules the
+    // percentages out.
+    let points = ft.rows.iter().flatten().any(|c| c.width.is_some());
+    if !points
+        && (1..=MAX_TABLE_COLS).contains(&cols)
+        && let Some(row) = pcts.iter().find(|p| p.len() == cols && p.iter().all(Option::is_some))
+    {
+        ft.widths = row.iter().flatten().copied().collect();
+        relative = true;
+    }
+    let (mut width, mut width_pct) = match width {
+        Some(Size::Pt(w)) => (Some(w), None),
+        Some(Size::Pct(p)) => (None, Some(p)),
+        None => (None, None),
     };
-    from_css.last().or_else(from_attr).filter(|w| w.is_finite() && *w > 1.0 && *w <= 1584.0)
+    // Cells sharing out a table of no stated width: it is as wide as their shares add up to.
+    if relative && width.is_none() && width_pct.is_none() {
+        width_pct = Some(ft.widths.iter().sum::<f32>().min(100.0));
+    }
+    if width.is_some_and(|w| !w.is_finite()) {
+        width = None;
+    }
+    let heights: Vec<Option<(f32, bool)>> = heights.into_iter().map(|h| h.map(|h| (h, false))).collect();
+    if width.is_none() && width_pct.is_none() && !relative && heights.iter().all(Option::is_none) {
+        return None;
+    }
+    Some(model::TableExtra { width, width_pct, heights, grid_style: true, relative_widths: relative, ..Default::default() })
 }
 
 fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -542,6 +622,7 @@ impl<'r> Builder<'r> {
             images,
             containers: vec![Vec::new()],
             cells: Vec::new(),
+            cell_pcts: Vec::new(),
             tables: Vec::new(),
             stack: Vec::new(),
             para: None,
@@ -875,27 +956,39 @@ impl<'r> Builder<'r> {
                 self.flush();
                 let blocks = if self.containers.len() > 1 { self.containers.pop().unwrap_or_default() } else { Vec::new() };
                 let mut cell = self.cells.pop().unwrap_or_default();
+                let pct = self.cell_pcts.pop().flatten();
                 cell.blocks = blocks;
                 if let Some(t) = self.tables.last_mut() {
                     t.row.get_or_insert_with(Vec::new).push(cell);
+                    t.pct_row.push(pct);
                 }
             }
             ElKind::Tr => {
-                if let Some(t) = self.tables.last_mut()
-                    && let Some(r) = t.row.take()
-                {
-                    t.rows.push(r);
+                if let Some(t) = self.tables.last_mut() {
+                    t.end_row();
                 }
             }
             ElKind::Table => {
                 if let Some(mut t) = self.tables.pop() {
-                    if let Some(r) = t.row.take() {
-                        t.rows.push(r);
-                    }
+                    t.end_row();
                     let borderless = !t.bordered;
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
-                    let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(craft_wordmodel::table::MAX_ROWS).collect();
+                    // Each row's height and cell percentages stay with it.
+                    let (mut rows, mut heights, mut pcts) = (Vec::new(), Vec::new(), Vec::new());
+                    let mut sizes = t.heights.into_iter().zip(t.pcts);
+                    for r in t.rows {
+                        let (h, p) = sizes.next().unwrap_or_default();
+                        if r.is_empty() {
+                            continue;
+                        }
+                        if rows.len() >= craft_wordmodel::table::MAX_ROWS {
+                            break;
+                        }
+                        rows.push(r);
+                        heights.push(h);
+                        pcts.push(p);
+                    }
                     let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
@@ -903,6 +996,7 @@ impl<'r> Builder<'r> {
                         if ft.cols() <= MAX_TABLE_COLS {
                             ft.widths_from_cells();
                         }
+                        ft.extra = table_sizes(&mut ft, t.width, heights, &pcts).map(Box::new);
                         self.container().push(FBlock::Table(ft));
                     }
                 }
@@ -1164,12 +1258,18 @@ impl<'r> Builder<'r> {
         let css = self.css_of(name, attrs);
         let ElementStyle { mut fmt, block_background, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
         match kind {
-            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, &css, true) }),
+            ElKind::Table => {
+                self.tables.push(TableB { bordered: declares_border(attrs, &css, true), width: size(&css, attrs, "width"), ..Default::default() })
+            }
             ElKind::Tr => {
-                if let Some(t) = self.tables.last_mut()
-                    && let Some(r) = t.row.take()
-                {
-                    t.rows.push(r);
+                if let Some(t) = self.tables.last_mut() {
+                    t.end_row();
+                    // A row's height is a minimum, in points (a percentage states none).
+                    t.height = None;
+                    t.grow(match size(&css, attrs, "height") {
+                        Some(Size::Pt(h)) => Some(h),
+                        _ => None,
+                    });
                 }
             }
             ElKind::Cell => {
@@ -1181,13 +1281,27 @@ impl<'r> Builder<'r> {
                 }
                 if tb && let Some(t) = self.tables.last_mut() {
                     // A cell without a row: start one.
-                    if let Some(r) = t.row.take() {
-                        t.rows.push(r);
-                    }
+                    t.end_row();
                     t.row = Some(Vec::new());
                 }
                 let num = |k: &str| attr(attrs, k).and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 63));
                 let colspan = num("colspan").unwrap_or(1);
+                // A cell's height is its row's at least. Its width, in points or as its column's
+                // share, is read once, so its attribute never overrides a CSS percentage.
+                let (cell_height, cell_size) = (size(&css, attrs, "height"), if colspan == 1 { size(&css, attrs, "width") } else { None });
+                let cell_points = match cell_size {
+                    Some(Size::Pt(w)) if w > 1.0 => Some(w),
+                    _ => None,
+                };
+                if let Some(t) = self.tables.last_mut()
+                    && let Some(Size::Pt(h)) = cell_height
+                {
+                    t.grow(Some(h));
+                }
+                self.cell_pcts.push(match cell_size {
+                    Some(Size::Pct(p)) => Some(p),
+                    _ => None,
+                });
                 let shading = block_background.or_else(|| {
                     for e in self.stack.iter().rev() {
                         if !self.page && matches!(e.name.as_str(), "body" | "html") {
@@ -1228,7 +1342,7 @@ impl<'r> Builder<'r> {
                     margins: None,
                     direction: Default::default(),
                     picture: None,
-                    width: if colspan == 1 { cell_width(&css, attrs) } else { None },
+                    width: cell_points,
                 });
                 fmt.background = None;
                 self.containers.push(Vec::new());

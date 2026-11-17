@@ -963,6 +963,12 @@ pub struct TableExtra {
     /// ODT's `table:table-header-rows`). Its header cells ([`FCell::header`]) may be more: a
     /// table style's header row is one too.
     pub header_rows: usize,
+    /// It keeps the default table style (Table Grid, whose borders it relies on) though it states
+    /// its sizes: an HTML table's. A table whose cells carry their own borders (ODT's) has none.
+    pub grid_style: bool,
+    /// Its column widths ([`FTable::widths`]) are proportions, scaled to the table's width (HTML's
+    /// percentages): its own width, else its percentage of the text width, else the text width.
+    pub relative_widths: bool,
 }
 
 impl FTable {
