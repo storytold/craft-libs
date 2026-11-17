@@ -400,12 +400,24 @@ fn write_replacing(dir: &Dir, rel: &Path, bytes: &[u8]) -> Result<(), Fault> {
         let _ = dir.remove_file(&temp_rel);
         return Err(fault);
     }
-    if let Err(error) = dir.rename(&temp_rel, dir, rel) {
+    let renamed = {
+        let _publishing = WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        dir.rename(&temp_rel, dir, rel)
+    };
+    if let Err(error) = renamed {
         let _ = dir.remove_file(&temp_rel);
         return Err(io_fault(&error));
     }
     Ok(())
 }
+
+/// Held by [`write_replacing`] around its rename, and by [`create_in_place`]
+/// from the moment it creates its file until the file is complete or removed.
+/// A save within this process therefore cannot replace a file that
+/// `create_in_place` is still writing, and `create_in_place` cannot remove a
+/// replacement when its own write fails. Another process writing the same
+/// folder is not covered.
+static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, Fault> {
     // `name` is never a path: it is one `Job::Create` field that names the
@@ -434,7 +446,7 @@ fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, 
     // so the name stays free for the next Save As instead of holding a partial
     // file that makes it fail with "already exists".
     let (temp_rel, mut handle) = open_temp(&dir, &rel)?;
-    let written = write_new(&mut handle, bytes).and_then(|()| handle.sync_all().map_err(|error| io_fault(&error)));
+    let written = write_new(&mut handle, bytes).and_then(|()| sync_new(&handle));
     drop(handle);
     if let Err(fault) = written {
         let _ = dir.remove_file(&temp_rel);
@@ -482,9 +494,13 @@ fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, 
 /// Creates `rel` with `create_new` and writes `bytes` into it, for a
 /// filesystem where [`create`] cannot publish with a hard link. `create_new`
 /// opens and creates in one step, so a name that is taken, or that exists as
-/// a symlink, is refused instead of overwritten. When the write fails, the
-/// file this call created is removed while its handle is still open.
+/// a symlink, is refused instead of overwritten. The bytes are synced, so a
+/// share that reports a full disk only at sync is a failed create. When the
+/// write or the sync fails, the file this call created is removed.
+/// [`WRITE_LOCK`] is held throughout, so no save in this process can replace
+/// the file before that removal.
 fn create_in_place(dir: &Dir, rel: &Path, name: &str, bytes: &[u8]) -> Result<(), Fault> {
+    let _writing = WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut create_options = OpenOptions::new();
     create_options.write(true).create_new(true);
     let mut handle = match dir.open_with(rel, &create_options) {
@@ -492,11 +508,27 @@ fn create_in_place(dir: &Dir, rel: &Path, name: &str, bytes: &[u8]) -> Result<()
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(Fault::Refused(format!("{name} already exists"))),
         Err(error) => return Err(io_fault(&error)),
     };
-    let written = write_new(&mut handle, bytes);
+    let written = write_new(&mut handle, bytes).and_then(|()| sync_new(&handle));
+    drop(handle);
+    #[cfg(test)]
+    tests::in_place_finished();
     if written.is_err() {
         let _ = dir.remove_file(rel);
     }
     written
+}
+
+/// Syncs a file [`create`] is making.
+fn sync_new(handle: &cap_std::fs::File) -> Result<(), Fault> {
+    #[cfg(test)]
+    if tests::FAIL_CREATE_SYNC.with(|countdown| {
+        let left = countdown.get();
+        countdown.set(left.saturating_sub(1));
+        left == 1
+    }) {
+        return Err(Fault::Unreachable("no space left on device".to_owned()));
+    }
+    handle.sync_all().map_err(|error| io_fault(&error))
 }
 
 /// Writes the bytes of a file [`create`] is making.
@@ -527,6 +559,53 @@ mod tests {
         pub(super) static NO_HARD_LINKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         /// Makes [`open_temp`] on this thread use 0 for its clock part.
         pub(super) static FIXED_TEMP_CLOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// When set to n, the nth [`sync_new`] call on this thread from now
+        /// fails. 0 turns it off.
+        pub(super) static FAIL_CREATE_SYNC: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+        /// Run once by [`create_in_place`] on this thread after its write and
+        /// sync, before it removes a failed file.
+        static IN_PLACE_FINISHED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn in_place_finished() {
+        if let Some(hook) = IN_PLACE_FINISHED.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    #[test]
+    fn without_hard_links_a_failed_sync_leaves_no_file_and_keeps_a_concurrent_save() {
+        let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().to_path_buf();
+        let held = std::rc::Rc::new(std::cell::Cell::new(false));
+        let saver = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (seen_held, seen_saver) = (held.clone(), saver.clone());
+        IN_PLACE_FINISHED.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                seen_held.set(WRITE_LOCK.try_lock().is_err());
+                // A save of the same name starts while the failed file is
+                // still there. It must not land before that file is removed.
+                *seen_saver.borrow_mut() = Some(std::thread::spawn(move || {
+                    let dir = open_root(&path).unwrap();
+                    write_replacing(&dir, Path::new("Minutes.txt"), b"saved meanwhile")
+                }));
+            }));
+        });
+        NO_HARD_LINKS.with(|off| off.set(true));
+        // The temporary copy syncs, then the in-place file's sync fails.
+        FAIL_CREATE_SYNC.with(|fail| fail.set(2));
+        let failed = create(root.path(), "", "Minutes.txt", b"the whole document");
+        FAIL_CREATE_SYNC.with(|fail| fail.set(0));
+        NO_HARD_LINKS.with(|off| off.set(false));
+
+        assert!(matches!(failed, Err(Fault::Unreachable(_))), "a failed sync is a failed create: {failed:?}");
+        assert!(held.get(), "the in-place file is written and removed under the write lock");
+        let saver = saver.borrow_mut().take().unwrap();
+        saver.join().unwrap().unwrap();
+        let left: Vec<_> = std::fs::read_dir(root.path()).unwrap().map(|item| item.unwrap().file_name()).collect();
+        assert_eq!(left, ["Minutes.txt"]);
+        assert_eq!(std::fs::read(root.path().join("Minutes.txt")).unwrap(), b"saved meanwhile", "the removal took only the failed file");
     }
 
     /// Held by the tests that make temporary files, so the next value of
