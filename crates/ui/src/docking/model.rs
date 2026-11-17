@@ -108,6 +108,11 @@ pub struct Monitor {
     pub rect: [f32; 4],
     /// Physical pixels per logical point.
     pub scale: f32,
+    /// The part of `rect` windows may use, without the taskbar, Dock or menu bar:
+    /// `[x, y, width, height]` on the desktop. Restored native windows keep their bar in it.
+    /// None, or an area outside `rect`: all of `rect`.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub work_area: Option<[f32; 4]>,
 }
 
 /// A window id no other window of this process has drawn, from a random start so ids saved
@@ -583,7 +588,7 @@ pub(super) fn valid_rect(rect: [f32; 4]) -> bool {
 
 /// A floating window's saved monitor and monitor size, each where given.
 fn valid_monitor(monitor: Option<&Monitor>, monitor_size: Option<[f32; 2]>) -> bool {
-    monitor.is_none_or(|m| valid_rect(m.rect) && m.scale.is_finite() && m.scale > 0.0)
+    monitor.is_none_or(|m| valid_rect(m.rect) && m.scale.is_finite() && m.scale > 0.0 && m.work_area.is_none_or(valid_rect))
         && monitor_size.is_none_or(|[w, h]| valid_rect([0.0, 0.0, w, h]))
 }
 
