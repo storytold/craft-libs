@@ -121,6 +121,10 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 The legacy ZIP Zstandard method-20 mapping and bounded-read regression in `crates/zip/src/lenient` are ported from RRFZ's Craft Anything commit `29badae7c9280fdf4c24795927bf3a91f51694c6` (MIT OR Apache-2.0). RRFZ remains the primary Git author. Firmware scanner detection remains app-owned and is not part of this port.
 
+The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
+AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
+Sanitization, animation fitting and numeric output policy remain caller-owned.
+
 ## Screen Video key frames
 
 `crates/video/src/screen_video.rs` extracts AniCraft `crates/xfl/src/video.rs` codec-3 decoding and its synthetic partial-block fixture, introduced by Tanish Manku in `1f3e603b7ff53a3da364e41ec4da8d43dc83aab0` with pixel-loop cleanup `2b7571363b4b647266df758f95b6e397021cfd4d` (MIT OR Apache-2.0). Import commits preserve Tanish as primary author. Caller-owned bounds and neutral RGBA output separate codec work from the consuming app's FLV first-frame/report policy. Boundary tests and integration are subsequent Dylan M. Taylor changes.
