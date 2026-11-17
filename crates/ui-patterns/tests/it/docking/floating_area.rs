@@ -502,30 +502,3 @@ fn a_settled_collapsed_window_runs_no_more_passes_than_an_expanded_one() {
     let (collapsed, expanded) = (passes(collapsed_at(WINDOW_AT)), passes(with_window(None)));
     assert!(collapsed <= expanded, "a still frame runs {collapsed} passes collapsed, {expanded} expanded");
 }
-
-#[trial]
-fn diag_window_move() {
-    let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
-    for group in bed.fixture.by_role(Role::GROUP) {
-        eprintln!("DIAG group {:?}", group.rect);
-    }
-    eprintln!("DIAG title_row {} at {:?}", bed.title_row.get(), window_title());
-    let tree = bed.fixture.tree();
-    for b in bed.fixture.by_role(Role::BUTTON) {
-        eprintln!("DIAG button {:?} {:?}", craft_ui::testing::access::name(tree, b.node), b.rect);
-    }
-    eprintln!("DIAG layers {:?}", craft_ui::testing::snapshot::layer_rects(bed.fixture.ctx()));
-    let from = window_title();
-    bed.fixture.frame(vec![moved(from)]);
-    bed.fixture.frame(vec![press(from)]);
-    eprintln!("DIAG drag_part {:?} click_part {:?}", bed.fixture.drag_part(), bed.fixture.click_part());
-    for step in 1..=4 {
-        bed.fixture.frame(vec![moved(from + Vec2::new(-40.0, 30.0) * (step as f32 / 4.0))]);
-        eprintln!(
-            "DIAG step {step} rect {:?} dragging {} actions {:?}",
-            bed.workspace.borrow().layout.floating[0].rect,
-            dragging(&bed),
-            bed.actions.borrow()
-        );
-    }
-}
