@@ -4,7 +4,7 @@ use super::CELL;
 use crate::buttons::Button;
 use crate::contract::ShowContainer as _;
 use crate::contract::{Bind, BodyCx, Show as _, Validity};
-use crate::docking::{GroupAt, IconicColumn, IconicColumnOutput, PanelSpec};
+use crate::docking::{ColumnBar, GroupAt, IconicColumn, IconicColumnOutput, PanelSpec};
 use crate::runtime::env::{Env, Message};
 use crate::sections::Panel;
 use crate::testing::memory::global;
@@ -41,6 +41,21 @@ fn at_stage<'a>(
 fn icon_groups(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
     let column = IconicColumn::new("Panels", global("iconic column", "story"), &column, Bind::kept(), &spec);
+    at_stage(ui, column, |group, at, ui, _| {
+        let GroupAt::Show(rect) = at else { return None };
+        let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
+        Panel::new(title).titled().show_at(ui, rect, |_, _| ());
+        None
+    })
+    .into()
+}
+
+/// The column of a floating window collapsed to icons: the window's title row is its bar, so the icons start at its
+/// top, and its flyouts open towards the room.
+#[story(IconicColumn<'static, u8>, covers = [Default], drive = Drive::Never)]
+fn icons_in_a_floating_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    let column = IconicColumn::new("Panels", global("iconic column", "window story"), &column, Bind::kept(), &spec).bar(ColumnBar::Window);
     at_stage(ui, column, |group, at, ui, _| {
         let GroupAt::Show(rect) = at else { return None };
         let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
