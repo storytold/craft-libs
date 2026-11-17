@@ -3,7 +3,7 @@
 
 use craft_behavior::Mixed;
 use craft_theme::ColorModel;
-use craft_ui::contract::{Bind, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -77,7 +77,7 @@ impl<'a> Body<'a> {
             }
         }
         Row::new().show(ui, |ui, _| {
-            Field::new(words.hex.as_str().to_owned()).side(HexField::hash_label()).show(ui, |ui, _| self.hex_field(ui, pass, &words, got));
+            Field::new(words.hex.as_str().to_owned()).side(HexField::hash_label()).show(ui, |ui, _| self.hex_field(ui, pass, &words, None, got));
             self.sample_button(ui, &words, got);
         });
     }
@@ -119,11 +119,15 @@ impl<'a> Body<'a> {
         }
     }
 
-    /// The hex field. The Full layout's first show focuses it.
-    pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
-        let edit = TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba())))
-            .empty(pass.shown.color.to_rgba())
-            .show(ui);
+    /// The hex field, at `sizing` when given. The Full layout's first show focuses it.
+    pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
+        let field =
+            TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba());
+        let edit = match sizing {
+            Some(sizing) => field.sizing(sizing),
+            None => field,
+        }
+        .show(ui);
         if pass.focus_hex {
             focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
         }

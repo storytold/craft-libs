@@ -118,8 +118,9 @@ fn a_dialog_reopened_keeps_only_web_colors_and_recalls_the_values_kept_on_ok() {
     assert_eq!(edited(&dialogs), Some(values), "Reset returns the typed values");
 }
 
-/// The Full picker's channel rows show a letter after each radio and no channel words; the radios keep their names, and
-/// the number fields of a column, the hex field included, start at one x whether or not their row has a radio.
+/// The Full picker lays its channels out as Photoshop's Color Picker does: a letter after each radio and no channel words,
+/// the number fields of a group at one x (the hex field, which has no radio, included), a unit after its field and
+/// outside it, and the second group (Lab, CMYK) starting on the first row of the first.
 #[trial]
 fn the_full_pickers_channel_rows_show_letters_and_align_their_fields() {
     let mut fixture = Fixture::new(|ui| {
@@ -139,7 +140,7 @@ fn the_full_pickers_channel_rows_show_letters_and_align_their_fields() {
     assert_eq!(fixture.by_role(Role::RADIO_BUTTON).len(), 9, "every channel keeps its radio");
     let fields = fixture.by_role(Role::SPIN_BUTTON);
     assert_eq!(fields.len(), 9);
-    // The columns are found by x, not by tree order: HSB and RGB fields share the first, Lab's the second.
+    // The groups are found by x, not by tree order: HSB and RGB fields share the first, Lab's the second.
     let mut starts: Vec<f32> = Vec::new();
     for field in &fields {
         if !starts.iter().any(|start| (start - field.rect.min.x).abs() < 0.5) {
@@ -148,7 +149,15 @@ fn the_full_pickers_channel_rows_show_letters_and_align_their_fields() {
     }
     starts.sort_by(f32::total_cmp);
     let rects: Vec<_> = fields.iter().map(|field| field.rect).collect();
-    assert_eq!(starts.len(), 2, "the fields start in two columns, one per model column: {rects:?}");
+    assert_eq!(starts.len(), 2, "the fields start in two groups: {rects:?}");
     let hex = fixture.by_label("Hex color").expect("the hex field");
-    assert!((hex.rect.min.x - starts[0]).abs() < 0.5, "the hex field, which has no radio, starts in the first column: {:?}", hex.rect);
+    assert!((hex.rect.min.x - starts[0]).abs() < 0.5, "the hex field, which has no radio, starts in the first group: {:?}", hex.rect);
+    let first = fields.iter().filter(|field| (field.rect.min.x - starts[0]).abs() < 0.5).map(|field| field.rect.min.y).fold(f32::MAX, f32::min);
+    let second = fields.iter().filter(|field| (field.rect.min.x - starts[1]).abs() < 0.5).map(|field| field.rect.min.y).fold(f32::MAX, f32::min);
+    assert!((first - second).abs() < 0.5, "the second group starts on the first group's first row: {first} against {second}");
+    let widest = fields.iter().map(|field| field.rect.width()).fold(0.0_f32, f32::max);
+    let hue = fields.iter().min_by(|a, b| a.rect.min.y.total_cmp(&b.rect.min.y).then(a.rect.min.x.total_cmp(&b.rect.min.x))).expect("the hue field");
+    let degrees = texts.iter().find(|run| run.text == "\u{b0}").expect("the degree unit is shown as text");
+    assert!(degrees.rect.min.x >= hue.rect.max.x - 0.5, "the unit sits after the field, outside it: {:?} against {:?}", degrees.rect, hue.rect);
+    assert!(widest < starts[1] - starts[0], "the fields are short, not the width of the room");
 }

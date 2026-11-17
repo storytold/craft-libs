@@ -4,15 +4,15 @@ use craft_behavior::{ColumnWidth, IconId, Metrics, Mixed, NavShape, Sense};
 use craft_theme::{ColorModel, HsbModel, OklchModel, RgbModel, Srgba};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, FieldLayout, LabelKind, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel,
-    Sizing,
+    Bind, Common, Component, Cx, FieldLayout, Gap, LabelKind, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _,
+    SideLabel, Sizing,
 };
 use craft_ui::display::{Icon, Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::style::{ComponentStyle, StyleCx, TypeRole};
-use craft_ui::text::{HexField, NumberField};
+use craft_ui::text::{HexField, NumberField, UnitPlacement};
 use egui::{Rect, Response, Ui, Vec2};
 
 use super::channel::{ChannelRule, ChannelUnit, channel_name};
@@ -162,11 +162,8 @@ impl Component for ColorWarningChip<'_> {
     }
 }
 
-/// Columns that take the width of their content: the Full layout's two halves, and its channel grid of one to three
-/// columns. A group of fields that fills the width would take all of a row's room otherwise.
-const HALVES: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
-const ONE_COLUMN: &[ColumnWidth] = &[ColumnWidth::Content];
-const THREE_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content];
+/// The columns of one channel group: radio, letter, and the value cell (field and unit), each as wide as its content.
+const THREE_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content];
 
 /// A grid column of the Full layout: HSB and RGB, then Lab and the host's models, then OKLCH.
 fn column_of(model: &dyn ColorModel) -> usize {
@@ -183,7 +180,7 @@ impl<'a> Body<'a> {
     pub(super) fn full(&self, ui: &mut Ui, pass: &Pass<'a>, got: &mut Collected) {
         let words = Env::of(ui).words::<ColorPickerWords>();
         let visible: Vec<&dyn ColorModel> = self.models.iter().copied().chain([pass.mode.model()]).collect();
-        Grid::new(HALVES).show(ui, |ui, _| {
+        Row::new().wrap(true).gap(Gap::Section).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 self.area_and_strip(ui, pass, &visible, got);
                 if self.has_web_check {
@@ -219,19 +216,21 @@ impl<'a> Body<'a> {
     /// half sets it.
     fn compare_swatch(&self, ui: &mut Ui, pass: &Pass<'a>, current: Mixed<PickedColor>, words: &ColorPickerWords, got: &mut Collected) {
         let caption = |text: &str| Text::new(text.to_owned()).role(TypeRole::Caption).shade(Shade::Muted);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             caption(words.new_caption.as_str()).show(ui);
-            Swatch::new(words.new_color.as_str().to_owned(), pass.shows(pass.shown.color)).sizing(Sizing::FillWidth).show(ui);
-            let restore = words.restore.as_str().to_owned();
-            let shown = match current {
-                Mixed::Same(current) => Mixed::Same(current.color),
-                Mixed::Mixed => Mixed::Mixed,
-            };
-            if Swatch::new(restore.clone(), shown).tooltip(restore).sizing(Sizing::FillWidth).show(ui).clicked
-                && let Mixed::Same(current) = current
-            {
-                got.clicks.push(current);
-            }
+            Stack::new().gap(Gap::None).show(ui, |ui, _| {
+                Swatch::new(words.new_color.as_str().to_owned(), pass.shows(pass.shown.color)).sizing(Sizing::FillWidth).show(ui);
+                let restore = words.restore.as_str().to_owned();
+                let shown = match current {
+                    Mixed::Same(current) => Mixed::Same(current.color),
+                    Mixed::Mixed => Mixed::Mixed,
+                };
+                if Swatch::new(restore.clone(), shown).tooltip(restore).sizing(Sizing::FillWidth).show(ui).clicked
+                    && let Mixed::Same(current) = current
+                {
+                    got.clicks.push(current);
+                }
+            });
             caption(words.current_caption.as_str()).show(ui);
         });
     }
@@ -249,15 +248,10 @@ impl<'a> Body<'a> {
                     .filter(|(column, models)| *column == 0 || !models.is_empty())
                     .map(|(_, models)| models)
                     .collect();
-                let widths = match columns.len() {
-                    1 => ONE_COLUMN,
-                    2 => &THREE_COLUMNS[..2],
-                    _ => THREE_COLUMNS,
-                };
-                Grid::new(widths).show(ui, |ui, _| {
+                // The groups sit side by side from the top; each is its own grid of radio, letter and value cells, so the
+                // fields of a group share one x whether or not their row has a radio.
+                Row::new().gap(Gap::Section).show(ui, |ui, _| {
                     for (column, models) in columns.iter().enumerate() {
-                        // Each model column is its own grid of radio, letter and field cells, so the fields of a
-                        // column share one x whether or not their row has a radio.
                         Grid::new(THREE_COLUMNS).show(ui, |ui, _| {
                             for model in models {
                                 self.model_fields(ui, pass, *model, ModelChoice { visible, offered: &offered, words }, got);
@@ -265,7 +259,8 @@ impl<'a> Body<'a> {
                             if column == 0 {
                                 Text::new(Label::from("")).show(ui);
                                 Text::new(Label::from(HexField::HASH)).shade(Shade::Muted).show(ui);
-                                self.hex_field(ui, pass, words, got);
+                                self.hex_field(ui, pass, words, Some(Sizing::Content), got);
+                                Text::new(Label::from("")).show(ui);
                             }
                         });
                     }
@@ -306,24 +301,32 @@ impl<'a> Body<'a> {
             }
             Text::new(Label::from(letter.to_owned())).shade(Shade::Muted).show(ui);
             let rule = ChannelRule::of(channel);
-            let unit = ChannelUnit::of(channel.unit);
             let value = f64::from(values.values[i]);
-            let field = NumberField::new(name, Bind::given(pass.shows(Some(value))))
+            // The unit is the field's kind (typed units, decimals) and sits in its own cell after the field.
+            let (kind, text) = match ChannelUnit::of(channel.unit) {
+                ChannelUnit::None => (None, None),
+                ChannelUnit::Percent => (Some(UnitKind::Percent), Some(Env::of(ui).units().symbol(UnitKind::Percent))),
+                ChannelUnit::Degrees => (Some(UnitKind::Degrees), Some(Env::of(ui).units().symbol(UnitKind::Degrees))),
+                ChannelUnit::Text(text) => (None, Some(text.to_owned())),
+            };
+            let field = NumberField::new(name.clone(), Bind::given(pass.shows(Some(value))))
                 .range(rule.range.clone())
                 .step(rule.step)
                 .snap_typed(true)
-                .commit_decimals(usize::from(rule.decimals));
-            let field = match unit {
-                ChannelUnit::None => field,
-                ChannelUnit::Percent => field.unit_kind(craft_ui::runtime::env::UnitKind::Percent),
-                ChannelUnit::Degrees => field.unit_kind(craft_ui::runtime::env::UnitKind::Degrees),
-                ChannelUnit::Text(text) => field.unit(Label::from(text)),
+                .commit_decimals(usize::from(rule.decimals))
+                .fixed_decimals(usize::from(rule.decimals))
+                .unit_placement(UnitPlacement::After)
+                .sizing(Sizing::Content);
+            let field = match kind {
+                Some(kind) => field.unit_kind(kind),
+                None => field,
             };
             got.adopt(field.show(ui).edit, pass.shown, |v, mine| {
                 if let Some(v) = v {
                     *mine = mine.with_channel(model, i, *v, &pass.rules);
                 }
             });
+            Text::new(Label::from(text.unwrap_or_default())).shade(Shade::Muted).show(ui);
         }
     }
 }
