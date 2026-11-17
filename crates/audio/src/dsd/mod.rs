@@ -30,8 +30,32 @@ pub const MAX_SAMPLE_RATE: u32 = 45_158_400;
 /// Maximum safe block size for DSF channel blocks (16 MiB).
 pub const MAX_BLOCK_SIZE: u32 = 16 * 1024 * 1024;
 
-/// Maximum safe memory allocation budget for decoded audio (256 MiB).
+/// Maximum audio-buffer allocation budget (256 MiB).
+///
+/// Raw readers limit their channel bytes; PCM conversion separately limits the
+/// simultaneously live PCM output and scratch buffers. Caller-owned raw input,
+/// metadata, and the small filter lookup table are not included.
 pub const MAX_DECODE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Maximum encoded container size, including headers and block padding (256 MiB).
+pub const MAX_ENCODE_BYTES: usize = 256 * 1024 * 1024;
+
+fn encoded_size(payload: usize, header: usize) -> Result<usize, Error> {
+    payload.checked_add(header).filter(|&n| n <= MAX_ENCODE_BYTES).ok_or(Error::MemoryLimitExceeded)
+}
+
+// Account for retained channel output plus the current filter's two live buffers.
+fn pcm_budget(lengths: impl Iterator<Item = usize>, factor: u32) -> Result<(), Error> {
+    let mut retained = 0usize;
+    for len in lengths {
+        let (working, output) = filter::allocation_sizes(len, factor)?;
+        if retained.checked_add(working).is_none_or(|n| n > MAX_DECODE_BYTES) {
+            return Err(Error::MemoryLimitExceeded);
+        }
+        retained = retained.checked_add(output).ok_or(Error::MemoryLimitExceeded)?;
+    }
+    Ok(())
+}
 
 /// Supported DSD container formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -110,6 +134,10 @@ impl RawAudio {
         if !matches!(factor, 8 | 16 | 32 | 64) {
             return Err(Error::Unsupported("decimation factor must be 8, 16, 32, or 64"));
         }
+        if self.channel_bytes.len() > MAX_CHANNELS {
+            return Err(Error::Unsupported("channel count must be between 1 and 8"));
+        }
+        pcm_budget(self.channel_bytes.iter().map(Vec::len), factor)?;
         let mut channels = Vec::with_capacity(self.channel_bytes.len());
         for ch_bytes in &self.channel_bytes {
             let pcm = filter::decimate_channel(ch_bytes, self.bit_order, factor)?;
@@ -222,4 +250,26 @@ pub fn encode_dsf(sample_rate: u32, channels: &[&[u8]], sample_count: u64, block
 /// Encodes planar 1-bit audio channels into a Philips DSDIFF file.
 pub fn encode_dsdiff(sample_rate: u32, channels: &[&[u8]], sample_count: u64) -> Result<Vec<u8>, Error> {
     dsdiff::write_dsdiff(sample_rate, channels, sample_count)
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn pcm_budget_counts_all_channels_and_live_scratch() {
+        let quarter = MAX_DECODE_BYTES / 4;
+        assert!(pcm_budget([quarter / 2, quarter / 2].into_iter(), 8).is_ok());
+        assert_eq!(pcm_budget([quarter / 2, quarter / 2 + 1].into_iter(), 8), Err(Error::MemoryLimitExceeded));
+        assert!(pcm_budget([quarter / 2].into_iter(), 16).is_ok());
+        assert_eq!(pcm_budget([quarter].into_iter(), 16), Err(Error::MemoryLimitExceeded));
+        assert_eq!(pcm_budget([usize::MAX].into_iter(), 8), Err(Error::MemoryLimitExceeded));
+    }
+
+    #[test]
+    fn encoded_budget_includes_headers_without_large_allocations() {
+        assert_eq!(encoded_size(MAX_ENCODE_BYTES - 92, 92), Ok(MAX_ENCODE_BYTES));
+        assert_eq!(encoded_size(MAX_ENCODE_BYTES - 91, 92), Err(Error::MemoryLimitExceeded));
+        assert_eq!(encoded_size(usize::MAX, 92), Err(Error::MemoryLimitExceeded));
+    }
 }

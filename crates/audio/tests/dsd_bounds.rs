@@ -63,3 +63,31 @@ fn empty_raw_audio_rejects_invalid_decimation_factors() {
         assert_eq!(raw.to_pcm_with_factor(factor).unwrap().sample_rate, 2_822_400 / factor);
     }
 }
+
+#[test]
+fn writers_reject_unbounded_output_before_allocating() {
+    let channels: [&[u8]; 8] = [&[]; 8];
+    for count in [u64::MAX, (craft_audio::dsd::MAX_ENCODE_BYTES as u64 + 1) * 8] {
+        assert_eq!(encode_dsf(2_822_400, &channels, count, 8), Err(Error::MemoryLimitExceeded));
+        assert_eq!(encode_dsdiff(2_822_400, &channels, count), Err(Error::MemoryLimitExceeded));
+    }
+    assert!(matches!(encode_dsf(2_822_400, &[&[]], 0, u32::MAX), Err(Error::InvalidData(_))));
+}
+
+#[test]
+fn encoded_sizes_match_actual_bytes_for_odd_and_even_payloads() {
+    for channels in 1..=8 {
+        for len in 0..=9 {
+            let data = vec![0x69; len];
+            let planes = vec![data.as_slice(); channels];
+            for block in [0, 1, 3, 8] {
+                let dsf = encode_dsf(2_822_400, &planes, len as u64 * 8, block).unwrap();
+                assert_eq!(u64::from_le_bytes(dsf[12..20].try_into().unwrap()), dsf.len() as u64);
+                assert_eq!(read_raw(&dsf).unwrap().channel_bytes, vec![data.clone(); channels]);
+            }
+            let dff = encode_dsdiff(2_822_400, &planes, len as u64 * 8).unwrap();
+            assert_eq!(u64::from_be_bytes(dff[4..12].try_into().unwrap()) + 12, dff.len() as u64);
+            assert_eq!(read_raw(&dff).unwrap().channel_bytes, vec![data; channels]);
+        }
+    }
+}

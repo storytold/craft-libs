@@ -265,23 +265,26 @@ pub fn write_dsf(sample_rate: u32, channels: &[&[u8]], sample_count: u64, block_
     if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate) {
         return Err(Error::InvalidData("sample rate out of bounds"));
     }
+    if block_size > MAX_BLOCK_SIZE {
+        return Err(Error::InvalidData("DSF block size exceeds maximum"));
+    }
     let block_size = if block_size == 0 { 4096 } else { block_size as usize };
 
     let num_channels = channels.len();
-    let bytes_per_ch = sample_count.div_ceil(8) as usize;
+    let bytes_per_ch = usize::try_from(sample_count.div_ceil(8)).map_err(|_| Error::MemoryLimitExceeded)?;
     let num_blocks = bytes_per_ch.div_ceil(block_size);
-    let payload_size = num_blocks.saturating_mul(num_channels).saturating_mul(block_size);
+    let payload_size = num_blocks.checked_mul(num_channels).and_then(|n| n.checked_mul(block_size)).ok_or(Error::MemoryLimitExceeded)?;
+    let file_size = super::encoded_size(payload_size, 92)?;
 
-    let data_chunk_size = 12u64.saturating_add(payload_size as u64);
-    let file_size = 28u64 + 52u64 + data_chunk_size;
+    let data_chunk_size = 12u64 + payload_size as u64;
 
     let mut out = Vec::new();
-    out.try_reserve_exact(file_size as usize).map_err(|_| Error::MemoryLimitExceeded)?;
+    out.try_reserve_exact(file_size).map_err(|_| Error::MemoryLimitExceeded)?;
 
     // 1. 'DSD ' chunk (28 bytes)
     out.extend_from_slice(b"DSD ");
     out.extend_from_slice(&28u64.to_le_bytes());
-    out.extend_from_slice(&file_size.to_le_bytes());
+    out.extend_from_slice(&(file_size as u64).to_le_bytes());
     out.extend_from_slice(&0u64.to_le_bytes()); // metadata offset = 0
 
     // 2. 'fmt ' chunk (52 bytes)

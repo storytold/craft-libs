@@ -249,8 +249,10 @@ pub fn write_dsdiff(sample_rate: u32, channels: &[&[u8]], sample_count: u64) -> 
     }
 
     let num_channels = channels.len();
-    let bytes_per_ch = sample_count.div_ceil(8) as usize;
-    let data_size = bytes_per_ch.saturating_mul(num_channels);
+    let bytes_per_ch = usize::try_from(sample_count.div_ceil(8)).map_err(|_| Error::MemoryLimitExceeded)?;
+    let data_size = bytes_per_ch.checked_mul(num_channels).ok_or(Error::MemoryLimitExceeded)?;
+    // Fixed headers plus four bytes for each channel identifier.
+    let file_size = super::encoded_size(data_size, 110 + 4 * num_channels)?;
 
     // Build PROP subchunks:
     // 1. 'FS  ' (4 bytes + 12 chunk header)
@@ -310,9 +312,9 @@ pub fn write_dsdiff(sample_rate: u32, channels: &[&[u8]], sample_count: u64) -> 
     dsd_chunk_hdr.extend_from_slice(b"DSD ");
     dsd_chunk_hdr.extend_from_slice(&(data_size as u64).to_be_bytes());
 
-    let frm8_payload_len = 4 + fver_chunk.len() + prop_chunk.len() + dsd_chunk_hdr.len() + data_size;
+    let frm8_payload_len = file_size - 12;
     let mut out = Vec::new();
-    out.try_reserve_exact(12 + frm8_payload_len).map_err(|_| Error::MemoryLimitExceeded)?;
+    out.try_reserve_exact(file_size).map_err(|_| Error::MemoryLimitExceeded)?;
 
     out.extend_from_slice(b"FRM8");
     out.extend_from_slice(&(frm8_payload_len as u64).to_be_bytes());

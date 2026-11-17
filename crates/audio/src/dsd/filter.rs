@@ -142,20 +142,28 @@ fn byte_lut(k: usize, byte_val: u8) -> f32 {
     sum
 }
 
+// Both the first-stage samples and the secondary output coexist during filtering.
+pub(super) fn allocation_sizes(len: usize, factor: u32) -> Result<(usize, usize), Error> {
+    if !matches!(factor, 8 | 16 | 32 | 64) {
+        return Err(Error::Unsupported("decimation factor must be 8, 16, 32, or 64"));
+    }
+    let stage = len.checked_mul(std::mem::size_of::<f32>()).ok_or(Error::MemoryLimitExceeded)?;
+    let output = (len / (factor / 8) as usize).checked_mul(std::mem::size_of::<f32>()).ok_or(Error::MemoryLimitExceeded)?;
+    let working = if factor == 8 { stage } else { stage.checked_add(output).ok_or(Error::MemoryLimitExceeded)? };
+    if working > MAX_DECODE_BYTES {
+        return Err(Error::MemoryLimitExceeded);
+    }
+    Ok((working, output))
+}
+
 /// Decimates 1-bit DSD audio bytes for a single channel to `f32` PCM.
 ///
 /// The default decimation factor is 8 (1 output float per input byte).
 /// When `factor` is 16, 32, or 64, the 1/8 output is further downsampled
 /// by 2, 4, or 8 respectively.
 pub fn decimate_channel(channel_bytes: &[u8], bit_order: BitOrder, factor: u32) -> Result<Vec<f32>, Error> {
-    if !matches!(factor, 8 | 16 | 32 | 64) {
-        return Err(Error::Unsupported("decimation factor must be 8, 16, 32, or 64"));
-    }
-
+    allocation_sizes(channel_bytes.len(), factor)?;
     let num_bytes = channel_bytes.len();
-    if num_bytes.saturating_mul(std::mem::size_of::<f32>()) > MAX_DECODE_BYTES {
-        return Err(Error::MemoryLimitExceeded);
-    }
 
     // Build the 12 x 256 lookup table for fast convolution.
     // 12 * 256 * 4 bytes = 12 KB, sits comfortably in L1 cache.
