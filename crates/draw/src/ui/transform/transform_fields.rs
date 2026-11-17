@@ -435,7 +435,8 @@ impl Cells<'_> {
                 .range(-bound..=bound)
                 .codec(codec.clone())
                 .unit(unit.clone())
-                .scrub_by_label();
+                .scrub_by_label()
+                .sizing(sizing);
             if percent {
                 number = number.commit_decimals(decimals);
             }
