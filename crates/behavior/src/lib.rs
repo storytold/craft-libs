@@ -110,7 +110,7 @@ pub use selection::{
 pub use sense::Sense;
 pub use sizing::{ControlMetrics, Metrics, Proposal};
 pub use typing::{EditRun, Ended, EscapeRule, Escaped, Typed, TypingRun};
-pub use value::{Applied, CancelReason, EditEvent, EditEvents, EditPolicy, Gesture, GestureId, GestureNote, GesturePhase, Mixed, Validity, Value};
+pub use value::{Applied, CancelReason, EditEvent, EditEvents, EditPolicy, Gesture, GestureId, GestureNote, GesturePhase, Mixed, Preview, Validity, Value};
 pub use value_drag::{DragWarp, ValueDrag, wrap_value};
 pub use wheel::{GESTURE_GAP, Wheel, WheelFocus, WheelGesture, WheelNotch, WheelPhase, WheelRoom, WheelSource, WheelTaker, WheelUnit};
 

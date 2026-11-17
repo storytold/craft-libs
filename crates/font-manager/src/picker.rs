@@ -11,7 +11,7 @@ mod stories;
 use std::sync::Arc;
 
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense, Value};
-use craft_behavior::{HitLevel, HitPriority, NavMove};
+use craft_behavior::{HitLevel, HitPriority, NavMove, Preview};
 use craft_font_catalog::Catalog;
 use craft_host::Section;
 use craft_ui::buttons::IconButton;
@@ -301,7 +301,7 @@ pub fn family_rows(
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FontPickerOutput {
-    /// The field's edit: a pick commits the family; a hovered or keyed row is a running proposal.
+    /// The field's edit: a pick commits the family.
     pub edit: EditResponse<String>,
     /// The style picked in an expanded family's style rows.
     pub picked_style: Option<String>,
@@ -310,10 +310,12 @@ pub struct FontPickerOutput {
     /// A family was picked: Enter or a click on a row, Enter on the exact typed name, or the wheel or arrows on the
     /// closed field. The picker has already noted it as recent.
     pub picked: Option<String>,
-    /// The family under the pointer or the keyboard row while the list is open, for a live preview of the selected
-    /// text (Photoshop previews on hover). `None` restores the committed family.
-    pub preview: Option<String>,
+    /// What this pass did to the live preview of the selected text: the family under the pointer or the keyboard row
+    /// of the open list (Photoshop previews on hover). It ends when the pointer leaves the rows, the list closes
+    /// (Escape, a press outside) or a row is picked. The field's value and text stay.
+    pub preview: Preview<String>,
 }
+
 
 impl Outcome for FontPickerOutput {
     type Value = String;
@@ -429,7 +431,7 @@ fn read<T: Value>(bind: &mut Option<Bind<'_, T>>, cx: &mut impl StageAccess) -> 
 }
 
 /// The font family field. Typing filters the list to the families whose name (in any language) matches, the best
-/// match first, and opens it; the chevron and Alt+Down open it on every family, Alt+Up closes it. Rows: a star, the
+/// match first, and opens it; a click on the name while the list is closed, the chevron and Alt+Down open it on every family (the click selects the name), Alt+Up closes it. Rows: a star, the
 /// family name in the interface face, a sample in the family's own face at the preview size and the class mark.
 /// Recent families form a group at the top. Up, Down and Page keys move the keyboard row, which previews, Enter or a
 /// click on a row picks it, Enter on a typed name that is a family picks that family, Escape closes the list and
@@ -453,6 +455,7 @@ pub struct FontPicker<'a> {
     picked: Option<String>,
     picked_style: Option<String>,
     rested: Option<String>,
+    preview: Preview<String>,
     /// The preview banner's text.
     #[prop]
     preview_text: Option<&'a str>,
@@ -473,6 +476,7 @@ impl<'a> FontPicker<'a> {
             picked: None,
             picked_style: None,
             rested: None,
+            preview: Preview::Unchanged,
             preview_text: None,
             served: &[],
         }
@@ -557,18 +561,20 @@ impl Component for FontPicker<'_> {
                 None => list.close(cx),
             }
         }
+        // A click on the name while the list is closed opens it on every family and selects the name, so typing
+        // replaces it (Photoshop's font field).
+        if !list.is_open(cx) && cx.text(&text_key()).is_some_and(|outcome| outcome.clicked) {
+            cx.select_all_text();
+            list.open(cx);
+        }
         if list.is_open(cx) {
             return;
         }
         // The one place the picker forgets what belongs to an open list.
+        rows::end_preview(self, cx);
         let typing = cx.memory::<Typing>();
-        typing.lead = None;
-        typing.lead_by_pointer = false;
         typing.expanded.clear();
         typing.rested.clear();
-        if matches!(cx.gesture(), Some(craft_behavior::GesturePhase::Begin | craft_behavior::GesturePhase::Update)) {
-            cx.cancel(craft_behavior::CancelReason::Dismissed);
-        }
         let settings = read(&mut self.settings, cx);
         let current = cx.value().cloned().unwrap_or_default();
         let all = self.ordered(cx, settings.as_ref());
@@ -602,8 +608,6 @@ impl Component for FontPicker<'_> {
     }
 
     fn finish(self, mut cx: Cx<'_, Self>) -> FontPickerOutput {
-        let list = cx.popup(POPUP);
-        let preview = if list.is_open(&mut cx) { cx.memory::<Typing>().lead.clone() } else { None };
         let edit = cx.edit_response();
         let committed = edit.events.iter().rev().find_map(|event| match event {
             EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(after.clone()),
@@ -617,6 +621,6 @@ impl Component for FontPicker<'_> {
             settings.note_recent(family);
             write(&mut bind, &mut cx, settings, "Recent font");
         }
-        FontPickerOutput { edit, picked, preview, picked_style: self.picked_style, rested: self.rested }
+        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested }
     }
 }

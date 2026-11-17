@@ -49,6 +49,8 @@ pub(crate) struct Shown {
     pub lost_focus: bool,
     /// Enter was pressed while the widget held focus.
     pub entered: bool,
+    /// A primary click on the widget ended this pass.
+    pub clicked: bool,
     pub caret: Option<Rect>,
     pub galley: std::sync::Arc<egui::Galley>,
     /// Where the galley sits on screen.
@@ -207,6 +209,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         focused,
         lost_focus: output.response.lost_focus() || (had_focus && !focused),
         entered,
+        clicked: output.response.clicked(),
         caret,
         galley: output.galley,
         galley_pos: output.galley_pos,

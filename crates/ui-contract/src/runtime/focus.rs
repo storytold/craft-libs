@@ -554,6 +554,16 @@ pub(crate) fn request_now(ctx: &Context, target: FocusTarget) {
     apply(ctx, acts);
 }
 
+/// Whether `at` (screen points) lies in a popup layer opened above the layer of the widget that holds egui focus: a
+/// press or a wheel there is the popup's, not the focused widget's. The layer under `at` is the layer test's; the
+/// focused widget's layer is egui's last-pass record of it, since a stop records no layer of its own.
+pub(crate) fn popup_above_focus(ctx: &Context, at: egui::Pos2) -> bool {
+    let focus_layer = egui_focus::focused(ctx).and_then(|widget| ctx.read_response(widget)).map(|response| response.layer_id);
+    crate::runtime::egui::areas::layer_at(ctx, at)
+        .zip(focus_layer)
+        .is_some_and(|(layer, below)| crate::runtime::overlay::popup_above(ctx, layer, below))
+}
+
 /// The stop focus is on, in the viewport whose pass is running: the focused member or part of the egui
 /// root, else the root itself.
 pub(crate) fn focused_stop(ctx: &Context) -> Option<StopKey> {

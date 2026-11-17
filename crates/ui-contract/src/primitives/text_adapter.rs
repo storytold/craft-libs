@@ -81,6 +81,8 @@ pub(crate) struct TextState {
     pub completions: completion::Completions,
     /// The draft change `Cx::set_draft` asked for, applied at the start of the next pass.
     pub change: Option<DraftChange>,
+    /// `Cx::select_all_text` asked for the whole text to be selected at the start of the next pass.
+    pub select_all: bool,
     /// The selection, `(caret, anchor)`, the text part had when its edit menu took the focus: egui collapses the
     /// selection of a widget without focus, and the menu's command acts on it once the focus is back, which reaches the
     /// widget the pass after the menu closes.
@@ -157,6 +159,8 @@ pub(crate) struct AdapterIn<'a> {
 pub(crate) struct AdapterOut {
     pub layout: TextLayout,
     pub focused: bool,
+    /// A primary click on the text ended this pass.
+    pub clicked: bool,
     /// The screen y of the first row's baseline; `None` while the text is empty.
     pub baseline: Option<f32>,
 }
@@ -468,7 +472,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let full = display;
     let layout = TextLayout::new(shown.galley, false, full);
     let baseline = (!layout.full.is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
-    AdapterOut { layout, focused: shown.focused, baseline }
+    AdapterOut { layout, focused: shown.focused, clicked: shown.clicked, baseline }
 }
 
 /// What [`show_selectable`] shows: the read-only text of a selection part.

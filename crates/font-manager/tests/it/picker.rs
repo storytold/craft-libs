@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::picker::{FontFilters, FontPicker, FontPickerSettings, SIMILAR_COUNT, family_rows};
+use craft_behavior::Preview;
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::focus::AccessActionKind;
@@ -42,7 +43,11 @@ fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>
         let mut seen = shown.borrow_mut();
         let out =
             FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served).show(ui);
-        seen.preview = out.preview;
+        match out.preview {
+            Preview::Shows(family) => seen.preview = Some(family),
+            Preview::Ended => seen.preview = None,
+            _ => {}
+        }
         if let Some(family) = out.picked {
             seen.picks.push((family, out.picked_style));
         }
@@ -128,8 +133,9 @@ fn the_row_under_the_pointer_is_proposed_as_the_preview_until_the_pointer_leaves
     let hack = fx.by_label("Hack").expect("the Hack row");
     fx.frame(vec![Event::PointerMoved(hack.center())]);
     fx.settle();
-    assert_eq!(seen.borrow().preview.as_deref(), Some("Hack"), "the hovered row proposes its family");
+    assert_eq!(seen.borrow().preview.as_deref(), Some("Hack"), "the hovered row previews its family");
     assert!(seen.borrow().picks.is_empty(), "a hover picks nothing");
+    assert_ne!(seen.borrow().family, "Hack", "a preview leaves the value");
 
     fx.frame(vec![Event::PointerGone]);
     fx.settle();
@@ -142,4 +148,41 @@ fn the_row_under_the_pointer_is_proposed_as_the_preview_until_the_pointer_leaves
     fx.key(Key::Escape, Modifiers::NONE);
     fx.settle();
     assert_eq!(seen.borrow().preview, None, "a list closed without a pick cancels the preview");
+}
+
+#[trial]
+fn a_preview_over_a_typed_query_keeps_the_query_and_the_list() {
+    let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    fx.type_text("Ha");
+    fx.settle();
+    let hack = fx.by_label("Hack").expect("the typed query lists Hack");
+    fx.frame(vec![Event::PointerMoved(hack.center())]);
+    fx.settle();
+    assert_eq!(seen.borrow().preview.as_deref(), Some("Hack"), "the hovered row previews its family");
+    assert!(present(&fx, "Ha"), "the field keeps the typed query while the row previews");
+    assert!(fx.by_label("Hack").is_some(), "the list stays open on the query");
+
+    fx.frame(vec![Event::PointerGone]);
+    fx.settle();
+    assert_eq!(seen.borrow().preview, None, "leaving the rows ends the preview");
+    assert!(fx.by_label("Hack").is_some(), "the list stays open after the preview ends");
+    assert!(present(&fx, "Ha"), "and the query stays");
+}
+
+#[trial]
+fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() {
+    let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
+    for family in ["Inter", "Hack"] {
+        let field = fx.by_label("Font family").expect("the family field");
+        fx.click(&field);
+        fx.settle();
+        fx.type_text(family);
+        fx.settle();
+        fx.key(Key::Enter, Modifiers::NONE);
+        fx.settle();
+        assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some(family), "the typed name is picked");
+    }
 }

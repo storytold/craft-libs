@@ -16,7 +16,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use crate::ui::length::DocUnit;
-use craft_behavior::{ColumnWidth, EditEvent, IconId};
+use craft_behavior::{ColumnWidth, EditEvent, IconId, Preview};
 use craft_theme::{Rgba, Srgba};
 use craft_ui::choice::Swatch;
 #[cfg(feature = "font-picker")]
@@ -428,9 +428,9 @@ pub struct CharacterControlsOutput {
     /// `Cancel` on Esc): the app merges its steps into one history step. A preset, toggle or select is a `Set`. The
     /// app applies them in order.
     pub edits: Vec<EditEvent<CharacterChange>>,
-    /// The family under the pointer in the open font list, for a live preview of the selected text (only with
-    /// `font-picker`).
-    pub preview_family: Option<String>,
+    /// What this pass did to the live preview of the selected text: the family under the pointer or the keyboard row
+    /// of the open font list (only with `font-picker`).
+    pub preview_family: Preview<String>,
     /// The family the pointer rested on in the open font list long enough for the app to load its preview.
     pub rested_family: Option<String>,
     /// The colour swatch was clicked: the app opens its colour picker for this request (key [`COLOR_KEY`]) and sets
@@ -549,7 +549,7 @@ impl<'a> CharacterControls<'a> {
         });
 
         let mut edits: Vec<EditEvent<CharacterChange>> = Vec::new();
-        let mut preview_family = None;
+        let mut preview_family = Preview::Unchanged;
         let mut rested_family = None;
         let mut requests = HostRequests::new();
 
