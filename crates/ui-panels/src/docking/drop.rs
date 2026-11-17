@@ -11,7 +11,7 @@ use crate::contract::{Component, Cx, DropMark, DropOperation, DropTarget, Pointe
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::env::{AppValues, EnvValue, EnvView, Label};
 use crate::runtime::pointer;
-use craft_behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, PanelPlace, Permissions, Target};
+use craft_behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, Permissions, Target};
 use craft_behavior::{CancelReason, DockSide};
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::hash::Hash;
@@ -165,10 +165,7 @@ fn spot_action<P: Clone + Eq + Hash>(
         return None;
     }
     let moved = moving_panels(layout, unit);
-    let place = |anchor: P, placement: DockPlacement<P>| {
-        let floating = matches!(layout.place(&anchor), Some(PanelPlace::Floating { .. }));
-        placement.allowed_by(permissions(&anchor), floating).then(|| beside(unit, anchor, placement))
-    };
+    let place = |anchor: P, placement: DockPlacement<P>| placement.allowed_by(permissions(&anchor)).then(|| beside(unit, anchor, placement));
     match spot {
         DockSpot::Tab { anchor, index } => {
             let destination = outside(layout, anchor, &moved)?;

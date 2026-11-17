@@ -4,7 +4,7 @@ use crate::docking::drop::{beside, members, moving_panels, to_target};
 use crate::docking::{DockEvent, DragUnit, FloatSpace};
 use crate::runtime::commands::CommandState;
 use craft_behavior::DockSide;
-use craft_behavior::dock::{Action, DockEdge, DockError, DockPlacement, Layout, Location, Node, PanelPlace, Permissions, Target, node_at};
+use craft_behavior::dock::{Action, Column, DockEdge, DockError, DockPlacement, Layout, Location, Node, PanelPlace, Permissions, Target, node_at};
 use egui::{Rect, Vec2};
 use std::hash::Hash;
 
@@ -200,11 +200,14 @@ pub fn actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, command: DockComm
         DockCommands::StepGroupDown => one(Action::step_group(panel.clone(), false)),
         DockCommands::ToggleMinimized => {
             shown()?;
-            one(Action::set_minimized(panel.clone(), !crate::docking::rail::minimized(layout, panel)))
+            one(Action::set_minimized(panel.clone(), !minimized(layout, panel)))
         }
         DockCommands::CollapseToIcons => {
             let place = layout.place(panel).ok_or(DockError::MissingPanel)?;
             let column = layout.column(&place).ok_or(DockError::InvalidPlacement)?;
+            if !column.iconic && !collapses(scene, column) {
+                return Err(DockError::NotAllowed);
+            }
             one(Action::set_iconic(panel.clone(), !column.iconic))
         }
         DockCommands::MovePanelTo | DockCommands::MoveGroupTo | DockCommands::ToggleMaximize | DockCommands::AutoCollapse => Ok(Vec::new()),
@@ -265,16 +268,37 @@ pub fn move_actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, unit: &DragU
     }
 }
 
-/// The state of each panel command for `panel`: enabled as its permissions and place allow, Collapse to Icons
-/// checked while its column is iconic. Maximize Frame applies to a frame of the docked layout, never to a floating
-/// one. `DockArea` publishes them in the panel's group scope.
+/// Whether the group or accordion section of `panel` is minimized to its tab strip. An accordion entry is minimized
+/// while it is closed. A panel the layout does not hold is not.
+fn minimized<P: Clone + Eq + Hash>(layout: &Layout<P>, panel: &P) -> bool {
+    let Some(place) = layout.place(panel) else { return false };
+    match layout.group(&place) {
+        Some(group) => group.minimized,
+        None => match layout.node_of(&place) {
+            Some(Node::Stack { entries, .. }) => entries.iter().any(|entry| &entry.panel == panel && !entry.open),
+            _ => false,
+        },
+    }
+}
+
+/// Whether `column` may collapse to icons: every panel in it collapses ([`Permissions::collapses`]).
+fn collapses<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, column: &Column<P>) -> bool {
+    column.panels().all(|panel| scene.policy(panel).collapses)
+}
+
+/// The state of each panel command for `panel`: enabled as its permissions and place allow. Collapse to Icons applies
+/// to every column, docked or floating, checked while it is iconic, and is off for a column that holds a panel that
+/// does not collapse. Maximize Frame applies to a frame of the docked layout, never to a floating one. `DockArea`
+/// publishes them in the panel's group scope.
 pub fn dock_states<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, panel: &P) -> Vec<(DockCommands, CommandState)> {
     let layout = scene.layout;
     let policy = |p: &P| scene.policy(p);
     let allowed = scene.policy(panel);
     let place = layout.place(panel);
     let floatable = place.is_some() && allowed.movable && allowed.floatable;
-    let iconic = place.as_ref().and_then(|place| layout.column(place)).map(|column| column.iconic);
+    let column = place.as_ref().and_then(|place| layout.column(place));
+    let iconic = column.map(|column| column.iconic);
+    let collapsible = column.is_some_and(|column| column.iconic || collapses(scene, column));
     let enabled = |on: bool| CommandState::new().enabled(on);
     let shown = place.is_some();
     let floating = matches!(place, Some(PanelPlace::Floating { .. }));
@@ -296,19 +320,20 @@ pub fn dock_states<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, panel: &P) ->
         (DockCommands::StepGroupUp, enabled(layout.can_step_group(panel, true, policy))),
         (DockCommands::StepGroupDown, enabled(layout.can_step_group(panel, false, policy))),
         (DockCommands::ToggleMinimized, enabled(shown)),
-        (DockCommands::CollapseToIcons, CommandState::new().enabled(iconic.is_some()).checked(iconic.unwrap_or(false))),
+        (DockCommands::CollapseToIcons, CommandState::new().enabled(collapsible).checked(iconic.unwrap_or(false))),
         (DockCommands::ToggleMaximize, enabled(shown && !floating)),
         (DockCommands::AutoCollapse, enabled(true)),
     ]
 }
 
-/// The actions that float `unit` at the rect a drag would float it at, or keep its window where it is.
+/// The actions that float `unit` at the rect a drag would float it at, or keep its window where it is: a window's
+/// only panel, and a window's only group, already float alone.
 fn float_actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, unit: &DragUnit<P>) -> Vec<Action<P>> {
     let layout = scene.layout;
     let panel = unit.lead();
     let window = layout.floating.iter().find(|window| window.contains(panel));
     let lone = window.is_some_and(|window| window.panels().count() == 1);
-    let whole = window.is_some_and(|window| matches!(window.root, Node::Tabs { .. } | Node::Stack { .. }));
+    let whole = window.is_some_and(|window| window.groups().len() == 1);
     let kept = window.map(|window| window.rect);
     let action = match (unit, kept) {
         (DragUnit::Panel(_), Some(rect)) if lone => Action::move_floating(panel.clone(), rect),

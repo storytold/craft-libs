@@ -23,15 +23,12 @@ pub struct FrameView<'a, P: Clone> {
     pub hidden: Vec<P>,
     /// The layout path of each split of the view, by the split's view path; `None` when the view is the layout.
     pub paths: Option<HashMap<Vec<bool>, Vec<bool>>>,
-    /// The layout index of each floating window of the view, in order.
-    pub windows: Vec<usize>,
-    /// For each floating window of the view, the path in the window's layout tree of each split of its pruned tree.
-    window_paths: Vec<HashMap<Vec<bool>, Vec<bool>>>,
 }
 
 impl<P: Clone> FrameView<'_, P> {
     /// Writes the split sizes of `edited`, an edit of the view's layout, into `layout`, the layout the view was made
-    /// from. Panels the view left out keep their place; only sizes change.
+    /// from. Panels the view left out keep their place; only the docked tree's split sizes change: floating windows
+    /// have no splits.
     pub fn write_back(&self, edited: &Layout<P>, layout: &mut Layout<P>) {
         let Some(paths) = &self.paths else {
             layout.clone_from(edited);
@@ -39,11 +36,6 @@ impl<P: Clone> FrameView<'_, P> {
         };
         if let (Some(shown), Some(root)) = (edited.root.as_ref(), layout.root.as_mut()) {
             tree::apply_sizes(root, &split_sizes(shown, paths));
-        }
-        for ((shown, at), paths) in edited.floating.iter().zip(&self.windows).zip(&self.window_paths) {
-            if let Some(window) = layout.floating.get_mut(*at) {
-                tree::apply_sizes(&mut window.root, &split_sizes(&shown.root, paths));
-            }
         }
     }
 }
@@ -93,42 +85,36 @@ pub fn maximize<'a, P: Clone + Eq + Hash>(
     });
     let unchanged = frame.is_none() && matches!(hide, HidePanels::None);
     if unchanged {
-        return FrameView {
-            layout: Cow::Borrowed(layout),
-            maximized: None,
-            hidden: Vec::new(),
-            paths: None,
-            windows: (0..layout.floating.len()).collect(),
-            window_paths: Vec::new(),
-        };
+        return FrameView { layout: Cow::Borrowed(layout), maximized: None, hidden: Vec::new(), paths: None };
     }
     let left_out = layout.panels().into_iter().filter(|panel| hidden(panel)).cloned().collect();
     let mut paths = HashMap::new();
-    let mut windows = Vec::new();
-    let mut window_paths = Vec::new();
     let (shown, kept) = match frame {
         Some((panel, path, node)) => (Layout::new(prune(&node, path, Vec::new(), &hidden, &mut paths), Vec::new()), Some(panel)),
         None => {
             let root = layout.root.as_ref().and_then(|root| prune(root, Vec::new(), Vec::new(), &hidden, &mut paths));
-            let mut floating = Vec::new();
-            for (at, window) in layout.floating.iter().enumerate() {
-                let mut window_map = HashMap::new();
-                let Some(root) = prune(&window.root, Vec::new(), Vec::new(), &hidden, &mut window_map) else { continue };
-                window_paths.push(window_map);
-                let mut shown: Floating<P> = window.clone();
-                shown.root = root;
-                floating.push(shown);
-                windows.push(at);
-            }
+            // A window whose panels are all hidden is left out.
+            let floating = layout
+                .floating
+                .iter()
+                .filter_map(|window| {
+                    let column = prune_column(&window.column, &hidden)?;
+                    let mut shown: Floating<P> = window.clone();
+                    shown.column = column;
+                    Some(shown)
+                })
+                .collect();
             (Layout::new(root, floating), None)
         }
     };
-    FrameView { layout: Cow::Owned(shown), maximized: kept, hidden: left_out, paths: Some(paths), windows, window_paths }
+    FrameView { layout: Cow::Owned(shown), maximized: kept, hidden: left_out, paths: Some(paths) }
 }
 
+/// The path of the docked node that holds a place of the docked tree: the `Tabs` or `Stack` node, or the `Dock` node
+/// of a column's group.
 fn path_of(place: &PanelPlace) -> Vec<bool> {
     match place {
-        PanelPlace::Node(path) | PanelPlace::Dock { path, .. } | PanelPlace::Floating { path, .. } => path.clone(),
+        PanelPlace::Node(path) | PanelPlace::Dock { path, .. } => path.clone(),
         _ => Vec::new(),
     }
 }
@@ -174,21 +160,21 @@ fn prune<P: Clone + PartialEq>(
             (!entries.is_empty()).then(|| Node::stack(entries))
         }
         Node::Dock { side, columns, .. } => {
-            let columns: Vec<Column<P>> = columns
-                .iter()
-                .filter_map(|column| {
-                    let groups: Vec<_> = column.groups.iter().filter_map(|group| prune_group(group, hidden)).collect();
-                    (!groups.is_empty()).then(|| {
-                        let mut kept = column.clone();
-                        kept.groups = groups;
-                        kept
-                    })
-                })
-                .collect();
+            let columns: Vec<Column<P>> = columns.iter().filter_map(|column| prune_column(column, hidden)).collect();
             (!columns.is_empty()).then(|| Node::dock(*side, columns))
         }
         _ => Some(node.clone()),
     }
+}
+
+/// A column without hidden panels, keeping its state; `None` when none of its panels shows.
+fn prune_column<P: Clone + PartialEq>(column: &Column<P>, hidden: &dyn Fn(&P) -> bool) -> Option<Column<P>> {
+    let groups: Vec<_> = column.groups.iter().filter_map(|group| prune_group(group, hidden)).collect();
+    (!groups.is_empty()).then(|| {
+        let mut kept = column.clone();
+        kept.groups = groups;
+        kept
+    })
 }
 
 /// A group without hidden panels; the selected panel stays selected when it is shown.
