@@ -35,7 +35,7 @@ pub const BOX: PartKey = PartKey::new("box");
 /// outside.
 const OUTSIDE: PartKey = PartKey::new("outside");
 
-/// The pointer-only part of an edge: the whole side, beside the midpoint handle `BOX.at(Edge(k))` that the keyboard
+/// The pointer-only part of an edge: the band along the whole side, outside it, beside the midpoint handle `BOX.at(Edge(k))` that the keyboard
 /// and the focus ring use. One part key carries one shape, so the side cannot reuse the handle's key.
 const EDGE: PartKey = PartKey::new("edge");
 
@@ -74,8 +74,13 @@ struct KeyPicked(Option<BoxPart>);
 const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
 
-/// The handles' pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a hit radius of 12, the
-/// rotate pointer within 36 of a corner, the rotate band from 5 to 18 outside it).
+/// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a handle reaches 8 from its
+/// point, inside the box as outside, each side's band reaches 11 outside it and none inside, the reference point and
+/// the centre reach 12, the rotate pointer shows within 36 of a corner, the rotate band runs from 5 to 18 outside it).
+/// The handle reach and the side bands are PhotoCraft's: inside the box only a handle's own reach is the box's, so a
+/// press there off the handles reaches what lies under the box (a text editor under a paragraph frame).
+const HANDLE_REACH_IN_HANDLES: f32 = 1.0;
+const SIDE_BAND_IN_HANDLES: f32 = 1.375;
 const HIT_IN_HANDLES: f32 = 1.5;
 const ROTATE_REACH_IN_HANDLES: f32 = 4.5;
 const BAND_INNER_IN_HANDLES: f32 = 0.625;
@@ -216,7 +221,11 @@ pub struct TransformBoxStyle {
     handle: HandleLook,
     line: StyleColor,
     halo: StyleColor,
-    /// The hit radius of a handle.
+    /// The hit radius of a corner or side handle.
+    handle_reach: f32,
+    /// How far a side's band reaches outside the box.
+    side_band: f32,
+    /// The hit radius of the reference point and of the centre.
     hit: f32,
     /// How far from a corner the rotate pointer shows outside the box.
     rotate_reach: f32,
@@ -884,6 +893,8 @@ impl Component for TransformBox<'_> {
             handle: cx.handle(),
             line: cx.color(overlay.line),
             halo: cx.color(overlay.halo),
+            handle_reach: handle.md * HANDLE_REACH_IN_HANDLES,
+            side_band: handle.md * SIDE_BAND_IN_HANDLES,
             hit: handle.md * HIT_IN_HANDLES,
             rotate_reach: handle.md * ROTATE_REACH_IN_HANDLES,
             band_inner: handle.md * BAND_INNER_IN_HANDLES,
@@ -911,7 +922,7 @@ impl Component for TransformBox<'_> {
     }
 
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
-    /// side as a pointer-only segment, the centre and the move strips where declared, and the outside. A handle, the
+    /// side as a pointer-only band outside it, the centre and the move strips where declared, and the outside. A handle, the
     /// reference point and the centre rank alike, so the nearest wins where they overlap on a small box; they rank above
     /// a side, which ranks above the inside, which ranks above the outside. A live line's controls declare its two
     /// ends only.
@@ -942,7 +953,7 @@ impl Component for TransformBox<'_> {
                 handle => {
                     let at = self.part_point(&state, handle).map_or(Pos2::ZERO, |at| space.view.to_screen(at));
                     (
-                        HitShape::circle(at, style.hit),
+                        HitShape::circle(at, style.handle_reach),
                         Sense::DRAG | Sense::TAKE_FOCUS,
                         HitPriority::new(HitLevel::Handle, HANDLE_SUB),
                         FocusShape::Circle,
@@ -960,7 +971,7 @@ impl Component for TransformBox<'_> {
         }
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
-            cx.part(EDGE.at(u64::from(k)), HitShape::segment(quad[side], quad[(side + 1) % 4]))
+            cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, style.side_band))
                 .sense(Sense::DRAG | slop_sense(BoxPart::Edge(k)))
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
@@ -1188,6 +1199,27 @@ fn outside_regions(quad: &[Pos2; 4], within: Rect) -> [Vec<Pos2>; 4] {
         clipped_to(&region, within)
     })
 }
+
+/// The band outside side `side` of the box `quad` (from corner `side` to the next), `width` wide, with the side's
+/// line itself: a press on the line or outside it within `width` takes the side; inside the box it does not. A side
+/// with no length is its line.
+fn side_band(quad: &[Pos2; 4], side: usize, width: f32) -> HitShape {
+    let (a, b) = (quad[side], quad[(side + 1) % 4]);
+    let along = b - a;
+    if along.length() < 1e-3 {
+        return HitShape::segment(a, b);
+    }
+    // The winding tells outside from inside, as `quad::outset` reads it.
+    let area: f32 = (0..4).map(|i| quad[i].x * quad[(i + 1) % 4].y - quad[(i + 1) % 4].x * quad[i].y).sum();
+    let d = along.normalized();
+    let out = Vec2::new(d.y, -d.x) * if area >= 0.0 { 1.0 } else { -1.0 };
+    // Half a point inside the line still counts as on it.
+    let (inner, outer) = (out * -SIDE_LINE_INSIDE, out * width);
+    HitShape::Polygon(vec![a + inner, b + inner, b + outer, a + outer])
+}
+
+/// How far inside the box a press still lies on a side's line, in screen points.
+const SIDE_LINE_INSIDE: f32 = 0.5;
 
 /// `polygon` clipped to `rect` (Sutherland-Hodgman, one rect side at a time).
 fn clipped_to(polygon: &[Pos2], rect: Rect) -> Vec<Pos2> {
