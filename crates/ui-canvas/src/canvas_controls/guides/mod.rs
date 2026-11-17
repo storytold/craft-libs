@@ -115,6 +115,11 @@ const CANVAS_DELETES: [Chord; 2] = [Chord::plain(Key::Delete), Chord::plain(Key:
 #[derive(Clone, Default)]
 struct PendingKey(Option<GuideKey>);
 
+/// The press slot of a press on a guide: set at the press, cleared when it ends, so the parts a held key declared stay
+/// declared until the press ends, though the key is let go before the drag begins.
+#[derive(Clone, Copy, Default)]
+struct HeldGuide;
+
 /// The ruler guides of a canvas: drawn, taken by the pointer and moved with the keyboard.
 ///
 /// - The pointer takes an unlocked guide while the guides are [`interactive`](Guides::interactive), or with the
@@ -292,6 +297,11 @@ impl<'a> Guides<'a> {
             let Some(result) = cx.part_if_declared(guide.key.part(GUIDE)) else { continue };
             let press = result.press;
             match press.phase {
+                PressPhase::Down { .. } => *cx.press_slot::<HeldGuide>() = Some(HeldGuide),
+                PressPhase::Release { .. } | PressPhase::Cancel { .. } => *cx.press_slot::<HeldGuide>() = None,
+                _ => {}
+            }
+            match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     self.report.select = Some(Some(guide.key));
                     if press.double_pressed() {
@@ -467,11 +477,12 @@ impl Component for Guides<'_> {
 
     /// The unlocked guides in view: edge-level drag parts in one roving group, in keyboard order. Page Up and Page
     /// Down move the group's arrival; the arrows are the guide's nudge. With `interactive` off they are declared only
-    /// for `moves_with_command`, while the command key is held or the guides' own drag runs, so a guide drag begun
-    /// with the key keeps its part when the key is let go mid-drag; `run_pointer` reads only declared parts, so this
-    /// is the one gate of the pointer.
+    /// for `moves_with_command`, while the command key is held, a press on a guide is down or the guides' own drag
+    /// runs, so a guide press begun with the key keeps its part when the key is let go before or during the drag;
+    /// `run_pointer` reads only declared parts, so this is the one gate of the pointer.
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        let takes = self.interactive || (self.moves_with_command && (crate::runtime::pointer::frame(cx.ui.ctx()).mods.cmd || cx.gesture_running()));
+        let held = cx.press_slot::<HeldGuide>().is_some() || cx.gesture_running();
+        let takes = self.interactive || (self.moves_with_command && (crate::runtime::pointer::frame(cx.ui.ctx()).mods.cmd || held));
         let (Some(space), Some(guides), true) = (canvas_space(&cx.env), cx.value(), takes) else { return };
         let mut any = false;
         for &at in &place::keyboard_order(guides) {
