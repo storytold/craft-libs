@@ -131,6 +131,37 @@ fn rgb(indices: &[u8], palette: &[u8; 768]) -> Vec<u8> {
 /// larger than the LZ window (4096).
 const MOVIES: [(u64, usize, usize, usize); 5] = [(1, 40, 30, 40), (2, 300, 5, 30), (3, 1, 1, 6), (4, 7, 64, 30), (5, 96, 80, 12)];
 
+/// Each picture converts into a `VideoFrame` of R, G, B planes holding the colours the decoder
+/// gives as RGB.
+#[test]
+fn pictures_convert_to_rgb_video_frames() {
+    use craft_video::frame::{ColorFamily, Samples, VideoFrame};
+    for (seed, w, h, frames) in MOVIES {
+        let m = movie(seed, w, h, frames);
+        let file = open(&m.bytes).unwrap();
+        let mut decoder = Decoder::new(file.header_bytes()).unwrap();
+        for (i, frame) in file.frames.iter().enumerate() {
+            let FrameKind::Video { new_palette, .. } = frame.kind else { continue };
+            let data = file.read_frame(&m.bytes, i).unwrap();
+            match file.picture_rect(i) {
+                Some(rect) => decoder.decode(rect.into(), new_palette, &data).unwrap(),
+                None if new_palette => decoder.decode_palette(&data).unwrap(),
+                None => {}
+            }
+            let f = VideoFrame::try_from(&decoder).unwrap();
+            assert_eq!((f.width(), f.height(), f.family(), f.bit_depth()), (w as u32, h as u32, ColorFamily::Rgb, 8));
+            assert_eq!(f.color.matrix, 0);
+            let plane = |p: usize| match f.plane(p).map(|p| p.samples()) {
+                Some(Samples::U8(s)) => s.clone(),
+                other => panic!("plane {p}: {other:?}"),
+            };
+            let (r, g, b) = (plane(0), plane(1), plane(2));
+            let interleaved: Vec<u8> = (0..w * h).flat_map(|i| [r[i], g[i], b[i]]).collect();
+            assert!(interleaved == decoder.rgb24(), "movie {seed}: frame {i}");
+        }
+    }
+}
+
 #[test]
 fn decodes_the_pictures_that_were_packed() {
     for (seed, w, h, frames) in MOVIES {
