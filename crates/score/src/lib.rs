@@ -4,9 +4,9 @@
 use std::fmt::Write as _;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
-fn over_budget(buf: &str) -> Result<(), String> {
-    if buf.len() > MAX_OUTPUT_BYTES {
-        return Err(format!("score too large: over {} MiB", MAX_OUTPUT_BYTES / (1024 * 1024)));
+fn over_budget(buf: &str, budget: usize) -> Result<(), String> {
+    if buf.len() > budget {
+        return Err(format!("score too large: over {} bytes", budget));
     }
     Ok(())
 }
@@ -71,10 +71,19 @@ fn note_type(units: u32) -> (&'static str, bool) {
 
 /// MusicXML 4.0 (partwise) for `parts`.
 pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
+    musicxml_budgeted(parts, setup, MAX_OUTPUT_BYTES)
+}
+
+/// [`musicxml`] with an explicit byte budget (kept separate so tests can pass a tiny budget
+/// instead of building a 256 MiB score).
+fn musicxml_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<String, String> {
     let mut x = String::new();
     x.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n");
     x.push_str("<!DOCTYPE score-partwise PUBLIC \"-//Recordare//DTD MusicXML 4.0 Partwise//EN\" \"http://www.musicxml.org/dtds/partwise.dtd\">\n");
     x.push_str("<score-partwise version=\"4.0\">\n");
+    // The header (and an oversized title/composer, escaped) can itself exceed the budget even with
+    // no measures, so check before the per-measure loop too.
+    over_budget(&x, budget)?;
     let _ = writeln!(x, "  <work><work-title>{}</work-title></work>", xml_escape(&setup.title));
     x.push_str("  <identification>\n");
     if !setup.composer.is_empty() {
@@ -85,6 +94,7 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
         let _ = writeln!(x, "    <score-part id=\"P{}\"><part-name>{}</part-name></score-part>", i + 1, xml_escape(&p.name));
     }
     x.push_str("  </part-list>\n");
+    over_budget(&x, budget)?;
     for (i, p) in parts.iter().enumerate() {
         let _ = writeln!(x, "  <part id=\"P{}\">", i + 1);
         let mut meter = (0, 0);
@@ -151,11 +161,12 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
                 }
             }
             x.push_str("    </measure>\n");
-            over_budget(&x)?;
+            over_budget(&x, budget)?;
         }
         x.push_str("  </part>\n");
     }
     x.push_str("</score-partwise>\n");
+    over_budget(&x, budget)?;
     Ok(x)
 }
 
@@ -169,6 +180,12 @@ fn staff_step(pitch: u8, bass: bool) -> i32 {
 
 /// An engraved score as a printable SVG page (A4 portrait width, as tall as needed).
 pub fn svg(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
+    svg_budgeted(parts, setup, MAX_OUTPUT_BYTES)
+}
+
+/// [`svg`] with an explicit byte budget (kept separate so tests can pass a tiny budget instead of
+/// building a 256 MiB score).
+fn svg_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<String, String> {
     const W: f64 = 794.0;
     const MARGIN: f64 = 48.0;
     const SP: f64 = 7.0; // staff space
@@ -190,7 +207,9 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
     let _ = writeln!(o, "<text x=\"{}\" y=\"56\" font-size=\"24\" text-anchor=\"middle\">{}</text>", W / 2.0, xml_escape(&setup.title));
     if !setup.composer.is_empty() {
         let _ = writeln!(o, "<text x=\"{}\" y=\"84\" font-size=\"13\" text-anchor=\"end\">{}</text>", W - MARGIN, xml_escape(&setup.composer));
+        over_budget(&o, budget)?;
     }
+    over_budget(&o, budget)?;
     let bar_w = (staff_x1 - staff_x0) / per as f64;
     for sys in 0..systems {
         let y_sys = top + sys as f64 * sys_h;
@@ -302,8 +321,13 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
                         let _ = writeln!(o, "<path d=\"M{:.1} {y:.1} q 8 5 16 0\" fill=\"none\" stroke=\"black\" stroke-width=\"0.9\"/>", x + 3.0);
                     }
                 }
-                over_budget(&o)?;
+                // Check each measure, so a run of rest-only or missing measures that only draws
+                // bar lines cannot grow the output past the budget untouched.
+                over_budget(&o, budget)?;
             }
+            // The staff markup (lines, clef, track names) itself grows with the part count even
+            // without any items, so check once per staff too.
+            over_budget(&o, budget)?;
         }
         // System bracket.
         let y_last = y_sys + (parts.len().max(1) - 1) as f64 * STAFF_GAP + 4.0 * SP;
@@ -313,8 +337,10 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
             staff_x0 - 30.0,
             staff_x0 - 30.0
         );
+        over_budget(&o, budget)?;
     }
     o.push_str("</svg>\n");
+    over_budget(&o, budget)?;
     Ok(o)
 }
 
