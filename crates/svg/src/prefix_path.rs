@@ -1,11 +1,18 @@
 //! SVG path data (SVG 1.1 §8.3 / SVG 2 §9.3): every command, implicit repeats, relative
 //! coordinates, smooth curves and elliptical arcs (converted to cubics through kurbo's `SvgArc`).
 //! Parsing stops at the first error, keeping what was read (as the specification asks).
+//!
+//! Compatibility API for importers requiring kurbo quadratics and cubic arc expansion,
+//! distinct from the strict neutral [`crate::path_data::parse_path`] API. Retains EffectCraft's
+//! malformed-prefix, close-path, finite-coordinate, radius-scaled tolerance and endpoint rules.
+//! Source: EffectCraft `pathdata.rs` at `05fc7f28352361f8f183da900ac5f4dfc9b69799`.
+//! Brandon Thomas authored the parser and post-Z termination fix; NetterSilver the arc
+//! tolerance/endpoint fixes; FredApps the finite-coordinate and element-budget safeguards.
 
 use kurbo::{BezPath, PathEl, Point, SvgArc, Vec2};
 
 /// Maximum path elements retained from one SVG path or point list.
-pub(crate) const MAX_PATH_ELEMENTS: usize = 100_000;
+pub const MAX_PATH_ELEMENTS: usize = 100_000;
 
 /// Tokenizer over numbers and command letters.
 struct Lex<'a> {
@@ -85,8 +92,14 @@ impl Lex<'_> {
     }
 }
 
-/// Parse no more than `max_values`; the flag reports whether another valid value was present.
-pub(crate) fn numbers_bounded(s: &str, max_values: usize) -> (Vec<f64>, bool) {
+/// Maximum values retained from a points list (two coordinates per path element).
+pub const MAX_NUMBER_VALUES: usize = MAX_PATH_ELEMENTS * 2;
+
+/// Parse a finite numeric prefix, retaining at most `min(max_values, MAX_NUMBER_VALUES)`.
+/// The flag reports a possible next number after the cap, not a malformed suffix.
+/// The caller must decide whether to refuse the document when the flag is set.
+pub fn numbers_bounded(s: &str, max_values: usize) -> (Vec<f64>, bool) {
+    let max_values = max_values.min(MAX_NUMBER_VALUES);
     let mut l = Lex { b: s.as_bytes(), i: 0 };
     let mut v = vec![];
     while l.at_number() {
@@ -129,8 +142,13 @@ struct PathLimit {
     exceeded: bool,
 }
 
-/// Parse at most `max_elements`, reporting when more path geometry was present.
-pub(crate) fn parse_path_data_bounded(d: &str, max_elements: usize) -> (BezPath, bool) {
+/// Parse at most `min(max_elements, MAX_PATH_ELEMENTS)` kurbo elements.
+/// The flag reports a reached cap with trailing input or a non-finite output coordinate.
+/// Malformed syntax alone returns the valid prefix without setting the flag. Importers
+/// should refuse the document on a true flag; [`parse_path_data`] intentionally keeps only
+/// the bounded prefix. Move/close commands and expanded arc cubics count toward the cap.
+pub fn parse_path_data_bounded(d: &str, max_elements: usize) -> (BezPath, bool) {
+    let max_elements = max_elements.min(MAX_PATH_ELEMENTS);
     let mut l = Lex { b: d.as_bytes(), i: 0 };
     let mut p = BezPath::new();
     let mut state = PathState { current: Point::ZERO, start: Point::ZERO, last_cubic: None, last_quad: None, open: false };
@@ -431,5 +449,32 @@ mod tests {
         let (values, exceeded) = numbers_bounded("1 2 3 4", 3);
         assert_eq!(values, [1.0, 2.0, 3.0]);
         assert!(exceeded);
+    }
+}
+
+#[cfg(test)]
+mod shared_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn huge_caller_budgets_remain_bounded() {
+        let (path, limited) = parse_path_data_bounded(&format!("M0 0{}", "h1".repeat(MAX_PATH_ELEMENTS)), usize::MAX);
+        assert!(limited);
+        assert!(path.elements().len() <= MAX_PATH_ELEMENTS);
+        let (values, limited) = numbers_bounded(&"1 ".repeat(MAX_NUMBER_VALUES + 1), usize::MAX);
+        assert!(limited);
+        assert_eq!(values.len(), MAX_NUMBER_VALUES);
+    }
+
+    #[test]
+    fn prefix_and_non_finite_flags_stay_distinct() {
+        let (path, limited) = parse_path_data_bounded("M0 0 L1 1 Lx", 20);
+        assert!(!limited);
+        assert_eq!(path.elements().len(), 2);
+        let (path, limited) = parse_path_data_bounded("M1e308 0 l1e308 0", 20);
+        assert!(limited);
+        assert!(path.elements().is_empty());
+        assert!(parse_path_data_bounded("M0 0", 0).1);
+        assert!(!parse_path_data_bounded("", 0).1);
     }
 }
