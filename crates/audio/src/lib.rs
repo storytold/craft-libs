@@ -30,9 +30,8 @@
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`; `mpa-encode`: the Layer II encoder), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
-//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files) and [`adpcm`]
-//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM).
-//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files),
+//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files), [`adpcm`]
+//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM),
 //!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech).
 //!
 //! The shared types below build with no features.
