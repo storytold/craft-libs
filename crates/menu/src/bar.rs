@@ -134,10 +134,12 @@ impl<'a> MenuBarUi<'a> {
         let titles: Vec<MenuTitle<'_>> =
             self.bar.menus.iter().zip(labels).map(|(menu, label)| MenuTitle::new(label, move |ui| shared.show(ui, &menu.children))).collect();
         let help = self.help_search.then(|| self.bar.menus.iter().position(|menu| menu.role == MenuRole::Help)).flatten();
-        let entries = if help.is_some() { entries_of(self.bar, self.english) } else { Vec::new() };
+        // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
+        let (bar_model, english) = (self.bar, self.english);
+        let entries = move || entries_of(bar_model, english);
         let mut bar = Bar::new(env.words::<BarWords>().label.clone(), titles).keyboard(self.keyboard.unwrap_or(self.target != Target::Mac));
         if let Some(menu) = help {
-            bar = bar.help(MenuHelp::new(menu, &entries));
+            bar = bar.help(MenuHelp::built(menu, &entries));
         }
         MenuBarOutput { titles: bar.show(ui).titles }
     }

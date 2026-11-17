@@ -173,17 +173,50 @@ impl<'a> MenuTitle<'a> {
 }
 
 /// The Help menu's search: the index of the menu that starts with the field, and the commands it searches.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct MenuHelp<'a> {
     menu: usize,
-    entries: &'a [HelpEntry],
+    entries: HelpEntries<'a>,
+}
+
+/// Where the help search's commands come from: a list the caller built, or a builder the bar runs only while the
+/// Help menu is open.
+#[derive(Clone, Copy)]
+enum HelpEntries<'a> {
+    Listed(&'a [HelpEntry]),
+    Built(&'a dyn Fn() -> Vec<HelpEntry>),
+}
+
+impl std::fmt::Debug for MenuHelp<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = match self.entries {
+            HelpEntries::Listed(entries) => format!("{} listed", entries.len()),
+            HelpEntries::Built(_) => "built when opened".to_string(),
+        };
+        f.debug_struct("MenuHelp").field("menu", &self.menu).field("entries", &entries).finish()
+    }
 }
 
 impl<'a> MenuHelp<'a> {
     /// A search field at the top of the menu `menu` (its position among the titles) over `entries`.
     pub fn new(menu: usize, entries: &'a [HelpEntry]) -> Self {
-        MenuHelp { menu, entries }
+        MenuHelp { menu, entries: HelpEntries::Listed(entries) }
+    }
+
+    /// A search field at the top of the menu `menu` over the commands `entries` builds. The bar runs it only in a pass
+    /// that shows the Help menu, so an app whose command list is costly to collect (every row of its menus) pays
+    /// nothing while the menu is closed.
+    pub fn built(menu: usize, entries: &'a dyn Fn() -> Vec<HelpEntry>) -> Self {
+        MenuHelp { menu, entries: HelpEntries::Built(entries) }
+    }
+
+    /// The commands, built now for a builder.
+    fn entries(&self) -> std::borrow::Cow<'a, [HelpEntry]> {
+        match self.entries {
+            HelpEntries::Listed(entries) => std::borrow::Cow::Borrowed(entries),
+            HelpEntries::Built(build) => std::borrow::Cow::Owned(build()),
+        }
     }
 }
 
@@ -524,9 +557,10 @@ impl Component for MenuBar<'_> {
         let folder = cx.env.folder();
         let texts = self.texts(&cx.env);
         let help = self.help;
-        let help_rows = help
-            .filter(|help| opened == Some(Open::Title(help.menu)))
-            .map(|help| Self::help_texts(help.entries, &cx.env, cx.env.words::<CommonWords>().path_separator.as_str()));
+        // Only a pass that shows the Help menu needs its commands; a builder runs here and nowhere else.
+        let help_entries = help.filter(|help| opened == Some(Open::Title(help.menu))).map(|help| help.entries());
+        let help_rows =
+            help_entries.as_deref().map(|entries| Self::help_texts(entries, &cx.env, cx.env.words::<CommonWords>().path_separator.as_str()));
         // The search starts empty each time the Help menu opens.
         let mut query = if help_rows.is_some() { cx.memory::<Query>().clone() } else { Query::default() };
         let mut stepped = None;
@@ -542,7 +576,9 @@ impl Component for MenuBar<'_> {
                 Menu::inline(Label::from(name.clone()))
                     .show(ui, |ui, menu| match slot {
                         Open::Title(at) => {
-                            if let (Some(help), Some(rows)) = (help.filter(|help| help.menu == *at), help_rows.as_ref()) {
+                            if let (Some(_), Some(rows), Some(entries)) =
+                                (help.filter(|help| help.menu == *at), help_rows.as_ref(), help_entries.as_deref())
+                            {
                                 // The field sits in a padded frame: its edge lines up with the row labels and it keeps clear of the first row.
                                 // The field drives the menu: Up, Down, Home and End move its active row and Enter runs
                                 // it, or the first enabled match, while typing stays in the field.
@@ -574,14 +610,14 @@ impl Component for MenuBar<'_> {
                                 let listed: Vec<usize> = search_order(&folder, &query.0, &refs)
                                     .into_iter()
                                     .filter(|at| {
-                                        let command = help.entries[*at].command();
+                                        let command = entries[*at].command();
                                         let fresh = !seen.contains(&command);
                                         seen.push(command);
                                         fresh
                                     })
                                     .collect();
                                 for at in &listed {
-                                    let entry = &help.entries[*at];
+                                    let entry = &entries[*at];
                                     let row = MenuItem::command(entry.command().clone()).label(entry.label().clone());
                                     if entry.path().is_empty() {
                                         row.show(ui)

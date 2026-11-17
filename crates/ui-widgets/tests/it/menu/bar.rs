@@ -146,3 +146,50 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
         }
     }
 }
+
+/// A help search over built entries builds them only in a pass that shows the Help menu: a bar whose menus stay closed
+/// never runs the builder, an open File menu doesn't either, and the open Help menu searches what it built.
+#[trial]
+fn built_help_entries_are_collected_only_while_the_help_menu_shows() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let builds = Rc::new(Cell::new(0u32));
+    let counted = builds.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![
+            MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            }),
+            MenuTitle::new("&Help", |ui| {
+                MenuItem::new("&About").show(ui);
+            }),
+        ];
+        let counted = counted.clone();
+        let build = move || {
+            counted.set(counted.get() + 1);
+            entries()
+        };
+        MenuBar::new("Main menu", titles).help(MenuHelp::built(1, &build)).show(ui);
+    });
+    fixture.settle();
+    fixture.settle();
+    assert_eq!(builds.get(), 0, "closed menus build nothing");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("New").is_some(), "File is open");
+    assert_eq!(builds.get(), 0, "another open menu builds nothing");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+
+    let help = fixture.by_label("Help").expect("the Help title");
+    fixture.click(&help);
+    fixture.settle();
+    assert!(builds.get() > 0, "the open Help menu builds its entries");
+    let search = fixture.by_label("Search menus").expect("the search field");
+    fixture.click(&search);
+    fixture.type_text("duplic");
+    fixture.settle();
+    assert!(fixture.by_label("Copy").is_some(), "the search finds a built entry by its English label");
+}

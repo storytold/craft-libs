@@ -423,13 +423,45 @@ impl Keymap {
                 ScopeKind::Panel => Active::panel(name[0]),
                 ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
             };
-            match self.lookup(&trigger.chord, false, &active) {
-                Lookup::None => false,
-                Lookup::Run(c) => self.find(&c) == Some(i),
-                Lookup::Cycle(cycle) => cycle.iter().any(|c| self.find(c) == Some(i)),
-            }
+            self.press_runs(&trigger.chord, &active, i)
         };
         single().filter(|(_, scope)| scope == home).chain(single().filter(|(_, scope)| scope != home)).find(runs).map(|(trigger, _)| trigger.chord)
+    }
+
+    /// Whether a single press of `chord` with `active` focus runs catalog entry `i`, alone or in a cycle: what
+    /// [`lookup`](Self::lookup) answers, decided on catalog positions without building the answer's commands.
+    /// [`shown_chord`](Self::shown_chord) asks it for each binding of every command a frame shows.
+    fn press_runs(&self, chord: &Chord, active: &Active, i: usize) -> bool {
+        let want = Trigger { chord: chord.effective(self.platform), double: false };
+        let held = active.typing && !self.typing.fires(&want.chord, self.platform);
+        let Some(holders) = self.by_trigger.get(&want) else { return false };
+        // Each command's nearest rank, as `lookup_nested` ranks them: `holders` is in catalog order, so a command's
+        // bindings are consecutive.
+        let ranked = || {
+            let mut out: Vec<(usize, u8)> = Vec::new();
+            for &(j, k) in holders {
+                let Some(r) = self.at(j, k).and_then(|(_, s)| self.scopes.rank_nested(s, active, &[])) else { continue };
+                if held && r != 0 {
+                    continue;
+                }
+                match out.last_mut() {
+                    Some((last, best)) if *last == j => *best = (*best).min(r),
+                    _ => out.push((j, r)),
+                }
+            }
+            out
+        };
+        let ranks = ranked();
+        let Some(best) = ranks.iter().map(|(_, r)| *r).min() else { return false };
+        let mut winners = ranks.iter().filter(|(_, r)| *r == best).map(|(j, _)| *j);
+        let Some(first) = winners.next() else { return false };
+        let rest: Vec<usize> = winners.collect();
+        if rest.is_empty() || !rest.iter().all(|j| self.same_group(first, *j)) {
+            // One winner, or several of different groups: the first runs.
+            return first == i;
+        }
+        // A cycle of the winners.
+        first == i || rest.contains(&i)
     }
 
     /// The command that holds `chord` for a surface that takes the key whatever has focus (a system menu item): the
@@ -604,7 +636,13 @@ impl Keymap {
     }
 
     fn find(&self, command: &CommandRef) -> Option<usize> {
-        self.index.get(&command.key()).copied()
+        // A command without parameters is keyed by its id (`CommandRef::key`): look it up without building the key.
+        // Menu rows, tooltips and buttons ask for their chords on every frame.
+        match &command.params {
+            serde_json::Value::Null => self.index.get(command.id.as_str()).copied(),
+            serde_json::Value::Object(params) if params.is_empty() => self.index.get(command.id.as_str()).copied(),
+            _ => self.index.get(&command.key()).copied(),
+        }
     }
 
     fn resolve_key(&self, key: &str) -> Option<usize> {
