@@ -173,7 +173,8 @@ pub fn pack_end(data_len: usize, embedded: bool) -> usize {
 /// Read a pack from a whole file's bytes.
 pub fn parse(data: &[u8]) -> Result<Pack, FormatError> {
     let (start, embedded) = find(data).ok_or_else(|| FormatError::Malformed("this file has no Godot pack".into()))?;
-    let bytes = data.get(start..).unwrap_or_default();
+    let end = pack_end(data.len(), embedded);
+    let bytes = data.get(start..end).unwrap_or_default();
     let header = header(bytes)?;
     let mut pack =
         Pack { header, start: start as u64, embedded, declared_files: None, table_read: false, members: Vec::new(), truncated: false, notes: Vec::new() };
@@ -207,7 +208,7 @@ pub fn parse(data: &[u8]) -> Result<Pack, FormatError> {
         return Ok(pack);
     }
     pack.table_read = true;
-    read_table(bytes, data.len() as u64, at.unwrap_or_default().saturating_add(4), count, &mut pack);
+    read_table(bytes, end as u64, at.unwrap_or_default().saturating_add(4), count, &mut pack);
     Ok(pack)
 }
 
