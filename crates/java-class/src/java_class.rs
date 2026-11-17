@@ -386,7 +386,10 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
     // Methods
     let methods = parse_members(&mut c, &pool, &mut warnings, "method")?;
     // Class attributes
-    let attrs = read_attrs(&mut c, &pool);
+    let (attrs, complete) = read_attrs(&mut c, &pool);
+    if !complete {
+        warnings.push("class attribute table ended early".into());
+    }
     let mut source_file = None;
     let mut signature = None;
     let mut inner_classes = Vec::new();
@@ -491,15 +494,16 @@ struct RawAttr<'a, 'p> {
     info: &'a [u8],
 }
 
-fn read_attrs<'a, 'p>(c: &mut Cursor<'a>, pool: &'p [Const]) -> Vec<RawAttr<'a, 'p>> {
-    let n = c.u16().unwrap_or(0) as usize;
+/// Return the complete attributes in the readable prefix and whether the whole table was read.
+fn read_attrs<'a, 'p>(c: &mut Cursor<'a>, pool: &'p [Const]) -> (Vec<RawAttr<'a, 'p>>, bool) {
     let mut out = Vec::new();
+    let Some(n) = c.u16().map(usize::from) else { return (out, false) };
     for _ in 0..n.min(MAX_ATTRS) {
-        let (Some(ni), Some(len)) = (c.u16(), c.u32()) else { break };
-        let Some(info) = c.take(len as usize) else { break };
+        let (Some(ni), Some(len)) = (c.u16(), c.u32()) else { return (out, false) };
+        let Some(info) = c.take(len as usize) else { return (out, false) };
         out.push(RawAttr { name: utf8_of(pool, ni), info });
     }
-    out
+    (out, n <= MAX_ATTRS)
 }
 
 fn bootstrap_table(data: &[u8]) -> Option<Vec<(u16, Vec<u16>)>> {
@@ -523,7 +527,8 @@ fn parse_members(c: &mut Cursor<'_>, pool: &[Const], warnings: &mut Vec<String>,
             break;
         };
         let mut m = Member { access, name: utf8_of(pool, name_idx).to_string(), descriptor: utf8_of(pool, desc_idx).to_string(), ..Default::default() };
-        for a in read_attrs(c, pool) {
+        let (attrs, _) = read_attrs(c, pool);
+        for a in attrs {
             match a.name {
                 "Code" => m.code = parse_code(a.info, pool),
                 "ConstantValue" => {
@@ -560,7 +565,8 @@ fn parse_code(info: &[u8], pool: &[Const]) -> Option<Code> {
         exceptions.push(ExceptionEntry { start_pc, end_pc, handler_pc, catch_type: (catch != 0).then(|| class_name_at(pool, catch)) });
     }
     let mut line_numbers = Vec::new();
-    for a in read_attrs(&mut c, pool) {
+    let (attrs, _) = read_attrs(&mut c, pool);
+    for a in attrs {
         if a.name == "LineNumberTable" {
             let mut lc = Cursor::new(a.info);
             let n = lc.u16().unwrap_or(0) as usize;
