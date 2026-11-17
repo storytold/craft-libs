@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use crate::ui::length::{DocUnit, length_field, shown};
-use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec};
+use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec, Preview};
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{
     Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec,
@@ -261,8 +261,8 @@ pub(crate) fn toggle_row<C>(ui: &mut Ui, label: Option<&Label>, toggles: &[Toggl
 pub(crate) struct FamilyField {
     /// The family edit, and the style edit of a style picked in an expanded family's rows; a hovered row is not one.
     pub edits: Vec<EditEvent<CharacterChange>>,
-    /// The family under the pointer or keyboard row in the open list.
-    pub preview: Option<String>,
+    /// What this pass did to the live preview: the family under the pointer or keyboard row in the open list.
+    pub preview: Preview<String>,
     /// The family the pointer or keyboard rested on in the open list.
     pub rested: Option<String>,
 }

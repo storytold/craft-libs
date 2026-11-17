@@ -1,7 +1,7 @@
 //! `TypeBar`: the type tool's options bar, the family, style, size, alignment, colour and panels buttons in one
 //! strip.
 
-use craft_behavior::{EditEvent, IconId};
+use craft_behavior::{EditEvent, IconId, Preview};
 use craft_theme::Srgba;
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::choice::Swatch;
@@ -67,8 +67,9 @@ pub struct TypeBarOutput {
     pub response: Response,
     /// The edit events of this pass.
     pub edits: Vec<EditEvent<TypeBarChange>>,
-    /// The family under the pointer in the open font list, for a live preview.
-    pub preview_family: Option<String>,
+    /// What this pass did to the live preview of the selected text: the family under the pointer or the keyboard row
+    /// of the open font list.
+    pub preview_family: Preview<String>,
     /// The family the pointer rested on in the open font list.
     pub rested_family: Option<String>,
     /// The colour well was clicked.
@@ -162,7 +163,7 @@ impl<'a> TypeBar<'a> {
         let directions = direction_toggles(paragraph, &paragraph_words);
 
         let mut edits: Vec<EditEvent<TypeBarChange>> = Vec::new();
-        let mut preview_family = None;
+        let mut preview_family = Preview::Unchanged;
         let mut rested_family = None;
         let mut requests = HostRequests::new();
         let (mut warp, mut panels) = (false, false);

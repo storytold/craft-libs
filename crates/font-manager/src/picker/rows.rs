@@ -6,7 +6,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use craft_behavior::{DisplayOrder, IconId, ItemSource, Selection};
+use craft_behavior::{DisplayOrder, IconId, ItemSource, Preview, Selection};
 use craft_font_catalog::Catalog;
 use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::choice::{Radio, RadioGroup};
@@ -266,9 +266,28 @@ fn rest<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontPicker<'a>>, family
     }
 }
 
+/// Shows `family` as the live preview, led by the pointer or by the keys; the pass reports it when the family changes.
+fn show_preview<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontPicker<'a>>, family: String, by_pointer: bool) {
+    let typing = cx.memory::<Typing>();
+    typing.lead_by_pointer = by_pointer;
+    if typing.lead.as_ref() != Some(&family) {
+        typing.lead = Some(family.clone());
+        picker.preview = Preview::Shows(family);
+    }
+}
+
+/// Ends the live preview, if one runs; the pass reports the end.
+pub(super) fn end_preview<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontPicker<'a>>) {
+    let typing = cx.memory::<Typing>();
+    typing.lead_by_pointer = false;
+    if typing.lead.take().is_some() {
+        picker.preview = Preview::Ended;
+    }
+}
+
 /// The list popup: one option row per family, the committed family's row selected, and the styles of the open
 /// families under their rows. A pick comes back as `Activate` (Enter, Tab or a click), a row the lead moves to is
-/// proposed as the preview, and a star flips a favourite. Each pass reports only the events of its own input.
+/// reported as the preview (the field's value and text stay), and a star flips a favourite. Each pass reports only the events of its own input.
 pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, FontPicker<'a>>) {
     let popup = cx.popup(POPUP);
     let words = cx.words::<FontPickerWords>();
@@ -390,10 +409,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         match event {
             CollectionEvent::LeadMoved { key, by } => {
                 if let Some(family) = slot_of(&slots, &key).and_then(Slot::family) {
-                    let typing = cx.memory::<Typing>();
-                    typing.lead = Some(family.to_owned());
-                    typing.lead_by_pointer = by == LeadSource::Pointer;
-                    cx.propose(family.to_owned());
+                    show_preview(picker, cx, family.to_owned(), by == LeadSource::Pointer);
                 }
             }
             CollectionEvent::Rested(key) => {
@@ -428,18 +444,12 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         (typing.lead_by_pointer, typing.lead.is_some())
     };
     if by_pointer && !over_rows {
-        let typing = cx.memory::<Typing>();
-        typing.lead = None;
-        typing.lead_by_pointer = false;
-        cx.cancel(craft_behavior::CancelReason::Dismissed);
+        end_preview(picker, cx);
     } else if over_rows
         && !led
         && let Some(family) = under_pointer.and_then(|key| slot_of(&slots, &key).and_then(Slot::family).map(str::to_owned))
     {
-        let typing = cx.memory::<Typing>();
-        typing.lead = Some(family.clone());
-        typing.lead_by_pointer = true;
-        cx.propose(family);
+        show_preview(picker, cx, family, true);
     }
     if let Some(mut changed) = settings.clone().filter(|_| !stars.is_empty()) {
         for (family, on) in &stars {
@@ -456,6 +466,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     if let Some((family, style)) = picked.and_then(|key| slot_of(&slots, &key)).and_then(Slot::pick) {
         picker.picked = Some(family.to_owned());
         picker.picked_style = style.map(str::to_owned);
+        end_preview(picker, cx);
         cx.propose(family.to_owned());
         cx.commit();
         popup.close(cx);

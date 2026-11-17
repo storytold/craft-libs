@@ -89,6 +89,8 @@ pub struct TextOutcome<V> {
     pub composing: bool,
     /// The completion candidates the list shows; empty while it is closed.
     pub completions: Vec<super::Completion>,
+    /// A primary click on the text ended this pass.
+    pub clicked: bool,
 }
 
 impl<V> TextOutcome<V> {
@@ -104,6 +106,7 @@ impl<V> TextOutcome<V> {
             committed: None,
             composing: false,
             completions: Vec::new(),
+            clicked: false,
         }
     }
 }

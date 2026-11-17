@@ -422,6 +422,10 @@ pub(crate) fn run<C: Component>(
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
+    if std::mem::take(&mut state.select_all) {
+        let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();
+        adapter::select(&ctx, widget, 0, len);
+    }
     cx.core.surface_slot = Some(ui.painter().add(egui::Shape::Noop));
     let menu_held = state.held_selection.is_some();
     let out = adapter::run(
@@ -505,6 +509,7 @@ pub(crate) fn run<C: Component>(
     outcome.caret_visible = caret_visible;
     outcome.composing = crate::runtime::ime::composing(&ctx, widget);
     outcome.completions = completions;
+    outcome.clicked = out.clicked;
     // The focus service moved focus off the widget with Tab before this pass's widgets ran.
     let left_by_tab = if was_focused && !out.focused { crate::runtime::focus::tabbed_off(&ctx, widget) } else { None };
     cx.core.texts = Some((decl.key, Box::new(RecordedText { outcome, submit_mods: resolved.submit_mods, left_by_tab })));
@@ -526,6 +531,13 @@ impl<C: Component> Cx<'_, C> {
     pub fn set_draft(&mut self, text: Option<String>) {
         self.core.memory.shown::<TextState>(state_id(self.core.id)).change =
             Some(text.map_or(adapter::DraftChange::Revert, adapter::DraftChange::Text));
+        crate::runtime::egui::repaint::request(&self.core.ctx);
+    }
+
+    /// Selects the whole text of the text part at the start of the next pass, as a field that takes focus with
+    /// `select_on_focus` does: a font field's click that opens its list selects the name, so typing replaces it.
+    pub fn select_all_text(&mut self) {
+        self.core.memory.shown::<TextState>(state_id(self.core.id)).select_all = true;
         crate::runtime::egui::repaint::request(&self.core.ctx);
     }
 
