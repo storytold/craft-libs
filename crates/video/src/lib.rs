@@ -76,5 +76,9 @@ pub mod av1;
 /// Uncompressed AVI and QuickTime pixel layouts.
 pub mod raw_video;
 
+/// Bounded Screen Video key-frame decoding (FLV codec 3).
+#[cfg(feature = "screen-video")]
+pub mod screen_video;
+
 #[cfg(feature = "vmd")]
 pub mod vmd;
