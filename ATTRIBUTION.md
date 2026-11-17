@@ -119,6 +119,9 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.
 
+## Aligned stored ZIP entries
+
+The USDZ alignment requirement and compatibility fixture for `Writer::add_stored_aligned` come from TextureCraft `crates/formats/src/mesh_export/usd.rs`, introduced by bflatastic in `bdbb52c9` and maintained through `9eb20086` (MIT OR Apache-2.0). The shared API and alignment validation are subsequent Dylan M. Taylor work. Scene/material mapping remains in TextureCraft.
 The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
 AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
 Sanitization, animation fitting and numeric output policy remain caller-owned.
