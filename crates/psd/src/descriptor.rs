@@ -12,6 +12,26 @@ mod lookup;
 /// Maximum nesting depth accepted when parsing (fuzz safety).
 pub const MAX_DEPTH: usize = 64;
 
+/// Per-container limits for parsing descriptor trees.
+///
+/// Limits apply to every nested descriptor and `VlLs` list, before allocation.
+/// They are not a total memory budget; byte strings and other value types retain
+/// their existing input-length checks. Defaults preserve the unrestricted counts
+/// accepted by the original API. Nesting remains bounded by [`MAX_DEPTH`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseLimits {
+    /// Maximum key/value pairs in each descriptor.
+    pub max_descriptor_items: u32,
+    /// Maximum values in each `VlLs` list.
+    pub max_list_items: u32,
+}
+
+impl Default for ParseLimits {
+    fn default() -> Self {
+        Self { max_descriptor_items: u32::MAX, max_list_items: u32::MAX }
+    }
+}
+
 /// A Photoshop Unicode string: UTF-16 code units, preserved exactly
 /// (including any trailing NUL and unpaired surrogates).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
@@ -300,6 +320,23 @@ impl Descriptor {
         Ok(d)
     }
 
+    /// Parses a descriptor at the start of `data`, returning it and the number of bytes consumed
+    /// (trailing data is allowed). Mid-stream reads of layer effects, fill and adjustment
+    /// descriptors use this; [`from_bytes`] still requires the slice to be fully consumed.
+    pub fn parse_prefix(data: &[u8]) -> Result<(Self, usize)> {
+        let mut r = Reader::new(data);
+        let d = Self::read(&mut r)?;
+        Ok((d, r.pos()))
+    }
+
+    /// Parses a descriptor prefix with explicit per-container limits.
+    /// Returns the descriptor and bytes consumed, allowing trailing data.
+    pub fn parse_prefix_with_limits(data: &[u8], limits: ParseLimits) -> Result<(Self, usize)> {
+        let mut r = Reader::new(data);
+        let d = Self::read_with_limits(&mut r, limits)?;
+        Ok((d, r.pos()))
+    }
+
     /// Serializes the descriptor.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = Vec::new();
@@ -308,7 +345,11 @@ impl Descriptor {
     }
 
     pub(crate) fn read(r: &mut Reader<'_>) -> Result<Self> {
-        read_descriptor(r, 0)
+        Self::read_with_limits(r, ParseLimits::default())
+    }
+
+    pub(crate) fn read_with_limits(r: &mut Reader<'_>, limits: ParseLimits) -> Result<Self> {
+        read_descriptor(r, 0, limits)
     }
 
     pub(crate) fn write(&self, out: &mut Vec<u8>) {
@@ -382,33 +423,36 @@ pub(crate) fn vec_for_count<T>(n: u32) -> Vec<T> {
     Vec::with_capacity((n as usize).min(MAX_PREALLOC))
 }
 
-fn read_descriptor(r: &mut Reader<'_>, depth: usize) -> Result<Descriptor> {
+fn read_descriptor(r: &mut Reader<'_>, depth: usize, limits: ParseLimits) -> Result<Descriptor> {
     if depth > MAX_DEPTH {
         return Err(PsdError::LimitExceeded("descriptor nesting too deep"));
     }
     let name = UnicodeString::read(r)?;
     let class_id = Id::read(r)?;
     let n = r.u32()?;
+    if n > limits.max_descriptor_items {
+        return Err(PsdError::LimitExceeded("too many descriptor items"));
+    }
     // Each item needs at least 5 (1-byte string key) + 4 (type) + 1 (bool).
     r.check_count(u64::from(n), 10)?;
     let mut items = vec_for_count(n);
     for _ in 0..n {
         let key = Id::read(r)?;
-        let v = read_value(r, depth + 1)?;
+        let v = read_value(r, depth + 1, limits)?;
         items.push((key, v));
     }
     Ok(Descriptor { name, class_id, items })
 }
 
-fn read_value(r: &mut Reader<'_>, depth: usize) -> Result<Value> {
+fn read_value(r: &mut Reader<'_>, depth: usize, limits: ParseLimits) -> Result<Value> {
     if depth > MAX_DEPTH {
         return Err(PsdError::LimitExceeded("descriptor nesting too deep"));
     }
     let ty = r.array::<4>()?;
-    read_typed_value(r, &ty, depth)
+    read_typed_value(r, &ty, depth, limits)
 }
 
-fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize) -> Result<Value> {
+fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize, limits: ParseLimits) -> Result<Value> {
     Ok(match ty {
         b"obj " => {
             let n = r.u32()?;
@@ -419,14 +463,17 @@ fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize) -> Result<Va
             }
             Value::Reference(items)
         }
-        b"Objc" => Value::Descriptor(read_descriptor(r, depth + 1)?),
-        b"GlbO" => Value::GlobalObject(read_descriptor(r, depth + 1)?),
+        b"Objc" => Value::Descriptor(read_descriptor(r, depth + 1, limits)?),
+        b"GlbO" => Value::GlobalObject(read_descriptor(r, depth + 1, limits)?),
         b"VlLs" => {
             let n = r.u32()?;
+            if n > limits.max_list_items {
+                return Err(PsdError::LimitExceeded("too many descriptor list items"));
+            }
             r.check_count(u64::from(n), 4)?;
             let mut items = vec_for_count(n);
             for _ in 0..n {
-                items.push(read_value(r, depth + 1)?);
+                items.push(read_value(r, depth + 1, limits)?);
             }
             Value::List(items)
         }
@@ -463,7 +510,7 @@ fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize) -> Result<Va
         }
         b"ObAr" => {
             let prefix = r.u32()?;
-            Value::ObjectArray(ObjectArray { prefix, body: read_descriptor(r, depth + 1)? })
+            Value::ObjectArray(ObjectArray { prefix, body: read_descriptor(r, depth + 1, limits)? })
         }
         other => {
             return Err(PsdError::Unsupported(format!("descriptor OSType {:?}", String::from_utf8_lossy(other))));
@@ -616,7 +663,7 @@ mod tests {
             data.extend_from_slice(b"bool\x01");
         }
         let mut r = Reader::new(&data);
-        match read_typed_value(&mut r, b"VlLs", 0).unwrap() {
+        match read_typed_value(&mut r, b"VlLs", 0, ParseLimits::default()).unwrap() {
             Value::List(v) => assert_eq!(v.len(), n as usize),
             other => panic!("expected list, got {other:?}"),
         }
@@ -703,6 +750,18 @@ mod tests {
         let b = v.to_bytes();
         assert_eq!(&b[..4], &[0, 0, 0, 16]);
         assert_eq!(VersionedDescriptor::from_bytes(&b).unwrap(), v);
+    }
+
+    #[test]
+    fn parse_prefix() {
+        let d = sample();
+        let mut b = d.to_bytes();
+        let n = b.len();
+        b.extend_from_slice(&[1, 2, 3]);
+        let (p, used) = Descriptor::parse_prefix(&b).unwrap();
+        assert_eq!(p, d);
+        assert_eq!(used, n);
+        assert!(Descriptor::from_bytes(&b).is_err(), "from_bytes still refuses trailing bytes");
     }
 
     #[test]
