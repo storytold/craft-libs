@@ -537,6 +537,8 @@ pub fn cpio_with_checksum(data: &[u8], max_members: usize, checksum: &mut dyn Fn
         }
         if format == "cpio-crc" {
             match h.get(102..110).filter(|field| field.iter().all(u8::is_ascii_hexdigit)).and_then(hex_field).and_then(|n| u32::try_from(n).ok()) {
+                // GNU cpio writes the symlink target without a checksum.
+                Some(0) if kind == MemberKind::Symlink => {}
                 Some(expected) => {
                     if let Some(body) = r.slice(data_off, size) {
                         match checksum(body) {
