@@ -210,8 +210,7 @@ fn rgba_is_direct_opaque_and_preserves_hdr_samples() {
 
 #[test]
 fn axis_limit_precedes_pixel_data_and_scratch_allocation() {
-    let mut limits = Limits::default();
-    limits.max_axis = 32768;
+    let limits = Limits { max_axis: 32768, ..Limits::default() };
     for resolution in ["-Y 1 +X 32769", "-Y 32769 +X 1", "+X 1 -Y 32769"] {
         let bytes = format!("#?RADIANCE\n\n{resolution}\n");
         assert_eq!(decode_rgba(bytes.as_bytes(), &limits), Err(Error::LimitExceeded("axis length")));
