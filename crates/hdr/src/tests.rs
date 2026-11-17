@@ -196,3 +196,24 @@ fn resolution_tokens_after_the_fourth_are_ignored() {
     assert_eq!((f.width, f.height), (1, 1));
     assert_eq!(dec(&file("-Y 1 +X", &[0; 4])), Err(Error::Malformed("bad resolution line")));
 }
+
+#[test]
+fn rgba_is_direct_opaque_and_preserves_hdr_samples() {
+    let bytes = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n\x80\x40\x20\x88\0\0\0\0";
+    let p = decode_rgba(bytes, &Limits::default()).unwrap();
+    assert_eq!((p.width, p.height), (2, 1));
+    assert_eq!(p.rgba, [128.0, 64.0, 32.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    // RGB fits in 24 bytes, RGBA needs 32: the extra channel must be counted.
+    assert!(decode_channels::<3>(bytes, &Limits::default(), 28).is_ok());
+    assert_eq!(decode_channels::<4>(bytes, &Limits::default(), 28), Err(Error::LimitExceeded("pixel count")));
+}
+
+#[test]
+fn axis_limit_precedes_pixel_data_and_scratch_allocation() {
+    let limits = Limits { max_axis: 32768, ..Limits::default() };
+    for resolution in ["-Y 1 +X 32769", "-Y 32769 +X 1", "+X 1 -Y 32769"] {
+        let bytes = format!("#?RADIANCE\n\n{resolution}\n");
+        assert_eq!(decode_rgba(bytes.as_bytes(), &limits), Err(Error::LimitExceeded("axis length")));
+        assert_eq!(decode(bytes.as_bytes(), &limits), Err(Error::LimitExceeded("axis length")));
+    }
+}

@@ -1,6 +1,6 @@
 # craft-midi
 
-MIDI file formats. Bytes in, a neutral model out, and back. No file access: callers pass bytes,
+MIDI file formats and synchronization wire messages. Bytes in, a neutral model out, and back. No file access: callers pass bytes,
 so the crate builds for wasm32.
 
 | Format | Read | Write |
@@ -79,3 +79,17 @@ of two, more than 65535 tracks or a gap beyond the 28-bit delta limit is an erro
 Written from the public Standard MIDI Files 1.0 specification (the MIDI Association). No other
 product's code, assets or strings were used. The code comes from SoundCraft's `soundcraft-midi`
 crate; the tests build every file they read in code, so the crate ships no binary test data.
+
+## Synchronization wire messages
+
+`sync` provides MIDI Clock/Start/Continue/Stop and Song Position Pointer parsing,
+clamped song-position encoding, and full-frame/quarter-frame MIDI Time Code serialization.
+It is allocation-free and contains no port access, clocks, tempo estimation or transport scheduling.
+`SyncMessage::parse` accepts a status-first prefix and ignores trailing bytes, matching LoopCraft;
+it is not a byte-stream parser. Time code supports only 24/25/30 non-drop fps, not 29.97 drop-frame.
+
+These wire helpers are extracted from LoopCraft's `crates/midi/src/sync.rs` at
+[`18c68c6e`](https://github.com/storytold/loopcraft/blob/18c68c6e18b13d90db3001dd9f95462cdc4b05a8/crates/midi/src/sync.rs).
+The source history credits bflatastic. Transport state and scheduling remain app-owned.
+Tests cover known wire vectors, truncated/invalid input, all song-position input values and
+legacy conversion behavior. No application consumer cutover is claimed by this library addition.

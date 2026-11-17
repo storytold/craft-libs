@@ -22,8 +22,55 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn samples() -> Option<PathBuf> {
-    let pinned = corpus::pinned();
-    std::env::var_os("AFFINITY_SAMPLES").map(PathBuf::from).or(pinned)
+    folder(std::env::var_os("AFFINITY_SAMPLES"), corpus::pinned)
+}
+
+/// The `AFFINITY_SAMPLES` folder when one is given, without reading the pinned corpus; otherwise
+/// the pinned corpus.
+fn folder(samples: Option<std::ffi::OsString>, pinned: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    samples.map(PathBuf::from).or_else(pinned)
+}
+
+#[test]
+fn a_samples_folder_is_used_without_the_pinned_corpus() {
+    assert_eq!(folder(Some("samples".into()), || panic!("the pinned corpus was read")), Some(PathBuf::from("samples")));
+    assert_eq!(folder(None, || Some(PathBuf::from("pinned"))), Some(PathBuf::from("pinned")));
+    assert_eq!(folder(None, || None), None);
+}
+
+#[test]
+fn the_pinned_manifest_is_well_formed() {
+    let rows = corpus::rows(corpus::MANIFEST).unwrap();
+    assert!(rows.iter().filter(|r| r.name.ends_with(".af")).count() >= 4);
+}
+
+#[test]
+fn the_manifest_check_rejects_malformed_rows() {
+    let digest = "0".repeat(64);
+    let url = "https://example.com/a.af";
+    let row = |name: &str| format!("{digest}\t{name}\tMIT\t{url}\n");
+    // Two names may share a digest.
+    assert!(corpus::rows(&(row("a.af") + &row("dir/b.af"))).is_ok());
+    for (bad, why) in [
+        (row("a.af") + &row("a.af"), "listed twice"),
+        (format!("{digest}\ta.af\tMIT\n"), "four tab-separated fields"),
+        (format!("{digest}\ta.af\tMIT\t{url}\textra\n"), "four tab-separated fields"),
+        (format!("{}\ta.af\tMIT\t{url}\n", "0".repeat(63)), "invalid SHA-256"),
+        (format!("{}\ta.af\tMIT\t{url}\n", "A".repeat(64)), "invalid SHA-256"),
+        (row("../a.af"), "relative path"),
+        (row("/a.af"), "relative path"),
+        (row("dir//a.af"), "relative path"),
+        (row("dir\\a.af"), "relative path"),
+        (row("C:a.af"), "relative path"),
+        (format!("{digest}\ta.af\t \t{url}\n"), "no license"),
+        (format!("{digest}\ta.af\tMIT\thttp://example.com/a.af\n"), "https"),
+        (format!("{digest}\ta.af\tMIT\thttps://\n"), "https"),
+    ] {
+        match corpus::rows(&bad) {
+            Ok(_) => panic!("accepted {bad:?}"),
+            Err(e) => assert!(e.contains(why), "{bad:?}: {e}"),
+        }
+    }
 }
 
 #[test]

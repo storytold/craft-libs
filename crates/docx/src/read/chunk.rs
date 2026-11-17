@@ -63,7 +63,7 @@ impl Reader<'_> {
         let chunk = AltChunk { content_type: &ct, part: &part, bytes };
         // A WordprocessingML chunk is a package; one that isn't Word's fails to read (logged).
         let is_docx = bytes.starts_with(b"PK\x03\x04");
-        let doc = if is_docx { self.read_nested(bytes, depth) } else { self.chunks.import.and_then(|f| f(&chunk)) };
+        let doc = if is_docx { self.read_nested(bytes, depth, &part) } else { self.chunks.import.and_then(|f| f(&chunk)) };
         let Some(mut doc) = doc else {
             log::warn!("docx: alternative format chunk {part} ({ct}) is in a format WordCraft can't bring in");
             return;
@@ -83,6 +83,8 @@ impl Reader<'_> {
         // The pictures the chunk's own reader dropped are the file's too (strict export, #6005),
         // each named by the chunk and its part in it (`word/afchunk1.docx > word/header1.xml`).
         // A chunk in another format brings none: those importers record nothing yet (#6007).
+        let skipped = std::mem::take(&mut doc.skipped_parts);
+        self.doc.skipped_parts.extend(skipped.into_iter().map(|name| format!("{part} > {name}")));
         let nested = std::mem::take(&mut doc.missing_pictures);
         let list_len = nested.list.len() as u64;
         for mut item in nested.list {
@@ -103,7 +105,7 @@ impl Reader<'_> {
 
     /// A WordprocessingML chunk: its document, read with the same importer and what is left of
     /// the budgets, its XML depth counting on from `depth`.
-    fn read_nested(&mut self, bytes: &[u8], depth: usize) -> Option<Document> {
+    fn read_nested(&mut self, bytes: &[u8], depth: usize, part: &str) -> Option<Document> {
         if self.chunks.nesting >= MAX_CHUNK_NESTING {
             log::warn!("docx: alternative format chunks nest deeper than {MAX_CHUNK_NESTING}; the inner ones are left out");
             return None;
@@ -112,8 +114,14 @@ impl Reader<'_> {
             Package::open_limited(bytes, MAX_PART, self.chunks.bytes).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
         let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, ..self.chunks };
-        let (doc, left, bytes, graphic) =
-            super::read_opened_in(&pkg, state).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
+        let (doc, left, bytes, graphic) = match super::read_opened_in(&pkg, state) {
+            Ok(read) => read,
+            Err(e) => {
+                log::warn!("docx: unreadable nested document chunk: {e}");
+                self.doc.skipped_parts.extend(pkg.skipped().iter().map(|name| format!("{part} > {name}")));
+                return None;
+            }
+        };
         self.chunks.left = left;
         self.chunks.bytes = bytes;
         self.chunks.graphic = graphic;
