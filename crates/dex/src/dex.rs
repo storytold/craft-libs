@@ -348,8 +348,11 @@ pub fn parse(data: &[u8]) -> Result<Dex<'_>, FormatError> {
             ProtoId { shorty: r.u32_le(o).unwrap_or(0), ret: r.u32_le(o + 4).unwrap_or(NO_INDEX), params_off: r.u32_le(o + 8).unwrap_or(0) }
         })
         .collect();
-    let member =
-        |o: usize| MemberId { class_idx: r.u16_le(o).unwrap_or(0), type_or_proto: r.u16_le(o + 2).unwrap_or(0), name_idx: r.u32_le(o + 4).unwrap_or(NO_INDEX) };
+    let member = |o: usize| MemberId {
+        class_idx: r.u16_le(o).unwrap_or(0),
+        type_or_proto: r.u16_le(o + 2).unwrap_or(0),
+        name_idx: r.u32_le(o + 4).unwrap_or(NO_INDEX),
+    };
     let fields = (0..nf).map(|i| member(fo + i * 8)).collect();
     let methods = (0..nm).map(|i| member(mo + i * 8)).collect();
     let classes = (0..nc)
@@ -423,7 +426,9 @@ impl<'a> Dex<'a> {
     /// `Lcls;->name:Ltype;`
     pub fn field_ref(&self, i: u32) -> String {
         match self.fields.get(i as usize) {
-            Some(f) => format!("{}->{}:{}", self.type_desc(u32::from(f.class_idx)), self.string(f.name_idx), self.type_desc(u32::from(f.type_or_proto))),
+            Some(f) => {
+                format!("{}->{}:{}", self.type_desc(u32::from(f.class_idx)), self.string(f.name_idx), self.type_desc(u32::from(f.type_or_proto)))
+            }
             None => format!("<field#{i}>"),
         }
     }
@@ -431,7 +436,9 @@ impl<'a> Dex<'a> {
     /// `Lcls;->name(…)R`
     pub fn method_ref(&self, i: u32) -> String {
         match self.methods.get(i as usize) {
-            Some(m) => format!("{}->{}{}", self.type_desc(u32::from(m.class_idx)), self.string(m.name_idx), self.proto_desc(u32::from(m.type_or_proto))),
+            Some(m) => {
+                format!("{}->{}{}", self.type_desc(u32::from(m.class_idx)), self.string(m.name_idx), self.proto_desc(u32::from(m.type_or_proto)))
+            }
             None => format!("<method#{i}>"),
         }
     }
@@ -683,9 +690,10 @@ pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -
                         let cls = dex.type_desc(u32::from(id.class_idx));
                         (cls == desc && method.is_none_or(|n| dex.string(id.name_idx) == n)).then(|| ("method", dex.method_ref(idx)))
                     }),
-                    IndexKind::Field if method.is_none() => {
-                        dex.fields.get(idx as usize).and_then(|id| (dex.type_desc(u32::from(id.class_idx)) == desc).then(|| ("field", dex.field_ref(idx))))
-                    }
+                    IndexKind::Field if method.is_none() => dex
+                        .fields
+                        .get(idx as usize)
+                        .and_then(|id| (dex.type_desc(u32::from(id.class_idx)) == desc).then(|| ("field", dex.field_ref(idx)))),
                     IndexKind::Type if method.is_none() => {
                         let t = dex.type_desc(idx);
                         (t.trim_start_matches('[') == desc).then_some(("type", t))
@@ -707,7 +715,7 @@ pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_anything_testkit::android as fx;
+    use crate::test_support::android as fx;
 
     #[test]
     fn parses_fixture() {
@@ -785,7 +793,7 @@ mod tests {
             }
             let _ = references(d, "Lcom/example/notes/Util;", None, 100);
         };
-        for m in craft_anything_testkit::mutations(&data) {
+        for m in crate::test_support::mutations(&data) {
             if let Ok(d) = parse(&m) {
                 walk(&d);
             }
@@ -796,7 +804,7 @@ mod tests {
             }
         }
         for seed in 0..64 {
-            let mut n = craft_anything_testkit::noise(seed, 2048);
+            let mut n = crate::test_support::noise(seed, 2048);
             n[..8].copy_from_slice(b"dex\n035\0");
             n[40..44].copy_from_slice(&0x1234_5678u32.to_le_bytes());
             if let Ok(d) = parse(&n) {

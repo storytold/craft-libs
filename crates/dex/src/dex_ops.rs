@@ -170,7 +170,8 @@ const BINOPS_2ADDR: [&str; 32] = [
     "rem-double/2addr",
 ];
 
-const LIT16: [&str; 8] = ["add-int/lit16", "rsub-int", "mul-int/lit16", "div-int/lit16", "rem-int/lit16", "and-int/lit16", "or-int/lit16", "xor-int/lit16"];
+const LIT16: [&str; 8] =
+    ["add-int/lit16", "rsub-int", "mul-int/lit16", "div-int/lit16", "rem-int/lit16", "and-int/lit16", "or-int/lit16", "xor-int/lit16"];
 const LIT8: [&str; 11] = [
     "add-int/lit8",
     "rsub-int/lit8",
@@ -236,7 +237,8 @@ const SFIELD: [&str; 14] = [
     "sput-short",
 ];
 const INVOKE: [&str; 5] = ["invoke-virtual", "invoke-super", "invoke-direct", "invoke-static", "invoke-interface"];
-const INVOKE_RANGE: [&str; 5] = ["invoke-virtual/range", "invoke-super/range", "invoke-direct/range", "invoke-static/range", "invoke-interface/range"];
+const INVOKE_RANGE: [&str; 5] =
+    ["invoke-virtual/range", "invoke-super/range", "invoke-direct/range", "invoke-static/range", "invoke-interface/range"];
 
 fn pick(list: &[&'static str], i: u8, base: u8) -> &'static str {
     list.get(usize::from(i.wrapping_sub(base))).copied().unwrap_or("unused")
@@ -683,7 +685,7 @@ mod tests {
     #[test]
     fn hostile() {
         for seed in 0..200 {
-            let n = craft_anything_testkit::noise(seed, 256);
+            let n = crate::test_support::noise(seed, 256);
             let code: Vec<u16> = n.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             let _ = decode(&code, 1000);
         }
