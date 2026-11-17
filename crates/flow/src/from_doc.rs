@@ -1106,7 +1106,10 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
     let ncols =
         t.rows.iter().map(|r| r.first_grid() + r.cells.iter().map(|c| c.span()).sum::<usize>() + r.grid_after()).max().unwrap_or(0).max(t.grid.len());
     for (ri, r) in t.rows.iter().enumerate() {
-        let header = r.props.header || (ri == 0 && t.props.look.header_row && t.rows.len() > 1);
+        // The look's header row is an option of the table's style (`w:tblLook/@w:firstRow`): with
+        // no table style there is nothing to apply, so the first row stays an ordinary row, as in
+        // Word. Only Repeat as header row makes it one then.
+        let header = r.props.header || (ri == 0 && style.is_some() && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
         for (ci, c) in r.cells.iter().enumerate() {
             let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };

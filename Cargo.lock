@@ -1499,6 +1499,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-color"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "craft-control"
 version = "0.1.0"
 dependencies = [
@@ -1549,6 +1557,13 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+]
+
+[[package]]
+name = "craft-dds"
+version = "0.1.0"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]
@@ -1926,6 +1941,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-frame"
+version = "0.1.0"
+dependencies = [
+ "craft-color",
+ "craft-time",
+ "rayon",
+ "serde",
+]
+
+[[package]]
 name = "craft-gainmap"
 version = "0.1.0"
 dependencies = [
@@ -2042,6 +2067,7 @@ name = "craft-image-codecs"
 version = "0.1.0"
 dependencies = [
  "avif-serialize",
+ "craft-dds",
  "craft-heif",
  "craft-jpeg",
  "craft-media-testkit",
@@ -2250,6 +2276,20 @@ dependencies = [
  "chrono",
  "craft-media-testkit",
  "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-media-source"
+version = "0.1.0"
+dependencies = [
+ "craft-audio",
+ "craft-color",
+ "craft-frame",
+ "craft-media",
+ "craft-time",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2848,6 +2888,10 @@ name = "craft-sniff"
 version = "0.1.0"
 
 [[package]]
+name = "craft-ssip"
+version = "0.1.0"
+
+[[package]]
 name = "craft-stencilcraft-document"
 version = "0.1.0"
 dependencies = [
@@ -2859,10 +2903,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
-
-[[package]]
-name = "craft-ssip"
-version = "0.1.0"
 
 [[package]]
 name = "craft-stencilcraft-format"
