@@ -46,6 +46,7 @@ fn crates() -> Vec<(&'static str, Registered)> {
     crates.push(("craft-table", craft_table::ui::testing::registered));
     #[cfg(feature = "text")]
     crates.push(("craft-text", craft_text::testing::registered));
+    #[cfg(feature = "theme-editor")]
     crates.push(("craft-theme-editor", craft_theme_editor::testing::registered));
     #[cfg(feature = "theme-store")]
     crates.push(("craft-theme-store", craft_theme_store::ui::registered));
