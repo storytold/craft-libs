@@ -15,6 +15,7 @@ craft-java-class = { path = "crates/java-class" }
 craft-sourcemap = { path = "crates/sourcemap" }
 craft-pcap = { path = "crates/pcap" }
 craft-har = { path = "crates/har" }
+craft-xfdf = { path = "crates/xfdf" }
 craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
