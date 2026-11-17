@@ -200,13 +200,13 @@ fn parse_digest(text: &str) -> Option<[u8; 32]> {
 }
 
 /// Checks that `path` is relative and stays in the corpus folder: parts separated by `/`, none
-/// empty, `.` or `..`, and no `\`, `:` or NUL anywhere, so the same row means the same file on
-/// every platform.
+/// empty, `.` or `..`, and no `\`, `:` or control character (NUL included) anywhere, so the same
+/// row means the same file on every platform.
 fn check_path(path: &str) -> Result<(), PathError> {
     if path.is_empty() {
         return Err(PathError::Empty);
     }
-    if path.contains(['\\', ':', '\0']) {
+    if path.contains(['\\', ':']) || path.chars().any(char::is_control) {
         return Err(PathError::Character);
     }
     for part in path.split('/') {
@@ -230,7 +230,7 @@ pub enum PathError {
     EmptyPart,
     /// The path has a `.` or `..` part.
     DotPart,
-    /// The path holds a `\`, a `:` or a NUL character.
+    /// The path holds a `\`, a `:` or a control character.
     Character,
 }
 
@@ -241,7 +241,7 @@ impl fmt::Display for PathError {
             Self::Absolute => "the path is absolute",
             Self::EmptyPart => "the path has an empty part",
             Self::DotPart => "the path has a . or .. part",
-            Self::Character => "the path holds a \\, a : or a NUL character",
+            Self::Character => "the path holds a \\, a : or a control character",
         })
     }
 }
@@ -413,6 +413,17 @@ pub fn verify_with_limits(dir: &Path, manifest: &Manifest, limits: &Limits) -> R
 }
 
 fn verify_entry(root: &Path, entry: &Entry, limits: &Limits, buf: &mut [u8]) -> Result<(), VerifyError> {
+    verify_entry_with(root, entry, limits, buf, open_for_reading)
+}
+
+/// [`verify_entry`] with the function that opens the resolved path; tests change the path in it.
+fn verify_entry_with(
+    root: &Path,
+    entry: &Entry,
+    limits: &Limits,
+    buf: &mut [u8],
+    open: impl FnOnce(&Path) -> io::Result<File>,
+) -> Result<(), VerifyError> {
     let path = || entry.path.clone();
     let target = entry.path_in(root).canonicalize().map_err(|error| VerifyError::Missing { path: path(), error })?;
     if !target.starts_with(root) {
@@ -422,11 +433,13 @@ fn verify_entry(root: &Path, entry: &Entry, limits: &Limits, buf: &mut [u8]) -> 
     if !kind.is_file() {
         return Err(VerifyError::NotAFile { path: path() });
     }
-    let file = open_for_reading(&target).map_err(|error| VerifyError::Read { path: path(), error })?;
+    let file = open(&target).map_err(|error| VerifyError::Read { path: path(), error })?;
     let meta = file.metadata().map_err(|error| VerifyError::Read { path: path(), error })?;
     if !meta.is_file() {
         return Err(VerifyError::NotAFile { path: path() });
     }
+    #[cfg(unix)]
+    opened_file_is_inside(root, entry, &file, &meta)?;
     if meta.len() > limits.max_file_bytes {
         return Err(VerifyError::TooLarge { path: path(), limit: limits.max_file_bytes });
     }
@@ -450,6 +463,49 @@ fn verify_entry(root: &Path, entry: &Entry, limits: &Limits, buf: &mut [u8]) -> 
         return Err(VerifyError::Modified { path: path() });
     }
     Ok(())
+}
+
+/// Checks, after the open, that the opened file is inside `root`, so a path changed into a link out
+/// of the folder between the first check and the open is refused. On Linux, Android and Apple
+/// platforms the kernel reports the open file's path, which must start with `root`. On other Unix
+/// systems, and where that path cannot be read, the entry's path is resolved again and must lead, without a link in its last part, to the
+/// opened file (the same device and inode).
+#[cfg(unix)]
+fn opened_file_is_inside(root: &Path, entry: &Entry, file: &File, opened: &std::fs::Metadata) -> Result<(), VerifyError> {
+    use std::os::unix::fs::MetadataExt;
+    let path = || entry.path.clone();
+    if let Some(actual) = opened_path(file).map_err(|error| VerifyError::Read { path: path(), error })? {
+        return if actual.starts_with(root) { Ok(()) } else { Err(VerifyError::Escapes { path: path() }) };
+    }
+    let again = entry.path_in(root).canonicalize().map_err(|error| VerifyError::Missing { path: path(), error })?;
+    let now = std::fs::symlink_metadata(&again).map_err(|error| VerifyError::Read { path: path(), error })?;
+    if !again.starts_with(root) || (now.dev(), now.ino()) != (opened.dev(), opened.ino()) {
+        return Err(VerifyError::Escapes { path: path() });
+    }
+    Ok(())
+}
+
+/// The path of the file `file` has open, as the kernel reports it in `/proc/self/fd`, or `None`
+/// when that cannot be read (for example without a mounted `/proc`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[allow(clippy::unnecessary_wraps)]
+fn opened_path(file: &File) -> io::Result<Option<PathBuf>> {
+    use std::os::fd::AsRawFd;
+    Ok(std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok())
+}
+
+/// The path of the file `file` has open, as the kernel reports it.
+#[cfg(target_vendor = "apple")]
+fn opened_path(file: &File) -> io::Result<Option<PathBuf>> {
+    use std::os::unix::ffi::OsStringExt;
+    let path = rustix::fs::getpath(file)?;
+    Ok(Some(PathBuf::from(OsString::from_vec(path.into_bytes()))))
+}
+
+/// `None`: the platform does not report the path of an open file.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))))]
+fn opened_path(_file: &File) -> io::Result<Option<PathBuf>> {
+    Ok(None)
 }
 
 /// Opens `path` for reading. On Unix the file is opened with `O_NONBLOCK`, so a path that was
@@ -661,6 +717,9 @@ mod tests {
             ("C:a", PathError::Character),
             ("\\\\server\\share\\a", PathError::Character),
             ("a\\..\\..\\b", PathError::Character),
+            ("a\u{1}b", PathError::Character),
+            ("a\u{7f}b", PathError::Character),
+            ("a\u{85}b", PathError::Character),
         ];
         for (path, expected) in cases {
             match parse_err(&format!("{HELLO_SHA}\t{path}\n")) {
@@ -817,6 +876,48 @@ mod tests {
         std::os::unix::fs::symlink(&outside.0, corpus.0.join("out")).expect("symlink");
         let manifest = Manifest::parse(&format!("{HELLO_SHA}\tout/hello.txt\n")).expect("parse");
         assert!(matches!(verify(&corpus.0, &manifest), Err(VerifyError::Escapes { .. })));
+    }
+
+    /// A file opened outside the folder, as after the listed path was changed into a link between
+    /// the first check and the open, is refused even when its contents match.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_opened_outside_the_folder_fails() {
+        let (scratch, manifest) = hello_corpus();
+        let outside = Scratch::new();
+        let other = outside.write("hello.txt", HELLO);
+        let root = scratch.0.canonicalize().expect("canonical folder");
+        let entry = &manifest.entries[0];
+        let opened = File::open(&other).expect("open the outside file");
+        let meta = opened.metadata().expect("metadata");
+        match opened_file_is_inside(&root, entry, &opened, &meta) {
+            Err(VerifyError::Escapes { path }) => assert_eq!(path, "hello.txt"),
+            other => panic!("{other:?}"),
+        }
+        let listed = File::open(root.join("hello.txt")).expect("open the listed file");
+        let meta = listed.metadata().expect("metadata");
+        opened_file_is_inside(&root, entry, &listed, &meta).expect("the listed file passes");
+    }
+
+    /// `verify` refuses a listed file that is changed into a link out of the folder after it was
+    /// resolved and before it is opened, even when the outside file's contents match.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_changed_into_an_outside_link_before_the_open_fails() {
+        let (scratch, manifest) = hello_corpus();
+        let outside = Scratch::new();
+        let other = outside.write("hello.txt", HELLO);
+        let root = scratch.0.canonicalize().expect("canonical folder");
+        let mut buf = vec![0u8; CHUNK];
+        let swap = |path: &Path| {
+            std::fs::remove_file(path)?;
+            std::os::unix::fs::symlink(&other, path)?;
+            open_for_reading(path)
+        };
+        match verify_entry_with(&root, &manifest.entries[0], &Limits::default(), &mut buf, swap) {
+            Err(VerifyError::Escapes { path }) => assert_eq!(path, "hello.txt"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
