@@ -1,0 +1,14 @@
+craft-audio-dsp
+Copyright (c) 2026 The StudioCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT and LICENSE-APACHE at the repository root).
+
+This crate contains code from the following projects, under the same licenses:
+
+FilmCraft (https://github.com/storytold/filmcraft), crates/audio-dsp
+Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option.
+
+SoundCraft (https://github.com/storytold/soundcraft), crates/dsp
+Copyright (c) 2026 ArtCraft Team and the SoundCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option.

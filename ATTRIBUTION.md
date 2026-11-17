@@ -111,6 +111,10 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 `crates/audio/src/wav_stream.rs` is extracted from AniCraft `crates/audio/src/wav.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0). Tanish Manku is retained as the primary import author, from original commit `30c121d269a49d9abe54a3834ed4aa0201542535`. Odd-data padding accounting, shared API documentation and regression tests are subsequent Dylan M. Taylor changes.
 
+## Audio DSP
+
+`crates/audio-dsp` is moved from StudioCraft's `crates/craft-audio-dsp` ([blamejs/StudioCraft](https://github.com/blamejs/StudioCraft) at `98224a9cc3e9eb353844908b2a676b2e6a9327d5`, MIT OR Apache-2.0). That crate combines FilmCraft `crates/audio-dsp` at `3f137a7ed420cac79b32145f5243b7f98b31f71c` and SoundCraft `crates/dsp` at `648ed9db9a0e98cc55643babffac381521a556c8` (both MIT OR Apache-2.0). `crates/audio-dsp/NOTICE` keeps the copyright notices of all three projects.
+
 ## GIMP palette reader
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.

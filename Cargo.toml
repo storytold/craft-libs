@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-palette = { path = "crates/palette" }
 craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
