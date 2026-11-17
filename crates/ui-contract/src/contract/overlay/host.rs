@@ -29,8 +29,8 @@ pub(crate) struct Layer<'a> {
     pub exiting: bool,
     /// The opacity the open and close motion gives.
     pub fade: f32,
-    /// The size the layer's content takes in this pass, when its container measured it before the layer shows;
-    /// a layer without one is placed by the size it took last pass.
+    /// The size the layer's content takes in this pass, as its container measured it before the layer shows. A
+    /// toast or a tooltip, which has none, is placed by the size it took last pass.
     pub size: Option<egui::Vec2>,
     /// The screen rect the layer is contained in (see [`region_for`]): placement, scrim, clip and input blocking stop at it.
     pub region: Option<Rect>,
@@ -60,14 +60,6 @@ pub(super) struct LayerMemory {
     family_closed: bool,
     /// The layer's focus scope has run in a pass that showed it: the scope takes its initial focus once per appearance.
     scope_entered: bool,
-    /// The least width the layer's body took in the last pass: a content-sized collection in the layer is at least
-    /// this wide, so its rows fill the layer.
-    min_width: f32,
-}
-
-/// The least width the body of the layer `id` takes, as of the last pass; 0 before the layer's first pass.
-pub(crate) fn floor_width(ctx: &Context, id: Id) -> f32 {
-    MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).min_width
 }
 
 pub(super) fn memory_slot(id: Id) -> Id {
@@ -136,20 +128,25 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     let bounds = layer.region.map_or_else(|| areas::safe_rect(ctx), |region| region.intersect(areas::safe_rect(ctx)));
     let anchor = anchor_rect(ctx, layer, bounds, &mut memory);
     let area = area_id(layer.id);
-    // A container's layer is placed by the size its container measured for this pass, any other by the size it took last
-    // pass. The layout memory entry under `size_id` marks that read, so a change of the size asks for
-    // the discard pass that places the layer by its real size, under the rule every measured size follows: no ask when
-    // the size also changed in the previous frame. A popup is placed by its anchor and opens from its opener's queued
-    // request, which a discard pass would replay.
+    let min_width = overlay.least_width(anchor.width());
+    // A container's layer is placed by the size its container measured for this pass, at least its least width; a
+    // toast or a tooltip by the size it took last pass. For a layer that owns its memory, the layout memory entry
+    // under `size_id` marks that read, so a change of the shown size asks for the discard pass that places the layer
+    // by it, under the rule every measured size follows: no ask when the size also changed in the previous frame. A
+    // popup's layer, whose memory its opener owns, asks none: it opens from its opener's queued request, which a
+    // discard pass would replay.
     let size_id = sub(layer.id, "layer_size");
     let sized = layer.owner == layer.id;
     if sized {
         let _ = layout_memory::read(ctx, size_id);
     }
-    let size = layer.size.or_else(|| areas::layer_rect(ctx, area).map(|rect| rect.size()));
+    let size = match layer.size {
+        Some(size) => Some(egui::vec2(size.x.max(min_width), size.y)),
+        None => areas::layer_rect(ctx, area).map(|rect| rect.size()),
+    };
     let placed = placement(ctx, layer, size, bounds, anchor);
     let tier = overlay::layer_tier(ctx, overlay.rank);
-    if sized && areas::layer_rect(ctx, area).is_none() {
+    if (sized || layer.size.is_some()) && areas::layer_rect(ctx, area).is_none() {
         areas::seed_area(ctx, areas::layer_of(tier, area), placed.at, placed.room);
     }
     // A modal's cover: it takes the presses below the modal while the modal is open, and paints the scrim if it has one.
@@ -168,7 +165,6 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     };
     let parent = overlay::drawing_parent(ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let min_width = overlay.least_width(anchor.width());
     let spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting };
     // The opener of the layer's scope is the stop focused when the layer first appears: egui's modal gate takes focus
     // from the widgets below a modal layer by the first pass that shows the layer. A dropdown that keeps its anchor's key
@@ -222,7 +218,6 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
     overlay::record(ctx, entry);
-    memory.min_width = min_width.min(placed.room.x);
     let dismissed = if layer.exiting { None } else { dismissal(ctx, layer, shown.rect, anchor, scope, &mut memory) };
     close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
     remember(layer, ctx, memory);

@@ -180,6 +180,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.instance_scope(self.comp.get_ref())
     }
 
+    fn memory_owner(&self) -> Option<Id> {
+        self.hooks.memory_owner(self.comp.get_ref())
+    }
+
     fn in_flow(&self) -> bool {
         self.hooks.in_flow(self.comp.get_ref())
     }
@@ -563,9 +567,15 @@ fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
     if !sizing {
         steps::claim_id(ui, id, facts.name);
     }
-    if !sizing && crate::runtime::memory::owner_pass(ui.ctx(), id).is_some() {
-        crate::contract::overlay::forget_layer(ui.ctx(), id, id);
-        crate::runtime::memory::end_shown(ui.ctx(), id);
+    // A layer whose memory belongs to another component (`ContainerProps::owner`) forgets only its layer: the rest
+    // of its memory lasts while that component shows.
+    match props.owner {
+        Some(owner) if !sizing => crate::contract::overlay::forget_layer(ui.ctx(), id, owner),
+        None if !sizing && crate::runtime::memory::owner_pass(ui.ctx(), id).is_some() => {
+            crate::contract::overlay::forget_layer(ui.ctx(), id, id);
+            crate::runtime::memory::end_shown(ui.ctx(), id);
+        }
+        _ => {}
     }
     Some(output)
 }

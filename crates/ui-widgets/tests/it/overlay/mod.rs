@@ -3,4 +3,5 @@
 mod hosting;
 pub(crate) mod kit;
 mod modal;
+mod pages;
 mod sampler;

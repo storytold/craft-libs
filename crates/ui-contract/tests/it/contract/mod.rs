@@ -3,6 +3,7 @@
 mod fixes;
 mod gesture;
 mod hit_order;
+mod pages;
 mod pointer;
 mod style;
 mod visited_type;

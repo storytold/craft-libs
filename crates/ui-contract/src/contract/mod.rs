@@ -21,6 +21,7 @@ mod level_table;
 mod looks;
 mod mount;
 pub mod overlay;
+mod pages;
 mod paint_ui;
 mod props;
 mod registry;
@@ -88,6 +89,7 @@ pub use lazy::Lazy;
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
+pub use pages::Pages;
 pub use paint_ui::PaintUi;
 pub use props::{Common, Props, Resolved, Tooltip, TooltipAt, TooltipSpec, TooltipWhen};
 #[doc(hidden)]

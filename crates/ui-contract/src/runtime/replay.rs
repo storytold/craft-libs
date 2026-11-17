@@ -1,5 +1,6 @@
 //! Run records: what a real run of a settling region (`Lazy::settles`) added to its pass, so a later pass adds it again
-//! in place of running the region. A record holds the region's paint, egui widget rects and AccessKit nodes (egui's
+//! in place of running the region. A measuring run of a measure-only child (a page `Pages` holds out of view) opens a
+//! record too; only its facts are kept, so a later pass takes its size in place of measuring it again. A record holds the region's paint, egui widget rects and AccessKit nodes (egui's
 //! pass records), what it registered with the focus service (`focus::Transcript`), and a journal of every other
 //! registration the services below take per pass: each service that keeps one notes it here while a record is open,
 //! as the call that makes it again. Records nest: a region's record holds the records its settled regions replayed.
@@ -113,6 +114,14 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     let mut facts = open.facts;
     facts.blocked |= egui.layers().any(|on| on != layer);
     Record { focus: focus::transcript(ctx, open.focus), journal, widgets: egui.widgets().iter().map(|widget| widget.id).collect(), egui, facts }
+}
+
+impl Facts {
+    /// Whether the run these facts are of still holds at `now`, after the values `edited` changed in the frame: nothing
+    /// in it moves, the time it asked to be shown again has not come, and it read none of them.
+    pub(crate) fn quiet(&self, now: f64, edited: Option<&HashSet<BindKey>>) -> bool {
+        !self.unsettled && self.wake.is_none_or(|at| at > now) && edited.is_none_or(|edited| self.reads.is_disjoint(edited))
+    }
 }
 
 fn min_wake(a: Option<f64>, b: Option<f64>) -> Option<f64> {

@@ -50,7 +50,7 @@ pub(crate) fn unshown<C: Container>(comp: &mut C, ctx: &Context, id: Id, props: 
         return false;
     }
     if !sizing {
-        let mut stage = MemoryStage::open_after(ctx, id, id);
+        let mut stage = MemoryStage::open_after(ctx, id, props.owner.unwrap_or(id));
         let open = open_now(comp, &mut stage, id, props);
         debug_assert!(!open, "a peek and a real stage decide the same open state");
         stage.write_back();

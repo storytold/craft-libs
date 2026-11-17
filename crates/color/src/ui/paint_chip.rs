@@ -16,7 +16,7 @@ use craft_theme::Srgba;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{ChoiceWords, Segmented, Swatch, SwatchFace};
 use craft_ui::contract::{
-    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _,
+    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _, Pages,
     PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
 use craft_ui::display::{Shade, Text};
@@ -480,62 +480,73 @@ impl Component for PaintChip<'_> {
         let full_picker = self.full_picker;
         let cmyk = self.cmyk.unwrap_or_else(|| CmykConverter::coated());
         let solid_now = if let Paint::Solid(color) = &paint { Some(*color) } else { None };
-        let entries: Vec<Entry<FillKind>> = self.kinds().into_iter().map(|kind| Entry::new(kind, kind_label(&words, kind))).collect();
+        let kinds = self.kinds();
+        let entries: Vec<Entry<FillKind>> = kinds.iter().map(|kind| Entry::new(*kind, kind_label(&words, *kind))).collect();
+        // Each tab's page shows the paint a switch to it would set, so a hidden page measures as it will show.
+        let page_paints: Vec<(FillKind, Paint)> =
+            kinds.iter().map(|kind| (*kind, if *kind == current { paint.clone() } else { self.switched(*kind, solid) })).collect();
         let (gradient, pattern, picture, swatches) = (&mut self.gradient, &mut self.pattern, &mut self.picture, &mut self.swatches);
         let shown = ui.show(popup, Overlay::popover(), |ui, _| {
-            let mut shown = Shown::default();
             let mut kind = current;
+            let mut full_picker_pressed = false;
             Row::new().show(ui, |ui, _| {
                 Segmented::new(name.clone(), Bind::bound(&mut kind), &entries).show(ui);
                 if full_picker {
                     let button = Button::new(words.color_picker.clone()).show(ui);
-                    shown.full_picker = craft_ui::contract::clicked(&button);
+                    full_picker_pressed = craft_ui::contract::clicked(&button);
                 }
             });
-            shown.kind = (kind != current).then_some(kind);
-            match &paint {
-                Paint::None => {}
-                Paint::Solid(color) => {
-                    let picked = compact_picker(name.clone(), Bind::given(PickedColor::rgb(*color)), sampled).alpha(true).eyedropper(true).show(ui);
-                    shown.edit = picked.events;
-                    shown.screen_pick = picked.screen_pick;
-                    if !recent_cells.is_empty() {
-                        Text::new(words.recent.clone()).shade(Shade::Faint).show(ui);
-                        let mut chosen = *color;
-                        let recent = SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &recent_cells).show(ui);
-                        shown.picked = recent.edit.as_ref().and_then(|edit| edit.value()).copied();
-                    }
-                    if let Some((groups, state)) = swatches.as_mut() {
-                        let groups: &[SwatchGroup] = groups;
-                        let rows = swatch_rows(groups, &swatch_words);
-                        let colors: HashMap<&str, &SwatchColor> =
-                            groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
-                        let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &rows)
-                            .toolbar(false)
-                            .row_menu(false)
-                            .default_open(DefaultOpen::None)
-                            .room_height(Env::of(ui).tokens.size.control.sm * SWATCH_ROWS)
-                            .thumb(|painter: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
-                                if let SwatchKey::Swatch(name) = info.key
+            let mut shown = Pages::new("paint", &kinds, &current).show(ui, |ui, page| {
+                let mut shown = Shown::default();
+                let Some((_, paint)) = page_paints.iter().find(|(kind, _)| kind == page) else { return shown };
+                match paint {
+                    Paint::None => {}
+                    Paint::Solid(color) => {
+                        let picked =
+                            compact_picker(name.clone(), Bind::given(PickedColor::rgb(*color)), sampled).alpha(true).eyedropper(true).show(ui);
+                        shown.edit = picked.events;
+                        shown.screen_pick = picked.screen_pick;
+                        if !recent_cells.is_empty() {
+                            Text::new(words.recent.clone()).shade(Shade::Faint).show(ui);
+                            let mut chosen = *color;
+                            let recent = SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &recent_cells).show(ui);
+                            shown.picked = recent.edit.as_ref().and_then(|edit| edit.value()).copied();
+                        }
+                        if let Some((groups, state)) = swatches.as_mut() {
+                            let groups: &[SwatchGroup] = groups;
+                            let rows = swatch_rows(groups, &swatch_words);
+                            let colors: HashMap<&str, &SwatchColor> =
+                                groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
+                            let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &rows)
+                                .toolbar(false)
+                                .row_menu(false)
+                                .default_open(DefaultOpen::None)
+                                .room_height(Env::of(ui).tokens.size.control.sm * SWATCH_ROWS)
+                                .thumb(|painter: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
+                                    if let SwatchKey::Swatch(name) = info.key
+                                        && let Some(color) = colors.get(name.as_str())
+                                    {
+                                        SwatchFace::new(color.to_srgb(cmyk)).selected(info.selected).paint(painter, rect);
+                                    }
+                                })
+                                .show(ui);
+                            for event in out.events {
+                                if let PresetEvent::Select { key: SwatchKey::Swatch(name), .. } = event
                                     && let Some(color) = colors.get(name.as_str())
                                 {
-                                    SwatchFace::new(color.to_srgb(cmyk)).selected(info.selected).paint(painter, rect);
+                                    shown.picked = Some(color.to_srgb(cmyk));
                                 }
-                            })
-                            .show(ui);
-                        for event in out.events {
-                            if let PresetEvent::Select { key: SwatchKey::Swatch(name), .. } = event
-                                && let Some(color) = colors.get(name.as_str())
-                            {
-                                shown.picked = Some(color.to_srgb(cmyk));
                             }
                         }
                     }
+                    Paint::Gradient(_) => shown.gradient = gradient.as_mut().and_then(|(_, editor)| editor.show(ui)),
+                    Paint::Pattern(_) => shown.pattern = pattern.as_mut().and_then(|(_, editor)| editor.show(ui)),
+                    Paint::Picture(_) => shown.picture = picture.as_mut().and_then(|(_, editor)| editor.show(ui)),
                 }
-                Paint::Gradient(_) => shown.gradient = gradient.as_mut().and_then(|(_, editor)| editor.show(ui)),
-                Paint::Pattern(_) => shown.pattern = pattern.as_mut().and_then(|(_, editor)| editor.show(ui)),
-                Paint::Picture(_) => shown.picture = picture.as_mut().and_then(|(_, editor)| editor.show(ui)),
-            }
+                shown
+            });
+            shown.kind = (kind != current).then_some(kind);
+            shown.full_picker = full_picker_pressed;
             shown
         });
         let Some(shown) = shown else { return };

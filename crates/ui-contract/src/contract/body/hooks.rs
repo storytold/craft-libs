@@ -78,6 +78,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         comp.props(Internal::new()).command_scope
     }
 
+    fn memory_owner(&self, comp: &C) -> Option<Id> {
+        comp.props(Internal::new()).owner
+    }
+
     fn dismissed(&mut self, comp: &mut C, cx: &mut Cx<'_, C>, why: CloseReason) {
         self.close = true;
         self.open = false;
@@ -427,9 +431,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             }
             None => self.measure_run(comp, at, cx, key, None),
         };
-        // A layer hung from an opener is at least as wide as the opener its overlay asks for, in the measuring run too,
+        // A layer hung from an opener or a rect is at least as wide as its overlay asks for, in the measuring run too,
         // so the rows of a content-sized list inside it are placed at that width.
-        let took = Vec2::new(overlay_of(&props).map_or(took.x, |overlay| took.x.max(crate::contract::overlay::opener_floor(overlay))), took.y);
+        let took = Vec2::new(overlay_of(&props).map_or(took.x, |overlay| took.x.max(crate::contract::overlay::anchor_floor(overlay))), took.y);
         self.overflow = (took.x - self.room.x).max(0.0);
         // A body wider than the room overflows it, or scrolls along it; either way the container keeps to the room.
         Vec2::new(took.x.min(self.room.x), if vertical { took.y.min(self.room.y) } else { took.y })

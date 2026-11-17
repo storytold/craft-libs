@@ -203,7 +203,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             }
             // An unbounded room (a horizontally scrolling body) takes the widest row, as a content-sized collection does.
             (_, _) => {
-                let floor = overlay::drawing_parent(ui.ctx()).map_or(0.0, |layer| crate::contract::overlay::floor_width(ui.ctx(), layer));
+                let floor = env.get::<crate::contract::overlay::LayerFloor>().0;
                 let widest = layout_memory::measured(ui.ctx(), sub(id, "largest")).map_or(0.0, |measured| measured.took.x);
                 // Columns side by side at their own widths: a `Content` column takes its widest cell, not the share of
                 // the widest row it would get.
