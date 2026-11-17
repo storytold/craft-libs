@@ -998,6 +998,8 @@ pub struct Flow {
     pub bytes: u64,
     pub packets_a_to_b: u64,
     pub packets_b_to_a: u64,
+    pub bytes_a_to_b: u64,
+    pub bytes_b_to_a: u64,
     pub first_frame: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_ts_ns: Option<u64>,
@@ -1124,6 +1126,8 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
                     bytes: 0,
                     packets_a_to_b: 0,
                     packets_b_to_a: 0,
+                    bytes_a_to_b: 0,
+                    bytes_b_to_a: 0,
                     first_frame: f.number,
                     first_ts_ns: f.ts_ns,
                     last_ts_ns: f.ts_ns,
@@ -1135,8 +1139,10 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
                 row.bytes += u64::from(f.original_len);
                 if forward {
                     row.packets_a_to_b += 1;
+                    row.bytes_a_to_b += u64::from(f.original_len);
                 } else {
                     row.packets_b_to_a += 1;
+                    row.bytes_b_to_a += u64::from(f.original_len);
                 }
                 if f.ts_ns.is_some() {
                     row.last_ts_ns = f.ts_ns;
@@ -1434,6 +1440,17 @@ mod tests {
         assert_eq!(count("vlan"), Some(3));
         assert_eq!(count("eth"), Some(3));
         assert_eq!(count("ipv4"), Some(3));
+    }
+
+    #[test]
+    fn flows_count_bytes_per_direction() {
+        let req = eth(0x0800, &ipv4_pkt(17, [10, 0, 0, 1], [10, 0, 0, 2], &udp(40000, 9999, &[b'q'; 10])));
+        let rep = eth(0x0800, &ipv4_pkt(17, [10, 0, 0, 2], [10, 0, 0, 1], &udp(9999, 40000, &[b'r'; 300])));
+        let s = summarize(&pcap(&[req, rep]), &|| false).unwrap();
+        let flow = serde_json::to_value(&s.flows[0]).unwrap();
+        assert_eq!(flow["bytes"], 394);
+        assert_eq!(flow["bytes_a_to_b"], 52);
+        assert_eq!(flow["bytes_b_to_a"], 342);
     }
 
     #[test]
