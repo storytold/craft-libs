@@ -285,6 +285,63 @@ fn special_characters_round_trip() {
 }
 
 #[test]
+fn a_backslash_before_a_line_end_or_a_tab_is_a_control_space() {
+    // The control symbol took the line end with it and read as nothing: the two words ran
+    // together, and a blank line after it no longer ended the paragraph.
+    assert_eq!(texts("\\begin{document}mid\\\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}mid\\\r\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}tab\\\there\\end{document}"), vec!["tab here".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\n\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\r\n\r\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+}
+
+#[test]
+fn a_control_space_at_a_line_end_adds_no_second_space() {
+    // The line end after it was read as a space of its own, so text taken as written (a
+    // reference, a URL) had two spaces where `\ ` gives one.
+    assert_eq!(tokenize("a\\\nb"), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\ntwo}\\end{document}"), vec!["one two".to_string()]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\r\n   two}\\end{document}"), vec!["one two".to_string()]);
+}
+
+#[test]
+fn blanks_after_a_control_space_add_no_second_space() {
+    // TeX skips the blanks after `\ ` and after `\` and a tab, but they were read as a space of
+    // their own, so text taken as written had two spaces.
+    for cs in ["\\ ", "\\\t"] {
+        assert_eq!(tokenize(&format!("a{cs} \tb")), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}\n  two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}   two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[one{cs}  two] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{cs:?}");
+        // A blank line after it still ends the paragraph.
+        assert_eq!(
+            texts(&format!("\\begin{{document}}first{cs}\n\nsecond\\end{{document}}")),
+            vec!["first".to_string(), "second".to_string()],
+            "{cs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_control_space_in_an_item_label_is_a_space() {
+    // The optional argument kept a control symbol as written, so the label read `one\ two`.
+    for src in ["one\\ two", "one\\\ttwo", "one\\\ntwo"] {
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[{src}] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{src:?}");
+    }
+}
+
+#[test]
+fn a_paragraph_that_ends_in_spaces_stays_apart_on_the_way_back() {
+    // Export writes the last of the spaces as a control space at the line end (`a \`), which
+    // import read as nothing, so the paragraph ran into the next one.
+    let tex = export(&Document::from_text("a  \nb"));
+    let t: Vec<String> = texts(&tex).iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    assert_eq!(t, vec!["a".to_string(), "b".to_string()], "{tex}");
+}
+
+#[test]
 fn exported_tables_size_their_columns() {
     let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false, extra: None, kept: None, wrap: None };
     let cell = |s: &str| Cell {
