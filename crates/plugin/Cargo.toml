@@ -1,0 +1,35 @@
+[package]
+name = "craft-plugin"
+description = "One WebAssembly plug-in runtime for the Craft apps: the sandbox, the manifest, permissions, bundles, the per-user plug-in store, catalogs and installing from GitHub releases"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `Fetch` for craft-update's HTTPS client, so an app can install from catalogs and GitHub
+# releases with the client (proxies, TLS) it already uses for its own updates. The rest of the
+# crate does no network I/O.
+http = ["dep:craft-update"]
+
+[dependencies]
+craft-update = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Bundle SHA-256s (catalogs pin them; SHA256SUMS lists them; the store records them).
+sha2 = "0.10"
+thiserror = { workspace = true }
+wasmi = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The per-user plug-in store writes its files crash-safely.
+craft-atomic = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+wat = "1.261"

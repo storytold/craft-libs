@@ -28,6 +28,7 @@ log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-plist = { path = "crates/plist" }
 craft-platform = { path = "crates/platform" }
+craft-plugin = { path = "crates/plugin" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-ai = { path = "crates/ai" }
@@ -49,6 +50,9 @@ hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"
 bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
+# The plug-in sandbox (craft-plugin): a pure-Rust interpreter, no JIT, so it also runs in wasm builds.
+# The apps use the same feature set.
+wasmi = { version = "2", default-features = false, features = ["std", "stable", "validate", "portable-dispatch"] }
 craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
