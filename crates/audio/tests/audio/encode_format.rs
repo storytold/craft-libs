@@ -20,8 +20,8 @@ fn only_formats_the_encoder_writes_are_named() {
 }
 
 #[test]
-fn ogg_names_follow_the_native_feature() {
-    let built = cfg!(all(feature = "vorbis-encode", not(target_arch = "wasm32")));
+fn ogg_names_follow_the_feature() {
+    let built = cfg!(feature = "vorbis-encode");
     assert_eq!(EncodeFormat::Ogg.is_built(), built);
     assert_eq!(encode_format_for("ogg"), built.then_some(EncodeFormat::Ogg));
     assert_eq!(craft_audio::ENCODE_EXTENSIONS.contains(&"ogg"), built);
