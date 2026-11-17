@@ -80,6 +80,32 @@ fn a_press_is_released_after_an_os_resize_of_an_undecorated_window() {
     }
 }
 
+/// A window that moves reports its inner size again, in points from its physical pixels: at a fractional scale the
+/// same size can come back a float step off (290.4 as 290.40002). That is no OS resize, so the press stays down: a
+/// release there ended every move of a floating panel on Windows a few points into the drag.
+#[trial]
+fn a_press_survives_a_size_that_differs_only_by_float_rounding() {
+    let shell = ShellInfo::default()
+        .os(Os::Windows)
+        .caps(Caps::native(Os::Windows))
+        .window(WindowInfo::new(WindowKind::Main).chrome(WindowChrome::Integrated));
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)));
+    let down = Cell::new(false);
+    let sized = |width: f32| ViewportInfo { inner_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))), ..ViewportInfo::default() };
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| down.set(ui.ctx().input(|input| input.pointer.any_down())));
+    };
+    windows.root_info(sized(800.0));
+    frame(vec![]);
+    frame(vec![moved(Pos2::new(20.0, 20.0))]);
+    frame(vec![press(Pos2::new(20.0, 20.0))]);
+    assert!(down.get(), "the press is down");
+    windows.root_info(sized(800.0 + 800.0 * f32::EPSILON));
+    frame(vec![]);
+    frame(vec![]);
+    assert!(down.get(), "a float step of size is no resize: the press stays down");
+}
+
 /// One frame of `windows` with the `Modal` open in the child viewport.
 fn modal_frame(windows: &Windows) -> Out {
     windows.frame(vec![], vec![], |ui| {
