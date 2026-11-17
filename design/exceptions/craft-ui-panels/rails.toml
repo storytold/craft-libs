@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "tool-rail-story-width"
+kind = "marker"
+rule = "contract/memory"
+path = "crates/ui-panels/src/rails/tool/stories.rs"
+reason = "The story gives the rail the width of its chosen columns, as a dock column does."
+count = 1
