@@ -2,6 +2,7 @@
 
 mod bidi;
 mod embed;
+mod font_table;
 mod glossary;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
@@ -155,6 +156,11 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
 }
 
 impl Writer<'_> {
+    /// The document's styles, for writers that need the resolved style chain.
+    pub(crate) fn styles(&self) -> &craft_wordmodel::styles::StyleSheet {
+        &self.doc.styles
+    }
+
     fn assign_media(&mut self) {
         let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (key, bytes) in &self.doc.media {

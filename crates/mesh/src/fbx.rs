@@ -41,9 +41,12 @@
 //!
 //! Not read: FBX 5 and older, animation stacks, skin deformers, blend shapes, lights, NURBS and patches.
 //!
-//! [`Limits::max_data_bytes`] bounds what one file may keep in memory: its parsed values (an
-//! array element counts 8 bytes whatever its type in the file), the meshes built from them and
-//! the image bytes.
+//! [`Limits::max_data_bytes`] is the budget the reader charges for one file: its parsed values,
+//! the meshes built from them and the image bytes. A binary file is charged 8 bytes per array
+//! element whatever its type in the file; its scalar, string and raw values are not counted. An
+//! ASCII file is charged `size_of::<Prop>()` for every value, each array element included, plus
+//! the bytes of its strings. Neither form is charged for record names or for the overhead of
+//! records and their containers, so the reader keeps those even with a budget of 0.
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -811,6 +814,11 @@ impl Document {
 
     /// Build a scene with explicitly selected compatibility behavior.
     pub fn scene_with_options(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<Scene> {
+        self.scene_with_placements(limits, resolve, options).map(|(scene, _)| scene)
+    }
+
+    /// Build a scene and list its mesh nodes in FBX placement order.
+    pub fn scene_with_placements(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<(Scene, Vec<Placement>)> {
         if self.version != 0 && self.version < 6000 {
             return Err(crate::Error::Unsupported(format!(
                 "FBX {}.{} (only FBX 6.x and 7.x files are read)",
@@ -927,6 +935,7 @@ impl Document {
         // One mesh per geometry and material-slot combination, shared by instances.
         let mut mesh_of: HashMap<(Key, Vec<usize>), usize> = HashMap::new();
         let mut placed = HashSet::new();
+        let mut placement_nodes = HashMap::new();
         for (id, model) in &models {
             let Some(ni) = node_of.get(id).copied() else { continue };
             let geometries = b.geometries_of(*id);
@@ -957,7 +966,7 @@ impl Document {
                 };
                 let transform = geometric(&Props::of(model));
                 let occupied = b.scene.nodes.get(ni).is_some_and(|n| n.mesh.is_some());
-                if transform.is_some() || occupied {
+                let placement_node = if transform.is_some() || occupied {
                     b.node_room()?;
                     let child = b.scene.nodes.len();
                     b.scene.nodes.push(Node {
@@ -969,13 +978,19 @@ impl Document {
                     if let Some(node) = b.scene.nodes.get_mut(ni) {
                         node.children.push(child);
                     }
-                } else if let Some(node) = b.scene.nodes.get_mut(ni) {
-                    node.mesh = Some(mesh_index);
-                }
+                    child
+                } else {
+                    if let Some(node) = b.scene.nodes.get_mut(ni) {
+                        node.mesh = Some(mesh_index);
+                    }
+                    ni
+                };
+                placement_nodes.insert((gid, Some(*id)), Placement { node: placement_node, model: Some(ni) });
             }
         }
         // Geometry with no Model connection still contributes a mesh at the origin.
         let placed_ids: HashSet<Key<'_>> = placed.iter().map(|(gid, _)| *gid).collect();
+        let mut unplaced = Vec::new();
         for geom in objects.children.iter().filter(|o| o.name == "Geometry" && o.child("Vertices").is_some()) {
             let Some(gid) = key(geom.props.first()) else { continue };
             if placed_ids.contains(&gid) {
@@ -989,13 +1004,54 @@ impl Document {
             b.node_room()?;
             let mesh_index = b.scene.meshes.len();
             b.scene.meshes.push(mesh);
-            b.scene.roots.push(b.scene.nodes.len());
+            let node_index = b.scene.nodes.len();
+            b.scene.roots.push(node_index);
             b.scene.nodes.push(Node { mesh: Some(mesh_index), ..Node::default() });
+            unplaced.push((key_text(gid), Placement { node: node_index, model: None }));
         }
+        let placements = ordered_placements(&models, &links, &placement_nodes, unplaced);
         let mut scene = b.scene;
         count_warning(&mut scene.warnings, b.skipped, "polygons with fewer than three corners or a vertex that is not there were left out");
-        Ok(scene)
+        Ok((scene, placements))
     }
+}
+
+fn ordered_placements<'a>(
+    models: &[(Key<'a>, &Record)],
+    links: &[(Key<'a>, Key<'a>)],
+    placement_nodes: &HashMap<(Key<'a>, Option<Key<'a>>), Placement>,
+    mut unplaced: Vec<(String, Placement)>,
+) -> Vec<Placement> {
+    let mut placements = Vec::new();
+    let mut seen = HashSet::new();
+    let mut add = |key| {
+        if let Some(placement) = placement_nodes.get(&key).copied()
+            && seen.insert(placement.node)
+        {
+            placements.push(placement);
+        }
+    };
+    // FBX 6 stores geometry in its model; connected FBX 7 geometry follows connection order.
+    for (id, model) in models {
+        if model.child("Vertices").is_some() {
+            add((*id, Some(*id)));
+        }
+    }
+    for (child, parent) in links {
+        add((*child, Some(*parent)));
+    }
+    unplaced.sort_by(|a, b| a.0.cmp(&b.0));
+    placements.extend(unplaced.into_iter().map(|(_, index)| index));
+    placements
+}
+
+/// One placed FBX mesh, with its scene node and source model node (if any).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placement {
+    /// The scene node holding the mesh.
+    pub node: usize,
+    /// The node of the model the mesh is placed by; `None` for geometry no model is connected to.
+    pub model: Option<usize>,
 }
 
 /// Diffuse material values as stored in FBX, before color-space conversion.
@@ -1129,6 +1185,13 @@ impl Document {
 enum Key<'a> {
     Id(i64),
     Name(&'a str),
+}
+
+fn key_text(key: Key<'_>) -> String {
+    match key {
+        Key::Id(i) => i.to_string(),
+        Key::Name(s) => s.to_string(),
+    }
 }
 
 fn key(p: Option<&Prop>) -> Option<Key<'_>> {
@@ -1543,8 +1606,13 @@ impl<'a> Build<'a, '_> {
                 }
                 None => materials.first().copied(),
             };
-            let at = match part_of.get(&slot) {
-                Some(at) => *at,
+            let existing = if self.strict_geometry {
+                parts.last().filter(|part| part.material == slot).map(|_| parts.len() - 1)
+            } else {
+                part_of.get(&slot).copied()
+            };
+            let at = match existing {
+                Some(at) => at,
                 None => {
                     if parts.len() >= limits.max_parts {
                         return Err(too_large(KIND, format!("more than {} material slots in a mesh", limits.max_parts)));

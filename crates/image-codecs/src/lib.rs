@@ -32,7 +32,9 @@ mod lab;
 mod options;
 pub mod orientation;
 pub mod png_probe;
+pub mod raw_metadata;
 pub mod resolution;
+pub mod resolution_probe;
 pub mod source_settings;
 pub mod tiff_probe;
 pub mod web;
@@ -66,6 +68,7 @@ pub use crate::options::{
 };
 pub use crate::orientation::{OrientSteps, exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
+pub use crate::resolution_probe::file_resolution;
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
@@ -73,7 +76,7 @@ pub use half::f16;
 use crate::codecs::sgi;
 #[cfg(feature = "sunraster")]
 use crate::codecs::sunraster;
-use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -141,7 +144,11 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Avif => codecs::avif_decode::decode(bytes, l, opts.keep_orientation),
         #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
         Format::Avif => via_image::decode(format, bytes, l),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::decode(format, bytes, l),
+        Format::Bmp => via_image::decode(format, bytes, l).map(|mut img| {
+            img.meta.dpi = bmp::resolution(bytes);
+            img
+        }),
+        Format::Gif | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::decode(format, bytes, l),
     }?;
     finish_format(format, bytes, img, opts)
 }
@@ -324,8 +331,24 @@ pub fn bmp_palette(bytes: &[u8]) -> Result<Option<Vec<[u8; 3]>>, CodecError> {
 
 /// Encodes `indices` (row-major, one byte per pixel) as an 8-bit palette BMP with the colour
 /// table `palette` (1 to 256 entries). Used for Indexed Color documents; BMP has no transparency.
+/// The header's resolution is left unset; [`encode_bmp_indexed_with_dpi`] writes one.
 pub fn encode_bmp_indexed(width: u32, height: u32, indices: &[u8], palette: &[[u8; 3]]) -> Result<Vec<u8>, CodecError> {
     via_image::encode_bmp_indexed(width, height, indices, palette)
+}
+
+/// [`encode_bmp_indexed`] with the resolution `dpi` (pixels per inch, horizontal then vertical)
+/// in the header's pixels per metre, as [`encode`] writes [`Metadata::dpi`] for a BMP. `None`, or
+/// a resolution with no positive whole number of pixels per metre, leaves the fields unset.
+pub fn encode_bmp_indexed_with_dpi(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 3]],
+    dpi: Option<(f32, f32)>,
+) -> Result<Vec<u8>, CodecError> {
+    let mut bytes = via_image::encode_bmp_indexed(width, height, indices, palette)?;
+    bmp::set_resolution(&mut bytes, dpi);
+    Ok(bytes)
 }
 
 /// Lists the pages (image directories) of a TIFF or BigTIFF file without decoding pixels: the
@@ -545,8 +568,12 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jp2 => Err(CodecError::unsupported(format, "JPEG 2000 is import-only; save as PNG or TIFF instead")),
         Format::Jxl => jxl::encode(image, plan),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => {
-            via_image::encode(format, image, plan, opts)
-        }
+        // The `image` crate leaves a BMP's resolution fields 0; Photoshop fills them in. They are
+        // part of the header, not metadata, so they are written whatever `embed_metadata` says.
+        Format::Bmp => via_image::encode(format, image, plan, opts).map(|mut bytes| {
+            bmp::set_resolution(&mut bytes, image.meta.dpi);
+            bytes
+        }),
+        Format::Gif | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
     }
 }

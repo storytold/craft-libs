@@ -5,8 +5,8 @@
 //! primitives (`TRIANGLES`, `TRIANGLE_STRIP`, `TRIANGLE_FAN`, indexed or not) with POSITION,
 //! NORMAL, TANGENT, every TEXCOORD_n, COLOR_0, JOINTS_0 and WEIGHTS_0 of any component type the
 //! specification or `KHR_mesh_quantization` allows, strided buffer views, sparse accessors,
-//! metallic-roughness materials (factors, the five texture slots with their UV set and wrap
-//! modes, alpha modes, double-sided, `KHR_materials_emissive_strength`, `KHR_materials_unlit`;
+//! metallic-roughness materials (factors, the five texture slots with their UV set, wrap
+//! modes and `KHR_texture_transform`, alpha modes, double-sided, `KHR_materials_emissive_strength`, `KHR_materials_unlit`;
 //! `KHR_materials_pbrSpecularGlossiness` as its diffuse colour and texture with roughness from
 //! the glossiness), textures whose image is only in `EXT_texture_webp`, images (embedded
 //! in a buffer view or a `data:` URI, or named), skins, animations of translation, rotation
@@ -15,8 +15,9 @@
 //! same accessors), and each primitive a [`Part`].
 //!
 //! Not read: required extensions that change how geometry is stored (Draco, meshopt) are
-//! [`Error::Unsupported`]; points, lines, morph targets and
-//! other extensions are passed over (skipped primitives are counted in a warning).
+//! [`Error::Unsupported`]; points, lines, morph targets, scenes other than the default and
+//! other extensions are passed over (skipped primitives, primitives with morph targets and the
+//! other scenes are named in warnings).
 //!
 //! Buffers are needed to read anything, so an external buffer is asked of the resolver (by its
 //! percent-decoded URI) and is [`Error::Missing`] when declined. External images are only named
@@ -35,10 +36,11 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     AlphaMode, Animation, Camera, Channel, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, Light, LightKind, Limits, Material, Mesh,
-    NONE, Node, Part, Projection, Resolver, Result, Scene, Skin, TextureRef, Trs, Wrap, count_warning, malformed, too_large,
+    NONE, Node, Part, Projection, Resolver, Result, Scene, Skin, TextureRef, Trs, UvTransform, Wrap, count_warning, malformed, too_large,
 };
 
 const KIND: &str = "glTF";
+const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 const CHUNK_JSON: u32 = 0x4E4F_534A;
 const CHUNK_BIN: u32 = 0x004E_4942;
 /// Most UV sets read from one primitive.
@@ -115,6 +117,11 @@ pub use crate::base64_decode;
 
 /// Percent-decode a URI. A `%` that two hex digits do not follow stays as it is.
 pub fn uri_decode(s: &str) -> String {
+    String::from_utf8_lossy(&percent_decode(s)).into_owned()
+}
+
+/// [`uri_decode`] as bytes, so escaped bytes that are not UTF-8 survive.
+fn percent_decode(s: &str) -> Vec<u8> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -128,7 +135,7 @@ pub fn uri_decode(s: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 /// The media type and bytes of a `data:` URI.
@@ -137,10 +144,12 @@ fn data_uri(uri: &str) -> Option<Result<(String, Vec<u8>)>> {
     Some((|| {
         let (meta, data) = rest.split_once(',').ok_or_else(|| malformed(KIND, "a data URI without a comma"))?;
         let mime = meta.split(';').next().unwrap_or("").to_string();
+        // Any character may be escaped (RFC 3986 2.1), base64's `+`, `/` and `=` included.
+        let bytes = percent_decode(data);
         let bytes = if meta.ends_with(";base64") {
-            base64_decode(data).ok_or_else(|| malformed(KIND, "bad base64 in a data URI"))?
+            std::str::from_utf8(&bytes).ok().and_then(base64_decode).ok_or_else(|| malformed(KIND, "bad base64 in a data URI"))?
         } else {
-            uri_decode(data).into_bytes()
+            bytes
         };
         Ok((mime, bytes))
     })())
@@ -345,6 +354,7 @@ impl Doc<'_> {
 struct Skipped {
     triangles: usize,
     primitives: usize,
+    morphs: usize,
 }
 
 fn rows_of<const N: usize>(v: &[f64]) -> impl Iterator<Item = [f64; N]> + '_ {
@@ -439,6 +449,7 @@ fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials
         return Ok(());
     };
     charge(&d.parts_left, 1, "primitives")?;
+    skipped.morphs += usize::from(!arr(p, "targets").is_empty());
     let key = attrs.to_string();
     let ([base, normal_base, uv_base, tangent_base], nv) = match shared.get(&key) {
         Some(known) => *known,
@@ -573,7 +584,7 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             let sampler = idx(texture, "sampler").and_then(|s| arr(j, "samplers").get(s));
             let webp = || texture.get("extensions").and_then(|e| e.get("EXT_texture_webp")).and_then(|e| idx(e, "source"));
             let image = idx(texture, "source").or_else(webp).filter(|i| *i < images)?;
-            Some(TextureRef { image, uv_set: 0, wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")] })
+            Some(TextureRef { image, wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")], ..TextureRef::default() })
         })
         .collect();
     let tref = |v: Option<&Value>| -> Option<TextureRef> {
@@ -583,7 +594,15 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
         // `EXT_texture_webp`: the image when the texture has no fallback `source`.
         let webp = || texture.get("extensions").and_then(|e| e.get("EXT_texture_webp")).and_then(|e| idx(e, "source"));
         let image = idx(texture, "source").or_else(webp).filter(|i| *i < images)?;
-        Some(TextureRef { image, uv_set: idx(v, "texCoord").unwrap_or(0) as u32, wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")] })
+        let tt = v.get("extensions").and_then(|e| e.get("KHR_texture_transform"));
+        // The extension's own `texCoord` overrides the texture info's.
+        let uv_set = tt.and_then(|t| idx(t, "texCoord")).or_else(|| idx(v, "texCoord")).unwrap_or(0);
+        Some(TextureRef {
+            image,
+            uv_set: u32::try_from(uv_set).unwrap_or(u32::MAX),
+            wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")],
+            transform: tt.map(uv_transform),
+        })
     };
     for m in list {
         let null = Value::Null;
@@ -648,7 +667,12 @@ fn nodes(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             children: indices(n, "children", list.len()),
         });
     }
-    scene.roots = match arr(j, "scenes").get(idx(j, "scene").unwrap_or(0)).or_else(|| arr(j, "scenes").first()) {
+    let scenes = arr(j, "scenes");
+    let chosen = idx(j, "scene").filter(|s| *s < scenes.len()).unwrap_or(0);
+    if scenes.len() > 1 {
+        scene.warnings.push(format!("scene {chosen} of {} was read; the others were left out", scenes.len()));
+    }
+    scene.roots = match scenes.get(chosen) {
         Some(s) => indices(s, "nodes", list.len()),
         None => {
             // No scene: every node that is nobody's child.
@@ -765,11 +789,25 @@ fn cameras_and_lights(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<(
     Ok(())
 }
 
+/// A `KHR_texture_transform` object; a missing or unusable member keeps its default.
+fn uv_transform(t: &Value) -> UvTransform {
+    let finite = |v: f64, default: f32| Some(v as f32).filter(|v| v.is_finite()).unwrap_or(default);
+    let d = UvTransform::default();
+    let [ou, ov] = nums(t, "offset", [0.0; 2]);
+    let [su, sv] = nums(t, "scale", [1.0; 2]);
+    UvTransform {
+        offset: [finite(ou, d.offset[0]), finite(ov, d.offset[1])],
+        rotation: finite(num(t, "rotation", 0.0), d.rotation),
+        scale: [finite(su, d.scale[0]), finite(sv, d.scale[1])],
+    }
+}
+
 /// Required extensions that only change how a file looks (textures, material models) or that
 /// the reader handles: the geometry reads without the others being understood.
 fn check_extensions(j: &Value, scene: &mut Scene) -> Result<()> {
-    const LOOKS: [&str; 4] = ["KHR_texture_transform", "KHR_texture_basisu", "MSFT_texture_dds", "KHR_lights_punctual"];
-    const READ: [&str; 5] = [
+    const LOOKS: [&str; 3] = ["KHR_texture_basisu", "MSFT_texture_dds", "KHR_lights_punctual"];
+    const READ: [&str; 6] = [
+        TEXTURE_TRANSFORM,
         "KHR_mesh_quantization",
         "KHR_materials_unlit",
         "KHR_materials_emissive_strength",
@@ -832,6 +870,7 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     animations(&d, limits, &mut scene)?;
     count_warning(&mut scene.warnings, skipped.primitives, "primitive(s) are points, lines or have no positions and were left out");
     count_warning(&mut scene.warnings, skipped.triangles, "triangle(s) could not be read and were left out");
+    count_warning(&mut scene.warnings, skipped.morphs, "primitive(s) have morph targets, which were left out (drawn in the base shape)");
     // A hierarchy with a cycle, or one too deep to walk, is refused here rather than by every caller.
     scene.instances(limits)?;
     Ok(scene)
@@ -951,7 +990,12 @@ impl Textures {
             self.textures.push((image, sampler));
             self.textures.len() - 1
         });
-        Some(json!({ "index": index, "texCoord": t.uv_set }))
+        let mut out = json!({ "index": index, "texCoord": t.uv_set });
+        if let (Some(tt), Some(o)) = (t.transform, out.as_object_mut()) {
+            let ext = json!({ "offset": tt.offset, "rotation": tt.rotation, "scale": tt.scale });
+            o.insert("extensions".into(), json!({ TEXTURE_TRANSFORM: ext }));
+        }
+        Some(out)
     }
 }
 
@@ -971,6 +1015,10 @@ fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'s
         if ext.contains_key(name) && !extensions.contains(&name) {
             extensions.push(name);
         }
+    }
+    let slots = [m.base_color_texture, m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture];
+    if slots.iter().flatten().any(|t| t.transform.is_some()) && !extensions.contains(&TEXTURE_TRANSFORM) {
+        extensions.push(TEXTURE_TRANSFORM);
     }
     let set = |o: &mut Value, key: &str, v: Option<Value>| {
         if let (Some(v), Some(o)) = (v, o.as_object_mut()) {
@@ -1011,7 +1059,13 @@ fn check_finite(scene: &Scene) -> Result<()> {
     let materials = scene.materials.iter().all(|m| {
         let values = [m.metallic, m.roughness, m.normal_scale, m.occlusion_strength];
         let cutoff = if let AlphaMode::Mask(c) = m.alpha_mode { c } else { 0.0 };
-        m.base_color.iter().chain(&m.emissive).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite()
+        let slots = [&m.base_color_texture, &m.metallic_roughness_texture, &m.normal_texture, &m.occlusion_texture, &m.emissive_texture];
+        let transforms = slots
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.transform)
+            .all(|t| t.offset.iter().chain(&t.scale).chain([&t.rotation]).all(|x| x.is_finite()));
+        m.base_color.iter().chain(&m.emissive).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite() && transforms
     });
     if positions && nodes && materials { Ok(()) } else { Err(malformed(KIND, "a position, transform or material value is not finite")) }
 }
