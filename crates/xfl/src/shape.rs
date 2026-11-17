@@ -96,28 +96,78 @@ pub struct Color {
     pub alpha: f32,
 }
 
+/// A native XFL instance color record (`<color><Color .../></color>`).
+///
+/// The view parses the authored tint, brightness, channel multipliers and offsets but does not
+/// choose a consumer's color-effect style or clamp values into an application's model. Offsets
+/// remain in XFL's native 0–255 scale. Invalid or non-finite channel multipliers use 1, and
+/// invalid or non-finite offsets use 0, matching the historical AniCraft importer.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeColorEffect<'a, E: XflElement> {
+    element: &'a E,
+}
+
 impl Matrix {
     /// The matrix used when an XFL element omits its transform.
     pub const IDENTITY: Matrix = Matrix { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0 };
 }
 
-fn number(element: &impl XflElement, name: &str) -> Option<f32> {
+impl<'a, E: XflElement> NativeColorEffect<'a, E> {
+    /// Views a native XFL `Color` element without converting it to an application's model.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
+    /// The native tint amount, when authored.
+    pub fn tint_multiplier(&self) -> Option<f32> {
+        number(self.element, "tintMultiplier")
+    }
+
+    /// The native tint color. Missing or malformed color values use black as other XFL colors do.
+    pub fn tint_color(&self) -> Color {
+        color(self.element, "tintColor", "__none")
+    }
+
+    /// The native brightness value, when authored.
+    pub fn brightness(&self) -> Option<f32> {
+        number(self.element, "brightness")
+    }
+
+    /// Red, green, blue, and alpha multipliers, with identity defaults for absent or invalid data.
+    pub fn multipliers(&self) -> [f32; 4] {
+        ["redMultiplier", "greenMultiplier", "blueMultiplier", "alphaMultiplier"].map(|name| number(self.element, name).unwrap_or(1.0))
+    }
+
+    /// Red, green, blue, and alpha offsets in XFL's native 0–255 scale.
+    pub fn offsets(&self) -> [f32; 4] {
+        ["redOffset", "greenOffset", "blueOffset", "alphaOffset"].map(|name| number(self.element, name).unwrap_or(0.0))
+    }
+}
+
+pub(crate) fn number(element: &impl XflElement, name: &str) -> Option<f32> {
     element.attr(name)?.trim().parse::<f32>().ok().filter(|value| value.is_finite())
 }
 
-fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
+pub(crate) fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
     element.attr(name)?.trim().parse::<u32>().ok()
 }
 
-fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
+pub(crate) fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
     element.attr(name).map(|value| value.trim() == "true")
 }
 
 /// Parses XFL's hexadecimal color and alpha attributes. Missing or malformed colors use black;
 /// missing, malformed, or non-finite alpha uses full opacity, matching the legacy importer.
 pub fn color(element: &impl XflElement, color_attribute: &str, alpha_attribute: &str) -> Color {
-    let rgb = element.attr(color_attribute).and_then(|value| u32::from_str_radix(value.trim().trim_start_matches('#'), 16).ok()).unwrap_or(0);
-    let alpha = number(element, alpha_attribute).unwrap_or(1.0).clamp(0.0, 1.0);
+    color_from_attributes(element.attr(color_attribute), element.attr(alpha_attribute))
+}
+
+/// Parses native color and alpha strings after a consumer has read them from its own element
+/// adapter. This keeps wire-value interpretation shared even when an application already has a
+/// borrowed schema view for the containing element.
+pub fn color_from_attributes(color: Option<&str>, alpha: Option<&str>) -> Color {
+    let rgb = color.and_then(|value| u32::from_str_radix(value.trim().trim_start_matches('#'), 16).ok()).unwrap_or(0);
+    let alpha = alpha.and_then(|value| value.trim().parse::<f32>().ok()).filter(|value| value.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0);
     Color { rgb, alpha }
 }
 
@@ -543,6 +593,14 @@ mod tests {
     }
 
     #[test]
+    fn color_attribute_values_keep_native_defaults_and_clamping() {
+        assert_eq!(color_from_attributes(Some(" #123456 "), Some("0.4")), Color { rgb: 0x123456, alpha: 0.4 });
+        assert_eq!(color_from_attributes(Some("invalid"), Some("NaN")), Color { rgb: 0, alpha: 1.0 });
+        assert_eq!(color_from_attributes(Some("#abcdef"), Some("2")), Color { rgb: 0xabcdef, alpha: 1.0 });
+        assert_eq!(color_from_attributes(None, Some("-1")), Color { rgb: 0, alpha: 0.0 });
+    }
+
+    #[test]
     fn style_table_views_keep_the_legacy_first_child_and_index_behavior() {
         let root = parse(b"<DOMShape><fills><LegacyFill index='5'><SolidColor color='#123456'/></LegacyFill></fills><strokes><LegacyStroke index='6'><SolidStroke weight='2'/></LegacyStroke></strokes></DOMShape>");
         let shape = Shape::new(&root).unwrap();
@@ -597,5 +655,21 @@ mod tests {
         let oval = parse(b"<DOMOvalObject objectWidth='10' objectHeight='8'/>");
         assert_eq!(Primitive::new(&oval).unwrap().kind(), PrimitiveKind::Oval);
         assert!(Primitive::new(&parse(b"<DOMShape/>")).is_none());
+    }
+
+    #[test]
+    fn native_color_effect_keeps_xfl_values_and_safe_channel_defaults() {
+        let element = parse(
+            br##"<x:Color xmlns:x="urn:xfl" tintMultiplier=".25" tintColor="#123456"
+            brightness="-.4" alphaMultiplier=".5" redMultiplier="Infinity" greenMultiplier="-2"
+            blueMultiplier=".5" redOffset="255" greenOffset="-255" blueOffset="NaN" alphaOffset=".25"/>"##,
+        );
+        let effect = NativeColorEffect::new(&element);
+
+        assert_eq!(effect.tint_multiplier(), Some(0.25));
+        assert_eq!(effect.tint_color(), Color { rgb: 0x123456, alpha: 1.0 });
+        assert_eq!(effect.brightness(), Some(-0.4));
+        assert_eq!(effect.multipliers(), [1.0, -2.0, 0.5, 0.5]);
+        assert_eq!(effect.offsets(), [255.0, -255.0, 0.0, 0.25]);
     }
 }
