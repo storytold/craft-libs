@@ -107,3 +107,6 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 ## Source-timed MIDI compatibility
 
 `crates/midi/src/source_timed.rs` is extracted from LoopCraft `crates/midi/src/lib.rs` at `884e67c24b9b68badf6a4a4f7d62492f3673d354` (MIT OR Apache-2.0). The recorded source history for the extracted file is Dylan M. Taylor (`0d150c1f`, `440bc7ed`, `9e50523d`); Git authorship is preserved. It includes the original hostile-file, SMPTE, timing and round-trip tests. UTF-8 truncation and event-budget suffix repairs are subsequent changes. The module is an application-independent source-timed model; it does not depend on LoopCraft.
+## Non-seeking WAV primitives
+
+`crates/audio/src/wav_stream.rs` is extracted from AniCraft `crates/audio/src/wav.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0). Tanish Manku is retained as the primary import author, from original commit `30c121d269a49d9abe54a3834ed4aa0201542535`. Odd-data padding accounting, shared API documentation and regression tests are subsequent Dylan M. Taylor changes.
