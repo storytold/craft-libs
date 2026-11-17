@@ -277,16 +277,9 @@ fn from_raw(
     let Some(raw) = raw.filter(|raw| raw.version == Some(3)) else {
         return Err(SourceMapError::BadVersion);
     };
-    let mut map = SourceMap {
-        file: raw.file,
-        source_root: raw.source_root,
-        sources: raw.sources,
-        sources_content: raw.sources_content,
-        names: raw.names.into_iter().map(Option::unwrap_or_default).collect(),
-        ignore_list: raw.ignore_list.or(raw.google_ignore_list).unwrap_or_default().into_iter().filter_map(|n| n.and_then(|n| u32::try_from(n).ok())).collect(),
-        ..Default::default()
-    };
     if let Some(sections) = raw.sections {
+        // The index has its own file name. Only its section maps describe original sources.
+        let mut map = SourceMap { file: raw.file, ..Default::default() };
         let sections = sections.ok_or(SourceMapError::BadSections)?;
         for section in sections {
             let offset = |n: Option<u64>| n.and_then(|n| u32::try_from(n).ok()).ok_or(SourceMapError::BadSections);
@@ -311,6 +304,15 @@ fn from_raw(
         }
         return Ok(map);
     }
+    let mut map = SourceMap {
+        file: raw.file,
+        source_root: raw.source_root,
+        sources: raw.sources,
+        sources_content: raw.sources_content,
+        names: raw.names.into_iter().map(Option::unwrap_or_default).collect(),
+        ignore_list: raw.ignore_list.or(raw.google_ignore_list).unwrap_or_default().into_iter().filter_map(|n| n.and_then(|n| u32::try_from(n).ok())).collect(),
+        ..Default::default()
+    };
     let m = raw.mappings.as_deref().unwrap_or_default();
     if mappings {
         decode_mappings(m, &mut map, budget, line_budget, limits.max_lines)?;
