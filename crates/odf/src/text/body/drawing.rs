@@ -67,6 +67,7 @@ pub(in crate::text) struct OpenGroup {
     pub(in crate::text) anchor: Option<String>,
     /// Its `text:anchor-page-number`.
     pub(in crate::text) page: Option<String>,
+    pub(in crate::text) z: u32,
     pub(in crate::text) style: Option<String>,
     pub(in crate::text) members: Vec<model::Member>,
 }
@@ -103,8 +104,9 @@ impl Body<'_> {
                 f.flip_v ^= v;
             }
             // Kept when it floats, or turns or mirrors the object in line.
-            let float = float
-                .filter(|f| f.wrap != craft_wordmodel::para::Wrap::Inline || crate::text::frames::turned(f) || f.flip_h || f.flip_v || f.y != 0.0);
+            let float = float.filter(|f| {
+                f.wrap != craft_wordmodel::para::Wrap::Inline || crate::text::frames::turned(f) || f.flip_h || f.flip_v || f.y != 0.0 || f.z != 0
+            });
             if let Some(blocks) = &boxed
                 && self.take_watermark(blocks)
             {
@@ -353,7 +355,8 @@ impl Body<'_> {
         let mut float =
             crate::text::frames::float_of(g.anchor.as_deref(), Some(&crate::text::writer::pt(x0)), Some(&crate::text::writer::pt(y0)), &graphic);
         float.page = crate::text::frames::page_of(g.anchor.as_deref(), g.page.as_deref(), &graphic);
-        let float = (float.wrap != craft_wordmodel::para::Wrap::Inline).then(|| Box::new(float));
+        float.z = g.z;
+        let float = (float.wrap != craft_wordmodel::para::Wrap::Inline || float.z != 0).then(|| Box::new(float));
         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_LEN) } else { 1.0 };
         self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members });
     }
