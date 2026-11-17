@@ -454,6 +454,56 @@ fn analog_delay_tail_covers_the_spread_channel() {
 }
 
 #[test]
+fn analog_delay_tail_covers_a_shortening_ramp() {
+    let mut e = fx("analog_delay", &[("delay", 500.0), ("feedback", 0.0), ("dry", 0.0), ("wet", 100.0)]);
+    let x = noise(31, SR as usize / 10, 0.5);
+    run(e.as_mut(), &x, &x);
+    // The delay ramps down from 500 ms while the noise is still in the line.
+    assert!(e.set_param("delay", 5.0));
+    let tail = e.tail_samples();
+    let silence = vec![0.0f32; SR as usize];
+    let (a, b) = run(e.as_mut(), &silence, &silence);
+    let last = |s: &[f32]| s.iter().rposition(|v| v.abs() > 1e-6).unwrap_or(0);
+    let last = last(&a).max(last(&b));
+    assert!(last > SR as usize / 100, "the ramped echo at {last}");
+    assert!(last <= e.latency() + tail, "echo at {last} after a tail of {tail}");
+}
+
+#[test]
+fn mastering_maximizer_switches_without_a_step() {
+    let mut e = fx("mastering", &[]);
+    let x = vec![0.9f32; SR as usize / 10];
+    let (y, _) = run(e.as_mut(), &x, &x);
+    let mut prev = y[y.len() - 1];
+    let mut steps = |z: &[f32]| {
+        let mut worst = 0.0f32;
+        for &v in z {
+            worst = worst.max((v - prev).abs());
+            prev = v;
+        }
+        worst
+    };
+    assert!(e.set_param("loudness", 1.0));
+    let (on, _) = run(e.as_mut(), &x, &x);
+    let on_step = steps(&on);
+    assert!(on_step < 0.005, "switching on stepped by {on_step}");
+    assert!(e.set_param("loudness", 0.0));
+    let (off, _) = run(e.as_mut(), &x, &x);
+    let off_step = steps(&off);
+    assert!(off_step < 0.005, "switching off stepped by {off_step}");
+    assert!((off[off.len() - 1] - y[y.len() - 1]).abs() < 1e-6, "{} {}", off[off.len() - 1], y[y.len() - 1]);
+    // Input above the ceiling is held to it from the first sample of the fade.
+    let mut e = fx("mastering", &[]);
+    let x = vec![1.0f32; SR as usize / 10];
+    run(e.as_mut(), &x, &x);
+    assert!(e.set_param("loudness", 1.0));
+    let (on, _) = run(e.as_mut(), &x, &x);
+    let ceiling = crate::db_to_gain(-0.3);
+    let peak = on.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+    assert!(peak <= ceiling + 1e-6, "{peak} over the ceiling {ceiling}");
+}
+
+#[test]
 fn mastering_reverb_fades_out_and_restarts_from_silence() {
     let mut e = fx("mastering", &[("reverb", 100.0)]);
     let n = SR as usize / 2;

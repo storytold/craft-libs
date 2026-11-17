@@ -363,6 +363,8 @@ pub struct Mastering {
     exc: Smoothed,
     width: Smoothed,
     boost: Smoothed,
+    /// Crossfade from the bypassed signal (0) to the maximized one (1).
+    loud_mix: Smoothed,
     out: Smoothed,
 }
 
@@ -402,6 +404,7 @@ impl Mastering {
             exc: sm(0.0, sample_rate),
             width: sm(1.0, sample_rate),
             boost: sm(1.0, sample_rate),
+            loud_mix: sm(0.0, sample_rate),
             out: sm(1.0, sample_rate),
         };
         s.apply_params(true);
@@ -420,9 +423,10 @@ impl Mastering {
         self.exc.set(0.6 * self.pv.v("exciter") / 100.0);
         self.width.set(self.pv.v("widener") / 100.0);
         self.boost.set(db_to_gain(12.0 * self.pv.v("loudness") / 100.0));
+        self.loud_mix.set(if self.pv.v("loudness") > 0.0 { 1.0 } else { 0.0 });
         self.out.set(db_to_gain(self.pv.v("output")));
         if snap {
-            for s in [&mut self.rev_amt, &mut self.exc, &mut self.width, &mut self.boost, &mut self.out] {
+            for s in [&mut self.rev_amt, &mut self.exc, &mut self.width, &mut self.boost, &mut self.loud_mix, &mut self.out] {
                 s.snap();
             }
         }
@@ -444,7 +448,7 @@ impl AudioEffect for Mastering {
         self.hp.iter_mut().for_each(OnePole::reset);
         self.lim_env = 0.0;
         self.rev_on = false;
-        for s in [&mut self.rev_amt, &mut self.exc, &mut self.width, &mut self.boost, &mut self.out] {
+        for s in [&mut self.rev_amt, &mut self.exc, &mut self.width, &mut self.boost, &mut self.loud_mix, &mut self.out] {
             s.snap();
         }
     }
@@ -454,7 +458,6 @@ impl AudioEffect for Mastering {
         if nch == 0 {
             return;
         }
-        let loud_on = self.pv.v("loudness") > 0.0;
         let rev_param = self.pv.v("reverb") > 0.0;
         let mode = self.pv.idx("exciter_mode");
         let ahp = OnePole::alpha(3000.0, self.sr);
@@ -485,9 +488,9 @@ impl AudioEffect for Mastering {
                 self.rev.process(&mut [&mut a[..len], &mut b[..len]]);
             }
             for i in 0..len {
-                // The maximizer stays in while its boost ramps back to 0 dB.
-                let loud = loud_on || self.boost.is_smoothing();
                 let (ra, ex, w, boost, out) = (self.rev_amt.tick(), self.exc.tick(), self.width.tick(), self.boost.tick(), self.out.tick());
+                // The maximizer crossfades in and out over the smoothing ramp.
+                let mix = self.loud_mix.tick();
                 let j = start + i;
                 for ch in 0..nch {
                     let mut v = channels[ch][j];
@@ -511,11 +514,8 @@ impl AudioEffect for Mastering {
                     channels[0][j] = m + s;
                     channels[1][j] = m - s;
                 }
-                if loud {
-                    for c in channels[..nch].iter_mut() {
-                        c[j] *= boost;
-                    }
-                    let peak = channels[..nch].iter().fold(0.0f32, |a, c| a.max(c[j].abs()));
+                if mix > 0.0 {
+                    let peak = channels[..nch].iter().fold(0.0f32, |a, c| a.max((c[j] * boost).abs()));
                     let target = (lin_db(ceiling) - lin_db(peak)).min(0.0);
                     if target < self.lim_env {
                         // An inf input sample gives -inf, which the release would never leave.
@@ -525,7 +525,10 @@ impl AudioEffect for Mastering {
                     }
                     let g = db_to_gain(self.lim_env);
                     for c in channels[..nch].iter_mut() {
-                        c[j] = soft_clip(c[j] * g, ceiling);
+                        let x = c[j];
+                        let y = soft_clip(x * boost * g, ceiling);
+                        // The blend stays within the ceiling, which the maximized signal holds.
+                        c[j] = if mix < 1.0 { (x + mix * (y - x)).clamp(-ceiling, ceiling) } else { y };
                     }
                 } else {
                     self.lim_env = 0.0;

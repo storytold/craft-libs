@@ -420,9 +420,13 @@ impl AnalogDelay {
 impl AudioEffect for AnalogDelay {
     param_plumbing!("analog_delay");
     /// Echoes of the longest channel delay: Spread lengthens the second channel's by up to half.
+    /// While a ramp runs, each of delay, spread and feedback counts at the larger of its current
+    /// and target values.
     fn tail_samples(&self) -> usize {
-        let delay = self.pv.v("delay") * (1.0 + 0.25 * self.pv.v("spread") / 100.0);
-        super::util::echo_tail(delay, self.pv.v("feedback") / 100.0, self.sr)
+        let delay_ms = self.time.value().max(self.time.target()) * 1000.0 / self.sr;
+        let spread = self.spread.value().max(self.spread.target());
+        let feedback = self.fb.value().max(self.fb.target());
+        super::util::echo_tail(delay_ms * (1.0 + 0.25 * spread), feedback, self.sr)
     }
     fn reset(&mut self) {
         self.lines.iter_mut().for_each(DelayLine::reset);
