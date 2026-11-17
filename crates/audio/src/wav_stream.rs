@@ -11,8 +11,11 @@
 /// Sample formats written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bits {
+    /// Signed 16-bit PCM.
     Int16,
+    /// Signed 24-bit PCM.
     Int24,
+    /// IEEE 754 32-bit float.
     Float32,
 }
 
@@ -70,6 +73,7 @@ pub fn append(out: &mut Vec<u8>, samples: &[f32], bits: Bits) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
