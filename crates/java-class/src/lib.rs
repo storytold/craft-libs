@@ -22,29 +22,29 @@ pub enum JavaClassError {
 use JavaClassError as FormatError;
 
 #[cfg(test)]
-#[path="regressions/java_array_operands.rs"]
+#[path = "regressions/java_array_operands.rs"]
 mod java_array_operands;
 
 #[cfg(test)]
-#[path="regressions/java_attribute_names.rs"]
+#[path = "regressions/java_attribute_names.rs"]
 mod java_attribute_names;
 
 #[cfg(test)]
-#[path="regressions/java_constant_pool_slots.rs"]
+#[path = "regressions/java_constant_pool_slots.rs"]
 mod java_constant_pool_slots;
 
 #[cfg(test)]
-#[path="regressions/java_invoke_operands.rs"]
+#[path = "regressions/java_invoke_operands.rs"]
 mod java_invoke_operands;
 
 #[cfg(test)]
-#[path="regressions/java_linkage_references.rs"]
+#[path = "regressions/java_linkage_references.rs"]
 mod java_linkage_references;
 
 #[cfg(test)]
-#[path="regressions/java_truncated_attributes.rs"]
+#[path = "regressions/java_truncated_attributes.rs"]
 mod java_truncated_attributes;
 
 #[cfg(test)]
-#[path="regressions/java_wide_opcodes.rs"]
+#[path = "regressions/java_wide_opcodes.rs"]
 mod java_wide_opcodes;

@@ -132,3 +132,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## JSONC span-preserving editing
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
+
+## Java class inspection
+
+`crates/java-class` extracts Craft Anything `java_class.rs` and `java_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0), preserving separate primary-author source-history ports by Brandon Thomas, BFlat, Afloat and RRFZ. The checked byte-reader, modified UTF-8 unit decoder, descriptor display helper and synthetic class fixtures come from the same source snapshot. Seven regression files retain their source authors. Neutral error wiring and shared crate integration are subsequent changes. No JAR archive, application I/O or bytecode execution is imported.

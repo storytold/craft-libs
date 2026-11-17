@@ -526,7 +526,8 @@ fn parse_members(c: &mut Cursor<'_>, pool: &[Const], warnings: &mut Vec<String>,
             warnings.push(format!("{what} table ended early"));
             break;
         };
-        let mut m = Member { access, name: utf8_of(pool, name_idx).to_string(), descriptor: utf8_of(pool, desc_idx).to_string(), ..Default::default() };
+        let mut m =
+            Member { access, name: utf8_of(pool, name_idx).to_string(), descriptor: utf8_of(pool, desc_idx).to_string(), ..Default::default() };
         let (attrs, _) = read_attrs(c, pool);
         for a in attrs {
             match a.name {
@@ -750,9 +751,10 @@ impl ClassFile {
             operand = match i.opcode {
                 0x12..=0x14 => const_display(&self.pool, cp),
                 0xb2..=0xb5 => self.resolve_ref(cp).map(|r| r.display()).unwrap_or_else(|| format!("#{cp}")),
-                0xb6..=0xb9 => {
-                    self.resolve_ref(cp).map(|r| format!("{}.{}{}", internal_to_dotted(&r.owner), r.name, r.descriptor)).unwrap_or_else(|| format!("#{cp}"))
-                }
+                0xb6..=0xb9 => self
+                    .resolve_ref(cp)
+                    .map(|r| format!("{}.{}{}", internal_to_dotted(&r.owner), r.name, r.descriptor))
+                    .unwrap_or_else(|| format!("#{cp}")),
                 0xba => {
                     // invokedynamic: show the bootstrap name:descriptor
                     match self.pool.get(cp as usize) {
@@ -890,7 +892,9 @@ pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize)
                 continue;
             }
             let hit = match i.opcode {
-                0xb6..=0xb9 => cf.resolve_ref(cp).and_then(|r| (r.owner == owner && method.is_none_or(|n| r.name == n)).then(|| ("method", r.display()))),
+                0xb6..=0xb9 => {
+                    cf.resolve_ref(cp).and_then(|r| (r.owner == owner && method.is_none_or(|n| r.name == n)).then(|| ("method", r.display())))
+                }
                 0xb2..=0xb5 if method.is_none() => cf.resolve_ref(cp).and_then(|r| (r.owner == owner).then(|| ("field", r.display()))),
                 0xbb | 0xbd | 0xc0 | 0xc1 | 0xc5 if method.is_none() => {
                     let name = class_name_at(&cf.pool, cp);

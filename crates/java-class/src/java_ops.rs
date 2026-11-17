@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn hostile() {
         for seed in 0..256 {
-            let n = craft_anything_testkit::noise(seed, 512);
+            let n = crate::test_support::noise(seed, 512);
             let _ = decode(&n, 10_000);
         }
         // truncated operands never panic

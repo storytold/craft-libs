@@ -10,12 +10,6 @@ impl<'a> Reader<'a> {
         Reader { data }
     }
 
-
-
-
-
-
-
     pub fn slice(&self, off: usize, len: usize) -> Option<&'a [u8]> {
         let end = off.checked_add(len)?;
         self.data.get(off..end)
@@ -29,12 +23,6 @@ impl<'a> Reader<'a> {
         self.slice(off, N)?.try_into().ok()
     }
 
-
-
-
-
-
-
     pub fn u16_be(&self, off: usize) -> Option<u16> {
         self.arr(off).map(u16::from_be_bytes)
     }
@@ -46,10 +34,6 @@ impl<'a> Reader<'a> {
     pub fn u64_be(&self, off: usize) -> Option<u64> {
         self.arr(off).map(u64::from_be_bytes)
     }
-
-
-
-
 }
 
 /// Decode one modified UTF-8 code unit. Invalid bytes consume only themselves,
@@ -65,4 +49,3 @@ pub(crate) fn mutf8_unit(bytes: &[u8]) -> (u16, usize) {
         _ => (0xfffd, 1),
     }
 }
-
