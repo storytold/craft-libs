@@ -78,6 +78,11 @@ pub struct MbState {
     pub mvd: [[[u8; 2]; 16]; 2],
     /// Bit per 8x8 block predicted in direct mode.
     pub direct8x8: u8,
+    /// A field macroblock: every macroblock of a field picture, and the macroblocks of a field
+    /// macroblock pair in an MBAFF frame (mb_field_decoding_flag, 7.4.4).
+    pub field: bool,
+    /// MBAFF: the bottom macroblock of its pair.
+    pub bottom: bool,
 }
 
 impl MbState {
@@ -106,6 +111,8 @@ impl Default for MbState {
             mv: [[[0; 2]; 16]; 2],
             mvd: [[[0; 2]; 16]; 2],
             direct8x8: 0,
+            field: false,
+            bottom: false,
         }
     }
 }
@@ -125,6 +132,8 @@ pub struct FrameRow {
     /// Unique id of the referenced picture per 8x8 block (u32::MAX = none).
     pub ref_id: [Box<[u32]>; 2],
     pub intra: Box<[bool]>,
+    /// Per macroblock: a field macroblock (fieldDecodingFlagX of Table 8-8 in an MBAFF frame).
+    pub field: Box<[bool]>,
 }
 
 /// A decoded (or in-progress) frame as stored in the DPB and referenced by later pictures.
@@ -204,6 +213,7 @@ impl Frame {
             ref_idx: [vec![-1; self.mb_w * 4].into(), vec![-1; self.mb_w * 4].into()],
             ref_id: per_list(self.mb_w * 4),
             intra: vec![true; self.mb_w].into(),
+            field: vec![false; self.mb_w].into(),
         }
     }
 
@@ -227,11 +237,13 @@ impl Frame {
         let mut ref_idx = [vec![-1i8; mb_w * 4], vec![-1i8; mb_w * 4]];
         let mut ref_id = [vec![u32::MAX; mb_w * 4], vec![u32::MAX; mb_w * 4]];
         let mut intra = vec![true; mb_w];
+        let mut field = vec![false; mb_w];
         for (x, st) in row_mbs.iter().enumerate() {
             if st.slice_num == u32::MAX {
                 continue;
             }
             intra[x] = st.kind.is_intra();
+            field[x] = st.field;
             for l in 0..2 {
                 mv[l][x * 16..x * 16 + 16].copy_from_slice(&st.mv[l]);
                 for b in 0..4 {
@@ -246,7 +258,16 @@ impl Frame {
         let [mv0, mv1] = mv;
         let [ri0, ri1] = ref_idx;
         let [id0, id1] = ref_id;
-        FrameRow { y, cb, cr, mv: [mv0.into(), mv1.into()], ref_idx: [ri0.into(), ri1.into()], ref_id: [id0.into(), id1.into()], intra: intra.into() }
+        FrameRow {
+            y,
+            cb,
+            cr,
+            mv: [mv0.into(), mv1.into()],
+            ref_idx: [ri0.into(), ri1.into()],
+            ref_id: [id0.into(), id1.into()],
+            intra: intra.into(),
+            field: field.into(),
+        }
     }
 
     /// A frame with every row published from `planes` and no motion (intra), e.g. "non-existing"
@@ -493,6 +514,25 @@ impl RefPic {
 
     pub fn poc(&self) -> i32 {
         self.poc
+    }
+
+    /// Field `parity` of this frame or field pair as a reference of a field macroblock of parity
+    /// `cur` in an MBAFF frame (8.4.2.1), with its own key, order count and chroma offset
+    /// (Table 8-10).
+    pub fn field(&self, parity: usize, cur: usize) -> RefPic {
+        let src = match &self.src {
+            RefSrc::Whole(f) => RefSrc::FieldOf(f.clone(), parity),
+            RefSrc::FieldOf(f, p) => RefSrc::FieldOf(f.clone(), *p),
+            RefSrc::Pair(t, b) => RefSrc::Whole(if parity == 0 { t.clone() } else { b.clone() }),
+        };
+        let poc = self.field_poc[parity & 1];
+        let mut r = RefPic::new(src, self.long_term, poc, [poc; 2], (self.id & !3) | ((parity as u32 & 1) + 1));
+        r.chroma_dy = match (parity, cur) {
+            (1, 0) => -2,
+            (0, 1) => 2,
+            _ => 0,
+        };
+        r
     }
 
     pub fn id(&self) -> u32 {

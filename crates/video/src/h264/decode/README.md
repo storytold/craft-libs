@@ -26,6 +26,14 @@ oracles and fixture generators.
   and MMCOs, direct prediction across frame and field structure, the chroma offset between fields
   of opposite parity and field deblocking follow the specification. A complementary field pair is
   output as one woven frame; a field without a second field is output with its lines repeated.
+- MBAFF frames (`mb_adaptive_frame_field_flag = 1`): macroblock pairs decoded as frame or field
+  pairs, with the flag coded or inferred for skipped pairs (7.4.4). Neighbours follow Table 6-4
+  (`mbaff_neighbour`); a field macroblock reads and writes every other line of its pair and
+  predicts from the fields of the reference frames (refIdx / 2, parity by refIdx % 2), with field
+  POCs for implicit weights and temporal direct, and the co-located macroblock of Tables 8-6 and
+  8-8 across frame and field pairs. Deblocking filters field macroblocks on their own lines, the
+  left edge of mixed pairs line by line and the top edge of a frame macroblock under a field pair
+  in two field passes (8.7).
 - Macroblocks: I (Intra 4x4 / 8x8 / 16x16, I_PCM), P (all partitions, P_8x8ref0, P_Skip),
   B (all partitions and sub-partitions, B_Skip, B_Direct_16x16, B_Direct_8x8), spatial and temporal
   direct prediction with/without `direct_8x8_inference`, constrained intra prediction.
@@ -140,6 +148,18 @@ with ffmpeg + libx264; tests print a message and skip when `/opt/homebrew/bin/ff
   only by the ITU-T H.264 conformance bitstreams with field pictures. Those are not in the
   repository; they were decoded outside it and compared with ffmpeg (the fixtures below are
   progressive libx264 streams).
+- MBAFF (`slicedec.rs`, `synth_tests.rs`, `intra.rs`): Table 6-4 is transcribed row by row into a
+  test and checked against `mbaff_neighbour` for every neighbour location, current macroblock
+  and kind and availability of the neighbouring pairs, for luma and chroma. Synthetic MBAFF
+  frames in CAVLC and CABAC (I_PCM field and frame pairs, P frames whose skipped pairs infer
+  their flag from the left pair, the pair above or neither, and copy from the field of their own
+  parity) are checked exactly and against ffmpeg at 1 and 3 threads. Chroma DC prediction with
+  only one half of the left column available (a field macroblock next to a frame pair with one
+  inter macroblock under constrained intra prediction) has a unit test. Intra and inter
+  prediction with residual data, weighted prediction, direct modes and deblocking of MBAFF
+  frames are covered by the ITU-T conformance bitstreams with MBAFF (all 36 bit-exact against
+  ffmpeg at 1, 3 and 14 threads) and libx264 1080i and 576i MBAFF streams, decoded outside the
+  repository.
 - Robustness: avcC input with pts round trip; randomly corrupted, truncated and garbage input never
   panics or deadlocks (single- and multi-threaded).
 - Conformance (`tests/it/conformance.rs`): every fixture is decoded single-threaded, with 3 threads
@@ -235,8 +255,6 @@ file; `H264_BENCH_ITERS=n` (and `H264_THREADS=t`, `H264_DRAFT=1`) turns it into 
 
 ## Known gaps
 
-- MBAFF (`mb_adaptive_frame_field_flag = 1`): frame pictures of such streams return
-  `Error::Unsupported`.
 - Only 8-bit 4:2:0. High 10 / 4:2:2 / 4:4:4 / monochrome and lossless
   (`qpprime_y_zero_transform_bypass`) return `Error::Unsupported`.
 - FMO (slice groups), SP/SI slices, data partitioning (Extended profile), MVC/SVC NAL units.

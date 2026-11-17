@@ -35,6 +35,8 @@ struct SliceJob {
     rbsp: Vec<u8>,
     refs: [Vec<RefPic>; 2],
     ls: Arc<LevelScale>,
+    /// TopFieldOrderCnt and BottomFieldOrderCnt of the picture (field macroblocks of MBAFF frames).
+    field_poc: [i32; 2],
 }
 
 /// A picture whose slices are being collected.
@@ -404,13 +406,6 @@ impl Decoder {
         if pps.num_slice_groups > 1 {
             return unsupported("slice groups (FMO)");
         }
-        // An interlaced SPS (frame_mbs_only_flag 0) is accepted. Its frame pictures without
-        // macroblock-adaptive frame/field coding decode like progressive ones (7.4.3: MbaffFrameFlag
-        // is 0, every macroblock is a frame macroblock), and its field pictures as half-height
-        // pictures of their own.
-        if sps.mb_adaptive_frame_field && !sh.field_pic {
-            return unsupported("interlaced MBAFF frames (mb_adaptive_frame_field_flag)");
-        }
         if matches!(sh.slice_type, SliceType::Sp | SliceType::Si) {
             return unsupported("SP/SI slices");
         }
@@ -450,7 +445,8 @@ impl Decoder {
             sh.mmcos.len() as u64,
             sh.long_term_reference as u64 + sh.mmcos.iter().filter(|m| m.op == 3 || m.op == 6).count() as u64,
         );
-        pending.slices.push(SliceJob { sh, pps, sps, rbsp, refs, ls });
+        let field_poc = [pending.poc.top, pending.poc.bottom];
+        pending.slices.push(SliceJob { sh, pps, sps, rbsp, refs, ls, field_poc });
         self.stat(|s| {
             if cabac {
                 s.slices_cabac += 1;
@@ -741,6 +737,7 @@ fn run_job(frame: FrameRef, slices: Vec<SliceJob>, shared: &Shared, draft: bool)
 }
 
 fn decode_slice(s: &SliceJob, pic: &mut PicState) -> Result<()> {
+    pic.field_poc = s.field_poc;
     let mut sd = SliceDecoder::new(&s.sh, &s.pps, &s.sps, pic, &s.refs, &s.ls)?;
     if s.pps.entropy_coding_mode {
         sd.decode_cabac(&s.rbsp)

@@ -68,6 +68,11 @@ fn pps(cabac: bool, weighted: bool) -> Vec<u8> {
 
 /// `pps` with weighted_bipred_idc `bipred`.
 fn pps_with(cabac: bool, weighted: bool, bipred: u32) -> Vec<u8> {
+    pps_full(cabac, weighted, bipred, false)
+}
+
+/// [`pps_with`], with constrained_intra_pred_flag `constrained`.
+fn pps_full(cabac: bool, weighted: bool, bipred: u32, constrained: bool) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_ue(0);
     w.write_ue(0);
@@ -82,7 +87,7 @@ fn pps_with(cabac: bool, weighted: bool, bipred: u32) -> Vec<u8> {
     w.write_se(0);
     w.write_se(0); // chroma_qp_index_offset
     w.write_bit(true); // deblocking_filter_control_present
-    w.write_bit(false);
+    w.write_bit(constrained); // constrained_intra_pred
     w.write_bit(false);
     w.rbsp_trailing();
     nal(3, 8, &w.finish())
@@ -117,6 +122,13 @@ struct Pic {
     field: Option<bool>,
     /// disable_deblocking_filter_idc 1.
     deblock_off: bool,
+    /// disable_deblocking_filter_idc when not `deblock_off` (0 or 2).
+    deblock_idc: u32,
+    /// slice_qp_delta.
+    qp_delta: i32,
+    /// P slice: num_ref_idx_l0_active overridden to the number of entries, each with explicit
+    /// weights (luma, cb, cr) as (weight, offset), log2 denominators 5 and 3.
+    l0_weights: Vec<[(i32, i32); 3]>,
 }
 
 impl Pic {
@@ -157,7 +169,23 @@ fn slice_header(w: &mut BitWriter, p: &Pic, cabac: bool) {
     if p.b {
         w.write_bit(true); // direct_spatial_mv_pred_flag
     }
-    if p.inter() {
+    if p.inter() && !p.l0_weights.is_empty() {
+        w.write_bit(true); // num_ref_idx_override
+        w.write_ue(p.l0_weights.len() as u32 - 1);
+        w.write_bit(false); // no list 0 modification
+        w.write_ue(5);
+        w.write_ue(3);
+        for e in &p.l0_weights {
+            w.write_bit(true);
+            w.write_se(e[0].0);
+            w.write_se(e[0].1);
+            w.write_bit(true);
+            for c in 1..3 {
+                w.write_se(e[c].0);
+                w.write_se(e[c].1);
+            }
+        }
+    } else if p.inter() {
         w.write_bit(false); // num_ref_idx_override
         w.write_bit(!p.mods.is_empty());
         if !p.mods.is_empty() {
@@ -213,11 +241,11 @@ fn slice_header(w: &mut BitWriter, p: &Pic, cabac: bool) {
     if cabac && p.inter() {
         w.write_ue(0); // cabac_init_idc
     }
-    w.write_se(0); // slice_qp_delta
+    w.write_se(p.qp_delta);
     if p.deblock_off {
         w.write_ue(1); // disable_deblocking_filter_idc
     } else {
-        w.write_ue(0);
+        w.write_ue(p.deblock_idc);
         w.write_se(0);
         w.write_se(0);
     }
@@ -726,6 +754,9 @@ fn avcc_rejects_a_valid_picture_slice_without_starting_a_picture() {
             interlaced: false,
             field: None,
             deblock_off: false,
+            deblock_idc: 0,
+            qp_delta: 0,
+            l0_weights: vec![],
         },
         false,
     );
@@ -910,6 +941,11 @@ const FIELD_NMB: usize = MB_W * FRAME_MB_H / 2;
 /// An SPS with frame_mbs_only_flag 0 (field pictures allowed, no MBAFF), POC type 0 with a 4-bit
 /// lsb, 4 reference frames.
 fn interlaced_sps(profile: u8) -> Vec<u8> {
+    interlaced_sps_with(profile, false)
+}
+
+/// [`interlaced_sps`], with mb_adaptive_frame_field_flag set when `mbaff`.
+fn interlaced_sps_with(profile: u8, mbaff: bool) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(profile as u32, 8);
     w.write_bits(0, 8);
@@ -923,7 +959,7 @@ fn interlaced_sps(profile: u8) -> Vec<u8> {
     w.write_ue(MB_W as u32 - 1);
     w.write_ue(FRAME_MB_H as u32 / 2 - 1); // pic_height_in_map_units_minus1 (field rows)
     w.write_bit(false); // frame_mbs_only_flag
-    w.write_bit(false); // mb_adaptive_frame_field_flag
+    w.write_bit(mbaff); // mb_adaptive_frame_field_flag
     w.write_bit(true); // direct_8x8_inference
     w.write_bit(false); // cropping
     w.write_bit(false); // vui
@@ -1394,4 +1430,544 @@ fn draft_mode_switched_between_two_fields_marks_the_pair_draft() {
         let drafts: Vec<bool> = out.iter().map(|p| p.draft).collect();
         assert_eq!(drafts, [false, true], "draft {d0} then {d1}");
     }
+}
+
+/// A macroblock pair of an MBAFF frame: a field or frame macroblock pair of two I_PCM macroblocks
+/// (top, bottom), or two skipped macroblocks (`mbs` None) whose field flag is inferred (7.4.4).
+#[derive(Clone)]
+struct Pair {
+    field: bool,
+    mbs: Option<[Vec<u8>; 2]>,
+    /// The top macroblock is skipped, the bottom one coded (`mbs` Some; its first entry unused):
+    /// mb_field_decoding_flag then comes with the bottom macroblock (7.3.4). Only as the last pair
+    /// of a slice (the writer takes the neighbours of later pairs as whole pairs).
+    top_skip: bool,
+}
+
+const PAIRS: usize = MB_W * FRAME_MB_H / 2;
+
+/// mb_field_decoding_flag of each pair: as coded, or inferred for a skipped pair from the left
+/// pair, else the pair above, else frame (7.4.4; one slice from pair 0).
+fn pair_fields(pairs: &[Pair]) -> Vec<bool> {
+    pair_fields_from(0, pairs)
+}
+
+/// [`pair_fields`] for a slice whose first pair is pair `first` of the picture (neighbours in
+/// earlier slices are not available).
+fn pair_fields_from(first: usize, pairs: &[Pair]) -> Vec<bool> {
+    let mut f = vec![false; pairs.len()];
+    for (i, p) in pairs.iter().enumerate() {
+        let a = first + i;
+        f[i] = if p.mbs.is_some() {
+            p.field
+        } else if !a.is_multiple_of(MB_W) && i >= 1 {
+            f[i - 1]
+        } else if i >= MB_W {
+            f[i - MB_W]
+        } else {
+            false
+        };
+    }
+    f
+}
+
+/// One slice of an MBAFF frame (I if every pair is I_PCM, else P), macroblocks in pair order,
+/// from pair `p.first_mb`.
+fn mbaff_slice_nal(p: &Pic, pairs: &[Pair], cabac: bool) -> Vec<u8> {
+    let first = p.first_mb as usize;
+    let intra = pairs.iter().all(|q| q.mbs.is_some());
+    // a dummy macroblock list that makes the header writer pick the slice type
+    let head = Pic { interlaced: true, field: None, mbs: if intra { vec![] } else { vec![None] }, ..p.clone() };
+    let mut w = BitWriter::new();
+    slice_header(&mut w, &head, cabac);
+    let fields = pair_fields_from(first, pairs);
+    let coded = |i: usize| pairs[i].mbs.is_some();
+    if !cabac {
+        let mut run = 0;
+        for (i, q) in pairs.iter().enumerate() {
+            let Some(mbs) = &q.mbs else {
+                run += 2;
+                continue;
+            };
+            assert!(!q.top_skip || (!intra && i + 1 == pairs.len()));
+            for (k, s) in mbs.iter().enumerate() {
+                if k == 0 && q.top_skip {
+                    run += 1;
+                    continue;
+                }
+                if !intra {
+                    w.write_ue(run);
+                    run = 0;
+                }
+                // with the top macroblock, or with the bottom one after a skipped top one
+                if k == 0 || q.top_skip {
+                    w.write_bit(q.field);
+                }
+                w.write_ue(if intra { 25 } else { 30 }); // I_PCM
+                write_pcm(&mut w, s);
+            }
+        }
+        if run > 0 {
+            w.write_ue(run);
+        }
+        w.rbsp_trailing();
+    } else {
+        while !w.is_byte_aligned() {
+            w.write_bit(true); // cabac_alignment_one_bit
+        }
+        let mut e = Enc::new(26, if intra { 3 } else { 0 });
+        // a macroblock (pair i, bottom k) is coded
+        let coded_mb = |i: usize, k: usize| pairs[i].mbs.is_some() && !(k == 0 && pairs[i].top_skip);
+        for (i, q) in pairs.iter().enumerate() {
+            assert!(!q.top_skip || (!intra && i + 1 == pairs.len()));
+            // (indices into `pairs`; pairs of earlier slices are not available)
+            let (left, above) = ((!(first + i).is_multiple_of(MB_W) && i >= 1).then(|| i - 1), (i >= MB_W).then(|| i - MB_W));
+            // the field flag the skip flags' neighbours follow: for a pair whose flag comes with
+            // the bottom macroblock, the one inferred from the neighbours, as the flag is not
+            // decoded yet (7.4.4)
+            let ctx_field = if q.top_skip { left.map(|l| fields[l]).or(above.map(|a| fields[a])).unwrap_or(false) } else { fields[i] };
+            for k in 0..2 {
+                let bottom = k == 1;
+                // neighbours A and B (6.4.12.2): A is in the left pair; B is the top macroblock of
+                // this pair for a bottom frame macroblock, else in the pair above
+                let b_own = bottom && !ctx_field;
+                if !intra {
+                    let term = |n: Option<usize>| n.is_some_and(coded) as usize;
+                    let inc = term(left) + if b_own { coded_mb(i, 0) as usize } else { term(above) };
+                    e.encode(&mut w, 11 + inc, !coded_mb(i, k) as u32);
+                }
+                if let (Some(mbs), true) = (&q.mbs, coded_mb(i, k)) {
+                    if k == 0 || q.top_skip {
+                        let term = |n: Option<usize>| n.is_some_and(|n| fields[n]) as usize;
+                        e.encode(&mut w, 70 + term(left) + term(above), q.field as u32);
+                    }
+                    if intra {
+                        // the neighbours are I_PCM (not I_NxN): condTerm 1 when available
+                        let inc = left.is_some() as usize + (b_own || above.is_some()) as usize;
+                        e.encode(&mut w, 3 + inc, 1);
+                    } else {
+                        e.encode(&mut w, 14, 1); // intra prefix
+                        e.encode(&mut w, 17, 1); // not I_NxN
+                    }
+                    e.terminate(&mut w, true); // I_PCM
+                    write_pcm(&mut w, &mbs[k]);
+                    e.init();
+                }
+                if bottom {
+                    // end_of_slice_flag follows each pair, not its top macroblock (7.3.4)
+                    e.terminate(&mut w, i + 1 == pairs.len());
+                }
+            }
+        }
+        w.align_zero();
+    }
+    nal(p.ref_idc, if p.idr { 5 } else { 1 }, &w.finish())
+}
+
+/// The frame an MBAFF picture of `pairs` decodes to: a frame macroblock covers 16 lines of its
+/// pair, a field macroblock every other line (the top macroblock the even ones); skipped pairs
+/// copy `reference`.
+fn render_mbaff(pairs: &[Pair], reference: Option<&Planes3>) -> Planes3 {
+    let (w, h) = (MB_W * 16, FRAME_MB_H * 16);
+    let (mut y, mut u, mut v) = reference.cloned().unwrap_or_else(|| (vec![0; w * h], vec![0; w * h / 4], vec![0; w * h / 4]));
+    for (i, q) in pairs.iter().enumerate() {
+        let Some(mbs) = &q.mbs else { continue };
+        let (x0, y0) = ((i % MB_W) * 16, (i / MB_W) * 32);
+        for (k, s) in mbs.iter().enumerate().skip(q.top_skip as usize) {
+            let line = |r: usize, n: usize| if q.field { 2 * r + k } else { n * k + r };
+            for r in 0..16 {
+                let o = (y0 + line(r, 16)) * w + x0;
+                y[o..o + 16].copy_from_slice(&s[r * 16..r * 16 + 16]);
+            }
+            for r in 0..8 {
+                let o = (y0 / 2 + line(r, 8)) * (w / 2) + x0 / 2;
+                u[o..o + 8].copy_from_slice(&s[256 + r * 8..256 + r * 8 + 8]);
+                v[o..o + 8].copy_from_slice(&s[320 + r * 8..320 + r * 8 + 8]);
+            }
+        }
+    }
+    (y, u, v)
+}
+
+/// MBAFF frames of I_PCM field and frame macroblock pairs, then P frames whose skipped pairs
+/// (field or frame, inferred from the left pair or the pair above) copy the reference: field
+/// macroblocks with refIdx 0 predict from the field of their own parity. 1 and 3 threads, CAVLC
+/// and CABAC, checked against ffmpeg.
+#[test]
+fn mbaff_frames_of_field_and_frame_pairs() {
+    for cabac in [false, true] {
+        let mut seed = 21u32;
+        let mut pcm = |field: bool| Pair { field, mbs: Some([random_mb(&mut seed), random_mb(&mut seed)]), top_skip: false };
+        let skip = Pair { field: false, mbs: None, top_skip: false };
+        // row 0: field, frame, field, field; row 1: frame, field, frame, frame
+        let i_pairs: Vec<Pair> = [true, false, true, true, false, true, false, false].map(&mut pcm).to_vec();
+        // skipped pairs infer: (1, 0) and (3, 0) field from the left, (0, 1) field from above,
+        // (2, 1) frame from the left although the pair above is field; in the last frame the
+        // skipped pairs are frame (the first has no neighbour, the others follow it). The
+        // inferred flags select CABAC contexts of later pairs.
+        // The last pair of each P frame has a skipped top and an I_PCM bottom macroblock, which
+        // carries the field flag (7.3.4): a field pair although the neighbours infer frame for
+        // the skip flags' contexts, then a frame pair (a bottom frame macroblock whose neighbour B
+        // is the skipped top one).
+        let top_skip = |mut q: Pair| {
+            q.top_skip = true;
+            q
+        };
+        let p_pairs = vec![pcm(true), skip.clone(), pcm(true), skip.clone(), skip.clone(), pcm(false), skip.clone(), top_skip(pcm(true))];
+        assert_eq!(pair_fields(&p_pairs), [true, true, true, true, true, false, false, true]);
+        let mut p2_pairs = vec![skip.clone(); PAIRS];
+        p2_pairs[1] = pcm(false);
+        p2_pairs[PAIRS - 1] = top_skip(pcm(false));
+        assert_eq!(pair_fields(&p2_pairs), [false; PAIRS]);
+        let pics = [
+            (Pic { idr: true, frame_num: 0, ref_idc: 3, poc_lsb: Some(0), ..Default::default() }, &i_pairs),
+            (Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), ..Default::default() }, &p_pairs),
+            (Pic { frame_num: 2, ref_idc: 2, poc_lsb: Some(8), ..Default::default() }, &p2_pairs),
+        ];
+        let mut stream = interlaced_sps_with(77, true);
+        stream.extend(pps(cabac, false));
+        for (p, pairs) in &pics {
+            stream.extend(mbaff_slice_nal(p, pairs, cabac));
+        }
+        let f0 = render_mbaff(&i_pairs, None);
+        let f1 = render_mbaff(&p_pairs, Some(&f0));
+        let f2 = render_mbaff(&p2_pairs, Some(&f1));
+        let expected = [f0, f1, f2];
+        cross_check_ffmpeg(&stream, &expected, if cabac { "synth_mbaff_cabac" } else { "synth_mbaff_cavlc" });
+        for threads in [1, 3] {
+            let mut dec = Decoder::with_threads(threads);
+            let mut out = dec.decode(&stream, 0).unwrap();
+            out.extend(dec.flush());
+            assert!(dec.take_error().is_none(), "cabac={cabac} threads={threads}");
+            assert_eq!(out.len(), expected.len());
+            for (i, (p, e)) in out.iter().zip(&expected).enumerate() {
+                assert_eq!(p.structure, PictureStructure::Frame);
+                assert!(p.y == e.0 && p.u == e.1 && p.v == e.2, "picture {i} differs (cabac={cabac}, threads={threads})");
+            }
+        }
+    }
+}
+
+/// A slice of an MBAFF P frame cut off at every length, the next slice decoding the rest of the
+/// frame with deblocking across the slice boundary. A cut between the two macroblocks of a pair
+/// leaves the bottom one undecoded; the frame macroblocks of the next slice beside and under that
+/// pair must neither panic nor filter against it (that indexed the slice table with the
+/// undecoded marker, caught as an internal error). With one thread the P frame reuses the I
+/// frame's picture state, so this also needs `PicState::reset` to clear the kind of a
+/// macroblock that stays undecoded.
+#[test]
+fn mbaff_slice_cut_between_the_macroblocks_of_a_pair() {
+    for cabac in [false, true] {
+        let mut seed = 5u32;
+        let mut pcm = |field: bool| Pair { field, mbs: Some([random_mb(&mut seed), random_mb(&mut seed)]), top_skip: false };
+        let i_pairs: Vec<Pair> = [false; PAIRS].map(&mut pcm).to_vec();
+        let skip = Pair { field: false, mbs: None, top_skip: false };
+        // slice A: pairs 0 and 1 (a frame I_PCM pair, the one to be cut); slice B: pairs 2.. all
+        // skipped frame pairs (pair 2 beside pair 1, pair 5 under it)
+        let a_pairs = vec![skip.clone(), pcm(false)];
+        let b_pairs = vec![skip.clone(); PAIRS - 2];
+        let mut head = interlaced_sps_with(77, true);
+        head.extend(pps(cabac, false));
+        head.extend(mbaff_slice_nal(&Pic { idr: true, frame_num: 0, ref_idc: 3, poc_lsb: Some(0), ..Default::default() }, &i_pairs, cabac));
+        let p = Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), ..Default::default() };
+        let slice_a = mbaff_slice_nal(&p, &a_pairs, cabac);
+        let slice_b = mbaff_slice_nal(&Pic { first_mb: 2, ..p.clone() }, &b_pairs, cabac);
+        // the uncut frame decodes cleanly (the stream itself is valid)
+        let mut whole = head.clone();
+        whole.extend(&slice_a);
+        whole.extend(&slice_b);
+        assert_eq!(decode_all(&whole, 1).len(), 2);
+        // a cut slice: start code, NAL header and some of the slice header kept at least
+        for len in 8..slice_a.len() {
+            let mut stream = head.clone();
+            stream.extend(&slice_a[..len]);
+            stream.extend(&slice_b);
+            for threads in [1, 3] {
+                // (a panic inside a picture job is caught and reported as an internal error, by
+                // `decode` itself or later by `take_error`)
+                let no_panic = |e: &dyn std::fmt::Display| {
+                    assert!(!e.to_string().contains("internal error"), "cabac={cabac} len={len} threads={threads}: {e}");
+                };
+                let mut dec = Decoder::with_threads(threads);
+                let mut out = match dec.decode(&stream, 0) {
+                    Ok(out) => out,
+                    Err(e) => {
+                        no_panic(&e);
+                        Vec::new()
+                    }
+                };
+                out.extend(dec.flush());
+                if let Some(e) = dec.take_error() {
+                    no_panic(&e);
+                }
+            }
+        }
+    }
+}
+
+/// A macroblock of [`mbaff_inter_slice_nal`].
+#[derive(Clone, Copy)]
+enum Mb {
+    /// P_Skip.
+    Skip,
+    /// P_L0_16x16 with refIdx 0 and this mvd, no residual.
+    Mvd(i32, i32),
+    /// P_L0_16x16 with this refIdx and mvd, no residual.
+    Ref(u32, i32, i32),
+    /// P_L0_L0_16x8 with refIdx 0 and these mvds for the upper and the lower partition, no
+    /// residual.
+    Split16x8([i32; 2], [i32; 2]),
+    /// I_16x16 with DC prediction (luma and chroma) and no residual.
+    Intra,
+    /// [`Mb::Intra`] whose neighbour A or B of luma block 0 is I_PCM (nC 8 or 16 for the
+    /// Intra16x16DCLevel coeff_token, 9.2.1), the other not.
+    IntraByPcm,
+    /// I_PCM with the samples of `random_mb` from this seed.
+    Pcm(u32),
+}
+
+/// A CAVLC P slice of an MBAFF frame from pair `p.first_mb`: per pair its field flag and its two
+/// macroblocks (a pair is either skipped as a whole or has a coded top macroblock, so the flag is
+/// sent with the top one).
+fn mbaff_inter_slice_nal(p: &Pic, pairs: &[(bool, [Mb; 2])]) -> Vec<u8> {
+    let head = Pic { interlaced: true, field: None, mbs: vec![None], ..p.clone() };
+    let mut w = BitWriter::new();
+    slice_header(&mut w, &head, false);
+    // reference indices of frame macroblocks range over the list, of field macroblocks over twice
+    // as many fields
+    let n_ref = p.l0_weights.len().max(1) as u32;
+    let mut run = 0;
+    for &(field, mbs) in pairs {
+        assert!(!matches!(mbs[0], Mb::Skip) || matches!(mbs[1], Mb::Skip), "flag would go with the bottom macroblock");
+        let ref0 = |w: &mut BitWriter| match if field { 2 * n_ref } else { n_ref } {
+            1 => {}
+            2 => w.write_bit(true),
+            _ => w.write_ue(0),
+        };
+        for (k, mb) in mbs.into_iter().enumerate() {
+            if let Mb::Skip = mb {
+                run += 1;
+                continue;
+            }
+            w.write_ue(run);
+            run = 0;
+            if k == 0 {
+                w.write_bit(field);
+            }
+            match mb {
+                Mb::Skip => {}
+                Mb::Mvd(x, y) | Mb::Ref(_, x, y) => {
+                    w.write_ue(0); // P_L0_16x16
+                    let ri = if let Mb::Ref(r, ..) = mb { r } else { 0 };
+                    // ref_idx_l0 te(v) with range n - 1 (7.4.5.1, 9.1.2)
+                    match if field { 2 * n_ref } else { n_ref } {
+                        1 => assert_eq!(ri, 0),
+                        2 => w.write_bit(ri == 0),
+                        _ => w.write_ue(ri),
+                    }
+                    w.write_se(x);
+                    w.write_se(y);
+                    w.write_ue(0); // coded_block_pattern 0
+                }
+                Mb::Split16x8(m0, m1) => {
+                    w.write_ue(1); // P_L0_L0_16x8
+                    ref0(&mut w);
+                    ref0(&mut w);
+                    for m in [m0, m1] {
+                        w.write_se(m[0]);
+                        w.write_se(m[1]);
+                    }
+                    w.write_ue(0); // coded_block_pattern 0
+                }
+                Mb::Intra | Mb::IntraByPcm => {
+                    w.write_ue(5 + 3); // I_16x16_2_0_0 (DC prediction, no AC, no chroma)
+                    w.write_ue(0); // intra_chroma_pred_mode DC
+                    w.write_se(0); // mb_qp_delta
+                    // Intra16x16DCLevel: coeff_token TotalCoeff 0, for nC 0..1 or 8 and over
+                    if let Mb::Intra = mb {
+                        w.write_bit(true);
+                    } else {
+                        w.write_bits(0b000011, 6);
+                    }
+                }
+                Mb::Pcm(mut seed) => {
+                    w.write_ue(5 + 25); // I_PCM
+                    write_pcm(&mut w, &random_mb(&mut seed));
+                }
+            }
+        }
+    }
+    if run > 0 {
+        w.write_ue(run);
+    }
+    w.rbsp_trailing();
+    nal(p.ref_idc, 1, &w.finish())
+}
+
+/// FNV-1a over the planes of the output pictures.
+fn planes_hash(pics: &[Planes3]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for (y, u, v) in pics {
+        for &b in y.iter().chain(u).chain(v) {
+            h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// An I frame of I_PCM frame pairs holding a smooth picture (luma rising 1 per column and 5 per
+/// line, chroma likewise), the reference of [`mbaff_deblocking_frame`].
+fn smooth_mbaff_i_frame() -> (Vec<u8>, Planes3) {
+    let (w, h) = (MB_W * 16, FRAME_MB_H * 16);
+    let y: Vec<u8> = (0..w * h).map(|i| (20 + i % w + 5 * (i / w) / 2) as u8).collect();
+    let c: Vec<u8> = (0..w * h / 4).map(|i| (60 + i % (w / 2) + 3 * (i / (w / 2))) as u8).collect();
+    let pairs: Vec<Pair> = (0..PAIRS)
+        .map(|i| {
+            let mb = |k: usize| -> Vec<u8> {
+                let (x0, y0) = ((i % MB_W) * 16, (i / MB_W) * 32 + 16 * k);
+                let mut s = Vec::with_capacity(384);
+                (0..16).for_each(|r| s.extend_from_slice(&y[(y0 + r) * w + x0..][..16]));
+                for _ in 0..2 {
+                    (0..8).for_each(|r| s.extend_from_slice(&c[(y0 / 2 + r) * (w / 2) + x0 / 2..][..8]));
+                }
+                s
+            };
+            Pair { field: false, mbs: Some([mb(0), mb(1)]), top_skip: false }
+        })
+        .collect();
+    let pic = Pic { idr: true, frame_num: 0, ref_idc: 3, poc_lsb: Some(0), ..Default::default() };
+    (mbaff_slice_nal(&pic, &pairs, false), render_mbaff(&pairs, None))
+}
+
+/// The P frame of [`mbaff_deblocking_frame`]: every MBAFF edge case of 8.7 at QP 38 over
+/// smooth content. Row 0: field, field, field (intra top), frame; row 1: frame, frame (intra
+/// top), field (intra top), field (intra bottom). That gives same-kind field edges with small
+/// vertical motion differences (pairs 0 and 1; the top macroblock of pair 1 has two 16x8
+/// partitions, predicted (4, 0) from the left and (4, 3), so its internal edge compares a
+/// vertical difference of 3 against the field limit of 2), mixed left edges whose bS alternates per line
+/// between an intra and an inter macroblock for a frame macroblock (pair 3 beside field pair 2)
+/// and for a field macroblock (pair 6 beside frame pair 5), frame pairs under field pairs (pairs 4
+/// and 5, two field passes) and an intra field macroblock over a frame pair (pair 7, mixed
+/// horizontal edge).
+const DEBLOCK_PAIRS: [(bool, [Mb; 2]); PAIRS] = [
+    (true, [Mb::Mvd(4, 0), Mb::Mvd(0, 6)]),
+    (true, [Mb::Split16x8([0, 0], [0, 3]), Mb::Mvd(-4, 3)]),
+    (true, [Mb::Intra, Mb::Mvd(2, -2)]),
+    (false, [Mb::Mvd(-2, 0), Mb::Mvd(0, -4)]),
+    (false, [Mb::Mvd(3, 1), Mb::Skip]),
+    (false, [Mb::Intra, Mb::Mvd(1, 0)]),
+    (true, [Mb::Intra, Mb::Mvd(-3, 2)]),
+    (true, [Mb::Mvd(2, 2), Mb::Intra]),
+];
+
+/// Decode `stream` (the smooth I frame and MBAFF P slices) at 1 and 3 threads: the same pictures
+/// both times, equal to ffmpeg's when it is installed, and hashing to `want` (ffmpeg's output,
+/// recorded).
+fn check_mbaff_deblocking(stream: &[u8], want: u64, name: &str) {
+    let one = decode_all(stream, 1);
+    assert_eq!(one.len(), 2, "{name}");
+    assert!(decode_all(stream, 3) == one, "{name}: threads differ");
+    cross_check_ffmpeg(stream, &one, name);
+    assert_eq!(planes_hash(&one), want, "{name}: output differs from ffmpeg's recorded output");
+}
+
+/// Deblocking of an MBAFF frame (8.7 with MbaffFrameFlag 1): mixed frame and field edges with bS
+/// per line, frame macroblocks under field pairs filtered once per field, field macroblock motion
+/// limits and intra bS on mixed horizontal edges, against ffmpeg.
+#[test]
+fn mbaff_deblocking_frame() {
+    let (i_frame, _) = smooth_mbaff_i_frame();
+    let mut stream = interlaced_sps_with(77, true);
+    stream.extend(pps(false, false));
+    stream.extend(i_frame);
+    let p = Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), qp_delta: 12, ..Default::default() };
+    stream.extend(mbaff_inter_slice_nal(&p, &DEBLOCK_PAIRS));
+    check_mbaff_deblocking(&stream, 10407637496959991110, "synth_mbaff_deblock");
+}
+
+/// disable_deblocking_filter_idc 2 in an MBAFF frame of two slices: edges between the slices
+/// stay unfiltered (the second slice starts at pair 2, so pair 2 has no left neighbour and pairs
+/// 4 to 6 none above for the filter), against ffmpeg.
+#[test]
+fn mbaff_deblocking_idc2_stops_at_slices() {
+    let (i_frame, _) = smooth_mbaff_i_frame();
+    for (idc, want) in [(0u32, 15451903455263300175u64), (2, 14323264706295858958)] {
+        let mut stream = interlaced_sps_with(77, true);
+        stream.extend(pps(false, false));
+        stream.extend(i_frame.clone());
+        let p = Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), qp_delta: 12, deblock_idc: idc, ..Default::default() };
+        stream.extend(mbaff_inter_slice_nal(&p, &DEBLOCK_PAIRS[..2]));
+        stream.extend(mbaff_inter_slice_nal(&Pic { first_mb: 2, ..p }, &DEBLOCK_PAIRS[2..]));
+        check_mbaff_deblocking(&stream, want, &format!("synth_mbaff_deblock_idc{idc}"));
+    }
+}
+
+/// An MBAFF P frame with explicit weights (8.4.2.3) for two reference frames whose entries
+/// differ: field macroblocks index fields, refIdx 0 to 3, and take the weights of frame entry
+/// refIdx >> 1 (8-284); frame macroblocks index frames. The references are the smooth I frame and
+/// a frame of random I_PCM pairs. 1 and 3 threads, against ffmpeg.
+#[test]
+fn mbaff_explicit_weights_of_field_macroblocks() {
+    let (i_frame, _) = smooth_mbaff_i_frame();
+    let mut seed = 9u32;
+    let random: Vec<Pair> =
+        (0..PAIRS).map(|_| Pair { field: false, mbs: Some([random_mb(&mut seed), random_mb(&mut seed)]), top_skip: false }).collect();
+    let pairs = [
+        (true, [Mb::Ref(2, 0, 0), Mb::Ref(3, 4, 0)]),
+        (false, [Mb::Ref(1, 0, 0), Mb::Ref(0, 0, 0)]),
+        (true, [Mb::Ref(1, 0, 4), Mb::Ref(0, 0, 0)]),
+        (true, [Mb::Ref(3, 0, 0), Mb::Ref(2, 2, 2)]),
+        (false, [Mb::Ref(0, 2, 0), Mb::Ref(1, 0, 2)]),
+        (true, [Mb::Ref(2, 0, 0), Mb::Ref(1, 0, 0)]),
+        (false, [Mb::Ref(1, 0, 0), Mb::Skip]),
+        (true, [Mb::Ref(3, 0, 0), Mb::Ref(0, 0, 0)]),
+    ];
+    let mut stream = interlaced_sps_with(77, true);
+    stream.extend(pps(false, true));
+    stream.extend(i_frame);
+    stream.extend(mbaff_slice_nal(&Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), ..Default::default() }, &random, false));
+    let p = Pic {
+        frame_num: 2,
+        ref_idc: 2,
+        poc_lsb: Some(8),
+        deblock_off: true,
+        l0_weights: vec![[(40, 3), (20, -2), (12, 5)], [(24, -6), (6, 4), (10, -3)]],
+        ..Default::default()
+    };
+    stream.extend(mbaff_inter_slice_nal(&p, &pairs));
+    let one = decode_all(&stream, 1);
+    assert_eq!(one.len(), 3);
+    assert!(decode_all(&stream, 3) == one, "threads differ");
+    cross_check_ffmpeg(&stream, &one, "synth_mbaff_weights");
+    assert_eq!(planes_hash(&one), 12712244450079857279, "output differs from ffmpeg's recorded output");
+}
+
+/// Constrained intra prediction in an MBAFF frame: a field macroblock beside a frame pair of one
+/// intra (I_PCM) and one inter macroblock sees half of its left column as available, the half of
+/// its lines in the intra macroblock (8.3.1.2 with 6.4.12.2): Intra16x16 needs the whole column
+/// (it predicts from the top only), chroma DC uses the left samples for the chroma blocks of the
+/// available half. Pair 1 has the intra macroblock above, pair 5 below. Against ffmpeg.
+#[test]
+fn mbaff_constrained_intra_with_half_the_left_column() {
+    let (i_frame, _) = smooth_mbaff_i_frame();
+    let pairs = [
+        (false, [Mb::Pcm(1), Mb::Mvd(2, 0)]),
+        (true, [Mb::IntraByPcm, Mb::IntraByPcm]),
+        (false, [Mb::Mvd(0, 2), Mb::Mvd(1, 0)]),
+        (false, [Mb::Skip, Mb::Skip]),
+        (false, [Mb::Mvd(1, 1), Mb::Pcm(3)]),
+        (true, [Mb::Intra, Mb::Intra]),
+        (false, [Mb::Skip, Mb::Skip]),
+        (false, [Mb::Skip, Mb::Skip]),
+    ];
+    let mut stream = interlaced_sps_with(77, true);
+    stream.extend(pps_full(false, false, 0, true));
+    stream.extend(i_frame);
+    let p = Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), deblock_off: true, ..Default::default() };
+    stream.extend(mbaff_inter_slice_nal(&p, &pairs));
+    let one = decode_all(&stream, 1);
+    assert_eq!(one.len(), 2);
+    assert!(decode_all(&stream, 3) == one, "threads differ");
+    cross_check_ffmpeg(&stream, &one, "synth_mbaff_constrained_intra");
+    assert_eq!(planes_hash(&one), 10295339011532637482, "output differs from ffmpeg's recorded output");
 }
