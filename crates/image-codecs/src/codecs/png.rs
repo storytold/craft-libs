@@ -27,6 +27,26 @@ pub(crate) fn dpi_of_ppm(ppm: u32) -> f32 {
 }
 
 /// Decodes a whole PNG, by driving a [`PngDecodeRows`] to its end.
+/// The stored size and EXIF block [`decode`] would find, from the chunks before the image data:
+/// the same header checks (limits, a file too small for its image) and the same frame (an fcTL
+/// before the IDAT overrides the header's size), without inflating any pixels or text.
+pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
+    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.alloc_usize() });
+    decoder.set_ignore_text_chunk(true);
+    {
+        let info = decoder.read_header_info().map_err(map_png_err)?;
+        let (w, h) = info.size();
+        limits.check_size(w, h)?;
+        let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.bits_per_pixel() as u64).div_ceil(8);
+        Limits::check_plausible(stored, bytes.len(), 1100)?;
+    }
+    let reader = decoder.read_info().map_err(map_png_err)?;
+    let info = reader.info();
+    let (w, h) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
+    limits.check_size(w, h)?;
+    Ok((w, h, info.exif_metadata.as_ref().map(|c| c.to_vec())))
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     PngDecodeRows::new(bytes, limits)?.step(&mut || true)?.ok_or_else(|| err("the decoder stopped before the image ended"))
 }
@@ -141,12 +161,12 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// Reads the header and refuses what [`decode`] refuses before any pixel is decoded: sizes
     /// past `limits`, and a file too small for the image it declares.
     pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
-        Self::open(bytes, limits, true)
+        Self::open(bytes, limits, true, false)
     }
 
     /// [`PngDecodeRows::new`], optionally without reserving the whole image: a caller that hands
     /// the rows on as they come ([`decode_rows`]) never holds them all.
-    fn open(bytes: B, limits: &Limits, reserve: bool) -> Result<Self, CodecError> {
+    fn open(bytes: B, limits: &Limits, reserve: bool, bounded_stream: bool) -> Result<Self, CodecError> {
         let at = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let bytes = SharedInput(std::sync::Arc::new(bytes));
         let input = Tracked { cursor: Cursor::new(bytes.clone()), at: at.clone() };
@@ -187,7 +207,14 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         let (width, height) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
         let line = reader.output_line_size(width).ok_or_else(|| err("image too large"))?;
         // The output layout is known: charge its real bytes per pixel, not RGBA16's worst case.
-        limits.check(width, height, layout, sample)?;
+        if bounded_stream {
+            limits.check_size(width, height)?;
+            if line > limits.alloc_usize() {
+                return Err(CodecError::LimitExceeded("one PNG row exceeds max_alloc".into()));
+            }
+        } else {
+            limits.check(width, height, layout, sample)?;
+        }
         let height = usize::try_from(height).map_err(|_| err("image too large"))?;
         if width == 0 || height == 0 {
             return Err(err("the image is empty"));
@@ -234,11 +261,35 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// decode the whole image after all (an interlaced file) calls
     /// [`PngDecodeRows::reserve_output`] before [`PngDecodeRows::step`].
     pub fn new_streaming(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
-        Self::open(bytes, limits, false)
+        Self::open(bytes, limits, false, false)
+    }
+
+    /// Opens a bounded row stream without charging a full image that is never retained.
+    /// Dimension, pixel-count, plausibility, decoder and metadata limits remain unchanged;
+    /// `max_alloc` also bounds each row group. It is not a total process-memory limit.
+    /// Unlike [`Self::new_streaming`], a streamable image may exceed the full-image budget.
+    /// Non-streamable images still require that budget, as do [`Self::step`] and
+    /// [`Self::reserve_output`]. The caller must bound any output it retains in its sink.
+    pub fn new_bounded_streaming(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
+        let decoder = Self::open(bytes, limits, false, true)?;
+        if !decoder.streamable() {
+            decoder.check_full_output()?;
+        }
+        Ok(decoder)
+    }
+
+    fn check_full_output(&self) -> Result<(), CodecError> {
+        let height = u32::try_from(self.height).map_err(|_| err("image too large"))?;
+        self.limits.check(self.width, height, self.layout, self.sample)?;
+        if self.size > self.limits.alloc_usize() {
+            return Err(CodecError::LimitExceeded("PNG output exceeds max_alloc".into()));
+        }
+        Ok(())
     }
 
     /// Reserves the buffer [`PngDecodeRows::step`] decodes the whole image into.
     pub fn reserve_output(&mut self) -> Result<(), CodecError> {
+        self.check_full_output()?;
         let size = self.size;
         self.buf.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {size} bytes for the image")))
     }
@@ -271,6 +322,7 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// Decodes at least one row (the whole image if it is interlaced), then goes on while `more()`
     /// returns true. `Some` once the image is complete, after which the decoder is spent.
     pub fn step(&mut self, more: &mut dyn FnMut() -> bool) -> Result<Option<Image>, CodecError> {
+        self.check_full_output()?;
         if self.done {
             return Err(err("the image was already decoded"));
         }
@@ -338,7 +390,9 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// `more()` returns true; `Some` with the extras once the file is read to its end, with the
     /// resolution a format that lacks one takes from its EXIF or XMP. A damaged file fails with
     /// the error [`decode`] gives, after however many rows were delivered. An orientation (an
-    /// `eXIf` after the image data may set one) is for the caller to apply.
+    /// `eXIf` after the image data may set one) is for the caller to apply. A new group size
+    /// must exceed any partial group retained from an earlier yield; otherwise this returns
+    /// an error without consuming another row.
     pub fn step_stream<E: From<CodecError>>(
         &mut self,
         group: u32,
@@ -348,12 +402,29 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         if self.done {
             return Err(err("the image was already decoded").into());
         }
-        let group = usize::try_from(group.max(1)).unwrap_or(usize::MAX);
+        // Tail EXIF may report an orientation after rows have already been delivered;
+        // that belongs in the returned extras, not a rejection of metadata continuation.
+        if self.rows == 0 && !self.tail && !self.streamable() {
+            return Err(err("this PNG requires whole-image decoding").into());
+        }
+        let group = usize::try_from(group.max(1)).unwrap_or(usize::MAX).min(self.height);
+        if self.rows - self.group_start >= group {
+            return Err(err("PNG row group is smaller than rows held from the previous step").into());
+        }
+        let group_bytes = group.checked_mul(self.line).ok_or_else(|| err("PNG row group is too large"))?;
+        if group_bytes > self.limits.alloc_usize() {
+            return Err(CodecError::LimitExceeded("PNG row group exceeds max_alloc".into()).into());
+        }
         if !self.tail {
             while self.rows < self.height {
                 let held = self.rows - self.group_start;
                 let at = held.checked_mul(self.line).ok_or_else(|| err("image too large"))?;
                 let end = at.checked_add(self.line).ok_or_else(|| err("image too large"))?;
+                // A caller may change its group size between yields. Bound the actual held
+                // bytes as well as the requested group before growing the row buffer.
+                if end > self.limits.alloc_usize() {
+                    return Err(CodecError::LimitExceeded("PNG row group exceeds max_alloc".into()).into());
+                }
                 if self.buf.len() < end {
                     self.buf
                         .try_reserve_exact(end - self.buf.len())
@@ -368,7 +439,7 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
                     to_native_endian(row);
                 }
                 self.rows += 1;
-                if self.rows - self.group_start == group || self.rows == self.height {
+                if self.rows - self.group_start >= group || self.rows == self.height {
                     let data = self.buf.get(..end).ok_or_else(|| err("invalid PNG row group"))?;
                     sink(u32::try_from(self.group_start).map_err(|_| err("image too large"))?, data)?;
                     self.group_start = self.rows;

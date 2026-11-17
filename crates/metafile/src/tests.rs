@@ -299,6 +299,9 @@ fn item_cap_stops_the_parse_and_keeps_the_rest() {
     let recs: Vec<Vec<u8>> = (0..MAX_ITEMS + 10).map(|_| rect.clone()).collect();
     let p = parse(&wmf(&recs, None)).unwrap();
     assert_eq!(p.items.len(), MAX_ITEMS);
+    assert!(p.truncated);
+    let p = parse(&wmf(&recs[..MAX_ITEMS], None)).unwrap();
+    assert_eq!((p.items.len(), p.truncated), (MAX_ITEMS, false), "exactly the cap is not past it");
 }
 
 #[test]
@@ -481,6 +484,34 @@ fn canvas_stops_at_the_byte_budget() {
     cv.bitmap([0.0, 0.0, 1.0, 1.0], big());
     assert!(cv.full());
     assert_eq!(cv.items.len(), 2);
+}
+
+#[test]
+fn a_bitmap_the_byte_budget_refuses_is_counted_once() {
+    let img = || Rgba { w: 4, h: 4, px: vec![0u8; 64] };
+    let diamond = || Some(vec![(2.0, 0.0), (4.0, 2.0), (2.0, 4.0), (0.0, 2.0)]);
+    let mut cv = Canvas::new();
+    cv.set_clip(diamond());
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(!cv.full() && !cv.items.is_empty() && cv.dropped_images == 0, "a bitmap that is kept");
+    // The clip cuts the bitmap into pieces, and none of them fits: one image is counted.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.set_clip(diamond());
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(cv.full() && cv.items.is_empty());
+    assert_eq!(cv.dropped_images, 1);
+    // A clip that leaves none of the bitmap refuses nothing.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.set_clip(Some(vec![(100.0, 100.0), (110.0, 100.0), (110.0, 110.0)]));
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(!cv.full() && cv.dropped_images == 0);
+    // A bitmap drawn with a raster operation is counted the same way.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.bitmap_rop([0.0, 0.0, 4.0, 4.0], img(), 0x00CC_0020);
+    assert!(cv.full() && cv.dropped_images == 1 && cv.unplayed_raster_ops == 0);
 }
 
 #[test]
@@ -906,7 +937,7 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
                 clips: Vec::new(),
             },
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
@@ -931,7 +962,7 @@ fn a_huge_pen_is_held_to_what_covers_the_frame() {
                 region: None,
                 clips: Vec::new(),
             }],
-            skipped_records: 0,
+            ..Default::default()
         };
         match pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]).first() {
             Some(crate::PlacedItem::Path { stroke, .. }) => stroke.map(|s| s.1),
@@ -950,7 +981,7 @@ fn a_huge_pen_is_held_to_what_covers_the_frame() {
 fn crop_window_keeps_a_sliver_and_stays_finite() {
     let [x, y, w, h] = crate::crop_window([0.0, 0.51771, 0.0, 0.45485]);
     assert!(x == 0.0 && w == 1.0 && (y - 0.51771).abs() < 1e-6 && (h - 0.02744).abs() < 1e-5, "{y} {h}");
-    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new(), ..Default::default() };
     let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 27.44), [0.0, 0.51771, 0.0, 0.45485]).unwrap();
     // The kept band of the source (517.71..545.15) is the frame (0..27.44).
     let top = tf * kurbo::Point::new(0.0, 517.71);
@@ -979,7 +1010,7 @@ fn crop_window_with_negative_sides_pads_the_source() {
     let [x, _, w, _] = crate::crop_window([f32::MIN, 0.0, -1e9, 0.0]);
     assert!(x == -100.0 && w == 201.0, "{x} {w}");
     // The source sits in the middle half of the frame.
-    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), ..Default::default() };
     let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), [0.0, -0.5, 0.0, -0.5]).unwrap();
     let (top, bottom) = (tf * kurbo::Point::new(0.0, 0.0), tf * kurbo::Point::new(100.0, 50.0));
     assert!((top.y - 25.0).abs() < 1e-9 && (bottom.y - 75.0).abs() < 1e-9 && (bottom.x - 100.0).abs() < 1e-9, "{top:?} {bottom:?}");
@@ -1012,7 +1043,7 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
                 clips: Vec::new(),
             },
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let frame = kurbo::Rect::new(1584.0, 1584.0, 5584.0, 5584.0);
     // The last sliver, the first sliver, and sides that overlap.
@@ -1039,7 +1070,7 @@ fn place_counts_the_items_own_clip_region_before_keeping_it() {
     let region = || Some(vec![[0.0, 0.0, 50.0, 25.0], [10.0, 10.0, 20.0, 20.0]]);
     let frame = kurbo::Rect::new(0.0, 0.0, 100.0, 50.0);
     let placed = |second: Item| {
-        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], skipped_records: 0 };
+        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], ..Default::default() };
         pic.place(frame, [0.0; 4]).len()
     };
     let small = vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)];
@@ -1070,7 +1101,7 @@ fn place_expands_a_clip_region_once_for_the_items_that_share_it() {
         region: Some(region.clone()),
         clips: Vec::new(),
     };
-    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), ..Default::default() };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 100.0, 50.0), [0.0; 4]);
     assert_eq!(placed.len(), 2000);
     let regions: Vec<_> = placed
@@ -1096,7 +1127,7 @@ fn place_keeps_only_finite_bounded_bitmaps_with_area() {
             bitmap([0.0, 0.0, f32::INFINITY, 10.0]),
             bitmap([10.0, 5.0, 10.0, 10.0]),
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
@@ -1249,7 +1280,7 @@ fn take_pixels_returns_only_drawable_bitmaps() {
         clips: Vec::new(),
     };
     assert_eq!(path.take_pixels(), None);
-    let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new(), skipped_records: 0 };
+    let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new(), ..Default::default() };
     assert!(pic(1.0, 2.0).has_size());
     assert!(!pic(0.0, 2.0).has_size() && !pic(f32::NAN, 2.0).has_size() && !pic(1.0, f32::INFINITY).has_size());
 }
@@ -1908,6 +1939,7 @@ fn pattern_brush_pixels_count_against_the_byte_budget() {
     recs.push(wrec(0x041B, &cat(vec![h16(9), h16(9), h16(0), h16(0)])));
     let p = wmf200(&recs);
     assert!(p.items.is_empty(), "the parse stopped at the budget: {:?}", p.items.len());
+    assert!(p.truncated);
 }
 
 fn item_region(item: &Item) -> Option<&[[f32; 4]]> {
@@ -2653,4 +2685,108 @@ fn canvas_budget_counts_bytes_held_elsewhere() {
     cv.bitmap([0.0, 0.0, 1.0, 1.0], Rgba { w: 1, h: 1, px: vec![0u8; 200] });
     assert!(cv.full());
     assert!(cv.items.is_empty());
+}
+
+/// The box through a path's segment ends (an ellipse's four cubics end on its box).
+fn end_extent(item: &Item) -> (f32, f32, f32, f32) {
+    let (segs, ..) = path_segs(item);
+    let (xs, ys): (Vec<f32>, Vec<f32>) = segs
+        .iter()
+        .filter_map(|s| match s {
+            Seg::Move(x, y) | Seg::Line(x, y) | Seg::Cubic(.., x, y) => Some((*x, *y)),
+            Seg::Close => None,
+        })
+        .unzip();
+    let lo = |v: &[f32]| v.iter().copied().fold(f32::MAX, f32::min);
+    let hi = |v: &[f32]| v.iter().copied().fold(f32::MIN, f32::max);
+    (lo(&xs), lo(&ys), hi(&xs), hi(&ys))
+}
+
+/// Two sub-pictures drawn into halves of the frame, as charts pasted from older Office versions
+/// are stored (deckcraft#2069): each saves the DC, halves the viewport with SCALEVIEWPORTEXT, sets
+/// its own 400 x 400 window (the second shifted 400 to the left, so it lands in the right half),
+/// draws a circle and restores the DC. The left circle stays in the left half and the right one
+/// lands in the right half of the 800 x 400 frame.
+#[test]
+fn wmf_scale_viewport_ext_draws_sub_pictures_into_parts_of_the_frame() {
+    let sub = |org_x: i32| {
+        vec![
+            wrec(0x001E, &[]),
+            wrec(0x0103, &h16(8)),
+            // yDenom, yNum, xDenom, xNum: x * 1/2, y * 1/1.
+            wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(1)])),
+            wrec(0x020B, &cat(vec![h16(0), h16(org_x)])),
+            wrec(0x020C, &cat(vec![h16(400), h16(400)])),
+            wrec(0x0418, &cat(vec![h16(380), h16(380), h16(20), h16(20)])),
+            wrec(0x0127, &h16(-1)),
+        ]
+    };
+    let mut recs = vec![wrec(0x020B, &cat(vec![h16(0), h16(0)])), wrec(0x020C, &cat(vec![h16(400), h16(800)]))];
+    recs.extend(sub(0));
+    recs.extend(sub(-400));
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (800.0, 400.0));
+    assert_eq!((p.items.len(), p.skipped_records), (2, 0), "both circles, and every record played");
+    for (item, want) in p.items.iter().zip([(20.0, 20.0, 380.0, 380.0), (420.0, 20.0, 780.0, 380.0)]) {
+        let got = end_extent(item);
+        assert!(close(got.0, want.0) && close(got.1, want.1) && close(got.2, want.2) && close(got.3, want.3), "{got:?}, want {want:?}");
+    }
+}
+
+/// SCALEWINDOWEXT scales the window extent, and OFFSETWINDOWORG and OFFSETVIEWPORTORG move the
+/// window and viewport origins by their offsets, on top of what the SET records gave them. The
+/// 100 x 100 window of a plain WMF is the frame, and the records after it place a rectangle in it.
+#[test]
+fn wmf_scale_window_ext_and_offset_origins_change_the_mapping() {
+    let rect = || wrec(0x041B, &cat(vec![h16(20), h16(20), h16(10), h16(10)]));
+    let base = || vec![wrec(0x0103, &h16(8)), wrec(0x020B, &cat(vec![h16(0), h16(0)])), wrec(0x020C, &cat(vec![h16(100), h16(100)]))];
+    let extent = |extra: Vec<Vec<u8>>| {
+        let mut recs = base();
+        recs.extend(extra);
+        recs.push(rect());
+        rect_extent(&parse(&wmf(&recs, None)).unwrap().items[0])
+    };
+    // The window doubled (x * 2/1, y * 4/2): the rectangle shows at half size.
+    let got = extent(vec![wrec(0x0410, &cat(vec![h16(2), h16(4), h16(1), h16(2)]))]);
+    assert!(close(got.0, 5.0) && close(got.1, 5.0) && close(got.2, 10.0) && close(got.3, 10.0), "scaled window: {got:?}");
+    // The window origin moved by (5, 10): the rectangle moves the other way.
+    let got = extent(vec![wrec(0x020F, &cat(vec![h16(10), h16(5)]))]);
+    assert!(close(got.0, 5.0) && close(got.1, 0.0) && close(got.2, 15.0) && close(got.3, 10.0), "window origin: {got:?}");
+    // The viewport origin moved by (30, -5): the rectangle moves with it.
+    let got = extent(vec![wrec(0x0211, &cat(vec![h16(-5), h16(30)]))]);
+    assert!(close(got.0, 40.0) && close(got.1, 5.0) && close(got.2, 50.0) && close(got.3, 15.0), "viewport origin: {got:?}");
+    // A zero denominator leaves the extent alone.
+    let got = extent(vec![wrec(0x0412, &cat(vec![h16(0), h16(1), h16(0), h16(1)]))]);
+    assert!(close(got.0, 10.0) && close(got.1, 10.0) && close(got.2, 20.0) && close(got.3, 20.0), "zero denominator: {got:?}");
+}
+
+#[test]
+fn wmf_viewport_scaling_does_not_resize_the_player_frame() {
+    for numerator in [1, 4] {
+        let recs = [
+            wrec(0x0103, &h16(8)),
+            wrec(0x020C, &cat(vec![h16(100), h16(100)])),
+            wrec(0x041B, &cat(vec![h16(100), h16(100), h16(0), h16(0)])),
+            // Change the mapping after drawing, without a matching RESTOREDC.
+            wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(numerator)])),
+        ];
+        let p = parse(&wmf(&recs, None)).unwrap();
+        assert_eq!((p.width, p.height), (100.0, 100.0));
+        assert_eq!(p.skipped_records, 0);
+        assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 100.0, 100.0));
+    }
+}
+
+#[test]
+fn wmf_viewport_scaling_before_first_window_is_retained() {
+    let recs = [
+        wrec(0x0103, &h16(8)),
+        wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(1)])),
+        wrec(0x020C, &cat(vec![h16(100), h16(100)])),
+        wrec(0x041B, &cat(vec![h16(100), h16(100), h16(0), h16(0)])),
+    ];
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (100.0, 100.0));
+    assert_eq!(p.skipped_records, 0);
+    assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 50.0, 100.0));
 }

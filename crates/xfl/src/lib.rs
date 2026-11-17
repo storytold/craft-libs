@@ -27,12 +27,20 @@ use std::collections::HashMap;
 pub mod document;
 /// XFL's edge-attribute grammar, independent of any consuming application's geometry types.
 pub mod edges;
+/// Borrowed views of native XFL filter records.
+pub mod filters;
 /// Borrowed views of native XFL media library records.
 pub mod media;
 /// Borrowed views of native XFL shape and style elements.
 pub mod shape;
+/// Borrowed views of native XFL shape-hint records.
+pub mod shape_hints;
+/// Borrowed views of native XFL frame-sound and envelope records.
+pub mod sound;
 /// Borrowed views of native XFL text-field and text-run schema.
 pub mod text;
+/// Borrowed views of native XFL tween and custom-ease records.
+pub mod tween;
 
 /// Largest single entry inflated (bytes).
 pub const MAX_ENTRY: usize = 256 * 1024 * 1024;
