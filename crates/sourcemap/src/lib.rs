@@ -1,3 +1,6 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
 //! Source maps (revision 3), including indexed maps with sections.
 //!
 //! Lookups follow the "original positions for a generated position" rule: on the generated line,
@@ -310,7 +313,13 @@ fn from_raw(
         sources: raw.sources,
         sources_content: raw.sources_content,
         names: raw.names.into_iter().map(Option::unwrap_or_default).collect(),
-        ignore_list: raw.ignore_list.or(raw.google_ignore_list).unwrap_or_default().into_iter().filter_map(|n| n.and_then(|n| u32::try_from(n).ok())).collect(),
+        ignore_list: raw
+            .ignore_list
+            .or(raw.google_ignore_list)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|n| n.and_then(|n| u32::try_from(n).ok()))
+            .collect(),
         ..Default::default()
     };
     let m = raw.mappings.as_deref().unwrap_or_default();
@@ -803,3 +812,5 @@ fn past_sources(m: &str, sources: usize) -> Option<usize> {
     None
 }
 
+#[cfg(test)]
+mod tests;

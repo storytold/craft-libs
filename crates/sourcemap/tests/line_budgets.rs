@@ -1,5 +1,5 @@
 use craft_sourcemap as sourcemap;
-use craft_sourcemap::{ Limits, SourceMapError};
+use craft_sourcemap::{Limits, SourceMapError};
 use serde_json::{Value, json};
 
 fn decode(value: Value, limits: Limits) -> Result<sourcemap::SourceMap, SourceMapError> {

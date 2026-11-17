@@ -72,7 +72,8 @@ fn indexed_maps_use_each_embedded_maps_own_root() {
 
 #[test]
 fn relative_sources_still_preserve_url_root_delimiters() {
-    for (root, expected) in [("webpack:///", "webpack:///main.js"), ("file:///", "file:///main.js"), ("src", "src/main.js"), ("src/", "src/main.js")] {
+    for (root, expected) in [("webpack:///", "webpack:///main.js"), ("file:///", "file:///main.js"), ("src", "src/main.js"), ("src/", "src/main.js")]
+    {
         let map = decode(json!({"version": 3, "sourceRoot": root, "sources": ["main.js"], "mappings": "AAAA"}));
         assert_eq!(map.all_sources(), [expected]);
     }
