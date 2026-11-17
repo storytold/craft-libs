@@ -288,11 +288,16 @@ impl OutlineDraft {
     /// Where a freehand point of `at` goes. With ⇧ held a [`locking_shift_drags`](Self::locking_shift_drags) Mixed draft's drag follows one line: once the pointer has
     /// travelled [`LOCK_DISTANCE`] screen points from the last vertex, the nearest of eight directions from there
     /// is locked and every later point is the pointer's projection onto it, however the pointer wanders, until ⇧ is
-    /// released. Before the lock the point stays at the vertex. Otherwise [`shift_step`](Self::shift_step).
+    /// released. Before the lock the point stays at the vertex. A Mixed draft that doesn't lock keeps the pointer's path
+    /// under ⇧. Otherwise [`shift_step`](Self::shift_step).
     fn drag_step(&mut self, at: DraftPoint) -> Point {
-        if !self.locks_shift_drag || self.kind != DraftKind::Mixed || !at.mods.shift || self.polygonal {
+        if self.kind != DraftKind::Mixed || !at.mods.shift || self.polygonal {
             self.lock = None;
             return self.shift_step(at);
+        }
+        if !self.locks_shift_drag {
+            self.lock = None;
+            return at.at;
         }
         let Some(&last) = self.points.last() else { return at.at };
         let (origin, direction) = match self.lock {

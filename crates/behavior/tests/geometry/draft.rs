@@ -82,6 +82,14 @@ fn shift_holds_a_freehand_drag_to_one_line() {
     assert!(points.len() >= 3, "{points:?}");
     assert!(points.iter().all(|p| p.y == 60.0), "the drag stays on the horizontal line through its start: {points:?}");
     assert_eq!(points.last().map(|p| p.x), Some(100.0), "and follows the pointer along it");
+
+    // A selection Lasso's ⇧ at the press adds to the selection: its drag keeps the pointer's path.
+    let mut lasso = OutlineDraft::new(DraftKind::Mixed, REACH);
+    lasso.press(at(10.0, 60.0, 1.0), true);
+    for (x, y) in [(30.0, 63.0), (50.0, 55.0)] {
+        lasso.drag(shift(x, y));
+    }
+    assert_eq!(lasso.points().last(), Some(&Point::new(50.0, 55.0)));
 }
 
 #[test]
