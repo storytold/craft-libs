@@ -90,7 +90,8 @@ impl FullWindowView {
     /// Fits the view to the rect and image size the value holds, while it is fitted.
     fn refit(&mut self) {
         if self.fit && self.size.width > 0.0 && self.size.height > 0.0 {
-            ViewCommands::FitOnScreen.apply(&mut self.view, &self.target(), None, self.pixels_per_point);
+            let target = self.target();
+            ViewCommands::FitOnScreen.apply(&mut self.view, &target, None, self.pixels_per_point);
         }
     }
 
@@ -129,7 +130,8 @@ impl FullWindowView {
     pub fn apply(&mut self, command: ViewCommands) -> bool {
         match command {
             ViewCommands::ZoomIn | ViewCommands::ZoomOut => {
-                let changed = command.apply(&mut self.view, &self.target(), None, self.pixels_per_point);
+                let target = self.target();
+                let changed = command.apply(&mut self.view, &target, None, self.pixels_per_point);
                 self.fit &= !changed;
                 changed
             }
@@ -140,7 +142,8 @@ impl FullWindowView {
                 *self != before
             }
             ViewCommands::ActualPixels => {
-                let changed = command.apply(&mut self.view, &self.target(), None, self.pixels_per_point) || self.fit;
+                let target = self.target();
+                let changed = command.apply(&mut self.view, &target, None, self.pixels_per_point) || self.fit;
                 self.fit = false;
                 changed
             }
