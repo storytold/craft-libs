@@ -39,6 +39,46 @@ impl DockPanels<u32> for Palettes {
     fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
 }
 
+/// Palette panels whose body records, in each pass of its window, whether the window host knows the app moves that
+/// window.
+struct MoveProbe(Vec<bool>);
+
+impl DockPanels<u32> for MoveProbe {
+    fn spec(&self, _: &u32) -> PanelSpec {
+        PanelSpec::new(PALETTE_TITLE)
+    }
+
+    fn permissions(&self, _: &u32) -> Permissions {
+        Permissions::ALL
+    }
+
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        let ctx = ui.ctx();
+        self.0.push(craft_ui::testing::windows::moved_by_app(ctx, ctx.viewport_id()));
+    }
+}
+
+/// A dock window's OS window is opened as one the app moves: its first pass knows it before the pass ends, where the
+/// Windows hit test is routed, so the system never takes the title row's band for its own move loop.
+#[trial]
+fn a_native_dock_window_is_moved_by_the_app_from_its_first_pass() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    let mut window = float();
+    let mut saved = Placement::new(PALETTE_AT.size().into(), 1.0);
+    saved.position_px = Some([PALETTE_AT.min.x as i32, PALETTE_AT.min.y as i32]);
+    window.native = Some(saved);
+    let mut workspace = Workspace::new(Layout::new(None, vec![window]));
+    let mut probe = MoveProbe(Vec::new());
+    windows.frame(vec![], vec![], |ui| {
+        let config = DockConfig::default().native_windows(true);
+        let _ = DockArea::new("Native dock", Bind::bound(&mut workspace), &mut probe, config).show(ui);
+    });
+    assert!(!probe.0.is_empty(), "the window's first frame runs the panel's body");
+    assert!(probe.0.iter().all(|known| *known), "every pass of the window knows the app moves it: {:?}", probe.0);
+}
+
 /// The dock records a move the OS made to its native window, and nothing while the OS reports what the model holds.
 #[trial]
 fn the_dock_records_where_the_os_put_its_native_window() {
