@@ -2903,6 +2903,7 @@ name = "craft-raster-codecs"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-dds",
  "craft-image-codecs",
  "image",
  "thiserror 2.0.21",
