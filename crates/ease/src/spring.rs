@@ -167,10 +167,18 @@ impl Spring {
         if -r1 * t > SETTLED {
             return (0.0, 0.0);
         }
-        let c1 = (v0 - r2 * y0) / (r1 - r2);
-        let c2 = y0 - c1;
+        // Written with the divided difference q = (e1 − e2) / (r1 − r2) rather than the two modes'
+        // coefficients, which overflow (in opposite signs) when r1 − r2 is tiny.
         let (e1, e2) = ((r1 * t).exp(), (r2 * t).exp());
-        (c1 * e1 + c2 * e2, c1 * r1 * e1 + c2 * r2 * e2)
+        let x = (r1 - r2) * t;
+        let q = if x <= 1.0 {
+            // e2 · t · (e^x − 1) / x, with its series where x is too small for expm1's quotient.
+            let g = if x < 1e-5 { 1.0 + x * (0.5 + x / 6.0) } else { x.exp_m1() / x };
+            e2 * t * g
+        } else {
+            (e1 - e2) / (r1 - r2)
+        };
+        (y0 * (e1 - r1 * q) + v0 * q, v0 * (e2 + r1 * q) - y0 * (w * w) * q)
     }
 }
 

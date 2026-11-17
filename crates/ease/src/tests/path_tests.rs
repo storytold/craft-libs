@@ -155,6 +155,44 @@ fn a_huge_curve_is_not_taken_for_a_straight_line() {
     assert!((mid.y - 750.0).abs() < 1.0, "{mid:?}");
 }
 
+/// Paths whose length is representable are measured even when their scale is near the f64 limit.
+#[test]
+fn a_path_near_the_largest_length_is_measured() {
+    let straight = MotionPath::new(&[Vec2::ZERO, Vec2::new(1e307 / 3.0, 0.0), Vec2::new(2e307 / 3.0, 0.0), Vec2::new(1e307, 0.0)]).unwrap();
+    assert_eq!(straight.length(), 1e307);
+    assert!((straight.point_at(0.5).x / 5e306 - 1.0).abs() < 1e-12, "{:?}", straight.point_at(0.5));
+    let curved = MotionPath::new(&[Vec2::ZERO, Vec2::ZERO, Vec2::new(0.0, 1e306), Vec2::new(5e307, 0.0)]).unwrap();
+    assert!(curved.length() > 5e307 && curved.length() < 5.2e307, "{}", curved.length());
+    assert!(curved.point_at(1.0).distance(Vec2::new(5e307, 0.0)) < 1e295);
+}
+
+/// A distance close to a start where the curve stands still is found on the curve, not where a
+/// few Newton steps from the table's guess happen to stop.
+#[test]
+fn a_short_distance_from_a_still_start_is_found() {
+    let p = MotionPath::new(&[Vec2::ZERO, Vec2::ZERO, Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0)]).unwrap();
+    for s in [1e-10, 1e-8, 1e-6] {
+        let q = p.point_at_length(s);
+        // The curve leaves the start straight up, so the point is `s` above it.
+        assert!((q.y - s).abs() < 1e-11 && q.x.abs() < 1e-9, "{s}: {q:?}");
+    }
+}
+
+#[test]
+fn a_vector_of_any_finite_size_has_a_unit_direction() {
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let big = Vec2::new(f64::MAX, f64::MAX).normalized();
+    assert!((big.x - h).abs() < 1e-15 && (big.y - h).abs() < 1e-15, "{big:?}");
+    assert_eq!(Vec2::new(-f64::MAX, 0.0).normalized(), Vec2::new(-1.0, 0.0));
+    let tiny = Vec2::new(f64::from_bits(1), f64::from_bits(1)).normalized();
+    assert!((tiny.x - h).abs() < 1e-15 && (tiny.y - h).abs() < 1e-15, "{tiny:?}");
+    let odd = Vec2::new(3.0 * f64::from_bits(1), -4.0 * f64::from_bits(1)).normalized();
+    assert!((odd.x - 0.6).abs() < 1e-15 && (odd.y + 0.8).abs() < 1e-15, "{odd:?}");
+    assert_eq!(Vec2::ZERO.normalized(), Vec2::ZERO);
+    assert_eq!(Vec2::new(f64::INFINITY, 1.0).normalized(), Vec2::ZERO);
+    assert_eq!(Vec2::new(1.0, f64::NAN).normalized(), Vec2::ZERO);
+}
+
 #[test]
 fn a_long_path_finds_its_segment_by_binary_search() {
     let anchors: Vec<Vec2> = (0..=MAX_PATH_SEGMENTS).map(|i| Vec2::new(i as f64, ((i as f64) * 0.1).sin())).collect();

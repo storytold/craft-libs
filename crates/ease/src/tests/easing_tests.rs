@@ -515,6 +515,66 @@ fn adding_a_point_keeps_the_shape() {
     assert!(c.insert_at(0.0).is_none() && c.insert_at(1.0).is_none() && c.insert_at(0.3).is_none() && c.insert_at(f64::NAN).is_none());
 }
 
+/// Splitting a steep curve can put a piece's handle past that piece's other end in x; the piece
+/// still runs forwards, so the handle is kept and the curve keeps its shape.
+#[test]
+fn adding_a_point_keeps_the_shape_where_the_pieces_handles_cross() {
+    let c = CustomEase::from_bezier(1.0, 0.0, 0.0, 1.0);
+    for t in [7.0 / 16.0, 0.2, 0.49, 0.51, 0.8] {
+        let (d, i) = c.insert_at(t).unwrap();
+        assert_eq!(i, 1);
+        assert_forwards(&d);
+        // x is flat at 0.5, so a solve within 1e-12 in x is within about 1e-4 in y there.
+        assert!((d.apply(0.5) - 0.5).abs() < 2e-4, "{t}: {}", d.apply(0.5));
+        for k in 0..=400 {
+            let u = k as f64 / 400.0;
+            let tol = if (u - 0.5).abs() > 0.05 { 1e-9 } else { 2e-4 };
+            assert!((c.apply(u) - d.apply(u)).abs() < tol, "{t} at {u}: {} vs {}", c.apply(u), d.apply(u));
+        }
+        // Removing the point again leaves a valid curve of one segment.
+        assert_forwards(&d.remove(1).unwrap());
+    }
+    // A handle past the far end is kept only while x still runs forwards.
+    let one = |out_x: f64| {
+        CustomEase::new(vec![
+            EasePoint { at: Vec2::ZERO, out: Vec2::new(out_x, 0.0), ..Default::default() },
+            EasePoint { at: Vec2::new(1.0, 1.0), h_in: Vec2::new(-0.4, 0.0), ..Default::default() },
+        ])
+    };
+    let (kept, cut) = (one(1.2), one(2.5));
+    assert_eq!((kept.points()[0].out.x, cut.points()[0].out.x), (1.2, 1.0));
+    assert_forwards(&kept);
+    assert_forwards(&cut);
+    // Such a curve is not a cubic-bezier() one, and from_bezier keeps x in the unit box.
+    assert_eq!(Easing::Custom(Arc::new(kept)).as_bezier(), None);
+    assert_eq!(Easing::Custom(Arc::new(cut)).as_bezier(), Some((1.0, 0.0, 0.6, 1.0)));
+    assert_eq!(CustomEase::from_bezier(1.2, 0.0, -0.1, 1.0).points()[0].out.x, 1.0);
+    assert_eq!(CustomEase::from_bezier(1.2, 0.0, -0.1, 1.0).points()[1].h_in.x, -1.0);
+}
+
+/// A smooth point near the value limit has its handles shortened along their line, so they stay
+/// in line.
+#[test]
+fn a_smooth_point_near_the_value_limit_keeps_its_handles_in_line() {
+    let c = CustomEase::new(vec![
+        EasePoint { at: Vec2::ZERO, ..Default::default() },
+        EasePoint { at: Vec2::new(0.1, 9.9), ..Default::default() },
+        EasePoint { at: Vec2::new(1.0, 1.0), ..Default::default() },
+    ]);
+    let s = c.set_smooth(1, true).unwrap();
+    let p = s.points()[1];
+    assert!(p.smooth && p.out.length() > 0.05 && p.h_in.length() > 0.01 && in_line(&p), "{p:?}");
+    assert!(p.at.y + p.out.y <= MAX_EASE_Y && p.at.y + p.h_in.y >= -MAX_EASE_Y, "{p:?}");
+    assert_forwards(&s);
+    // Moving the smooth point up to the limit, or next to a neighbor, keeps them in line too.
+    for to in [Vec2::new(0.5, 9.99), Vec2::new(0.999, 5.0), Vec2::new(0.001, -9.99)] {
+        let m = s.move_point(1, to).unwrap();
+        let q = m.points()[1];
+        assert!(q.smooth && in_line(&q), "{to:?}: {q:?}");
+        assert_forwards(&m);
+    }
+}
+
 #[test]
 fn point_edits_keep_time_running_forwards() {
     let c = wave();
@@ -570,14 +630,17 @@ fn a_smooth_point_keeps_its_handles_in_line_near_a_neighbor() {
     assert!(q.h_in.length() > 0.05 && in_line(&q) && q.at.y + q.h_in.y <= MAX_EASE_Y + 1e-12, "{q:?}");
 }
 
-/// Every segment's x control points lie between its ends, so x never decreases.
+/// Every segment's x never decreases: its handles reach toward their neighbors, and x′ (a
+/// quadratic with Bernstein coefficients b − a, cc − b and d − cc) is never negative.
 fn assert_forwards(c: &CustomEase) {
     let pts = c.points();
     assert!(pts.len() >= 2 && pts.len() <= MAX_EASE_POINTS);
     assert_eq!((pts[0].at, pts[pts.len() - 1].at), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
     for i in 0..pts.len() - 1 {
         let [a, b, cc, d] = c.segment(i).unwrap();
-        assert!(a.x <= b.x && b.x <= d.x && a.x <= cc.x && cc.x <= d.x, "segment {i}: {a:?} {b:?} {cc:?} {d:?}");
+        let (k0, k1, k2) = (b.x - a.x, cc.x - b.x, d.x - cc.x);
+        let forwards = a.x <= d.x && k0 >= 0.0 && k2 >= 0.0 && (k1 >= 0.0 || k1 * k1 <= k0 * k2 * (1.0 + 1e-9));
+        assert!(forwards, "segment {i}: {a:?} {b:?} {cc:?} {d:?}");
         for v in [a, b, cc, d] {
             assert!(v.is_finite() && v.y.abs() <= MAX_EASE_Y + 1e-9);
         }

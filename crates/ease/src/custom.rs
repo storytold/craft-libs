@@ -39,10 +39,12 @@ pub enum Handle {
 /// A custom ease: Bezier segments through its points, from (0, 0) to (1, 1).
 ///
 /// Always valid, however it was made: 2 to [`MAX_EASE_POINTS`] finite points sorted by x, the
-/// ends fixed at (0, 0) and (1, 1), every handle's x between its point and the neighbor it
-/// reaches toward (so each segment's x runs forwards and time never runs backwards), and every
-/// value within ±[`MAX_EASE_Y`]. Reading a file repairs a curve the way [`CustomEase::new`]
-/// does.
+/// ends fixed at (0, 0) and (1, 1), every handle reaching toward its neighbor in x and every
+/// segment's x running forwards (so time never runs backwards), and every value within
+/// ±[`MAX_EASE_Y`]. A handle whose x lies between its point and that neighbor always keeps x
+/// running forwards; a handle may reach past the neighbor (as a piece of a split segment can)
+/// only while its segment's x still runs forwards. Reading a file repairs a curve the way
+/// [`CustomEase::new`] does.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(from = "CustomEaseFile"))]
@@ -82,8 +84,10 @@ impl CustomEase {
         CustomEase::linear_points()
     }
 
-    /// One segment with handles `(x1, y1)` and `(x2, y2)` in the unit box.
+    /// One segment with handles `(x1, y1)` and `(x2, y2)` in the unit box (x is clamped to
+    /// `0..=1`).
     pub fn from_bezier(x1: f64, y1: f64, x2: f64, y2: f64) -> CustomEase {
+        let (x1, x2) = (x1.clamp(0.0, 1.0), x2.clamp(0.0, 1.0));
         CustomEase::new(vec![
             EasePoint { at: Vec2::ZERO, h_in: Vec2::ZERO, out: Vec2::new(x1, y1), smooth: false },
             EasePoint { at: Vec2::new(1.0, 1.0), h_in: Vec2::new(x2 - 1.0, y2 - 1.0), out: Vec2::ZERO, smooth: false },
@@ -170,16 +174,29 @@ impl CustomEase {
         }
     }
 
-    /// Brings every handle within reach (see the type's docs).
+    /// Brings every handle within reach (see the type's docs): each handle toward its neighbor
+    /// in x and within ±[`MAX_EASE_Y`], then, in a segment whose x would run backwards, each
+    /// handle that reaches past the neighbor back to it. A smooth point's handles are shortened
+    /// along their own line, so they stay in line; a corner's are clipped.
     fn clamp_handles(&mut self) {
-        let xs: Vec<f64> = self.points.iter().map(|p| p.at.x).collect();
         let n = self.points.len();
         for (i, p) in self.points.iter_mut().enumerate() {
-            let prev = if i == 0 { p.at.x } else { xs.get(i - 1).copied().unwrap_or(p.at.x) };
-            let next = xs.get(i + 1).copied().unwrap_or(p.at.x);
-            let y = |h: f64, at: f64| h.clamp(-MAX_EASE_Y - at, MAX_EASE_Y - at);
-            p.h_in = if i == 0 { Vec2::ZERO } else { Vec2::new(p.h_in.x.clamp(prev - p.at.x, 0.0), y(p.h_in.y, p.at.y)) };
-            p.out = if i + 1 == n { Vec2::ZERO } else { Vec2::new(p.out.x.clamp(0.0, next - p.at.x), y(p.out.y, p.at.y)) };
+            let (lo, hi) = (-MAX_EASE_Y - p.at.y, MAX_EASE_Y - p.at.y);
+            p.h_in = if i == 0 { Vec2::ZERO } else { fit_y(Vec2::new(p.h_in.x.min(0.0), p.h_in.y), lo, hi, p.smooth) };
+            p.out = if i + 1 == n { Vec2::ZERO } else { fit_y(Vec2::new(p.out.x.max(0.0), p.out.y), lo, hi, p.smooth) };
+        }
+        for i in 1..n {
+            let (Some(a), Some(b)) = (self.points.get(i - 1).copied(), self.points.get(i).copied()) else { continue };
+            let span = b.at.x - a.at.x;
+            if runs_forwards(span, a.out.x, -b.h_in.x) {
+                continue;
+            }
+            if let Some(p) = self.points.get_mut(i - 1) {
+                p.out = fit_x(p.out, span, p.smooth);
+            }
+            if let Some(p) = self.points.get_mut(i) {
+                p.h_in = fit_x(p.h_in, span, p.smooth);
+            }
         }
     }
 
@@ -187,12 +204,11 @@ impl CustomEase {
         &self.points
     }
 
-    /// The control points of segment `i` (from point `i` to point `i + 1`), absolute; the inner
-    /// points' x always between the ends' (so x runs forwards along it).
+    /// The control points of segment `i` (from point `i` to point `i + 1`), absolute; x runs
+    /// forwards along it (see the type's docs).
     pub fn segment(&self, i: usize) -> Option<[Vec2; 4]> {
         let (a, b) = (self.points.get(i)?, self.points.get(i.checked_add(1)?)?);
-        let inner = |p: Vec2| Vec2::new(p.x.clamp(a.at.x, b.at.x.max(a.at.x)), p.y);
-        Some([a.at, inner(a.at + a.out), inner(b.at + b.h_in), b.at])
+        Some([a.at, a.at + a.out, b.at + b.h_in, b.at])
     }
 
     /// The segment that time `t` falls in.
@@ -356,5 +372,50 @@ impl CustomEase {
             }
         }
         out
+    }
+}
+
+/// Whether a segment `span` wide in x whose out handle reaches `a` forwards and whose in handle
+/// reaches `c` backwards (both at least 0) runs forwards in x. Its x′ is the quadratic with
+/// Bernstein coefficients `a`, `span − a − c` and `c`, which is never negative when the middle
+/// one is at least −√(ac); that always holds while neither handle reaches past the other end,
+/// and never holds when one reaches past 4/3 of the span.
+fn runs_forwards(span: f64, a: f64, c: f64) -> bool {
+    if a <= span && c <= span {
+        return true;
+    }
+    if a > 2.0 * span || c > 2.0 * span {
+        return false;
+    }
+    let b = span - a - c;
+    b >= 0.0 || b * b <= a * c * (1.0 + 1e-12)
+}
+
+/// Handle `h` (an offset) with its y within `lo..=hi`: a smooth point's shortened along its line,
+/// a corner's clipped.
+fn fit_y(h: Vec2, lo: f64, hi: f64, smooth: bool) -> Vec2 {
+    let k = if h.y > hi {
+        hi / h.y
+    } else if h.y < lo {
+        lo / h.y
+    } else {
+        return h;
+    };
+    if smooth { Vec2::new(h.x * k, (h.y * k).clamp(lo, hi)) } else { Vec2::new(h.x, h.y.clamp(lo, hi)) }
+}
+
+/// Handle `h` (an offset) reaching at most `span` in x: a smooth point's shortened along its line,
+/// a corner's clipped.
+fn fit_x(h: Vec2, span: f64, smooth: bool) -> Vec2 {
+    let reach = h.x.abs();
+    if reach <= span {
+        return h;
+    }
+    let span = span.max(0.0);
+    if smooth {
+        let k = span / reach;
+        Vec2::new((h.x * k).clamp(-span, span), h.y * k)
+    } else {
+        Vec2::new(span.copysign(h.x), h.y)
     }
 }

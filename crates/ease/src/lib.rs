@@ -156,8 +156,8 @@ pub(crate) const SOLVE_STEPS: u32 = 64;
 /// How close [`solve_monotonic`] brings `bez(s)` to `x`, relative to the curve's span.
 pub(crate) const SOLVE_TOLERANCE: f64 = 1e-12;
 
-/// The parameter where the Bezier `p` (non-decreasing: its inner points lie between its ends)
-/// reaches `x`: Newton steps kept inside a shrinking bracket, halving when a step leaves it, to
+/// The parameter where the Bezier `p` (non-decreasing, as it is when its inner points lie
+/// between its ends) reaches `x`: Newton steps kept inside a shrinking bracket, halving when a step leaves it, to
 /// within [`SOLVE_TOLERANCE`] of the span in at most [`SOLVE_STEPS`] steps. The curve with both
 /// handles at full reach (`p1 = p3`, `p2 = p0`), whose slope is zero halfway, is inverted in
 /// closed form.

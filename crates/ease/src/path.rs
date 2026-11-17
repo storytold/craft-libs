@@ -6,6 +6,9 @@ use crate::{EaseError, Vec2, bez, dbez};
 pub const MAX_PATH_SEGMENTS: usize = 10_000;
 /// Cells in each segment's arc-length table.
 const ARC_N: usize = 32;
+/// Most steps `Segment::param_at` takes; halving a table cell this often reaches the smallest
+/// step an `f64` parameter can take.
+const PARAM_STEPS: u32 = 64;
 
 /// 5-point Gauss-Legendre nodes and weights on −1..1.
 const GAUSS: [(f64, f64); 5] = [
@@ -34,7 +37,7 @@ impl Segment {
         if straight {
             let len = p[0].distance(p[3]);
             for (i, v) in table.iter_mut().enumerate() {
-                *v = len * i as f64 / ARC_N as f64;
+                *v = len * (i as f64 / ARC_N as f64);
             }
         } else {
             let mut acc = 0.0;
@@ -58,7 +61,10 @@ impl Segment {
     }
 
     /// The parameter at arc length `s` from the segment's start (`0..=length`): the table
-    /// cell's straight-line guess refined with Newton steps on the true arc length.
+    /// cell's straight-line guess refined with Newton steps on the true arc length, kept inside
+    /// a shrinking bracket and halving it when a step would leave it (where the curve stands
+    /// still, for one), until the arc length is within 1e-12 of the segment's length of `s`, in
+    /// at most [`PARAM_STEPS`] steps.
     fn param_at(&self, s: f64) -> f64 {
         let len = self.length();
         if len <= 0.0 {
@@ -72,16 +78,20 @@ impl Segment {
         let (Some(&a), Some(&b)) = (self.table.get(i - 1), self.table.get(i)) else { return s / len };
         let (u0, u1) = ((i - 1) as f64 / ARC_N as f64, i as f64 / ARC_N as f64);
         let mut u = u0 + if b > a { (s - a) / (b - a) } else { 0.0 } * (u1 - u0);
-        for _ in 0..4 {
-            let d = speed(&self.p, u);
-            if d <= 1e-12 * len {
-                break;
-            }
+        let (mut lo, mut hi) = (u0, u1);
+        for _ in 0..PARAM_STEPS {
             let e = a + arc(&self.p, u0, u) - s;
-            u = (u - e / d).clamp(u0, u1);
             if e.abs() <= 1e-12 * len {
                 break;
             }
+            if e < 0.0 {
+                lo = u;
+            } else {
+                hi = u;
+            }
+            let d = speed(&self.p, u);
+            let next = if d > 0.0 { u - e / d } else { f64::NAN };
+            u = if next > lo && next < hi { next } else { 0.5 * (lo + hi) };
         }
         u
     }
@@ -109,9 +119,11 @@ fn speed(p: &[Vec2; 4], u: f64) -> f64 {
 }
 
 /// Arc length between parameters `a` and `b` (Gauss-Legendre; exact enough on one table cell).
+/// Each term is scaled by the interval before they are added, so a length near the largest
+/// `f64` does not overflow on the way.
 fn arc(p: &[Vec2; 4], a: f64, b: f64) -> f64 {
     let (m, h) = ((a + b) * 0.5, (b - a) * 0.5);
-    GAUSS.iter().map(|(x, w)| w * speed(p, m + h * x)).sum::<f64>() * h
+    GAUSS.iter().map(|(x, w)| w * h * speed(p, m + h * x)).sum::<f64>()
 }
 
 /// Whether control point `c` lies on the segment `a`–`b` (within rounding).

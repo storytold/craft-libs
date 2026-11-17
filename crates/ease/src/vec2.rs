@@ -26,10 +26,17 @@ impl Vec2 {
         self.x.hypot(self.y)
     }
 
-    /// The vector scaled to length 1, or zero for a zero (or non-finite) vector.
+    /// The vector scaled to length 1, or zero for a zero (or non-finite) vector. The components
+    /// are divided by the larger one first, so a vector near the largest or smallest `f64` still
+    /// gives a unit vector.
     pub fn normalized(self) -> Vec2 {
-        let l = self.length();
-        if l > 0.0 && l.is_finite() { Vec2::new(self.x / l, self.y / l) } else { Vec2::ZERO }
+        let m = self.x.abs().max(self.y.abs());
+        if !(self.is_finite() && m > 0.0) {
+            return Vec2::ZERO;
+        }
+        let (x, y) = (self.x / m, self.y / m);
+        let l = x.hypot(y);
+        Vec2::new(x / l, y / l)
     }
 
     pub fn lerp(self, o: Vec2, t: f64) -> Vec2 {

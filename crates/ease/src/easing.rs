@@ -409,7 +409,8 @@ impl Easing {
     /// Classic slider, the Quad, Cubic and Back eases in and out, and a custom ease of one
     /// segment; the Quad and Cubic in-outs get their usual one-curve approximations. `None` for
     /// eases one curve cannot draw (Bounce, Elastic, the other families, hold, springs, sampled
-    /// tables and custom eases of several segments).
+    /// tables, custom eases of several segments, and a custom ease of one segment whose handle
+    /// reaches past the unit box in x).
     pub fn as_bezier(&self) -> Option<(f64, f64, f64, f64)> {
         const THIRD: f64 = 1.0 / 3.0;
         Some(match self {
@@ -430,7 +431,7 @@ impl Easing {
             }
             Easing::CubicBezier(a, b, c, d) => bezier_handles(*a, *b, *c, *d),
             Easing::Custom(c) => match c.points() {
-                [a, b] => (a.out.x, a.out.y, b.at.x + b.h_in.x, b.at.y + b.h_in.y),
+                [a, b] if a.out.x <= 1.0 && b.h_in.x >= -1.0 => (a.out.x, a.out.y, b.at.x + b.h_in.x, b.at.y + b.h_in.y),
                 _ => return None,
             },
             _ => return None,

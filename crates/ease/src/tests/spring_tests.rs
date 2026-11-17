@@ -77,6 +77,11 @@ fn a_very_slow_spring_steps_without_overflow() {
     let mut s = SpringState { value: 0.0, velocity: 1.0 };
     let v = s.step(&spring, 0.0, 1.0).unwrap();
     assert!((v - 1.0).abs() < 1e-12 && (s.velocity - 1.0).abs() < 1e-12, "{s:?}");
+    // The same over-damped.
+    let spring = Spring::new(1e-320, 2.0).unwrap();
+    let mut s = SpringState { value: 0.0, velocity: 1.0 };
+    let v = s.step(&spring, 0.0, 1.0).unwrap();
+    assert!((v - 1.0).abs() < 1e-12 && (s.velocity - 1.0).abs() < 1e-12, "{s:?}");
 }
 
 /// Physical values whose damping ratio is above the limit are refused, not changed.
