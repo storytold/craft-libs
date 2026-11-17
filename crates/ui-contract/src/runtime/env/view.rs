@@ -167,10 +167,8 @@ impl<'a> EnvView<'a> {
         label.resolved(&self.scoped.words)
     }
 
-    /// The env this view shows, owned: for the framework's painters that run after the region that asked for them (a
-    /// drag preview, a canvas readout on the ghost layer), so they paint in that region's tokens, words and direction.
-    #[doc(hidden)]
-    pub fn to_env(&self) -> super::Env {
+    /// The env this view shows, owned: what the drag preview, which paints after the region it started in, paints with.
+    pub(crate) fn to_env(&self) -> super::Env {
         super::Env { scoped: Arc::new(self.scoped.clone()) }
     }
 

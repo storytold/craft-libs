@@ -149,6 +149,14 @@ fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
                 || signature(fixture.tree()) != before
                 || fixture.focused() != focus;
             if !acted {
+                eprintln!(
+                    "DIAG T3 did-nothing: story {} node {:?} name {:?} focus before {focus:?} after {:?} outputs {}",
+                    story.name,
+                    key,
+                    crate::testing::access::name(fixture.tree(), key),
+                    fixture.focused(),
+                    outputs.len()
+                );
                 return Err(format!("{}: {kind:?} on {:?} did nothing", story.name, fixture.tree().role_of(key)));
             }
         }

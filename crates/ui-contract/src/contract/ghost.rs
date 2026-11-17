@@ -1,18 +1,18 @@
 //! The ghost layer's content (8.4, 8.5): the running drag's preview beside the pointer, the mark of the drop target that
 //! would take the payload, and the painted pointer the cursor service settled on, which goes to the window as its
 //! cursor image instead where the window takes one. They come from the drag session's data and the cursor record; the
-//! layer takes no input.
+//! layer takes no input. Value readouts beside the pointer during a gesture paint here too, for the pass that asks.
 
 use crate::primitives::pointer_art::{self as pointers, Art};
 
-use crate::primitives::{Draw, DrawEnv, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
+use crate::primitives::{Draw, DrawEnv, Mirror, PaintRecord, PaintShape, RuleKind, Span, SvgIcon, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
-use crate::runtime::env::Env;
+use crate::runtime::env::{Env, EnvView, Label};
 use crate::runtime::{cursor, pointer};
 use crate::style::{Corners, Ink, RuleWidth, SurfaceKind, UiTokens, rule_look};
 use craft_behavior::Flow;
-use egui::{Context, CornerRadius, Pos2, Rect, Vec2};
+use egui::{Context, CornerRadius, Pos2, Rect, Vec2, vec2};
 use std::cell::RefCell;
 
 /// The end hook's painter of the ghost layer: pass it to `InstallSpec::frame_layers`. The drag preview paints in the
@@ -25,6 +25,66 @@ pub fn paint(ctx: &Context) {
     if let Some(session) = drag::ghost(ctx) {
         paint_drag(ctx, session.env.as_ref().unwrap_or(&root), &painter, &session);
     }
+}
+
+/// Paints rows of a label and a value beside the pointer at `at`, on the ghost layer, in `env`'s tokens, words and
+/// direction: the env of the region that asks, for this pass only. It sits toward the lower end side of the pointer
+/// (the lower right, mirrored under right-to-left), flips to the other side where the window has no room and stays
+/// inside the window. Labels start at the reading start and values end at the reading end, the widest label and the
+/// widest value a section gap apart. Labels are in the muted ink and values in the normal one. No rows paint nothing.
+pub fn readout(ctx: &Context, env: &EnvView<'_>, at: Pos2, rows: &[(Label, String)]) {
+    if rows.is_empty() {
+        return;
+    }
+    let tokens = env.shared_tokens();
+    let tokens = &*tokens;
+    let direction = env.direction();
+    let painter = painter(ctx);
+    let record = RefCell::new(PaintRecord::default());
+    let draw = Draw::new(&painter, &record, DrawEnv { tokens, direction, ink: Ink::OnPanel });
+    let runs: Vec<(String, String)> = rows.iter().map(|(label, value)| (env.resolve(label).as_str().to_owned(), value.clone())).collect();
+    let layouts: Vec<_> = runs
+        .iter()
+        .map(|(label, value)| {
+            (draw.layout(&TextRun::spans(vec![Span::new(label.as_str()).muted()]), f32::INFINITY), draw.layout(&TextRun::new(value), f32::INFINITY))
+        })
+        .collect();
+    let space = &tokens.space;
+    let pad = vec2(space.gap.stack, space.gap.row);
+    let label_width = layouts.iter().fold(0.0f32, |widest, (label, _)| widest.max(label.size().x));
+    let value_width = layouts.iter().fold(0.0f32, |widest, (_, value)| widest.max(value.size().x));
+    let width = 2.0 * pad.x + label_width + space.gap.section + value_width;
+    let heights: Vec<f32> = layouts.iter().map(|(label, value)| label.size().y.max(value.size().y)).collect();
+    let height = 2.0 * pad.y + heights.iter().sum::<f32>() + tokens.stroke.thin * (heights.len() - 1) as f32;
+    let tip = tokens.size.pointer_tip;
+    let rtl = direction.is_rtl();
+    let outer = readout_place(at, vec2(tip.x, tip.y), vec2(width, height), rtl, ctx.content_rect());
+    draw.surface(outer, SurfaceKind::Popup, Corners::All);
+    let mut y = outer.min.y + pad.y;
+    for ((label, value), row_height) in layouts.iter().zip(&heights) {
+        let (label_x, value_x) = if rtl {
+            (outer.max.x - pad.x - label.size().x, outer.min.x + pad.x)
+        } else {
+            (outer.min.x + pad.x, outer.max.x - pad.x - value.size().x)
+        };
+        draw.galley(Pos2::new(label_x, y), label);
+        draw.galley(Pos2::new(value_x, y), value);
+        y += row_height + tokens.stroke.thin;
+    }
+}
+
+/// The readout's rect for a pointer at `at`: `offset` toward the reading end and down, on the other side of the pointer
+/// where it would leave `window` across, and shifted to stay inside `window`.
+fn readout_place(at: Pos2, offset: Vec2, size: Vec2, rtl: bool, window: Rect) -> Rect {
+    let beside = |toward_end: bool| {
+        let left = if toward_end != rtl { at.x + offset.x } else { at.x - offset.x - size.x };
+        Rect::from_min_size(Pos2::new(left, at.y + offset.y), size)
+    };
+    let fits = |rect: Rect| rect.min.x >= window.min.x && rect.max.x <= window.max.x;
+    let rect = if fits(beside(true)) || !fits(beside(false)) { beside(true) } else { beside(false) };
+    let dx = (window.min.x - rect.min.x).max(0.0) - (rect.max.x - window.max.x).max(0.0);
+    let dy = (window.min.y - rect.min.y).max(0.0) - (rect.max.y - window.max.y).max(0.0);
+    rect.translate(vec2(dx, dy))
 }
 
 /// The painter of the ghost layer, over the whole screen and above every popup. The layer takes no input.

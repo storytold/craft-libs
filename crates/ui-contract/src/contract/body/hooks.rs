@@ -282,7 +282,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
 
     fn extent(&mut self, comp: &C, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
         let props = comp.props(Internal::new());
-        self.room = self.mount_room(props, ui, id, at);
+        self.room = self.mount_room(props, ui, id, at, scx.tokens);
         let env = Env::of(ui);
         self.given = self.given_axes(props, &env, at);
         self.fixed_height = self.fixed_height(props, at);
@@ -340,7 +340,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),
-            None => self.mount_room(&props, at.ui, id, at.at),
+            None => self.mount_room(&props, at.ui, id, at.at, at.scx.tokens),
         };
         self.given = self.given_axes(&props, at.env, at.at);
         self.fixed_height = self.fixed_height(&props, at.at);
