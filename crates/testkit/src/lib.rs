@@ -26,7 +26,8 @@
 //!
 //! On targets other than `wasm32`, [`serial`] holds [`serial::TestLock`], a lock that a `static`
 //! can hold and that the thread holding it can take again, and [`serial::gpu_lock`], the one lock
-//! every GPU test of a process takes.
+//! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
+//! different lock can run at the same time as one that takes this one.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!

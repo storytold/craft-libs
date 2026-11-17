@@ -20,7 +20,7 @@
 //!
 //! [`gpu_lock`] is the one lock of the process for tests that build a GPU harness or a wgpu device.
 //! Several graphics drivers crash when one process drives wgpu devices from more than one thread
-//! at once. Take it on the test's first line (`let _gpu = gpu_lock();`) so it is released last.
+//! at once. Every such test in a process must take this lock. Take it on the test's first line (`let _gpu = gpu_lock();`) so it is released last.
 //! [`hold_gpu_lock`] takes the same lock and keeps it until the calling thread ends.
 
 use std::cell::RefCell;
