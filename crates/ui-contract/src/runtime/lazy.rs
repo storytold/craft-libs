@@ -285,6 +285,7 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - the pointer is not over it, no press started on it and none of its widgets is dragged or holds egui focus, and
 ///   none of that held in its last run;
 /// - none of its stops holds focus or is the target of a focus request, now or in its last run;
+/// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes);
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`);
 /// - its content version is the one of its last run;
 /// - no frame unsettled every child (`unsettle`): an app's repaint request outside every settling child or an edit of a
@@ -296,6 +297,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
     let targets = focus::targets(ctx);
+    let routed = crate::runtime::keys::routed_to(ctx);
     let now = frame::clock(ctx);
     let held = (input_state::dragged(ctx), focus_state::focused(ctx));
     let settled = with(ctx, |store, pass_nr, frame| {
@@ -316,7 +318,8 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
                             && !settled.engaged
                             && !facts.blocked
                             && facts.quiet(now, edited.as_ref())
-                            && !settled.record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)))
+                            && !settled.record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)) || routed.contains(&stop))
+                            && !routed.iter().any(|id| settled.record.widgets.contains(id))
                             && ![held.0, held.1].iter().flatten().any(|widget| settled.record.widgets.contains(widget))
                     });
                 entry.replays = Some((pass_nr, replays));

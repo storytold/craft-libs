@@ -44,7 +44,7 @@ pub(crate) use intents::{
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
-pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, take_shortcuts};
+pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
