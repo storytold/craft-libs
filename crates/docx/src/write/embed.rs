@@ -102,12 +102,13 @@ impl<'d> EmbedWriter<'d> {
     }
 
     /// Write the font table kept from a file, with the fonts it embeds, relating it from `rels`.
-    pub fn font_table(&mut self, rels: &mut PartRels) {
+    /// Whether there was one to write.
+    pub fn font_table(&mut self, rels: &mut PartRels) -> bool {
         let mut written = Vec::new();
-        let Some(root) = crate::package::font_table_key(self.passthrough).map(str::to_string) else { return };
-        if let Some(name) = self.copy_tree(&root, &mut HashMap::new(), &mut written) {
-            rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
-        }
+        let Some(root) = crate::package::font_table_key(self.passthrough).map(str::to_string) else { return false };
+        let Some(name) = self.copy_tree(&root, &mut HashMap::new(), &mut written) else { return false };
+        rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
+        true
     }
 
     /// Reserve the names of the media files this writer writes.
@@ -884,10 +885,11 @@ mod tests {
             let spec = ChartSpec {
                 kind: ChartType::Column,
                 categories: vec!["a".into(), "b".into()],
-                series: (0..series).map(|i| ChartSeries { name: format!("S{i}"), values: vec![Some(1.0); 2] }).collect(),
+                series: (0..series).map(|i| ChartSeries { name: format!("S{i}"), values: vec![Some(1.0); 2], ..Default::default() }).collect(),
                 title: None,
                 legend: None,
                 data_labels: false,
+                ..Default::default()
             };
             let graphic = Graphic { kind: GraphicKind::Chart, w: 100.0, h: 100.0, chart: Some(Arc::new(spec)), ..Default::default() };
             InlineObject::Graphic { w: 100.0, h: 100.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) }
