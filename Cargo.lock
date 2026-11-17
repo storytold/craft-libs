@@ -1757,6 +1757,7 @@ dependencies = [
 name = "craft-dex"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -3188,6 +3189,7 @@ dependencies = [
 name = "craft-tar"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
 ]
 
@@ -3378,6 +3380,7 @@ dependencies = [
 name = "craft-wasm"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
  "wasmparser 0.261.0",

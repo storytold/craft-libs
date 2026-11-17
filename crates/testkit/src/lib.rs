@@ -37,6 +37,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
+pub mod format_corpus;
 pub mod guards;
 pub mod hostile;
 

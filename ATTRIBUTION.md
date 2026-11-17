@@ -157,3 +157,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## Dalvik DEX inspection
 
 `crates/dex` extracts Craft Anything `crates/formats/src/dex.rs` and `dex_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Five source-history ports preserve Brandon Thomas, BFlat and Afloat as primary authors. Five regression imports retain BFlat/Afloat authors and exact source revisions. The checked byte-reader/MUTF-8 subset and synthetic DEX fixture come from that app's `bytes.rs` and `testkit/src/android.rs`; deterministic noise/mutations come from its testkit. No application file I/O, APK logic or execution is imported. Shared neutral errors and workspace wiring are subsequent changes; existing per-file strings, member/handler and bytecode payload budgets are retained.
+
+## Format test corpus helpers
+
+crates/testkit/src/format_corpus.rs consolidates the identical deterministic noise/mutations helpers previously retained in DEX, WASM and TAR test support from Craft Anything (MIT OR Apache-2.0). The implementations and case order are unchanged; original source-history attribution remains with those extraction commits.

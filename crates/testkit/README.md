@@ -266,3 +266,7 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+## Format corpus compatibility
+
+The format_corpus module preserves the original Craft Anything deterministic noise and mutation corpus, now shared by DEX, WASM and TAR tests. Seed zero, wrapping seed scrambling, case order and the stride transition are stable. It is not a replacement for hostile::mutations or the generic RNG APIs. No input cases are removed.
