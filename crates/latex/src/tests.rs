@@ -395,6 +395,20 @@ fn a_box_shows_only_its_text() {
 }
 
 #[test]
+fn a_box_argument_can_be_the_character_after_a_bracket() {
+    // TeX reads one character as an argument, and after a `]` it shares the bracket's token: the
+    // `0` is the angle and the `x` is the text.
+    for src in [
+        "a\\rotatebox[origin=c]0{x}b",
+        "a\\rotatebox[origin=c]0 {x}b",
+        "a\\raisebox{2pt}[0pt][0pt]xb",
+        "a\\scalebox{2}[1]x\\selectlanguage{english}{b}",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["axb".to_string()], "{src}");
+    }
+}
+
+#[test]
 fn settings_that_are_not_text_show_nothing() {
     for src in [
         "\\hyphenation{ta-ble}word",
