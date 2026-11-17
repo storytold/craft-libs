@@ -8,7 +8,7 @@ use super::words::DockWords;
 use super::{PanelDrag, PanelKey, PanelTitle};
 use crate::buttons::IconButton;
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, HeaderEdge, HeaderParts, HeaderRegion, ListDrag, MeasureCx,
+    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, HeaderEdge, HeaderParts, HeaderRegion, ListDrag, MeasureCx,
     Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, ShowCollection as _, ShowContainer as _,
     Sizing, WordSetCx as _,
 };
@@ -220,6 +220,8 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// Only the header shows; the body and its drop spots are left out.
     #[prop(flag)]
     minimized: bool,
+    /// The open state the body step reads: closed while minimized, so no body runs.
+    open: Bind<'a, bool>,
     /// The grip drags the group.
     #[prop]
     movable: bool,
@@ -266,6 +268,7 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
             panels,
             active,
             minimized: false,
+            open: Bind::given(true),
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
@@ -409,6 +412,12 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
 }
 
 impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
+    /// Closed while minimized: the body step runs the header alone, and the body leaves no node, shape or stop.
+    fn open(&mut self) -> Option<BindMut<'_, bool>> {
+        self.open = Bind::given(!self.minimized);
+        Some(self.open.reborrow())
+    }
+
     /// The drag band, then the panel menu button when it shows, at the header's end edge.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         let band = grip_width(cx.tokens);

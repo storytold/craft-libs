@@ -6,6 +6,7 @@ extern crate craft_ui_panels as craft_ui;
 mod access;
 pub(crate) mod body;
 mod dialogs;
+mod dock_group;
 // outer edit
 mod edit;
 // end of outer edit
