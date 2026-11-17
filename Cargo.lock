@@ -2199,6 +2199,7 @@ dependencies = [
 name = "craft-design-lint"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "proc-macro2",
  "quote",
  "serde",
