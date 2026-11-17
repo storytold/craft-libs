@@ -37,6 +37,30 @@ pub use sizing::{GroupSize, fit_widths, group_heights, scale_widths, stacked, wi
 const DIVIDER: PartKey = PartKey::new("divider");
 const EDGE: PartKey = PartKey::new("edge");
 
+/// Where a column's bar is. A dock column and a floating window are both one column; the window's title row is the
+/// bar of the column it holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColumnBar {
+    /// The column shows its own bar (the double arrow and the band that moves the column and opens its menu), the
+    /// divider of its inner edge, its frame and the drop bands of its two edges: a column of a side dock.
+    #[default]
+    Own,
+    /// The column fills a floating window, whose frame, edges and title row carry what `Own` shows: the column shows
+    /// no bar, no edge divider and no frame, and registers no edge bands, since nothing goes beside a floating column.
+    Window,
+}
+
+impl ColumnBar {
+    /// The height of the column's bar: the dock's bar height for `Own`, none for `Window`.
+    pub(super) fn height(self, sizes: &DockSizes) -> f32 {
+        match self {
+            ColumnBar::Own => sizes.bar,
+            ColumnBar::Window => 0.0,
+        }
+    }
+}
+
 /// The caller's view of one group: the group, the rect it takes and the body step's context. The dock passes the
 /// group to `DockPanels::group_view` or shows a `DockGroup` in it.
 pub type GroupView<'a, P> = Box<dyn FnMut(&Group<P>, Rect, &mut Ui, &mut BodyCx<'_>) + 'a>;
@@ -85,6 +109,9 @@ pub struct DockColumnStyle {
 ///
 /// The column registers the drop bands of its two edges (`DockSpot::column`) and of the seams between its groups
 /// (`DockSpot::seam`) with the dock `dock` every pass. A dock hidden by the shell shows nothing.
+///
+/// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar and the window's edges
+/// size it: the column shows its groups and their dividers only, and registers its seams.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, probe(DockColumn<'static, u8>))]
 pub struct DockColumn<'a, P: Value + Hash + 'static> {
@@ -101,6 +128,9 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     /// The window edge the column's dock sits on; the column's inner edge faces away from it.
     #[prop]
     edge: DockEdge,
+    /// Where the column's bar is: its own (a dock column) or its floating window's title row.
+    #[prop]
+    bar: ColumnBar,
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
@@ -124,6 +154,7 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
             spec,
             auto_collapse: false,
             edge: DockEdge::Start,
+            bar: ColumnBar::Own,
             within: Rect::NOTHING,
             laid: None,
             resized: Vec::new(),
@@ -151,19 +182,22 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
         at: Option<Rect>,
         mut view: impl FnMut(&Group<P>, Rect, &mut Ui, &mut BodyCx<'_>) + 'a,
     ) -> DockColumnOutput<P> {
-        let (column, spec, auto_collapse, edge) = (self.column, self.spec, self.auto_collapse, self.edge);
+        let (column, spec, auto_collapse, edge, own) = (self.column, self.spec, self.auto_collapse, self.edge, self.bar);
         let mut bar = BarRecord::default();
         let shown = &mut bar;
         let body = move |ui: &mut Ui, body: &mut BodyCx<'_>| {
-            if body.shell().is_some_and(|shell| !shell.dock_visible()) {
+            // A floating window shows where the area shows it; the shell hides docks only.
+            if own == ColumnBar::Own && body.shell().is_some_and(|shell| !shell.dock_visible()) {
                 return;
             }
             let Some(sizes) = body.style::<DockColumn<'_, P>>().map(|style| style.sizes) else { return };
             // The bar and the groups at the heights this pass's drag leaves them, in the measuring run and the real
             // run alike: the same plan `parts` lays out, so the dividers sit at the seams.
             let drags = |key: u64, divider: &Divider| divider::drag(body.part_press(DIVIDER.at(key)).phase, body.rect, false, divider);
-            let plan = column_plan(column, spec, body.rect, &sizes, drags);
-            if let Some(grip) = column_grip(column, spec, body) {
+            let plan = column_plan(column, spec, body.rect, own, &sizes, drags);
+            if own == ColumnBar::Own
+                && let Some(grip) = column_grip(column, spec, body)
+            {
                 *shown = show_bar(ui, body, plan.bar, true, auto_collapse, edge, grip);
             }
             for (group, rect) in column.groups.iter().zip(&plan.groups) {
@@ -200,15 +234,17 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
 }
 
 /// The bar and body of the column in `rect`, and the groups stacked in the body, with the drags `drags` makes of
-/// the dividers between open groups (the divider's part index and the divider as laid out before the drag).
+/// the dividers between open groups (the divider's part index and the divider as laid out before the drag). A
+/// column in a floating window has an empty bar on top.
 fn column_plan<P: Value + Hash>(
     column: &Column<P>,
     spec: &dyn Fn(&P) -> PanelSpec,
     rect: Rect,
+    own: ColumnBar,
     sizes: &DockSizes,
     drags: impl Fn(u64, &Divider) -> Option<Drag>,
 ) -> Plan {
-    let bar = Rect::from_min_max(rect.min, Pos2::new(rect.right(), (rect.top() + sizes.bar).min(rect.bottom())));
+    let bar = Rect::from_min_max(rect.min, Pos2::new(rect.right(), (rect.top() + own.height(sizes)).min(rect.bottom())));
     let body = Rect::from_min_max(Pos2::new(rect.left(), bar.bottom()), rect.max);
     body_plan(column, spec, bar, body, sizes, drags)
 }
@@ -297,27 +333,33 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         Sense::empty()
     }
 
-    /// The chevron at the bar's outer end, and a divider between every two open groups.
+    /// The chevron at the bar's outer end, a divider between every two open groups and the inner edge's divider; a
+    /// column in a floating window has the group dividers only.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sizes = cx.style.sizes;
-        let plan = column_plan(self.column, self.spec, rect, &sizes, |_, _| None);
-        let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
-        let name = chevron_name(&cx.words::<DockWords>(), true);
-        let _ = cx.part(CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
+        let plan = column_plan(self.column, self.spec, rect, self.bar, &sizes, |_, _| None);
+        if self.bar == ColumnBar::Own {
+            let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
+            let name = chevron_name(&cx.words::<DockWords>(), true);
+            let _ = cx.part(CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
+        }
         let dividers = plan.dividers(rect, sizes.reach);
         for (key, _, divider) in dividers {
             divider::declare(cx, rect, DIVIDER, key, &divider);
         }
-        divider::declare(cx, rect, EDGE, 0, &self.edge_divider(rect, &sizes));
+        if self.bar == ColumnBar::Own {
+            divider::declare(cx, rect, EDGE, 0, &self.edge_divider(rect, &sizes));
+        }
         self.laid = Some(plan);
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let sizes = cx.style.sizes;
         let (rect, rtl, ctx) = (cx.rect, cx.flow.is_rtl(), cx.core.ctx.clone());
-        self.collapse = cx.part_activated(CHEVRON).is_some();
+        let own = self.bar == ColumnBar::Own;
+        self.collapse = own && cx.part_activated(CHEVRON).is_some();
         let Some(base) = self.laid.take() else { return };
-        let mut plan = column_plan(self.column, self.spec, rect, &sizes, |key, divider| divider::pointer(cx, DIVIDER, key, divider));
+        let mut plan = column_plan(self.column, self.spec, rect, self.bar, &sizes, |key, divider| divider::pointer(cx, DIVIDER, key, divider));
         let dividers = base.dividers(rect, sizes.reach);
         let keyed: Vec<(u64, Divider)> = dividers.iter().map(|(key, _, divider)| (*key, *divider)).collect();
         if let Some((key, coord)) = divider::keys(cx, DIVIDER, &keyed, sizes.step, sizes.jump)
@@ -333,12 +375,14 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
                 self.resized.push((anchor.clone(), plan.heights[group]));
             }
         }
-        let edge = self.edge_divider(rect, &sizes);
-        if let Some(Drag::To(coord)) = divider::pointer(cx, EDGE, 0, &edge) {
-            self.move_edge(rect, &edge, coord);
-        }
-        if let Some((_, coord)) = divider::keys(cx, EDGE, &[(0, edge)], sizes.step, sizes.jump) {
-            self.move_edge(rect, &edge, coord);
+        if own {
+            let edge = self.edge_divider(rect, &sizes);
+            if let Some(Drag::To(coord)) = divider::pointer(cx, EDGE, 0, &edge) {
+                self.move_edge(rect, &edge, coord);
+            }
+            if let Some((_, coord)) = divider::keys(cx, EDGE, &[(0, edge)], sizes.step, sizes.jump) {
+                self.move_edge(rect, &edge, coord);
+            }
         }
         self.register(&ctx, rect, rtl, &plan, &sizes);
         self.laid = Some(plan);
@@ -348,13 +392,21 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         let Some(plan) = self.laid.as_ref() else { return };
         // Painted here, not as the container's surface, which lies over what `paint` draws.
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
-        ui.draw().surface(plan.bar, SurfaceKind::Background, Corners::None);
-        paint_chevron(ui, self.edge, true, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), true));
+        if self.bar == ColumnBar::Own {
+            ui.draw().surface(plan.bar, SurfaceKind::Background, Corners::None);
+            paint_chevron(ui, self.edge, true, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), true));
+        }
     }
 
-    /// The column's frame, then the dividers over it.
+    /// The column's frame, then the dividers over it. The frame of a column in a floating window is the window's.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(plan) = self.laid.as_ref() else { return };
+        if self.bar == ColumnBar::Window {
+            for pair in plan.open.windows(2) {
+                ui.face(DIVIDER.at(pair[0] as u64), Splitter::new(Axis::Y));
+            }
+            return;
+        }
         ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
         for pair in plan.open.windows(2) {
             ui.face(DIVIDER.at(pair[0] as u64), Splitter::new(Axis::Y));
@@ -372,9 +424,11 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         for (key, _, divider) in plan.dividers(cx.rect, sizes.reach) {
             divider::describe(access, DIVIDER, key, &divider, words.resize.as_str(), sizes.step);
         }
-        let edge = self.edge_divider(cx.rect, &sizes);
-        divider::describe(access, EDGE, 0, &edge, words.resize.as_str(), sizes.step);
-        describe_chevron(access, &chevron_name(&words, true));
+        if self.bar == ColumnBar::Own {
+            let edge = self.edge_divider(cx.rect, &sizes);
+            divider::describe(access, EDGE, 0, &edge, words.resize.as_str(), sizes.step);
+            describe_chevron(access, &chevron_name(&words, true));
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> DockColumnOutput<P> {
@@ -413,10 +467,12 @@ pub(super) fn register_edges<P: Clone + Send + 'static>(ctx: &Context, dock: Id,
 }
 
 impl<P: Value + Hash + 'static> DockColumn<'_, P> {
-    /// Registers the drop bands of the column's two edges and of the seams between its groups.
+    /// Registers the drop bands of the column's two edges, for a dock column, and of the seams between its groups.
     fn register(&self, ctx: &Context, rect: Rect, rtl: bool, plan: &Plan, sizes: &DockSizes) {
         let Some(first) = self.anchor(0) else { return };
-        register_edges(ctx, self.dock, first, rect, rtl, sizes);
+        if self.bar == ColumnBar::Own {
+            register_edges(ctx, self.dock, first, rect, rtl, sizes);
+        }
         let (mut before, half) = (first, sizes.seam_band * 0.5);
         for (at, group) in plan.groups.iter().enumerate().skip(1) {
             let Some(after) = self.anchor(at) else { continue };

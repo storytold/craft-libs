@@ -1,7 +1,9 @@
 //! `IconicColumn`: a column collapsed to one icon per panel, and the flyouts its icons open.
 
 use super::divider::{self, Divider, Drag};
-use super::dock_column::{BarRecord, CHEVRON, bar_slots, chevron_name, column_grip, describe_chevron, paint_chevron, register_edges, show_bar};
+use super::dock_column::{
+    BarRecord, CHEVRON, ColumnBar, bar_slots, chevron_name, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
+};
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_group_drag};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
@@ -61,6 +63,18 @@ impl IconicSizes {
             separator: cx.tokens.space.gap.tight,
             labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
         }
+    }
+
+    /// The sizes in the root scope's style, for code outside a style pass:
+    /// `StyleCx::with_root(ctx, IconicSizes::style)`.
+    pub fn of(ctx: &egui::Context) -> Self {
+        StyleCx::with_root(ctx, IconicSizes::style)
+    }
+
+    /// The height of the icons of `column` under its bar: a cell per panel and the room between every two groups.
+    pub fn icons_height<P>(&self, column: &Column<P>) -> f32 {
+        let cells: usize = column.groups.iter().map(|group| group.panels.len()).sum();
+        cells as f32 * self.cell + column.groups.len().saturating_sub(1) as f32 * self.separator
     }
 }
 
@@ -143,6 +157,9 @@ pub struct IconicColumnStyle {
 /// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`.
 /// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
 /// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
+///
+/// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar: the column shows its
+/// icons under it and keeps the divider of its inner edge, which sets its width, and registers no edge bands.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, overlay, probe(IconicColumn<'static, u8>))]
 pub struct IconicColumn<'a, P: Value + Hash + 'static> {
@@ -156,6 +173,9 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// The window edge the column sits on, which the flyout opens away from.
     #[prop]
     edge: DockEdge,
+    /// Where the column's bar is: its own (a dock column) or its floating window's title row.
+    #[prop]
+    bar: ColumnBar,
     /// Whether Auto-Collapse Iconic Panels is on.
     #[prop]
     auto_collapse: bool,
@@ -164,7 +184,8 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     within: Rect,
     open: Bind<'a, Option<P>>,
     view: Option<FlyoutView<'a, P>>,
-    bar: Rect,
+    /// The bar's rect this pass.
+    bar_rect: Rect,
     record: BarRecord,
     shown: Option<usize>,
     width: Option<f32>,
@@ -213,11 +234,12 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
             column,
             spec,
             edge: DockEdge::Start,
+            bar: ColumnBar::Own,
             auto_collapse: false,
             within: Rect::NOTHING,
             open,
             view: None,
-            bar: Rect::NOTHING,
+            bar_rect: Rect::NOTHING,
             record: BarRecord::default(),
             shown: None,
             width: None,
@@ -277,7 +299,7 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
     }
 
     fn plan(&self, rect: Rect, sizes: &IconicSizes, rtl: bool) -> Plan {
-        let bar = Rect::from_min_max(rect.min, Pos2::new(rect.right(), (rect.top() + sizes.column.bar).min(rect.bottom())));
+        let bar = Rect::from_min_max(rect.min, Pos2::new(rect.right(), (rect.top() + self.bar.height(&sizes.column)).min(rect.bottom())));
         let body = Rect::from_min_max(Pos2::new(rect.left(), bar.bottom()), rect.max);
         let wide = body.width() >= sizes.labels;
         let (mut y, mut cells, mut names, mut grips, mut groups) = (body.top(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -386,10 +408,12 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sizes = cx.style.sizes;
         let plan = self.plan(rect, &sizes, cx.flow.is_rtl());
-        self.bar = plan.bar;
-        let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
-        let name = chevron_name(&cx.words::<DockWords>(), false);
-        let _ = cx.header_part(chevron_edge(self.edge), CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
+        self.bar_rect = plan.bar;
+        if self.bar == ColumnBar::Own {
+            let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
+            let name = chevron_name(&cx.words::<DockWords>(), false);
+            let _ = cx.header_part(chevron_edge(self.edge), CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
+        }
         for (at, (_, _, cell)) in plan.cells.iter().enumerate() {
             let Some(panel) = self.flat().get(at).and_then(|(group, panel)| self.panel(*group, *panel)) else { continue };
             let label = (self.spec)(panel).label;
@@ -417,7 +441,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let sizes = cx.style.sizes;
         let (rect, rtl, ctx) = (cx.rect, cx.flow.is_rtl(), cx.core.ctx.clone());
-        self.expand = cx.part_activated(CHEVRON).is_some();
+        self.expand = self.bar == ColumnBar::Own && cx.part_activated(CHEVRON).is_some();
         let Some(plan) = self.laid.take() else { return };
         let flat = self.flat();
         let popup = cx.popup("flyout");
@@ -491,8 +515,10 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         // Painted here, not as the container's surface, which lies over what `paint` draws.
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
-        ui.draw().surface(self.bar, SurfaceKind::Background, Corners::None);
-        paint_chevron(ui, self.edge, false, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), false));
+        if self.bar == ColumnBar::Own {
+            ui.draw().surface(self.bar_rect, SurfaceKind::Background, Corners::None);
+            paint_chevron(ui, self.edge, false, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), false));
+        }
         let flat = self.flat();
         for (at, (group, panel)) in flat.iter().enumerate() {
             let Some(panel) = self.panel(*group, *panel) else { continue };
@@ -527,7 +553,9 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
             access.node(GRIP.at(*group as u64), Role::BUTTON).name = Name::Text(name);
         }
         divider::describe(access, EDGE, 0, &self.edge_divider(cx.rect, &sizes.column), words.resize.as_str(), sizes.column.step);
-        describe_chevron(access, &chevron_name(&words, false));
+        if self.bar == ColumnBar::Own {
+            describe_chevron(access, &chevron_name(&words, false));
+        }
     }
 
     /// The flyout of every cell whose popup is open, beside the column on the canvas side. A resize the user makes
@@ -591,11 +619,13 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
 }
 
 impl<P: Value + Hash + 'static> IconicColumn<'_, P> {
-    /// Registers the drop bands of the column's edges, and the upper and lower half of every icon group: a drop on
+    /// Registers the drop bands of a dock column's edges, and the upper and lower half of every icon group: a drop on
     /// the upper half stacks above the group, one on the lower half below it.
     fn register(&self, ctx: &egui::Context, rect: Rect, rtl: bool, plan: &Plan, sizes: &IconicSizes) {
         let Some(first) = self.column.groups.first().and_then(|group| group.panels.first()) else { return };
-        register_edges(ctx, self.dock, first, rect, rtl, &sizes.column);
+        if self.bar == ColumnBar::Own {
+            register_edges(ctx, self.dock, first, rect, rtl, &sizes.column);
+        }
         let half = sizes.separator * 0.5;
         let last = plan.groups.len().saturating_sub(1);
         for (at, group) in &plan.groups {
@@ -629,19 +659,22 @@ fn chevron_edge(edge: DockEdge) -> HeaderEdge {
 }
 
 impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
-    /// The chevron's square at the bar's outer end.
+    /// The chevron's square at the bar's outer end; nothing in a floating window, whose title row is the bar.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
+        if self.bar == ColumnBar::Window {
+            return HeaderParts::NONE;
+        }
         let side = cx.style.sizes.column.bar;
         if chevron_edge(self.edge) == HeaderEdge::End { HeaderParts::NONE.end(side) } else { HeaderParts::NONE.start(side) }
     }
 
     /// The column bar, over the icons. What the user did on it is read in `finish`.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        if cx.shell().is_some_and(|shell| !shell.dock_visible()) {
+        if self.bar == ColumnBar::Window || cx.shell().is_some_and(|shell| !shell.dock_visible()) {
             return;
         }
         if let Some(grip) = column_grip(self.column, self.spec, cx) {
-            self.record = show_bar(ui, cx, self.bar, false, self.auto_collapse, self.edge, grip);
+            self.record = show_bar(ui, cx, self.bar_rect, false, self.auto_collapse, self.edge, grip);
         }
     }
 }
