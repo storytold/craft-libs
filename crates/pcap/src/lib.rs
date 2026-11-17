@@ -1034,6 +1034,9 @@ pub struct Summary {
     pub dns_queries: Vec<Count>,
     /// "name TYPE value" from DNS responses.
     pub dns_answers: Vec<Count>,
+    /// "question A|AAAA address" from DNS responses: each address answered, keyed by the response's first
+    /// question (so CNAME chains end at the name that was asked), as Wireshark's fields report them.
+    pub dns_addresses: Vec<Count>,
     /// "METHOD host target" from HTTP/1.x requests.
     pub http_requests: Vec<Count>,
     /// Server names from TLS ClientHellos.
@@ -1082,6 +1085,7 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
     let mut flow_rows: Vec<Flow> = Vec::new();
     let (mut protocols, mut stacks, mut endpoints) = (Tally::default(), Tally::default(), Tally::default());
     let (mut queries, mut answers, mut http, mut sni, mut alpn) = (Tally::default(), Tally::default(), Tally::default(), Tally::default(), Tally::default());
+    let mut addresses = Tally::default();
     for f in cap.by_ref() {
         if f.number % 4096 == 0 && cancelled() {
             return Err(FormatError::Malformed("cancelled".into()));
@@ -1151,6 +1155,13 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
             for a in &dns.answers {
                 answers.add(format!("{} {} {}", a.name, a.rtype, a.value));
             }
+            if dns.response
+                && let Some(q) = dns.questions.first()
+            {
+                for a in dns.answers.iter().filter(|a| matches!(a.rtype.as_str(), "A" | "AAAA") && a.value.parse::<IpAddr>().is_ok()) {
+                    addresses.add(format!("{} {} {}", q.name, a.rtype, a.value));
+                }
+            }
         }
         if let Some(h) = &d.http
             && h.kind == "request"
@@ -1175,6 +1186,7 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
     s.endpoints = endpoints.done("endpoints", &mut capped);
     s.dns_queries = queries.done("dns_queries", &mut capped);
     s.dns_answers = answers.done("dns_answers", &mut capped);
+    s.dns_addresses = addresses.done("dns_addresses", &mut capped);
     s.http_requests = http.done("http_requests", &mut capped);
     s.tls_sni = sni.done("tls_sni", &mut capped);
     s.tls_alpn = alpn.done("tls_alpn", &mut capped);
