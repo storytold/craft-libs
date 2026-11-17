@@ -858,8 +858,14 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             // egui gives no click target where a drag-only widget is on top (a resize grip over a layer's or a
             // window's edge): a root under it keeps its click there, but a drag is that widget's.
             let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| !mine(Some(id)));
-            resolve_press_in(state, members, xf, at, target)
-                .map(|hit| (hit, if drag_elsewhere { hit.sense.difference(Sense::DRAG) } else { hit.sense }))
+            let won = resolve_press_in(state, members, xf, at, target);
+            if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+                eprintln!(
+                    "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: root {root:?} members {members} targets {targets:?} won {:?}",
+                    won.map(|hit| (hit.owner, hit.part))
+                );
+            }
+            won.map(|hit| (hit, if drag_elsewhere { hit.sense.difference(Sense::DRAG) } else { hit.sense }))
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();
