@@ -247,3 +247,53 @@ fn a_key_command_runs_with_the_list_open_and_closes_it() {
     assert!(!list_open(&mut fixture), "and closes the list");
     assert_eq!(value(&mut fixture), 1, "and the value stays");
 }
+
+/// The name of an edit event's step.
+fn step_name<V>(event: &craft_behavior::EditEvent<V>) -> &'static str {
+    use craft_behavior::EditEvent;
+    match event {
+        EditEvent::Begin { .. } => "begin",
+        EditEvent::Update { .. } => "update",
+        EditEvent::Commit { .. } => "commit",
+        EditEvent::Cancel { .. } => "cancel",
+        EditEvent::Set { .. } => "set",
+        _ => "other",
+    }
+}
+
+/// The wheel over the field steps the pick with the list open too, one entry per line a turn carries, and takes over
+/// the row the keys previewed: the run commits once when the wheel stops, with nothing put back.
+#[trial]
+fn the_wheel_steps_the_open_select_a_line_an_entry_and_commits_when_it_stops() {
+    use craft_behavior::GESTURE_GAP;
+    use craft_ui::testing::pointer::{moved, wheel_lines};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let value = Rc::new(RefCell::new(1u8));
+    let steps: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let (held, seen) = (value.clone(), steps.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::new(3u8, "Three"), Entry::new(4u8, "Four"), Entry::new(5u8, "Five")];
+        let mut guard = held.borrow_mut();
+        let out = Select::new("Pick", Bind::bound(&mut *guard), &entries).show(ui);
+        seen.borrow_mut().extend(out.events.iter().map(step_name));
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    let face = fixture.by_role(Role::COMBO_BOX).first().expect("the field").rect;
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(*value.borrow(), 2, "the keys preview Two");
+    fixture.frame(vec![moved(face.center())]);
+    fixture.frame(vec![wheel_lines(-2.0)]);
+    assert_eq!(*value.borrow(), 4, "a turn of two lines down steps two entries on from the previewed one");
+    assert!(!steps.borrow().contains(&"commit"), "nothing commits while the wheel turns: {:?}", steps.borrow());
+    fixture.advance(GESTURE_GAP * 2.0).idle(3);
+    let steps = steps.borrow();
+    assert_eq!(steps.iter().filter(|step| **step == "commit").count(), 1, "the wheel's end commits the run once: {steps:?}");
+    assert!(!steps.contains(&"cancel"), "and puts nothing back: {steps:?}");
+    assert_eq!(*value.borrow(), 4);
+}

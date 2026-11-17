@@ -355,17 +355,18 @@ impl<C: Component> Cx<'_, C> {
     /// proposes it (the first notch begins the run), and a `WheelPhase::End` share, which the runtime hands a value
     /// control when the wheel gesture ends, commits a running run. A `WheelPhase::Start` share, which the runtime
     /// hands when a new gesture begins in the pass the last one ended, commits the running run first, so its notch
-    /// begins the next run. A run a host change or a removal cancelled stays cancelled; the end then changes nothing.
+    /// begins the next run. A notch inside a gesture a press carries joins that gesture; inside one no press carries
+    /// (an open list's key preview) it makes the gesture a wheel run, which the wheel's end commits. A run a host change
+    /// or a removal cancelled stays cancelled; the end then changes nothing.
     pub fn wheel_run(&mut self, phase: WheelPhase, next: Option<ValueOf<C>>) {
         if phase == WheelPhase::Start && self.in_wheel_run() {
             self.commit();
         }
         if let Some(next) = next {
-            let running = self.gesture_slot().is_running();
+            let pressed = self.core.press_held();
             self.propose(next);
             let slot = self.gesture_slot();
-            // Only a run the wheel began is a wheel run: a notch inside a press-carried gesture joins that gesture.
-            if !running && slot.is_running() {
+            if slot.is_running() && !pressed {
                 slot.wheel = true;
             }
         }

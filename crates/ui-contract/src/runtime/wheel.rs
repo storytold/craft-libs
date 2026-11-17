@@ -121,6 +121,9 @@ pub(crate) fn begin(ctx: &Context) {
                 let focus = WheelFocus::new(focused).app_field(app_field).by_position(by_position);
                 // The device's lines and pages become points of each taker: the notch is the scroll owner's to choose.
                 for (owner, mut share) in split(&state.last, at, share, focus, state.armed, &mut state.gesture, now) {
+                    if unit == WheelUnit::Line {
+                        share.lines = share.scroll;
+                    }
                     if let Some(taker) = state.last.iter().find(|taker| taker.owner == owner) {
                         share.scroll = taker.points(share.scroll, unit);
                     }

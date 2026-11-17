@@ -13,7 +13,7 @@ use crate::buttons::IconButton;
 use crate::contract::overlay::{Popup, Trigger};
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, LeadOnOpen, LeadSource,
-    MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, Show as _,
+    MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupHandle, PopupKind, Props as _, Role, Show as _,
     ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _, step_stop, step_stops,
 };
 use crate::list::{List, ListRow, ThumbAspect};
@@ -73,11 +73,12 @@ impl<'a> HeaderMenu<'a> {
 /// listbox with the picked entry active, and typing opens it on the first entry the typed letters begin. The open list
 /// is one gesture: each entry the keys (Up, Down, Page keys, Home, End, type-ahead) make active is proposed as the
 /// value, Enter or a click picks, and Escape, Alt+Up or a press outside close it and put the value back. Closed, the
-/// arrow keys, Home, End and the wheel (while the field is focused or armed) step the pick through the stepped entries
-/// ([`Entry::stepped`]); from a value that is none of them, forward lands on the first and back on the last. The field is
-/// as wide as its widest entry, placeholder or mixed word, at least a field length, so it keeps its width whichever is
-/// shown. A content-sized select fits that widest face, up to a field length; a longer one elides. The closed wheel
-/// run is one edit gesture, committed when the wheel gesture ends.
+/// arrow keys, Home and End step the pick through the stepped entries ([`Entry::stepped`]), and so does the wheel over
+/// the field, open or closed, one entry a notch; from a value that is none of them, forward lands on the first and back
+/// on the last. The field is as wide as its widest entry, placeholder or mixed word, at least a field length, so it
+/// keeps its width whichever is shown. A content-sized select fits that widest face, up to a field length; a longer one
+/// elides. A wheel run is one edit gesture, committed when the wheel gesture ends; over the open list it takes over the
+/// entry the keys previewed.
 ///
 /// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
 /// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
@@ -149,6 +150,40 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             cx.set(value.clone());
         }
     }
+
+    /// The closed field's keys: typed letters open the list on the first entry they begin, AccessKit sets the pick and
+    /// the arrow keys, Home and End step it through `stops`.
+    fn closed_keys(&self, cx: &mut Cx<'_, Self>, list: PopupHandle, stops: &[usize]) {
+        let held = self.position(cx.value());
+        while let Some(text) = cx.intents().take_text() {
+            // Type-ahead passes over headings: their captions name no entry.
+            let labels: Vec<Label> =
+                self.entries.iter().map(|entry| if entry.is_item() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
+            let folder = cx.env.folder();
+            let found = TypeAhead::pick(&text, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()), |s| folder.key(s));
+            if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {
+                cx.propose(value.clone());
+                list.open(cx);
+                return;
+            }
+        }
+        if let Some(at) = cx.intents().take_set_value() {
+            // `Edit::set` is a one-shot change: a wheel run's open proposal is committed first.
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
+            let to = (at.round().max(0.0) as usize).min(stops.len() - 1);
+            self.pick(cx, stops[to]);
+        }
+        while let Some((mv, _)) = cx.intents().take_move() {
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
+            if let Some(to) = step(stops, self.position(cx.value()), mv) {
+                self.pick(cx, to);
+            }
+        }
+    }
 }
 
 /// Whether a select's faces fit their text: only a select sized to its content.
@@ -213,8 +248,9 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// Enter and Space toggle the listbox; a press on the face toggles it through the part. While it is closed, typed
-    /// letters open it on the first entry they begin, the arrow keys, Home, End and the wheel step the pick through the
-    /// stepped entries, and AccessKit sets it. A proposal the list closed on without a pick is cancelled.
+    /// letters open it on the first entry they begin, the arrow keys, Home and End step the pick through the stepped
+    /// entries, and AccessKit sets it; the wheel steps it open or closed. A proposal the list closed on without a pick
+    /// is cancelled.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let list = cx.popup("list");
         toggle_on_key(cx, list);
@@ -223,49 +259,29 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             cx.cancel(CancelReason::Dismissed);
         }
         let stops = step_stops(self.entries);
-        if list.is_open(cx) || stops.is_empty() {
+        if stops.is_empty() {
             return;
         }
-        let held = self.position(cx.value());
-        while let Some(text) = cx.intents().take_text() {
-            // Type-ahead passes over headings: their captions name no entry.
-            let labels: Vec<Label> =
-                self.entries.iter().map(|entry| if entry.is_item() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
-            let folder = cx.env.folder();
-            let found = TypeAhead::pick(&text, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()), |s| folder.key(s));
-            if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {
-                cx.propose(value.clone());
-                list.open(cx);
-                return;
-            }
+        if !list.is_open(cx) {
+            self.closed_keys(cx, list, &stops);
         }
-        if let Some(at) = cx.intents().take_set_value() {
-            // `Edit::set` is a one-shot change: a wheel run's open proposal is committed first.
-            if cx.in_wheel_run() {
-                cx.commit();
-            }
-            let to = (at.round().max(0.0) as usize).min(stops.len() - 1);
-            self.pick(cx, stops[to]);
-        }
-        while let Some((mv, _)) = cx.intents().take_move() {
-            if cx.in_wheel_run() {
-                cx.commit();
-            }
-            if let Some(to) = step(&stops, self.position(cx.value()), mv) {
-                self.pick(cx, to);
-            }
-        }
-        // The wheel gives one notch, down for a step forward (as a combo box and a tab strip step). The end share of the gesture has no scroll and commits the run.
+        // The wheel steps the pick over the field with the list open or closed, one stop a notch, down for a step
+        // forward (as a combo box and a tab strip step); a run over the open list takes over the rows the keys
+        // previewed. The end share of the gesture has no scroll and commits the run.
         if let Some(wheel) = cx.take_wheel() {
             if matches!(wheel.phase, WheelPhase::End) {
                 cx.wheel_run(wheel.phase, None);
             } else if let StepResult::Set(along) =
-                wheel_step(&ValueSteps::new(0.0, -1.0, 1.0, 1.0, 1.0), ValueAxes::Both, &wheel, cx.env.direction().is_rtl())
+                wheel_step(&ValueSteps::new(0.0, -f64::MAX, f64::MAX, 1.0, 1.0).fine(1.0), ValueAxes::Both, &wheel, cx.env.direction().is_rtl())
                 && along != 0.0
-                && let Some(to) = step_stop(&stops, self.position(cx.value()), along < 0.0)
-                && let Some(value) = self.entries[to].value()
             {
-                cx.wheel_run(wheel.phase, Some(value.clone()));
+                let mut to = self.position(cx.value());
+                for _ in 0..along.abs().round() as usize {
+                    to = step_stop(&stops, to, along < 0.0);
+                }
+                if let Some(value) = to.and_then(|to| self.entries[to].value()) {
+                    cx.wheel_run(wheel.phase, Some(value.clone()));
+                }
             }
         }
     }

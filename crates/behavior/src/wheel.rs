@@ -60,6 +60,10 @@ use emath::{Pos2, Rect, Vec2};
 pub struct Wheel {
     /// Scroll in points, wheel notches and lines already converted by the service.
     pub scroll: Vec2,
+    /// The share's scroll in the device's lines (wheel notches) when `unit` is [`WheelUnit::Line`], as the service
+    /// read it before it turned them into the taker's points; zero for points and pages. A value control steps once
+    /// per whole line ([`wheel_step`](crate::nav::wheel_step)).
+    pub lines: Vec2,
     /// Zoom factor; 1 for none.
     pub zoom: f32,
     /// The modifiers held.
@@ -89,6 +93,7 @@ impl Wheel {
     pub const fn new(scroll: Vec2, mods: Mods, unit: WheelUnit, phase: WheelPhase) -> Self {
         Wheel {
             scroll,
+            lines: Vec2::ZERO,
             zoom: 1.0,
             mods,
             unit,

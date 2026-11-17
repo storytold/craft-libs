@@ -111,26 +111,28 @@ pub fn step_until_changed<T: PartialEq + Copy>(from: T, step: impl Fn(T) -> T, s
     }
 }
 
-/// Maps a wheel event to the new value of a single-value control: one `notch` per event, up for positive scroll.
-/// Vertical scroll counts first; horizontal scroll counts when there is none (a vertical-only control ignores it),
-/// flipped under right-to-left text. Shift scales the notch by `large / small` and Alt by `fine / small`; both
-/// together keep the notch, as the arrow keys do. Zero scroll is `Ignored`.
+/// Maps a wheel share to the new value of a single-value control: one `notch` per whole wheel line the share carries
+/// ([`Wheel::lines`]), and one for a share of points or pages, up for positive scroll. Vertical scroll counts first;
+/// horizontal scroll counts when there is none (a vertical-only control ignores it), flipped under right-to-left text.
+/// Shift scales the notch by `large / small` and Alt by `fine / small`; both together keep the notch, as the arrow
+/// keys do. Zero scroll is `Ignored`.
 pub fn wheel_step(steps: &ValueSteps, axes: ValueAxes, wheel: &Wheel, rtl: bool) -> StepResult {
-    let along = if wheel.scroll.y != 0.0 {
-        wheel.scroll.y
+    let (along, lines) = if wheel.scroll.y != 0.0 {
+        (wheel.scroll.y, wheel.lines.y)
     } else if matches!(axes, ValueAxes::Vertical) || wheel.scroll.x == 0.0 {
         return StepResult::Ignored;
     } else if rtl {
-        -wheel.scroll.x
+        (-wheel.scroll.x, wheel.lines.x)
     } else {
-        wheel.scroll.x
+        (wheel.scroll.x, wheel.lines.x)
     };
+    let notches = f64::from(lines.abs().trunc().max(1.0));
     let scale = match (wheel.mods.shift, wheel.mods.alt) {
         (true, false) if steps.small != 0.0 => steps.large / steps.small,
         (false, true) if steps.small != 0.0 => steps.fine / steps.small,
         _ => 1.0,
     };
-    let delta = steps.notch * scale * f64::from(along.signum());
+    let delta = steps.notch * scale * notches * f64::from(along.signum());
     StepResult::Set((steps.value + delta).clamp(steps.min, steps.max))
 }
 
