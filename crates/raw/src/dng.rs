@@ -500,6 +500,12 @@ const FRAME_RATE: u16 = 51044;
 /// CinemaDNG `ReelName` (tag 51081).
 const REEL_NAME: u16 = 51081;
 
+/// A CinemaDNG `FrameRate` of `n / d` frames a second between 1/1000 and 1000 (shared with the
+/// bounded `dng_metadata` reader).
+pub(crate) fn plausible_frame_rate(n: i64, d: i64) -> bool {
+    n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d
+}
+
 /// The CinemaDNG tags of a frame, from IFD 0 (where the specification puts them), else the raw IFD. A frame rate
 /// outside 1/1000 to 1000 frames a second and a time code that is not valid BCD are ignored.
 fn cinema_tags(ifd0: &Ifd, raw: &Ifd) -> CinemaTags {
@@ -510,7 +516,7 @@ fn cinema_tags(ifd0: &Ifd, raw: &Ifd) -> CinemaTags {
         _ => None,
     });
     CinemaTags {
-        frame_rate: frame_rate.filter(|&(n, d)| n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d),
+        frame_rate: frame_rate.filter(|&(n, d)| plausible_frame_rate(n, d)),
         timecode: pick(TIME_CODES).bytes(TIME_CODES).and_then(Timecode::from_bytes),
         reel_name: pick(REEL_NAME).string(REEL_NAME).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
     }

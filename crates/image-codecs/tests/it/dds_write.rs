@@ -16,6 +16,8 @@ const DDPF_ALPHAPIXELS: u32 = 0x1;
 const DDPF_FOURCC: u32 = 0x4;
 const DDPF_RGB: u32 = 0x40;
 const DDPF_LUMINANCE: u32 = 0x2_0000;
+const DXGI_BC4_UNORM: u32 = 80;
+const DXGI_BC5_UNORM: u32 = 83;
 
 const BLOCKS: [DdsCompression; 3] = [DdsCompression::Bc1, DdsCompression::Bc2, DdsCompression::Bc3];
 
@@ -80,11 +82,21 @@ fn psnr(a: &Image, b: &Image) -> f64 {
     if mse == 0.0 { f64::INFINITY } else { 10.0 * (255.0f64.powi(2) / mse).log10() }
 }
 
+/// Whether a written texture has the DX10 header after the legacy one.
+fn has_dx10(file: &[u8]) -> bool {
+    le32(file, 80) & DDPF_FOURCC != 0 && &file[84..88] == b"DX10"
+}
+
+/// Bytes of the headers before the first level.
+fn head(file: &[u8]) -> usize {
+    if has_dx10(file) { 148 } else { 128 }
+}
+
 /// Bytes of one level as a reader computes them from the header's pixel format.
 fn level_bytes(file: &[u8], w: usize, h: usize) -> usize {
     if le32(file, 80) & DDPF_FOURCC != 0 {
-        let block = if &file[84..88] == b"DXT1" { 8 } else { 16 };
-        w.div_ceil(4) * h.div_ceil(4) * block
+        let eight = &file[84..88] == b"DXT1" || (has_dx10(file) && le32(file, 128) == DXGI_BC4_UNORM);
+        w.div_ceil(4) * h.div_ceil(4) * if eight { 8 } else { 16 }
     } else {
         w * h * le32(file, 88) as usize / 8
     }
@@ -94,9 +106,9 @@ fn level_bytes(file: &[u8], w: usize, h: usize) -> usize {
 fn level(file: &[u8], i: u32) -> Image {
     let (w, h) = (le32(file, 16) as usize, le32(file, 12) as usize);
     let size = |i: u32| ((w >> i).max(1), (h >> i).max(1));
-    let start = 128 + (0..i).map(|j| level_bytes(file, size(j).0, size(j).1)).sum::<usize>();
+    let start = head(file) + (0..i).map(|j| level_bytes(file, size(j).0, size(j).1)).sum::<usize>();
     let (lw, lh) = size(i);
-    let mut b = file[..128].to_vec();
+    let mut b = file[..head(file)].to_vec();
     b[12..16].copy_from_slice(&(lh as u32).to_le_bytes());
     b[16..20].copy_from_slice(&(lw as u32).to_le_bytes());
     b[28..32].copy_from_slice(&1u32.to_le_bytes());
@@ -338,15 +350,122 @@ fn fidelity_warnings_follow_the_compression() {
     }
     assert!(warns(DdsCompression::Bc1).contains(&FidelityWarning::AlphaBinarized));
     assert!(!warns(DdsCompression::Bc3).contains(&FidelityWarning::AlphaBinarized));
+    // BC4 is gray and BC5 has no alpha: translucent colour loses what they don't hold.
+    let bc4 = warns(DdsCompression::Bc4);
+    for w in [FidelityWarning::LossyCompression, FidelityWarning::ColorToGray, FidelityWarning::AlphaDiscarded] {
+        assert!(bc4.contains(&w), "BC4: {w:?} missing from {bc4:?}");
+    }
+    let bc5 = warns(DdsCompression::Bc5);
+    assert!(bc5.contains(&FidelityWarning::LossyCompression) && bc5.contains(&FidelityWarning::AlphaDiscarded), "{bc5:?}");
+    assert!(!bc5.contains(&FidelityWarning::ColorToGray) && !bc5.contains(&FidelityWarning::AlphaBinarized), "{bc5:?}");
+    // A gray map written as BC4 loses only to the compression.
+    let gray = ramp(8, 8, ChannelLayout::Gray);
+    assert_eq!(fidelity_warnings_with(&gray, Format::Dds, &opts(DdsCompression::Bc4, false)), [FidelityWarning::LossyCompression]);
+}
+
+/// The largest difference in channel `c` between two images of `channels` channels.
+fn max_diff(a: &Image, b: &Image, channels: usize, c: usize) -> u8 {
+    a.data().chunks(channels).zip(b.data().chunks(channels)).map(|(x, y)| x[c].abs_diff(y[c])).max().unwrap_or(0)
+}
+
+/// `gradient`'s red as gray, or its red, green and blue.
+fn gradient_as(w: u32, h: u32, layout: ChannelLayout) -> Image {
+    let rgba = gradient(w, h);
+    let data = rgba.data().chunks(4).flat_map(|p| if layout == ChannelLayout::Gray { vec![p[0]] } else { p[..3].to_vec() }).collect();
+    Image::from_u8(w, h, layout, data).unwrap()
+}
+
+#[test]
+fn bc4_and_bc5_are_written_with_the_dx10_header() {
+    for (compression, dxgi, block, layout) in
+        [(DdsCompression::Bc4, DXGI_BC4_UNORM, 8, ChannelLayout::Gray), (DdsCompression::Bc5, DXGI_BC5_UNORM, 16, ChannelLayout::Rgb)]
+    {
+        for (w, h) in [(1, 1), (2, 2), (5, 3), (33, 17)] {
+            let img = ramp(w, h, layout);
+            let b = encode(&img, Format::Dds, &opts(compression, false)).unwrap();
+            let linear = w.div_ceil(4) * h.div_ceil(4) * block;
+            assert_eq!(&b[84..88], b"DX10");
+            assert_eq!((le32(&b, 80), le32(&b, 88)), (DDPF_FOURCC, 0));
+            assert_eq!(le32(&b, 8), REQUIRED | DDSD_LINEARSIZE, "linear size, not pitch");
+            assert_eq!(le32(&b, 20), linear, "{compression:?} {w}x{h}: the top level's size");
+            // DXGI format, a 2D texture, no misc flags, one texture, alpha mode unknown.
+            assert_eq!([le32(&b, 128), le32(&b, 132), le32(&b, 136), le32(&b, 140), le32(&b, 144)], [dxgi, 3, 0, 1, 0]);
+            assert_eq!(b.len(), 148 + linear as usize);
+            assert!(!craft_image_codecs::has_unretained_source_data(&b).unwrap());
+            let back = decode(&b).unwrap();
+            assert_eq!((back.dimensions(), back.layout()), ((w, h), layout), "{compression:?} {w}x{h}");
+        }
+    }
+}
+
+#[test]
+fn bc4_and_bc5_error_on_gradients_is_bounded() {
+    // Each block of the gradient spans 12 levels in a channel: eight values (or six and the
+    // extremes) are under two levels apart.
+    let gray = gradient_as(64, 64, ChannelLayout::Gray);
+    let back = decode(&encode(&gray, Format::Dds, &opts(DdsCompression::Bc4, false)).unwrap()).unwrap();
+    assert_eq!(back.layout(), ChannelLayout::Gray);
+    let err = max_diff(&gray, &back, 1, 0);
+    assert!(err <= 2, "BC4 off by {err}");
+
+    let rgb = gradient_as(64, 64, ChannelLayout::Rgb);
+    let back = decode(&encode(&rgb, Format::Dds, &opts(DdsCompression::Bc5, false)).unwrap()).unwrap();
+    assert_eq!(back.layout(), ChannelLayout::Rgb);
+    let (red, green) = (max_diff(&rgb, &back, 3, 0), max_diff(&rgb, &back, 3, 1));
+    assert!(red <= 2 && green <= 2, "BC5 red off by {red}, green by {green}");
+    assert!(back.data().chunks(3).all(|p| p[2] == 0), "BC5 has no blue");
+}
+
+#[test]
+fn bc4_and_bc5_take_any_source_layout() {
+    // RGBA to BC4 goes through gray; to BC5 through RGB, dropping alpha and then blue.
+    let img = gradient(9, 7);
+    for (compression, layout) in [(DdsCompression::Bc4, ChannelLayout::Gray), (DdsCompression::Bc5, ChannelLayout::Rgb)] {
+        let back = decode(&encode(&img, Format::Dds, &opts(compression, true)).unwrap()).unwrap();
+        let want = img.convert(layout, img.sample_type());
+        let ch = layout.channels();
+        assert_eq!((back.dimensions(), back.layout()), ((9, 7), layout));
+        for c in 0..ch.min(2) {
+            let err = max_diff(&want, &back, ch, c);
+            assert!(err <= 8, "{compression:?} channel {c} off by {err}");
+        }
+    }
+}
+
+#[test]
+fn bc4_and_bc5_mip_chains_follow_the_box_filter() {
+    for (compression, layout, block) in [(DdsCompression::Bc4, ChannelLayout::Gray, 8), (DdsCompression::Bc5, ChannelLayout::Rgb, 16)] {
+        let img = gradient_as(12, 6, layout);
+        let b = encode(&img, Format::Dds, &opts(compression, true)).unwrap();
+        // 12×6, 6×3, 3×1, 1×1: 3×2, 2×1, 1 and 1 blocks after both headers.
+        assert_eq!(le32(&b, 28), 4);
+        assert_eq!(le32(&b, 8), REQUIRED | DDSD_LINEARSIZE | DDSD_MIPMAPCOUNT);
+        assert_eq!(b.len(), 148 + (6 + 2 + 1 + 1) * block);
+        let mut want = img.clone();
+        for i in 0..4 {
+            let got = level(&b, i);
+            assert_eq!((got.dimensions(), got.layout()), (want.dimensions(), layout), "{compression:?} level {i}");
+            for c in 0..layout.channels().min(2) {
+                // Smaller levels are steeper (8, then 16 levels a pixel), so a block's values
+                // sit up to a few levels off its palette.
+                let err = max_diff(&want, &got, layout.channels(), c);
+                assert!(err <= 4, "{compression:?} level {i} channel {c} off by {err}");
+            }
+            want = box_filter(&want);
+        }
+    }
 }
 
 #[test]
 fn compression_names_round_trip() {
+    assert_eq!(DdsCompression::ALL.len(), 6);
     for c in DdsCompression::ALL {
         assert_eq!(DdsCompression::from_name(c.name()), Some(c));
     }
     assert_eq!(DdsCompression::from_name("DXT5"), Some(DdsCompression::Bc3));
     assert_eq!(DdsCompression::from_name("dxt1"), Some(DdsCompression::Bc1));
+    assert_eq!(DdsCompression::from_name("ATI1"), Some(DdsCompression::Bc4));
+    assert_eq!(DdsCompression::from_name("ati2"), Some(DdsCompression::Bc5));
     for bad in ["", "bc7", "dxt2", "uncompressed "] {
         assert_eq!(DdsCompression::from_name(bad), None, "{bad:?}");
     }
@@ -360,6 +479,18 @@ fn compression_names_round_trip() {
 #[test]
 #[ignore]
 fn dds_encode_timings_on_30_mp() {
+    let img = texture_30_mp();
+    for compression in DdsCompression::ALL {
+        for mipmaps in [false, true] {
+            let t = std::time::Instant::now();
+            let b = encode(&img, Format::Dds, &opts(compression, mipmaps)).unwrap();
+            eprintln!("{compression:?} mipmaps={mipmaps}: {:.0} ms, {} MB", t.elapsed().as_secs_f64() * 1e3, b.len() >> 20);
+        }
+    }
+}
+
+/// A synthetic ~30 MP RGBA texture (6336×4752): gentle ramps with a little noise.
+fn texture_30_mp() -> Image {
     let (w, h) = (6336u32, 4752u32);
     let mut s = 0x1234_5678u32;
     let mut data = Vec::with_capacity(w as usize * h as usize * 4);
@@ -371,12 +502,28 @@ fn dds_encode_timings_on_30_mp() {
             data.extend([(x / 25 + y / 19) as u8, (x / 31) as u8 ^ (s as u8 & 3), (y / 23) as u8, (255 - x / 25) as u8]);
         }
     }
-    let img = Image::from_u8(w, h, ChannelLayout::Rgba, data).unwrap();
+    Image::from_u8(w, h, ChannelLayout::Rgba, data).unwrap()
+}
+
+/// Decode timings of the same texture written with each compression: the best of five runs, so
+/// one slow run doesn't decide. Ignored by default; run in release:
+///
+/// ```sh
+/// cargo test --release -p craft-image-codecs --test it -- dds_write:: --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn dds_decode_timings_on_30_mp() {
+    let img = texture_30_mp();
     for compression in DdsCompression::ALL {
-        for mipmaps in [false, true] {
+        let b = encode(&img, Format::Dds, &opts(compression, false)).unwrap();
+        let mut best = f64::INFINITY;
+        for _ in 0..5 {
             let t = std::time::Instant::now();
-            let b = encode(&img, Format::Dds, &opts(compression, mipmaps)).unwrap();
-            eprintln!("{compression:?} mipmaps={mipmaps}: {:.0} ms, {} MB", t.elapsed().as_secs_f64() * 1e3, b.len() >> 20);
+            let back = decode(&b).unwrap();
+            best = best.min(t.elapsed().as_secs_f64());
+            assert_eq!(back.dimensions(), img.dimensions());
         }
+        eprintln!("{compression:?} decode: {:.0} ms, {} MB", best * 1e3, b.len() >> 20);
     }
 }
