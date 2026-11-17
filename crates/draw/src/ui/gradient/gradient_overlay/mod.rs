@@ -26,7 +26,7 @@ use egui::{Color32, Pos2, Rect, Response, Vec2, vec2};
 
 use super::gradient_line::{at_screen, midpoint_location};
 use super::{GradientStyle, LineGradient, LinePart};
-use craft_color::ui::gradient::{GradientWords, Sampler, StopColor, StopRef, StopRow, StopRows, StopRules, marker_texts};
+use craft_color_ui::ui::gradient::{GradientWords, Sampler, StopColor, StopRef, StopRow, StopRows, StopRules, marker_texts};
 use parts::{END, LINE, MIDPOINT, START, STOP, line_part};
 
 craft_ui::words! {
@@ -108,7 +108,7 @@ const TEAR_OFF: f32 = 36.0;
 ///   or the line by 1 document unit, 10 with Shift. Delete and Backspace remove a stop, Insert and Cmd/Ctrl+Enter add one
 ///   halfway after the picked stop. Enter and Space on a colour stop or an end set `color_requested`. Each change is one
 ///   Set.
-/// - With [`shared_selection`](Self::shared_selection) the overlay and a [`GradientEditor`](craft_color::ui::gradient::GradientEditor) share one selected stop.
+/// - With [`shared_selection`](Self::shared_selection) the overlay and a [`GradientEditor`](craft_color_ui::ui::gradient::GradientEditor) share one selected stop.
 #[derive(Component, Props)]
 #[component(canvas_control)]
 pub struct GradientOverlay<'a> {

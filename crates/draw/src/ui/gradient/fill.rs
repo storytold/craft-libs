@@ -1,7 +1,7 @@
 //! [`GradientFill`]: the gradient fill value of shapes and Gradient Fill layers.
 
 use craft_behavior::IconId;
-use craft_color::ui::gradient::GradientStops;
+use craft_color_ui::ui::gradient::GradientStops;
 use craft_ui::runtime::env::Label;
 use serde::{Deserialize, Serialize};
 

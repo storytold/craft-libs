@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use craft_behavior::{Metrics, Sense};
-use craft_color::gradient::GradientStops;
+use craft_color_ui::gradient::GradientStops;
 use craft_theme::Srgba;
 use craft_ui::choice::SwatchMetrics;
 use craft_ui::contract::{

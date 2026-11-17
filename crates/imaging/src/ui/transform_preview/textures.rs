@@ -83,7 +83,7 @@ pub struct PreviewMask {
 
 /// The monitor conversion of the displayed preview (LC27): `key` changes whenever `convert` does;
 /// `convert` takes premultiplied document texels to the monitor's. The app builds it from
-/// `craft-color`'s display transform (PhotoCraft `CanvasDisplay`). Effects keep reading the raw
+/// `craft-color-ui`'s display transform (PhotoCraft `CanvasDisplay`). Effects keep reading the raw
 /// levels.
 #[derive(Clone)]
 #[non_exhaustive]

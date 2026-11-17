@@ -2,7 +2,7 @@
 //! stops only, Reverse and Dither.
 //!
 //! It lives here rather than with the other adjustment editors in craft-imaging because it picks from the palette's
-//! [`GradientGroup`] presets, and a family crate depends on no other family crate but craft-color.
+//! [`GradientGroup`] presets, and a family crate depends on no other family crate but craft-color-ui.
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -17,7 +17,7 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 use std::sync::Arc;
 
-use craft_color::ui::gradient::{ColorStop, GradientEditor, GradientStops, Sampler, StopColor, StopRows, StopRules};
+use craft_color_ui::ui::gradient::{ColorStop, GradientEditor, GradientStops, Sampler, StopColor, StopRows, StopRules};
 use serde::{Deserialize, Serialize};
 
 use super::{GradientGroup, GradientRef};

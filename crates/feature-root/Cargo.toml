@@ -33,7 +33,7 @@ craft-ui-gallery = { path = "../ui-gallery", default-features = false }
 # The gallery's optional domain crates, with the gallery's features (`cl doctor` checks that the lists match).
 craft-automation = { workspace = true, features = ["screen-testing"] }
 craft-browse = { workspace = true, features = ["screen-testing"] }
-craft-color = { workspace = true, features = ["screen-testing"] }
+craft-color-ui = { workspace = true, features = ["screen-testing"] }
 craft-draw = { workspace = true, features = ["screen-testing"] }
 craft-imaging = { workspace = true, features = ["screen-testing"] }
 craft-layers = { workspace = true, features = ["screen-testing"] }

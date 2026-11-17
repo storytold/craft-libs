@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use craft_color::ui::{ColorSamplers, SamplerCache, SamplerReadout, SamplerReadouts};
+use craft_color_ui::ui::{ColorSamplers, SamplerCache, SamplerReadout, SamplerReadouts};
 use craft_theme::Srgba;
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::env::Label;

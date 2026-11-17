@@ -11,10 +11,13 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-palette = { path = "crates/palette" }
+craft-score = { path = "crates/score" }
 craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
+craft-ssip = { path = "crates/ssip" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
 craft-render-parity = { path = "crates/render-parity" }
@@ -26,6 +29,7 @@ craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-win32 = { path = "crates/win32" }
+craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
@@ -49,10 +53,14 @@ craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-behavior = { path = "crates/behavior" }
 craft-atomic = { path = "crates/atomic" }
+craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
+craft-color = { path = "crates/color" }
+craft-color-ui = { path = "crates/color-ui" }
+craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
@@ -60,7 +68,6 @@ craft-dav = { path = "crates/dav" }
 craft-automation = { path = "crates/automation" }
 craft-browse = { path = "crates/browse" }
 craft = { path = "crates/craft" }
-craft-color = { path = "crates/color" }
 craft-design-lint = { path = "crates/design-lint" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-doc-binary = { path = "crates/doc-binary" }
@@ -109,12 +116,14 @@ craft-font-subset = { path = "crates/font-subset" }
 harfbuzz-subset-sys = { git = "https://github.com/storytold/harfbuzz.git", rev = "2659dd807f9a48f75604ee7c76cb709f7b70b950" }
 craft-host = { path = "crates/host" }
 craft-i18n = { path = "crates/i18n" }
+craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
 craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-imaging = { path = "crates/imaging" }
 craft-jpeg = { path = "crates/jpeg" }
+craft-control = { path = "crates/control" }
 craft-control-protocol = { path = "crates/control-protocol" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
 craft-mcp = { path = "crates/mcp" }
@@ -131,6 +140,7 @@ craft-macho = { path = "crates/macho" }
 craft-math = { path = "crates/math" }
 # No default features: craft-audio turns on the craft-media modules each of its features needs.
 craft-media = { path = "crates/media", default-features = false }
+craft-media-source = { path = "crates/media-source" }
 craft-materialx = { path = "crates/materialx" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
@@ -154,10 +164,12 @@ craft-pkcs7 = { path = "crates/pkcs7" }
 craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
 craft-pages = { path = "crates/pages" }
+craft-press-print = { path = "crates/press-print" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-image-codecs = { path = "crates/image-codecs" }
+craft-dds = { path = "crates/dds" }
 craft-psd = { path = "crates/psd" }
 craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
@@ -176,6 +188,7 @@ craft-stencilcraft-format = { path = "crates/stencilcraft-format" }
 craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
+craft-testkit = { path = "crates/testkit" }
 craft-text = { path = "crates/text" }
 craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }
@@ -239,6 +252,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
+
+[workspace.lints.cargo]
+unused_workspace_dependencies = "allow"
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"

@@ -20,7 +20,14 @@ pub fn packages() -> Vec<Package> {
     let t = Duration::from_secs(10);
     let mut out = Vec::new();
     let mut add = |manager, list: Vec<(String, String)>| {
-        out.extend(list.into_iter().filter(|(n, _)| ours(n)).map(|(name, version)| Package { manager, name, version }));
+        out.extend(list.into_iter().filter(|(n, _)| ours(n)).map(|(name, version)| Package {
+            manager,
+            name,
+            version,
+            user: false,
+            origin: None,
+            installation: None,
+        }));
     };
     if let Some(list) = capture("dpkg-query", &["-W", "-f", "${Package}|${db:Status-Status}|${Version}\n"], t) {
         add(InstallSource::Deb, packages::parse_dpkg(&list));
@@ -36,15 +43,28 @@ pub fn packages() -> Vec<Package> {
         add(InstallSource::Pacman, packages::parse_pacman(&list));
     }
     let arch = format!("--arch={}", std::env::consts::ARCH);
-    if let Some(list) = crate::process::capture_flatpak(&["list", "--app", &arch, "--columns=application,version"], t) {
-        let mut flatpaks = packages::parse_flatpak_list(&list);
+    if let Some(list) = crate::process::capture_flatpak(&["list", "--app", &arch, "--columns=application,version,origin,installation"], t) {
+        let mut flatpaks = packages::parse_flatpak_list_with_origin(&list);
         // Bundles built from a release tarball often list no version: ask Flatpak directly.
-        for (id, version) in flatpaks.iter_mut().filter(|(id, v)| v.is_empty() && id.starts_with("ai.storyteller.")) {
-            if let Some(v) = crate::process::capture_flatpak(&["info", &arch, id], t).as_deref().and_then(packages::parse_flatpak_info) {
+        for (id, version, _, installation) in flatpaks.iter_mut().filter(|(id, v, _, _)| v.is_empty() && id.starts_with("ai.storyteller.")) {
+            let custom_scope;
+            let scope_arg = match installation.as_deref() {
+                Some("user") => vec!["--user"],
+                Some("system") | None => vec!["--system"],
+                Some(named) => {
+                    custom_scope = format!("--installation={named}");
+                    vec![custom_scope.as_str()]
+                }
+            };
+            let info_args = [&["info"][..], &scope_arg, &[&arch, id]].concat();
+            if let Some(v) = crate::process::capture_flatpak(&info_args, t).as_deref().and_then(packages::parse_flatpak_info) {
                 *version = v;
             }
         }
-        add(InstallSource::Flatpak, flatpaks);
+        out.extend(flatpaks.into_iter().filter(|(n, _, _, _)| ours(n)).map(|(name, version, origin, installation)| {
+            let is_user = installation.as_deref() == Some("user");
+            Package { manager: InstallSource::Flatpak, name, version, user: is_user, origin, installation }
+        }));
     }
     out
 }
@@ -121,12 +141,41 @@ pub fn appimages(app: &App) -> Vec<(PathBuf, Option<version::Version>)> {
 /// Flatpak package, then a binary on `PATH`.
 pub fn detect(app: &App, snapshot: &Snapshot) -> Option<Installed> {
     if let Some((path, version)) = appimages(app).into_iter().next() {
-        return Some(Installed { version, source: InstallSource::AppImage, location: path.display().to_string(), package: None });
+        return Some(Installed {
+            version,
+            source: InstallSource::AppImage,
+            location: path.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        });
     }
     let order = [InstallSource::Deb, InstallSource::Rpm, InstallSource::Pacman, InstallSource::Flatpak];
     if let Some(p) = packages::find(app, &snapshot.packages, &order) {
-        let location = if p.manager == InstallSource::Flatpak { app.bundle_id() } else { binary_on_path(app.id) };
-        return Some(Installed { version: packages::version_of(p), source: p.manager, location, package: Some(p.name.clone()) });
+        let location = if p.manager == InstallSource::Flatpak { p.name.clone() } else { binary_on_path(app.id) };
+        let externally_managed = p.manager == InstallSource::Flatpak
+            && p.origin.as_deref().is_none_or(|origin| {
+                if packages::is_flatpark_origin(origin) {
+                    return true;
+                }
+                let scope = match p.installation.as_deref() {
+                    Some("user") => "--user".to_string(),
+                    Some("system") | None => "--system".to_string(),
+                    Some(name) => format!("--installation={name}"),
+                };
+                crate::process::capture_flatpak(&["remotes", &scope, "--show-disabled", "--columns=name,url"], Duration::from_secs(10))
+                    .is_none_or(|remotes| packages::remote_manages_flatpak(origin, &remotes))
+            });
+        return Some(Installed {
+            version: packages::version_of(p),
+            source: p.manager,
+            location,
+            package: Some(p.name.clone()),
+            externally_managed,
+            origin: p.origin.clone(),
+            installation: p.installation.clone(),
+        });
     }
     detect_system_install(app)
 }
@@ -137,7 +186,15 @@ pub fn detect(app: &App, snapshot: &Snapshot) -> Option<Installed> {
 /// to whatever installed it, since it can't tell which package manager that was.
 fn detect_system_install(app: &App) -> Option<Installed> {
     let bin = find_binary(app.id)?;
-    Some(Installed { version: binary_version(&bin, app), source: InstallSource::Binary, location: bin.display().to_string(), package: None })
+    Some(Installed {
+        version: binary_version(&bin, app),
+        source: InstallSource::Binary,
+        location: bin.display().to_string(),
+        package: None,
+        externally_managed: true,
+        origin: None,
+        installation: None,
+    })
 }
 
 fn find_binary(id: &str) -> Option<PathBuf> {

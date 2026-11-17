@@ -10,7 +10,15 @@ pub fn detect(app: &App) -> Option<Installed> {
     if !bin.exists() {
         return None;
     }
-    Some(Installed { version: binary_version(&bin, app), source: InstallSource::Binary, location: bin.display().to_string(), package: None })
+    Some(Installed {
+        version: binary_version(&bin, app),
+        source: InstallSource::Binary,
+        location: bin.display().to_string(),
+        package: None,
+        externally_managed: true,
+        origin: None,
+        installation: None,
+    })
 }
 
 /// `<app> --version` prints `<app> 0.5.0 (sha, date)`.

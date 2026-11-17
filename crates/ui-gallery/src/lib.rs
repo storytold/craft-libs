@@ -29,8 +29,8 @@ fn crates() -> Vec<(&'static str, Registered)> {
     crates.push(("craft-automation", craft_automation::testing::registered));
     #[cfg(feature = "browse")]
     crates.push(("craft-browse", craft_browse::ui::testing::registered));
-    #[cfg(feature = "color")]
-    crates.push(("craft-color", craft_color::ui::testing::registered));
+    #[cfg(feature = "color-ui")]
+    crates.push(("craft-color-ui", craft_color_ui::ui::testing::registered));
     #[cfg(feature = "draw")]
     crates.push(("craft-draw", craft_draw::testing::registered));
     #[cfg(feature = "imaging")]

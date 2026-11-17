@@ -2,6 +2,7 @@
 
 mod bench;
 mod cms;
+mod constructors;
 mod fogra39;
 mod named;
 mod profile_id;

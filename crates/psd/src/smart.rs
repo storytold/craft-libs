@@ -259,11 +259,16 @@ pub struct SmartObject {
 impl SmartObject {
     /// Reads the data of a `SoLd` / `SoLE` block.
     pub fn from_placed_layer_data(data: &[u8]) -> Result<Self> {
+        Self::from_placed_layer_data_with_limits(data, crate::descriptor::ParseLimits::default())
+    }
+
+    /// Reads a `SoLd` / `SoLE` block with explicit descriptor container limits.
+    pub fn from_placed_layer_data_with_limits(data: &[u8], limits: crate::descriptor::ParseLimits) -> Result<Self> {
         let mut r = Reader::new(data);
         let _kind = r.array::<4>()?;
         let _version = r.u32()?;
         let _descriptor_version = r.u32()?;
-        let d = Descriptor::read(&mut r)?;
+        let d = Descriptor::read_with_limits(&mut r, limits)?;
         let uuid = d.get_text("Idnt").unwrap_or_default();
         let t = eight(&d, "Trnf").unwrap_or([0.0; 8]);
         // The non-affine transform when present (perspective), else the transform.

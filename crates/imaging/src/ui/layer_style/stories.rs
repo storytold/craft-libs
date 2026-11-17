@@ -2,7 +2,7 @@
 //! document, one story per effect page and the Styles page. Each opens a [`HostedLayerStyle`] on the story's dialog
 //! host from a button.
 
-use craft_color::gradient::{ColorStop, GradientStops};
+use craft_color_ui::gradient::{ColorStop, GradientStops};
 use craft_theme::Srgba;
 use craft_ui::contract::Entry;
 use craft_ui::dialog::stories::hosted;

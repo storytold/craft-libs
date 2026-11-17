@@ -30,14 +30,14 @@ note = "A canvas control: `new(label, Bind<LineGradient>)` over the canvas's vie
 [[type]]
 name = "STOP_STEP"
 old = ""
-new = "craft_color::ui::gradient::stops::STOP_STEP"
+new = "craft_color_ui::ui::gradient::stops::STOP_STEP"
 status = "replaced"
 note = "New documented const: the share of the bar or line one Left or Right press moves a stop or midpoint."
 
 [[type]]
 name = "STOP_STEP_FAR"
 old = ""
-new = "craft_color::ui::gradient::stops::STOP_STEP_FAR"
+new = "craft_color_ui::ui::gradient::stops::STOP_STEP_FAR"
 status = "replaced"
 note = "New documented const: the share one Shift+arrow press moves a stop or midpoint."
 

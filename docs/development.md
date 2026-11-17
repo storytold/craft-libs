@@ -22,7 +22,7 @@ For a crate whose tests you build next, skip `cl check`: a check is a separate c
 
 ### The one-minute component loop
 
-A fix to one gallery component, from the edit to its old/new picture on a page: edit the component's crate, then `cl render <crate> <Component>` (about 10–25 s warm: the changed crate, the renderer's link, the render) and compare the PNGs with the previous ones; put the old and the new image side by side in whatever image viewer or comparison page you use. `story-render` links the framework and only the domain crates its features name, so a change in craft-color rebuilds craft-color and the renderer, not the gallery and its 17 crates. `cl render ui <Component>` renders the framework's own components.
+A fix to one gallery component, from the edit to its old/new picture on a page: edit the component's crate, then `cl render <crate> <Component>` (about 10–25 s warm: the changed crate, the renderer's link, the render) and compare the PNGs with the previous ones; put the old and the new image side by side in whatever image viewer or comparison page you use. `story-render` links the framework and only the domain crates its features name, so a change in craft-color-ui rebuilds craft-color-ui and the renderer, not the gallery and its 17 crates. `cl render ui <Component>` renders the framework's own components.
 
 ## One feature resolution
 

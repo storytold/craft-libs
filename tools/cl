@@ -67,7 +67,7 @@ FRAMEWORK = ["craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-
 ROOT = "feature-root"
 # Domain crates the story renderer can link, by the crate's short name.
 RENDER_FEATURES = {
-    "automation", "browse", "color", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
+    "automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
     "theme-store", "timeline", "dialogs", "font-manager", "update",
 }
 REFUSED = {

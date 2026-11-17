@@ -456,7 +456,7 @@ fn a_copy_on_a_read_only_image_gets_the_download_link() {
     let (src, image, mount) = (dir.path().join("src"), dir.path().join("test.dmg"), dir.path().join("mount"));
     launcher_bundle(&src);
     std::fs::create_dir(&mount).unwrap();
-    let _one_at_a_time = crate::install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _one_at_a_time = crate::install::macos::disk_image_turn();
     let text = std::ffi::OsStr::new;
     let created = hdiutil(
         &[text("create"), text("-quiet"), text("-format"), text("UDZO"), text("-srcfolder"), src.as_os_str(), image.as_os_str()],
@@ -758,7 +758,7 @@ fn unsigned_launcher_dmg(dir: &Path, version: &str) -> Vec<u8> {
     .unwrap();
     std::fs::write(contents.join("MacOS/ArtCraft Launcher"), version).unwrap();
     let dmg = dir.join(format!("built-{version}.dmg"));
-    let one_at_a_time = install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let one_at_a_time = install::macos::disk_image_turn();
     let ok = std::process::Command::new("hdiutil")
         .args(["create", "-quiet", "-format", "UDZO", "-volname", "ArtCraft Launcher", "-srcfolder"])
         .arg(dir.join(format!("src-{version}")))
@@ -820,6 +820,8 @@ fn a_failed_self_update_keeps_its_download_for_the_next_try() {
     let (url, requests) = serve(body.clone(), vec![Reply::Full, Reply::Full]);
     let release = launcher_release("0.2.0", &body, url, dir.path());
     let kept = install::download_path(&paths, &release.assets[0]);
+    // The updates below open the disk image.
+    let _other_processes = install::macos::other_test_processes_wait();
     for _ in 0..2 {
         let error =
             prepare_update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &|| Ok(()), None).unwrap_err();

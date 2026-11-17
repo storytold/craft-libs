@@ -19,13 +19,13 @@ workspace = true
 [features]
 default = []
 # The tool widgets (`craft_draw::ui`).
-ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:craft-color", "craft-color/ui", "dep:craft-settings", "dep:serde_json"]
+ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:craft-color-ui", "craft-color-ui/ui", "dep:craft-settings", "dep:serde_json"]
 # The widgets' stories and trials (`tests/it`).
-screen-testing = ["ui", "craft-ui/testing", "craft-color/screen-testing"]
+screen-testing = ["ui", "craft-ui/testing", "craft-color-ui/screen-testing"]
 
 [dependencies]
 craft-behavior = { workspace = true, optional = true }
-craft-color = { workspace = true, optional = true }
+craft-color-ui = { workspace = true, optional = true }
 craft-host = { workspace = true }
 craft-i18n = { workspace = true }
 craft-keymap = { workspace = true, optional = true }

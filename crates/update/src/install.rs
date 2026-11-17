@@ -99,6 +99,11 @@ pub fn install_at(
     {
         not_running(app, process::running(Path::new(&inst.location)))?;
     }
+    if kind == PackageKind::Flatpak
+        && let Some(installed) = existing.filter(|installed| installed.source == InstallSource::Flatpak && installed.externally_managed)
+    {
+        return Err(managed_elsewhere(app, installed, false).unwrap_or_else(|| "Update this app through its Flatpak repository".into()));
+    }
     bind_artifact_version(app, release, asset)?;
     if !job.replace
         && let Some(inst) = existing
@@ -109,6 +114,16 @@ pub fn install_at(
     }
     check_download_link(app, release, asset)?;
     log::info!("{}: starting {} to {} ({})", app.name, if existing.is_some() { "update" } else { "install" }, release.version_label(), kind.label());
+    #[cfg(all(target_os = "linux", feature = "oci_migration"))]
+    if kind == PackageKind::Flatpak
+        && !job.replace
+        && !release.prerelease
+        && let Some(installed) = existing
+        && let Some(expected) = release.version.as_ref()
+        && linux::migrate_bundle_to_oci(app, installed, expected, job.stop)?
+    {
+        return Ok(None);
+    }
     let file = download(release, asset, job)?;
     log::info!("{}: download ready ({}), running installer...", app.name, file.display());
     // Past this point the install can't be interrupted halfway.
@@ -366,6 +381,9 @@ pub(crate) fn choose_kinds_with(
             // opens and removes them but never replaces them.
             InstallSource::Pacman if is_release_arch_package(app, inst) => Some(PackageKind::ArchPkg),
             InstallSource::Pacman => return Vec::new(),
+            // Repository-managed Flatpaks are externally managed: the launcher will not
+            // replace them with a downloaded local .flatpak bundle.
+            InstallSource::Flatpak if inst.externally_managed => return Vec::new(),
             InstallSource::Flatpak => Some(PackageKind::Flatpak),
             InstallSource::AppImage => Some(PackageKind::AppImage),
             InstallSource::Binary => Some(PackageKind::TarGz),
@@ -465,6 +483,16 @@ fn managed_elsewhere_with(app: &App, installed: &Installed, uninstall: bool, rep
         InstallSource::Pacman if !uninstall && !is_release_arch_package(app, installed) => {
             let pkg = installed.package.clone().unwrap_or_else(|| app.id.to_string());
             Some(pacman_update_hint(app, &pkg, repo_fn(&pkg).as_deref()))
+        }
+        InstallSource::Flatpak if !uninstall && installed.externally_managed => {
+            let default_pkg = app.bundle_id();
+            let pkg = installed.package.as_deref().unwrap_or(&default_pkg);
+            let scope = match installed.installation.as_deref() {
+                Some("user") => "--user".to_string(),
+                Some("system") | None => "--system".to_string(),
+                Some(name) => format!("--installation={name}"),
+            };
+            Some(format!("{} was installed from a Flatpak repository. Update it with flatpak update {scope} {pkg}", app.name))
         }
         InstallSource::Binary => Some(format!("{} was installed outside the launcher. Update or remove it the way it was installed.", app.name)),
         _ => None,
@@ -656,12 +684,18 @@ fn prepare_home(home: &Path) {
     }
 }
 
+/// The start of the name of the folder [`staging_dir`] makes. Six random letters and digits
+/// follow it.
+#[cfg(target_os = "linux")]
+const STAGING: &str = ".artcraft-launcher-";
+
 /// A new folder of our own inside `dir`, removed when dropped: a predictable name there may be
 /// the user's.
 #[cfg(target_os = "linux")]
 fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
     tempfile::Builder::new()
-        .prefix(".artcraft-launcher-")
+        .prefix(STAGING)
+        .rand_bytes(6)
         .tempdir_in(dir)
         .map_err(|e| format!("couldn't create a staging folder in {} ({e})", dir.display()))
 }
@@ -808,8 +842,15 @@ fn cancelled(stop: &Stop) -> impl Fn() -> bool + '_ {
     || stop.check().is_err_and(|e| e == crate::protocol::CANCELLED)
 }
 
+/// For a running helper command: only CANCELLED ends it. PAUSED lets the current command finish
+/// (callers check `stop` before starting the next one).
 #[cfg(target_os = "linux")]
-pub(crate) mod linux;
+fn kill_on_cancel(stop: &Stop) -> impl Fn() -> Result<(), String> + '_ {
+    || if cancelled(stop)() { Err(crate::protocol::CANCELLED.into()) } else { Ok(()) }
+}
+
+#[cfg(target_os = "linux")]
+pub mod linux;
 
 #[cfg(target_os = "macos")]
 pub mod macos;

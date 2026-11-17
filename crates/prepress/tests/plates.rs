@@ -1,6 +1,9 @@
 //! Integration tests of craft-prepress: plates.
 
-use craft_prepress::{Alternate, CmsConversion, Ink, InkId, Options, Process, plates};
+use std::sync::Arc;
+
+use craft_cms::{Profile, builtin};
+use craft_prepress::{Alternate, CmsConversion, Error, Fallback, Ink, InkId, Options, Process, plates, press_profile};
 
 /// A 40 × 40 pt page with `content` and `resources`, `catalog` entries, and `objects`
 /// numbered from 5 (each a whole object body).
@@ -28,6 +31,13 @@ const GOLD: &str = "[/Separation /Gold /DeviceCMYK << /FunctionType 2 /Domain [0
 fn black_and_gold(gs: &str) -> Vec<u8> {
     let resources = format!("/ColorSpace << /CS0 {GOLD} >> /ExtGState << /OP << /op true >> >>");
     page_pdf(&format!("0 0 0 1 k 0 0 40 40 re f {gs} /CS0 cs 0.5 scn 10 10 20 20 re f"), &resources, "", &[])
+}
+
+fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
+    let mut out = format!("<< {dict} /Length {} >> stream\n", data.len()).into_bytes();
+    out.extend_from_slice(data);
+    out.extend_from_slice(b"\nendstream");
+    out
 }
 
 fn black() -> InkId {
@@ -74,6 +84,26 @@ fn a_black_and_gold_page_separates_into_the_process_plates_and_gold() {
     assert_eq!(px(&overprint, 2, 2), k);
     let dark = px(&overprint, 20, 20);
     assert!(dark.iter().zip(k).all(|(d, k)| *d <= k) && dark[2] < k[2], "Gold over black: {dark:?}, black {k:?}");
+}
+
+#[test]
+fn the_press_profile_is_the_one_the_plates_separate_through() {
+    let synthetic = builtin::COATED_CMYK_ICC;
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /DestOutputProfile 5 0 R >>]";
+    let red = |catalog: &str| page_pdf("1 0 0 rg 0 0 40 40 re f", "", catalog, &[stream("/N 4", synthetic)]);
+    let parsed = |icc: &[u8]| Some(Profile::parse(icc).unwrap());
+    let defaults = Options::default();
+
+    assert_eq!(press_profile(&red(intent), 0, &defaults).unwrap(), parsed(synthetic), "the output intent's");
+    assert_eq!(press_profile(&red(""), 0, &defaults).unwrap(), parsed(builtin::COATED_FOGRA39_ICC), "FOGRA39");
+    let callers = Options { fallback: Fallback::Profile(Arc::from(synthetic)), ..Options::default() };
+    assert_eq!(press_profile(&red(""), 0, &callers).unwrap(), parsed(synthetic), "the caller's");
+    let formulas = Options { fallback: Fallback::DeviceFormulas, ..Options::default() };
+    assert_eq!(press_profile(&red(""), 0, &formulas).unwrap(), None, "device formulas have no profile");
+    assert_eq!(press_profile(&red(intent), 0, &formulas).unwrap(), parsed(synthetic), "an output intent still wins");
+    assert!(matches!(press_profile(&red(""), 1, &defaults), Err(Error::NoPage(1))));
+    let broken = Options { fallback: Fallback::Profile(Arc::from(&b"not a profile"[..])), ..Options::default() };
+    assert!(matches!(press_profile(&red(""), 0, &broken), Err(Error::Profile(_))));
 }
 
 #[test]

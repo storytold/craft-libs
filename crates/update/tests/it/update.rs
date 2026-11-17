@@ -73,6 +73,7 @@ fn an_install_waits_while_the_app_holds_unsaved_work() {
     let (mut fixture, dialogs) = rig(DialogHost::new());
     let mut u = updater(Ok(None));
     u.offer(newer());
+    u.settle_for_tests(&ctx());
     u.request_install(false);
     assert!(!u.is_installing(), "nothing is scheduled while there is unsaved work");
     assert!(u.status_message().is_some());
@@ -98,11 +99,25 @@ fn a_prompt_opened_before_the_pin_cannot_install_the_stable_release() {
     let path = dir.path().join("versions.json");
     let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(&path);
     u.offer(newer());
+    u.settle_for_tests(&ctx());
     assert!(u.prompt_open());
     pin(&path, &VersionTrack::Pinned("v0.13.0".into()));
     u.request_install(true);
     assert!(!u.is_installing(), "nothing installs once the launcher pinned the app");
     assert!(!u.prompt_open());
+}
+
+/// A pin the launcher makes while an offer is inspected holds the offer: no prompt opens.
+#[trial]
+fn a_pin_made_while_an_offer_is_inspected_holds_the_offer() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let path = dir.path().join("versions.json");
+    let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(&path);
+    u.offer(newer());
+    pin(&path, &VersionTrack::Pinned("v0.13.0".into()));
+    u.settle_for_tests(&ctx());
+    assert!(!u.prompt_open(), "no prompt for the stable release once the launcher pinned the app");
+    assert!(u.managed().is_some());
 }
 
 #[trial]

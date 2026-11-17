@@ -7,7 +7,7 @@ use super::arrowheads::arrow_rows;
 use super::stroke_cells::{style_button, take_width, width_cell};
 use super::{LINE_WEIGHT_RANGE, LiveShape, RADIUS_RANGE, ShapeAppearance, ShapeChange, ShapeWords};
 use craft_behavior::{EditEvent, EditEvents, NumberCodec};
-use craft_color::ui::{Paint, PaintChip, PaintChipOutput, ScreenPickGesture};
+use craft_color_ui::ui::{Paint, PaintChip, PaintChipOutput, ScreenPickGesture};
 use craft_theme::Srgba;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};

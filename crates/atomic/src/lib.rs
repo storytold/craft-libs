@@ -71,6 +71,9 @@ pub trait AtomicFs {
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
     /// Give the open temporary file its final permissions.
     fn set_permissions(&self, file: &File, perms: std::fs::Permissions) -> io::Result<()>;
+    /// Put the open temporary file in group `gid` (Unix only).
+    #[cfg(unix)]
+    fn set_group(&self, file: &File, gid: u32) -> io::Result<()>;
 }
 
 /// The production file system implementation.
@@ -126,6 +129,11 @@ impl AtomicFs for RealFs {
 
     fn set_permissions(&self, file: &File, perms: std::fs::Permissions) -> io::Result<()> {
         file.set_permissions(perms)
+    }
+
+    #[cfg(unix)]
+    fn set_group(&self, file: &File, gid: u32) -> io::Result<()> {
+        std::os::unix::fs::fchown(file, None, Some(gid))
     }
 }
 
@@ -343,10 +351,29 @@ fn split(target: &Path, path: &Path) -> io::Result<(PathBuf, String)> {
     Ok((dir, name.to_string_lossy().into_owned()))
 }
 
-/// Create a temporary file in `dir`, fill it with `fill`, give it the permissions of the file it
-/// replaces (`replaced`, Unix) and flush it. Permission restoration is skipped when the mode
-/// already matches after `fill`. A leftover file with the same name is skipped. When any step
-/// fails, the temporary file is removed.
+/// Give `perms` the replaced file's group, or drop its group bits when the stage cannot join
+/// that group. A stage already in the group needs no fchown, which some filesystems reject even
+/// as a no-op, and dropping the bits there would narrow a mode the replaced file granted.
+#[cfg(unix)]
+fn adopt_group(fs: &dyn AtomicFs, file: &File, stage_gid: u32, replaced_gid: u32, perms: std::fs::Permissions) -> io::Result<std::fs::Permissions> {
+    use std::os::unix::fs::PermissionsExt;
+    if perms.mode() & 0o070 == 0 || stage_gid == replaced_gid {
+        return Ok(perms);
+    }
+    if fs.set_group(file, replaced_gid).is_ok() {
+        return Ok(perms);
+    }
+    let mut narrowed = perms;
+    narrowed.set_mode(narrowed.mode() & !0o070);
+    Ok(narrowed)
+}
+
+/// Create a temporary file in `dir`, fill it with `fill`, give it the permissions and group of
+/// the file it replaces (`replaced`, Unix) and flush it. Permission restoration is skipped when
+/// the mode already matches after `fill`; the group bits are dropped when the file cannot be put
+/// in the replaced file's group, so they never open the file to a group that was not granted
+/// them. A leftover file with the same name is skipped. When any step fails, the temporary file
+/// is removed.
 fn stage(
     fs: &dyn AtomicFs,
     dir: &Path,
@@ -383,6 +410,14 @@ fn stage(
                             // Compare permission and special bits, not file-type bits.
                             if (file.metadata()?.permissions().mode() & 0o7777) == (p.mode() & 0o7777) {
                                 return Ok(());
+                            }
+                            // The group bits belong to the replaced file's group, which a new
+                            // inode need not be in (setgid directory, another primary group).
+                            if let Some(replaced) = replaced {
+                                let stage_gid = std::os::unix::fs::MetadataExt::gid(&file.metadata()?);
+                                let replaced_gid = std::os::unix::fs::MetadataExt::gid(replaced);
+                                let perms = adopt_group(fs, &file, stage_gid, replaced_gid, p)?;
+                                return fs.set_permissions(&file, perms);
                             }
                         }
                         fs.set_permissions(&file, p)

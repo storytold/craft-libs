@@ -3,7 +3,7 @@
 
 use std::ops::RangeInclusive;
 
-use craft_color::ui::Paint;
+use craft_color_ui::ui::Paint;
 use serde::{Deserialize, Serialize};
 
 use crate::stroke::StrokeStyle;

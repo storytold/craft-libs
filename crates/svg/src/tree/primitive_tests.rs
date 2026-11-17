@@ -109,8 +109,11 @@ fn hand_written_segments_are_recognised_too() {
             Segment::Close,
         ],
         fill: None,
+        fill_rule: crate::tree::document::FillRule::NonZero,
         stroke: None,
         source_path: crate::tree::document::NodePath::default(),
+        id: String::new(),
+        transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     };
     assert_eq!(path.primitive(), Some(Primitive::Ellipse { cx: 5.0, cy: 5.0, rx: 5.0, ry: 5.0 }));
 }

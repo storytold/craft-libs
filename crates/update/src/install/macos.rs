@@ -64,6 +64,37 @@ impl<'a> Expect<'a> {
 /// `hdiutil create` too), since it turns concurrent requests away.
 pub(crate) static DISK_IMAGES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Blocks until no other test process (nor another thread here) holds the lock file that the
+/// tests take around their disk-image work, and holds it until the file is dropped.
+#[cfg(test)]
+pub(crate) fn other_test_processes_wait() -> std::fs::File {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(std::env::temp_dir().join("craft-update-tests-disk-images.lock"))
+        .unwrap();
+    file.lock().unwrap();
+    file
+}
+
+/// A test's turn at the disk-image helper, taken from other test processes and from the
+/// other threads of this one, until dropped.
+#[cfg(test)]
+pub(crate) struct DiskImageTurn {
+    _in_process: std::sync::MutexGuard<'static, ()>,
+    _other_processes: std::fs::File,
+}
+
+/// Waits for [`DiskImageTurn`]. The lock file comes first: a test that holds only the file
+/// around an install waits for [`DISK_IMAGES`] inside it.
+#[cfg(test)]
+pub(crate) fn disk_image_turn() -> DiskImageTurn {
+    let other_processes = other_test_processes_wait();
+    let in_process = DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    DiskImageTurn { _in_process: in_process, _other_processes: other_processes }
+}
+
 /// Deep signature checks wait their turn here. `codesign --deep` reads every file of the
 /// bundle, so checks that overlap compete for the disk and all slow down. The time limit
 /// starts when a check's turn comes.

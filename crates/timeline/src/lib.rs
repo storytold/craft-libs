@@ -43,6 +43,7 @@ pub mod model;
 #[cfg(feature = "otio")]
 pub mod otio;
 pub mod path;
+pub mod preflight;
 pub mod rate;
 pub mod rates;
 pub mod report;
@@ -75,6 +76,8 @@ mod clips_tests;
 mod clock_tests;
 #[cfg(test)]
 mod frames_tests;
+#[cfg(test)]
+mod preflight_tests;
 #[cfg(test)]
 mod time_tests;
 #[cfg(test)]

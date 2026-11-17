@@ -1,5 +1,5 @@
 //! Screen capture for the screen colour picker (F04.01): every monitor's pixels and ICC profile,
-//! taken once when the picker opens. The UI side is `craft_color::ui::screen_picker`.
+//! taken once when the picker opens. The UI side is `craft_color_ui::ui::screen_picker`.
 //!
 //! Backends: X11 (`GetImage` per RandR monitor, `_ICC_PROFILE` properties), Wayland (the
 //! Screenshot portal's `PickColor`, where the compositor's own picker returns one colour), macOS (CoreGraphics window-list image per display, the

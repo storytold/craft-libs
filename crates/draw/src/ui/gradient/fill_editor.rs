@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, Mixed};
-use craft_color::ui::ScreenPickGesture;
-use craft_color::ui::gradient::{GradientEditor, GradientStops, StopColor, StopRef};
+use craft_color_ui::ui::ScreenPickGesture;
+use craft_color_ui::ui::gradient::{GradientEditor, GradientStops, StopColor, StopRef};
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Segmented};

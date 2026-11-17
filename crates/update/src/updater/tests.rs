@@ -21,6 +21,18 @@ fn newer() -> Release {
     Release { tag: "v9.0.0".into(), version: crate::version::parse("9.0.0"), ..Release::default() }
 }
 
+/// Every offer's prompt, as the passes after the offers' threads answered would open it.
+fn settle_offer(updater: &mut Updater) {
+    updater.settle_offers(&egui::Context::default());
+    assert!(updater.next_offer.is_none(), "every offer has answered");
+}
+
+/// Offers [`newer`] as the app would and waits for its prompt.
+fn offer_now(updater: &mut Updater) {
+    updater.offer(newer());
+    settle_offer(updater);
+}
+
 /// One pass of the updater on a dialog host.
 fn frame(u: &mut Updater, _ctx: &egui::Context, can_start: bool) -> Action {
     u.run(&mut DialogHost::new(), can_start)
@@ -40,7 +52,7 @@ fn the_helper_starts_once_when_the_app_exits() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let ctx = egui::Context::default();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     let starts = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&starts);
     let (tx, rx) = channel();
@@ -72,7 +84,7 @@ fn a_canceled_close_keeps_the_update_ready() {
     use std::sync::atomic::Ordering;
     let ctx = egui::Context::default();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     let (starts, restart) = counted_restart();
     let (tx, rx) = channel();
     u.install = Some((rx, newer()));
@@ -312,7 +324,7 @@ fn a_check_answering_during_an_update_reports_the_update() {
     let ctx = egui::Context::default();
     for answer in [Ok(None), Err("offline".to_owned()), Ok(Some((newer(), false)))] {
         let mut u = updater(Ok(None));
-        u.offer(newer());
+        offer_now(&mut u);
         u.check_now();
         assert_eq!(u.status(), &Status::Checking);
         let (check_tx, check_rx) = channel();
@@ -327,7 +339,7 @@ fn a_check_answering_during_an_update_reports_the_update() {
         assert_eq!(u.status(), &Status::Ready, "after {answer:?}");
 
         let mut u = updater(Ok(None));
-        u.offer(newer());
+        offer_now(&mut u);
         u.check_now();
         let (check_tx, check_rx) = channel();
         u.check = Some(check_rx);
@@ -363,7 +375,7 @@ fn a_failed_install_ends_the_installing_status() {
 fn a_requested_check_finds_a_helper_failure_while_the_app_still_runs() {
     let ctx = egui::Context::default();
     let (_dir, paths, mut u) = with_records("0.1.0");
-    u.offer(newer());
+    offer_now(&mut u);
     let (tx, rx) = channel();
     u.install = Some((rx, newer()));
     assert!(tx.send(Ok(Restart::scheduled())).is_ok());
@@ -400,7 +412,7 @@ fn a_retry_after_a_helper_failure_while_the_app_runs_waits_for_the_exit() {
     use std::sync::atomic::Ordering;
     let ctx = egui::Context::default();
     let (_dir, paths, mut u) = with_records("0.1.0");
-    u.offer(newer());
+    offer_now(&mut u);
     let (tx, rx) = channel();
     u.install = Some((rx, newer()));
     assert!(tx.send(Ok(Restart::scheduled())).is_ok());
@@ -466,13 +478,13 @@ fn an_offer_before_the_check_at_start_says_why_the_last_update_failed() {
     let ctx = egui::Context::default();
     let (_dir, paths, mut u) = with_records("0.1.0");
     self_update::record_failure(&paths, "disk full");
-    u.offer(newer());
+    offer_now(&mut u);
     assert_eq!(u.prompt.as_ref().and_then(Offer::message), None, "the failure is not read before the check at start");
     start_answered(&mut u, &ctx, Ok(Some(newer())));
     assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
     assert_eq!(u.prompt.as_ref().and_then(Offer::message).as_deref(), Some("The update could not be installed: disk full"));
     u.prompt = None;
-    u.offer(newer());
+    offer_now(&mut u);
     assert_eq!(u.prompt.as_ref().and_then(Offer::message), None, "the reason is shown once");
 }
 
@@ -649,7 +661,7 @@ fn prompt_message(u: &Updater) -> String {
 /// An updater whose install has finished and waits for the app to close.
 fn installed(ctx: &egui::Context) -> Updater {
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     let (tx, rx) = channel();
     u.install = Some((rx, newer()));
     assert!(tx.send(Ok(Restart::scheduled())).is_ok());
@@ -663,7 +675,7 @@ fn installed(ctx: &egui::Context) -> Updater {
 fn save_and_update_saves_first_and_then_installs() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     click_save(&mut u, &mut screen);
     assert!(u.take_save_request(), "the click asks the app to save");
     assert!(!u.take_save_request(), "once");
@@ -681,7 +693,7 @@ fn save_and_update_saves_first_and_then_installs() {
 fn a_note_from_an_earlier_click_goes_when_the_save_starts() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     u.request_install(false);
     assert!(prompt_message(&u).starts_with("Save or close"));
     click_save(&mut u, &mut screen);
@@ -693,7 +705,7 @@ fn a_note_from_an_earlier_click_goes_when_the_save_starts() {
 fn a_failed_save_says_why_and_calls_the_install_off() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     click_save(&mut u, &mut screen);
     u.save_stopped(Some("disk full".into()));
     assert!(!saving(&u));
@@ -709,7 +721,7 @@ fn a_failed_save_says_why_and_calls_the_install_off() {
 fn a_save_that_leaves_work_unsaved_goes_back_to_the_note() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     click_save(&mut u, &mut screen);
     assert!(u.take_save_request());
     u.save_stopped(None);
@@ -725,7 +737,7 @@ fn a_save_that_leaves_work_unsaved_goes_back_to_the_note() {
 fn work_that_can_no_longer_be_saved_stops_the_saving() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     click_save(&mut u, &mut screen);
     screen.pass(&mut u, false, false);
     assert!(!saving(&u));
@@ -736,7 +748,7 @@ fn work_that_can_no_longer_be_saved_stops_the_saving() {
 #[trial]
 fn a_late_save_stopped_changes_nothing() {
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     u.save_stopped(Some("disk full".into()));
     assert_eq!(prompt_message(&u), "");
 }
@@ -746,13 +758,13 @@ fn a_late_save_stopped_changes_nothing() {
 fn dismissing_during_the_save_forgets_the_install() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     click_save(&mut u, &mut screen);
     screen.fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
     screen.pass(&mut u, false, true);
     assert!(!u.prompt_open());
     assert!(!u.take_save_request());
-    u.offer(newer());
+    offer_now(&mut u);
     self_updating(&mut u);
     screen.pass(&mut u, true, false);
     assert!(u.prompt.is_some() && u.install.is_none());
@@ -764,9 +776,9 @@ fn dismissing_during_the_save_forgets_the_install() {
 fn a_new_offer_during_the_save_installs_nothing() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     click_save(&mut u, &mut screen);
-    u.offer(newer());
+    offer_now(&mut u);
     self_updating(&mut u);
     screen.pass(&mut u, true, false);
     assert!(u.prompt.is_some() && u.install.is_none());
@@ -779,7 +791,7 @@ fn a_new_offer_during_the_save_installs_nothing() {
 fn the_button_needs_both_unsaved_work_and_an_app_that_can_save() {
     let mut screen = Screen::new();
     let mut u = updater(Ok(None));
-    u.offer(newer());
+    offer_now(&mut u);
     self_updating(&mut u);
     screen.pass(&mut u, false, true);
     assert!(screen.shows("Save and Update"), "unsaved work the app can save");
@@ -845,4 +857,187 @@ fn save_and_update_after_a_canceled_close_closes_once_the_work_is_saved() {
     assert!(!saving(&u), "a close the user cancels leaves no spinner");
     assert_eq!(screen.pass(&mut u, true, false), Action::None);
     assert!(u.install.is_none());
+}
+
+/// A release the app offers itself is inspected on a thread of its own, as one a check finds
+/// is: `offer` and a pass that runs while reading the installed files is stalled return at
+/// once, and the prompt opens with the thread's answer at the pass after it answers.
+#[trial]
+fn a_stalled_offer_inspection_does_not_block_a_frame() {
+    let ctx = egui::Context::default();
+    let (seen_tx, seen) = channel();
+    let (resume, resumed) = channel::<()>();
+    let resumed = Mutex::new(resumed);
+    let calls = Arc::new(Mutex::new(0_u32));
+    let probe_calls = Arc::clone(&calls);
+    let mut u = updater(Ok(None)).with_probe(Arc::new(move |_, _| {
+        *probe_calls.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        let _ = seen_tx.send(());
+        // Stalled until the test lets it go, like a read on storage that does not answer.
+        let _ = resumed.lock().unwrap_or_else(PoisonError::into_inner).recv();
+        true
+    }));
+    u.offer(newer());
+    assert!(u.prompt.is_none(), "offer returns before the install is inspected");
+    assert!(seen.recv().is_ok(), "the offer's thread inspects the install");
+    u.tick(&ctx);
+    assert!(u.prompt.is_none(), "no prompt while the inspection is stalled");
+    assert!(u.offered.is_some(), "the offer is still being inspected");
+
+    assert!(resume.send(()).is_ok());
+    settle_offer(&mut u);
+    assert!(u.prompt.as_ref().is_some_and(|p| p.installs_itself), "the prompt offers Update and Restart");
+    assert_eq!(u.status(), &Status::Idle);
+    assert_eq!(*calls.lock().unwrap_or_else(PoisonError::into_inner), 1, "the pass did not inspect the install again");
+}
+
+/// Offers made while a slow inspection runs start no thread of their own: the newest waits for
+/// it, is inspected next, and its prompt opens in place of the earlier ones.
+#[trial]
+fn offers_during_a_stalled_inspection_wait_for_it() {
+    let (seen_tx, seen) = channel();
+    let (resume, resumed) = channel::<()>();
+    let resumed = Mutex::new(resumed);
+    let inspected = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&inspected);
+    let mut u = updater(Ok(None)).with_probe(Arc::new(move |_: &'static App, release: &Release| {
+        log.lock().unwrap_or_else(PoisonError::into_inner).push(release.tag.clone());
+        let _ = seen_tx.send(());
+        let _ = resumed.lock().unwrap_or_else(PoisonError::into_inner).recv();
+        true
+    }));
+    let tagged = |tag: &str| Release { tag: tag.into(), ..newer() };
+    u.offer(tagged("v9.0.0"));
+    assert!(seen.recv().is_ok(), "the first offer is being inspected");
+    u.offer(tagged("v9.0.1"));
+    u.offer(tagged("v9.0.2"));
+    // One go-ahead per offer, so that a thread started for each would not stall the test.
+    for _ in 0..3 {
+        assert!(resume.send(()).is_ok());
+    }
+    settle_offer(&mut u);
+    let inspected = inspected.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    assert_eq!(inspected, ["v9.0.0", "v9.0.2"], "one inspection at a time, and only the newest offer waits");
+    assert_eq!(u.prompt.as_ref().map(|p| p.release.tag.as_str()), Some("v9.0.2"));
+}
+
+/// A check at start that finds the release while the app's own offer is still inspected leaves
+/// the prompt to the offer, which says why the last update failed.
+#[trial]
+fn a_check_answering_during_an_offer_leaves_the_prompt_to_the_offer() {
+    let ctx = egui::Context::default();
+    let (_dir, paths, mut u) = with_records("0.1.0");
+    self_update::record_failure(&paths, "disk full");
+    u.offer(newer());
+    start_answered(&mut u, &ctx, Ok(Some(newer())));
+    settle_offer(&mut u);
+    assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
+    assert_eq!(prompt_message(&u), "The update could not be installed: disk full");
+}
+
+/// A requested check that answers while an offer is inspected keeps its answer when the
+/// offer's prompt opens.
+#[trial]
+fn an_offer_opening_after_a_requested_check_keeps_its_answer() {
+    let ctx = egui::Context::default();
+    let mut u = updater(Ok(None));
+    u.check_now();
+    u.offer(newer());
+    u.settle_for_tests(&ctx);
+    assert_eq!(u.status(), &Status::UpToDate);
+    settle_offer(&mut u);
+    assert!(u.prompt_open());
+    assert_eq!(u.status(), &Status::UpToDate, "the offer's prompt does not close the check's result");
+}
+
+/// An installation that starts while an offer is inspected keeps the offer's prompt from
+/// opening over it.
+#[trial]
+fn an_offer_answering_during_an_install_opens_no_prompt() {
+    let mut u = updater(Ok(None));
+    u.offer(newer());
+    let (_tx, rx) = channel();
+    u.install = Some((rx, newer()));
+    settle_offer(&mut u);
+    assert!(!u.prompt_open());
+}
+
+/// An installation that fails while an offer made before it is still inspected keeps the
+/// prompt that says why: the offer's answer, and an offer waiting for it, open nothing.
+#[trial]
+fn an_offer_answering_after_a_failed_install_keeps_the_failure() {
+    let ctx = egui::Context::default();
+    let (seen_tx, seen) = channel();
+    let (resume, resumed) = channel::<()>();
+    let resumed = Mutex::new(resumed);
+    let mut u = updater(Ok(None)).with_probe(Arc::new(move |_: &'static App, _: &Release| {
+        let _ = seen_tx.send(());
+        let _ = resumed.lock().unwrap_or_else(PoisonError::into_inner).recv();
+        true
+    }));
+    u.offer(newer());
+    assert!(seen.recv().is_ok(), "the offer is being inspected");
+    u.offer(Release { tag: "v9.0.2".into(), ..newer() });
+    let (tx, rx) = channel();
+    u.install = Some((rx, newer()));
+    assert!(tx.send(Err("disk full".into())).is_ok());
+    u.tick(&ctx);
+    assert_eq!(prompt_message(&u), "disk full");
+    for _ in 0..2 {
+        assert!(resume.send(()).is_ok());
+    }
+    settle_offer(&mut u);
+    assert_eq!(prompt_message(&u), "disk full", "the failure's prompt stays open");
+    offer_now(&mut u);
+    assert_eq!(prompt_message(&u), "", "a later offer opens its own prompt");
+}
+
+/// The prompt for an earlier release cannot install it while a newer offer is inspected.
+#[trial]
+fn a_new_offer_closes_the_prompt_for_the_earlier_release() {
+    let mut u = updater(Ok(None));
+    offer_now(&mut u);
+    self_updating(&mut u);
+    u.offer(Release { tag: "v9.0.2".into(), ..newer() });
+    u.request_install(true);
+    assert!(!u.prompt_open(), "nothing is left to click for the earlier release");
+    assert!(u.install.is_none());
+    settle_offer(&mut u);
+    assert_eq!(u.prompt.as_ref().map(|p| p.release.tag.as_str()), Some("v9.0.2"));
+}
+
+/// A save that ends while a newer offer is still inspected installs nothing either: the save
+/// was asked for the earlier release.
+#[trial]
+fn a_save_ending_while_a_new_offer_is_inspected_installs_nothing() {
+    let mut screen = Screen::new();
+    let mut u = updater(Ok(None));
+    offer_now(&mut u);
+    click_save(&mut u, &mut screen);
+    assert!(u.take_save_request());
+    u.offer(newer());
+    assert!(!u.prompt_open(), "the earlier release's prompt closes while the new one is inspected");
+    screen.pass(&mut u, true, false);
+    assert!(u.install.is_none());
+    settle_offer(&mut u);
+    assert!(u.prompt.as_ref().is_some_and(|p| !p.saving));
+    assert_eq!(prompt_message(&u), "", "{}", prompt_message(&u));
+    assert!(u.install.is_none());
+}
+
+/// Later on a finished install drops the close it asked for: saving the work afterwards does
+/// not close the app. The update stays ready, and Restart to Update asks for the close again.
+#[trial]
+fn later_on_a_finished_install_does_not_close_the_app_after_a_save() {
+    let ctx = egui::Context::default();
+    let mut screen = Screen::new();
+    let mut u = installed(&ctx);
+    assert_eq!(screen.pass(&mut u, false, false), Action::None, "unsaved work holds the close back");
+    screen.fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(screen.pass(&mut u, false, false), Action::None);
+    assert!(!u.prompt_open());
+    assert_eq!(screen.pass(&mut u, true, false), Action::None, "the work is saved, and the user chose Later");
+    assert!(u.restart.is_some(), "the update still waits for the exit");
+    u.restart_to_update();
+    assert_eq!(screen.pass(&mut u, true, false), Action::Close);
 }

@@ -121,13 +121,13 @@ An app has one dependency, one pin and one import root.
 ```toml
 [dependencies]
 craft = { git = "https://github.com/storytold/craft-libs", rev = "...", features = [
-    "ui", "color", "layers", "theme-store", "platform-clipboard",
+    "ui", "color-ui", "layers", "theme-store", "platform-clipboard",
 ] }
 ```
 
 ```rust
 use craft::prelude::*;
-use craft::color::ui::{ColorPicker, SwatchPalette};
+use craft::color_ui::ui::{ColorPicker, SwatchPalette};
 ```
 
 The facade's rules and features are in [3.3](#33-the-craft-facade).
@@ -192,7 +192,7 @@ Tiers describe dependency direction. A crate depends only on lower tiers. They a
 ```text
 Tier 3  craft              facade: re-exports and forwards features
           |
-Tier 2  families           craft-color, craft-draw, craft-layers, ...
+Tier 2  families           craft-color-ui, craft-draw, craft-layers, ...
           |
 Tier 1  UI library         craft-ui-contract, -widgets, -panels, -canvas, -patterns, -shell; the craft-ui facade
           |
@@ -204,7 +204,7 @@ Rules:
 - Tier 0 needs no egui. A tier-0 crate that converts to egui types does so behind a feature: `craft-theme`'s `ecolor`, `craft-host`'s `ui`, `craft-keymap`'s `egui`.
 - The UI library names no document concept and never depends on a family.
 - A family keeps core types at the crate root and egui UI in `ui` behind the `ui` feature, and may be UI-only.
-- No family's `ui` depends on another family's `ui`, except on `craft-color`, the base family any family may use (`crates/craft/tests/families.rs` checks it). A widget two other families share moves down to the UI library.
+- No family's `ui` depends on another family's `ui`, except on `craft-color-ui`, the base family any family may use (`crates/craft/tests/families.rs` checks it). A widget two other families share moves down to the UI library.
 
 ### 3.2 The UI library crates
 
@@ -239,7 +239,7 @@ graph TD
 
 ### 3.3 The `craft` facade
 
-- Every public UI type is re-exported at `<crate>::ui`; every core type at the crate root: `craft::color::ui::ColorPicker`, `craft::color::Palette`.
+- Every public UI type is re-exported at `<crate>::ui`; every core type at the crate root: `craft::color_ui::ui::ColorPicker`, `craft::color_ui::Palette`.
 - `craft::prelude` holds `AppInfo`, `Host`, `Section`, `Tokens`, `DialogStack` and `Outcome`. There are no other preludes.
 - A feature can move between crates as long as `craft::<family>` stays.
 
@@ -253,7 +253,7 @@ Native-only modules use `#[cfg(not(target_arch = "wasm32"))]`. A crate that cann
 | --- | --- | --- |
 | Facade | One dependency for apps | `craft` |
 | UI library | Shared UI infrastructure ([3.2](#32-the-ui-library-crates)) | `craft-ui` (facade), `craft-ui-contract`, `craft-ui-widgets`, `craft-ui-panels`, `craft-ui-canvas`, `craft-ui-patterns`, `craft-ui-shell`, `craft-ui-macros`, `craft-behavior` |
-| Domain families | Features with core logic and egui UI | `craft-color`, `craft-draw`, `craft-imaging`, `craft-layers`, `craft-browse`, `craft-text`, `craft-font-manager`, `craft-pages`, `craft-review`, `craft-table`, `craft-timeline`; planned: `craft-code` |
+| Domain families | Features with core logic and egui UI | `craft-color-ui`, `craft-draw`, `craft-imaging`, `craft-layers`, `craft-browse`, `craft-text`, `craft-font-manager`, `craft-pages`, `craft-review`, `craft-table`, `craft-timeline`; planned: `craft-code` |
 | Infrastructure services | Egui-free logic that families and apps share | `craft-theme`, `craft-theme-store`, `craft-host`, `craft-i18n`, `craft-settings`, `craft-keymap`, `craft-menu`, `craft-automation`, `craft-update`, `craft-cms`, `craft-ai-core`, `craft-atomic`, `craft-docpath`, `craft-font-catalog`, `craft-font-store`, `craft-font-subset`, `craft-pdf`, `craft-prepress`, `craft-proof` |
 | Formats and codecs | Clean-room readers and writers | `craft-audio`, `craft-crw`, `craft-jpeg`, `craft-media`, `craft-doc`, `craft-ecproj-format`, `craft-pcraft-format`, `craft-vectorcraft-format` |
 | Platform adapters | One operating-system, window-system or browser service each | `craft-platform`, `craft-dialogs`, `craft-window`, `craft-win32`, `craft-quit`, `craft-print`, `craft-web-api`, `craft-web-host`; next: `craft-gpu` |
@@ -591,7 +591,7 @@ Along a height its parent sizes from its content, a container that fills takes i
 
 | Crate | Components |
 | --- | --- |
-| `craft-color` | ColorPicker, ColorArea, ColorWheel, ColorDisc, ColorRamp, ColorPopover, SwatchPair, SwatchPalette, GradientEditor, the gradient stop rules and the gradient model |
+| `craft-color-ui` | ColorPicker, ColorArea, ColorWheel, ColorDisc, ColorRamp, ColorPopover, SwatchPair, SwatchPalette, GradientEditor, the gradient stop rules and the gradient model |
 | `craft-draw` | GradientSwatch, GradientPalette, gradient line, TransformFields, transform box, bezier paths, crop frame, perspective crop quad, pen draft |
 | `craft-imaging` | LevelsEditor, CurveEditor, Histogram, warp grid |
 | `craft-layers` | Layers panel, rows, filter bar, thumbnails |
@@ -756,7 +756,7 @@ Size: about 185 library tasks, plus about 28 PhotoCraft tasks and about 20 Vecto
 
 - The UI feature is `ui` in every crate, plus `screen-testing`.
 - `craft-host` carries the services every feature reads.
-- Domain code moves out of the UI library into `craft-draw`, `craft-imaging`, `craft-color` and `craft-print`.
+- Domain code moves out of the UI library into `craft-draw`, `craft-imaging`, `craft-color-ui` and `craft-print`.
 - The `craft` facade gives one dependency and one pin.
 - The gallery and word registry cover every `ui` crate.
 - Each app's `xtask` checks the egui revision.
@@ -837,7 +837,7 @@ The layers reach `next` bottom-up, so each push builds and passes CI:
 | --- | --- | --- |
 | 1 | egui patches | The fork's commits go to `storytold/egui` branch `next`; `craft-libs` moves its egui pin to it ([3.7](#37-one-egui-revision)). Everything else depends on this |
 | 2 | Icon sets | Data only |
-| 3 | Token model and themes | `craft-theme`, `craft-theme-store`, `craft-color`. New crates; nothing depends on them yet |
+| 3 | Token model and themes | `craft-theme`, `craft-theme-store`, `craft-color-ui`. New crates; nothing depends on them yet |
 | 4 | Library core | `craft-behavior`, `craft-ui-macros`, `craft-ui-contract` (runtime, style, primitives, contract, test kit), `craft-ui-widgets` |
 | 5 | Panels, canvas, patterns, shell | `craft-ui-panels`, `craft-ui-canvas`, `craft-ui-patterns`, `craft-ui-shell`, the `craft-ui` facade, with `craft-draw` and `craft-imaging` |
 | 6 | Host, facade and changes to existing crates | `craft-host`, `craft`, and changes in `craft-menu`, `craft-keymap`, `craft-window` and `craft-platform` |
@@ -865,7 +865,7 @@ The library replaces upstream's `craft-ui` crate, and changes public items in `c
 | Primitives, controls, composites, patterns | built |
 | Canvas shell, docking with iconic column and flyouts, title bar | built |
 | Dialog frame, prompts, full-window dialogs, preferences window, typed dialog stack | built |
-| `craft-color`, `craft-draw`, `craft-imaging`, `craft-layers`, `craft-browse`, `craft-automation`, `craft-pages`, `craft-review`, `craft-table`, `craft-timeline` | built |
+| `craft-color-ui`, `craft-draw`, `craft-imaging`, `craft-layers`, `craft-browse`, `craft-automation`, `craft-pages`, `craft-review`, `craft-table`, `craft-timeline` | built |
 | `craft-host`, the `craft` facade, one egui revision check | built |
 | UI library as six crates and the `craft-ui` facade, the API map | built |
 | Gallery with Components and Theme workspaces, Variants, app preview; the story renderer | built |
@@ -952,7 +952,7 @@ Ten themes, 17 mode variants. The suite default is ArtCraft.
 | Preset browser | `craft-ui-patterns` (`patterns::presets`) | Works on a generic preset library model |
 | Canvas overlays: grid, guides, smart guides, marquee, rulers | `craft-ui-canvas` (`canvas`, `canvas_controls`) | Draw over any canvas; no document type |
 | Crop frame, gradient overlay, transform box, bezier paths | `craft-draw` | Need shape and gradient types |
-| Colour picker, wheel, swatch palette | `craft-color` | Need colour models |
+| Colour picker, wheel, swatch palette | `craft-color-ui` | Need colour models |
 | Levels editor, curve editor, histogram, warp grid | `craft-imaging` | Need image-adjustment types |
 | Layers panel | `craft-layers` | Needs the `LayerTree` trait |
 
@@ -1021,7 +1021,7 @@ Conventions:
 - Types carry their full name (`LayersPanel`, not `layers::Panel`), so they read the same wherever they are imported.
 - In a family crate, a module `ui::x` is the egui side and a bare `x` is core.
 
-29 crates are new relative to storytold main: `craft`, `craft-automation`, `craft-behavior`, `craft-browse`, `craft-color`, `craft-design-lint`, `craft-draw`, `craft-font-subset`, `craft-host`, `craft-imaging`, `craft-layers`, `craft-pages`, `craft-review`, `craft-table`, `craft-theme`, `craft-theme-store`, `craft-timeline`, `craft-ui-bench`, `craft-ui-canvas`, `craft-ui-contract`, `craft-ui-gallery`, `craft-ui-macros`, `craft-ui-panels`, `craft-ui-patterns`, `craft-ui-shell`, `craft-ui-test-kit`, `craft-ui-widgets`, `craft-win32` and `story-render`. `craft-ui` keeps upstream's package name as the library's facade. `craft-gpu` is the next step, and `craft-code` is planned.
+29 crates are new relative to storytold main: `craft`, `craft-automation`, `craft-behavior`, `craft-browse`, `craft-color-ui`, `craft-design-lint`, `craft-draw`, `craft-font-subset`, `craft-host`, `craft-imaging`, `craft-layers`, `craft-pages`, `craft-review`, `craft-table`, `craft-theme`, `craft-theme-store`, `craft-timeline`, `craft-ui-bench`, `craft-ui-canvas`, `craft-ui-contract`, `craft-ui-gallery`, `craft-ui-macros`, `craft-ui-panels`, `craft-ui-patterns`, `craft-ui-shell`, `craft-ui-test-kit`, `craft-ui-widgets`, `craft-win32` and `story-render`. `craft-ui` keeps upstream's package name as the library's facade. `craft-gpu` is the next step, and `craft-code` is planned.
 
 ### Facade features
 
@@ -1174,7 +1174,7 @@ Code editor field and console. UI-only family. New crate.
 | `ui::console` | Script console panel | planned, step 8 |
 | `ui::editor` | Syntax-coloured code field (syntax colours as a `data.code.*` token family) | planned, step 8 |
 
-#### craft-color
+#### craft-color-ui
 
 Colour for apps: picker, wells, swatch tables, ramps, hex field. New on the branch.
 

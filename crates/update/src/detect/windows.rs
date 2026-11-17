@@ -102,5 +102,8 @@ pub fn detect(app: &App) -> Option<Installed> {
         source: InstallSource::Msi,
         location: m.exe.map_or_else(|| app.name.to_string(), |p| p.display().to_string()),
         package: Some(m.product_code),
+        externally_managed: false,
+        origin: None,
+        installation: None,
     })
 }

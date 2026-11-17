@@ -30,5 +30,13 @@ pub fn read_bundle(app: &App, path: &Path) -> Option<Installed> {
     let full_key = format!("{}Version", app.name);
     let text =
         [full_key.as_str(), "CFBundleShortVersionString", "CFBundleVersion"].iter().find_map(|k| dict.get(k).and_then(plist::Value::as_string));
-    Some(Installed { version: text.and_then(version::parse), source: InstallSource::MacApp, location: path.display().to_string(), package: None })
+    Some(Installed {
+        version: text.and_then(version::parse),
+        source: InstallSource::MacApp,
+        location: path.display().to_string(),
+        package: None,
+        externally_managed: false,
+        origin: None,
+        installation: None,
+    })
 }

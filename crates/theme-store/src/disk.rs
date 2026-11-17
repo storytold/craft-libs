@@ -228,6 +228,11 @@ impl AtomicFs for Guarded<'_> {
         self.inner.sync_dir(dir)
     }
 
+    #[cfg(unix)]
+    fn set_group(&self, file: &File, gid: u32) -> io::Result<()> {
+        self.inner.set_group(file, gid)
+    }
+
     fn set_permissions(&self, file: &File, perms: Permissions) -> io::Result<()> {
         self.inner.set_permissions(file, perms)
     }
