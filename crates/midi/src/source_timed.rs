@@ -475,7 +475,11 @@ pub fn read(data: &[u8]) -> Result<Smf, Error> {
     // Truncate long names to MAX_TEXT (craft-midi may not truncate).
     for track in &mut smf.tracks {
         if track.name.len() > MAX_TEXT {
-            track.name.truncate(MAX_TEXT);
+            let mut end = MAX_TEXT;
+            while !track.name.is_char_boundary(end) {
+                end -= 1;
+            }
+            track.name.truncate(end);
         }
     }
 
@@ -485,21 +489,7 @@ pub fn read(data: &[u8]) -> Result<Smf, Error> {
     let total = total_notes + total_changes;
     if total > MAX_EVENTS {
         // Trim to fit within MAX_EVENTS, prioritizing notes then changes.
-        let mut remaining = MAX_EVENTS;
-        for track in &mut smf.tracks {
-            if remaining == 0 {
-                break;
-            }
-            let keep_notes = remaining.min(track.notes.len());
-            track.notes.truncate(keep_notes);
-            remaining -= keep_notes;
-            if remaining == 0 {
-                break;
-            }
-            let keep_changes = remaining.min(track.changes.len());
-            track.changes.truncate(keep_changes);
-            remaining -= keep_changes;
-        }
+        cap_events(&mut smf, MAX_EVENTS);
         smf.warnings.push(format!("holds more events than are read: the rest was left out"));
     }
 
@@ -515,6 +505,18 @@ pub fn read(data: &[u8]) -> Result<Smf, Error> {
     smf.ticks = all_ticks.max().unwrap_or(0);
 
     Ok(smf)
+}
+
+// Visit every track even after the budget is exhausted, clearing the remaining suffix.
+fn cap_events(smf: &mut Smf, mut remaining: usize) {
+    for track in &mut smf.tracks {
+        let keep_notes = remaining.min(track.notes.len());
+        track.notes.truncate(keep_notes);
+        remaining -= keep_notes;
+        let keep_changes = remaining.min(track.changes.len());
+        track.changes.truncate(keep_changes);
+        remaining -= keep_changes;
+    }
 }
 
 /// Check if the data ends with a valid End of Track marker.
@@ -1034,6 +1036,7 @@ fn division(raw: u16) -> Result<(u16, Option<f64>), Error> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -1428,5 +1431,25 @@ mod tests {
             assert_eq!(out, bytes, "{value:#x}");
             assert_eq!(Reader { data: &bytes, pos: 0 }.varlen().unwrap(), value);
         }
+    }
+
+    #[test]
+    fn long_utf8_track_name_is_truncated_at_a_character_boundary() {
+        let mut smf = song();
+        smf.tracks[0].name = format!("{}é", "a".repeat(255));
+        let bytes = try_write(&smf).unwrap();
+        let result = read(&bytes).unwrap();
+        assert!(result.tracks[0].name.len() <= MAX_TEXT);
+        assert!(result.tracks[0].name.is_char_boundary(result.tracks[0].name.len()));
+    }
+
+    #[test]
+    fn event_cap_clears_later_track_events() {
+        let mut smf = song();
+        let track = smf.tracks[0].clone();
+        smf.tracks = vec![track.clone(), track.clone(), track];
+        cap_events(&mut smf, 1);
+        assert_eq!(smf.tracks.iter().map(|t| t.notes.len() + t.changes.len()).sum::<usize>(), 1);
+        assert!(smf.tracks[1].notes.is_empty() && smf.tracks[2].notes.is_empty());
     }
 }
