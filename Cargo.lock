@@ -2989,6 +2989,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "dds",
+ "half",
  "rayon",
  "thiserror 2.0.21",
 ]
