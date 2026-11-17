@@ -73,7 +73,7 @@ pub use color_model::{
 pub use contrast::{contrast_ratio, ensure_contrast, relative_luminance, text_contrast_min};
 pub use derive::{Anchoring, ContrastCheck, PassMove, Ramps, over};
 pub use explain::{ColorOrigin, Explained, PairReport, SizeLayer, SizeOrigin, explain, explain_sized};
-pub use id::{APP_DEFAULT, AppId, IdError, RESERVED_PREFIX, SUITE_DEFAULT, ThemeId};
+pub use id::{APP_DEFAULT, AppId, IconPackId, IdError, RESERVED_PREFIX, SUITE_DEFAULT, ThemeId};
 pub use identify::{Identify, identifiable_outline, visible_hover};
 pub use parts::{
     BadgeColors, BadgeStyle, BadgeTone, BorderColors, ButtonColors, ButtonVariant, BySize, CheckOffColors, CheckOnColors, CheckSwitchColors,
