@@ -26,11 +26,16 @@
 //! through `postMessage`) or its canvas has `data-host="page"` (the page runs it directly:
 //! messages are `CustomEvent`s on the canvas, the fields in `detail`). This module is the contract
 //! itself and builds everywhere; [`web`] (wasm32 only) is the bridge an app's web shell calls.
+//!
+//! What the app then shows in its title bar — saved, saving, unsaved, the stored version, how many
+//! people are in the document, and a read-only session — is [`status`], from the same messages.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+
+pub mod status;
 
 #[cfg(target_arch = "wasm32")]
 pub mod web;

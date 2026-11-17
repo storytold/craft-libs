@@ -2,9 +2,10 @@
 
 The host messages between a Craft app's web build and the page that hosts it, as one contract and one bridge for every app (storytold/craft-libs#358). A page frames the app with `?host=parent`, or runs it directly with `data-host="page"` on its canvas; either way the same messages pass files in, saves out, and unsaved-changes state, so a page can host any of the apps the same way.
 
-The crate has two parts:
+The crate has three parts:
 
 - **The contract** (all targets): the message kinds and their `<app>:<kind>` types, the contract version, how the hosting mode is read from the URL and the canvas, and the clean-up of file names a host passes in. Pure, tested natively.
+- **The statuses** (all targets): `status::HostStatus`, what the title bar says about the document — saved, saving, unsaved, the stored version, how many people are in it, read-only — built from the same messages, with the priority rules in one place. Plain data, tested natively; the app supplies the words.
 - **The bridge** (`web`, wasm32 only): `Host::connect(app, canvas)` finds the host, `listen` hears its messages, and `post_ready`, `post_save`, `post_dirty`, `post_failed` and `post_handoff` answer it. Only the same-origin parent window is heard and answered; with a parent on another origin the app runs as if unframed.
 
 ## Messages
@@ -49,3 +50,25 @@ if let Some(host) = craft_web_host::web::Host::connect("pdfcraft", &canvas) {
 ```
 
 The page command API is [`craft-web-api`](../web-api/README.md) (storytold/craft-libs#413): `window.<app>.request` and the command functions. It sits beside these messages. Opening, saving, the document name and the dirty flag stay here.
+
+## Title bar statuses
+
+`status::HostStatus` takes one input per thing the app learns, in any order:
+
+```rust
+use craft_web_host::status::{HostStatus, SaveState, StatusInput};
+
+let mut status = HostStatus::new();
+status.apply(StatusInput::Edited); // a local change
+status.apply(StatusInput::SavePosted { id: Some("7") }); // the `save` it just posted
+status.apply(StatusInput::Saved { id: "7" }); // the host's `saved`
+assert_eq!(status.save_state(), SaveState::Saved);
+
+// Each frame, the parts the title bar draws, in the order it draws them.
+for part in status.cluster().parts() {
+    // `ClusterPart::{Headline, Participants, Sync, Version}`, worded by the app's language pack.
+    let _ = part;
+}
+```
+
+`cluster().parts()` leaves out what does not apply: no participant count without a session, no sync word while `synced`, no version before a commit. `cluster().error` is the reason a save was refused, for as long as the document shows as unsaved.
