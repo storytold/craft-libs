@@ -842,6 +842,10 @@ fn read_metadata(c: &Container) -> (Option<Vec<u8>>, Option<String>) {
 /// Decodes the primary image. `keep_orientation` leaves the container's `clap`, `irot` and
 /// `imir` unapplied (the stored pixels), as for HEIF.
 pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> Result<Image> {
+    decode_with_depth(bytes, limits, keep_orientation).map(|(image, _)| image)
+}
+
+pub(crate) fn decode_with_depth(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> Result<(Image, u8)> {
     let c = parse(bytes)?;
     let id = c.primary;
     let (w, h) = item_size(&c, id)?;
@@ -890,9 +894,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     // PQ or HLG: linear light in 32-bit float, as for HEIF.
     if cicp.is_hdr() {
         limits.check(w, h, layout, SampleType::F32)?;
-        return crate::cicp::linearize(img, cicp);
+        return crate::cicp::linearize(img, cicp).map(|image| (image, bits));
     }
-    Ok(img)
+    Ok((img, bits))
 }
 
 #[cfg(test)]
@@ -1301,6 +1305,9 @@ mod tests {
             let src = Image::from_u8(w as u32, h as u32, ChannelLayout::Rgb, card(w, h, 3)).unwrap();
             let file = encode_avif_with_speed(&src, 95, 10).unwrap();
             let img = crate::decode(&file).unwrap();
+            let (with_depth, depth) = crate::decode_avif_with_depth(&file, &crate::DecodeOptions::default()).unwrap();
+            assert_eq!(depth, 10);
+            assert_eq!(with_depth, img);
             assert_eq!((img.width(), img.height(), img.layout(), img.sample_type()), (48, 32, ChannelLayout::Rgb, SampleType::U16));
             let diff = mean_abs_diff(&rgb8(&img), &card(w, h, 3));
             assert!(diff < 2.5, "mean difference {diff}");
