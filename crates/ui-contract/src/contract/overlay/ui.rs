@@ -1,23 +1,23 @@
 //! `OverlayUi`: what the `overlay` hook gets for each anchored popup.
 
-use super::host::{Layer, forget_layer, host};
-use super::place::Anchor;
-use super::placement::{PopupRegion, region_for, resolve_anchor};
+use super::host::forget_layer;
+use super::place::{Anchor, Place};
+use super::placement::PopupRegion;
 use super::popups::{PopupHandle, PopupLayer, with_popups};
 use super::props::Overlay;
-use crate::contract::body::pad_of;
-use crate::contract::{BodyCx, Inner, Internal, Mount, POPUP_PAD, Props as _, Resolved, ShowContainer};
-use crate::primitives::SurfaceSlot;
+use crate::contract::{
+    BodyCx, Common, Component, Container, ContainerProps, Cx, Inner, Internal, Mount, NoValue, Outcome, POPUP_PAD, Props as _, Resolved, Role,
+    ShowContainer,
+};
 use crate::runtime::access::PopupShown;
-use crate::runtime::egui::alloc;
 use crate::runtime::egui::areas::{self};
 use crate::runtime::env::Env;
-use crate::runtime::memory::MemoryStage;
+use crate::runtime::memory::sub;
 use crate::runtime::motion::{self};
 use crate::runtime::overlay::{self, CloseReason};
-use crate::style::SurfaceKind;
-use craft_behavior::PartRef;
-use egui::{Context, Id, IdMap, Rect, Ui, UiBuilder};
+use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use craft_behavior::{Metrics, PartRef, Sense};
+use egui::{Context, Id, IdMap, Rect, Response, Ui};
 
 /// What the `overlay` hook gets: one call per anchored popup of this component, built at step 10 with the open state
 /// of every popup `cx.popup` registered this pass.
@@ -89,42 +89,32 @@ impl<'a> OverlayUi<'a> {
 
     /// Shows the popup while its handle is open, on a popup surface, inside `POPUP_PAD`; the content is a body closure.
     /// `None` while closed.
-    pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
+    ///
+    /// The popup is a layer container sized from its content: its body is measured in this pass before the layer is
+    /// placed, so a popup whose content changes is placed by its new size in the pass that shows it. A child that fills
+    /// the width takes the width the popup settles on, not the window's. The popup's memory belongs to the component
+    /// that shows it (or to the opener its overlay names), so what its body keeps lasts while that component shows.
+    pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
         let Some(open) = self.open.get(&popup.id).copied() else {
             debug_assert!(false, "popup {:?} is shown but was not registered with `cx.popup` this pass", popup.name);
             return None;
         };
-        let ctx = self.ctx.clone();
-        with_popups(&ctx, |popups| popups.anchors.push((self.owner, PopupShown { id: popup.id, kind: overlay.popup, open })));
         let owner = overlay.opener.as_ref().map_or(self.owner, |opener| opener.id);
-        let presence = motion::layer_presence(&ctx, popup.id, owner, self.env.motion, open, overlay.motion);
-        if !presence.visible {
-            forget_layer(&ctx, popup.id, owner);
+        // A closed popup that no longer fades runs nothing: no container run for each closed popup of every pass.
+        if !open && !motion::layer_fading(self.ctx, sub(popup.id, "presence")) {
+            with_popups(self.ctx, |popups| popups.anchors.push((self.owner, PopupShown { id: popup.id, kind: overlay.popup, open })));
+            forget_layer(self.ctx, popup.id, owner);
             return None;
         }
-        let anchor = resolve_anchor(&ctx, popup.id, &overlay, self.anchor, self.to_screen);
-        let region = region_for(&self.env, &overlay);
-        let layer = Layer { id: popup.id, owner, overlay: &overlay, anchor, env: &self.env, exiting: !open, fade: presence.t, size: None, region };
-        let resolved = self.resolved;
-        let mut result = None;
-        let mut requested = false;
-        let out = host(&ctx, &layer, &mut |ui| {
-            let surface = SurfaceSlot::reserve(ui, true);
-            let mut stage = if ui.is_sizing_pass() { MemoryStage::open_peek(&ctx, popup.id) } else { MemoryStage::open_owned(&ctx, popup.id, owner) };
-            let env = Env::of(ui);
-            let pad = pad_of(&env.tokens, POPUP_PAD);
-            let mut inner = alloc::child(ui, UiBuilder::new().max_rect(ui.available_rect_before_wrap().shrink(pad)));
-            inner.set_min_width((ui.min_rect().width() - 2.0 * pad).max(0.0));
-            let mut shown_open = open;
-            let mut bcx = BodyCx::new(popup.id, env.view(), resolved, inner.max_rect(), &mut stage, &mut shown_open, None);
-            result = Some(body(&mut inner, &mut bcx));
-            requested = bcx.close_requested().is_some();
-            stage.write_back();
-            alloc::advance_past(ui, inner.min_rect().expand(pad));
-            surface.paint(&env.tokens, SurfaceKind::Popup, ui.min_rect(), env.direction);
-        });
-        self.record_shown(popup, open, overlay.opener.is_none(), if requested { Some(CloseReason::Requested) } else { out.dismissed });
-        result.filter(|_| open)
+        // A popup with no opener hangs from the owner's rect, which the container's layer reads as a rect anchor.
+        let overlay = match (&overlay.opener, &overlay.place) {
+            (None, Place::Anchored { anchor: Anchor::Response, .. }) => overlay.anchor(Anchor::Rect(self.anchor)),
+            _ => overlay,
+        };
+        let label = self.resolved.label_value.clone();
+        let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).mount(Mount::Layer(overlay));
+        let container = PopupBody { common: Common::new(), props: ContainerProps { owner: Some(owner), ..props } }.label(label);
+        self.show_container(popup, container, body).and_then(|shown| shown.inner)
     }
 
     /// Shows `container` as the layer of `popup`, through the container pipeline: its body step with the move band
@@ -180,3 +170,62 @@ impl<'a> OverlayUi<'a> {
         }
     }
 }
+
+/// The style of a popup body: its surface and padding come from the container.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+pub struct PopupBodyStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// What a popup body reports: its response.
+#[derive(Debug)]
+pub struct PopupBodyOutput {
+    response: Response,
+}
+
+impl Outcome for PopupBodyOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+
+    fn unshown(response: Response) -> Option<Self> {
+        Some(PopupBodyOutput { response })
+    }
+}
+
+/// The layer container [`OverlayUi::show`] shows a popup's body closure in: content-sized, on a popup surface inside
+/// `POPUP_PAD`, its memory owned by the component that shows the popup. It adds no node of its own: the layer's node
+/// is the popup's.
+#[derive(crate::contract::Component)]
+#[component(container, unregistered)]
+pub struct PopupBody {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+}
+
+impl Component for PopupBody {
+    const ROLE: Role = Role::None;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    type Style = PopupBodyStyle;
+    type Output = PopupBodyOutput;
+
+    fn style(_: &StyleCx<'_>, _: PopupBodyStyleKey) -> PopupBodyStyle {
+        PopupBodyStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> PopupBodyOutput {
+        PopupBodyOutput { response: cx.response.clone() }
+    }
+}
+
+impl Container for PopupBody {}

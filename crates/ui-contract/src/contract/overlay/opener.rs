@@ -151,15 +151,31 @@ pub(crate) enum Opening {
 }
 
 /// The least width a layer asks of its content: its `min_width` rule applied to the width of the opener it hangs
-/// from, 0 for a layer with no opener or an anchor that is not a rect.
-pub(crate) fn opener_floor(overlay: &Overlay) -> f32 {
-    let Some(opener) = &overlay.opener else { return 0.0 };
-    let width = match &opener.anchor {
-        Some(Anchor::Rect(rect)) => rect.width(),
-        Some(Anchor::Response) | None => opener.rect.width(),
-        Some(_) => return 0.0,
+/// from, else of the rect its place hangs it from; 0 for an anchor that is not a rect.
+pub(crate) fn anchor_floor(overlay: &Overlay) -> f32 {
+    let width = match &overlay.opener {
+        Some(opener) => match &opener.anchor {
+            Some(Anchor::Rect(rect)) => rect.width(),
+            Some(Anchor::Response) | None => opener.rect.width(),
+            Some(_) => return 0.0,
+        },
+        None => match &overlay.place {
+            Place::Anchored { anchor: Anchor::Rect(rect), .. } => rect.width(),
+            _ => return 0.0,
+        },
     };
     overlay.least_width(width)
+}
+
+/// The least width of the layer the content runs in ([`anchor_floor`]), which a layer's container gives its regions:
+/// a content-sized collection in the layer is at least this wide, so its rows fill the layer. 0 outside a layer.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct LayerFloor(pub(crate) f32);
+
+impl crate::runtime::env::EnvValue for LayerFloor {
+    fn root() -> Self {
+        LayerFloor(0.0)
+    }
 }
 
 /// The anchor a layer opened by `opener` hangs from: the opener's own, else the layer's `Pointer` or `Corner`

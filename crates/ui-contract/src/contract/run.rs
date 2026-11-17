@@ -254,6 +254,12 @@ pub(crate) trait ShapeHooks<C: Component> {
         None
     }
 
+    /// The component whose memory holds this one's shown memory, when it is another: a popup body's memory belongs to
+    /// the component that shows the popup, so it lasts while that component shows, open or closed.
+    fn memory_owner(&self, _comp: &C) -> Option<Id> {
+        None
+    }
+
     /// Step 7: the parts the shape declares itself (scroll parts, the item layout).
     fn parts(&mut self, _comp: &mut C, _rect: Rect, _pcx: &mut PartsCx<'_, C>) {}
 
@@ -496,6 +502,7 @@ pub(crate) trait Erased {
     fn declares_parts(&self) -> bool;
     fn read(&mut self, stage: &mut MemoryStage, id: Id, env: &Env);
     fn instance_scope(&self) -> Option<commands::CommandScope>;
+    fn memory_owner(&self) -> Option<Id>;
     fn in_flow(&self) -> bool;
     /// Whether the shape fills the width of the room it is shown in (a body not sized from its content).
     fn fills_width(&self) -> bool;
@@ -1309,7 +1316,7 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
             trace.mark(step);
         }
     }
-    let mut stage = if sizing { MemoryStage::open_peek(&ctx, id) } else { MemoryStage::open(&ctx, id) };
+    let mut stage = if sizing { MemoryStage::open_peek(&ctx, id) } else { MemoryStage::open_owned(&ctx, id, t.memory_owner().unwrap_or(id)) };
     let resolved = Resolved { pad: t.pad(&env.tokens), ..steps::resolved(id, &step1, &common) };
     // 4 value. A sizing pass reads the cancel and ends nothing: its stage is a copy, and the real run reads the
     // cancel again.

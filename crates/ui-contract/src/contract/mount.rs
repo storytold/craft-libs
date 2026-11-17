@@ -32,7 +32,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
         let presence = if at.ui.is_sizing_pass() {
             Presence { t: 1.0, visible: open, exiting: false }
         } else {
-            motion::layer_presence(ctx, sub(at.id, "presence"), at.id, at.env.motion, open, overlay.motion)
+            motion::layer_presence(ctx, sub(at.id, "presence"), props.owner.unwrap_or(at.id), at.env.motion, open, overlay.motion)
         };
         (presence.visible.then_some(presence.t), !open)
     };
@@ -46,7 +46,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
         Mount::Pane(pane) => Mounted { host: Box::new(PaneHost(*pane)), exiting: false },
         Mount::Window { .. } => Mounted { host: Box::new(WindowContentHost), exiting: false },
         Mount::Layer(overlay) => match layer(overlay) {
-            (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(overlay.clone(), props.save.clone(), exiting, fade, at.size)), exiting },
+            (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(overlay.clone(), props, exiting, fade, at.size)), exiting },
             (None, _) => closed(),
         },
         Mount::FullWindow => full_window(props.focus),
@@ -57,9 +57,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
                 full_window(fallback.focus)
             } else if !viewports {
                 match layer(fallback) {
-                    (Some(fade), exiting) => {
-                        Mounted { host: Box::new(LayerHost::new(fallback.clone(), props.save.clone(), exiting, fade, at.size)), exiting }
-                    }
+                    (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(fallback.clone(), props, exiting, fade, at.size)), exiting },
                     (None, _) => closed(),
                 }
             } else if open {
@@ -192,6 +190,8 @@ impl Host for PaneHost {
 struct LayerHost {
     overlay: Overlay,
     save: Option<SaveKey>,
+    /// The component whose memory holds the layer's bookkeeping (`ContainerProps::owner`), else the container.
+    owner: Option<Id>,
     exiting: bool,
     fade: f32,
     /// The size the container measured for this pass.
@@ -200,8 +200,8 @@ struct LayerHost {
 }
 
 impl LayerHost {
-    fn new(overlay: Overlay, save: Option<SaveKey>, exiting: bool, fade: f32, size: Vec2) -> Self {
-        LayerHost { overlay, save, exiting, fade, size, dismissed: None }
+    fn new(overlay: Overlay, props: &ContainerProps, exiting: bool, fade: f32, size: Vec2) -> Self {
+        LayerHost { overlay, save: props.save.clone(), owner: props.owner, exiting, fade, size, dismissed: None }
     }
 }
 
@@ -251,7 +251,17 @@ impl Host for LayerHost {
             ShowAt::Rect(rect) => rect.size(),
             ShowAt::Flow => self.size,
         });
-        let layer = Layer { id, owner: id, overlay: &overlay, anchor, env, exiting: self.exiting, fade: self.fade, size: Some(size), region };
+        let layer = Layer {
+            id,
+            owner: self.owner.unwrap_or(id),
+            overlay: &overlay,
+            anchor,
+            env,
+            exiting: self.exiting,
+            fade: self.fade,
+            size: Some(size),
+            region,
+        };
         let out = overlay::host(&ctx, &layer, &mut |ui| {
             // A layer the user sized with no position of its own shows at that size where the host placed it from its
             // anchor, within the room the host leaves it.

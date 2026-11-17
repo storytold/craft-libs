@@ -766,6 +766,9 @@ pub struct ContainerProps {
     pub label_column: bool,
     /// How the labelled rows under the container show their labels; `None` keeps the scheme of the scope.
     pub labels: Option<LabelScheme>,
+    /// The component whose memory holds the container's shown memory and its layer's bookkeeping, when it is another:
+    /// the body of a popup an `overlay` hook shows belongs to the component that shows it.
+    pub(crate) owner: Option<egui::Id>,
 }
 
 impl Default for ContainerProps {
@@ -844,6 +847,7 @@ impl ContainerProps {
             collection_body: false,
             label_column: false,
             labels: None,
+            owner: None,
         }
     }
 

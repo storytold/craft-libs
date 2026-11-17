@@ -53,6 +53,8 @@ impl BodyHooks<'_> {
         // opener's env as in the run under the layer's.
         if matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow) {
             scoped.start_layer();
+            let floor = super::placement::overlay_of(props).map_or(0.0, crate::contract::overlay::anchor_floor);
+            scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor(floor));
         }
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
         scoped.enabled &= cx.core.resolved.enabled;
