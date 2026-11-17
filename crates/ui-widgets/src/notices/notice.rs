@@ -563,12 +563,6 @@ impl Component for Notice<'_> {
             // the column's room: in a container that sets a line length, its paragraphs' wrap width.
             (_, None) => cx.column_room().map_or(natural, |column| natural.min(column)),
         };
-        {
-            let test = std::thread::current().name().unwrap_or("?").rsplit("::").next().unwrap_or("?").to_owned();
-            if test.starts_with("an_erased_sampling") || test.starts_with("brush_strokes_change") {
-                eprintln!("DIAG {test}: notice measure room {:?} column {:?} natural {natural} width {width}", cx.room, cx.column_room());
-            }
-        }
         Vec2::new(width, self.plan(cx, &texts, self.wrap_width(cx, width)).height)
     }
 
