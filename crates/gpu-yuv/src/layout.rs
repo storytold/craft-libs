@@ -40,32 +40,46 @@ fn aligned(n: u32) -> Option<u32> {
     n.div_ceil(a).checked_mul(a)
 }
 
+/// The planes of `format` at `width × height` (the first `count` of the array) and the read-back
+/// buffer size.
+fn planes_of(format: Format, width: u32, height: u32) -> Result<([PlaneLayout; 3], usize, u64), Error> {
+    if width == 0 || height == 0 || width % 2 == 1 || height % 2 == 1 {
+        return Err(Error::OutputSize { width, height });
+    }
+    let s = format.sample_bytes();
+    let (cw, ch) = (width / 2, height / 2);
+    let (sizes, count) = match format {
+        Format::Nv12 | Format::P010 => ([(width, height, s), (cw, ch, 2 * s), (0, 0, 0)], 2),
+        Format::I420 => ([(width, height, s), (cw, ch, s), (cw, ch, s)], 3),
+    };
+    let overflow = Error::Overflow { width, height };
+    let mut offset = 0u64;
+    let mut tight = 0u64;
+    let mut planes = [PlaneLayout { width: 0, height: 0, texel_bytes: 0, offset: 0, bytes_per_row: 0 }; 3];
+    for (plane, (w, h, texel_bytes)) in planes.iter_mut().zip(sizes).take(count) {
+        let row = w.checked_mul(texel_bytes).ok_or(overflow.clone())?;
+        let bytes_per_row = aligned(row).ok_or(overflow.clone())?;
+        *plane = PlaneLayout { width: w, height: h, texel_bytes, offset, bytes_per_row };
+        offset = offset.checked_add(u64::from(bytes_per_row) * u64::from(h)).ok_or(overflow.clone())?;
+        tight = tight.checked_add(u64::from(row) * u64::from(h)).ok_or(overflow.clone())?;
+    }
+    // A packed frame must also fit in memory on this target.
+    usize::try_from(tight).map_err(|_| overflow)?;
+    Ok((planes, count, offset))
+}
+
 impl FrameLayout {
     /// The layout of `format` at `width × height`; both sides must be even and not zero.
     pub fn new(format: Format, width: u32, height: u32) -> Result<FrameLayout, Error> {
-        if width == 0 || height == 0 || width % 2 == 1 || height % 2 == 1 {
-            return Err(Error::OutputSize { width, height });
-        }
-        let s = format.sample_bytes();
-        let (cw, ch) = (width / 2, height / 2);
-        let sizes: Vec<(u32, u32, u32)> = match format {
-            Format::Nv12 | Format::P010 => vec![(width, height, s), (cw, ch, 2 * s)],
-            Format::I420 => vec![(width, height, s), (cw, ch, s), (cw, ch, s)],
-        };
-        let overflow = Error::Overflow { width, height };
-        let mut offset = 0u64;
-        let mut tight = 0u64;
-        let mut planes = Vec::with_capacity(sizes.len());
-        for (w, h, texel_bytes) in sizes {
-            let row = w.checked_mul(texel_bytes).ok_or(overflow.clone())?;
-            let bytes_per_row = aligned(row).ok_or(overflow.clone())?;
-            planes.push(PlaneLayout { width: w, height: h, texel_bytes, offset, bytes_per_row });
-            offset = offset.checked_add(u64::from(bytes_per_row) * u64::from(h)).ok_or(overflow.clone())?;
-            tight = tight.checked_add(u64::from(row) * u64::from(h)).ok_or(overflow.clone())?;
-        }
-        // A packed frame must also fit in memory on this target.
-        usize::try_from(tight).map_err(|_| overflow)?;
-        Ok(FrameLayout { format, width, height, planes, buffer_size: offset })
+        let (planes, count, buffer_size) = planes_of(format, width, height)?;
+        Ok(FrameLayout { format, width, height, planes: planes[..count].to_vec(), buffer_size })
+    }
+
+    /// Whether the fields are what [`FrameLayout::new`] gives for the format and size. It does not
+    /// allocate, so a frame loop can call it.
+    fn is_valid(&self) -> bool {
+        matches!(planes_of(self.format, self.width, self.height),
+            Ok((planes, count, size)) if planes[..count] == self.planes[..] && size == self.buffer_size)
     }
 
     /// Bytes of one tightly packed frame: the planes one after another, each row without padding.
@@ -77,7 +91,7 @@ impl FrameLayout {
     /// into `frame` without the row padding. `frame` must be [`FrameLayout::frame_bytes`] long.
     /// A layout whose fields differ from what [`FrameLayout::new`] gives is [`Error::Layout`].
     pub fn unpack(&self, padded: &[u8], frame: &mut [u8]) -> Result<(), Error> {
-        if FrameLayout::new(self.format, self.width, self.height).as_ref() != Ok(self) {
+        if !self.is_valid() {
             return Err(Error::Layout);
         }
         if (padded.len() as u64) < self.buffer_size {
