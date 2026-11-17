@@ -62,6 +62,11 @@ fn default_build_formats_all_symmetric() {
         Format::Dpx,
         Format::Cineon,
         Format::Iff,
+        #[cfg(feature = "sunraster")]
+        Format::SunRaster,
+        #[cfg(feature = "sgi")]
+        Format::Sgi,
+        Format::JpegLs,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -69,10 +74,15 @@ fn default_build_formats_all_symmetric() {
 }
 
 #[test]
-fn avif_never_readable() {
-    assert!(!caps(Format::Avif).read);
+fn avif_is_readable_only_with_the_decode_feature() {
+    assert_eq!(caps(Format::Avif).read, cfg!(all(feature = "avif-decode", not(target_arch = "wasm32"))));
     assert_eq!(caps(Format::Avif).write, cfg!(feature = "avif"));
-    assert!(matches!(decode_as(Format::Avif, b"\0\0\0\x1cftypavif"), Err(CodecError::Unsupported { .. })));
+    let header = decode_as(Format::Avif, b"\0\0\0\x1cftypavif");
+    if caps(Format::Avif).read {
+        assert!(matches!(header, Err(CodecError::Malformed { .. })), "{header:?}");
+    } else {
+        assert!(matches!(header, Err(CodecError::Unsupported { .. })), "{header:?}");
+    }
 }
 
 #[test]
@@ -218,6 +228,52 @@ fn detect_magic_iff() {
     assert_eq!(detect(b"FORM\0\0\0\x14AIFF"), None);
     assert!(decode_as(Format::Iff, b"FORM\0\0\0\x14ILBM").is_err());
 }
+#[cfg(feature = "sgi")]
+#[test]
+fn detect_magic_sgi() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgba, (0..60).collect()).unwrap();
+    let bytes = encode(&img, Format::Sgi, &EncodeOptions::default()).unwrap();
+    assert_eq!(detect(&bytes), Some(Format::Sgi));
+    assert_eq!(from_extension("scan.RGB"), Some(Format::Sgi));
+    assert_eq!(from_extension("scan.bw"), Some(Format::Sgi));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Sgi));
+    assert_eq!(Format::Sgi.max_dimensions(), Some((65535, 65535)));
+    // The magic number alone, without a full header, is not SGI.
+    assert_eq!(detect(&[0x01, 0xda, 0, 1, 0, 2]), None);
+    assert!(decode_as(Format::Sgi, &[0x01, 0xda]).is_err());
+}
+
+#[test]
+fn detect_magic_jpeg_ls() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let img = Image::from_u8(5, 3, ChannelLayout::Gray, (0..15).collect()).unwrap();
+    let bytes = encode(&img, Format::JpegLs, &EncodeOptions::default()).unwrap();
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert_eq!(from_extension("scan.JLS"), Some(Format::JpegLs));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::JpegLs));
+    assert_eq!(Format::JpegLs.max_dimensions(), Some((65535, 65535)));
+    // Plain JPEG still is JPEG: SOI, then a baseline frame header.
+    assert_eq!(detect(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11]), Some(Format::Jpeg));
+    assert!(decode_as(Format::JpegLs, &[0xFF, 0xD8, 0xFF, 0xF7]).is_err());
+}
+
+#[cfg(feature = "sunraster")]
+#[test]
+fn detect_magic_sun_raster() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgb, (0..45).collect()).unwrap();
+    let bytes = encode(&img, Format::SunRaster, &EncodeOptions::default()).unwrap();
+    assert_eq!(detect(&bytes), Some(Format::SunRaster));
+    assert_eq!(from_extension("scan.RAS"), Some(Format::SunRaster));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::SunRaster));
+    assert_eq!(detect(&[0x59, 0xa6, 0x6a, 0x95]), None);
+    assert!(decode_as(Format::SunRaster, &[0x59, 0xa6, 0x6a, 0x95]).is_err());
+}
+
 #[test]
 fn detect_magic_avif() {
     assert_eq!(detect(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some(Format::Avif));
@@ -306,4 +362,29 @@ fn extensions_unique_across_formats() {
     all.sort();
     all.dedup();
     assert_eq!(all.len(), n);
+}
+
+#[cfg(not(feature = "sgi"))]
+#[test]
+fn sgi_requires_explicit_feature() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    assert!(!caps(Format::Sgi).read && !caps(Format::Sgi).write);
+    assert!(decode_as(Format::Sgi, &[]).is_err());
+    let image = Image::from_u8(1, 1, ChannelLayout::Gray, vec![0]).unwrap();
+    assert!(encode(&image, Format::Sgi, &EncodeOptions::default()).is_err());
+    let mut header = vec![0; 512];
+    header[..12].copy_from_slice(&[1, 218, 0, 1, 0, 2, 0, 1, 0, 1, 0, 1]);
+    assert_eq!(detect(&header), None);
+}
+
+#[cfg(not(feature = "sunraster"))]
+#[test]
+fn sun_raster_disabled_by_default() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let bytes = [0x59, 0xa6, 0x6a, 0x95, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 42, 0];
+    assert_ne!(detect(&bytes), Some(Format::SunRaster));
+    assert!(!caps(Format::SunRaster).read && !caps(Format::SunRaster).write);
+    assert!(decode_as(Format::SunRaster, &bytes).is_err());
+    let image = Image::from_u8(1, 1, ChannelLayout::Gray, vec![42]).unwrap();
+    assert!(encode(&image, Format::SunRaster, &EncodeOptions::default()).is_err());
 }

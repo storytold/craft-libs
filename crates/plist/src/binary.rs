@@ -68,6 +68,15 @@ struct Bin<'a> {
     limits: Limits,
 }
 
+/// Explicit legacy version-admission policy. Structural validation is never relaxed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BinaryOptions {
+    /// Accept any eighth header byte after `bplist0`, matching historical inspection readers.
+    /// This is not support for a new binary encoding: all objects still obey the bplist00
+    /// grammar and bounds. The default accepts only the exact `bplist00` header.
+    pub allow_unknown_minor_version: bool,
+}
+
 /// Parse a `bplist00` binary property list.
 pub fn parse_binary(data: &[u8]) -> Result<Value, FormatError> {
     parse_binary_with_limits(data, Limits::default())
@@ -75,19 +84,24 @@ pub fn parse_binary(data: &[u8]) -> Result<Value, FormatError> {
 
 /// Parse a binary property list, with caller-selected input, object, expansion and nesting limits.
 pub fn parse_binary_with_limits(data: &[u8], limits: Limits) -> Result<Value, FormatError> {
-    let (mut b, top) = reader(data, limits)?;
+    parse_binary_with_options(data, limits, BinaryOptions::default())
+}
+
+/// Parse with explicit version admission and the same structural/resource checks as the strict reader.
+pub fn parse_binary_with_options(data: &[u8], limits: Limits, options: BinaryOptions) -> Result<Value, FormatError> {
+    let (mut b, top) = reader(data, limits, options)?;
     let mut stack = reserved(limits.max_depth.min(256))?;
     b.object(top, &mut stack)
 }
 
-fn reader(data: &[u8], limits: Limits) -> Result<(Bin<'_>, usize), FormatError> {
+fn reader(data: &[u8], limits: Limits, options: BinaryOptions) -> Result<(Bin<'_>, usize), FormatError> {
     if data.len() > limits.max_input_bytes {
         return Err(FormatError::TooLarge("input bytes".into()));
     }
     if !data.starts_with(b"bplist") {
         return Err(FormatError::Malformed("not a binary plist".into()));
     }
-    if !data.starts_with(b"bplist00") {
+    if !data.starts_with(if options.allow_unknown_minor_version { b"bplist0".as_slice() } else { b"bplist00".as_slice() }) {
         return Err(FormatError::Unsupported("unknown binary plist version".into()));
     }
     let len = data.len();
@@ -344,7 +358,7 @@ fn reserved_string(n: usize) -> Result<String, FormatError> {
 /// selected objects and resource exhaustion return errors. Unselected value graphs are not
 /// validated. This permits preference readers to ignore unrelated future object kinds.
 pub fn first_string_in_array(data: &[u8], key: &str, limits: Limits) -> Result<Option<String>, FormatError> {
-    let (mut b, top) = reader(data, limits)?;
+    let (mut b, top) = reader(data, limits, BinaryOptions::default())?;
     let (kind, n, start) = b.header(top)?;
     if kind != 0xd {
         return Ok(None);
