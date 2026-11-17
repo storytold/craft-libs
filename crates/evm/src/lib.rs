@@ -677,6 +677,13 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
     })
 }
 
+/// Resolve the destination of a JUMP to an instruction index, when the PUSH right before it is
+/// readable and lands on an instruction boundary.
+fn jump_destination(code: &[u8], ins: &[Ins], k: usize, index_of: &dyn Fn(usize) -> Option<usize>) -> Option<usize> {
+    let push = k.checked_sub(1).and_then(|p| ins.get(p)).filter(|p| is_push(p.op))?;
+    index_of(usize::try_from(imm_u64(code, push)?).ok()?)
+}
+
 /// Follow a function's entry for a few instructions (and up to two unconditional jumps) looking
 /// for a CALLVALUE check.
 fn payability(code: &[u8], ins: &[Ins], start: usize, index_of: &dyn Fn(usize) -> Option<usize>) -> (&'static str, String) {
@@ -686,17 +693,14 @@ fn payability(code: &[u8], ins: &[Ins], start: usize, index_of: &dyn Fn(usize) -
         let Some(i) = ins.get(k) else { break };
         match i.op {
             0x34 if rejects_value(code, ins, k, index_of) => return ("nonpayable", format!("rejects nonzero CALLVALUE at {:#x}", i.off)),
-            0x56 => {
-                let target = k.checked_sub(1).and_then(|p| ins.get(p)).filter(|p| is_push(p.op)).and_then(|p| imm_u64(code, p));
-                match target.and_then(|t| index_of(usize::try_from(t).ok()?)) {
-                    Some(t) if hops < 2 => {
-                        hops += 1;
-                        k = t;
-                        continue;
-                    }
-                    _ => return ("unknown", "jumps somewhere we cannot follow before any CALLVALUE check".into()),
+            0x56 => match jump_destination(code, ins, k, index_of) {
+                Some(t) if hops < 2 => {
+                    hops += 1;
+                    k = t;
+                    continue;
                 }
-            }
+                _ => return ("unknown", "jumps somewhere we cannot follow before any CALLVALUE check".into()),
+            },
             0x57 => return ("unknown", "branches before any CALLVALUE check".into()),
             0xfd | 0xfe => return ("unknown", "halts with an error before any CALLVALUE check".into()),
             0x00 | 0xf3 | 0xff | 0x35 | 0x37 | 0x54 | 0x55 | 0xf1 | 0xf4 | 0xfa | 0xa0..=0xa4 => {
@@ -735,17 +739,14 @@ fn reverts_soon(code: &[u8], ins: &[Ins], mut k: usize, index_of: &dyn Fn(usize)
         let Some(i) = ins.get(k) else { return false };
         match i.op {
             0xfd | 0xfe => return true,
-            0x56 => {
-                let target = k.checked_sub(1).and_then(|p| ins.get(p)).filter(|p| is_push(p.op)).and_then(|p| imm_u64(code, p));
-                match target.and_then(|t| index_of(usize::try_from(t).ok()?)) {
-                    Some(t) if hops < 2 => {
-                        hops += 1;
-                        k = t;
-                        continue;
-                    }
-                    _ => return false,
+            0x56 => match jump_destination(code, ins, k, index_of) {
+                Some(t) if hops < 2 => {
+                    hops += 1;
+                    k = t;
+                    continue;
                 }
-            }
+                _ => return false,
+            },
             0x5b | 0x50 | 0x80..=0x9f | 0x5f | 0x60..=0x7f => {}
             _ => return false,
         }
