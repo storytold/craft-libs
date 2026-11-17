@@ -891,28 +891,56 @@ fn styles_as_read(doc: &Document, kept: Option<&craft_wordmodel::kept::KeptXml>,
             used.2.entry(name.to_string()).or_insert_with(|| d.clone());
         }
     }
+    let (changed, rewritten) = common_changes(doc, k);
+    let ours = |id: &str| super::writer::odf_name(id);
+    let read = super::kept::file_names(&k.style_ids, &ours);
+    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten, &read)
+}
+
+/// The keys of the file's style definitions `doc` has changed since they were read, and what
+/// becomes of those written from the model under the file's names ([`super::kept::rewritten_defs`]).
+/// The others are written as read.
+fn common_changes(
+    doc: &Document,
+    k: &craft_wordmodel::kept::KeptXml,
+) -> (std::collections::BTreeSet<String>, std::collections::BTreeMap<String, Option<String>>) {
     let now = model_styles(doc);
     let changed = super::kept::changed(&k.style_prints, &super::kept::prints(&now));
     // The name WordCraft writes a style id under (`My_20_Custom` was read as `MyCustom`).
     let ours = |id: &str| super::writer::odf_name(id);
     let rewritten = super::kept::rewritten_defs(&now, &k.defs, &changed, &k.style_ids, &ours);
-    let read = super::kept::file_names(&k.style_ids, &ours);
-    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten, &read)
+    (changed, rewritten)
 }
 
 /// The package files the file's own definitions refer to, and those the markup written as read
-/// links to (`used`), written as read with them (added to `files` and `manifest` where no file
-/// `taken` has the path). A picture only an edited paragraph showed isn't written.
+/// links to (`w.kept_files_used`, `w.kept_used`), written as read with them (added to `files` and
+/// `manifest` where no file `taken` has the path). A picture only an edited paragraph showed isn't written.
 fn with_kept_files(
+    doc: &Document,
     kept: Option<&craft_wordmodel::kept::KeptXml>,
-    used: &std::collections::BTreeSet<String>,
+    styles: &str,
+    w: &Writer,
     taken: &dyn Fn(&str) -> bool,
     files: &mut Vec<(String, std::sync::Arc<Vec<u8>>)>,
     manifest: &mut String,
 ) {
     let Some(k) = kept else { return };
-    let mut wanted = used.clone();
-    for d in k.defs.values() {
+    let mut wanted = w.kept_files_used.clone();
+    let pages_kept = k.pages_as_read(doc);
+    let (changed, rewritten) = common_changes(doc, k);
+    for (key, d) in &k.defs {
+        if !pages_kept && (key.starts_with("sauto:") || key.starts_with("master:")) {
+            continue;
+        }
+        if key.starts_with("common:") {
+            // The file's definition is written back as read unless the document changed it
+            // (`styles_as_read`): then WordCraft's takes its place, or none does. WordCraft's own
+            // definition takes a drawing definition's place too. Its href is then no longer used.
+            let written = !changed.contains(key) && !rewritten.contains_key(key) && !(super::kept::drawing_def(d) && super::kept::defined(styles, d));
+            if !written {
+                continue;
+            }
+        }
         super::kept::hrefs(d, &mut wanted);
     }
     // A file linked, or one in a folder linked (an object's).
@@ -1311,7 +1339,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         w.objects.iter().map(|(d, _, _)| d).chain(w.object_dirs.iter().map(|(d, _)| d)).map(|d| format!("{}/", d.trim_end_matches('/'))).collect();
     let taken = |p: &str| w.pictures.iter().any(|(n, _, _)| n == p) || dirs.iter().any(|d| p.starts_with(d.as_str()));
     let mut kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
-    with_kept_files(kept, &w.kept_files_used, &taken, &mut kept_files, &mut manifest);
+    with_kept_files(doc, kept, &styles, &w, &taken, &mut kept_files, &mut manifest);
     for (path, mime) in &kept_entries {
         if (path.ends_with('/') && kept_files.iter().any(|(p, _)| p.starts_with(path.as_str()))) || kept_files.iter().any(|(p, _)| p == path) {
             manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(path), x(mime)));
@@ -1461,43 +1489,121 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// A `draw:fill-image` definition's name and picture path, when `xml` starts with one.
+fn fill_image_of(xml: &str) -> Option<(String, String)> {
+    let tag = xml.split('>').next()?;
+    if !tag.trim_start_matches('<').starts_with("draw:fill-image") {
+        return None;
+    }
+    let name = super::kept::raw_attr(tag, "draw:name").map(super::kept::attr_text)?;
+    let href = super::kept::raw_attr(tag, "xlink:href").map(super::kept::attr_text)?;
+    Some((name.into_owned(), href.into_owned()))
+}
+
+/// `name` as a `draw:name` (§16.42) may read: an NCName — letters, digits, `-`, `_` and `.`, not
+/// starting with `-`, `.` or a digit. Characters outside those are turned into `_`.
+fn fill_image_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().min(255));
+    for c in name.chars().take(255) {
+        let ok = c.is_alphanumeric() || c == '-' || c == '_' || c == '.';
+        let start_ok = c.is_alphabetic() || c == '_';
+        if out.is_empty() {
+            out.push(if start_ok { c } else { '_' });
+        } else {
+            out.push(if ok { c } else { '_' });
+        }
+    }
+    if out.is_empty() { "PageBackground".to_string() } else { out }
+}
+
 /// `styles` with the page background picture (Design › Page Color › Fill Effects › Picture) in
-/// each page layout (§17.3 `style:background-image`, first in `style:page-layout-properties`),
-/// the picture written into the package by `w`: tiled, stretched, or centred at its own size
-/// (§20.249 `style:repeat`).
-fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
+/// each page layout (§17.3 `style:background-image`, first in `style:page-layout-properties`, and
+/// modern ODF 1.2/1.3 §16.42 `draw:fill="bitmap"` with `draw:fill-image`), the picture written
+/// into the package by `w`: tiled, stretched, or centred at its own size (§20.249 `style:repeat`).
+fn page_background(doc: &Document, w: &mut Writer, mut styles: String) -> String {
     let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
     let Some(data) = doc.media.get(&pic.media) else { return styles };
     let Some(ext) = model::sniff_image(data) else { return styles };
-    let name = format!("Pictures/page-background.{ext}");
-    if !w.pictures.iter().any(|(n, _, _)| *n == name) {
-        w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
+    let kept = doc.kept.of("odt");
+    // A kept package file holding these bytes is this picture already: its path is reused, so
+    // saving what was opened doesn't add a copy on every save.
+    let same_kept = |path: &str| kept.is_some_and(|k| k.files.get(path).is_some_and(|b| b.as_slice() == data.as_slice()));
+    let mut name = format!("Pictures/page-background.{ext}");
+    let mut pic_n = 1;
+    while (w.reserved.contains(&name) && !same_kept(&name)) || w.pictures.iter().any(|(n, d, _)| n == &name && d.as_slice() != data.as_slice()) {
+        name = format!("Pictures/page-background-{pic_n}.{ext}");
+        pic_n += 1;
     }
     let repeat = match pic.fill_type.to_ascii_lowercase().as_str() {
         "tile" => "repeat",
         "center" => "no-repeat",
         _ => "stretch",
     };
-    let el = format!(
+    // The fill-image definitions already written, by name, once: renaming looks each up rather
+    // than scanning every definition for it (a hostile file names thousands alike).
+    let mut fill_images: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for d in w.kept_defs.values() {
+        if let Some((n, h)) = fill_image_of(d) {
+            fill_images.insert(n, h);
+        }
+    }
+    for (i, _) in styles.match_indices("<draw:fill-image ") {
+        if let Some((n, h)) = styles.get(i..).and_then(fill_image_of) {
+            fill_images.insert(n, h);
+        }
+    }
+    let mut fill_name = if !pic.title.is_empty() { fill_image_name(&pic.title) } else { "PageBackground".to_string() };
+    let base_fill_name = fill_name.clone();
+    // The definition under this name is this picture when its path is ours, or a kept file with
+    // the same bytes: then the file's name is reused instead of a copy being added.
+    let same_picture =
+        |href: &str, w: &Writer| href == name || same_kept(href) || w.pictures.iter().any(|(n, d, _)| n == href && d.as_slice() == data.as_slice());
+    let mut n = 1;
+    while let Some(href) = fill_images.get(&fill_name) {
+        let href = href.clone();
+        if same_picture(&href, w) {
+            name = href;
+            break;
+        }
+        fill_name = format!("{base_fill_name}-{n}");
+        n += 1;
+    }
+    if !w.pictures.iter().any(|(n, _, _)| *n == name) {
+        w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
+    }
+    let fill_image_def =
+        format!("<draw:fill-image draw:name=\"{}\" xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\"/>", x(&fill_name), x(&name));
+    if !super::kept::defined(&styles, &fill_image_def) {
+        styles = styles.replacen("</office:styles>", &format!("{fill_image_def}</office:styles>"), 1);
+    }
+    let bg_el = format!(
         "<style:background-image xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\" style:position=\"center center\" style:repeat=\"{repeat}\"/>",
         x(&name)
     );
+    let fill_attrs = format!(" draw:fill=\"bitmap\" draw:fill-image-name=\"{}\" style:repeat=\"{repeat}\"", x(&fill_name));
+
     // After each layout's properties' opening tag.
-    let mut out = String::with_capacity(styles.len() + el.len() * 4);
+    let mut out = String::with_capacity(styles.len() + bg_el.len() * 4);
     let mut rest = styles.as_str();
     while let Some(at) = rest.find("<style:page-layout-properties") {
+        let tag_start = at + "<style:page-layout-properties".len();
         let Some(end) = rest.get(at..).and_then(|r| r.find('>')).map(|e| at + e) else { break };
         let self_closing = rest.get(end.saturating_sub(1)..end) == Some("/");
         if self_closing {
-            out.push_str(rest.get(..end.saturating_sub(1)).unwrap_or_default());
+            let before_slash = end.saturating_sub(1);
+            out.push_str(rest.get(..tag_start).unwrap_or_default());
+            out.push_str(&fill_attrs);
+            out.push_str(rest.get(tag_start..before_slash).unwrap_or_default());
             out.push('>');
-            out.push_str(&el);
+            out.push_str(&bg_el);
             out.push_str("</style:page-layout-properties>");
         } else {
-            out.push_str(rest.get(..=end).unwrap_or_default());
-            out.push_str(&el);
+            out.push_str(rest.get(..tag_start).unwrap_or_default());
+            out.push_str(&fill_attrs);
+            out.push_str(rest.get(tag_start..=end).unwrap_or_default());
+            out.push_str(&bg_el);
         }
-        rest = rest.get(end + 1..).unwrap_or_default();
+        rest = rest.get(end.saturating_add(1)..).unwrap_or_default();
     }
     out.push_str(rest);
     out
