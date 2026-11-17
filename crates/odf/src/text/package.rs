@@ -933,10 +933,18 @@ fn with_kept_files(
             continue;
         }
         if key.starts_with("common:") {
-            // The file's definition is written back as read unless the document changed it
-            // (`styles_as_read`): then WordCraft's takes its place, or none does. WordCraft's own
-            // definition takes a drawing definition's place too. Its href is then no longer used.
-            let written = !changed.contains(key) && !rewritten.contains_key(key) && !(super::kept::drawing_def(d) && super::kept::defined(styles, d));
+            // What `styles_as_read` writes in its place, when it rewrites it: what that names (an
+            // unread namesake's own definition, as read) is what is written.
+            if let Some(def) = rewritten.get(key) {
+                if let Some(def) = def {
+                    super::kept::hrefs(def, &mut wanted);
+                }
+                continue;
+            }
+            // The file's definition is written back as read unless the document changed it: then
+            // WordCraft's takes its place, or none does. WordCraft's own definition takes a
+            // drawing definition's place too. Its href is then no longer used.
+            let written = !changed.contains(key) && !(super::kept::drawing_def(d) && super::kept::defined(styles, d));
             if !written {
                 continue;
             }
