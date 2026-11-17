@@ -30,6 +30,10 @@
 //! resampler of [`Image::try_resize`]. The forms without `try_` allocate like `Vec`. A failed
 //! infallible allocation ends the process. Rows are generated on several threads only with the
 //! `parallel` feature.
+//!
+//! [`normal`] makes tangent-space normal maps from a height plane, and [`packing`] packs
+//! occlusion, roughness and metallic into one RGBA image. Both read a [`ScalarSource`] one row at
+//! a time, so a tiled surface is read in place instead of copied into a float plane.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -40,6 +44,14 @@ use std::sync::Arc;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+
+pub mod normal;
+pub mod packing;
+mod source;
+#[cfg(test)]
+mod tiled_tests;
+
+pub use source::{ScalarSource, SourceError, TextureOpError};
 
 /// Largest side the clamping constructors make, and the default [`Limits::max_side`].
 pub const MAX_SIDE: u32 = 8192;

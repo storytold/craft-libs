@@ -30,7 +30,8 @@
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
-//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files).
+//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files),
+//!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech).
 //!
 //! The shared types below build with no features.
 
@@ -41,6 +42,8 @@ pub mod ac3;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
 mod buffer;
+#[cfg(any(feature = "gsm-decode", feature = "gsm-encode"))]
+pub mod gsm;
 mod layout;
 #[cfg(any(feature = "mp3-encode", feature = "mp3-decode"))]
 pub mod mp3;
@@ -56,6 +59,8 @@ pub mod peaks;
 pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
+#[cfg(feature = "sbc")]
+pub mod sbc;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
 #[cfg(feature = "vorbis-encode")]

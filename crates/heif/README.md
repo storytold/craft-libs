@@ -55,8 +55,10 @@ and a scan gathers at most 64 MiB in all. A build with
 `default-features = false, features = ["metadata"]` has no heic-rs dependency, and its
 `read_metadata` is `items::read`. With both features, a test checks that the two readers agree.
 
-Feature `testdata` exposes `craft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
-32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above.
+Feature `test-support` exposes `craft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
+32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above. The
+feature's former name, `testdata`, still turns it on until every crate that enables it uses
+`test-support`.
 
 ## Why it is a separate, optional crate
 

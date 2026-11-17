@@ -19,14 +19,13 @@
 //! Unknown camera metadata versions are ignored rather than assigned a guessed white balance.
 
 use crate::crx;
-use crate::shared::{black_from_columns, white_from_data};
+use crate::shared::{aspect_crop, black_from_columns, white_from_data};
 use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use craft_metadata::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
 use craft_tiff::{Ifd, Tiff};
 
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_DATA: u16 = 0x4001;
-const ASPECT_INFO: u16 = 0x009a;
 
 /// Pick the first largest raw track. Equal-sized later tracks can be the Dual Pixel delta, which
 /// must never replace the main sensor image. An invalid full-size descriptor is reported, not
@@ -91,18 +90,6 @@ fn sensor_crop(maker: Option<&Ifd>, width: usize, height: usize) -> Option<Rect>
         width,
         height,
     )
-}
-
-/// The shot's aspect-ratio rectangle from `AspectInfo`, placed inside `image` (the recommended crop). `None`
-/// when the tag is absent or malformed, or its rectangle doesn't fit inside `image`.
-fn aspect_crop(maker: Option<&Ifd>, image: Rect) -> Option<Rect> {
-    let data = maker?.u64s(ASPECT_INFO)?;
-    let [width, height, left, top] = [1usize, 2, 3, 4].map(|i| data.get(i).and_then(|&v| usize::try_from(v).ok()));
-    let (width, height, left, top) = (width?, height?, left?, top?);
-    if width < 2 || height < 2 || left.checked_add(width)? > image.width || top.checked_add(height)? > image.height {
-        return None;
-    }
-    Some(Rect::new(image.x.checked_add(left)?, image.y.checked_add(top)?, width, height))
 }
 
 fn geometry(area: Option<&Cr3ImageArea>, maker: Option<&Ifd>, width: usize, height: usize) -> (Rect, Rect) {
@@ -385,6 +372,7 @@ fn extend_white(image: &mut RawImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::ASPECT_INFO;
     use craft_tiff::{IfdBuilder, Value};
 
     fn maker(version: u16, wb_at: usize, black_at: usize, white_at: usize) -> Ifd {
