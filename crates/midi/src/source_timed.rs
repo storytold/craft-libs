@@ -256,8 +256,7 @@ fn change_from_craft(c: &CraftCtrlEvent, ppq: u16) -> Change {
 }
 
 fn smf_to_craft(craft_smf: &CraftSmf, ppq: u16) -> Smf {
-    let mut smf = Smf::default();
-    smf.format = craft_smf.format;
+    let mut smf = Smf { format: craft_smf.format, ..Default::default() };
 
     // Craft-midi converts ticks to 960 PPQ when reading. Scale back to source ppq.
     let (from, to) = (i128::from(craft_midi::PPQ.max(1)), i128::from(ppq.max(1)));
@@ -301,8 +300,7 @@ fn smf_to_craft(craft_smf: &CraftSmf, ppq: u16) -> Smf {
         .collect();
 
     for ct in &craft_smf.tracks {
-        let mut track = Track::default();
-        track.name = trim_text(&ct.name);
+        let mut track = Track { name: trim_text(&ct.name), ..Default::default() };
 
         for n in &ct.sequence.notes {
             // Scale from 960 PPQ back to source ppq.
@@ -328,8 +326,7 @@ fn smf_to_craft(craft_smf: &CraftSmf, ppq: u16) -> Smf {
 }
 
 fn smf_from_craft(smf: &Smf) -> CraftSmf {
-    let mut craft_smf = CraftSmf::default();
-    craft_smf.format = smf.format;
+    let mut craft_smf = CraftSmf { format: smf.format, ..Default::default() };
 
     // Scale from source PPQ to 960 when writing.
     let (from, to) = (i128::from(smf.ppq.max(1)), i128::from(craft_midi::PPQ));
@@ -444,7 +441,7 @@ pub fn read(data: &[u8]) -> Result<Smf, Error> {
     }
 
     // For standard PPQ files, use craft-midi directly (no scaling needed).
-    let lr = read_smf_lenient(data).map_err(|e| map_midi_error(e))?;
+    let lr = read_smf_lenient(data).map_err(map_midi_error)?;
     let craft_smf = &lr.smf;
 
     // Extract ppq from the raw data (craft-midi doesn't expose it directly).
@@ -490,7 +487,7 @@ pub fn read(data: &[u8]) -> Result<Smf, Error> {
     if total > MAX_EVENTS {
         // Trim to fit within MAX_EVENTS, prioritizing notes then changes.
         cap_events(&mut smf, MAX_EVENTS);
-        smf.warnings.push(format!("holds more events than are read: the rest was left out"));
+        smf.warnings.push("holds more events than are read: the rest was left out".to_string());
     }
 
     // Compute ticks as max of ALL tick values (notes, tempos, signatures, markers).
