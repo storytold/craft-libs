@@ -73,6 +73,13 @@ impl<'a> Mapper<'a> {
                     pending.push((target, 1));
                 }
             }
+            // A pattern's tile is needed like a main, and so is what it uses in turn.
+            for tile in pattern_tiles(node) {
+                if self.pattern_tiles.insert(tile.clone()) {
+                    mains.insert(tile.clone());
+                    pending.push((tile, 1));
+                }
+            }
             pending.extend(self.children(&id).into_iter().map(|child| (child, depth + 1)));
         }
         mains
@@ -143,7 +150,9 @@ impl<'a> Mapper<'a> {
             }
             let Some(node) = self.nodes.get(&node_id) else { continue };
             let kind = node.get("type").and_then(Kv::str);
-            let definition = (kind == Some("SYMBOL") || (kind == Some("FRAME") && node.get("isStateGroup").and_then(Kv::bool) == Some(true)))
+            let definition = (kind == Some("SYMBOL")
+                || (kind == Some("FRAME") && node.get("isStateGroup").and_then(Kv::bool) == Some(true))
+                || self.pattern_tiles.contains(&node_id))
                 && required_mains.contains(&node_id);
             let in_definition = in_definition || definition;
             if in_definition {
@@ -330,4 +339,14 @@ fn sorted_modes(n: &Kv) -> Vec<(String, Value)> {
         .collect();
     modes.sort_by(|a, b| a.0.cmp(&b.0));
     modes
+}
+
+/// The layers `node`'s pattern fills and strokes tile.
+fn pattern_tiles<'k>(node: &Kv<'k>) -> Vec<String> {
+    ["fillPaints", "strokePaints"]
+        .iter()
+        .flat_map(|k| node.get(k).map(Kv::list).unwrap_or_default())
+        .filter(|p| p.get("type").and_then(Kv::str) == Some("PATTERN"))
+        .filter_map(|p| p.get("sourceNodeId").and_then(guid))
+        .collect()
 }
