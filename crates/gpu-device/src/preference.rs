@@ -137,8 +137,8 @@ pub struct Selection {
 ///   features when a driver lists it twice), with [`choose`]'s corrections; without one, or when
 ///   it is an Intel Vulkan entry [`choose`] never draws with, the automatic choice and
 ///   [`Notice::AdapterMissing`].
-/// - [`Preference::Software`] uses the first usable software adapter; without one, the automatic
-///   choice and [`Notice::NoSoftwareAdapter`].
+/// - [`Preference::Software`] uses the first usable software adapter, with [`choose`]'s
+///   corrections; without one, the automatic choice and [`Notice::NoSoftwareAdapter`].
 ///
 /// A software adapter that the automatic choice took adds [`Notice::SoftwareOnly`].
 pub fn select(candidates: &[Candidate], preference: &Preference) -> Option<Selection> {
@@ -151,16 +151,14 @@ pub fn select(candidates: &[Candidate], preference: &Preference) -> Option<Selec
             // the correction draws with the entry exposing the most features.
             let found =
                 candidates.iter().enumerate().filter(|(_, c)| c.usable && key.matches(c)).max_by_key(|(i, c)| (c.features, std::cmp::Reverse(*i)));
-            match found.map(|(index, c)| corrected(candidates, index, c)) {
-                Some(index) if !candidates.get(index).is_some_and(intel_vulkan_crashes) => Some(index),
-                _ => {
-                    notices.push(Notice::AdapterMissing(key.clone()));
-                    None
-                }
+            let found = found.and_then(|(index, _)| drawn_with(candidates, index));
+            if found.is_none() {
+                notices.push(Notice::AdapterMissing(key.clone()));
             }
+            found
         }
         Preference::Software => {
-            let found = candidates.iter().position(|c| c.usable && c.is_software());
+            let found = candidates.iter().position(|c| c.usable && c.is_software()).and_then(|index| drawn_with(candidates, index));
             if found.is_none() {
                 notices.push(Notice::NoSoftwareAdapter);
             }
@@ -178,6 +176,15 @@ pub fn select(candidates: &[Candidate], preference: &Preference) -> Option<Selec
         }
     };
     Some(Selection { index, notices })
+}
+
+/// The entry to draw with when the entry at `index` is asked for, with [`choose`]'s corrections:
+/// the newest version of a driver that lists the GPU twice, or the DirectX 12 entry of an Intel
+/// GPU whose Vulkan entry [`choose`] never draws with. `None` when that Intel Vulkan entry has no
+/// usable DirectX 12 entry.
+fn drawn_with(candidates: &[Candidate], index: usize) -> Option<usize> {
+    let index = corrected(candidates, index, candidates.get(index)?);
+    (!candidates.get(index).is_some_and(intel_vulkan_crashes)).then_some(index)
 }
 
 /// Whether `preference` asked for `candidate` itself: software for a software adapter, or the key
@@ -330,6 +337,17 @@ mod tests {
             assert!(asked_for(&named, &llvmpipe[0]) && asked_for(&Preference::Software, &llvmpipe[0]));
             assert!(!asked_for(&Preference::Auto, &llvmpipe[0]) && !asked_for(&Preference::Software, &adapters[1]));
         }
+    }
+
+    #[test]
+    fn software_draws_with_the_newer_version_of_a_driver_listed_twice() {
+        let stale = gpu("llvmpipe (LLVM 15.0.7, 256 bits)", Vulkan, Cpu, 0x10005, 0, "", "llvmpipe", "Mesa 23.0.4", 40);
+        let newer = gpu("llvmpipe (LLVM 19.1.0, 256 bits)", Vulkan, Cpu, 0x10005, 0, "", "llvmpipe", "Mesa 25.2.4", 50);
+        let hardware = gpu("AMD Radeon RX 6800M", Dx12, DiscreteGpu, 0x1002, 0x73df, "0000:03:00.0", "32.0.21045.11001", "", 36);
+        let adapters = vec![stale, newer, hardware];
+        assert_eq!(select(&adapters, &Preference::Software), Some(Selection { index: 1, notices: vec![] }));
+        // the stale entry is never tried, and the newer one is not left out
+        assert_eq!(ranked(&adapters, &Preference::Software), vec![1, 2]);
     }
 
     #[test]
