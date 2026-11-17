@@ -33,6 +33,20 @@ pub(crate) fn qcode_for(nonlinear: bool, qs: f64) -> u8 {
     best.0
 }
 
+/// How far a picture gives up quality to fit the VBV buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Fallback {
+    /// Coded normally.
+    None,
+    /// Intra blocks keep only their DC coefficient (I pictures).
+    DcOnly,
+    /// The smallest picture there is, whatever the source: an I picture of mid-grey blocks (every
+    /// DC equal to its predictor, no AC), or a P or B picture whose macroblocks are skipped or
+    /// predicted with a zero vector and no residual (backward in a B picture), which repeats the
+    /// reference. Its size depends only on the picture size and the headers.
+    Minimal,
+}
+
 /// What every slice of one picture shares (read-only).
 pub(crate) struct PicCtx<'a> {
     /// I, P or B.
@@ -58,6 +72,7 @@ pub(crate) struct PicCtx<'a> {
     pub search: i32,
     /// quantiser_scale_code per macroblock.
     pub mb_qcode: &'a [u8],
+    pub fallback: Fallback,
 }
 
 impl PicCtx<'_> {
@@ -223,6 +238,16 @@ fn macroblock(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, (mbx, mby): (us
     let planes = (ctx.src.w, ctx.src.cw);
     let lambda = ((qs * 3 + 4) / 8).max(1) as u32;
     let rec = match (ctx.ptype, ctx.fwd) {
+        (PictureType::P, Some(reference)) if ctx.fallback == Fallback::Minimal => {
+            let (rec, skipped) = inter_mb(ctx, st, w, &mb, reference, [0, 0]);
+            ro.stats.skipped += skipped as u32;
+            Some(rec)
+        }
+        (PictureType::B, _) if ctx.bwd.is_some() && ctx.fallback == Fallback::Minimal => {
+            let (rec, skipped) = b_mb(ctx, st, w, &mb, BPred { dirs: MB_BWD, mvs: [[0; 2]; 2] });
+            ro.stats.skipped += skipped as u32;
+            Some(rec)
+        }
         (PictureType::P, Some(reference)) => {
             let search = Search { reference, src: &src.y, mbx, mby, f_code: ctx.f_code, range: ctx.search, pmv: st.pmv[0], lambda };
             let found = search.run(&candidates(ctx, st, addr, 0));
@@ -391,11 +416,19 @@ fn intra_mb(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, mb: &MbIn) -> MbP
     let mut rec = mb.src.clone();
     for i in 0..ctx.blocks() {
         let cc = if i < 4 { 0 } else { 1 + (i & 1) };
-        let f = fdct(&mb.src.block(i, cbw));
         let mut levels = [0i32; 64];
-        levels[0] = ((f[0] / dc_mult as f32).round() as i32).clamp(0, dc_max);
-        for pos in 1..64 {
-            levels[pos] = quant_intra(f[pos], ctx.intra_matrix[pos], qs);
+        // The minimal fallback repeats the DC predictor and codes no coefficients, so it needs
+        // no transform.
+        if ctx.fallback == Fallback::Minimal {
+            levels[0] = st.dc[cc];
+        } else {
+            let f = fdct(&mb.src.block(i, cbw));
+            levels[0] = ((f[0] / dc_mult as f32).round() as i32).clamp(0, dc_max);
+            if ctx.fallback == Fallback::None {
+                for pos in 1..64 {
+                    levels[pos] = quant_intra(f[pos], ctx.intra_matrix[pos], qs);
+                }
+            }
         }
         let diff = levels[0] - st.dc[cc];
         st.dc[cc] = levels[0];
@@ -464,6 +497,9 @@ fn residual(ctx: &PicCtx, mb: &MbIn, pred: &MbPix, qs: i32) -> ([[i32; 64]; 8], 
     let n = ctx.blocks();
     let mut levels = [[0i32; 64]; 8];
     let mut cbp = 0u32;
+    if ctx.fallback == Fallback::Minimal {
+        return (levels, cbp);
+    }
     for i in 0..n {
         let (s, p) = (mb.src.block(i, cbw), pred.block(i, cbw));
         let f = fdct(&std::array::from_fn(|k| s[k] - p[k]));
@@ -617,6 +653,7 @@ mod tests {
             f_code: 3,
             search: 31,
             mb_qcode: &[4; 3],
+            fallback: Fallback::None,
         };
         let bad = BPred { dirs: MB_FWD, mvs: [[34, 0], [0, 0]] };
         // the bitstream can carry the vector (f_code 3: -64..64): only the position rules it out

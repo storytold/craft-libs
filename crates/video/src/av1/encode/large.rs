@@ -12,6 +12,14 @@ pub struct LargeEncoder {
     width: usize,
     height: usize,
     seq_header: Option<Vec<u8>>,
+    finished: bool,
+}
+
+/// An encoded frame and the number of the input frame it represents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BufferedPacket {
+    pub input_frame_number: u64,
+    pub packet: Packet,
 }
 
 impl LargeEncoder {
@@ -22,6 +30,19 @@ impl LargeEncoder {
 
     /// Creates the tiled encoder with a rav1e speed preset from 1 (slower) to 10 (faster).
     pub fn with_speed(cfg: &EncoderConfig, speed: u8) -> Result<Self, Error> {
+        let mut normalized = cfg.clone();
+        if let RateControl::ConstantQ(q) = normalized.rate {
+            normalized.rate = RateControl::ConstantQ(q.max(1));
+        }
+        Self::with_exact_quantizer(&normalized, speed)
+    }
+
+    /// Creates a tiled encoder preserving the exact rav1e constant quantizer, including zero.
+    ///
+    /// This is for callers migrating from rav1e's `0..=255` quality input. Zero is not lossless:
+    /// rav1e still clamps coded quantization indices, but uses a distinct rate-distortion target.
+    /// [`Self::with_speed`] retains the shared API's existing minimum-quantizer normalization.
+    pub fn with_exact_quantizer(cfg: &EncoderConfig, speed: u8) -> Result<Self, Error> {
         if cfg.width < 16 || cfg.height < 16 || cfg.width > 8192 || cfg.height > 8192 {
             return Err(Error::InvalidConfig("large AV1 frame dimensions must be 16..=8192".into()));
         }
@@ -44,17 +65,19 @@ impl LargeEncoder {
             matrix_coefficients: MatrixCoefficients::BT709,
         });
         ec.low_latency = true;
-        ec.quantizer = quality.max(1) as usize;
+        ec.quantizer = usize::from(quality);
         ec.min_quantizer = ec.quantizer.min(255) as u8;
         ec.min_key_frame_interval = 1;
         ec.max_key_frame_interval = cfg.keyint.clamp(1, 120) as u64;
         ec.tiles = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
         let ctx = Config::new().with_encoder_config(ec).new_context().map_err(|e| Error::InvalidConfig(format!("rav1e: {e}")))?;
-        Ok(Self { ctx, width: cfg.width as usize, height: cfg.height as usize, seq_header: None })
+        Ok(Self { ctx, width: cfg.width as usize, height: cfg.height as usize, seq_header: None, finished: false })
     }
 
-    /// Encodes one frame. The frame planes must match the configured 4:2:0 dimensions.
-    pub fn encode_with_key(&mut self, frame: &Frame<'_>, force_key: bool) -> Result<Packet, Error> {
+    fn submit(&mut self, frame: &Frame<'_>, force_key: bool) -> Result<(), Error> {
+        if self.finished {
+            return Err(Error::InvalidFrame("AV1 encoder was already finished".into()));
+        }
         if frame.y_stride < self.width
             || frame.uv_stride < self.width / 2
             || frame.y.len() < frame.y_stride.saturating_mul(self.height)
@@ -70,14 +93,54 @@ impl LargeEncoder {
         let params =
             FrameParameters { frame_type_override: if force_key { FrameTypeOverride::Key } else { FrameTypeOverride::No }, ..Default::default() };
         self.ctx.send_frame((input, params)).map_err(|e| Error::InvalidFrame(format!("rav1e: {e}")))?;
+        Ok(())
+    }
+
+    fn packet(&mut self, packet: rav1e::prelude::Packet<u8>) -> Result<BufferedPacket, Error> {
+        let (data, seq) = sample_data(&packet.data)?;
+        if self.seq_header.is_none() {
+            self.seq_header = seq;
+        }
+        Ok(BufferedPacket { input_frame_number: packet.input_frameno, packet: Packet { data, keyframe: packet.frame_type == FrameType::KEY } })
+    }
+
+    fn drain(&mut self) -> Result<Vec<BufferedPacket>, Error> {
+        let mut packets = Vec::new();
+        loop {
+            match self.ctx.receive_packet() {
+                Ok(packet) => packets.push(self.packet(packet)?),
+                Err(rav1e::prelude::EncoderStatus::Encoded) => {}
+                Err(rav1e::prelude::EncoderStatus::NeedMoreData) if !self.finished => return Ok(packets),
+                Err(rav1e::prelude::EncoderStatus::LimitReached) if self.finished => return Ok(packets),
+                Err(e) => return Err(Error::InvalidFrame(format!("rav1e: {e}"))),
+            }
+        }
+    }
+
+    /// Submit a frame and return all packets available now, which may be empty while the encoder
+    /// buffers input. Call [`Self::finish`] after the last frame to retrieve delayed packets.
+    pub fn push(&mut self, frame: &Frame<'_>, force_key: bool) -> Result<Vec<BufferedPacket>, Error> {
+        self.submit(frame, force_key)?;
+        self.drain()
+    }
+
+    /// Finish the stream and return its remaining packets. Repeated calls return no packets.
+    pub fn finish(&mut self) -> Result<Vec<BufferedPacket>, Error> {
+        if !self.finished {
+            self.ctx.send_frame(None).map_err(|e| Error::InvalidFrame(format!("rav1e: {e}")))?;
+            self.finished = true;
+        }
+        self.drain()
+    }
+
+    /// Encodes one frame if a packet is immediately available. The input is accepted even if
+    /// rav1e needs more frames and this returns an error; new callers should use [`Self::push`].
+    pub fn encode_with_key(&mut self, frame: &Frame<'_>, force_key: bool) -> Result<Packet, Error> {
+        self.submit(frame, force_key)?;
         loop {
             match self.ctx.receive_packet() {
                 Ok(packet) => {
-                    let (data, seq) = sample_data(&packet.data)?;
-                    if self.seq_header.is_none() {
-                        self.seq_header = seq;
-                    }
-                    return Ok(Packet { data, keyframe: packet.frame_type == FrameType::KEY });
+                    return Ok(self.packet(packet)?.packet);
                 }
                 Err(rav1e::prelude::EncoderStatus::Encoded) => continue,
                 Err(rav1e::prelude::EncoderStatus::NeedMoreData | rav1e::prelude::EncoderStatus::LimitReached) => {
@@ -152,4 +215,136 @@ fn sample_data(data: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), Error> {
         pos = end;
     }
     Ok((sample, sequence))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_zero_quantizer_matches_direct_rav1e() {
+        let mut cfg = EncoderConfig::new(64, 48, 24, 1);
+        cfg.rate = RateControl::ConstantQ(0);
+        cfg.keyint = 120;
+        let y: Vec<u16> = (0..64 * 48).map(|i| ((i * 13 + i / 64 * 41) % 256) as u16).collect();
+        let u: Vec<u16> = (0..32 * 24).map(|i| ((i * 29) % 256) as u16).collect();
+        let v: Vec<u16> = (0..32 * 24).map(|i| ((i * 53) % 256) as u16).collect();
+        let frame = Frame { y: &y, u: &u, v: &v, y_stride: 64, uv_stride: 32 };
+        let mut actual = LargeEncoder::with_exact_quantizer(&cfg, 10).unwrap();
+        let mut packets = actual.push(&frame, true).unwrap();
+        packets.extend(actual.finish().unwrap());
+
+        // Frozen direct-rav1e settings used by the original consumer at quality 100.
+        let mut ec = Rav1eConfig::with_speed_preset(10);
+        ec.width = 64;
+        ec.height = 48;
+        ec.time_base = Rational::new(1, 24);
+        ec.bit_depth = 8;
+        ec.chroma_sampling = ChromaSampling::Cs420;
+        ec.pixel_range = PixelRange::Limited;
+        ec.color_description = Some(ColorDescription {
+            color_primaries: ColorPrimaries::BT709,
+            transfer_characteristics: TransferCharacteristics::BT709,
+            matrix_coefficients: MatrixCoefficients::BT709,
+        });
+        ec.low_latency = true;
+        ec.quantizer = 0;
+        ec.min_quantizer = 0;
+        ec.min_key_frame_interval = 1;
+        ec.max_key_frame_interval = 120;
+        ec.tiles = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
+        let mut direct: Context<u8> = Config::new().with_encoder_config(ec).new_context().unwrap();
+        let mut input = direct.new_frame();
+        for (plane, (samples, stride)) in input.planes.iter_mut().zip([(&y, 64), (&u, 32), (&v, 32)]) {
+            let bytes: Vec<u8> = samples.iter().map(|&p| p as u8).collect();
+            plane.copy_from_raw_u8(&bytes, stride, 1);
+        }
+        let params = FrameParameters { frame_type_override: FrameTypeOverride::Key, ..Default::default() };
+        direct.send_frame((input, params)).unwrap();
+        direct.flush();
+        let mut expected = Vec::new();
+        loop {
+            match direct.receive_packet() {
+                Ok(p) => expected.push(BufferedPacket {
+                    input_frame_number: p.input_frameno,
+                    packet: Packet { data: sample_data(&p.data).unwrap().0, keyframe: p.frame_type == FrameType::KEY },
+                }),
+                Err(rav1e::prelude::EncoderStatus::Encoded) => {}
+                Err(rav1e::prelude::EncoderStatus::LimitReached) => break,
+                Err(e) => panic!("direct rav1e failed: {e}"),
+            }
+        }
+        assert_eq!(packets, expected);
+        assert_eq!(packets.len(), 1);
+
+        // Existing callers keep their former zero-to-one normalization.
+        let encode = |cfg: &EncoderConfig| {
+            let mut enc = LargeEncoder::with_speed(cfg, 10).unwrap();
+            let mut out = enc.push(&frame, true).unwrap();
+            out.extend(enc.finish().unwrap());
+            out
+        };
+        let normalized = encode(&cfg);
+        cfg.rate = RateControl::ConstantQ(1);
+        assert_eq!(normalized, encode(&cfg));
+    }
+
+    #[test]
+    fn buffered_frames_are_returned_with_input_numbers_and_finish_drains() {
+        let cfg = EncoderConfig::new(64, 48, 24, 1);
+        let mut encoder = LargeEncoder::with_speed(&cfg, 10).unwrap();
+        assert!(encoder.av1c().is_none());
+        let y = vec![96; 64 * 48];
+        let uv = vec![128; 32 * 24];
+        let frame = Frame { y: &y, u: &uv, v: &uv, y_stride: 64, uv_stride: 32 };
+        let mut packets = Vec::new();
+        for i in 0..4 {
+            packets.extend(encoder.push(&frame, i == 2).unwrap());
+        }
+        packets.extend(encoder.finish().unwrap());
+        assert_eq!(packets.iter().map(|p| p.input_frame_number).collect::<Vec<_>>(), [0, 1, 2, 3]);
+        assert!(packets[0].packet.keyframe);
+        assert!(packets[2].packet.keyframe, "requested key frame");
+        assert!(encoder.av1c().is_some());
+        #[cfg(feature = "av1-decode")]
+        {
+            let mut decoder = crate::av1::decode::Decoder::with_threads(1);
+            let mut frames = Vec::new();
+            for packet in &packets {
+                frames.extend(decoder.decode(&packet.packet.data).unwrap());
+            }
+            frames.extend(decoder.flush_result().unwrap());
+            assert_eq!(frames.len(), 4);
+            assert!(frames.iter().all(|frame| (frame.width, frame.height) == (64, 48)));
+        }
+        assert!(encoder.finish().unwrap().is_empty());
+        assert!(encoder.push(&frame, false).is_err());
+    }
+
+    #[test]
+    fn a_large_frame_can_be_flushed_even_when_the_first_push_is_buffered() {
+        let cfg = EncoderConfig::new(4112, 16, 30, 1);
+        let mut encoder = LargeEncoder::with_speed(&cfg, 10).unwrap();
+        let y = vec![64; 4112 * 16];
+        let uv = vec![128; 2056 * 8];
+        let frame = Frame { y: &y, u: &uv, v: &uv, y_stride: 4112, uv_stride: 2056 };
+        let mut packets = encoder.push(&frame, false).unwrap();
+        packets.extend(encoder.finish().unwrap());
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].input_frame_number, 0);
+        assert!(packets[0].packet.keyframe);
+        assert!(!packets[0].packet.data.is_empty());
+        assert!(encoder.av1c().is_some());
+    }
+
+    #[test]
+    fn invalid_frame_is_not_queued_and_empty_stream_finishes() {
+        let cfg = EncoderConfig::new(64, 48, 24, 1);
+        let mut encoder = LargeEncoder::with_speed(&cfg, 10).unwrap();
+        let short = [0; 1];
+        let frame = Frame { y: &short, u: &short, v: &short, y_stride: 64, uv_stride: 32 };
+        assert!(encoder.push(&frame, false).is_err());
+        assert!(encoder.finish().unwrap().is_empty());
+        assert!(encoder.av1c().is_none());
+    }
 }

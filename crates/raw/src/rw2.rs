@@ -615,11 +615,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         _ => Rect::new(0, 0, active.width, active.height),
     };
-    if !data.is_empty() {
+    // Packed formats 2/5/7 are lossless sample containers: zero is an ordinary
+    // code, not evidence of a mapped-out photosite. The documented zero repair
+    // applies to the predictive format 4 and older word containers only.
+    if !data.is_empty() && matches!(encoding, Encoding::Words | Encoding::Blocks { kind: Block::Format4, .. }) {
         fill_defects(&mut data, w, active);
     }
 
-    let cfa = cfa(ifd0.u16(CFA_PATTERN).unwrap_or(1));
+    let cfa_code = ifd0.u16(CFA_PATTERN);
+    // RGGB is still usable when metadata is absent or unknown, but callers
+    // must be able to distinguish that fallback from a recorded sensor phase.
+    let assumed_cfa = !matches!(cfa_code, Some(1..=4));
+    let cfa = cfa(cfa_code.unwrap_or(1));
     let read = BLACK_RGB.map(|tag| ifd0.f64(tag).filter(|v| v.is_finite() && *v >= 0.0));
     let tags = read.map(|v| v.unwrap_or(0.0) as f32);
     let offset = match encoding {
@@ -665,12 +672,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists { list3: distortion(ifd0, active).into_iter().collect(), ..Default::default() },
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: crate::LevelSources { black: black_source, white: white_source },
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -1070,17 +1079,61 @@ mod tests {
     }
 
     #[test]
+    fn cfa_fallback_provenance_preserves_pixels_in_header_and_full_modes() {
+        let pixels: Vec<u16> = (0..72).map(|i| 17 + i * 113).collect();
+        let payload = pack(&pixels, 14);
+        for (code, expected, assumed) in [
+            (None, "RGGB", true),
+            (Some(0), "RGGB", true),
+            (Some(5), "RGGB", true),
+            (Some(u16::MAX), "RGGB", true),
+            (Some(1), "RGGB", false),
+            (Some(2), "GRBG", false),
+            (Some(3), "GBRG", false),
+            (Some(4), "BGGR", false),
+        ] {
+            let mut tags = vec![short(BITS, 14), short(RAW_FORMAT, 7)];
+            if let Some(code) = code {
+                tags.push(short(CFA_PATTERN, code));
+            }
+            let bytes = file(18, 4, &tags, &payload, &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!((image.width, image.height), (18, 4));
+                assert_eq!(image.cfa.as_ref().unwrap().name(), expected, "code {code:?}");
+                assert_eq!(image.notices, crate::RawNotices { assumed_cfa: assumed, ..Default::default() }, "code {code:?}, {mode:?}");
+                assert_eq!(samples(&image), if mode == Mode::Full { pixels.as_slice() } else { &[] });
+            }
+        }
+    }
+
+    #[test]
+    fn lossless_packed_formats_preserve_zero_codes_inside_the_active_area() {
+        let (w, h) = (90usize, 12usize);
+        for (format, bits, rotated) in [(5u16, 12u32, true), (5, 14, true), (7, 14, false), (2, 12, false)] {
+            let mut px = vec![1000u16; w * h];
+            px[5 * w + 20] = 0;
+            let payload = pack(&px, bits);
+            let bytes = rw2(w as u16, h as u16, bits as u16, format, 100, &if rotated { rotate(payload) } else { payload });
+            assert_eq!(samples(&crate::decode(&bytes).unwrap()), px, "format {format}/{bits}");
+        }
+    }
+
+    #[test]
     fn levels_crop_defects_and_cfa() {
         let (w, h) = (90usize, 60usize);
         let mut px: Vec<u16> = (0..w * h).map(|i| 300 + (i % 7) as u16).collect();
-        // a saturation plateau sets the white level; zeros inside the active area are defects
+        // A saturation plateau sets the white level. In the older word container,
+        // isolated zeros inside the active area are documented mapped-out defects.
         px[10 * w..20 * w].fill(3900);
         px[30 * w + 40] = 0;
         px[1] = 0; // in the border: left alone
-        let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(RAW_FORMAT, 5)];
+        let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(COMPRESSION, 34828)];
         tags.extend([0x002f, 0x0030, 0x0031, 0x0032].iter().zip([12u16, 10, 52, 80]).map(|(&tag, v)| short(tag, v)));
         tags.extend(LINEARITY_LIMIT.map(|tag| short(tag, 2000))); // recorded limits are not used
-        let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+        // Compression 34828 stores left-justified samples in little-endian u16 words.
+        let words: Vec<u8> = px.iter().flat_map(|&v| (v << 4).to_le_bytes()).collect();
+        let bytes = file(w as u16, h as u16, &tags, &words, &|off| vec![(t::STRIP_OFFSETS, Value::Long(vec![off]))]);
         let r = crate::decode(&bytes).unwrap();
         let d = samples(&r);
         assert_eq!(d[30 * w + 40], ((px[30 * w + 38] as u32 + px[30 * w + 42] as u32 + px[28 * w + 40] as u32 + px[32 * w + 40] as u32) / 4) as u16);

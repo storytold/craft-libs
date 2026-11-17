@@ -15,8 +15,12 @@ default = ["system"]
 system = ["dep:fontique"]
 
 [dependencies]
+harfrust = "0.13"
+kurbo = { workspace = true }
 skrifa = { version = "0.47", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
+unicode-bidi = "0.3.18"
+unicode-segmentation = "1.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
