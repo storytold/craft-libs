@@ -153,6 +153,11 @@ pub struct Store<S: TokenStore = Keychain> {
     /// The suite folder. `None` when this process keeps nothing.
     dir: Option<PathBuf>,
     tokens: S,
+    /// This store's own test-only pause point (see [`race_hook`]). One per instance, never
+    /// shared across stores, so two tests racing their own stores in parallel can never answer
+    /// each other's pause.
+    #[cfg(test)]
+    race_hook: race_hook::Hook,
 }
 
 impl Store<Keychain> {
@@ -165,7 +170,20 @@ impl Store<Keychain> {
 impl<S: TokenStore> Store<S> {
     /// A store over a given folder and token store. `None` keeps nothing.
     pub fn at(dir: Option<PathBuf>, tokens: S) -> Store<S> {
-        Store { dir, tokens }
+        Store {
+            dir,
+            tokens,
+            #[cfg(test)]
+            race_hook: race_hook::Hook::new(),
+        }
+    }
+
+    /// Arms this store's own test-only pause point in [`Store::update_token`], between its
+    /// first, unlocked check and the lock it takes for its second one. See [`race_hook`] for
+    /// why the hook lives on the store rather than behind one shared slot.
+    #[cfg(test)]
+    pub(crate) fn arm_race_hook(&self) -> race_hook::Handle {
+        self.race_hook.arm()
     }
 
     /// The suite folder, when there is one.
@@ -332,15 +350,15 @@ impl<S: TokenStore> Store<S> {
             accounts::Located::Unknown => return Err(Error::Unknown(id.to_owned())),
         }
 
-        // Test only, and a no-op unless a test has armed it (see `race_hook`): holds here, right
-        // after the first check above has read the pre-race generation and right before the
-        // lock for the second one, so a test can run a competing sign-in or a discard and
-        // re-add to completion in between. Without this, a test that only lines threads up at
-        // their start cannot tell a build that correctly rejects at the second, locked check
-        // apart from a pre-fix build that got lucky and rejected at the first, unlocked one
-        // instead.
+        // Test only, and a no-op unless a test armed this store's own hook (see `race_hook`):
+        // holds here, right after the first check above has read the pre-race generation and
+        // right before the lock for the second one, so a test can run a competing sign-in or a
+        // discard and re-add to completion in between. Without this, a test that only lines
+        // threads up at their start cannot tell a build that correctly rejects at the second,
+        // locked check apart from a pre-fix build that got lucky and rejected at the first,
+        // unlocked one instead.
         #[cfg(test)]
-        race_hook::pause();
+        self.race_hook.pause();
 
         lock::with_lock(&path, || {
             let mut list = accounts::read(&path)?;

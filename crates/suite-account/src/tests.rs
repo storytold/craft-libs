@@ -297,7 +297,7 @@ fn a_refresh_racing_a_newer_sign_in_for_the_same_handle_never_overwrites_its_tok
     let first = store.sign_in(&new_account(), &Secret::new("session-1"), NOW).unwrap();
     let seen_generation = first.generation;
 
-    let gate = crate::race_hook::arm();
+    let gate = store.arm_race_hook();
     let winner_dir = dir.path().to_path_buf();
     let winner_keychain = keychain.clone();
     let winner = std::thread::spawn(move || -> Result<(), Error> {
@@ -337,7 +337,7 @@ fn a_refresh_racing_a_discard_and_re_add_for_the_same_handle_never_overwrites_it
     let first = store.sign_in(&new_account(), &Secret::new("session-1"), NOW).unwrap();
     let seen_generation = first.generation;
 
-    let gate = crate::race_hook::arm();
+    let gate = store.arm_race_hook();
     let winner_dir = dir.path().to_path_buf();
     let winner_keychain = keychain.clone();
     let winner_id = first.id.clone();
