@@ -467,7 +467,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                     let ti = func_types.get(code_index as usize).copied();
                     let mut locals = 0u64;
                     let lr = body.get_locals_reader()?;
-                    for l in lr.into_iter().take(10_000) {
+                    for l in lr {
                         let (n, _) = l?;
                         locals = locals.saturating_add(u64::from(n));
                     }
@@ -653,6 +653,22 @@ pub fn scan_glue(text: &str, imports: &[WasmImport]) -> GlueScan {
 mod tests {
     use super::*;
     use craft_anything_testkit::formats as fx;
+
+    /// The output inventory limit applies to retained functions, not the local groups within one retained function.
+    #[test]
+    fn local_counts_include_groups_after_ten_thousand() {
+        // One valid () -> () function containing 10,001 runs of one i32 local.
+        let mut bytes = b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0".to_vec();
+        // section size = 1 + 3 + 20005, body size = 2 + 20002 + 1.
+        bytes.extend([10, 0xa9, 0x9c, 1, 1, 0xa5, 0x9c, 1, 0x91, 0x4e]);
+        for _ in 0..10_001 {
+            bytes.extend([1, 0x7f]);
+        }
+        bytes.push(0x0b);
+        let report = inspect(&bytes).unwrap();
+        assert!(report.validation.valid, "{:?}", report.validation);
+        assert_eq!(report.functions[0].locals, 10_001);
+    }
 
     #[test]
     fn reads_the_sample_module() {
