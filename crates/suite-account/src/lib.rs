@@ -103,6 +103,8 @@ mod error;
 mod lock;
 pub mod migrate;
 pub mod paths;
+#[cfg(test)]
+mod race_hook;
 mod secret;
 pub mod store;
 
@@ -329,6 +331,16 @@ impl<S: TokenStore> Store<S> {
             }
             accounts::Located::Unknown => return Err(Error::Unknown(id.to_owned())),
         }
+
+        // Test only, and a no-op unless a test has armed it (see `race_hook`): holds here, right
+        // after the first check above has read the pre-race generation and right before the
+        // lock for the second one, so a test can run a competing sign-in or a discard and
+        // re-add to completion in between. Without this, a test that only lines threads up at
+        // their start cannot tell a build that correctly rejects at the second, locked check
+        // apart from a pre-fix build that got lucky and rejected at the first, unlocked one
+        // instead.
+        #[cfg(test)]
+        race_hook::pause();
 
         lock::with_lock(&path, || {
             let mut list = accounts::read(&path)?;

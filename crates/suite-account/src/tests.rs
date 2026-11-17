@@ -282,46 +282,33 @@ fn a_write_against_an_unknown_account_says_so_rather_than_claiming_a_stale_gener
 
 // ---- a lost race never touches the keychain --------------------------------
 
-/// A newer sign-in for the same handle wins the accounts lock first. Its own token is already in
-/// the keychain. It finishes its commit while a stale refresh is still blocked waiting on that
-/// same lock. The refresh's second check must then see the new generation and refuse, having
-/// never touched the keychain at all. The race is set up by holding the real lock on a
-/// background thread, releasing it only once the refresh (on the calling thread) has had the
-/// chance to take its own unlocked first read of the old, pre-race state.
+/// A newer sign-in for the same handle must never let a stale refresh overwrite its token. The
+/// refresh is held at `race_hook`'s pause point right after its own first, unlocked look at the
+/// old generation. Only then does the newer sign-in run, and it always finishes before the pause
+/// lifts and the refresh takes its second, locked look. A plain start barrier cannot pin that
+/// ordering: it only lines both operations up at the beginning, so a build that still has the
+/// bug this test guards against could pass anyway, by rejecting at the first check because the
+/// sign-in happened to land first, never reaching the second check this test is named for.
 #[test]
 fn a_refresh_racing_a_newer_sign_in_for_the_same_handle_never_overwrites_its_token() {
-    use std::sync::mpsc;
-
     let dir = tempfile::tempdir().unwrap();
     let keychain = Memory::new();
     let store = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
     let first = store.sign_in(&new_account(), &Secret::new("session-1"), NOW).unwrap();
     let seen_generation = first.generation;
 
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
-    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
-    let hold_dir = dir.path().to_path_buf();
-    let hold_keychain = keychain.clone();
-    let hold_id = first.id.clone();
-    let hold_handle = std::thread::spawn(move || -> Result<(), Error> {
-        let path = paths::file(&hold_dir);
-        crate::lock::with_lock(&path, || {
-            ready_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            // Stands in for a second sign-in's own unlocked token write, already landed, now
-            // committing its row while the refresh below is still waiting on this same lock.
-            hold_keychain.put(&hold_id, &Secret::new("session-2")).map_err(Error::Keychain)?;
-            let mut list = accounts::read(&path)?;
-            let generation = list.get(&hold_id).map_or(0, |a| a.generation) + 1;
-            list.put(Account { id: hold_id.clone(), generation, ..Account::default() });
-            accounts::write(&path, &list)
-        })
+    let gate = crate::race_hook::arm();
+    let winner_dir = dir.path().to_path_buf();
+    let winner_keychain = keychain.clone();
+    let winner = std::thread::spawn(move || -> Result<(), Error> {
+        gate.arrived.recv().map_err(|_| Error::Unknown("the refresh never reached the pause point".to_owned()))?;
+        Store::at(Some(winner_dir), winner_keychain).sign_in(&new_account(), &Secret::new("session-2"), NOW + 10)?;
+        gate.go.send(()).map_err(|_| Error::Unknown("the refresh gave up waiting for the pause to lift".to_owned()))?;
+        Ok(())
     });
 
-    ready_rx.recv().unwrap();
-    release_tx.send(()).unwrap();
     let refresh = store.update_token(&first.id, seen_generation, &Secret::new("session-1-refreshed"), NOW + 20);
-    hold_handle.join().unwrap().unwrap();
+    winner.join().unwrap().unwrap();
 
     assert!(matches!(refresh, Err(Error::StaleGeneration { .. })), "the refresh must lose to the newer sign-in: {refresh:?}");
     assert!(keychain.has(&first.id), "the new session's token must still be in the keychain");
@@ -337,46 +324,34 @@ fn a_refresh_racing_a_newer_sign_in_for_the_same_handle_never_overwrites_its_tok
 }
 
 /// The same race, with the newer sign-in preceded by a discard: the handle is removed and
-/// tombstoned, then signed in again, both landing while the refresh is blocked on the lock. Both
-/// steps complete before the refresh ever gets the lock back. Its second check lands on the
-/// re-added row's new, active generation, never the tombstone in between.
+/// tombstoned, then signed in again, both only after the refresh's first, unlocked check has
+/// already read the old generation, and both finished before the pause lifts for its second,
+/// locked one. Session two's token must be the one left standing either way, the same pin as
+/// the sign-in race above and for the same reason: a start barrier alone cannot tell a correct
+/// second check apart from a lucky early rejection at the first one.
 #[test]
 fn a_refresh_racing_a_discard_and_re_add_for_the_same_handle_never_overwrites_its_token() {
-    use std::sync::mpsc;
-
     let dir = tempfile::tempdir().unwrap();
     let keychain = Memory::new();
     let store = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
     let first = store.sign_in(&new_account(), &Secret::new("session-1"), NOW).unwrap();
     let seen_generation = first.generation;
 
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
-    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
-    let hold_dir = dir.path().to_path_buf();
-    let hold_keychain = keychain.clone();
-    let hold_id = first.id.clone();
-    let hold_handle = std::thread::spawn(move || -> Result<(), Error> {
-        let path = paths::file(&hold_dir);
-        crate::lock::with_lock(&path, || {
-            ready_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            // Discard, then a fresh sign-in for the same handle: both land together while the
-            // refresh below is still waiting on this same lock.
-            let _ = hold_keychain.remove(&hold_id);
-            let mut list = accounts::read(&path)?;
-            let old_generation = list.get(&hold_id).map(|a| a.generation).unwrap_or(0);
-            list.remove_with_tombstone(&hold_id, old_generation)?;
-            hold_keychain.put(&hold_id, &Secret::new("session-2")).map_err(Error::Keychain)?;
-            let generation = list.tombstone_generation(&hold_id).unwrap_or(0) + 1;
-            list.put(Account { id: hold_id.clone(), generation, ..Account::default() });
-            accounts::write(&path, &list)
-        })
+    let gate = crate::race_hook::arm();
+    let winner_dir = dir.path().to_path_buf();
+    let winner_keychain = keychain.clone();
+    let winner_id = first.id.clone();
+    let winner = std::thread::spawn(move || -> Result<(), Error> {
+        gate.arrived.recv().map_err(|_| Error::Unknown("the refresh never reached the pause point".to_owned()))?;
+        let other = Store::at(Some(winner_dir), winner_keychain);
+        other.discard(&winner_id)?;
+        other.sign_in(&new_account(), &Secret::new("session-2"), NOW + 10)?;
+        gate.go.send(()).map_err(|_| Error::Unknown("the refresh gave up waiting for the pause to lift".to_owned()))?;
+        Ok(())
     });
 
-    ready_rx.recv().unwrap();
-    release_tx.send(()).unwrap();
     let refresh = store.update_token(&first.id, seen_generation, &Secret::new("session-1-refreshed"), NOW + 20);
-    hold_handle.join().unwrap().unwrap();
+    winner.join().unwrap().unwrap();
 
     assert!(refresh.is_err(), "the refresh must lose to the discard and re-add: {refresh:?}");
     assert!(keychain.has(&first.id), "the re-added session's token must still be in the keychain");
