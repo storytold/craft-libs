@@ -1,7 +1,7 @@
 //! Focus movement: Tab and F6, roving groups, initial focus, restore, programmatic requests and focus after
 //! removal. Every movement reads last pass's registrations and returns the egui changes to apply.
 
-use super::{Act, BeginIn, FocusTarget, Initial, PickedIn, State, StopKey, StopRec, TabReach};
+use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, StopKey, StopRec, TabReach};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use craft_behavior::focus::after_removal;
@@ -165,7 +165,7 @@ impl State {
     /// is recorded under that root.
     pub(super) fn focus_stop(&mut self, rec: StopRec) -> Vec<Act> {
         let key = rec.stop.key();
-        let acts = self.focus_stop_in_place(rec);
+        let acts = self.move_focus(rec, FocusOrigin::Request);
         self.revealed = Some(key);
         acts
     }
@@ -173,6 +173,10 @@ impl State {
     /// Moves focus to `rec` without a reveal: a press focuses a stop under the pointer, which is on screen already,
     /// and scrolling it in would move the content under the held press.
     pub(super) fn focus_stop_in_place(&mut self, rec: StopRec) -> Vec<Act> {
+        self.move_focus(rec, FocusOrigin::Press)
+    }
+
+    fn move_focus(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         self.note_entry(&rec);
         let stop = &rec.stop;
         let roving = stop.group.is_some();
@@ -186,7 +190,7 @@ impl State {
         );
         let moved = self.focus_now != Some(stop.root) || self.focused.get(&stop.root) != Some(&stop.key());
         if moved {
-            self.arrived = Some((self.frame, stop.key()));
+            self.arrived = Some((self.frame, stop.key(), origin));
         }
         self.focused.insert(stop.root, stop.key());
         self.focus_now = Some(stop.root);

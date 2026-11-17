@@ -5,7 +5,7 @@ use crate::contract::Component;
 use crate::runtime::focus::{self};
 use crate::runtime::keys::{Intents, MenuKey};
 use crate::runtime::measure;
-use craft_behavior::{MoveMods, NavMove, PartRef, PressPhase};
+use craft_behavior::{MoveMods, NavMove, PartRef};
 use craft_keymap::Chord;
 use egui::{Rect, Vec2};
 
@@ -23,8 +23,8 @@ pub trait Focus {
     /// every pass of the frame; `None` when focus stayed on its part, left the component, or sits on the component
     /// itself.
     fn focus_arrived(&self) -> Option<PartRef>;
-    /// [`focus_arrived`](Focus::focus_arrived) when the part is not under a press: focus came by the keyboard or a
-    /// focus request (Photoshop: Tab into a field selects its text, a click does not). A press on the part reports
+    /// [`focus_arrived`](Focus::focus_arrived) when the focus record says the keyboard or a
+    /// focus request moved it (Photoshop: Tab into a field selects its text, a click does not). A press reports
     /// none; the press selects by its own rule.
     fn focus_arrived_by_key(&self) -> Option<PartRef>;
     /// The component holds key focus.
@@ -69,9 +69,8 @@ impl Focus for CxCore<'_> {
     }
 
     fn focus_arrived_by_key(&self) -> Option<PartRef> {
-        self.focus_arrived().filter(|part| {
-            self.results.get(&(part.key, part.index)).is_some_and(|result| matches!(result.press.phase, PressPhase::Idle | PressPhase::Hover))
-        })
+        let facts = if focus::writes() == self.focus.at { self.focus } else { focus::facts(&self.ctx, self.id) };
+        self.focus_arrived().filter(|_| facts.arrived_origin == Some(focus::FocusOrigin::Request))
     }
 
     fn is_focused(&self) -> bool {

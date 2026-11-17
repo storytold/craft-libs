@@ -358,6 +358,17 @@ impl DialogHost {
         if self.is_open::<D>() { Err(dialog) } else { Ok(self.open(dialog)) }
     }
 
+    /// [`open_unless_open`](Self::open_unless_open) from inside a pass: a dialog it opens takes the Escape that arrived
+    /// in this pass, so the focused component beneath (a canvas's frame part, say) gets no Cancel. Plain `open` has no
+    /// `Context`, and the dialog shows from the next pass, after the components beneath have read the key.
+    pub fn open_unless_open_in<D: StackDialog>(&mut self, ctx: &Context, dialog: D) -> Result<DialogId, D> {
+        let opened = self.open_unless_open(dialog);
+        if opened.is_ok() {
+            crate::runtime::overlay::take_keys_for_new_dialog(ctx);
+        }
+        opened
+    }
+
     /// Opens `dialog` as a child of `parent`: shown over it, disabled with it, closed when the
     /// parent closes (a contour editor from Layer Style).
     pub fn open_child<D: StackDialog>(&mut self, dialog: D, parent: DialogId) -> DialogId {
