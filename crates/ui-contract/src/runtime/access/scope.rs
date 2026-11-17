@@ -572,13 +572,6 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
                 let named = patches.iter().any(|patch| matches!(patch, LabelPatch::LabelledBy { node: id, .. } if *id == node.id));
                 report_unnamed(ctx, node.unnamed.clone().filter(|_| !named));
             }
-            if label.activated {
-                eprintln!(
-                    "DIAG T3 label activated: {:?} nodes {:?}",
-                    label.text,
-                    scope.nodes.iter().map(|node| (node.id, node.disabled, node.inner_stop.is_some())).collect::<Vec<_>>()
-                );
-            }
             // A click on a label, as on any form label, moves focus to its one control.
             if let (true, [only]) = (label.activated, &scope.nodes[..])
                 && !only.disabled
