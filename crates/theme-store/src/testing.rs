@@ -151,5 +151,10 @@ mod fault {
         fn set_permissions(&self, file: &File, perms: Permissions) -> io::Result<()> {
             RealFs.set_permissions(file, perms)
         }
+
+        #[cfg(unix)]
+        fn set_group(&self, file: &File, gid: u32) -> io::Result<()> {
+            RealFs.set_group(file, gid)
+        }
     }
 }
