@@ -233,6 +233,11 @@ impl Package {
         self.opc.size()
     }
 
+    /// The entries of the zip that could not be read and were left out, by name.
+    pub fn skipped(&self) -> &[String] {
+        self.opc.skipped()
+    }
+
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
     /// name without the leading `/`.
     pub fn from_parts(files: BTreeMap<String, Vec<u8>>) -> Package {

@@ -315,6 +315,19 @@ fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
     );
 }
 
+/// Every entry read is charged to one document-wide total, so an archive of many individually
+/// allowed entries cannot spend an unbounded amount of memory in one open.
+#[test]
+fn entries_are_charged_to_one_document_wide_total() {
+    let stack = "<image w='1' h='1'><stack/></image>";
+    let bytes = archive(stack, &[("a.png", vec![1; 100]), ("b.png", vec![2; 100])]);
+    // Room for `stack.xml` and one image, not two.
+    let mut a = Archive::open_with_total(&bytes, stack.len() as u64 + 120).unwrap();
+    assert_eq!(a.entry("a.png", MAX_ENTRY).unwrap().unwrap(), vec![1; 100]);
+    let err = a.entry("b.png", MAX_ENTRY).unwrap_err();
+    assert!(matches!(&err, Error::Invalid(m) if m.contains("b.png") && m.contains("may expand to")), "{err:?}");
+}
+
 /// Two entries of one name: `zip` keeps one, and which one the writer meant is not known.
 #[test]
 fn two_entries_of_one_name_are_refused() {
