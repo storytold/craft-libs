@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// Most frames and rejected simple packet blocks read from one capture.
+/// Most accepted and rejected packet records read from one capture.
 pub const MAX_PACKETS: u64 = 5_000_000;
 /// Most flows tracked; later flows are counted but get no id.
 pub const MAX_FLOWS: usize = 100_000;
@@ -90,7 +90,10 @@ pub struct Capture<'a> {
     pub truncated: bool,
     count: u64,
     rejected_simple_blocks: u64,
-    rejected_simple_reported: bool,
+    rejected_short_blocks: u64,
+    rejected_interfaces: u64,
+    invalid_fractions: u64,
+    warnings_reported: bool,
 }
 
 fn rd_u16(r: &Reader<'_>, le: bool, off: usize) -> Option<u16> {
@@ -129,7 +132,10 @@ impl<'a> Capture<'a> {
             truncated: false,
             count: 0,
             rejected_simple_blocks: 0,
-            rejected_simple_reported: false,
+            rejected_short_blocks: 0,
+            rejected_interfaces: 0,
+            invalid_fractions: 0,
+            warnings_reported: false,
         };
         let classic = |le: bool, nanos: bool| -> Result<(Kind, String, Interface), FormatError> {
             let major = rd_u16(&r, le, 4).ok_or_else(|| FormatError::Truncated("pcap header".into()))?;
@@ -173,7 +179,7 @@ impl<'a> Capture<'a> {
     }
 
     fn packet_limit_reached(&mut self) -> bool {
-        if self.count.saturating_add(self.rejected_simple_blocks) < MAX_PACKETS {
+        if self.count + self.rejected_simple_blocks + self.rejected_short_blocks + self.rejected_interfaces < MAX_PACKETS {
             return false;
         }
         if !self.truncated && self.pos < self.data.len() {
@@ -183,12 +189,24 @@ impl<'a> Capture<'a> {
         true
     }
 
-    fn report_rejected_simple_blocks(&mut self) {
-        if self.rejected_simple_blocks > 0 && !self.rejected_simple_reported {
+    fn report_packet_warnings(&mut self) {
+        if self.warnings_reported {
+            return;
+        }
+        self.warnings_reported = true;
+        if self.rejected_short_blocks > 0 {
+            self.warnings.push(format!("skipped {} packet block(s) with captured data past the end", self.rejected_short_blocks));
+        }
+        if self.rejected_interfaces > 0 {
+            self.warnings.push(format!("skipped {} packet block(s) naming an undeclared interface", self.rejected_interfaces));
+        }
+        if self.invalid_fractions > 0 {
+            self.warnings.push(format!("ignored {} timestamp(s) with a fraction outside its second", self.invalid_fractions));
+        }
+        if self.rejected_simple_blocks > 0 {
             let n = self.rejected_simple_blocks;
             let suffix = if n == 1 { "" } else { "s" };
             self.warnings.push(format!("skipped {n} simple packet block{suffix} with inconsistent captured lengths"));
-            self.rejected_simple_reported = true;
         }
     }
 
@@ -196,7 +214,11 @@ impl<'a> Capture<'a> {
         let (base, exp) = self.interfaces.get(iface).map(|i| i.tsresol).unwrap_or((10, 6));
         let offset_s = self.interfaces.get(iface).map(|i| i.tsoffset).unwrap_or(0);
         let ns = if base == 10 {
-            if exp <= 9 { u128::from(units) * 10u128.pow(u32::from(9 - exp)) } else { u128::from(units) / 10u128.checked_pow(u32::from(exp - 9))? }
+            if exp <= 9 {
+                u128::from(units) * 10u128.pow(u32::from(9 - exp))
+            } else {
+                10u128.checked_pow(u32::from(exp - 9)).map_or(0, |scale| u128::from(units) / scale)
+            }
         } else {
             (u128::from(units) * 1_000_000_000) >> exp.min(127)
         };
@@ -229,8 +251,14 @@ impl<'a> Capture<'a> {
             return self.stop(format!("record at offset {p} claims {incl} bytes past the end of the file"));
         };
         self.pos = p + 16 + body.len();
-        let units = u64::from(sec) * if nanos { 1_000_000_000 } else { 1_000_000 } + u64::from(frac);
-        Some(self.frame(0, units, body, orig))
+        let per_second = if nanos { 1_000_000_000 } else { 1_000_000 };
+        let units = u64::from(sec) * u64::from(per_second) + u64::from(frac);
+        let mut frame = self.frame(0, units, body, orig);
+        if frac >= per_second {
+            self.invalid_fractions += 1;
+            frame.ts_ns = None;
+        }
+        Some(frame)
     }
 
     fn next_ng(&mut self, mut le: bool) -> Option<Frame<'a>> {
@@ -323,15 +351,14 @@ impl<'a> Capture<'a> {
                         )
                     };
                     let (Some(iface), Some(hi), Some(lo), Some(cap), Some(orig)) = (iface, hi, lo, cap, orig) else { continue };
-                    let Some(data) = usize::try_from(cap).ok().filter(|&c| body + 20 + c <= body_end).and_then(|c| r.slice(body + 20, c)) else {
-                        self.warnings.push(format!("packet block at offset {p} claims more bytes than it holds; skipped"));
+                    let Some(data) = usize::try_from(cap).ok().filter(|&c| c <= body_end - (body + 20)).and_then(|c| r.slice(body + 20, c)) else {
+                        self.rejected_short_blocks += 1;
                         continue;
                     };
-                    let iface = self.section_base + iface;
-                    if iface >= self.interfaces.len() {
-                        self.warnings.push(format!("packet block at offset {p} names an undeclared interface; skipped"));
+                    let Some(iface) = self.section_base.checked_add(iface).filter(|&id| id < self.interfaces.len()) else {
+                        self.rejected_interfaces += 1;
                         continue;
-                    }
+                    };
                     return Some(self.frame(iface, (u64::from(hi) << 32) | u64::from(lo), data, orig));
                 }
                 3 => {
@@ -346,6 +373,7 @@ impl<'a> Capture<'a> {
                     }
                     let Some(data) = r.slice(body + 4, cap) else { continue };
                     if iface >= self.interfaces.len() {
+                        self.rejected_interfaces += 1;
                         continue;
                     }
                     // Simple packet blocks carry no timestamp.
@@ -378,7 +406,7 @@ impl<'a> Iterator for Capture<'a> {
             }
         };
         if frame.is_none() {
-            self.report_rejected_simple_blocks();
+            self.report_packet_warnings();
         }
         frame
     }
@@ -1522,6 +1550,64 @@ mod tests {
         assert!(cap.next().is_none());
         assert!(cap.truncated);
         assert_eq!(cap.pos, data.len() - valid.len());
+    }
+
+    #[test]
+    fn malformed_packet_blocks_share_the_budget_and_report_each_reason_once() {
+        use craft_anything_testkit::pcap::block;
+        let mut data = pcapng(&[]);
+        for kind in [2, 6] {
+            let mut body = [0; 20];
+            body[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+            data.extend(block(kind, &body));
+        }
+        let mut body = [0; 20];
+        body[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        data.extend(block(6, &body));
+        let mut shb = pcapng(&[]);
+        shb.truncate(28);
+        data.extend(shb);
+        data.extend(block(3, &[0; 4])); // No interface in this section.
+        data.extend(block(3, &[0; 4]));
+        let mut cap = Capture::new(&data).unwrap();
+        cap.count = MAX_PACKETS - 4;
+        assert!(cap.next().is_none());
+        assert!(cap.truncated);
+        assert_eq!(cap.warnings.len(), 3);
+        assert!(cap.warnings.iter().any(|s| s.contains("2 packet block(s) naming")));
+        assert!(cap.warnings.iter().any(|s| s.contains("2 packet block(s) with")));
+        assert!(cap.next().is_none());
+        assert_eq!(cap.warnings.len(), 3);
+    }
+
+    #[test]
+    fn invalid_classic_fractions_do_not_move_the_capture_period() {
+        for (magic, scale) in [(CLASSIC_US, 1_000_000u32), (CLASSIC_NS, 1_000_000_000)] {
+            let mut data = pcap(&[vec![], vec![]]);
+            data[..4].copy_from_slice(&magic.to_le_bytes());
+            data[28..32].copy_from_slice(&scale.to_le_bytes());
+            data[44..48].copy_from_slice(&(scale - 1).to_le_bytes());
+            let mut cap = Capture::new(&data).unwrap();
+            assert_eq!(cap.next().unwrap().ts_ns, None);
+            assert!(cap.next().unwrap().ts_ns.is_some());
+            assert!(cap.next().is_none());
+            assert_eq!(cap.warnings.len(), 1);
+        }
+    }
+
+    #[test]
+    fn subnanosecond_decimal_resolutions_keep_the_interface_offset() {
+        use craft_anything_testkit::pcap::block;
+        let mut data = pcapng(&[]);
+        data.truncate(28);
+        let mut idb = vec![1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 1, 0, 127, 0, 0, 0, 14, 0, 8, 0];
+        idb.extend(2i64.to_le_bytes());
+        data.extend(block(1, &idb));
+        let mut epb = [0; 20];
+        epb[4..12].fill(0xff);
+        data.extend(block(6, &epb));
+        let frame = Capture::new(&data).unwrap().next().unwrap();
+        assert_eq!(frame.ts_ns, Some(2_000_000_000));
     }
 
     #[test]
