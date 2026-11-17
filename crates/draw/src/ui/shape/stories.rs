@@ -7,7 +7,7 @@ use super::{
 };
 use crate::ui::shape_drag::{BoxConstraints, ShapeKind};
 use craft_behavior::EditEvent;
-use craft_color::ui::Paint;
+use craft_color_ui::ui::Paint;
 use craft_theme::Srgba;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::{Bind, ShowContainer as _};

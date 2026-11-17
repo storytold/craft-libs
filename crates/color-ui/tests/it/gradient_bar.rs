@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::EditEvent;
-use craft_color::ui::gradient::stops::{StopRules, sample};
-use craft_color::ui::gradient::{ColorStop, GradientEditor, GradientStops, OpacityStop, StopDrop, StopRef, StopRows};
+use craft_color_ui::ui::gradient::stops::{StopRules, sample};
+use craft_color_ui::ui::gradient::{ColorStop, GradientEditor, GradientStops, OpacityStop, StopDrop, StopRef, StopRows};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};

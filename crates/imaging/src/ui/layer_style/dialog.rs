@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use craft_color::gradient::GradientStops;
+use craft_color_ui::gradient::GradientStops;
 use craft_theme::{Srgba, TypeRole};
 use craft_ui::contract::{CommandSet as _, Entry, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Divider, Text};

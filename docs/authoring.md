@@ -25,7 +25,7 @@ A family trial drives frames through `Fixture` (`Fixture::new` or `Fixture::stor
 
 ## A new crate with components
 
-A crate outside the library that holds contract types (a family crate) runs its suite and trials from one test executable, its library's test target, with `screen-testing` turning on its stories. `crates/color` is the model:
+A crate outside the library that holds contract types (a family crate) runs its suite and trials from one test executable, its library's test target, with `screen-testing` turning on its stories. `crates/color-ui` is the model:
 
 ```toml
 [lib]
@@ -42,7 +42,7 @@ craft-ui = { workspace = true, features = ["testing"] }
 ```rust
 // src/lib.rs
 #[cfg(all(test, feature = "screen-testing"))]
-extern crate self as craft_color;
+extern crate self as craft_color_ui;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
 mod integration;

@@ -25,6 +25,7 @@ craft-automation = { workspace = true, optional = true }
 craft-browse = { workspace = true, optional = true }
 craft-cms = { workspace = true, optional = true }
 craft-color = { workspace = true, optional = true }
+craft-color-ui = { workspace = true, optional = true }
 craft-crw = { workspace = true, optional = true }
 craft-dialogs = { workspace = true, optional = true }
 craft-doc = { workspace = true, optional = true }
@@ -199,7 +200,7 @@ ui = [
     "dep:egui",
     "craft-automation?/ui",
     "craft-browse?/ui",
-    "craft-color?/ui",
+    "craft-color-ui?/ui",
     "craft-dialogs?/ui",
     "craft-draw?/ui",
     "craft-font-manager?/ui",
@@ -221,7 +222,7 @@ screen-testing = [
     "craft-ui/testing",
     "craft-automation?/screen-testing",
     "craft-browse?/screen-testing",
-    "craft-color?/screen-testing",
+    "craft-color-ui?/screen-testing",
     "craft-dialogs?/screen-testing",
     "craft-draw?/screen-testing",
     "craft-font-manager?/screen-testing",
@@ -299,7 +300,8 @@ cms = ["dep:craft-cms"]
 
 codepage = ["dep:craft-codepage"]
 
-color = ["dep:craft-color", "keymap", "settings", "window", "platform"]
+color = ["dep:craft-color"]
+color-ui = ["dep:craft-color-ui", "keymap", "settings", "window", "platform"]
 
 control = ["dep:craft-control"]
 
@@ -335,7 +337,7 @@ docx = ["dep:craft-docx"]
 
 dpx = ["dep:craft-dpx"]
 
-draw = ["dep:craft-draw", "keymap", "color", "settings"]
+draw = ["dep:craft-draw", "keymap", "color-ui", "settings"]
 
 drawingml = ["dep:craft-drawingml"]
 
@@ -444,7 +446,7 @@ image-codecs-sgi = ["image-codecs", "craft-image-codecs/sgi"]
 image-codecs-sunraster = ["image-codecs", "craft-image-codecs/sunraster"]
 image-codecs-threads = ["image-codecs", "craft-image-codecs/threads"]
 
-imaging = ["dep:craft-imaging", "color", "keymap"]
+imaging = ["dep:craft-imaging", "color-ui", "keymap"]
 
 indd = ["dep:craft-indd"]
 

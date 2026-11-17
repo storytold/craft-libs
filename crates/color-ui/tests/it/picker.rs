@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::Mixed;
-use craft_color::ui::{ColorPickerDialog, ColorReadout, PickedColor};
+use craft_color_ui::ui::{ColorPickerDialog, ColorReadout, PickedColor};
 use craft_host::{AppInfo, Host};
 use craft_theme::{ModelValues, Rgba, Srgba};
 use craft_ui::contract::Bind;

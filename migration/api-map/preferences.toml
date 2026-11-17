@@ -61,7 +61,7 @@ name = "HexField"
 old = ""
 new = "craft_ui::text::HexField"
 status = "replaced"
-note = "Replaces the preferences hex row and craft-color's `HexField`: `TextField<HexCodec>` over a `craft_theme::Rgba`, built with `HexField::hex(label, Bind<Rgba>)`."
+note = "Replaces the preferences hex row and craft-color-ui's `HexField`: `TextField<HexCodec>` over a `craft_theme::Rgba`, built with `HexField::hex(label, Bind<Rgba>)`."
 
 [[type]]
 name = "HexCodec"

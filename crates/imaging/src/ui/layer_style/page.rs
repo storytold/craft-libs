@@ -1,8 +1,8 @@
 //! The effect page: one field per entry of the effect's [`EffectSpec`], drawn by kind.
 
 use craft_behavior::{EditEvent, EditEvents, Mixed, NumberCodec};
-use craft_color::gradient::GradientStops;
-use craft_color::ui::gradient::GradientEditor;
+use craft_color_ui::gradient::GradientStops;
+use craft_color_ui::ui::gradient::GradientEditor;
 use craft_theme::variant::Tone;
 use craft_theme::{Srgba, TypeRole};
 use craft_ui::buttons::Button;

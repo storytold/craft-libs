@@ -2,7 +2,7 @@
 //! Rectangle's gear.
 
 use craft_behavior::EditEvent;
-use craft_color::ui::Paint;
+use craft_color_ui::ui::Paint;
 use craft_draw::ui::{
     Arrowheads, ArrowheadsPopover, BoxConstraint, BoxConstraints, BoxConstraintsPopover, LiveShape, ShapeAppearance, ShapeBar, ShapeChange,
     ShapeKind, ShapePanel, ShapeToolSettings,

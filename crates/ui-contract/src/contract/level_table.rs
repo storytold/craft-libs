@@ -9,10 +9,10 @@ use super::level::Surface::{self, Canvas, Chrome, Own};
 
 /// `(crate target, type name, surface)`, sorted by crate target and name.
 pub(super) const SURFACES: &[(&str, &str, Surface)] = &[
-    ("craft_color", "ColorHud", Canvas),
-    ("craft_color", "ColorSamplerMarks", Canvas),
-    ("craft_color", "EyedropperBar", Chrome),
-    ("craft_color", "SampleSizeSelect", Chrome),
+    ("craft_color_ui", "ColorHud", Canvas),
+    ("craft_color_ui", "ColorSamplerMarks", Canvas),
+    ("craft_color_ui", "EyedropperBar", Chrome),
+    ("craft_color_ui", "SampleSizeSelect", Chrome),
     ("craft_draw", "AddBesideHandles", Canvas),
     ("craft_draw", "ArrowheadsPopover", Chrome),
     ("craft_draw", "BoxConstraintsPopover", Chrome),

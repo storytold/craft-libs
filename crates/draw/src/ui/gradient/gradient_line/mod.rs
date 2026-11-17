@@ -9,7 +9,7 @@
 use egui::Pos2;
 use kurbo::Point;
 
-use craft_color::ui::gradient::{GradientStops, StopRef, StopRow};
+use craft_color_ui::ui::gradient::{GradientStops, StopRef, StopRow};
 
 /// Midpoint diamonds show only between stops farther apart than this, as the stop bar's do.
 pub const MIN_MIDPOINT_GAP: f32 = 0.001;

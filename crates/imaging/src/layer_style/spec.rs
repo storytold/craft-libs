@@ -52,7 +52,7 @@ pub enum FieldKind {
     /// Gradient Overlay's Method: Smooth, Perceptual, Linear, Classic, and Custom first while the
     /// stored value names none of them (an imported curve kept until the user picks).
     GradientMethod,
-    /// A gradient: a preset select over the stop bar (`craft_color::ui::gradient::GradientEditor`).
+    /// A gradient: a preset select over the stop bar (`craft_color_ui::ui::gradient::GradientEditor`).
     Gradient,
     #[allow(missing_docs)]
     Check,
@@ -466,7 +466,7 @@ fn hex(s: &str) -> StyleValue {
 }
 
 fn black_to_white() -> StyleValue {
-    use craft_color::gradient::{ColorStop, GradientStops};
+    use craft_color_ui::gradient::{ColorStop, GradientStops};
     let color = |s: &str| Srgba::from_hex(s).unwrap_or(Srgba::BLACK);
     StyleValue::Gradient(GradientStops::new(vec![ColorStop::new(0.0, color("#000000")), ColorStop::new(1.0, color("#ffffff"))]))
 }

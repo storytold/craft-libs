@@ -19,7 +19,7 @@ use egui::{ColorImage, Context, CornerRadius, Pos2, Rect, Response, Vec2, pos2, 
 use super::{LOUPE_PIXELS, Snapshot};
 
 /// The texture store the captures are shown from; emptied when a pick ends.
-const STORE: &str = "craft-color screen pick";
+const STORE: &str = "craft-color-ui screen pick";
 
 /// The store the capture textures live in.
 pub(super) fn store(ctx: &Context) -> TextureStore<u64> {

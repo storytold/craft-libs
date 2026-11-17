@@ -1,6 +1,6 @@
 //! Stories of the gradient fill editor.
 
-use craft_color::ui::gradient::{ColorStop, GradientStops};
+use craft_color_ui::ui::gradient::{ColorStop, GradientStops};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::patterns::presets::PresetState;

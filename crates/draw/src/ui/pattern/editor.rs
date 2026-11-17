@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::{PatternColors, PatternFillOptions, PatternSwatch, PatternWords};
 use craft_behavior::{EditEvent, EditEvents, Mixed, NumberCodec};
-use craft_color::ui::{ColorPopover, PickedColor};
+use craft_color_ui::ui::{ColorPopover, PickedColor};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, FieldLayout, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked};

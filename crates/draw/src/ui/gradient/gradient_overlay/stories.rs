@@ -12,8 +12,8 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use super::GradientOverlay;
 use super::parts::END;
 use crate::ui::gradient::{GradientLine, GradientStyle, LineGradient, gradient_line};
-use craft_color::ui::gradient::stops::sample;
-use craft_color::ui::gradient::{ColorStop, GradientEditor, GradientStops, StopRef, StopRows};
+use craft_color_ui::ui::gradient::stops::sample;
+use craft_color_ui::ui::gradient::{ColorStop, GradientEditor, GradientStops, StopRef, StopRows};
 
 fn gradient() -> LineGradient {
     LineGradient {

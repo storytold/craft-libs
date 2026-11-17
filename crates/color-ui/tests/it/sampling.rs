@@ -7,7 +7,7 @@ use std::sync::Arc;
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_cms::convert::CmykConverter;
-use craft_color::ui::{
+use craft_color_ui::ui::{
     CaptureResult, CaptureSource, ColorPicker, ColorPickerLayout, ColorSamplerPass, ColorSamplerTool, ColorSamplers, MAX_SAMPLERS, PickedColor,
     SamplerCache, SamplerEvent, SamplerReadouts, ScreenColorPicker, ScreenPick, ScreenPickerWords, StillCapture,
 };

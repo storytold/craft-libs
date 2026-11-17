@@ -1,4 +1,4 @@
-//! No family crate's `ui` depends on another family crate (Q50: craft-color is the base family).
+//! No family crate's `ui` depends on another family crate (Q50: craft-color-ui is the base family).
 
 use super::common;
 
@@ -12,7 +12,7 @@ const FAMILIES: &[&str] = &[
     "automation",
     "browse",
     "code",
-    "color",
+    "color-ui",
     "dialogs",
     "draw",
     "font-manager",
@@ -31,7 +31,7 @@ const FAMILIES: &[&str] = &[
 ];
 
 /// Family crates any family's `ui` may depend on.
-const BASE: &[&str] = &["color"];
+const BASE: &[&str] = &["color-ui"];
 
 /// craft-menu composes the menu bar from craft-keymap and craft-quit; it is a shell over the families
 /// and not a family itself.
@@ -63,5 +63,5 @@ fn family_ui_depends_on_no_other_family() {
             }
         }
     }
-    assert!(offenders.is_empty(), "family ui crates may depend only on craft-color's ui, not on each other:\n{}", offenders.join("\n"));
+    assert!(offenders.is_empty(), "family ui crates may depend only on craft-color-ui's ui, not on each other:\n{}", offenders.join("\n"));
 }

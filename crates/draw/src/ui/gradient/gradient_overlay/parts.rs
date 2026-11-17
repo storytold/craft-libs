@@ -9,7 +9,7 @@ use egui::Pos2;
 use super::{GradientOverlay, screen_line};
 use crate::ui::gradient::gradient_line::{at_screen, midpoint_location};
 use crate::ui::gradient::{LineGradient, LinePart};
-use craft_color::ui::gradient::{StopRef, StopRow};
+use craft_color_ui::ui::gradient::{StopRef, StopRow};
 
 /// The line between the handles.
 pub(super) const LINE: PartKey = PartKey::new("line");

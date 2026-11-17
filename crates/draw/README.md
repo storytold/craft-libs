@@ -1,6 +1,6 @@
 # craft-draw
 
-Vector and shape tools for Craft apps. With the `ui` feature, `craft_draw::ui` has the pen, crop and free transform overlays (below), the gradient tools (`GradientPalette`, `GradientSwatch`, the on-canvas `GradientOverlay` with its `gradient_line` geometry, the `GradientFillEditor` and the `GradientMapEditor`; the stop bar `GradientEditor`, the stop rules `gradient::stops` and `GradientRamp` are `craft_color::ui::gradient`'s) and these tools and panels, each in its own module with its labels:
+Vector and shape tools for Craft apps. With the `ui` feature, `craft_draw::ui` has the pen, crop and free transform overlays (below), the gradient tools (`GradientPalette`, `GradientSwatch`, the on-canvas `GradientOverlay` with its `gradient_line` geometry, the `GradientFillEditor` and the `GradientMapEditor`; the stop bar `GradientEditor`, the stop rules `gradient::stops` and `GradientRamp` are `craft_color_ui::ui::gradient`'s) and these tools and panels, each in its own module with its labels:
 
 - `stroke`: `StrokeEditor`, `StrokeButton` and `StrokePreview` over `StrokeStyle`; `corner`: `CornerWidgets` for corner radii;
 - `shape` and `shape_drag`: `ShapePanel`, `ShapeBar`, `ShapeDragTool` and `CreateShapeDialog`; `slice`: `SliceTool`, `SliceOverlay`, `SliceBar` and the Slice Options and Divide Slices dialogs; `artboard` and `add_beside`: `ArtboardTool`, `ArtboardBar`, `ArtboardProperties` and the add-beside buttons; `connector`: `ConnectorTool`, `ConnectorOverlay` and `ConnectorBar`;
@@ -10,7 +10,7 @@ Vector and shape tools for Craft apps. With the `ui` feature, `craft_draw::ui` h
 
 The main types of every module are re-exported at `craft_draw::ui`.
 
-The gradient parts use the gradient stop editor, the colour picker and the wells of `craft-color`.
+The gradient parts use the gradient stop editor, the colour picker and the wells of `craft-color-ui`.
 
 `ui::pen`, `ui::crop` and `ui::transform` hold the canvas overlays of the Pen, Crop and Free Transform tools. They sense through `craft_ui::canvas` (`CanvasView`, `Claim`, `PartFocus`, `quad`):
 

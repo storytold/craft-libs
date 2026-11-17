@@ -7,7 +7,7 @@
 //! story's surface and the layers it opened. A story runs in an embedded shell, over which its dialogs open, and a story
 //! whose dialog the card holds behind its button is shown with the dialog open.
 //!
-//! The bin links the framework and only the domain crates its features name (`--features color` for craft-color's
+//! The bin links the framework and only the domain crates its features name (`--features color-ui` for craft-color-ui's
 //! components; `--features apps` for every crate, as the gallery links them), so a change in one crate rebuilds that
 //! crate and this bin, not the gallery.
 //!

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::EditEvent;
-use craft_color::ui::gradient::{ColorStop, GradientStops};
+use craft_color_ui::ui::gradient::{ColorStop, GradientStops};
 use craft_draw::ui::gradient::{GradientFill, GradientFillEditor, GradientGroup, GradientItem, GradientRef, GradientStyle};
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, Role};

@@ -1732,6 +1732,7 @@ dependencies = [
  "craft-cms",
  "craft-codepage",
  "craft-color",
+ "craft-color-ui",
  "craft-control",
  "craft-control-protocol",
  "craft-crs",
@@ -2100,6 +2101,14 @@ dependencies = [
 name = "craft-color"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "craft-color-ui"
+version = "0.1.0"
+dependencies = [
  "craft-behavior",
  "craft-cms",
  "craft-host",
@@ -2318,7 +2327,7 @@ name = "craft-draw"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
- "craft-color",
+ "craft-color-ui",
  "craft-host",
  "craft-i18n",
  "craft-keymap",
@@ -2786,7 +2795,7 @@ name = "craft-imaging"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
- "craft-color",
+ "craft-color-ui",
  "craft-host",
  "craft-i18n",
  "craft-keymap",
@@ -3989,7 +3998,7 @@ dependencies = [
  "craft-automation",
  "craft-behavior",
  "craft-browse",
- "craft-color",
+ "craft-color-ui",
  "craft-dialogs",
  "craft-draw",
  "craft-font-manager",
@@ -5554,7 +5563,7 @@ version = "0.1.0"
 dependencies = [
  "craft-automation",
  "craft-browse",
- "craft-color",
+ "craft-color-ui",
  "craft-dialogs",
  "craft-draw",
  "craft-font-manager",

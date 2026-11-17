@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CancelReason, CanvasView, EditEvent, PointerButton};
-use craft_color::AreaMode;
-use craft_color::ui::{
+use craft_color_ui::AreaMode;
+use craft_color_ui::ui::{
     ColorArea, ColorDisc, ColorHud, ColorRamp, DiscMove, RampKind, RampPick, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv,
 };
 use craft_keymap::Mods;

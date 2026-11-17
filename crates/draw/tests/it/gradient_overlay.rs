@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
-use craft_color::ui::gradient::{ColorStop, GradientStops, StopRef};
+use craft_color_ui::ui::gradient::{ColorStop, GradientStops, StopRef};
 use craft_draw::ui::gradient::GradientOverlay;
 use craft_draw::ui::gradient::gradient_line::{GradientLine, LineGradient};
 use craft_theme::Srgba;

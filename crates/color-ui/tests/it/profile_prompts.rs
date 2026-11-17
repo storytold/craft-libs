@@ -1,6 +1,6 @@
 //! The profile prompt's automation fields follow its question.
 
-use craft_color::ui::{ProfileAction, ProfileAnswer, ProfileMismatchDialog, ProfileMode, ProfileQuestion};
+use craft_color_ui::ui::{ProfileAction, ProfileAnswer, ProfileMismatchDialog, ProfileMode, ProfileQuestion};
 use craft_ui::dialog::{DialogHost, DialogId, DialogResult};
 use craft_ui::testing::trial;
 use egui::Context;
@@ -13,7 +13,7 @@ fn fields(host: &DialogHost, id: DialogId) -> Value {
 
 /// A mismatch takes its three actions and, only when rememberable, `remember`; a missing profile has no `discard`;
 /// OK answers the action and the box as set.
-// craft-color has no craft-automation dev-dependency (color/Cargo.toml is dialogs-w6's), so the trial drives the
+// craft-color-ui has no craft-automation dev-dependency (color/Cargo.toml is dialogs-w6's), so the trial drives the
 // by-id host calls `dialog_method` makes for `ui.dialog.set` and `ui.dialog.confirm`.
 #[trial]
 fn profile_prompt_fields_set_and_confirm() {

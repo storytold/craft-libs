@@ -3,8 +3,8 @@
 //! ([`map`]); [`GradientOverlay`] and [`gradient_line`], the on-canvas gradient line; and [`GradientFillEditor`], the
 //! fill and its style.
 //!
-//! The stop model, the stop rules, the stop bar `craft_color::ui::gradient::GradientEditor` and the ramp paint
-//! `craft_color::ui::gradient::GradientRamp` are craft-color's: the parts here build on them and import them from
+//! The stop model, the stop rules, the stop bar `craft_color_ui::ui::gradient::GradientEditor` and the ramp paint
+//! `craft_color_ui::ui::gradient::GradientRamp` are craft-color-ui's: the parts here build on them and import them from
 //! there.
 
 mod fill;

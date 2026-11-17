@@ -19,13 +19,13 @@ workspace = true
 [features]
 default = []
 # The editing widgets (`craft_imaging::ui`).
-ui = ["craft-color/ui", "dep:serde_json", "dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:kurbo"]
+ui = ["craft-color-ui/ui", "dep:serde_json", "dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:kurbo"]
 # Stories and integration trials of the widgets.
 screen-testing = ["ui", "craft-ui/testing"]
 
 [dependencies]
 craft-behavior = { workspace = true, optional = true }
-craft-color = { workspace = true }
+craft-color-ui = { workspace = true }
 craft-host = { workspace = true }
 craft-i18n = { workspace = true }
 craft-keymap = { workspace = true, optional = true }

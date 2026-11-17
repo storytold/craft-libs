@@ -10,7 +10,7 @@ use egui::{Response, Ui};
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-use craft_color::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
+use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 
 /// The presets take their content height up to this many small control heights, then scroll.
 const MAX_ROWS: f32 = 6.0;
@@ -77,7 +77,7 @@ impl GradientRef {
 ///
 /// ```
 /// use craft_theme::Srgba;
-/// use craft_color::ui::gradient::{ColorStop, GradientStops};
+/// use craft_color_ui::ui::gradient::{ColorStop, GradientStops};
 /// use craft_draw::ui::{GradientGroup, GradientItem, GradientPalette, GradientRef};
 /// use craft_ui::contract::{Bind, Show as _};
 /// use craft_ui::patterns::presets::PresetState;

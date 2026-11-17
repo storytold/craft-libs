@@ -59,6 +59,7 @@ craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
 craft-color = { path = "crates/color" }
+craft-color-ui = { path = "crates/color-ui" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }

@@ -30,7 +30,7 @@ use std::time::Duration;
 use craft_behavior::edit_history::Step;
 use craft_behavior::kurbo::Rect as DocRect;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed, PixelSize};
-use craft_color::ui::{ColorSamplerMarks, ColorSamplerTool, ColorSamplers, SamplerCache, SamplerEvent};
+use craft_color_ui::ui::{ColorSamplerMarks, ColorSamplerTool, ColorSamplers, SamplerCache, SamplerEvent};
 use craft_theme::TypeRole;
 use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource, ToolHost, ViewCommands, ZoomTool};
 use craft_ui::contract::{Bind, Pattern, Remember as _, Show as _, ShowContainer as _};

@@ -5,8 +5,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_behavior::{EditEvent, Selection};
-use craft_color::palette::{SwatchColor, SwatchGroup};
-use craft_color::ui::{
+use craft_color_ui::palette::{SwatchColor, SwatchGroup};
+use craft_color_ui::ui::{
     ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand,
     SwatchesMenu, SwatchesPanel, SwatchesState,
 };
@@ -264,7 +264,7 @@ fn swatches_rig(groups: Vec<SwatchGroup>) -> (Fixture, Rc<RefCell<Vec<SwatchEdit
 fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     let red = SwatchColor::Rgb([1.0, 0.0, 0.0]);
     let blue = SwatchColor::Rgb([0.0, 0.0, 1.0]);
-    let entry = |name: &str, color: SwatchColor| craft_color::palette::SwatchEntry::new(name.to_owned(), color);
+    let entry = |name: &str, color: SwatchColor| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), color);
     let groups = vec![
         SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", red), entry("Color Swatch 1", blue)] },
         SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Blue", blue)] },
@@ -372,10 +372,10 @@ fn a_swatch_table_cell_reports_its_colour_selects_on_click_and_shows_its_name() 
 }
 
 /// Whether the Info panel over `measure` shows each of the names "A", "L", "L1", "L2".
-fn measure_names(measure: Option<craft_color::ui::InfoMeasure>) -> [bool; 4] {
+fn measure_names(measure: Option<craft_color_ui::ui::InfoMeasure>) -> [bool; 4] {
     let mut fixture = Fixture::new(move |ui| {
-        let readings = craft_color::ui::InfoReadings::new().measure(measure.clone()).document(Some([640, 480]));
-        let _ = craft_color::ui::InfoPanel::new("Info", &readings).show(ui);
+        let readings = craft_color_ui::ui::InfoReadings::new().measure(measure.clone()).document(Some([640, 480]));
+        let _ = craft_color_ui::ui::InfoPanel::new("Info", &readings).show(ui);
     });
     fixture.settle();
     ["A", "L", "L1", "L2"].map(|name| fixture.by_label(name).is_some())
@@ -383,14 +383,14 @@ fn measure_names(measure: Option<craft_color::ui::InfoMeasure>) -> [bool; 4] {
 
 #[trial]
 fn the_info_panel_shows_the_rulers_measure_while_it_has_one() {
-    use craft_color::ui::InfoMeasure;
+    use craft_color_ui::ui::InfoMeasure;
     assert_eq!(measure_names(Some(InfoMeasure::line("-36.9°", "250.00"))), [true, true, false, false], "a ruler: A and L");
     assert_eq!(measure_names(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))), [true, false, true, true], "a protractor: A, L1 and L2");
     assert_eq!(measure_names(None), [false; 4], "no ruler, no measure names");
     let mut fixture = Fixture::new(|ui| {
         let readings =
-            craft_color::ui::InfoReadings::new().measure(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))).document(Some([640, 480]));
-        let _ = craft_color::ui::InfoPanel::new("Info", &readings).show(ui);
+            craft_color_ui::ui::InfoReadings::new().measure(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))).document(Some([640, 480]));
+        let _ = craft_color_ui::ui::InfoPanel::new("Info", &readings).show(ui);
     });
     fixture.settle();
     for value in ["45.0°", "200.00", "141.42"] {

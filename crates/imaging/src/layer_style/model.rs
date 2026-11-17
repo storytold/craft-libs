@@ -122,7 +122,7 @@ pub enum StyleValue {
     /// A contour value.
     Contour(Contour),
     /// A gradient: its colour and opacity stops.
-    Gradient(craft_color::gradient::GradientStops),
+    Gradient(craft_color_ui::gradient::GradientStops),
     /// A point such as a Gradient Overlay's hidden `offset`.
     Point([f64; 2]),
     /// Data the library never reads, in the app's own encoding (an imported multi-stop gradient,

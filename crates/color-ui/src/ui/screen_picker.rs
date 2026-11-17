@@ -247,7 +247,7 @@ impl<'a> ScreenColorPicker<'a> {
             let [x, y, w, h] = capture::area(snapshot).cover();
             let key = key_of((pick.generation, n));
             let window = CaptureWindow::new(title.clone(), Rect::from_min_size(pos2(x, y), vec2(w, h))).id_salt((
-                "craft-color screen pick",
+                "craft-color-ui screen pick",
                 pick.generation,
                 n,
             ));

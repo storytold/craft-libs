@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use craft_color::ui::{PairWell, SwatchPair, Well};
+use craft_color_ui::ui::{PairWell, SwatchPair, Well};
 use craft_theme::{Srgba, ThemeId};
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::testing::{Fixture, trial};

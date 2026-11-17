@@ -7,11 +7,11 @@
 //! dropped silently ([`SwatchReport`]).
 //!
 //! ```no_run
-//! use craft_color::palette::{SwatchFormat, read_swatches, write_swatches};
+//! use craft_color_ui::palette::{SwatchFormat, read_swatches, write_swatches};
 //! # let bytes: Vec<u8> = Vec::new();
 //! let (groups, report) = read_swatches(&bytes, "Brand.ase")?;
 //! let (aco, report) = write_swatches(&groups, SwatchFormat::Aco)?;
-//! # Ok::<(), craft_color::palette::SwatchError>(())
+//! # Ok::<(), craft_color_ui::palette::SwatchError>(())
 //! ```
 
 use craft_cms::convert::CmykConverter;
@@ -254,7 +254,7 @@ impl std::error::Error for SwatchError {}
 // pc: crates/engine/src/cmd/swatch_cmds.rs:491 `read_file` (`.aco`, `.act`, `.ase` with
 // :406 `from_aco`, :435 `from_ase`), crates/psd/src/aco.rs:150 `parse`, crates/psd/src/ase.rs:180
 // `parse`, crates/psd/src/act.rs:46 `parse`; inv-vectorcraft: crates/color/src/palette_io.rs:376
-// `read_gpl`. The binary parsers move here (craft-color has no psd crate).
+// `read_gpl`. The binary parsers move here (craft-color-ui has no psd crate).
 pub fn read_swatches(bytes: &[u8], file_name: &str) -> Result<(Vec<SwatchGroup>, SwatchReport), SwatchError> {
     let format = SwatchFormat::sniff(bytes, file_name).ok_or(SwatchError::UnknownFormat)?;
     let stem = stem_of(file_name);

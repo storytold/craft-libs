@@ -2,7 +2,7 @@
 //! Color, Solid and Gradient, as PhotoCraft's shape options bar and Properties panel; and
 //! [`PaintList`], named paints in rows with their chips.
 //!
-//! The gradient editor is craft-draw's, and craft-draw depends on craft-color, so the chip takes
+//! The gradient editor is craft-draw's, and craft-draw depends on craft-color-ui, so the chip takes
 //! the editor's body from the host ([`PaintChip::gradient_editor`]); so do the Pattern and Picture
 //! tabs ([`PaintChip::pattern_editor`], [`PaintChip::picture_editor`]: craft-draw's
 //! `PatternFillEditor` and `PictureFillEditor`).
@@ -129,7 +129,7 @@ impl ImagePreview {
 }
 
 /// A paint: none, a solid colour, a gradient, a pattern or a picture. More kinds may come: a
-/// `match` on it outside craft-color needs a `_` arm.
+/// `match` on it outside craft-color-ui needs a `_` arm.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Paint {

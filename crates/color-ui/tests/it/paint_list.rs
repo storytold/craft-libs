@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use craft_color::ui::{Paint, PaintList, PaintListEvent, PaintListOptions};
+use craft_color_ui::ui::{Paint, PaintList, PaintListEvent, PaintListOptions};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};

@@ -3,7 +3,7 @@
 //! VectorCraft's Color Guide and Color Themes math, on encoded sRGB through HSB.
 //!
 //! ```no_run
-//! use craft_color::harmony::{Guide, GuideOptions, Harmony};
+//! use craft_color_ui::harmony::{Guide, GuideOptions, Harmony};
 //! use craft_theme::Srgba;
 //! let base = Srgba::rgb(0.24, 0.39, 0.87);
 //! let triad = Harmony::Triad.apply(base);              // base first, then two partners

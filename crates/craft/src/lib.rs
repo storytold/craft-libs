@@ -41,6 +41,8 @@ pub use craft_cms as cms;
 pub use craft_codepage as codepage;
 #[cfg(feature = "color")]
 pub use craft_color as color;
+#[cfg(feature = "color-ui")]
+pub use craft_color_ui as color_ui;
 #[cfg(feature = "control")]
 pub use craft_control as control;
 #[cfg(feature = "control-protocol")]

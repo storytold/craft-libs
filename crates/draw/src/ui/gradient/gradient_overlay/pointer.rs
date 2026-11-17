@@ -13,8 +13,8 @@ use super::GradientOverlay;
 use super::parts::{keyboard_order, part_ref, selection_of};
 use crate::ui::gradient::gradient_line::{MIN_MIDPOINT_GAP, project};
 use crate::ui::gradient::{GradientLine, LineGradient, LinePart};
-use craft_color::ui::gradient::stops::{self, round_location};
-use craft_color::ui::gradient::{Sampler, StopRef, StopRow, default_sampler};
+use craft_color_ui::ui::gradient::stops::{self, round_location};
+use craft_color_ui::ui::gradient::{Sampler, StopRef, StopRow, default_sampler};
 
 /// The press a drag edits from: the part it took and the gradient at the press. Kept for the length of the press.
 #[derive(Clone, Default)]

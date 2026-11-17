@@ -90,7 +90,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
 - [`craft-crs`](crates/crs/README.md): Adobe Camera Raw settings (the `crs:` namespace of an XMP packet or `.xmp` sidecar, read through craft-metadata): the settings by name, numbers, tone curve points, local corrections and the crop, read and written. From PhotoCraft.
 - [`craft-codepage`](crates/codepage/README.md): legacy 8-bit code pages, one table each: the single-byte Windows pages, Mac OS Roman and fifteen DOS pages, keyed by Windows code page number, with the RTF/Word font charsets. craft-rtf, craft-dxf and craft-mime decode through it.
-- [`craft-color`](crates/color/README.md): colour picker, wells, swatch tables, ramps and the hex
+- [`craft-color-ui`](crates/color-ui/README.md): colour picker, wells, swatch tables, ramps and the hex
   field; the Color Picker dialog, droppers, eyedropper, samplers, screen picker, Color and Swatches
   panels (`ui` feature); swatch files, the display transform and harmonies.
 - [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:

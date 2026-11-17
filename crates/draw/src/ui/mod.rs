@@ -3,7 +3,7 @@
 //! - [`gradient`]: the gradient palette ([`GradientPalette`]) and swatch, the on-canvas
 //!   [`GradientOverlay`] with the geometry of its line ([`gradient::gradient_line`]), the
 //!   [`GradientMapEditor`] and the [`GradientFillEditor`]. The stop bar and the stop rules are
-//!   craft-color's (`craft_color::ui::gradient`).
+//!   craft-color-ui's (`craft_color_ui::ui::gradient`).
 //! - [`pen`]: the `PenDraft` of the Pen tool and the [`BezierOverlay`] that edits paths, with the
 //!   path model they share ([`EditPath`]), the anchor tools' [`AnchorTool`], and the [`PathOptionsPopover`].
 //! - [`stroke`]: the [`StrokeEditor`], the [`StrokeButton`] that opens it and the [`StrokePreview`].

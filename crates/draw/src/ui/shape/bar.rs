@@ -4,7 +4,7 @@ use super::panel::{Cells, ChipSetup, NumberCell, SIDES_RANGE, sides_change};
 use super::{LINE_WEIGHT_RANGE, RADIUS_RANGE, ShapeAppearance, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords, StrokeCells};
 use crate::ui::shape_drag::ShapeKind;
 use craft_behavior::EditEvent;
-use craft_color::ui::{PaintChip, PaintChipOutput, ScreenPickGesture};
+use craft_color_ui::ui::{PaintChip, PaintChipOutput, ScreenPickGesture};
 use craft_theme::Srgba;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel};
@@ -118,7 +118,7 @@ impl<'a> ShapeBar<'a> {
             // The body may run more than once in a pass; each run starts clean.
             pass.begin();
             if paint {
-                let fill_on = !matches!(appearance.fill, craft_color::ui::Paint::None);
+                let fill_on = !matches!(appearance.fill, craft_color_ui::ui::Paint::None);
                 let check = Checkbox::new(Bind::given(fill_on)).label(words.fill.clone()).show(ui).events;
                 pass.events.extend(check.map(ShapeChange::FillOn));
                 let hidden = SideLabel::new().kind(LabelKind::Hidden);

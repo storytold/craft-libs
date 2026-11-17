@@ -34,10 +34,10 @@ test = false
 # One feature per domain crate whose stories the viewer links; `apps` is all of them and the default. A build
 # that needs one crate's stories only (the story renderer) turns the default off and names the crate.
 default = ["apps"]
-apps = ["automation", "browse", "color", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text", "theme-store", "timeline", "dialogs", "font-manager", "update"]
+apps = ["automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text", "theme-store", "timeline", "dialogs", "font-manager", "update"]
 automation = ["dep:craft-automation"]
 browse = ["dep:craft-browse"]
-color = ["dep:craft-color"]
+color-ui = ["dep:craft-color-ui"]
 draw = ["dep:craft-draw"]
 imaging = ["dep:craft-imaging"]
 layers = ["dep:craft-layers"]
@@ -82,7 +82,7 @@ web-time = "1.1"
 # The domain crates' stories, registered under each crate's `screen-testing`.
 craft-automation = { workspace = true, features = ["screen-testing"], optional = true }
 craft-browse = { workspace = true, features = ["screen-testing"], optional = true }
-craft-color = { workspace = true, features = ["screen-testing"], optional = true }
+craft-color-ui = { workspace = true, features = ["screen-testing"], optional = true }
 craft-draw = { workspace = true, features = ["screen-testing"], optional = true }
 craft-imaging = { workspace = true, features = ["screen-testing"], optional = true }
 craft-layers = { workspace = true, features = ["screen-testing"], optional = true }
