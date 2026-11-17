@@ -4,7 +4,7 @@
 use crate::buttons::IconButton;
 use crate::buttons::icon_button::IconButtonStyleKey;
 use crate::contract::overlay::Trigger;
-use crate::contract::{Access, BodyCx, Name, PaintUi, Props as _, Role, Show as _, ShowContainer as _, WordSetCx as _};
+use crate::contract::{Access, BodyCx, Lazy, Name, PaintUi, Props as _, Role, Show as _, ShowContainer as _, WordSetCx as _};
 use crate::docking::group::GroupGrip;
 use crate::docking::{ColumnArrow, DockWords, PanelSpec};
 use crate::menu::{GroupItem, Menu, MenuWords, PanelMenu, PanelRow};
@@ -13,7 +13,7 @@ use craft_behavior::PartKey;
 use craft_behavior::dock::{Column, DockEdge};
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, CustomVariant, Emphasis, States, Tokens, Variant, VariantLook};
-use egui::{Rect, Ui};
+use egui::{Rect, Ui, UiBuilder};
 
 /// The chevron of a column's bar: a click collapses an expanded column to icons and expands an iconic one.
 pub(in crate::docking) const CHEVRON: PartKey = PartKey::new("chevron");
@@ -109,6 +109,20 @@ pub(in crate::docking) fn show_bar<P: Clone + Send + Sync + 'static>(
         .show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked);
     record.picked = picked.inner.flatten();
     record
+}
+
+/// Shows a column's bar in `band` through `show`, in a child `Ui` held to the band. With a `content` version (the
+/// dock's [`DockPanels::spec_version`](crate::docking::DockPanels::spec_version) joined with its arrangement) the bar
+/// settles: it runs when that version, its band or something the framework tracks in it changed, or the pointer or
+/// focus is on it, and otherwise repaints its last run, which reports nothing.
+pub(in crate::docking) fn settled_bar(ui: &mut Ui, band: Rect, content: Option<u64>, show: impl FnOnce(&mut Ui) -> BarRecord) -> BarRecord {
+    let key = "column bar";
+    let lazy = Lazy::new(key, 0.0).settles(content.is_some());
+    let lazy = match content {
+        Some(version) => lazy.content(version),
+        None => lazy,
+    };
+    ui.scope_builder(UiBuilder::new().max_rect(band).id_salt(key), |ui| lazy.show(ui, show)).inner.unwrap_or_default()
 }
 
 /// The name of a column's bar: the labels of its panels.
