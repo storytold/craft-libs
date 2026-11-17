@@ -48,11 +48,7 @@ fn package_styled(body: &str, chunk: Option<(&str, &str, &[u8])>, styles: Option
     files.push(("[Content_Types].xml".into(), types.into_bytes()));
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, bytes) in files {
-        zw.start_file(
-            name,
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
-        )
-        .unwrap();
+        zw.start_file(name, zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
         zw.write_all(&bytes).unwrap();
     }
     zw.finish().unwrap().into_inner()
