@@ -225,13 +225,61 @@ pub mod packbits {
         decode_row(src, expected, out, true)
     }
 
+    /// Decodes a strict PackBits row directly into caller-owned storage, without allocating.
+    ///
+    /// The output must be filled exactly: short input, truncated packets and packets that
+    /// overflow the row are errors. Trailing bytes after the row is full are ignored, as by
+    /// [`decode`]. An error may leave a decoded prefix in `out`; its remaining bytes are unchanged.
+    pub fn decode_to_slice(src: &[u8], out: &mut [u8]) -> Result<()> {
+        let mut offset: usize = 0;
+        decode_packets(src, out.len(), false, |packet| {
+            let len = packet.len();
+            // The walker caps each packet by the remaining row, before exposing it here.
+            let end = offset.checked_add(len).ok_or(PsdError::LimitExceeded("PackBits output offset overflow"))?;
+            let dst = out.get_mut(offset..end).ok_or(PsdError::LimitExceeded("PackBits output slice overflow"))?;
+            match packet {
+                RowPacket::Literal(bytes) => dst.copy_from_slice(bytes),
+                RowPacket::Fill(value, _) => dst.fill(value),
+            }
+            offset = end;
+            Ok(())
+        })
+    }
+
+    enum RowPacket<'a> {
+        Literal(&'a [u8]),
+        Fill(u8, usize),
+    }
+
+    impl RowPacket<'_> {
+        fn len(&self) -> usize {
+            match self {
+                Self::Literal(bytes) => bytes.len(),
+                Self::Fill(_, len) => *len,
+            }
+        }
+    }
+
     fn decode_row(src: &[u8], expected: usize, out: &mut Vec<u8>, padded: bool) -> Result<()> {
-        let target = out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
+        out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
+        decode_packets(src, expected, padded, |packet| {
+            match packet {
+                RowPacket::Literal(bytes) => out.extend_from_slice(bytes),
+                RowPacket::Fill(value, len) => out.extend(std::iter::repeat_n(value, len)),
+            }
+            Ok(())
+        })
+    }
+
+    // One packet walker serves strict Vec, strict slice and padded recovery decoding. It
+    // validates the complete payload before clipping or emitting, preserving recovery errors.
+    fn decode_packets(src: &[u8], expected: usize, padded: bool, mut emit: impl FnMut(RowPacket<'_>) -> Result<()>) -> Result<()> {
+        let mut remaining = expected;
         let mut i = 0;
-        while out.len() < target {
+        while remaining > 0 {
             let Some(&h) = src.get(i) else {
                 if padded {
-                    out.resize(target, 0);
+                    emit(RowPacket::Fill(0, remaining))?;
                     break;
                 }
                 return Err(PsdError::Decompress("PackBits row ended early".into()));
@@ -240,25 +288,28 @@ pub mod packbits {
             let h = h as i8;
             if h >= 0 {
                 let len = h as usize + 1;
-                let Some(lit) = src.get(i..i + len) else {
+                let Some(lit) = i.checked_add(len).and_then(|end| src.get(i..end)) else {
                     return Err(PsdError::Decompress("PackBits literal truncated".into()));
                 };
-                if !padded && len > target - out.len() {
+                if !padded && len > remaining {
                     return Err(PsdError::Decompress("PackBits literal overflows row".into()));
                 }
-                out.extend_from_slice(&lit[..len.min(target - out.len())]);
+                let take = len.min(remaining);
+                emit(RowPacket::Literal(&lit[..take]))?;
+                remaining -= take;
                 i += len;
             } else if h != -128 {
-                let len = 1 - h as isize;
-                let len = len as usize;
+                let len = (1 - h as isize) as usize;
                 let Some(&b) = src.get(i) else {
                     return Err(PsdError::Decompress("PackBits run truncated".into()));
                 };
                 i += 1;
-                if !padded && len > target - out.len() {
+                if !padded && len > remaining {
                     return Err(PsdError::Decompress("PackBits run overflows row".into()));
                 }
-                out.extend(std::iter::repeat_n(b, len.min(target - out.len())));
+                let take = len.min(remaining);
+                emit(RowPacket::Fill(b, take))?;
+                remaining -= take;
             }
         }
         Ok(())

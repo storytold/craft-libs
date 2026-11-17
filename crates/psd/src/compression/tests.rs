@@ -829,3 +829,44 @@ fn caller_scratch_prediction_rejects_invalid_inputs_before_mutation() {
         unpredict_with_scratch(&mut [], &empty, &mut []).unwrap();
     }
 }
+
+#[test]
+fn packbits_slice_matches_strict_rows_and_preserves_guards() {
+    for (src, width) in [
+        (vec![1, 10, 11, 128, 254, 7], 5),
+        (vec![129, 9], 128),
+        (vec![0, 4, 255], 1), // Ignore trailing malformed packets once full.
+        (vec![], 0),
+        (vec![128], 1),
+        (vec![2, 1], 3),
+        (vec![255], 2),
+        (vec![255, 9], 1),
+        (vec![1, 1, 2], 1),
+        (vec![0, 8, 128], 2),
+    ] {
+        let mut guarded = vec![0xA5; width + 2];
+        let result = packbits::decode_to_slice(&src, &mut guarded[1..width + 1]);
+        let reference = packbits::decode(&src, width);
+        assert_eq!(result.is_ok(), reference.is_ok(), "{src:?}, width={width}");
+        if let Ok(expected) = reference {
+            assert_eq!(&guarded[1..width + 1], expected);
+        }
+        assert_eq!(guarded[0], 0xA5);
+        assert_eq!(guarded[width + 1], 0xA5);
+    }
+    let mut out = [0xA5; 3];
+    assert!(packbits::decode_to_slice(&[0, 8, 255], &mut out).is_err());
+    assert_eq!(out, [8, 0xA5, 0xA5], "failure retains only completed packets");
+}
+
+#[test]
+fn packbits_slice_roundtrips_all_packet_lengths() {
+    for len in 0..=256 {
+        for bytes in [vec![42; len], (0..len).map(|i| i as u8).collect()] {
+            let encoded = packbits::encode_vec(&bytes);
+            let mut out = vec![0; len];
+            packbits::decode_to_slice(&encoded, &mut out).unwrap();
+            assert_eq!(out, bytes);
+        }
+    }
+}
