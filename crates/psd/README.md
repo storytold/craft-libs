@@ -127,7 +127,7 @@ builder.push_layer(LayerSpec) / begin_group(GroupSpec) / end_group()? / composit
 builder.build() -> Result<PsdFile>;  builder.to_bytes()
 PixelData::{Rgba8, Rgba16, GrayA8, GrayA16, Cmyka8, Cmyka16}   // CMYK given as ink, stored inverted
 
-// Test generator (feature `testgen`)
+// Test generator (feature `test-support`; `testgen` is an alias)
 testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_plane}
 ```
 
