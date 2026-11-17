@@ -172,13 +172,48 @@ fn an_object_stream_with_parameters_by_reference_is_read() {
     assert_eq!(hidden.as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone()), Some(b"yes".to_vec()));
 }
 
+/// The file key length an `/Encrypt` dictionary gives (ISO 32000-2 Table 20, Table 25). `/V 1` is
+/// 40 bits whatever `/Length` says; `/V 2` takes `/Length`. At `/V 4` the crypt filter strings and
+/// streams use decides: `AESV2` and `AESV3` take a 128-bit key (a stale `/Length 40` or a filter
+/// `/Length 5` beside them was read as 40 bits, and the file didn't open as qpdf, MuPDF and
+/// PDFium open it); an RC4 filter takes its own `/Length` (bytes, or bits), else the dictionary's
+/// (as MuPDF and PDFium read a filter without one; it was read as 128), whatever the filter is
+/// called (only `/StdCF` was looked at).
+#[test]
+fn the_key_length_comes_from_the_filter_in_use() {
+    let doc = Document::new_empty();
+    let length = |dict: &str| {
+        let (_, o) = crate::cos::parse_indirect(format!("1 0 obj {dict} endobj").as_bytes(), 0, &|_| None).unwrap();
+        crate::cos::security::encrypt_dict(&doc, o.as_dict().unwrap()).length_bits
+    };
+    let v4 = |top: &str, filters: &str, stm: &str, str_: &str| {
+        length(&format!("<< /Filter /Standard /V 4 /R 4 {top} /CF << {filters} >> /StmF /{stm} /StrF /{str_} >>"))
+    };
+    let std = |cfm: &str, len: &str| format!("/StdCF << /CFM /{cfm} {len} >>");
+    assert_eq!(v4("/Length 128", &std("AESV2", "/Length 5"), "StdCF", "StdCF"), 128);
+    assert_eq!(v4("/Length 40", &std("AESV2", "/Length 16"), "StdCF", "StdCF"), 128, "a stale /Length 40");
+    assert_eq!(v4("", &std("AESV3", "/Length 32"), "StdCF", "StdCF"), 128);
+    for (len, bits) in [("/Length 5", 40), ("/Length 6", 48), ("/Length 16", 128), ("/Length 40", 40), ("/Length 128", 128)] {
+        assert_eq!(v4("/Length 128", &std("V2", len), "StdCF", "StdCF"), bits, "{len}");
+    }
+    assert_eq!(v4("/Length 40", &std("V2", ""), "StdCF", "StdCF"), 40, "RC4 without a length of its own");
+    assert_eq!(v4("", &std("V2", ""), "StdCF", "StdCF"), 128);
+    assert_eq!(v4("/Length 40", "/MyCF << /CFM /V2 /Length 6 >>", "MyCF", "MyCF"), 48, "a filter not called StdCF");
+    assert_eq!(v4("", "/MyCF << /CFM /V2 /Length 7 >>", "Identity", "MyCF"), 56, "strings only");
+    // A filter that leaves streams as they are decides nothing: the strings' AES filter does.
+    assert_eq!(v4("", &format!("/Clear << /CFM /None /Length 5 >> {}", std("AESV2", "/Length 16")), "Clear", "StdCF"), 128, "a clear /StmF");
+    assert_eq!(length("<< /Filter /Standard /V 1 /R 2 /Length 128 >>"), 40);
+    assert_eq!(length("<< /Filter /Standard /V 2 /R 3 /Length 56 >>"), 56);
+    assert_eq!(length("<< /Filter /Standard /V 2 /R 3 >>"), 40);
+}
+
 /// Each entry of an `/Encrypt` dictionary, and of a crypt filter in it, reads the same by reference.
 /// Read as absent, `/StmF` or `/CFM` was `/Identity`, so a whole file's streams stayed ciphertext.
 #[test]
 fn encrypt_dictionary_entries_read_the_same_by_reference() {
     let string = |s: &str| Object::String(crate::cos::PdfString::text(s));
     let mut filter = Dict::new();
-    filter.set(b"CFM".to_vec(), Object::name("AESV2"));
+    filter.set(b"CFM".to_vec(), Object::name("V2"));
     filter.set(b"Length".to_vec(), Object::Int(5));
     let cf = |filter: Dict| {
         let mut cf = Dict::new();
@@ -209,7 +244,7 @@ fn encrypt_dictionary_entries_read_the_same_by_reference() {
     assert_eq!((direct.stm_f.as_slice(), direct.str_f.as_slice(), direct.ef_f.as_slice()), (&b"StdCF"[..], &b"Other"[..], &b"StdCF"[..]));
     assert_eq!(direct.length_bits, 40, "the filter's own length, in bytes");
     assert!(!direct.encrypt_metadata);
-    assert_eq!(direct.crypt_filters.iter().filter(|(_, m)| *m == crate::crypt::Method::Aes128).count(), 1);
+    assert_eq!(direct.crypt_filters.iter().filter(|(_, m)| *m == crate::crypt::Method::Rc4).count(), 1);
     for (key, value) in &entries {
         let mut one = d.clone();
         let r = doc.add(value.clone());
@@ -823,7 +858,7 @@ fn an_entry_that_misses_its_object_is_found_by_searching_but_is_not_exact() {
 /// edit of that number still answers for it.
 #[test]
 fn an_unreadable_object_is_searched_for_once() {
-    let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Odd Key(x) >>"];
+    let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Odd ) >>"];
     let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R /Info 3 0 R"))).unwrap();
     FILE_SCANS.with(|scans| scans.set(0));
     let first = doc.try_get(3);
@@ -2710,4 +2745,124 @@ fn find_agrees_with_a_plain_window_search() {
         let to = from + (next() % (hay.len() as u64 + 1 - from as u64)) as usize;
         assert_eq!(find(&hay, needle, from, to), naive(&hay, needle, from, to), "{hay:?} {needle:?} {from} {to}");
     }
+}
+
+/// A key written with spaces is joined (as in some Info dictionaries), and the object it was read
+/// from is listed as repaired, once however often it is read. A sound object (a stream with an
+/// indirect `/Length`) adds nothing.
+#[test]
+fn a_spaced_key_is_listed_once_as_a_repair_of_its_object() {
+    let file = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /Title (Report) /Universal PDF(Acme) >>",
+            "<< /Length 5 0 R >>\nstream\nabcd\nendstream",
+            "4",
+        ],
+        "/Root 1 0 R /Info 3 0 R",
+    );
+    let doc = Document::open(Arc::new(file)).unwrap();
+    assert!(doc.repaired_objects().is_empty(), "nothing has read object 3 yet");
+    for _ in 0..3 {
+        let info = doc.get(ObjRef::new(3, 0));
+        assert!(info.as_dict().is_some_and(|d| d.get(b"Universal PDF").is_some()), "{info:?}");
+    }
+    assert!(doc.try_get(4).is_ok());
+    let lines = doc.repaired_objects();
+    assert_eq!(lines, ["object 3 0 was repaired: a dictionary key written with spaces was read as one key"], "{lines:?}");
+    assert_eq!(doc.clone().repaired_objects(), lines, "clones share the list");
+    assert!(doc.unreadable_objects().is_empty());
+}
+
+/// A scan of a fresh document lists the repaired object as a read does, and once.
+#[test]
+fn a_scan_lists_a_spaced_key_repair_once() {
+    let file = build(
+        &["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) /Universal PDF(Acme) >>"],
+        "/Root 1 0 R /Info 3 0 R",
+    );
+    let doc = Document::open(Arc::new(file)).unwrap();
+    assert_eq!(doc.scan_objects_checked().filter(|(_, o)| o.is_ok()).count(), 3);
+    assert_eq!(doc.scan_objects_checked().count(), 3);
+    assert_eq!(doc.repaired_objects(), ["object 3 0 was repaired: a dictionary key written with spaces was read as one key"]);
+}
+
+/// A file holding object stream 4 with `members` (one object, numbered 3), the catalog and pages
+/// as objects 1 and 2, and a cross-reference stream as object 5. `extra` is added to the stream's
+/// dictionary; with `lost`, the table says the stream itself sits in stream 9, which is absent, so
+/// only a scan of the file finds it.
+fn objstm_file(members: &[u8], extra: &str, lost: bool) -> Vec<u8> {
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 6];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 >>");
+    let mut stm = format!("<< /Type /ObjStm /N 1 /First 4 /Length {} {extra} >>\nstream\n", members.len()).into_bytes();
+    stm.extend_from_slice(members);
+    stm.extend_from_slice(b"\nendstream");
+    obj(&mut out, 4, &stm);
+    let xref_at = out.len();
+    let mut rows = vec![0u8, 0, 0, 0, 0, 255];
+    for (n, off) in offs.iter().enumerate().take(6).skip(1) {
+        let row = match n {
+            3 => [2, 0, 0, 0, 4, 0],
+            4 if lost => [2, 0, 0, 0, 9, 0],
+            5 => [1, (xref_at >> 24) as u8, (xref_at >> 16) as u8, (xref_at >> 8) as u8, xref_at as u8, 0],
+            _ => [1, (off >> 24) as u8, (off >> 16) as u8, (off >> 8) as u8, *off as u8, 0],
+        };
+        rows.extend_from_slice(&row);
+    }
+    let mut xs = format!("<< /Type /XRef /Size 6 /W [1 4 1] /Root 1 0 R /Info 3 0 R /Length {} >>\nstream\n", rows.len()).into_bytes();
+    xs.extend_from_slice(&rows);
+    xs.extend_from_slice(b"\nendstream");
+    let at = out.len();
+    out.extend_from_slice(b"5 0 obj\n");
+    out.extend_from_slice(&xs);
+    out.extend_from_slice(b"\nendobj\n");
+    out.extend_from_slice(format!("startxref\n{at}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// A member of an object stream with a spaced key is listed under its own number, not the
+/// stream's.
+#[test]
+fn a_spaced_key_in_an_object_stream_member_is_listed_under_the_member() {
+    let doc = Document::open(Arc::new(objstm_file(b"3 0 << /Title (Report) /Universal PDF(Acme) >>", "", false))).unwrap();
+    let info = doc.get(ObjRef::new(3, 0));
+    assert!(info.as_dict().is_some_and(|d| d.get(b"Universal PDF").is_some()), "{info:?}");
+    assert_eq!(doc.repaired_objects(), ["object 3 0 was repaired: a dictionary key written with spaces was read as one key"]);
+}
+
+/// An object stream found only by a scan, whose dictionary has a spaced key, is listed under its
+/// own number; the member read through it, which has none, is not listed.
+#[test]
+fn a_scanned_object_stream_with_a_spaced_key_is_listed_under_the_stream() {
+    let doc = Document::open(Arc::new(objstm_file(b"3 0 << /Title (Report) >>", "/Universal PDF(Acme)", true))).unwrap();
+    let info = doc.get(ObjRef::new(3, 0));
+    assert!(info.as_dict().is_some_and(|d| d.get(b"Title").is_some()), "{info:?}");
+    assert_eq!(doc.repaired_objects(), ["object 4 0 was repaired: a dictionary key written with spaces was read as one key"]);
+}
+
+/// A clone's edited object stream with a spaced key is not listed for the document it was cloned
+/// from, whose own member has none.
+#[test]
+fn a_spaced_key_read_from_a_clone_edit_is_not_listed_for_the_source() {
+    let doc = Document::open(Arc::new(objstm_file(b"3 0 << /Title (Report) >>", "", false))).unwrap();
+    let mut clone = doc.clone();
+    let members = b"3 0 << /Title (Edited) /Universal PDF(Acme) >>".to_vec();
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("ObjStm"));
+    d.set(b"N".to_vec(), Object::Int(1));
+    d.set(b"First".to_vec(), Object::Int(4));
+    clone.set(ObjRef::new(4, 0), Object::Stream(Stream::from_raw(d, members)));
+    let edited = clone.get(ObjRef::new(3, 0));
+    assert!(edited.as_dict().is_some_and(|d| d.get(b"Universal PDF").is_some()), "{edited:?}");
+    assert!(doc.repaired_objects().is_empty(), "{:?}", doc.repaired_objects());
+    assert!(doc.get(ObjRef::new(3, 0)).as_dict().is_some_and(|d| d.get(b"Universal PDF").is_none()));
 }

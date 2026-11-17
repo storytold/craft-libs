@@ -69,7 +69,7 @@ const BLEND_XML: &[(&str, u32)] = &[
 
 /// The generator of a `generatoritem`: an application's own payload (`<namespace>:<payload>` as
 /// the effect id), one of the generators every editor has by name, or one the catalog knows.
-fn generator_from(name: &str, id: &str, opts: &ImportOptions, report: &mut Report) -> Generator {
+fn generator_from(name: &str, id: &str, opts: &ImportOptions, report: &mut Report, limit: Option<usize>) -> Generator {
     if let Some(data) = id.strip_prefix(opts.namespace).and_then(|rest| rest.strip_prefix(':'))
         && !opts.namespace.is_empty()
     {
@@ -85,7 +85,7 @@ fn generator_from(name: &str, id: &str, opts: &ImportOptions, report: &mut Repor
             if let Some(g) = opts.catalog.generator_by_name(n) {
                 return g;
             }
-            report.warn(format!("generator \"{name}\" is not supported; imported as Black Video"));
+            report.warn_limited(limit, format!("generator \"{name}\" is not supported; imported as Black Video"));
             Generator::BlackVideo
         }
     }
@@ -117,15 +117,22 @@ struct PendingLink {
     refs: Vec<String>,
 }
 
+const MAX_NESTING_DEPTH: usize = 64;
+const MAX_REIMPORTS: usize = 4096;
+
 struct Imp<'a, 'c, 'r> {
     b: Builder<'c>,
     opts: &'a ImportOptions<'a>,
     report: &'r mut Report,
+    report_limit: Option<usize>,
     files: HashMap<String, Node<'a>>,
     seq_defs: HashMap<String, Node<'a>>,
     file_items: HashMap<String, ItemId>,
     seq_items: HashMap<String, ItemId>,
     in_progress: HashSet<String>,
+    depth_hits: usize,
+    truncated_at: HashMap<String, usize>,
+    reimports_left: usize,
     links: Vec<PendingLink>,
     xml_clip_ids: HashMap<(ItemId, String), ClipId>,
     /// `(sequence key, file key)` pairs where some audio clip item of that file uses `sourcetrack/trackindex` > 1,
@@ -154,6 +161,10 @@ fn node_key(n: Node) -> String {
 /// Read an `xmeml` document. Media paths are resolved against `opts.base_dir`; effects the format
 /// does not name itself are looked up in `opts.catalog`. What cannot be represented is in `report`.
 pub fn import(text_in: &str, opts: &ImportOptions, report: &mut Report) -> Result<Imported> {
+    import_with_report_limit(text_in, opts, report, None)
+}
+/// Read FCP7 XML with an optional distinct-diagnostic limit.
+pub fn import_with_report_limit(text_in: &str, opts: &ImportOptions, report: &mut Report, report_limit: Option<usize>) -> Result<Imported> {
     let doc = crate::xml::parse(text_in).map_err(|e| Error::parse(Format::Fcp7Xml, e))?;
     let root = Node(&doc);
     if root.name() != "xmeml" {
@@ -163,7 +174,7 @@ pub fn import(text_in: &str, opts: &ImportOptions, report: &mut Report) -> Resul
         .descendants()
         .any(|n| n.has_tag_name("timebase") && n.text().and_then(|t| t.trim().parse::<f64>().ok()).is_some_and(|tb| tb > MAX_RATE as f64))
     {
-        report.warn(format!("a timebase above {MAX_RATE} per second is not a frame rate; it was limited to {MAX_RATE}"));
+        report.warn_limited(report_limit, format!("a timebase above {MAX_RATE} per second is not a frame rate; it was limited to {MAX_RATE}"));
     }
     let mut imp = Imp {
         b: Builder::new(
@@ -172,11 +183,15 @@ pub fn import(text_in: &str, opts: &ImportOptions, report: &mut Report) -> Resul
         ),
         opts,
         report,
+        report_limit,
         files: HashMap::new(),
         seq_defs: HashMap::new(),
         file_items: HashMap::new(),
         seq_items: HashMap::new(),
         in_progress: HashSet::new(),
+        depth_hits: 0,
+        truncated_at: HashMap::new(),
+        reimports_left: MAX_REIMPORTS,
         links: Vec::new(),
         xml_clip_ids: HashMap::new(),
         split_files: HashSet::new(),
@@ -215,7 +230,7 @@ pub fn import(text_in: &str, opts: &ImportOptions, report: &mut Report) -> Resul
         return Err(Error::Empty);
     }
     let mut imported = imp.b.finish();
-    imported.bound(report);
+    imported.bound_with_report_limit(report, report_limit);
     Ok(imported)
 }
 
@@ -333,7 +348,7 @@ impl<'a> Imp<'a, '_, '_> {
                 self.b.file_media(&format!("file:{p}"), &name, &p, &spec, bin)
             }
             None => {
-                self.report.warn(format!("file \"{name}\" has no pathurl; imported offline"));
+                self.report.warn_limited(self.report_limit, format!("file \"{name}\" has no pathurl; imported offline"));
                 let p = resolve_path(&name, self.opts.base_dir);
                 let id = self.b.file_media(&format!("fileid:{key}"), &name, &p, &spec, bin);
                 if let Some(m) = self.b.p.item_mut(id).and_then(|i| i.as_media_mut()) {
@@ -349,12 +364,29 @@ impl<'a> Imp<'a, '_, '_> {
     /// Sequence item for a `<sequence>` element (definition or reference).
     fn sequence(&mut self, n: Node<'a>, bin: Option<BinId>) -> Option<ItemId> {
         let key = node_key(n);
+        let depth = self.in_progress.len();
+        let mut again = None;
         if let Some(id) = self.seq_items.get(&key) {
-            return Some(*id);
+            let shallower = self.truncated_at.get(&key).is_some_and(|d| depth < *d) && !self.in_progress.contains(&key);
+            if !shallower {
+                return Some(*id);
+            }
+            if self.reimports_left == 0 {
+                self.report.warn_limited(self.report_limit, "truncated nested sequence kept incomplete after the re-import limit was reached");
+                return Some(*id);
+            }
+            self.reimports_left -= 1;
+            again = Some(*id);
         }
         let def = if child(n, "media").is_some() { n } else { *self.seq_defs.get(&key)? };
+        if depth >= MAX_NESTING_DEPTH {
+            self.depth_hits += 1;
+            self.report.warn_limited(self.report_limit, "nested sequence is nested too deeply; imported as a gap");
+            return None;
+        }
+        let hits_before = self.depth_hits;
         if !self.in_progress.insert(key.clone()) {
-            self.report.warn("recursive nested sequence ignored");
+            self.report.warn_limited(self.report_limit, "recursive nested sequence ignored");
             return None;
         }
         let name = child_text(def, "name").unwrap_or("Sequence").to_string();
@@ -374,12 +406,18 @@ impl<'a> Imp<'a, '_, '_> {
         {
             settings.sample_rate = sr as u32;
         }
-        let id = self.b.reserve_sequence(&name, settings.clone(), bin);
-        if let Some(l) = path_text(def, &["labels", "label2"]).and_then(label_from)
-            && let Some(it) = self.b.p.item_mut(id)
-        {
-            it.label = l;
-        }
+        let id = match again {
+            Some(id) => id,
+            None => {
+                let id = self.b.reserve_sequence(&name, settings.clone(), bin);
+                if let Some(l) = path_text(def, &["labels", "label2"]).and_then(label_from)
+                    && let Some(it) = self.b.p.item_mut(id)
+                {
+                    it.label = l;
+                }
+                id
+            }
+        };
         self.seq_items.insert(key.clone(), id);
         let mut seq = empty_sequence(settings);
         seq.start_timecode = tc.and_then(|t| child_i64(t, "frame")).unwrap_or(0);
@@ -389,7 +427,7 @@ impl<'a> Imp<'a, '_, '_> {
             let Some(m) = media.and_then(|m| child(m, tag)) else { continue };
             for (ti, tn) in children(m, "track").enumerate() {
                 if !self.b.ensure_tracks(&mut seq, kind, ti + 1) {
-                    self.report.warn(format!("FCP7 {kind:?} tracks beyond {MAX_IMPORTED_TRACKS} were skipped"));
+                    self.report.warn_limited(self.report_limit, format!("FCP7 {kind:?} tracks beyond {MAX_IMPORTED_TRACKS} were skipped"));
                     break;
                 }
                 self.track(&mut seq, id, kind, ti, tn, TrackFormat { rate, frame: (w, h) });
@@ -403,6 +441,11 @@ impl<'a> Imp<'a, '_, '_> {
         }
         self.b.put_sequence(id, seq);
         self.in_progress.remove(&key);
+        if self.depth_hits > hits_before {
+            self.truncated_at.insert(key, depth);
+        } else {
+            self.truncated_at.remove(&key);
+        }
         Some(id)
     }
 
@@ -425,10 +468,13 @@ impl<'a> Imp<'a, '_, '_> {
                         }
                         let t = &mut seq.tracks_mut(kind)[ti];
                         if t.items.iter().any(|o| o.start < ti_item.end() && ti_item.start < o.end()) {
-                            self.report.warn("overlapping clip items on one track; the later one was moved to a new track");
+                            self.report
+                                .warn_limited(self.report_limit, "overlapping clip items on one track; the later one was moved to a new track");
                             if self.b.place(seq, kind, ti + 1, ti_item).is_none() {
-                                self.report
-                                    .warn(format!("FCP7 {kind:?} track exceeds the {MAX_IMPORTED_TRACKS}-track import limit; clip was skipped"));
+                                self.report.warn_limited(
+                                    self.report_limit,
+                                    format!("FCP7 {kind:?} track exceeds the {MAX_IMPORTED_TRACKS}-track import limit; clip was skipped"),
+                                );
                             }
                         } else {
                             t.items.push(ti_item);
@@ -470,7 +516,7 @@ impl<'a> Imp<'a, '_, '_> {
                 (seq_rate.tick_of(end) - d, d)
             }
             (false, false) => {
-                self.report.warn(format!("clip \"{name}\" has neither start nor end; skipped"));
+                self.report.warn_limited(self.report_limit, format!("clip \"{name}\" has neither start nor end; skipped"));
                 return None;
             }
         };
@@ -495,7 +541,7 @@ impl<'a> Imp<'a, '_, '_> {
             match BLEND_XML.iter().find(|(n, _)| n.eq_ignore_ascii_case(mode)) {
                 Some((_, v)) if *v != 0 => set_param(self.b.catalog, &mut ti, "opacity", "blend", Param::new(ParamValue::Choice(*v))),
                 Some(_) => {}
-                None => self.report.warn(format!("composite mode \"{mode}\" is not supported")),
+                None => self.report.warn_limited(self.report_limit, format!("composite mode \"{mode}\" is not supported")),
             }
         }
         ti.markers = read_markers(c, rate, &mut self.b);
@@ -512,7 +558,7 @@ impl<'a> Imp<'a, '_, '_> {
             let eff = child(c, "effect");
             let gname = eff.and_then(|e| child_text(e, "name")).unwrap_or(name).to_string();
             let gid = eff.and_then(|e| child_text(e, "effectid")).unwrap_or("").to_string();
-            let mut g = generator_from(&gname, &gid, self.opts, self.report);
+            let mut g = generator_from(&gname, &gid, self.opts, self.report, self.report_limit);
             if let (Generator::ColorMatte { color }, Some(e)) = (&mut g, eff)
                 && let Some(v) = e.descendants().find(|d| d.has_tag_name("value") && child(*d, "red").is_some())
             {
@@ -526,14 +572,24 @@ impl<'a> Imp<'a, '_, '_> {
             match self.file(f, Some(name), None) {
                 Some(item) => Some(item),
                 None => {
-                    self.report.warn(format!("clip \"{name}\" refers to a file the document does not define; skipped"));
+                    self.report.warn_limited(self.report_limit, format!("clip \"{name}\" refers to a file the document does not define; skipped"));
                     None
                 }
             }
         } else if let Some(s) = child(c, "sequence") {
-            self.sequence(s, None)
+            if let Some(id) = self.sequence(s, None) {
+                return Some(id);
+            }
+            self.report.warn_limited(self.report_limit, format!("clip \"{name}\" refers to a nested sequence that was left out; imported offline"));
+            Some(self.offline_media(kind, seq_rate, frame, name))
         } else {
-            self.report.warn(format!("clip \"{name}\" has no media reference; imported offline"));
+            self.report.warn_limited(self.report_limit, format!("clip \"{name}\" has no media reference; imported offline"));
+            Some(self.offline_media(kind, seq_rate, frame, name))
+        }
+    }
+
+    fn offline_media(&mut self, kind: TrackKind, seq_rate: FrameRate, frame: (u32, u32), name: &str) -> ItemId {
+        {
             let spec = MediaSpec {
                 video: (kind == TrackKind::Video).then_some((frame.0, frame.1, seq_rate)),
                 audio: (kind == TrackKind::Audio).then_some((48_000, 2)),
@@ -545,7 +601,7 @@ impl<'a> Imp<'a, '_, '_> {
             if let Some(m) = self.b.p.item_mut(id).and_then(|i| i.as_media_mut()) {
                 m.offline = true;
             }
-            Some(id)
+            id
         }
     }
 
@@ -565,12 +621,16 @@ impl<'a> Imp<'a, '_, '_> {
                                 remap.reverse |= v < 0.0;
                             }
                             if child(p, "keyframe").is_some() {
-                                self.report.warn("variable speed (time remap keyframes) is not supported; a constant speed was used");
+                                self.report.warn_limited(
+                                    self.report_limit,
+                                    "variable speed (time remap keyframes) is not supported; a constant speed was used",
+                                );
                             }
                         }
                         Some("reverse") => remap.reverse |= child_bool(p, "value").unwrap_or(false),
                         Some("variablespeed") if child_bool(p, "value") == Some(true) || child_f64(p, "value").is_some_and(|v| v != 0.0) => {
-                            self.report.warn("variable speed (time remap keyframes) is not supported; a constant speed was used");
+                            self.report
+                                .warn_limited(self.report_limit, "variable speed (time remap keyframes) is not supported; a constant speed was used");
                         }
                         _ => {}
                     }
@@ -671,7 +731,7 @@ impl<'a> Imp<'a, '_, '_> {
                 let catalog = self.b.catalog;
                 let def = catalog.effect(id).filter(|d| !d.intrinsic).or_else(|| catalog.effect_by_name(name).filter(|d| !d.intrinsic));
                 let Some(def) = def else {
-                    self.report.warn(format!("effect \"{name}\" is not supported and was skipped"));
+                    self.report.warn_limited(self.report_limit, format!("effect \"{name}\" is not supported and was skipped"));
                     return;
                 };
                 let mut inst = def.instance();
@@ -703,7 +763,13 @@ impl<'a> Imp<'a, '_, '_> {
         }
         let eff = child(c, "effect");
         let name = eff.and_then(|x| child_text(x, "name")).or_else(|| eff.and_then(|x| child_text(x, "effectid"))).unwrap_or("Cross Dissolve");
-        let effect = transition_effect(self.b.catalog, name, kind == TrackKind::Audio, self.report);
+        let mut temporary = Report::default();
+        let effect = transition_effect(self.b.catalog, name, kind == TrackKind::Audio, &mut temporary);
+        for e in temporary.entries {
+            for _ in 0..e.count {
+                self.report.warn_limited(self.report_limit, &e.message);
+            }
+        }
         let align_s = child_text(c, "alignment").unwrap_or("").to_ascii_lowercase();
         let track = &mut seq.tracks_mut(kind)[ti];
         let (mut from, mut to) = (None, None);
@@ -724,7 +790,7 @@ impl<'a> Imp<'a, '_, '_> {
             }
         }
         if from.is_none() && to.is_none() {
-            self.report.warn(format!("transition \"{name}\" at frame {start} has no adjacent clip; skipped"));
+            self.report.warn_limited(self.report_limit, format!("transition \"{name}\" at frame {start} has no adjacent clip; skipped"));
             return;
         }
         let cut = from.map(|f| f.1).or(to.map(|t| t.1)).unwrap_or(s);
@@ -864,6 +930,7 @@ struct Exp<'a, 'r> {
     p: &'a Project,
     opts: &'a ExportOptions<'a>,
     report: &'r mut Report,
+    report_limit: Option<usize>,
     w: XmlWriter,
     file_ids: HashMap<ItemId, String>,
     seq_ids: HashMap<ItemId, String>,
@@ -874,11 +941,22 @@ struct Exp<'a, 'r> {
 }
 
 pub fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: &mut Report) -> Result<String> {
+    export_with_report_limit(p, seq_id, opts, report, None)
+}
+/// Write FCP7 XML with an optional distinct-diagnostic limit.
+pub fn export_with_report_limit(
+    p: &Project,
+    seq_id: ItemId,
+    opts: &ExportOptions,
+    report: &mut Report,
+    report_limit: Option<usize>,
+) -> Result<String> {
     p.sequence(seq_id).ok_or(Error::NoSequence(seq_id))?;
     let mut x = Exp {
         p,
         opts,
         report,
+        report_limit,
         w: XmlWriter::new(Some("xmeml")),
         file_ids: HashMap::new(),
         seq_ids: HashMap::new(),
@@ -953,11 +1031,11 @@ impl Exp<'_, '_> {
         }
         // Each clip lists every member of its group, so a group of n clips writes n * n links.
         if let Some(n) = link_members.values().map(Vec::len).filter(|&n| n > MAX_LINK_MEMBERS).max() {
-            self.report.warn(format!("a link group of {n} clips was exported with its first {MAX_LINK_MEMBERS} members"));
+            self.report.warn_limited(self.report_limit, format!("a link group of {n} clips was exported with its first {MAX_LINK_MEMBERS} members"));
             link_members.values_mut().for_each(|m| m.truncate(MAX_LINK_MEMBERS));
         }
         if seq.all_tracks().any(|t| t.items.iter().any(|i| i.group.is_some())) {
-            self.report.info("clip groups have no FCP7 XML equivalent and were not exported");
+            self.report.info_limited(self.report_limit, "clip groups have no FCP7 XML equivalent and were not exported");
         }
         for kind in [TrackKind::Video, TrackKind::Audio] {
             let tag = if kind == TrackKind::Video { "video" } else { "audio" };
@@ -1014,7 +1092,7 @@ impl Exp<'_, '_> {
 
     fn write_transition(&mut self, tr: &Transition, kind: TrackKind, rate: FrameRate, t: &crate::model::Track) {
         if !on_frame(rate, tr.start) || !on_frame(rate, tr.duration) {
-            self.report.warn("sub-frame transition positions were rounded to frames");
+            self.report.warn_limited(self.report_limit, "sub-frame transition positions were rounded to frames");
         }
         let align = match (tr.from, tr.to, tr.align) {
             (None, Some(_), _) => "start-black",
@@ -1100,12 +1178,13 @@ impl Exp<'_, '_> {
     fn write_clip(&mut self, c: &TrackItem, kind: TrackKind, seq: &Sequence, xid: &str, links: &[(String, TrackKind, usize, usize)]) {
         let rate = seq.settings.frame_rate;
         if !on_frame(rate, c.start) || !on_frame(rate, c.duration) {
-            self.report.warn("sub-frame clip positions were rounded to frames");
+            self.report.warn_limited(self.report_limit, "sub-frame clip positions were rounded to frames");
         }
         if let Some(clip) = crate::build::uncarried_clip(self.p, c, rate) {
-            self.report.warn(format!(
-                "{clip} has no Final Cut Pro 7 XML equivalent: it is written as a clip item without media and is not read back on import"
-            ));
+            self.report.warn_limited(
+                self.report_limit,
+                format!("{clip} has no Final Cut Pro 7 XML equivalent: it is written as a clip item without media and is not read back on import"),
+            );
         }
         let base = base_item(self.p, c.item);
         let generator = crate::build::generator_of(self.p, base).cloned();
@@ -1151,7 +1230,7 @@ impl Exp<'_, '_> {
         if let Some(blend) = param(c, "opacity", "blend").and_then(|p| p.value.as_f64()).map(|v| v as u32).filter(|v| *v != 0) {
             match BLEND_XML.iter().find(|(_, v)| *v == blend) {
                 Some((n, _)) => self.w.text("compositemode", n),
-                None => self.report.warn("blend mode not representable in FCP7 XML; Normal used"),
+                None => self.report.warn_limited(self.report_limit, "blend mode not representable in FCP7 XML; Normal used"),
             }
         }
         self.write_filters(c, kind, seq, base);
@@ -1197,7 +1276,8 @@ impl Exp<'_, '_> {
                 self.w.text("effectid", g.label());
             }
             Generator::Other { name, data } => {
-                self.report.info(format!("generator \"{name}\" is written with an effect id only {} reads", self.opts.namespace));
+                self.report
+                    .info_limited(self.report_limit, format!("generator \"{name}\" is written with an effect id only {} reads", self.opts.namespace));
                 self.w.text("name", name);
                 self.w.text("effectid", format!("{}:{data}", self.opts.namespace));
             }
@@ -1276,7 +1356,7 @@ impl Exp<'_, '_> {
                 if param_modified(self.opts.catalog, c, "motion", "scale_width")
                     || param(c, "motion", "uniform_scale").and_then(|p| p.value.as_bool()) == Some(false)
                 {
-                    self.report.warn("non-uniform scale is not supported by FCP7 Basic Motion; uniform scale written");
+                    self.report.warn_limited(self.report_limit, "non-uniform scale is not supported by FCP7 Basic Motion; uniform scale written");
                 }
                 let enabled = c.effect("motion").is_none_or(|e| e.enabled);
                 self.open_effect("Basic Motion", "basic", "motion", "motion", "video", enabled);
@@ -1323,7 +1403,7 @@ impl Exp<'_, '_> {
             }
             if c.speed != 1.0 || c.reverse || c.frame_hold.is_some() {
                 if param(c, "time_remap", "speed").is_some_and(|p| p.is_animated()) {
-                    self.report.warn("speed ramps (time remapping keyframes) are not exported to FCP7 XML");
+                    self.report.warn_limited(self.report_limit, "speed ramps (time remapping keyframes) are not exported to FCP7 XML");
                 }
                 self.open_effect("Time Remap", "timeremap", "motion", "motion", "video", true);
                 let sp = if c.frame_hold.is_some() { 0.0 } else { c.speed * 100.0 };
@@ -1335,7 +1415,7 @@ impl Exp<'_, '_> {
             }
         } else {
             if c.gain_db != 0.0 {
-                self.report.info("clip gain was folded into Audio Levels");
+                self.report.info_limited(self.report_limit, "clip gain was folded into Audio Levels");
             }
             if param_modified(self.opts.catalog, c, "volume", "level") || c.gain_db != 0.0 {
                 let g = c.gain_db;
@@ -1358,7 +1438,7 @@ impl Exp<'_, '_> {
                 self.close_effect();
             }
             if param_modified(self.opts.catalog, c, "channel_volume", "left") || param_modified(self.opts.catalog, c, "channel_volume", "right") {
-                self.report.warn("Channel Volume is not supported by FCP7 XML and was not exported");
+                self.report.warn_limited(self.report_limit, "Channel Volume is not supported by FCP7 XML and was not exported");
             }
         }
         for e in standard_effects(self.opts.catalog, c) {
@@ -1442,7 +1522,7 @@ impl Exp<'_, '_> {
                 self.w.close();
             }
             _ => {
-                self.report.info("Bezier keyframe easing is written as FCP curve keyframes (handles not preserved)");
+                self.report.info_limited(self.report_limit, "Bezier keyframe easing is written as FCP curve keyframes (handles not preserved)");
                 self.w.open("interpolation", &[]);
                 self.w.text("name", "FCPCurve");
                 self.w.close();
@@ -1460,7 +1540,7 @@ impl Exp<'_, '_> {
         for k in &p.keyframes {
             let Some(v) = val(&k.value) else { continue };
             if !on_frame(rate, k.time) {
-                self.report.info("sub-frame keyframes were rounded to frames");
+                self.report.info_limited(self.report_limit, "sub-frame keyframes were rounded to frames");
             }
             self.w.open("keyframe", &[]);
             self.w.text("when", frames_round(rate, k.time));
@@ -1472,7 +1552,7 @@ impl Exp<'_, '_> {
 
     fn generic_effect(&mut self, e: &EffectInstance, kind: TrackKind, rate: FrameRate) {
         let Some(def) = self.opts.catalog.effect(&e.effect) else {
-            self.report.warn(format!("unknown effect \"{}\" was not exported", e.effect));
+            self.report.warn_limited(self.report_limit, format!("unknown effect \"{}\" was not exported", e.effect));
             return;
         };
         let media = if kind == TrackKind::Video { "video" } else { "audio" };
@@ -1500,7 +1580,7 @@ impl Exp<'_, '_> {
                     self.w.close();
                     self.w.close();
                     if p.is_animated() {
-                        self.report.warn(format!("point keyframes of \"{}\" were not exported", def.name));
+                        self.report.warn_limited(self.report_limit, format!("point keyframes of \"{}\" were not exported", def.name));
                     }
                 }
                 ParamValue::Bool(b) => self.simple_param(&pd.id, &pd.label, bool_str(*b)),
@@ -1514,7 +1594,7 @@ impl Exp<'_, '_> {
                     self.w.close();
                 }
                 ParamValue::Opaque(_) => {
-                    self.report.warn(format!("curve parameters of \"{}\" are not supported by FCP7 XML", def.name));
+                    self.report.warn_limited(self.report_limit, format!("curve parameters of \"{}\" are not supported by FCP7 XML", def.name));
                 }
             }
         }

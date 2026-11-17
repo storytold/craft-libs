@@ -39,6 +39,8 @@ pub struct Package {
     /// Lowercased part name → its stored spelling: part names are case-insensitive (ECMA-376
     /// Part 2 §6.2.2.3), so every spelling is one part.
     lower: HashMap<String, String>,
+    /// Names of the entries the archive could not produce, in archive order.
+    skipped: Vec<String>,
 }
 
 impl Package {
@@ -55,6 +57,7 @@ impl Package {
         let mut zip = open_zip(bytes, limits, u64::MAX)?;
         let skip = limits.oversized == Oversized::Skip;
         let mut files = BTreeMap::new();
+        let mut skipped = Vec::new();
         let (mut total, mut work) = (0u64, 0u64);
         let entries: Vec<String> = zip.names().map(|n| n.into_owned()).collect();
         for (i, entry) in entries.iter().enumerate() {
@@ -97,19 +100,20 @@ impl Package {
                 Err(e) => {
                     work = work.saturating_add(size);
                     log::warn!("opc: zip entry {name} unreadable: {e}");
+                    skipped.push(name);
                 }
             }
         }
-        Ok(Package::new(files))
+        Ok(Package::new(files, skipped))
     }
 
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
     /// name.
     pub fn from_parts(files: BTreeMap<String, Vec<u8>>) -> Package {
-        Package::new(files.into_iter().map(|(name, bytes)| (stored_name(&name), Arc::new(bytes))).collect())
+        Package::new(files.into_iter().map(|(name, bytes)| (stored_name(&name), Arc::new(bytes))).collect(), Vec::new())
     }
 
-    fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>) -> Package {
+    fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>, skipped: Vec<String>) -> Package {
         let mut lower: HashMap<String, String> = HashMap::new();
         let mut collides = false;
         for name in files.keys() {
@@ -121,7 +125,7 @@ impl Package {
             }
         }
         if !collides {
-            return Package { files, lower };
+            return Package { files, lower, skipped };
         }
         // Entries whose names differ only in case are one part, so every spelling of the name
         // reaches the same stored entry. The spelling kept is the one a relationship names, so
@@ -140,7 +144,12 @@ impl Package {
         files.retain(|name, _| lower.get(&name.to_ascii_lowercase()) == Some(name));
         let dropped = before.saturating_sub(files.len());
         log::warn!("opc: {dropped} zip entries are other spellings of parts already read; they are left out");
-        Package { files, lower }
+        Package { files, lower, skipped }
+    }
+
+    /// The entries of the archive that could not be read and were left out, by name.
+    pub fn skipped(&self) -> &[String] {
+        &self.skipped
     }
 
     /// The bytes of all its parts.
