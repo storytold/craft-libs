@@ -134,6 +134,9 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 
 `crates/video/src/screen_video.rs` extracts AniCraft `crates/xfl/src/video.rs` codec-3 decoding and its synthetic partial-block fixture, introduced by Tanish Manku in `1f3e603b7ff53a3da364e41ec4da8d43dc83aab0` with pixel-loop cleanup `2b7571363b4b647266df758f95b6e397021cfd4d` (MIT OR Apache-2.0). Import commits preserve Tanish as primary author. Caller-owned bounds and neutral RGBA output separate codec work from the consuming app's FLV first-frame/report policy. Boundary tests and integration are subsequent Dylan M. Taylor changes.
 
+## Source Map v3 parser and lookup
+
+`crates/sourcemap` extracts the bounded parser, source inventory and generated-position lookup from Craft Anything `crates/formats/src/sourcemap.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). Core-history ports preserve Brandon Thomas, BFlat, Afloat, RRFZ, Nicolas Bohn and Alex Joaquim Pereira as primary authors, with exact source revisions in each commit. Six regression files preserve their source authors; nine core unit tests retain the original tests. App annotation scanning, data URLs, base64 and file I/O are intentionally not imported. Workspace wiring is a subsequent change; existing limits and errors are unchanged.
 ## JSONC span-preserving editing
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
