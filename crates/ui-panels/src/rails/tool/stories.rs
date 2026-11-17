@@ -48,9 +48,9 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let slots = slots();
     let last = LastUsed::default();
     let width = ToolRail::<u8>::dock_grid(ui.ctx(), slots.len() + 1).width(u16::from(columns));
+    // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
     let out = ui
         .scope(|ui| {
-            // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
             ui.set_max_width(width);
             ToolRail::new("Tools", &slots, &BRUSH, &last).hidden(&hidden).edit_toolbar("Edit Toolbar").show_rail(ui, |_, _| {})
         })
