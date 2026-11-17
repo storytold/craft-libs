@@ -8,7 +8,7 @@ mod stories;
 
 use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};
-use crate::primitives::{CheckerArea, PaintShape, Rule, StrokeWidth, TextRun, paint_surround};
+use crate::primitives::{CheckerArea, PaintShape, PaintSlot, Rule, StrokeWidth, TextRun, paint_surround};
 use crate::runtime::env::Label;
 use crate::style::{
     ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, SurroundLook, TypeRole,
@@ -163,7 +163,12 @@ impl Outcome for PasteboardOutput {
 }
 
 /// The pasteboard and page frames under a document. Show it first in the canvas body, then the document, then the
-/// overlays. The canvas must be given a view; without one nothing is shown.
+/// overlays. The pages' shadows and fills paint in the canvas's picture slot, ahead of the pictures shown after it, so
+/// a picture under the controls ([`RasterDisplay::picture`](super::RasterDisplay::picture)) lies over them. The
+/// surround of plain pages paints there too; the surround between artboards (pages marked with [`PageFrame::active()`]) paints over the
+/// pictures, hiding the document outside the boards except where [`uncovered`](Self::uncovered) leaves it open. The
+/// page edges and names paint in place, over the pictures. The canvas must be given a view; without one nothing is
+/// shown.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(canvas_control, content_painter)]
 pub struct Pasteboard<'a> {
@@ -349,15 +354,28 @@ impl Component for Pasteboard<'_> {
         let (view, style) = (space.view, cx.style);
         let draw = ui.draw();
         let edges = ui.content_painter(cx);
+        // What lies under the pages (their shadows and fills) marks where it starts; it moves into the canvas's picture
+        // slot, in show order before the pictures, so every picture lies over it. The surround of plain pages goes
+        // with it, so a picture reaching past the page (copies around it, pixels past the canvas) shows over it; the
+        // surround between artboards paints over the pictures and hides the document there, except where `uncovered`
+        // leaves it open. The page edges and names, which mark the pages, paint in place over the pictures. Outside a
+        // canvas, or in a space with no slot, everything paints in place.
+        let under = space.picture_slot().map(|_| PaintSlot::reserve(&edges.painter));
+        let artboards = self.pages.iter().any(|page| page.active.is_some());
         let polygon = |quad: &[Pos2; 4]| PaintShape::Polygon(quad.to_vec());
         // A colour the canvas sets is a plain data fill, with no pattern, as in production.
         let fill = space.pasteboard().fill();
         let look = style.surround.shown(cx.env.canvas_pattern());
-        for quad in Self::quads(&view, self.pages, self.uncovered).iter().filter(|quad| bounds(quad).intersects(view.rect)) {
-            match fill {
-                Some(color) => draw.data_fill(&polygon(quad), color),
-                None => paint_surround(&edges.painter, CheckerArea::Quad(*quad), &look),
+        let surround = || {
+            for quad in Self::quads(&view, self.pages, self.uncovered).iter().filter(|quad| bounds(quad).intersects(view.rect)) {
+                match fill {
+                    Some(color) => draw.data_fill(&polygon(quad), color),
+                    None => paint_surround(&edges.painter, CheckerArea::Quad(*quad), &look),
+                }
             }
+        };
+        if !artboards {
+            surround();
         }
         let aligned = view.axis_aligned();
         let edge = |quad: &[Pos2; 4], color: StyleColor| {
@@ -372,12 +390,9 @@ impl Component for Pasteboard<'_> {
                 draw.stroke(&polygon(quad), StrokeWidth::Thin, color);
             }
         };
-        for (at, page) in self.pages.iter().enumerate() {
+        let shown = |page: &PageFrame| page.name.is_some() || bounds(&view.quad(page.rect)).intersects(view.rect);
+        for page in self.pages.iter().filter(|page| shown(*page)) {
             let quad = view.quad(page.rect);
-            let named = page.name.is_some();
-            if !bounds(&quad).intersects(view.rect) && !named {
-                continue;
-            }
             if self.border == PageBorder::DropShadow {
                 if aligned {
                     draw.surface_styled(bounds(&quad), &style.shadow);
@@ -388,6 +403,17 @@ impl Component for Pasteboard<'_> {
             if let Some(color) = page.fill {
                 draw.data_fill(&polygon(&quad), color);
             }
+        }
+        if let Some(under) = under {
+            let ctx = edges.painter.ctx().clone();
+            let shapes = under.take_after(&ctx);
+            space.paint_picture(&ctx, shapes);
+        }
+        if artboards {
+            surround();
+        }
+        for (at, page) in self.pages.iter().enumerate().filter(|(_, page)| shown(*page)) {
+            let quad = view.quad(page.rect);
             if self.border == PageBorder::Line {
                 edge(&quad, style.outline);
             }
