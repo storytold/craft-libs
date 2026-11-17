@@ -27,7 +27,8 @@ pub mod pen;
 pub mod pending;
 pub mod pointer;
 pub(crate) mod reads;
-pub(crate) mod replay;
+#[doc(hidden)]
+pub mod replay;
 pub mod requests;
 pub mod sampler;
 pub mod toast;

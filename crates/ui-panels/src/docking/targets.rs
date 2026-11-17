@@ -403,7 +403,7 @@ impl<P> Default for Pass<P> {
     }
 }
 
-impl<P: Clone + Send + 'static> DockTargets<P> {
+impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
     /// Runs `f` on the registries of the running pass; `None` outside a pass.
     fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass<P>) -> R) -> Option<R> {
         let facts = frame::running(ctx)?;
@@ -435,6 +435,10 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_target") {
             return;
         }
+        Self::journal(ctx, || {
+            let spot = spot.clone();
+            move |ctx: &Context| Self::register_in(ctx, dock, spot.clone(), hit, applies)
+        });
         Self::with_dock(ctx, dock, |targets| targets.add(spot, hit, applies, hit));
     }
 
@@ -445,6 +449,10 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_target") {
             return;
         }
+        Self::journal(ctx, || {
+            let spot = spot.clone();
+            move |ctx: &Context| Self::register_band(ctx, dock, spot.clone(), band, line, reach)
+        });
         let near = line.expand(reach).intersect(band);
         Self::with_dock(ctx, dock, |targets| targets.add(spot, band, band, near));
     }
@@ -456,7 +464,14 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_room") {
             return;
         }
+        Self::journal(ctx, || move |ctx: &Context| Self::register_room(ctx, dock, room));
         Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
+    }
+
+    /// Notes a registration in the records of the settling regions around the running code, so a region that settles
+    /// registers its drop spots again when it replays its last run.
+    fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
+        crate::runtime::replay::journal(ctx, make);
     }
 
     /// Runs `f` on the registry of `dock` in the running pass, made empty the first time.
