@@ -175,7 +175,7 @@ impl State {
     fn take_focus(&mut self, plan: &Plan) -> Vec<Act> {
         let Some(owner) = plan.owner else { return Vec::new() };
         match self.press_stop(owner, plan.part) {
-            Some(stop) => self.focus_stop(stop),
+            Some(stop) => self.focus_stop_in_place(stop),
             None => vec![Act::Focus(plan.root.unwrap_or(owner), Default::default())],
         }
     }
