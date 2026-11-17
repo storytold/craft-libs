@@ -385,6 +385,9 @@ pub fn manifest(generated_by: &str, files: &[(&str, &str, Value)]) -> Value {
 /// Incremental in-memory Penpot container writer. Members are compressed as they are added;
 /// the writer retains their names and archive output, not a second collection of payloads.
 /// Paths must be safe and distinct. Entries keep insertion order and use deflate level 3.
+/// If [`Writer::add`] fails, discard the writer: additions are not transactional, and a ZIP
+/// failure may leave a reserved member name or partially written output. Do not finish or reuse
+/// a writer after an error.
 #[derive(Default)]
 pub struct Writer {
     zip: craft_zip::Writer,
@@ -397,6 +400,7 @@ impl Writer {
     }
 
     /// Write one member immediately; the caller may release its serialized payload afterwards.
+    /// On any error, discard this writer rather than retrying or calling [`Writer::finish`].
     pub fn add(&mut self, path: &str, bytes: &[u8]) -> Result<(), Error> {
         if path.is_empty() || !safe_name(path) || !self.seen.insert(path.to_owned()) {
             return Err(Error::Io(format!("unsafe or repeated member path: {}", path.chars().take(200).collect::<String>())));
