@@ -254,3 +254,37 @@ fn frames_over_a_given_context_run_on_it() {
     again.frame(vec![], |ui| second |= ui.ctx() == &ctx);
     assert!(second, "a second driver over the installed context runs on it");
 }
+
+/// An AccessKit request routed to a component inside a settled region reaches it: the region runs once in the pass
+/// that routes a Focus to its probe's node, though it has a content version (so input alone does not run it), and not
+/// at all in the same frame whose Focus goes to a probe outside it. The probes take no focus, so no focus request
+/// runs the region in their place.
+#[trial]
+fn a_routed_access_request_runs_its_settled_region_once() {
+    use craft_ui::testing::focus::{AccessActionKind, access_request};
+    let runs = Cell::new(0usize);
+    let (inside, outside) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(200.0, 80.0)), |ui| {
+            Lazy::new("routed", 0.0).settles(true).content(1).show(ui, |ui| {
+                runs.set(runs.get() + 1);
+                Probe::new(&inside).label("Inside").sense(craft_behavior::Sense::CLICK).show(ui);
+            });
+            Probe::new(&outside).label("Outside").sense(craft_behavior::Sense::CLICK).show(ui);
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(30, show);
+    let (inside_id, outside_id) = (inside.borrow().id.expect("the inside probe ran"), outside.borrow().id.expect("the outside probe ran"));
+    assert_ne!(inside_id, outside_id, "two probes");
+    let count = |frames: &mut Frames, target: Id| {
+        runs.set(0);
+        let passes = frames.frame(vec![access_request(AccessActionKind::Focus, target)], show);
+        (runs.get(), passes)
+    };
+    let (elsewhere, _) = count(&mut frames, outside_id);
+    assert_eq!(elsewhere, 0, "a Focus routed outside the settled region runs it in no pass");
+    frames.idle(30, show);
+    let (routed, passes) = count(&mut frames, inside_id);
+    assert_eq!(routed, 1, "a Focus routed into the settled region runs it once ({passes} passes in the frame)");
+}
