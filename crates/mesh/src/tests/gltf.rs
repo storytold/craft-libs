@@ -152,6 +152,34 @@ fn gltf_text(buffer: &str, image: &str) -> (Vec<u8>, Vec<u8>) {
     (serde_json::to_vec(&doc).unwrap(), b.bin)
 }
 
+/// What a `.gltf` file holding `buffer` and `image` as URIs reads as: the image's bytes, or
+/// the error.
+fn embedded(buffer: &str, image: &str) -> std::result::Result<Option<Vec<u8>>, Error> {
+    let (doc, _) = gltf_text(buffer, image);
+    read(&doc, &Limits::default(), &mut |_| None).map(|s| s.images[0].data.clone())
+}
+
+/// A data URI may escape any character (RFC 3986 §2.1), base64's `+`, `/` and `=` included.
+#[test]
+fn percent_escapes_in_a_data_uri_are_decoded_to_bytes() {
+    let bin = gltf_text("", "").1;
+    let buffer = format!("data:application/octet-stream;base64,{}", base64(&bin));
+    // 0xFB 0xFF 0xBF: "+/+/" in base64.
+    let image = [0xFB, 0xFF, 0xBF, 0xFB, 0xFF, 0xBF];
+    assert_eq!(base64(&image), "+/+/+/+/");
+    let escaped = |s: &str| s.replace('+', "%2B").replace('/', "%2f").replace('=', "%3D");
+    let want = Some(image.to_vec());
+    let plain_image = format!("data:image/png;base64,{}", base64(&image));
+    let (head, body) = buffer.split_once(',').unwrap();
+    let every = format!("{head},{}", body.bytes().map(|c| format!("%{c:02X}")).collect::<String>());
+    assert_eq!(embedded(&every, &plain_image).unwrap(), want, "a buffer escaped throughout");
+    assert_eq!(embedded(&buffer, &escaped(&plain_image)).unwrap(), want, "an escaped image");
+    // Not base64: the escaped bytes as they are, high bytes too.
+    assert_eq!(embedded(&buffer, "data:image/png,%FB%FF%BF%FB%ff%bf").unwrap(), want);
+    assert_eq!(embedded(&buffer, "data:,a%20b%").unwrap(), Some(b"a b%".to_vec()));
+    assert_eq!(embedded(&buffer, "data:image/png;base64,%25").unwrap(), None, "an escaped % is not base64");
+}
+
 #[test]
 fn embedded_and_external_resources() {
     // Embedded: data URIs for the buffer and the image.
@@ -828,4 +856,43 @@ fn specular_glossiness_and_webp_textures() {
     assert_eq!(m.metallic_roughness_texture, None);
     let plain = &s.materials[1];
     assert_eq!((plain.base_color, plain.metallic, plain.roughness, plain.base_color_texture), ([1.0; 4], 0.0, 0.0, None));
+}
+
+#[test]
+fn morph_targets_and_other_scenes_are_named_in_warnings() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let d = b.f32s(&[0.0; 9], "VEC3", 3);
+    let plain = json!({ "attributes": { "POSITION": p } });
+    let morphed = json!({ "attributes": { "POSITION": p }, "targets": [{ "POSITION": d }] });
+    let doc = |scene: Value, scenes: Value| {
+        b.glb(json!({
+            "scene": scene,
+            "scenes": scenes,
+            "nodes": [{ "mesh": 0 }, { "mesh": 0 }],
+            "meshes": [{ "primitives": [plain, morphed, morphed] }],
+        }))
+    };
+    let s = parse(&doc(json!(1), json!([{ "nodes": [0] }, { "nodes": [1] }, { "nodes": [] }]))).unwrap();
+    assert_eq!(s.roots, [1]);
+    assert_eq!(
+        s.warnings,
+        ["scene 1 of 3 was read; the others were left out", "2 primitive(s) have morph targets, which were left out (drawn in the base shape)",]
+    );
+    // The morphed primitives are still drawn, in their base shape.
+    assert_eq!(s.meshes[0].parts.len(), 3);
+    let morphs = "2 primitive(s) have morph targets, which were left out (drawn in the base shape)";
+    // An out-of-range choice falls back to the first scene.
+    let s = parse(&doc(json!(5), json!([{ "nodes": [1] }, { "nodes": [0] }]))).unwrap();
+    assert_eq!(s.roots, [1]);
+    assert_eq!(s.warnings, ["scene 0 of 2 was read; the others were left out", morphs]);
+    // One scene, or none, is not a warning about scenes.
+    let s = parse(&doc(json!(5), json!([{ "nodes": [0] }]))).unwrap();
+    assert_eq!(s.roots, [0]);
+    assert_eq!(s.warnings, [morphs]);
+    let s = parse(&doc(json!(null), json!(null))).unwrap();
+    assert_eq!(s.roots, [0, 1]);
+    assert_eq!(s.warnings, [morphs]);
+    let s = parse(&one_mesh(&b, plain.clone())).unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
 }

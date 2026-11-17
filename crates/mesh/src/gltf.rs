@@ -15,8 +15,9 @@
 //! same accessors), and each primitive a [`Part`].
 //!
 //! Not read: required extensions that change how geometry is stored (Draco, meshopt) are
-//! [`Error::Unsupported`]; points, lines, morph targets and
-//! other extensions are passed over (skipped primitives are counted in a warning).
+//! [`Error::Unsupported`]; points, lines, morph targets, scenes other than the default and
+//! other extensions are passed over (skipped primitives, primitives with morph targets and the
+//! other scenes are named in warnings).
 //!
 //! Buffers are needed to read anything, so an external buffer is asked of the resolver (by its
 //! percent-decoded URI) and is [`Error::Missing`] when declined. External images are only named
@@ -115,6 +116,11 @@ pub use crate::base64_decode;
 
 /// Percent-decode a URI. A `%` that two hex digits do not follow stays as it is.
 pub fn uri_decode(s: &str) -> String {
+    String::from_utf8_lossy(&percent_decode(s)).into_owned()
+}
+
+/// [`uri_decode`] as bytes, so escaped bytes that are not UTF-8 survive.
+fn percent_decode(s: &str) -> Vec<u8> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -128,7 +134,7 @@ pub fn uri_decode(s: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 /// The media type and bytes of a `data:` URI.
@@ -137,10 +143,12 @@ fn data_uri(uri: &str) -> Option<Result<(String, Vec<u8>)>> {
     Some((|| {
         let (meta, data) = rest.split_once(',').ok_or_else(|| malformed(KIND, "a data URI without a comma"))?;
         let mime = meta.split(';').next().unwrap_or("").to_string();
+        // Any character may be escaped (RFC 3986 2.1), base64's `+`, `/` and `=` included.
+        let bytes = percent_decode(data);
         let bytes = if meta.ends_with(";base64") {
-            base64_decode(data).ok_or_else(|| malformed(KIND, "bad base64 in a data URI"))?
+            std::str::from_utf8(&bytes).ok().and_then(base64_decode).ok_or_else(|| malformed(KIND, "bad base64 in a data URI"))?
         } else {
-            uri_decode(data).into_bytes()
+            bytes
         };
         Ok((mime, bytes))
     })())
@@ -345,6 +353,7 @@ impl Doc<'_> {
 struct Skipped {
     triangles: usize,
     primitives: usize,
+    morphs: usize,
 }
 
 fn rows_of<const N: usize>(v: &[f64]) -> impl Iterator<Item = [f64; N]> + '_ {
@@ -439,6 +448,7 @@ fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials
         return Ok(());
     };
     charge(&d.parts_left, 1, "primitives")?;
+    skipped.morphs += usize::from(!arr(p, "targets").is_empty());
     let key = attrs.to_string();
     let ([base, normal_base, uv_base, tangent_base], nv) = match shared.get(&key) {
         Some(known) => *known,
@@ -648,7 +658,12 @@ fn nodes(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             children: indices(n, "children", list.len()),
         });
     }
-    scene.roots = match arr(j, "scenes").get(idx(j, "scene").unwrap_or(0)).or_else(|| arr(j, "scenes").first()) {
+    let scenes = arr(j, "scenes");
+    let chosen = idx(j, "scene").filter(|s| *s < scenes.len()).unwrap_or(0);
+    if scenes.len() > 1 {
+        scene.warnings.push(format!("scene {chosen} of {} was read; the others were left out", scenes.len()));
+    }
+    scene.roots = match scenes.get(chosen) {
         Some(s) => indices(s, "nodes", list.len()),
         None => {
             // No scene: every node that is nobody's child.
@@ -832,6 +847,7 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     animations(&d, limits, &mut scene)?;
     count_warning(&mut scene.warnings, skipped.primitives, "primitive(s) are points, lines or have no positions and were left out");
     count_warning(&mut scene.warnings, skipped.triangles, "triangle(s) could not be read and were left out");
+    count_warning(&mut scene.warnings, skipped.morphs, "primitive(s) have morph targets, which were left out (drawn in the base shape)");
     // A hierarchy with a cycle, or one too deep to walk, is refused here rather than by every caller.
     scene.instances(limits)?;
     Ok(scene)

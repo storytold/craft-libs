@@ -241,6 +241,71 @@ fn fragments_without_a_document_environment() {
 }
 
 #[test]
+fn a_blank_line_after_a_comment_ends_the_paragraph() {
+    // The comment took its line end with it, so the blank line after it read as a single line
+    // end: the paragraphs ran together with two spaces between them.
+    let two = ["first", "second"];
+    assert_eq!(texts("\\begin{document}first % note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n  \t\n\nsecond\\end{document}"), two);
+    // A comment still joins its line to a next line that is not blank.
+    assert_eq!(texts("\\begin{document}first%\nsecond\\end{document}"), ["firstsecond"]);
+    assert_eq!(texts("\\begin{document}first % note\n   second\\end{document}"), ["first second"]);
+}
+
+#[test]
+fn a_blank_line_after_a_control_word_at_a_line_end_ends_the_paragraph() {
+    // The control word took the line end after it, so the blank line read as a single line end.
+    assert_eq!(texts("\\begin{document}first \\relax\n\nsecond\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax  \n \n second\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax\nsecond\\end{document}"), ["first second"]);
+}
+
+/// Wraps `body` in a document whose line ends are all `nl`.
+fn with_line_ends(body: &str, nl: &str) -> String {
+    format!("\\begin{{document}}{nl}{}{nl}\\end{{document}}{nl}", body.replace('\n', nl))
+}
+
+#[test]
+fn a_blank_line_ends_the_paragraph_with_cr_and_crlf_line_ends() {
+    // #6365: only LF counted as a line end, so with CR line ends every paragraph break was lost.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first\nsecond", nl)), ["first second"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first \\relax\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+    }
+}
+
+#[test]
+fn a_comment_ends_at_a_cr_line_end() {
+    // #6373: a comment ran to the next LF, so with CR line ends it took the rest of the file.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first\n% note\nsecond\n\nthird", nl)), ["first second", "third"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first\n% note\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+    }
+}
+
+#[test]
+fn a_verbatim_environment_starts_after_a_cr_line_end() {
+    // #6374: the rest of the `\begin{verbatim}` line ran to the next LF, so with CR line ends it took the rest of the file.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(
+            texts(&with_line_ends("before\n\n\\begin{verbatim}\ncode one\ncode two\n\\end{verbatim}\n\nafter", nl)),
+            ["before", "code one", "code two", "after"],
+            "{nl:?}"
+        );
+    }
+}
+
+#[test]
+fn the_line_end_after_a_control_word_reads_as_nothing_with_cr_and_crlf_line_ends() {
+    // #6375: the control word took only an LF after it, so a CR there read as a space.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first \\TeX\nis", nl)), ["first TeXis"], "{nl:?}");
+    }
+}
+
+#[test]
 fn equations_survive_a_round_trip() {
     let mut d = Document::new();
     let mut p = craft_wordmodel::Paragraph::with_text("Area ", Default::default());
@@ -282,6 +347,63 @@ fn special_characters_round_trip() {
     let tex = export(&d);
     let back = import(tex.as_bytes());
     assert_eq!(back.plain_text(Default::default()).trim(), text.replace('\t', "\u{2003}"), "{tex}");
+}
+
+#[test]
+fn a_backslash_before_a_line_end_or_a_tab_is_a_control_space() {
+    // The control symbol took the line end with it and read as nothing: the two words ran
+    // together, and a blank line after it no longer ended the paragraph.
+    assert_eq!(texts("\\begin{document}mid\\\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}mid\\\r\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}tab\\\there\\end{document}"), vec!["tab here".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\n\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\r\n\r\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+}
+
+#[test]
+fn a_control_space_at_a_line_end_adds_no_second_space() {
+    // The line end after it was read as a space of its own, so text taken as written (a
+    // reference, a URL) had two spaces where `\ ` gives one.
+    assert_eq!(tokenize("a\\\nb"), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\ntwo}\\end{document}"), vec!["one two".to_string()]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\r\n   two}\\end{document}"), vec!["one two".to_string()]);
+}
+
+#[test]
+fn blanks_after_a_control_space_add_no_second_space() {
+    // TeX skips the blanks after `\ ` and after `\` and a tab, but they were read as a space of
+    // their own, so text taken as written had two spaces.
+    for cs in ["\\ ", "\\\t"] {
+        assert_eq!(tokenize(&format!("a{cs} \tb")), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}\n  two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}   two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[one{cs}  two] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{cs:?}");
+        // A blank line after it still ends the paragraph.
+        assert_eq!(
+            texts(&format!("\\begin{{document}}first{cs}\n\nsecond\\end{{document}}")),
+            vec!["first".to_string(), "second".to_string()],
+            "{cs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_control_space_in_an_item_label_is_a_space() {
+    // The optional argument kept a control symbol as written, so the label read `one\ two`.
+    for src in ["one\\ two", "one\\\ttwo", "one\\\ntwo"] {
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[{src}] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{src:?}");
+    }
+}
+
+#[test]
+fn a_paragraph_that_ends_in_spaces_stays_apart_on_the_way_back() {
+    // Export writes the last of the spaces as a control space at the line end (`a \`), which
+    // import read as nothing, so the paragraph ran into the next one.
+    let tex = export(&Document::from_text("a  \nb"));
+    let t: Vec<String> = texts(&tex).iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    assert_eq!(t, vec!["a".to_string(), "b".to_string()], "{tex}");
 }
 
 #[test]
@@ -436,4 +558,18 @@ fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
     let t = table::table(&toks, "", 0);
     assert_eq!(t.rows.first().map(Vec::len), Some(craft_wordmodel::table::MAX_COLS));
     assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
+}
+
+#[test]
+fn a_starred_line_break_shows_no_star() {
+    // `\\*` (a line break with no page break after it) left its `*` in the text.
+    for src in ["a\\\\*b", "a\\\\*[3pt]b", "a\\\\b"] {
+        let p = paras(&format!("\\begin{{document}}{src}\\end{{document}}"));
+        assert_eq!(p.len(), 1, "{src}");
+        assert_eq!(p[0].text().replace(['\n', '\u{B}'], "|"), "a|b", "{src}");
+    }
+    let flow = parse("\\begin{document}\\begin{tabular}{ll}a & b \\\\* c & d\\end{tabular}\\end{document}");
+    let Some(FBlock::Table(t)) = flow.blocks.first() else { panic!("{:?}", flow.blocks) };
+    assert_eq!(t.rows.len(), 2, "{t:?}");
+    assert_eq!(t.rows[1].iter().map(|c| c.text().trim().to_string()).collect::<Vec<_>>(), ["c", "d"]);
 }

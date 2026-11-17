@@ -110,9 +110,9 @@ FBX 6.x files (a `Model` holds its mesh, `Properties60`, objects connected by na
 geometry, transforms, the hierarchy and materials. Not read: FBX 5 and older, 6.x textures,
 animation, skin deformers, blend shapes, cameras, lights, NURBS.
 
-Not read (glTF): required geometry extensions (Draco, meshopt) are
-Not read (glTF): sparse accessors and required geometry extensions (Draco, meshopt) are
-`Error::Unsupported`; points, lines, morph targets, tangents and other extensions are passed over.
+Not read (glTF): required geometry extensions (Draco, meshopt) are `Error::Unsupported`. Points,
+lines and morph targets are left out and counted in a warning; scenes other than the default are
+named in one; other extensions are passed over.
 Not written: skins, animations, cameras, lights, and `.gltf` with separate files.
 
 ## Hostile input

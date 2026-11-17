@@ -103,3 +103,7 @@ and the exact transfer revision are recorded in each vendored crate's SOURCE.jso
 
 `crates/tga/src/metadata_tests.rs` and metadata-boundary helpers in `crates/tga/src/lib.rs` are adapted from nuclearspike's FilmCraft #1932 at `e7842f76f887005c460c64a8ab51d59d086e6f27` (MIT OR Apache-2.0). Synthetic fixtures are original contributor test data; primary Git author retained.
 The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper are ported from Craft Anything `8f3b775157d331dd31cfa4da911e26d8856b8c77` (same MIT OR Apache-2.0 source licenses). Brandon Thomas is the primary import author; retained hardening credits include Afloat, BFlat, Rahul, RRFZ and NetterSilver. The finite-real fix preserves gmrmad1 as author from Craft Anything #1905 (`d85e104f`); quoted-attribute/line-ending regressions preserve RRFZ. Bounds/adaptation and bounded entity scanning are subsequent Dylan M. Taylor changes. App-specific JSON projections and keyed-archive interpretation remain outside this crate.
+
+## Non-seeking WAV primitives
+
+`crates/audio/src/wav_stream.rs` is extracted from AniCraft `crates/audio/src/wav.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0). Tanish Manku is retained as the primary import author, from original commit `30c121d269a49d9abe54a3834ed4aa0201542535`. Odd-data padding accounting, shared API documentation and regression tests are subsequent Dylan M. Taylor changes.

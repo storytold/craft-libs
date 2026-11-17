@@ -1,5 +1,18 @@
 //! Header-only BMP dimensions and pixel-data coverage, without allocating a canvas.
 
+/// Recognize a BMP file header with a supported DIB header kind.
+///
+/// This is a format-routing check, not full validation: dimensions and pixel data may still
+/// be invalid. Unlike the broad signature detector, it requires the minimum 26-byte core
+/// header and a known DIB size, preserving callers that reject arbitrary `BM` prefixes.
+pub fn is_supported_header(b: &[u8]) -> bool {
+    if b.len() >= 26 && b.starts_with(b"BM") {
+        let dib = u32::from_le_bytes([b[14], b[15], b[16], b[17]]);
+        return matches!(dib, 12 | 16 | 40 | 52 | 56 | 64 | 108 | 124);
+    }
+    false
+}
+
 /// Coverage of the declared pixel array. Row byte counts include row padding; RLE coverage
 /// counts the pixels drawn by commands and may be smaller than the canvas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,5 +154,24 @@ mod tests {
         assert_eq!(coverage(&truncated, 4, 2).pixels, 0);
         let nibble = bmp(2, &[0, 3, 0x12, 0x30, 0, 1]);
         assert_eq!(coverage(&nibble, 4, 2).pixels, 3);
+    }
+    #[test]
+    fn supported_header_recognition_preserves_length_signature_and_dib_rules() {
+        let mut b = [0_u8; 26];
+        b[..2].copy_from_slice(b"BM");
+        for dib in [12_u32, 16, 40, 52, 56, 64, 108, 124] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert!(is_supported_header(&b), "DIB {dib}");
+            for n in 0..26 {
+                assert!(!is_supported_header(&b[..n]), "prefix {n}");
+            }
+        }
+        for dib in [0_u32, 13, 39, 41, 125, u32::MAX] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert!(!is_supported_header(&b), "DIB {dib}");
+        }
+        b[14..18].copy_from_slice(&40_u32.to_le_bytes());
+        b[0] = b'X';
+        assert!(!is_supported_header(&b));
     }
 }

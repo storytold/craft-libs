@@ -2888,6 +2888,10 @@ name = "craft-sniff"
 version = "0.1.0"
 
 [[package]]
+name = "craft-ssip"
+version = "0.1.0"
+
+[[package]]
 name = "craft-stencilcraft-document"
 version = "0.1.0"
 dependencies = [
@@ -2899,10 +2903,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
-
-[[package]]
-name = "craft-ssip"
-version = "0.1.0"
 
 [[package]]
 name = "craft-stencilcraft-format"
