@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 craft-audio-dsp = { path = "crates/audio-dsp" }
+craft-pcap = { path = "crates/pcap" }
 craft-har = { path = "crates/har" }
 craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
@@ -59,6 +60,8 @@ craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
+craft-cloud = { path = "crates/cloud" }
+craft-cloud-local = { path = "crates/cloud-local" }
 craft-color = { path = "crates/color" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
