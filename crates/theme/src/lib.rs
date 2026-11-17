@@ -29,6 +29,7 @@ mod color_model;
 pub mod contrast;
 mod derive;
 pub mod dump;
+pub mod edit;
 mod explain;
 pub mod format;
 mod id;
@@ -51,6 +52,8 @@ pub mod variant;
 mod app_sizes_tests;
 #[cfg(test)]
 mod color_model_tests;
+#[cfg(test)]
+mod edit_tests;
 #[cfg(test)]
 mod explain_tests;
 #[cfg(test)]
