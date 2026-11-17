@@ -1418,8 +1418,18 @@ impl Body<'_> {
         // keeps it; else its part of the text width.
         let room = width.filter(|_| align.is_some() && rel.is_none()).or_else(|| width_pct.map(|p| self.sec.text_width() * p / 100.0));
         let contained = !self.tables.is_empty() || self.containers.len() > 1 || self.sec.columns.count > 1;
-        let extra =
-            model::TableExtra { align, width: None, width_pct, heights: Vec::new(), keep_rows: Vec::new(), fixed: true, space, header_rows: 0 };
+        let extra = model::TableExtra {
+            align,
+            width: None,
+            width_pct,
+            heights: Vec::new(),
+            keep_rows: Vec::new(),
+            fixed: true,
+            space,
+            header_rows: 0,
+            grid_style: false,
+            relative_widths: false,
+        };
         let background = get(a, "table:style-name").and_then(|s| self.styles.table_background(s));
         self.tables.push(TableB {
             rows: Vec::new(),

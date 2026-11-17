@@ -1188,6 +1188,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
             fixed: t.props.fixed,
             space: [t.props.space_before, t.props.space_after],
             header_rows: t.rows.iter().take_while(|r| r.props.header).count(),
+            grid_style: false,
+            relative_widths: false,
         }
     });
     // Kept whole for formats that ask for it: its header rows count even without the rest.

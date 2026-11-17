@@ -837,12 +837,27 @@ impl<'a> Builder<'a> {
         let mut tb = Table::new(1, cols, width);
         // A table from a format that keeps cell formatting (ODT) has its cells' own borders and no
         // table style of Word's kind: Table Grid's single spacing would change its text.
-        if t.borderless || t.extra.is_some() {
+        if t.borderless || t.extra.as_ref().is_some_and(|x| !x.grid_style) {
             tb.props.style = None;
         }
-        if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0) {
+        let relative = t.extra.as_ref().is_some_and(|x| x.relative_widths);
+        if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && (*w > 1.0 || relative && *w > 0.0)) {
             // Narrow columns stay as they are: raising them would widen the table past its source.
             tb.grid = t.widths.iter().map(|w| w.min(1584.0)).collect();
+            // Proportions (HTML's percentages) take the table's own width, its share of the text
+            // width, or the text width.
+            if let Some(x) = t.extra.as_ref().filter(|x| x.relative_widths) {
+                let target = x
+                    .width
+                    .filter(|w| w.is_finite() && *w > 0.0)
+                    .or_else(|| x.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(|p| width * p.min(100.0) / 100.0))
+                    .unwrap_or(width)
+                    .min(1584.0);
+                let sum: f32 = tb.grid.iter().sum();
+                if sum > 0.0 && sum.is_finite() {
+                    tb.grid.iter_mut().for_each(|w| *w = *w * target / sum);
+                }
+            }
         }
         tb.rows.clear();
         if let Some(x) = &t.extra {
