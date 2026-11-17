@@ -1,12 +1,14 @@
 //! The public transactions of a layout: an action under permissions, atomic, with the panels it closed.
 
-use std::hash::Hash;
+use std::{collections::HashSet, hash::Hash};
 
 use super::{
     action::Action,
+    edit::{leaves, tree_panels},
     groups::{Target, Unit},
     inner::unit_of,
     layout::Layout,
+    node::Node,
     policy::{DockError, Permissions},
 };
 
@@ -19,12 +21,14 @@ impl<P: Clone + Eq + Hash> Layout<P> {
     /// Check application policy before making an atomic change, and return the panels the
     /// action closed (see [`Self::closed_by`]) so the application can release their state.
     /// The callback must be stable throughout one call. Registry validation remains with the
-    /// application, particularly Open.
+    /// application, particularly Open. The column rights ([`Permissions::collapses`],
+    /// [`Permissions::shares_column`]) are checked on the result: an action that leaves a panel breaking them,
+    /// which did not before, is refused, so a drag's dry run refuses it alike.
     pub fn apply_with_permissions(&mut self, action: Action<P>, permissions: impl Fn(&P) -> Permissions) -> Result<Vec<P>, DockError> {
         self.validate()?;
         let action = match action {
             Action::Open { panel, anchor: None } if self.root.is_some() && !self.contains(&panel) => {
-                let (anchor, placement) = self.open_place(&permissions).ok_or(DockError::MissingTarget)?;
+                let (anchor, placement) = self.open_place(&panel, &permissions).ok_or(DockError::MissingTarget)?;
                 Action::OpenAt { panel, anchor, placement }
             }
             Action::StepGroup { panel, up } => {
@@ -36,8 +40,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
             }
             action => action,
         };
-        // A destination in a floating window takes only floatable panels, and a group placed
-        // there becomes a split of the anchor's frame.
+        // A destination in a floating window takes only floatable panels.
         let floats = |anchor: &P| self.floating.iter().any(|w| w.contains(anchor));
         match &action {
             Action::Move { panel, anchor, placement } | Action::OpenAt { panel, anchor, placement } => {
@@ -46,7 +49,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 if !opens && !permissions(panel).movable {
                     return Err(DockError::NotAllowed);
                 }
-                if !placement.allowed_by(permissions(anchor), floats(anchor)) || floats(anchor) && !permissions(panel).floatable {
+                if !placement.allowed_by(permissions(anchor)) || floats(anchor) && !permissions(panel).floatable {
                     return Err(DockError::NotAllowed);
                 }
             }
@@ -69,7 +72,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     && match to {
                         Target::Float { .. } => policy.floatable,
                         Target::At { anchor, placement } => {
-                            placement.allowed_by(permissions(anchor), floats(anchor)) && (!floats(anchor) || policy.floatable)
+                            placement.allowed_by(permissions(anchor)) && (!floats(anchor) || policy.floatable)
                         }
                         Target::NewDock { .. } => true,
                     };
@@ -86,7 +89,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     Target::Float { .. } if members.iter().any(|p| !permissions(p).floatable) => return Err(DockError::NotAllowed),
                     Target::At { anchor, placement }
                         if !members.contains(anchor)
-                            && (!placement.allowed_by(permissions(anchor), floats(anchor))
+                            && (!placement.allowed_by(permissions(anchor))
                                 || floats(anchor) && members.iter().any(|p| !permissions(p).floatable)) =>
                     {
                         return Err(DockError::NotAllowed);
@@ -110,8 +113,46 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         let mut proposed = self.clone();
         proposed.apply_inner(action, &|p| permissions(p).is_protected())?;
         proposed.validate()?;
-        *self = proposed;
-        Ok(closed)
+        if !proposed.breaks_columns_beyond(self, &permissions) {
+            *self = proposed;
+            return Ok(closed);
+        }
+        Err(DockError::NotAllowed)
+    }
+
+    /// Whether a panel breaks its column rights in this layout that did not in `before`.
+    pub(super) fn breaks_columns_beyond(&self, before: &Self, permissions: &impl Fn(&P) -> Permissions) -> bool {
+        let breaches = self.column_breaches(permissions);
+        !breaches.is_empty() && !breaches.is_subset(&before.column_breaches(permissions))
+    }
+
+    /// The panels that break their column rights: a panel that does not collapse ([`Permissions::collapses`]) in
+    /// a collapsed column, and every panel of a column (or node of the docked tree) that holds a panel that does
+    /// not share it ([`Permissions::shares_column`]) beside another panel.
+    pub(super) fn column_breaches(&self, permissions: &impl Fn(&P) -> Permissions) -> HashSet<P> {
+        let mut breaches = HashSet::new();
+        let mut check = |panels: Vec<&P>, iconic: bool| {
+            if iconic {
+                breaches.extend(panels.iter().filter(|p| !permissions(p).collapses).map(|p| (*p).clone()));
+            }
+            if panels.len() > 1 && panels.iter().any(|p| !permissions(p).shares_column) {
+                breaches.extend(panels.into_iter().cloned());
+            }
+        };
+        for window in &self.floating {
+            check(window.panels().collect(), window.column.iconic);
+        }
+        for (leaf, _) in self.root.as_ref().map(leaves).unwrap_or_default() {
+            match leaf {
+                Node::Dock { columns, .. } => {
+                    for column in columns {
+                        check(column.panels().collect(), column.iconic);
+                    }
+                }
+                leaf => check(tree_panels(leaf), false),
+            }
+        }
+        breaches
     }
 
     /// Apply every action in order, or none: the first rejection leaves the layout unchanged.

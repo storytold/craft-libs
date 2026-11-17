@@ -2,7 +2,7 @@
 
 use super::{AppShell, ShellRegion};
 use crate::choice::Checkbox;
-use crate::contract::{Bind, PaneEdge, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::Dialog;
 use crate::display::Text;
 use crate::layout_components::Grid;
@@ -44,9 +44,6 @@ fn app_shell_canvas(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         })
         .options_bar(true, |ui, _, _| {
             Text::new("Options").show(ui);
-        })
-        .tools(PaneEdge::Start, 1, true, |ui, _, _| {
-            Text::new("Tools").show(ui);
         })
         .status(true, |ui, _, _| {
             Text::new("Status").show(ui);

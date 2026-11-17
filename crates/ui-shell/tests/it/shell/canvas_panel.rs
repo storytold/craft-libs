@@ -45,7 +45,7 @@ impl Component for Document {
     }
 }
 
-/// Shows a panel with rail and tabs, and a document filling its document area when `with_document`; after two
+/// Shows a panel with tabs, and a document filling its document area when `with_document`; after two
 /// settling frames, moves to the area's centre and clicks there `clicks` times, one frame per press and per release.
 /// Returns the steps (0 the move) in which the panel reported `empty_double`.
 fn empty_doubles(with_document: bool, clicks: usize) -> Vec<usize> {
@@ -54,7 +54,7 @@ fn empty_doubles(with_document: bool, clicks: usize) -> Vec<usize> {
     let mut reported = false;
     let frame = |events: Vec<Event>, document: &mut Rect, reported: &mut bool| {
         windows.frame(events, vec![], |ui| {
-            let shown = CanvasPanel::new().rail("Panels", |_, _| {}).tabs(|_, _| {}).show(ui, |ui, cx| {
+            let shown = CanvasPanel::new().tabs(|_, _| {}).show(ui, |ui, cx| {
                 if with_document {
                     Document { common: Common::new() }.show_at(ui, cx.rect);
                 }
@@ -89,25 +89,4 @@ fn an_empty_canvas_panel_reports_a_double_click_on_its_room() {
     // Steps: move, press, release, press (the second press of the double click), release.
     assert_eq!(empty_doubles(false, 2), vec![3], "the second press on the empty room reports once");
     assert_eq!(empty_doubles(true, 2), Vec::<usize>::new(), "a document that takes the press leaves the room's double click unreported");
-}
-
-/// The panel rail is one rail column wide at the panel's end edge, and the document area runs up to it: no band of the
-/// rail's chrome is left between them, whatever the room.
-#[trial]
-fn the_panel_rail_is_one_rail_column_at_the_end_edge() {
-    let windows = Windows::new();
-    let (mut rail, mut document, mut room, mut column) = (None, Rect::NOTHING, Rect::NOTHING, 0.0);
-    for _ in 0..2 {
-        windows.frame(vec![], vec![], |ui| {
-            room = ui.max_rect();
-            column = craft_ui::runtime::env::Env::of(ui).tokens.size.rail.width;
-            let shown = CanvasPanel::new().rail("Panels", |_, _| {}).show(ui, |_, _| {});
-            rail = shown.rail;
-            document = shown.document;
-        });
-    }
-    let rail = rail.expect("the rail shows");
-    assert!((rail.right() - room.right()).abs() < 0.5, "the rail ends at the panel's end edge: {rail:?} in {room:?}");
-    assert!((rail.width() - column).abs() < 0.5, "the rail is one rail column wide: {rail:?}, column {column}");
-    assert!(document.right() <= rail.left() + 0.5 && rail.left() - document.right() < column, "the document meets the rail: {document:?} {rail:?}");
 }

@@ -48,6 +48,58 @@ impl DockHeights {
     }
 }
 
+/// How a panel that lays its content in a grid of equal columns (a toolbar) sizes its dock column. The column is a
+/// whole number of content columns wide, its steps ([`Column::steps`](craft_behavior::dock::Column::steps)), and as
+/// tall as the content measures at that width: docked from the top of the dock, floating under the title row. A drag
+/// of the column's edge sets whole steps; the content lays out as many columns as fit the width it gets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DockGrid {
+    /// The content's width at one column: a cell and the content's own padding on both sides.
+    pub first: f32,
+    /// The width each further column adds: a cell and the gap before it.
+    pub step: f32,
+    /// The most columns the content fills, its cell count: more steps show it no wider.
+    pub most: u16,
+}
+
+impl DockGrid {
+    /// A grid `first` wide at one column, `step` wider for each further column, up to `most` columns.
+    pub const fn new(first: f32, step: f32, most: u16) -> Self {
+        DockGrid { first, step, most }
+    }
+
+    /// Whether the widths are finite and positive and the grid has a column.
+    pub fn valid(self) -> bool {
+        self.first.is_finite() && self.first > 0.0 && self.step.is_finite() && self.step > 0.0 && self.most > 0
+    }
+
+    /// `steps` kept between one column and [`most`](Self::most).
+    pub fn clamp(self, steps: u16) -> u16 {
+        steps.clamp(1, self.most.max(1))
+    }
+
+    /// The content's width at `steps` columns, kept within the grid's columns.
+    pub fn width(self, steps: u16) -> f32 {
+        self.first + f32::from(self.clamp(steps) - 1) * self.step
+    }
+
+    /// The most columns whose width fits `width`, at least one.
+    pub fn steps_within(self, width: f32) -> u16 {
+        (1..=self.most.max(1)).rev().find(|steps| self.width(*steps) <= width + WIDTH_SLACK).unwrap_or(1)
+    }
+
+    /// The fewest columns at which `height`, the content's height at a width ([`width`](Self::width)), fits `room`;
+    /// the most columns when none fits.
+    pub fn steps_for_height(self, room: f32, mut height: impl FnMut(f32) -> f32) -> u16 {
+        let most = self.most.max(1);
+        (1..=most).find(|steps| height(self.width(*steps)) <= room + WIDTH_SLACK).unwrap_or(most)
+    }
+}
+
+/// How far a width or height may pass the room and still fit it: the rounding of laid-out sizes.
+const WIDTH_SLACK: f32 = 0.5;
+
 /// What the dock reads of a panel: its name and icon, its size policy and how its floating window behaves. The
 /// permissions of a panel (movable, floatable, closable, takes tabs, takes splits) belong to the dock model, not
 /// to this spec.
@@ -75,6 +127,9 @@ pub struct PanelSpec {
     /// The panel is a document canvas: its group shows it without the tab and side drops of a panel group, and the
     /// host draws it with `DockPanels::group_view`.
     pub canvas: bool,
+    /// The grid the panel lays its content in, which makes a column with steps whole content columns wide and as
+    /// tall as its content. `None` for a panel that fills the width it gets.
+    pub grid: Option<DockGrid>,
 }
 
 impl PanelSpec {
@@ -89,6 +144,7 @@ impl PanelSpec {
             allow_native: true,
             window_kind: WindowKind::Tool,
             canvas: false,
+            grid: None,
         }
     }
 
@@ -138,6 +194,13 @@ impl PanelSpec {
     #[must_use]
     pub fn canvas(mut self) -> Self {
         self.canvas = true;
+        self
+    }
+
+    /// The grid the panel lays its content in.
+    #[must_use]
+    pub fn grid(mut self, grid: DockGrid) -> Self {
+        self.grid = Some(grid);
         self
     }
 }

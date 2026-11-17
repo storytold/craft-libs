@@ -25,6 +25,9 @@ const DOCUMENT_HEIGHT: f64 = 800.0;
 /// The share of the dock the canvas group takes.
 const CANVAS_SHARE: f32 = 0.8;
 
+/// The width of the dock that holds the toolbar: room for its column at two steps.
+const TOOLS_DOCK_WIDTH: f32 = 120.0;
+
 /// The tools of the rail. Each is a command of the `tools` group; a tool alone in its slot carries its letter, and the
 /// letter of a slot with several is the pick command of [`ToolKey`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet)]
@@ -146,6 +149,8 @@ impl ColorPair {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Panel {
+    /// The toolbar: a stepped column of tool buttons that docks and floats by dragging.
+    Tools,
     /// The document tabs over the canvas.
     Canvas,
     /// The Navigator.
@@ -156,7 +161,7 @@ pub enum Panel {
 
 impl Panel {
     /// Every panel, in the Window menu's order.
-    pub const ALL: [Panel; 3] = [Panel::Canvas, Panel::Navigator, Panel::Layers];
+    pub const ALL: [Panel; 4] = [Panel::Tools, Panel::Canvas, Panel::Navigator, Panel::Layers];
 
     /// Whether the panel stays docked and open: the canvas.
     pub const fn protected(self) -> bool {
@@ -412,12 +417,20 @@ pub struct MockState {
     pub colors: ColorPair,
     /// The panel whose frame shows alone.
     pub maximized: Option<Panel>,
+    /// The panel open in the flyout of a column collapsed to icons.
+    pub flyout: Option<Panel>,
 }
 
 impl Default for MockState {
     fn default() -> Self {
-        let side = Column::new(vec![Group::new(vec![Panel::Navigator], 0), Group::new(vec![Panel::Layers], 0)]).with_width(SIDE_WIDTH);
-        let root = Node::split(Axis::X, SplitSize::Ratio(CANVAS_SHARE), Node::tabs(vec![Panel::Canvas], 0), Node::dock(DockEdge::End, vec![side]));
+        // The toolbar sits in a dock of its own at the start, one tool column wide; its column keeps that grid.
+        let tools = Column::new(vec![Group::new(vec![Panel::Tools], 0)]).with_steps(1);
+        let side = Column::new(vec![Group::new(vec![Panel::Layers], 0)]).with_width(SIDE_WIDTH);
+        let mut icons = Column::new(vec![Group::new(vec![Panel::Navigator], 0)]).with_width(SIDE_WIDTH);
+        icons.iconic = true;
+        let canvas =
+            Node::split(Axis::X, SplitSize::Ratio(CANVAS_SHARE), Node::tabs(vec![Panel::Canvas], 0), Node::dock(DockEdge::End, vec![side, icons]));
+        let root = Node::split(Axis::X, SplitSize::FixedFirst(TOOLS_DOCK_WIDTH), Node::dock(DockEdge::Start, vec![tools]), canvas);
         MockState {
             workspace: Workspace::new(Layout::new(Some(root), Vec::new())),
             document: Document::default(),
@@ -427,6 +440,7 @@ impl Default for MockState {
             status: None,
             colors: ColorPair::default(),
             maximized: None,
+            flyout: None,
         }
     }
 }

@@ -126,7 +126,6 @@ pub(super) const SURFACES: &[(&str, &str, Surface)] = &[
     ("craft_ui", "PaneArea", Own),
     ("craft_ui", "PaneFrame", Own),
     ("craft_ui", "Panel", Own),
-    ("craft_ui", "PanelRail", Chrome),
     ("craft_ui", "ParamDialog", Own),
     ("craft_ui", "ParamRows", Own),
     ("craft_ui", "PasswordDialog", Own),

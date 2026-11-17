@@ -4,7 +4,7 @@ include-tests = false
 deny-unused = true
 
 [[exempt]]
-path = "crates/ui-panels/src/rails/panel_rail/trials.rs"
+path = "crates/ui-panels/src/rails/tool/trials.rs"
 rules = ["literal-size"]
 reason = "trial rooms, not looks"
 
