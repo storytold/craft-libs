@@ -18,6 +18,8 @@ const MAX_MEMBERS: usize = 65_536;
 /// Most try blocks / handlers per method.
 const MAX_TRIES: usize = 4096;
 const MAX_HANDLERS: usize = 256;
+/// Bound descriptor copies across all tries, including repeated references to one handler list.
+const MAX_HANDLER_BYTES: usize = 64 << 20;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Header {
@@ -471,8 +473,9 @@ impl<'a> Dex<'a> {
         for i in 0..n.min(256) {
             let Some(item) = r.u32_le(set_off as usize + 4 + i * 4) else { break };
             // visibility u8, then encoded_annotation: uleb type_idx …
-            let vis = r.u8(item as usize).unwrap_or(0);
-            if let Some((t, _)) = r.uleb128(item as usize + 1) {
+            let Some(vis) = r.u8(item as usize) else { continue };
+            let Some(value_off) = (item as usize).checked_add(1) else { continue };
+            if let Some((t, _)) = r.uleb128(value_off) {
                 let v = match vis {
                     0 => "build",
                     1 => "runtime",
@@ -500,8 +503,8 @@ impl<'a> Dex<'a> {
         };
         let (Some(sf), Some(inf), Some(dm), Some(vm)) = (next(&mut pos), next(&mut pos), next(&mut pos), next(&mut pos)) else { return cd };
         let remaining = self.data.len().saturating_sub(pos);
-        let total = [sf, inf, dm, vm].iter().map(|&x| x as usize).sum::<usize>();
-        if total > remaining || total > MAX_MEMBERS * 4 {
+        let total = [sf, inf, dm, vm].iter().map(|&x| u64::from(x)).sum::<u64>();
+        if total > remaining as u64 || total > (MAX_MEMBERS * 4) as u64 {
             return cd;
         }
         for (count, is_method, slot) in [(sf, false, 0), (inf, false, 1), (dm, true, 2), (vm, true, 3)] {
@@ -540,6 +543,11 @@ impl<'a> Dex<'a> {
 
     /// The code item at `off`.
     pub fn code(&self, off: u32) -> Option<Code> {
+        self.code_with_handler_budget(off, MAX_HANDLER_BYTES)
+    }
+
+    fn code_with_handler_budget(&self, off: u32, max_handler_bytes: usize) -> Option<Code> {
+        let mut handler_bytes_left = max_handler_bytes;
         if off == 0 {
             return None;
         }
@@ -570,7 +578,14 @@ impl<'a> Dex<'a> {
                     let Some((t, k1)) = r.uleb128(p) else { break };
                     let Some((addr, k2)) = r.uleb128(p + k1) else { break };
                     p += k1 + k2;
-                    handlers.push(Handler { exception: Some(self.type_desc(t as u32)), address: addr as u32 });
+                    // Borrow valid descriptors until admission, so repeated handler references
+                    // cannot allocate a copy before the aggregate budget is checked.
+                    let descriptor = match self.types.get(t as u32 as usize) {
+                        Some(&s) => std::borrow::Cow::Borrowed(self.string(s)),
+                        None => std::borrow::Cow::Owned(format!("<type#{}>", t as u32)),
+                    };
+                    handler_bytes_left = handler_bytes_left.checked_sub(descriptor.len())?;
+                    handlers.push(Handler { exception: Some(descriptor.into_owned()), address: addr as u32 });
                 }
                 if size <= 0
                     && handlers.len() as u64 == size.unsigned_abs()
@@ -811,5 +826,70 @@ mod tests {
                 walk(&d);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod retained_handler_safety_tests {
+    use super::*;
+
+    fn fixture(data: &[u8]) -> Dex<'_> {
+        Dex {
+            data,
+            header: Header::default(),
+            strings: vec!["Labcdefghijklmn;".into()],
+            types: vec![0],
+            protos: vec![],
+            fields: vec![],
+            methods: vec![],
+            classes: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn repeated_handler_lists_share_one_retained_byte_budget() {
+        let mut data = vec![0u8; 36];
+        // Code item at 1, no instructions, two try records sharing one handler.
+        data[7..9].copy_from_slice(&2u16.to_le_bytes());
+        data[33..36].copy_from_slice(&[1, 0, 0]);
+        let dex = fixture(&data);
+        let bytes = dex.strings[0].len();
+        assert!(dex.code_with_handler_budget(1, bytes * 2 - 1).is_none());
+        let code = dex.code_with_handler_budget(1, bytes * 2).unwrap();
+        assert_eq!(code.tries.len(), 2);
+        assert_eq!(code.tries[0].handlers[0].exception.as_deref(), Some(dex.strings[0].as_str()));
+        assert_eq!(code.tries[1].handlers[0].exception.as_deref(), Some(dex.strings[0].as_str()));
+    }
+
+    fn class() -> ClassDef {
+        ClassDef {
+            class_idx: 0,
+            access: 0,
+            superclass_idx: NO_INDEX,
+            interfaces_off: 0,
+            source_file_idx: NO_INDEX,
+            annotations_off: 1,
+            class_data_off: 1,
+            static_values_off: 0,
+        }
+    }
+
+    #[test]
+    fn impossible_annotation_item_is_rejected() {
+        let mut data = vec![0u8; 13];
+        data[1..5].copy_from_slice(&5u32.to_le_bytes());
+        data[5..9].copy_from_slice(&1u32.to_le_bytes());
+        data[9..13].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(fixture(&data).annotations(&class()).is_empty());
+    }
+
+    #[test]
+    fn class_counts_cannot_wrap_before_admission() {
+        let data = [0, 0xff, 0xff, 0xff, 0xff, 0x0f, 1, 0, 0];
+        let cd = fixture(&data).class_data(&class());
+        assert!(!cd.complete);
+        assert!(cd.static_fields.is_empty());
+        assert!(cd.instance_fields.is_empty());
     }
 }
