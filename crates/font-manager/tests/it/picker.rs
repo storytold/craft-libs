@@ -5,9 +5,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use craft_behavior::Preview;
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::picker::{FontFilters, FontPicker, FontPickerSettings, SIMILAR_COUNT, family_rows};
-use craft_behavior::Preview;
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::focus::AccessActionKind;

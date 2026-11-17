@@ -208,8 +208,7 @@ impl<'a> GradientPalette<'a> {
             };
         let (wide, high) = GradientRamp::CHIP_ASPECT;
         let most = Env::of(ui).tokens.size.control.sm * MAX_ROWS;
-        let mut browser =
-            PresetBrowser::new(self.label, self.state, &rows).cell_shape(CellShape::ratio(wide, high)).room_height(most).thumb(thumb);
+        let mut browser = PresetBrowser::new(self.label, self.state, &rows).cell_shape(CellShape::ratio(wide, high)).room_height(most).thumb(thumb);
         if let Some(selected) = self.selected {
             browser = browser.selected(selected);
         }

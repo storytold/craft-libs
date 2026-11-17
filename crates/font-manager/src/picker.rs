@@ -316,7 +316,6 @@ pub struct FontPickerOutput {
     pub preview: Preview<String>,
 }
 
-
 impl Outcome for FontPickerOutput {
     type Value = String;
 
