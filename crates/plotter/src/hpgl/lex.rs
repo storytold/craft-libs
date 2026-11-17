@@ -456,3 +456,90 @@ mod tests {
         assert_eq!(lex.op(true), Some(*b"PU"));
     }
 }
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn short_encoded_payloads_terminate_with_finite_coordinates() {
+        for value in 0..=u16::MAX {
+            let [a, b] = value.to_be_bytes();
+            let bytes = [a, b, b';'];
+            let mut lex = Lexer::new(&bytes);
+            let mut state = Pe::default();
+            let mut ended = false;
+            for _ in 0..=bytes.len() {
+                let before = lex.pos();
+                let Some(item) = lex.pe(&mut state) else {
+                    ended = true;
+                    break;
+                };
+                assert!(lex.pos() > before);
+                assert!(lex.pos() <= bytes.len());
+                if let PeItem::Point { x, y, .. } = item {
+                    assert!(x.is_finite() && y.is_finite());
+                }
+            }
+            assert!(ended);
+        }
+    }
+
+    #[test]
+    fn pcl_payloads_are_never_interpreted_as_plot_commands() {
+        for escape in [b"\x1b*b6W".as_slice(), b"\x1b*b6V", b"\x1b&p6X"] {
+            let mut bytes = escape.to_vec();
+            bytes.extend(b"PD9,9;\x1b%0BIN;");
+            let mut lex = Lexer::new(&bytes);
+            assert_eq!(lex.op(true), Some(*b"IN"));
+            assert_eq!(lex.raster, escape.starts_with(b"\x1b*b"));
+        }
+        for prefix in [
+            b"\x1bEgarbage\x1b%0B".as_slice(),
+            b"\x1b(8U",
+            b"\x1b.r12,3:",
+            b"\x1b.Y",
+            b"\x1b*z1a2B",
+            b"\x1b0",
+            b"\x1b%-12345X@PJL ENTER LANGUAGE=PCL\nignored\x1b%0B",
+        ] {
+            let mut bytes = prefix.to_vec();
+            bytes.extend(b"IN;");
+            assert_eq!(Lexer::new(&bytes).op(true), Some(*b"IN"));
+        }
+        let mut raster = Lexer::new(b"\x1b*r1AIN;");
+        assert_eq!(raster.op(true), Some(*b"IN"));
+        assert!(raster.raster);
+        for bytes in [b"\x1b".as_slice(), b"\x1b.", b"\x1b*b", b"\x1b*b999999999999Wshort"] {
+            let mut lex = Lexer::new(bytes);
+            assert_eq!(lex.op(false), None);
+            assert!(lex.done());
+        }
+    }
+
+    #[test]
+    fn malformed_parameters_comments_and_label_delimiters_preserve_boundaries() {
+        let mut lex = Lexer::new(b" +-.12,999999999999999999999999999999;PU;");
+        assert_eq!(lex.number(), Some(-(0.1 + 0.02)));
+        assert!(lex.number().is_some_and(f64::is_finite));
+        assert_eq!(lex.number(), None);
+        assert_eq!(lex.op(true), Some(*b"PU"));
+        for (bytes, closed) in [(b"1,2;".as_slice(), true), (b"1,2PU", false)] {
+            assert_eq!(Lexer::new(bytes).closed_params(), closed);
+        }
+        for (bytes, valid) in [(b" \"PD9,9;\";".as_slice(), true), (b";", true), (b"", true), (b"unquoted", false)] {
+            assert_eq!(Lexer::new(bytes).comment(), valid);
+        }
+        let mut lex = Lexer::new(b"1,2\"label\";SP3;");
+        lex.params();
+        assert_eq!(lex.op(true), Some(*b"SP"));
+        assert!(!Lexer::new(b"bad").quoted());
+        assert_eq!(Lexer::new(b";").char(), None);
+        assert_eq!(Lexer::new(b"@").char(), Some(b'@'));
+        assert_eq!(Lexer::new(b"1IN;").op(true), None);
+        assert_eq!(Lexer::new(b"1IN;").op(false), Some(*b"IN"));
+        let mut lex = Lexer::new(b"unterminated");
+        lex.label(ETX);
+        assert!(lex.done());
+    }
+}
