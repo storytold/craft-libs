@@ -116,4 +116,15 @@ mod tests {
         trailing.extend_from_slice(&[1, 2, 3]);
         assert_eq!(decode_keyframe(&trailing, 40, 3200), decode_keyframe(&p, 40, 3200));
     }
+    #[test]
+    fn inflated_block_must_have_exactly_its_expected_pixel_bytes() {
+        for length in [16 * 16 * 3 - 1, 16 * 16 * 3, 16 * 16 * 3 + 1] {
+            let packed = miniz_oxide::deflate::compress_to_vec_zlib(&vec![7; length], 6);
+            let mut p = vec![0, 16, 0, 16];
+            p.extend_from_slice(&(packed.len() as u16).to_be_bytes());
+            p.extend_from_slice(&packed);
+            assert_eq!(decode_keyframe(&p, 16, 1024).is_some(), length == 16 * 16 * 3);
+            assert!(decode_keyframe(&p[..6], 16, 1024).is_none());
+        }
+    }
 }
