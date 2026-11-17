@@ -615,8 +615,11 @@ pub fn prototype(family: Family, order: usize, ripple_db: f64, stop_db: f64) -> 
 }
 
 /// Transform a prototype to `band` at `f1` (and `f2` for band-pass/stop) and digitize it. An
-/// unusable rate is replaced as [`crate::sane_sample_rate`] describes.
+/// unusable rate is replaced as [`crate::sane_sample_rate`] describes, and a NaN edge frequency
+/// takes 1 kHz.
 pub fn realize(proto: &Prototype, band: Band, f1: f64, f2: f64, sample_rate: f64) -> Sections {
+    let edge = |hz: f64| if hz.is_nan() { 1000.0 } else { hz };
+    let (f1, f2) = (edge(f1), edge(f2));
     let sample_rate = f64::from(crate::sane_sample_rate(sample_rate as f32));
     let mut f = proto.0;
     let nyq = sample_rate * 0.5;
@@ -768,6 +771,15 @@ mod tests {
                 let s = realize(&p, Band::LowPass, 1000.0, 0.0, sr);
                 let db = s.magnitude_db(100.0, 48_000.0);
                 assert!(db.is_finite(), "{family:?} at {sr}: {db}");
+            }
+        }
+        // A NaN edge frequency gives a finite filter in every band.
+        let p = prototype(Family::Butterworth, 4, 1.0, 60.0);
+        for band in [Band::LowPass, Band::HighPass, Band::BandPass, Band::BandStop] {
+            for (f1, f2) in [(f64::NAN, 2000.0), (500.0, f64::NAN), (f64::NAN, f64::NAN)] {
+                let s = realize(&p, band, f1, f2, 48_000.0);
+                let db = s.magnitude_db(100.0, 48_000.0);
+                assert!(db.is_finite(), "{band:?} at {f1}, {f2}: {db}");
             }
         }
     }
