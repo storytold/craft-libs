@@ -554,19 +554,10 @@ pub struct FlowKey {
 pub fn decode(link_type: u32, data: &[u8]) -> Decoded {
     let mut d = Decoded::default();
     let r = Reader::new(data);
-    let (ethertype, off) = match link_type {
+    let (mut ethertype, mut off) = match link_type {
         1 => {
             d.protocols.push("eth");
-            let mut et = r.u16_be(12);
-            let mut off = 14usize;
-            for _ in 0..2 {
-                if matches!(et, Some(0x8100 | 0x88a8)) {
-                    d.protocols.push("vlan");
-                    et = r.u16_be(off + 2);
-                    off += 4;
-                }
-            }
-            (et, off)
+            (r.u16_be(12), 14usize)
         }
         113 => {
             d.protocols.push("sll");
@@ -607,6 +598,16 @@ pub fn decode(link_type: u32, data: &[u8]) -> Decoded {
             return d;
         }
     };
+    // Both Ethernet and Linux cooked headers carry an EtherType. Each VLAN
+    // tag supplies another EtherType after its tag-control field.
+    for _ in 0..2 {
+        if !matches!(ethertype, Some(0x8100 | 0x88a8)) {
+            break;
+        }
+        d.protocols.push("vlan");
+        ethertype = r.u16_be(off + 2);
+        off += 4;
+    }
     let payload = data.get(off..).unwrap_or(&[]);
     match ethertype {
         Some(0x0800) => ipv4(payload, &mut d),
@@ -1818,6 +1819,21 @@ mod tests {
     #[test]
     fn raw_ip_without_fcs_bits_still_decodes() {
         classic_link_word(101, true, false, 0);
+    }
+
+    #[test]
+    fn linux_cooked_vlan_frames_reach_the_network_decoder() {
+        let ip = ipv4_pkt(17, [10, 0, 0, 1], [10, 0, 0, 2], &udp(123, 456, b"payload"));
+        for (link, header_len, protocol_at) in [(113, 16, 14), (276, 20, 0)] {
+            let mut frame = vec![0; header_len];
+            frame[protocol_at..protocol_at + 2].copy_from_slice(&0x88a8_u16.to_be_bytes());
+            frame.extend_from_slice(&[0, 1, 0x81, 0, 0, 2, 0x08, 0]);
+            frame.extend_from_slice(&ip);
+            let decoded = decode(link, &frame);
+            assert_eq!(decoded.protocols.iter().filter(|&&p| p == "vlan").count(), 2);
+            assert_eq!(decoded.transport.unwrap().dst_port, Some(456));
+            assert!(decode(link, &frame[..header_len + 1]).ip.is_none());
+        }
     }
 
     #[test]
