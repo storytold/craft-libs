@@ -3,7 +3,7 @@
 use super::route::layout_of;
 use super::{AltTrack, Batch, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
-use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
+use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput, Refed};
 use crate::runtime::env::Env;
 use crate::runtime::focus::{self, EndKey, KeyUse};
 use crate::runtime::frame::{ChromeToggle, request_chrome_toggle};
@@ -53,8 +53,9 @@ impl Strip<'_> {
     /// Records `event` in `batch` and returns whether egui keeps it.
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
-    /// with the press, in this pass or a later one.
-    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent) -> bool {
+    /// with the press, in this pass or a later one. `at` is the input time the event arrived at when an earlier frame
+    /// held it (`Refed`), `None` for this pass's own input.
+    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent, at: Option<f64>) -> bool {
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
             batch.last_press = None;
@@ -67,7 +68,7 @@ impl Strip<'_> {
                 }
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
-                let kept = self.press(batch, key, &input, repeat);
+                let kept = self.press(batch, key, &input, repeat, at);
                 // The canvas's Space keeps its text from every field, as a claim does.
                 let canvas = batch.presses.get(pushed).is_some_and(|press| press.canvas);
                 batch.last_press = Some(LastPress {
@@ -105,7 +106,7 @@ impl Strip<'_> {
                 if key == Some(Key::Enter) {
                     batch.enter_down = Some(false);
                 }
-                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false });
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at });
                 true
             }
             KeyEvent::Text(text) => {
@@ -150,9 +151,9 @@ impl Strip<'_> {
                     .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == Mods::CMD && shortcut.input.typed == Some(key));
                 if !sent && self.records {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
-                    self.press(batch, key, &input, false);
+                    self.press(batch, key, &input, false, at);
                 } else if !sent {
-                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false });
+                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -244,7 +245,7 @@ impl Strip<'_> {
         }
     }
 
-    fn press(&self, batch: &mut Batch, key: Key, input: &KeyInput, repeat: bool) -> bool {
+    fn press(&self, batch: &mut Batch, key: Key, input: &KeyInput, repeat: bool, at: Option<f64>) -> bool {
         let mods = input.mods;
         match self.use_of(key, input) {
             PressUse::Claimed(chord) => {
@@ -261,7 +262,7 @@ impl Strip<'_> {
                 // keeps its momentary command from firing (production pans under a dialog whatever has focus).
                 batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true });
+                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true, at });
                 }
                 false
             }
@@ -300,7 +301,7 @@ impl Strip<'_> {
             PressUse::Press => {
                 batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: false });
+                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: false, at });
                 }
                 true
             }
@@ -389,8 +390,9 @@ pub(super) fn chrome_toggle_of(ctx: &Context, input: &KeyInput) -> Option<Chrome
 
 /// The input hook's key steps (H3). Reads only `RawInput` and records keyed by `input.viewport_id`. Returns
 /// whether it removed an event, so the hook asks for a repaint, and the events that wait for the next frame
-/// (`Strip::ends_pass`), in order.
-pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui::Event>) {
+/// (`Strip::ends_pass`), in order, with the input time each arrived at when an earlier frame held it. `refed` is the
+/// held events of earlier frames the input carries (H0).
+pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput, mut refed: Refed) -> (bool, Vec<(egui::Event, Option<f64>)>) {
     let viewport = input.viewport_id;
     // The canvas a modal layer keeps open takes the events its reach admits and nothing else (`runtime::sampler`).
     let (hole, trimmed) = sampler::hook(ctx, input);
@@ -444,8 +446,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui
         stage.keyed = false;
         input.events.retain(|event| {
             let read = raw_input::key_event(event, os, &latin);
+            let at = refed.arrival(event);
             if !later.is_empty() || strip.ends_pass(&batch, &read) {
-                later.push(event.clone());
+                later.push((event.clone(), at));
                 return false;
             }
             note_down(&mut stage.down, &read);
@@ -455,7 +458,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
                 _ => visible,
             };
-            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, read)
+            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, read, at)
         });
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);

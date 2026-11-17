@@ -102,13 +102,13 @@ impl OpacityDigit {
         }
     }
 
-    /// What `fired` sets, through the pair state `keys`, at `now` seconds (the pass time): `None` for another command,
-    /// a release, or a held key's repeat, which types no second digit.
-    pub fn entry(keys: &mut DigitKeys, fired: &Fired, now: f64) -> Option<DigitEntry> {
+    /// What `fired` sets, through the pair state `keys`, at the key's own time (`Fired::time`): `None` for another
+    /// command, a release, or a held key's repeat, which types no second digit.
+    pub fn entry(keys: &mut DigitKeys, fired: &Fired) -> Option<DigitEntry> {
         if fired.phase != FirePhase::Press {
             return None;
         }
         let (digit, second) = OpacityDigit::from_ref(&fired.command)?.digit();
-        keys.press(digit, second, now)
+        keys.press(digit, second, fired.time)
     }
 }

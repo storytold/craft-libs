@@ -569,10 +569,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     crate::runtime::env::system::input_hook(ctx, &input.events);
     // H0: one press per pass.
     let frame = pass::frame_nr(ctx, viewport);
-    let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(input, frame, &mut record.held));
+    let (held_back, refed) = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(input, frame, &mut record.held));
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left.
     ime::input_hook(ctx, &mut input.events, viewport);
-    let (stripped, later) = keys::input_hook(ctx, input);
+    let (stripped, later) = keys::input_hook(ctx, input, refed);
     if !later.is_empty() {
         PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.hold_ahead(later));
     }
@@ -602,6 +602,8 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     let now = pass::now(&ctx);
     let (pass_nr, frame_nr) = (pass::pass_nr(&ctx, viewport), ctx.cumulative_frame_nr_for(viewport));
     let (elapsed, cancelled) = PerViewport::<ViewportRecord>::with(&ctx, viewport, |record| {
+        // The events this frame's input hook held arrived at the frame's input time.
+        record.held.stamp(now);
         let elapsed = record.now.replace(now).map_or(0.0, |previous| (now - previous).max(0.0));
         (elapsed, std::mem::take(&mut record.press_cancelled))
     });

@@ -123,12 +123,17 @@ pub struct Fired {
     pub cycle: bool,
     /// The chord pressed was a bound chord of the command with Alt added, and the command opted in.
     pub alt_variant: bool,
+    /// The input time, in seconds of egui's input clock, of the event that fired it: for a key, when its press or
+    /// release arrived, also when the runtime held the event back to a later frame; the pass time for the other
+    /// sources. A key's hold is the time between its press and its release, however late a frame runs them.
+    pub time: f64,
 }
 
 impl Fired {
-    /// `command` fired from `source` in `phase`, for the app scope (no target), without a group cycle or the Alt variant.
-    pub fn new(command: CommandRef, source: FireSource, phase: FirePhase) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false }
+    /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
+    /// cycle or the Alt variant.
+    pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time }
     }
 }
 

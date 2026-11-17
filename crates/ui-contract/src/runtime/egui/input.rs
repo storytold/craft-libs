@@ -12,19 +12,27 @@ use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, 
 pub use egui::RawInput;
 
 /// The events that wait for the next frame, for one viewport: the one-press rule's and those the key stage cuts at a
-/// focus move (`keys::input_hook`).
+/// focus move (`keys::input_hook`). Each keeps the input time it arrived at, `None` until the begin hook of the frame
+/// it arrived in reads the clock (`stamp`).
 #[derive(Default)]
 pub(crate) struct HeldInput {
-    events: Vec<Event>,
+    events: Vec<(Event, Option<f64>)>,
     frame: Option<u64>,
 }
 
 impl HeldInput {
     /// Holds `events`, which a later step of this pass's input hook cut, for the next frame, ahead of the events held
     /// already: they arrived before them.
-    pub(crate) fn hold_ahead(&mut self, mut events: Vec<Event>) {
+    pub(crate) fn hold_ahead(&mut self, mut events: Vec<(Event, Option<f64>)>) {
         events.append(&mut self.events);
         self.events = events;
+    }
+
+    /// Gives the events this frame's input hook held the frame's input time `now`, which the begin hook reads.
+    pub(crate) fn stamp(&mut self, now: f64) {
+        for (_, arrived) in self.events.iter_mut().filter(|(_, arrived)| arrived.is_none()) {
+            *arrived = Some(now);
+        }
     }
 
     /// Whether events wait for the next frame.
@@ -34,21 +42,39 @@ impl HeldInput {
     }
 }
 
+/// The events an earlier frame held that lead this frame's input, in order, each with the input time it arrived at.
+#[derive(Default)]
+pub(crate) struct Refed(Vec<(Event, f64)>);
+
+impl Refed {
+    /// The input time `event` arrived at when it is a held event, read in input order; `None` for an event of this
+    /// frame's own input, which arrived at the pass time. Held events lead the input and a stage may have removed some,
+    /// so the held events before a match are gone, and the first event that matches none ends them.
+    pub(crate) fn arrival(&mut self, event: &Event) -> Option<f64> {
+        let Some(at) = self.0.iter().position(|(held, _)| held == event) else {
+            self.0.clear();
+            return None;
+        };
+        self.0.drain(..=at).last().map(|(_, arrived)| arrived)
+    }
+}
+
 /// H0: this pass carries at most one pointer press, as its last pointer event. Events after the first press
 /// wait in `held` and lead the next frame's events. A repeated pass of the same frame, a discard pass,
 /// receives no input events, so it gets none of the held ones. Returns whether events were held, so the hook
-/// asks for a repaint.
-pub(crate) fn hold_back_presses(input: &mut RawInput, frame: u64, held: &mut HeldInput) -> bool {
+/// asks for a repaint, and the held events this pass's input carries with their arrival times.
+pub(crate) fn hold_back_presses(input: &mut RawInput, frame: u64, held: &mut HeldInput) -> (bool, Refed) {
     if held.frame == Some(frame) {
-        return false;
+        return (false, Refed::default());
     }
     held.frame = Some(frame);
     let mut events = std::mem::take(&mut held.events);
-    events.append(&mut input.events);
-    let (now, later) = split_after_first_press(events, |event| matches!(event, Event::PointerButton { pressed: true, .. }));
-    input.events = now;
+    events.extend(input.events.drain(..).map(|event| (event, None)));
+    let (now, later) = split_after_first_press(events, |(event, _)| matches!(event, Event::PointerButton { pressed: true, .. }));
+    let refed = now.iter().filter_map(|(event, arrived)| arrived.map(|arrived| (event.clone(), arrived))).collect();
+    input.events = now.into_iter().map(|(event, _)| event).collect();
     held.events = later;
-    !held.events.is_empty()
+    (!held.events.is_empty(), Refed(refed))
 }
 
 /// Takes key presses and texts out of the running pass's input. `places` and `texts` are the places the key stage
