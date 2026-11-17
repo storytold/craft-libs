@@ -2298,6 +2298,9 @@ dependencies = [
 [[package]]
 name = "craft-media-testkit"
 version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+]
 
 [[package]]
 name = "craft-menu"
@@ -2977,6 +2980,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-testkit"
+version = "0.1.0"
 
 [[package]]
 name = "craft-text"
