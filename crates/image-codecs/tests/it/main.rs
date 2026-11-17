@@ -1,8 +1,10 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod bmp_resolution;
 mod camera_raw;
 mod common;
 mod dds;
+mod dds_oracle;
 mod dds_write;
 mod decode_warnings;
 mod deep_exr;
