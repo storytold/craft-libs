@@ -128,9 +128,18 @@ with ffmpeg + libx264; tests print a message and skip when `/opt/homebrew/bin/ff
   explicit bi-prediction, and field pictures (top or bottom field first, a field predicted from the
   other field of its frame, a frame from a field pair, fields from a frame, non-paired fields). The
   expected output is known exactly and is also checked against ffmpeg, except for non-paired
-  fields, which ffmpeg drops.
-- Field scans and the field CABAC contexts are only reached with residual data, which the
-  synthetic streams do not carry; the ITU-T conformance streams with field pictures cover them.
+  fields, which ffmpeg drops (C.4.5.3 outputs them; the decoder repeats their lines and marks the
+  picture `PictureStructure::TopField` or `BottomField`).
+- Field scans and field CABAC contexts (`synth_tests.rs`): a field pair whose transform blocks
+  carry one coefficient each, at every scan position, is compared with two progressive pictures
+  carrying it at the matching zig-zag position: Intra16x16 DC blocks in CAVLC and CABAC (4x4 field
+  scan, significance contexts 277 and 338) and 8x8 blocks in High profile CABAC (8x8 field scan,
+  Table 9-43 field contexts). The scan and context tables of these tests are transcribed from the
+  specification separately from the decoder's, and ffmpeg checks the field pairs. Inter field
+  macroblocks with residual data, the remaining block categories and larger pictures are covered
+  only by the ITU-T H.264 conformance bitstreams with field pictures. Those are not in the
+  repository; they were decoded outside it and compared with ffmpeg (the fixtures below are
+  progressive libx264 streams).
 - Robustness: avcC input with pts round trip; randomly corrupted, truncated and garbage input never
   panics or deadlocks (single- and multi-threaded).
 - Conformance (`tests/it/conformance.rs`): every fixture is decoded single-threaded, with 3 threads
