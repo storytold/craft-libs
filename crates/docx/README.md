@@ -19,6 +19,8 @@ assert_eq!(back.plain_text(craft_wordmodel::StoryRef::Body), doc.plain_text(craf
 ## Reading
 
 - `read(bytes)`, `read_with(bytes, &ReadOptions { password, chunks })`, `read_with_password`.
+- `read_limited(bytes, &options, max_part, max_total)`: `read_with` within the caller's own
+  decompression budgets, for a host with little memory.
 - `read_xml(bytes)`: a Word XML Document or a Word 2003 XML Document, told apart by its root.
 - `package_title(reader, max_part)`: the title in `docProps/core.xml`, inflating only that part.
 
