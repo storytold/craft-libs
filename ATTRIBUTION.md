@@ -132,3 +132,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## JSONC span-preserving editing
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
+
+## XFA XML DOM
+
+`crates/xfa/src/xml.rs` is extracted from PDFCraft at `271e479c53723b1b294c866d5cb2f27604601b29`, originally by Dylan M. Taylor (`eead4541`, `7d44e654`), MIT OR Apache-2.0. Only visibility and module boundaries change; PDF/layout/form policy remains in the app.

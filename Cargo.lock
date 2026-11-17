@@ -3381,6 +3381,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xfa"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+]
+
+[[package]]
 name = "craft-xfl"
 version = "0.1.0"
 dependencies = [
