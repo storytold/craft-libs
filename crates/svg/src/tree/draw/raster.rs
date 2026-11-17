@@ -138,3 +138,7 @@ fn webp_error(error: image_webp::DecodingError) -> RasterValidationFailure {
         _ => RasterValidationFailure::Invalid,
     }
 }
+
+#[cfg(test)]
+#[path = "raster_tests.rs"]
+mod raster_tests;

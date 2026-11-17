@@ -14,6 +14,12 @@ struct Package {
 pub(crate) struct LockGraph {
     packages: Vec<Package>,
 }
+// Cargo dependency edges may omit the resolved Git fragment even though the
+// selected package ID always records it. Other source identities stay exact.
+fn source_matches(edge: &str, package: Option<&str>) -> bool {
+    let Some(package) = package else { return false };
+    if edge.starts_with("git+") && !edge.contains('#') { package.split_once('#').map_or(package, |(base, _)| base) == edge } else { package == edge }
+}
 impl LockGraph {
     pub(crate) fn parse(text: &str) -> Self {
         let lock: toml::Value = toml::from_str(text).unwrap();
@@ -55,7 +61,9 @@ impl LockGraph {
         let found: Vec<_> = self
             .packages
             .iter()
-            .filter(|p| p.id.name == name && version.is_none_or(|v| p.id.version == v) && source.is_none_or(|s| p.id.source.as_deref() == Some(s)))
+            .filter(|p| {
+                p.id.name == name && version.is_none_or(|v| p.id.version == v) && source.is_none_or(|s| source_matches(s, p.id.source.as_deref()))
+            })
             .collect();
         assert_eq!(found.len(), 1, "ambiguous or absent resolved edge {} from {from:?}", edges[0]);
         found[0].id.clone()
@@ -124,4 +132,54 @@ fn selected_renderer_graph_rejects_a_split_validator_backend() {
     assert_renderer_edges(&matching, &matching.workspace_package("craft-svg"));
     let split = make(true);
     assert!(std::panic::catch_unwind(|| assert_renderer_edges(&split, &split.workspace_package("craft-svg"))).is_err());
+}
+
+#[test]
+fn git_edges_resolve_full_package_ids_and_reject_canonical_ambiguity() {
+    let fixture = |second: bool| {
+        let mut text = String::from(
+            r#"
+[[package]]
+name = "consumer"
+version = "1"
+dependencies = ["codec 1 (git+https://example.invalid/codecs?rev=chosen)"]
+[[package]]
+name = "explicit"
+version = "1"
+dependencies = ["codec 1 (git+https://example.invalid/codecs?rev=chosen#aaaa)"]
+[[package]]
+name = "wrong"
+version = "1"
+dependencies = ["codec 1 (git+https://example.invalid/codecs?rev=chosen#cccc)"]
+[[package]]
+name = "codec"
+version = "1"
+source = "git+https://example.invalid/codecs?rev=chosen#aaaa"
+"#,
+        );
+        if second {
+            text.push_str(
+                r#"
+[[package]]
+name = "codec"
+version = "1"
+source = "git+https://example.invalid/codecs?rev=chosen#bbbb"
+"#,
+            );
+        }
+        LockGraph::parse(&text)
+    };
+    let unique = fixture(false);
+    let selected = unique.dependency(&unique.workspace_package("consumer"), "codec");
+    assert_eq!(selected.source.as_deref(), Some("git+https://example.invalid/codecs?rev=chosen#aaaa"));
+    assert_eq!(selected, unique.dependency(&unique.workspace_package("explicit"), "codec"));
+    assert!(std::panic::catch_unwind(|| unique.dependency(&unique.workspace_package("wrong"), "codec")).is_err());
+    let ambiguous = fixture(true);
+    assert!(std::panic::catch_unwind(|| ambiguous.dependency(&ambiguous.workspace_package("consumer"), "codec")).is_err());
+    assert_eq!(selected, ambiguous.dependency(&ambiguous.workspace_package("explicit"), "codec"));
+    assert!(!source_matches("registry+one", Some("registry+one#aaaa")), "registry sources remain exact");
+    assert!(
+        !source_matches("git+https://example.invalid/codecs?rev=other", selected.source.as_deref()),
+        "requested Git revision remains part of the identity"
+    );
 }
