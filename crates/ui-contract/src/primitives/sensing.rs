@@ -788,10 +788,11 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         .cancel(cancel);
         let mut machine = std::mem::take(&mut state.machine);
         let step = machine.step(input, |at| {
-            // The press-target rule (8.3): exactly one root starts a press, the one whose shape is on top under it
-            // (`pointer::press_winner`). A root under a modal layer starts none; where egui names no target of the
-            // root's kind (its click target, its drag target for a drag-only root; a root whose widgets sense neither
-            // is never named), only a root the modal's canvas admits does.
+            // The press-target rule (8.3): a press's click and its drag each start on one root, the one whose shape
+            // is on top under it for that kind (`pointer::press_winners`); the root starts it for the kinds it won. A
+            // root under a modal layer starts none; where egui names no target of the root's kind (its click target,
+            // its drag target for a drag-only root; a root whose widgets sense neither is never named), only a root the
+            // modal's canvas admits does.
             let root = state.root.map(|root| root.id);
             let targets = pass_pointer.press_targets;
             let untargeted = if union_sense.contains(Sense::CLICK) {
@@ -801,8 +802,19 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             } else {
                 true
             };
-            let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted)
-                && root.is_some_and(|own| pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own));
+            let won_kinds = root.map_or(Sense::empty(), |own| pointer::press_winners(ctx, at, targets).senses_of(own));
+            let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted) && !won_kinds.is_empty();
+            if let Some(test) = pointer::diag_test()
+                && state.root.is_some_and(|own| own.rect.contains(at))
+            {
+                eprintln!(
+                    "DIAG {test}: start root {:?} enabled {enabled} allowed {allowed} won {won_kinds:?} untargeted {untargeted} takes {} layer {layer:?} rect {:?} clip {:?}",
+                    root.map(pointer::diag_id),
+                    crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted),
+                    state.root.map(|own| own.rect),
+                    state.root.map(|own| own.clip),
+                );
+            }
             if !enabled || !allowed {
                 return None;
             }
@@ -810,7 +822,12 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             // window's edge): a root under a raw egui one keeps its click there, but a drag is that widget's.
             let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| pointer::foreign_target(ctx, id));
             let won = resolve_press_in(state, members, xf, at, target);
-            won.map(|hit| (hit, if drag_elsewhere { hit.sense.difference(Sense::DRAG) } else { hit.sense }))
+            // The kinds of press another root won are not this one's.
+            let lost = (Sense::CLICK | Sense::DRAG).difference(won_kinds);
+            won.map(|hit| {
+                let sense = hit.sense.difference(lost);
+                (hit, if drag_elsewhere { sense.difference(Sense::DRAG) } else { sense })
+            })
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();

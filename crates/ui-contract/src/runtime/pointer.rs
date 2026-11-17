@@ -135,7 +135,7 @@ pub(crate) struct Shapes {
     next: u32,
     /// The press winner found over `last`, for the point and targets it was asked for: every root asks for the
     /// same press.
-    winner: Option<(Pos2, PressTargets, Option<(Winner<Id>, Id)>)>,
+    winner: Option<(Pos2, PressTargets, PressWinners)>,
 }
 
 /// The begin hook (H5): converts the pass's pointer input.
@@ -529,14 +529,36 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
     })
 }
 
-/// The root a press at `at` (screen points) belongs to, with the shape of it that wins the press: what the sensing
-/// core starts the press on and the focus service classifies it by (8.3, H7). On the topmost layer under the press,
-/// each root recorded there in the last pass resolves its own shapes by the arena rule, and the root whose winning
-/// shape was recorded last in the pass, the one painted on top, takes the press. A transformed body's layer shows
-/// its root's own shapes beneath everything on it. A shape counts only where its clip shows it; at a point no clip
-/// on the layer holds (one automation names past the window), a shape counts when some of it shows inside its clip.
-/// A press egui's hit test gives to a widget no component registered (a raw egui widget on top) has no winner.
-pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {
+/// The roots a press at `at` (screen points) goes to, each with the shape of it that wins it: its click's and its
+/// drag's (8.3, H7). On the topmost layer under the press, each root recorded there in the last pass resolves its own
+/// shapes by the arena rule, and the roots rank by their winning shapes' place in the pass's paint order, top first. The
+/// top one takes every kind of press its shape senses. Under a top shape that only drags (a window's resize grip), the
+/// click goes to the first root below whose shape clicks; under one that only clicks (a button), the drag goes to the
+/// first root below whose shape drags, when that root takes no click anywhere. A transformed body's layer shows its root's own shapes
+/// beneath everything on it. A shape counts only where its clip shows it; at a point no clip on the layer holds (one
+/// automation names past the window), a shape counts when some of it shows inside its clip. A press egui's hit test
+/// gives to a widget no component registered (a raw egui widget on top) goes to no root.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct PressWinners {
+    pub click: Option<(Winner<Id>, Id)>,
+    pub drag: Option<(Winner<Id>, Id)>,
+}
+
+impl PressWinners {
+    /// The root that starts the press for its kinds of press, with the kinds it takes.
+    pub(crate) fn senses_of(&self, root: Id) -> craft_behavior::Sense {
+        let mut sense = craft_behavior::Sense::empty();
+        if self.click.is_some_and(|(_, owner)| owner == root) {
+            sense |= craft_behavior::Sense::CLICK;
+        }
+        if self.drag.is_some_and(|(_, owner)| owner == root) {
+            sense |= craft_behavior::Sense::DRAG;
+        }
+        sense
+    }
+}
+
+pub(crate) fn press_winners(ctx: &Context, at: Pos2, targets: PressTargets) -> PressWinners {
     let viewport = pass::current_viewport(ctx);
     let found = PerViewport::<Shapes>::with(ctx, viewport, |record| {
         record.winner.filter(|(point, asked, _)| *point == at && *asked == targets).map(|(_, _, found)| found)
@@ -544,21 +566,30 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
     if let Some(found) = found {
         return found;
     }
-    let found = find_press_winner(ctx, viewport, at, targets);
+    let found = find_press_winners(ctx, viewport, at, targets);
     PerViewport::<Shapes>::with(ctx, viewport, |record| record.winner = Some((at, targets, found)));
     found
 }
 
-fn find_press_winner(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {
-    let layer = areas::layer_at(ctx, at)?;
+/// The root a press at `at` belongs to, with its winning shape: the click's root (`press_winners`), else the drag's.
+/// What the focus service classifies a press by and a host asks a press about.
+pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {
+    let winners = press_winners(ctx, at, targets);
+    winners.click.or(winners.drag)
+}
+
+fn find_press_winners(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> PressWinners {
+    let Some(layer) = areas::layer_at(ctx, at) else {
+        if let Some(test) = diag_test() {
+            eprintln!("DIAG {test}: press_winner at {at:?}: no layer");
+        }
+        return PressWinners::default();
+    };
     let to_layer = |layer: Layer| areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
     let body = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last_bodies.get(&layer).copied());
     let beneath = body.map(|(root, parent)| (root, parent, to_layer(parent)));
     let on_layer = to_layer(layer);
-    PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        if targets.click.is_some_and(|widget| !registered_in(&record.last, widget)) {
-            return None;
-        }
+    let found = PerViewport::<Shapes>::with(ctx, viewport, |record| {
         // Bottom to top: the body layer's root on its own layer, then the roots on the layer in paint order.
         let mut stack: Vec<(u8, Id, &RootRecord, Pos2)> = Vec::new();
         if let Some((root, parent, point)) = beneath
@@ -570,7 +601,37 @@ fn find_press_winner(ctx: &Context, viewport: ViewportId, at: Pos2, targets: Pre
             stack.extend(roots.iter().map(|(root, entry)| (1, *root, entry, on_layer)));
         }
         let shown = stack.iter().any(|(_, _, entry, point)| entry.placed.iter().any(|placed| placed.clip.contains(*point)));
-        stack
+        if let Some(test) = diag_test() {
+            let hits: Vec<String> = stack
+                .iter()
+                .flat_map(|(tier, root, entry, point)| {
+                    entry.shapes.iter().zip(&entry.placed).filter(|(shape, _)| shape.hits(*point)).map(move |(shape, placed)| {
+                        format!(
+                            "[tier {tier} root {} owner {} part {:?} sense {:?} level {:?} pos {} order {} clip_in {}]",
+                            diag_id(*root),
+                            diag_id(shape.owner),
+                            shape.part,
+                            shape.sense,
+                            shape.priority.level,
+                            shape.position,
+                            placed.order,
+                            placed.clip.contains(*point)
+                        )
+                    })
+                })
+                .collect();
+            let foreign = |widget: Option<Id>| widget.map(|widget| (diag_id(widget), !registered_in(&record.last, widget)));
+            eprintln!(
+                "DIAG {test}: press_winner at {at:?} layer {layer:?} body {:?} click {:?} drag {:?} shown {shown} hits {hits:?}",
+                beneath.map(|(root, parent, _)| (diag_id(root), parent)),
+                foreign(targets.click),
+                foreign(targets.drag)
+            );
+        }
+        if targets.click.is_some_and(|widget| !registered_in(&record.last, widget)) {
+            return PressWinners::default();
+        }
+        let mut ranked: Vec<_> = stack
             .into_iter()
             .filter_map(|(tier, root, entry, point)| {
                 let shows = |index: usize| {
@@ -583,11 +644,74 @@ fn find_press_winner(ctx: &Context, viewport: ViewportId, at: Pos2, targets: Pre
                 let shapes: Vec<Shape<Id>> = kept.iter().map(|&index| entry.shapes[index].clone()).collect();
                 let mut winner = resolve(&shapes, point, ResolveFor::Press)?;
                 winner.index = kept[winner.index];
-                Some(((tier, entry.placed[winner.index].order), winner, root))
+                Some(((tier, entry.placed[winner.index].order), winner, root, entry.click))
             })
-            .max_by_key(|(rank, ..)| *rank)
-            .map(|(_, winner, root)| (winner, root))
-    })
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut winners = PressWinners::default();
+        for (_, winner, root, root_clicks) in ranked {
+            let (clicks, drags) = (winner.sense.contains(craft_behavior::Sense::CLICK), winner.sense.contains(craft_behavior::Sense::DRAG));
+            match (winners.click.is_some(), winners.drag.is_some()) {
+                // The top root takes what its shape senses; one that takes both kinds takes the whole press.
+                (false, false) => {
+                    winners.click = clicks.then_some((winner, root));
+                    winners.drag = drags.then_some((winner, root));
+                    if clicks && drags {
+                        break;
+                    }
+                }
+                // Under a top shape that only drags, the first one below that clicks takes the click.
+                (false, true) => {
+                    if clicks {
+                        winners.click = Some((winner, root));
+                        break;
+                    }
+                }
+                // Under a top shape that only clicks, the first root below whose shape drags takes the drag, unless the
+                // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it.
+                (true, false) => {
+                    if clicks || root_clicks {
+                        break;
+                    }
+                    if drags {
+                        winners.drag = Some((winner, root));
+                        break;
+                    }
+                }
+                (true, true) => break,
+            }
+        }
+        winners
+    });
+    if let Some(test) = diag_test() {
+        let show = |found: Option<(Winner<Id>, Id)>| found.map(|(winner, root)| (diag_id(root), diag_id(winner.owner), winner.part, winner.sense));
+        eprintln!("DIAG {test}: press_winner at {at:?} -> click {:?} drag {:?}", show(found.click), show(found.drag));
+    }
+    found
+}
+
+/// DIAG: the test under study this thread runs, if any.
+pub(crate) fn diag_test() -> Option<&'static str> {
+    const TESTS: [&str; 8] = [
+        "delete_removes_the_plane_and_escape_drops_a_half_plane_first",
+        "a_window_mounts_edges_resize_the_window_and_the_childs_press_keeps_its_click",
+        "gradient_map_stop_picker_closed_without_a_colour_changes_nothing",
+        "photo_filter_colour_picker_previews_live_cancel_restores_and_ok_is_one_step",
+        "every_paragraph_box_handle_resizes_the_box_with_snapping_on",
+        "click_inside_the_paragraph_box_off_the_glyphs_moves_the_caret",
+        "a_crop_drag_begun_before_the_dialog_still_ends_under_it",
+        "move_pointer_still_reaches_the_liquify_workspace",
+    ];
+    // Trials run on unnamed pool threads: there the run names its trial in `CRAFT_DIAG_TEST`.
+    let thread = std::thread::current();
+    let name = std::env::var("CRAFT_DIAG_TEST").ok().or_else(|| thread.name().map(str::to_owned))?;
+    TESTS.into_iter().find(|test| name.ends_with(test))
+}
+
+/// DIAG: the tail of an id's path.
+pub(crate) fn diag_id(id: Id) -> String {
+    let text = format!("{id:?}");
+    text.char_indices().rev().nth(90).map_or(text.clone(), |(at, _)| text[at..].to_owned())
 }
 
 /// Whether some root registered the egui widget `widget` in `layers`.
