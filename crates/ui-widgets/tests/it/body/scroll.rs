@@ -575,13 +575,15 @@ fn a_pressed_field_in_part_view_stays_put_and_tab_to_it_reveals_it() {
     let mut frames = Frames::new();
     frames.screen(VIEW + ORIGIN.to_vec2() * 2.0);
     frames.idle(3, &mut show);
+    // A field's response rect is clipped to the view, so the fields' full height is the first one's, wholly in view.
+    let height = fields[0].get().1.height();
     let (_, second) = fields[1].get();
-    gap.set(gap.get() + view.get().bottom() - second.height() / 2.0 - second.top());
+    gap.set(gap.get() + view.get().bottom() - height / 2.0 - second.top());
     frames.idle(3, &mut show);
     let (second_id, second) = fields[1].get();
     assert!(
-        second.top() < view.get().bottom() && second.bottom() > view.get().bottom(),
-        "the second field shows in part: {second:?} in {:?}",
+        second.top() < view.get().bottom() && second.top() + height > view.get().bottom(),
+        "the second field shows in part: {second:?} ({height} tall) in {:?}",
         view.get()
     );
     pointer::click(&mut frames, Pos2::new(second.center().x, (second.top() + view.get().bottom()) / 2.0), &mut show);
@@ -595,5 +597,9 @@ fn a_pressed_field_in_part_view_stays_put_and_tab_to_it_reveals_it() {
     frames.idle(2, &mut show);
     assert_eq!(frames.ctx.memory(|memory| memory.focused()), Some(second_id), "Tab moved focus to the second field");
     let (_, rect) = fields[1].get();
-    assert!(view.get().contains_rect(rect), "Tab scrolled the field into view: {rect:?} in {:?}", view.get());
+    assert!(
+        view.get().contains_rect(rect) && rect.height() > height - SAME,
+        "Tab scrolled the whole field into view: {rect:?} ({height} tall) in {:?}",
+        view.get()
+    );
 }
