@@ -379,10 +379,17 @@ fn first_component_subsampled(b: &[u8]) -> bool {
         return false;
     }
     let mut i = 2;
-    while let (Some(&0xFF), Some(&m)) = (b.get(i), b.get(i + 1)) {
+    while let Some(&prefix) = b.get(i) {
+        // The decoder searches forward between segments. Stray bytes and
+        // stuffed FF 00 pairs must not hide a frame from the abort-build guard.
+        if prefix != 0xFF {
+            i += 1;
+            continue;
+        }
+        let Some(&m) = b.get(i + 1) else { return false };
         match m {
             0xFF => i += 1,
-            0x01 | 0xD0..=0xD8 => i += 2,
+            0x00 | 0x01 | 0xD0..=0xD8 => i += 2,
             0xD9 | 0xDA => return false,
             _ => {
                 let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
@@ -1149,6 +1156,22 @@ mod tests {
         let mut ordinary = Vec::new();
         jpeg_encoder::Encoder::new(&mut ordinary, 90).encode(&[128], 1, 1, jpeg_encoder::ColorType::Luma).unwrap();
         validate_jpeg_rgba8_with_panic_policy(&ordinary, 1, true).unwrap();
+    }
+
+    #[test]
+    fn jpeg_sampling_guard_finds_frame_after_marker_padding() {
+        let header = progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)]);
+        // Exercise the shared header guard, without a pixel payload.
+        for split in [2, 8] {
+            let (before, after) = header.split_at(split);
+            for padding in [&[0][..], &[0x7F, 0][..], &[0xFF, 0][..], &[0xFF][..]] {
+                let padded = [before, padding, after].concat();
+                assert!(first_component_subsampled(&padded), "offset {split}, padding {padding:?}");
+                let got = validate_jpeg_rgba8_with_panic_policy(&padded, 64, true);
+                assert!(matches!(got, Err(CodecError::Malformed { message, .. }) if message.contains("frame maximum")));
+            }
+        }
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0, 0xFF]));
     }
 
     #[test]
