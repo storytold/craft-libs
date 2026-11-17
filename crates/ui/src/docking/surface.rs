@@ -1137,7 +1137,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 
     /// The connected monitors (feature `native-windows`). A native floating window stores the
     /// one it is on, and a restored layout puts each window back on its monitor, or on the
-    /// main window's when that monitor is gone. egui 0.36 reports no monitors; without a list
+    /// main window's when that monitor is gone, with its bar in the monitor's
+    /// [`Monitor::work_area`] where one is given. egui 0.36 reports no monitors; without a list
     /// windows store the monitor size egui reports and restore onto the main window's monitor.
     /// eframe 0.36 keeps winit's event loop, and with it `available_monitors`, to itself, so an
     /// eframe application builds the list from the platform's own display API.
