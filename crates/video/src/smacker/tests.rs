@@ -408,3 +408,31 @@ fn hostile_input_never_panics() {
         });
     }
 }
+
+/// The picture converts into a `VideoFrame` of R, G, B planes holding the colours the decoder
+/// gives as RGBA.
+#[test]
+fn the_picture_converts_to_an_rgb_video_frame() {
+    use crate::frame::{ColorFamily, Samples, VideoFrame};
+    let s = Stream::new(&[0], &[0], &[0], &[code(SOLID, 0, 7), code(SOLID, 0, 9)]);
+    let mut dec = s.decoder(8, 4, b"SMK2");
+    let mut w = BitWriter::new();
+    s.types.put(&mut w, code(SOLID, 0, 7));
+    s.types.put(&mut w, code(SOLID, 0, 9));
+    // keep entries 0 to 6, set 7, keep 8, set 9
+    dec.decode(Some(&[0x80 | 6, 0x3F, 0x00, 0x10, 0x80, 0x01, 0x20, 0x3C]), &w.finish()).unwrap();
+    assert_eq!((dec.palette()[7], dec.palette()[9]), ([255, 0, 0x41], [4, 0x82, 0xF3]));
+    assert_eq!(rows(&dec)[0], [7, 7, 7, 7, 9, 9, 9, 9]);
+
+    let f = VideoFrame::try_from(&dec).unwrap();
+    assert_eq!((f.width(), f.height(), f.family(), f.bit_depth()), (8, 4, ColorFamily::Rgb, 8));
+    assert_eq!(f.color.matrix, 0);
+    let plane = |p: usize| match f.plane(p).map(|p| p.samples()) {
+        Some(Samples::U8(s)) => s.clone(),
+        other => panic!("plane {p}: {other:?}"),
+    };
+    let (r, g, b) = (plane(0), plane(1), plane(2));
+    let rgba: Vec<u8> = (0..32).flat_map(|i| [r[i], g[i], b[i], 255]).collect();
+    assert_eq!(rgba, dec.to_rgba());
+    assert_eq!(r[..8], [255, 255, 255, 255, 4, 4, 4, 4]);
+}
