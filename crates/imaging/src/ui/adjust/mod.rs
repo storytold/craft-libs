@@ -8,7 +8,7 @@
 //!   [`TonePickTool`]).
 //! - Slider sets: [`AdjustSliders`] (Exposure, Vibrance, Posterize, any table), [`BrightnessContrastEditor`],
 //!   [`ThresholdEditor`], [`ColorBalanceEditor`], [`PhotoFilterEditor`], [`HueSaturationEditor`],
-//!   [`BlackWhiteEditor`], [`ChannelMixerEditor`], [`SelectiveColorEditor`].
+//!   [`BlackWhiteEditor`], [`ChannelMixerEditor`], [`CmykChannelMixerEditor`], [`SelectiveColorEditor`].
 //! - The Image › Adjustments dialog around any of them on the dialog host ([`HostedAdjustDialog`]).
 //! - The Properties panel's session ([`AdjustSession`]).
 //! - The Adjustments panel: a grid of buttons that add an adjustment layer ([`AdjustmentsPanel`], [`AdjustmentKind`]).
@@ -44,8 +44,8 @@ pub use labels::AdjustWords;
 pub use levels_editor::{Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsWords};
 pub use levels_panel::{LevelsPanel, LevelsPanelOutput};
 pub use mixers::{
-    BlackWhite, BlackWhiteEditor, BlackWhiteOutput, ChannelMixer, ChannelMixerEditor, SelectiveColor, SelectiveColorEditor, SelectiveColorOutput,
-    SelectiveMethod,
+    BlackWhite, BlackWhiteEditor, BlackWhiteOutput, ChannelMixer, ChannelMixerEditor, CmykChannelMixer, CmykChannelMixerEditor, SelectiveColor,
+    SelectiveColorEditor, SelectiveColorOutput, SelectiveMethod,
 };
 pub use panel::{AdjustmentsPanel, AdjustmentsPanelOutput};
 pub use session::AdjustSession;

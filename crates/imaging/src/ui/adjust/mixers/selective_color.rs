@@ -133,7 +133,8 @@ impl<'a> SelectiveColorEditor<'a> {
                 .map(|(key, name)| AdjustField::new(key, name.clone(), -100.0..=100.0, 0.0).unit_kind(UnitKind::Percent))
                 .collect();
             let mut run = Run::start(&mut value, context, now, memory.began);
-            let tables = Tables { name: words.colors.clone(), entries: &entries, picked: range, fields: &fields, values: &now.ranges[range] };
+            let tables =
+                Tables { name: words.colors.clone(), entries: &entries, picked: range, fields: &fields, values: &now.ranges[range], enabled: true };
             let picked = tables.show(ui, cx, &mut run, move |now: &SelectiveColor, i, x| {
                 let mut next = *now;
                 next.ranges[range][i] = x;

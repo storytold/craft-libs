@@ -7,7 +7,7 @@ mod selective_color;
 mod stories;
 
 pub use black_white::{BlackWhite, BlackWhiteEditor, BlackWhiteOutput};
-pub use channel_mixer::{ChannelMixer, ChannelMixerEditor};
+pub use channel_mixer::{ChannelMixer, ChannelMixerEditor, CmykChannelMixer, CmykChannelMixerEditor};
 pub use selective_color::{SelectiveColor, SelectiveColorEditor, SelectiveColorOutput, SelectiveMethod};
 
 use craft_behavior::Value;
@@ -27,6 +27,8 @@ struct Tables<'t> {
     picked: usize,
     fields: &'t [AdjustField],
     values: &'t [f64],
+    /// Whether the rows take edits; the select always does.
+    enabled: bool,
 }
 
 impl Tables<'_> {
@@ -44,7 +46,7 @@ impl Tables<'_> {
         });
         for (i, field) in self.fields.iter().enumerate() {
             let set = set.clone();
-            run.slider_row(ui, cx, field, self.values[i], move |now, x| set(now, i, x));
+            run.slider_row_enabled(ui, cx, field, self.values[i], self.enabled, move |now, x| set(now, i, x));
         }
         chosen
     }

@@ -1,6 +1,9 @@
 //! Stories of Black & White, Channel Mixer and Selective Color: each editor's cases in one card.
 
-use super::{BlackWhite, BlackWhiteEditor, ChannelMixer, ChannelMixerEditor, SelectiveColor, SelectiveColorEditor, SelectiveMethod};
+use super::{
+    BlackWhite, BlackWhiteEditor, ChannelMixer, ChannelMixerEditor, CmykChannelMixer, CmykChannelMixerEditor, SelectiveColor, SelectiveColorEditor,
+    SelectiveMethod,
+};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -60,4 +63,26 @@ fn selective_color_absolute(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut start = SelectiveColor { method: SelectiveMethod::Absolute, ..SelectiveColor::default() };
     start.ranges[0] = [-20.0, 25.0, 0.0, 10.0];
     selective_color(ui, data, start)
+}
+
+fn cmyk_channel_mixer(ui: &mut Ui, data: &mut StoryData, start: CmykChannelMixer) -> StoryOutput {
+    let value = data.value("value", start);
+    CmykChannelMixerEditor::new("Channel Mixer", Bind::bound(value)).show(ui).into()
+}
+
+#[story(CmykChannelMixerEditor<'static>, covers = [Default], drive = Drive::Never, group = "Inks", title = "CMYK")]
+fn cmyk_channel_mixer_inks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    cmyk_channel_mixer(ui, data, CmykChannelMixer { cyan: [80.0, 20.0, 0.0, 0.0, 0.0], ..CmykChannelMixer::default() })
+}
+
+/// An imported Monochrome: the one Gray output, its rows disabled, the box only turns off.
+#[story(CmykChannelMixerEditor<'static>, covers = [], drive = Drive::Never, group = "Inks", title = "Imported Monochrome")]
+fn cmyk_channel_mixer_monochrome(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    cmyk_channel_mixer(ui, data, CmykChannelMixer { gray: Some([30.0, 30.0, 30.0, 10.0, 0.0]), ..CmykChannelMixer::default() })
+}
+
+/// A Total over 100 % warns.
+#[story(CmykChannelMixerEditor<'static>, covers = [], drive = Drive::Never, group = "Inks", title = "Total over 100 %")]
+fn cmyk_channel_mixer_over(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    cmyk_channel_mixer(ui, data, CmykChannelMixer { cyan: [70.0, 30.0, 20.0, 0.0, 0.0], ..CmykChannelMixer::default() })
 }
