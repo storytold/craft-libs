@@ -99,7 +99,7 @@ pub fn linear_to_pq(linear: f32) -> f32 {
 
 /// Relative luminance weights of the RGB primaries `code` (BT.2020's for anything else, the
 /// space BT.2100 defines HLG in).
-fn luma_weights(code: u16) -> [f32; 3] {
+pub(crate) fn luma_weights(code: u16) -> [f32; 3] {
     match code {
         1 => [0.2126, 0.7152, 0.0722],
         12 => [0.2290, 0.6917, 0.0793],
