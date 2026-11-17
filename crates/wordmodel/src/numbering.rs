@@ -70,12 +70,18 @@ impl Default for Level {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AbstractNum {
     pub id: u32,
     pub name: Option<String>,
     pub levels: Vec<Level>,
+    /// Which levels were defined in the source file. `None` is used by model-created definitions,
+    /// where the populated `levels` vector is authoritative. DOCX readers set this when they fill
+    /// unspecified Word levels with their effective defaults. This reader-only provenance is not
+    /// serialized as part of the document model.
+    #[serde(skip)]
+    pub explicit_levels: Option<[bool; 9]>,
     /// Word's list identity (`w:nsid`, 8 hex digits), which it uses to match lists across
     /// documents (paste, compare); kept from the file.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +93,20 @@ pub struct AbstractNum {
     /// `None`: derived from the levels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_level_type: Option<String>,
+}
+
+// Explicit source-level presence is reader provenance used to distinguish an omitted Word level
+// from an effective default. It is intentionally not part of the document model's structural
+// equality, just as it is not serialized.
+impl PartialEq for AbstractNum {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.name == other.name
+            && self.levels == other.levels
+            && self.nsid == other.nsid
+            && self.tmpl == other.tmpl
+            && self.multi_level_type == other.multi_level_type
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -235,6 +255,20 @@ impl Numbering {
             return Some(l);
         }
         self.abstract_of(num)?.levels.get(level as usize)
+    }
+    /// Whether the source definition supplied this level, or a per-numbering override defines it.
+    ///
+    /// [`Self::level`] also exposes Word's effective default for omitted levels. This method lets
+    /// importers preserve formats whose historical behavior distinguishes an explicit level from
+    /// that effective fallback. Older serialized and model-created definitions have no source
+    /// presence metadata, so their populated levels count as defined.
+    pub fn level_is_defined(&self, num: u32, level: u8) -> bool {
+        let Some(n) = self.num(num) else { return false };
+        if n.level_overrides.iter().any(|(i, _)| *i == level) {
+            return true;
+        }
+        let Some(a) = self.abstract_of(num) else { return false };
+        a.explicit_levels.map_or_else(|| a.levels.get(level as usize).is_some(), |levels| levels.get(level as usize).copied().unwrap_or(false))
     }
     /// Create a new list of `kind`; returns the `num` id. List ids run out only past `u32::MAX`
     /// lists, more than memory holds; then nothing is added and the id is 0, "no list".
@@ -484,6 +518,42 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_level_metadata_preserves_effective_defaults_and_old_models() {
+        let mut numbering = Numbering::default();
+        let id = numbering.add_list(ListKind::Numbered);
+        assert!(numbering.level_is_defined(id, 0));
+        assert!(numbering.level_is_defined(id, 8));
+
+        let abstract_id = numbering.num(id).unwrap().abstract_id;
+        let mut explicit = [false; 9];
+        explicit[0] = true;
+        numbering.abstracts.iter_mut().find(|a| a.id == abstract_id).unwrap().explicit_levels = Some(explicit);
+
+        // Effective Word defaults remain available to existing model callers, while importers can
+        // tell that this source file supplied only level zero.
+        assert!(numbering.level(id, 1).is_some());
+        assert!(!numbering.level_is_defined(id, 1));
+        assert!(numbering.level_is_defined(id, 0));
+
+        // Old serialized definitions have no presence marker; populated levels remain valid.
+        numbering.abstracts.iter_mut().find(|a| a.id == abstract_id).unwrap().explicit_levels = None;
+        assert!(numbering.level_is_defined(id, 8));
+
+        // A per-numbering level definition takes precedence over the abstract's missing level.
+        numbering.abstracts.iter_mut().find(|a| a.id == abstract_id).unwrap().explicit_levels = Some(explicit);
+        numbering.nums.iter_mut().find(|n| n.id == id).unwrap().level_overrides.push((1, Level::default()));
+        assert!(numbering.level_is_defined(id, 1));
+    }
+
+    #[test]
+    fn explicit_level_metadata_does_not_change_model_equality() {
+        let mut with_metadata = AbstractNum::default();
+        let without_metadata = with_metadata.clone();
+        with_metadata.explicit_levels = Some([true; 9]);
+        assert_eq!(with_metadata, without_metadata);
+    }
 
     /// Read-only counter APIs retain the renderer's bounds and never advance a list.
     #[test]

@@ -10,3 +10,4 @@ mod raw_pcm;
 mod roundtrip;
 mod stream;
 mod wav_empty_data;
+mod wav_ixml;
