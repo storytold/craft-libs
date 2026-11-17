@@ -788,10 +788,14 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
     })
 }
 
+/// A candidate shape under a point: its rank, the winner it makes, its root and whether the root takes clicks
+/// anywhere.
+type Ranked = ((u8, u32), Winner<Id>, Id, bool);
+
 /// The press winners among `ranked`, each root's topmost shape under a point that takes a press with its rank and
 /// whether the root takes clicks anywhere: by the per-kind rule of [`PressWinners`].
-fn winners_of(mut ranked: Vec<((u8, u32), Winner<Id>, Id, bool)>) -> PressWinners {
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
+    ranked.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     let mut winners = PressWinners::default();
     for (_, winner, root, root_clicks) in ranked {
         let (clicks, drags) = (winner.sense.contains(craft_behavior::Sense::CLICK), winner.sense.contains(craft_behavior::Sense::DRAG));
@@ -891,13 +895,13 @@ pub(crate) fn arena_clip(ctx: &Context, component: Id) -> Option<Rect> {
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         [&record.this, &record.last].into_iter().find_map(|layers| {
             let holds = |root: Id, entry: &RootRecord| root == component || entry.shapes.iter().any(|shape| shape.owner == component);
-            let root = layers.values().find_map(|roots| roots.iter().find(|(root, entry)| holds(**root, *entry)).map(|(root, _)| *root))?;
+            let root = layers.values().find_map(|roots| roots.iter().find(|(root, entry)| holds(**root, entry)).map(|(root, _)| *root))?;
             let background =
                 |shape: &Shape<Id>| shape.owner == root && shape.part.is_none() && shape.priority.level == craft_behavior::HitLevel::Background;
             layers
                 .values()
                 .filter_map(|roots| roots.get(&root))
-                .find_map(|entry| entry.shapes.iter().zip(&entry.placed).find(|(shape, _)| background(*shape)).map(|(_, placed)| placed.clip))
+                .find_map(|entry| entry.shapes.iter().zip(&entry.placed).find(|(shape, _)| background(shape)).map(|(_, placed)| placed.clip))
         })
     })
 }
