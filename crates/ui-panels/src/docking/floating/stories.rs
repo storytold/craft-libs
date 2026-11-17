@@ -3,12 +3,22 @@
 use super::{FloatingGroup, WindowColumn};
 use crate::buttons::Button;
 use crate::contract::Show as _;
+use crate::docking::IconicSizes;
 use crate::menu::MenuItem;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::dock::DockEdge;
 use egui::{Pos2, Rect, Ui, Vec2};
 
 const START: Rect = Rect { min: Pos2::new(40.0, 40.0), max: Pos2::new(280.0, 220.0) };
+
+/// The icons a collapsed story column shows: three panels.
+const ICON_CELLS: f32 = 3.0;
+
+/// The size of a collapsed column of `ICON_CELLS` icon cells.
+fn icon_strip(ui: &Ui) -> Vec2 {
+    let sizes = IconicSizes::of(ui.ctx());
+    Vec2::new(sizes.cell, sizes.cell * ICON_CELLS)
+}
 
 #[story(FloatingGroup<'static>, covers = [Default], drive = Drive::Never)]
 fn floating_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -32,8 +42,7 @@ fn floating_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn floating_dock_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = *data.value("rect", START);
     let collapsed = *data.value("collapsed", false);
-    // A strip of three icon cells, as an iconic column of three panels is.
-    let column = if collapsed { WindowColumn::collapsed(DockEdge::Start, Vec2::new(40.0, 120.0)) } else { WindowColumn::expanded(DockEdge::Start) };
+    let column = if collapsed { WindowColumn::collapsed(DockEdge::Start, icon_strip(ui)) } else { WindowColumn::expanded(DockEdge::Start) };
     let shown = FloatingGroup::new("Layers", rect).column(column).sized(crate::contract::Sizing::Fill).show_group(ui, |ui, _| {
         Button::new(if collapsed { "L" } else { "Add layer" }).show(ui);
     });
@@ -50,7 +59,7 @@ fn floating_dock_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(FloatingGroup<'static>, covers = [Default], drive = Drive::Never)]
 fn floating_collapsed_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = *data.value("rect", START);
-    let column = WindowColumn::collapsed(DockEdge::End, Vec2::new(40.0, 120.0));
+    let column = WindowColumn::collapsed(DockEdge::End, icon_strip(ui));
     let shown = FloatingGroup::new("Layers", rect).column(column).sized(crate::contract::Sizing::Fill).show_group(ui, |ui, _| {
         Button::new("L").show(ui);
     });
