@@ -875,6 +875,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
     let hover_layer_ok = top.is_some_and(|top| top == layer || Some(top) == body_layer);
     let members = !pointer::members_withheld(ctx, read.viewport, pass_nr, arena.0);
     let (mut cancelled, mut release_held) = (false, false);
+    let measuring = crate::runtime::measure::active(ctx);
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
         let pos = pos.unwrap_or(Pos2::ZERO);
         let input = PassInput::new(
@@ -941,7 +942,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             && (step.target.is_some() || step.activated.is_some())
         {
             eprintln!(
-                "DIAG {test}: step root {:?} pass {pass_nr} events {} held {} cancel {cancel:?} phase {:?} target {:?} activated {:?} open {}",
+                "DIAG {test}: step root {:?} pass {pass_nr} measuring {measuring} events {} held {} cancel {cancel:?} phase {:?} target {:?} activated {:?} open {}",
                 state.root.map(|root| pointer::diag_id(root.id)),
                 pass_pointer.events.len(),
                 pass_pointer.primary_down,
