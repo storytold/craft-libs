@@ -4,6 +4,18 @@ use serde_json::json;
 
 use crate::{Json, nums, round6};
 
+/// Raw gradient wire values from borrowed or mapped stops, without intermediate allocation.
+///
+/// Yields color groups (`position, r, g, b`) then every opacity pair (`position, alpha`).
+/// Input order and all values, including non-finite values and opaque alpha, are preserved.
+/// Sanitization, rounding, and input/output size budgets remain the caller's responsibility.
+pub fn flat_gradient_values(
+    colors: impl IntoIterator<Item = (f64, [f64; 3])>,
+    opacities: impl IntoIterator<Item = (f64, f64)>,
+) -> impl Iterator<Item = f64> {
+    colors.into_iter().flat_map(|(p, [r, g, b])| [p, r, g, b]).chain(opacities.into_iter().flat_map(|(p, a)| [p, a]))
+}
+
 /// A gradient: colour stops and opacity stops, each at a position in 0..=1.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Gradient {
@@ -37,7 +49,7 @@ impl Gradient {
     /// stops remain present so an opaque frame can interpolate to a translucent one.
     /// Non-finite values are preserved; callers must sanitize them before JSON output.
     pub fn flat_values(&self) -> impl Iterator<Item = f64> + '_ {
-        self.colors.iter().flat_map(|(p, [r, g, b])| [*p, *r, *g, *b]).chain(self.opacities.iter().flat_map(|(p, a)| [*p, *a]))
+        flat_gradient_values(self.colors.iter().copied(), self.opacities.iter().copied())
     }
 
     /// The flat list, rounded to six decimals. The alpha pairs are left out when every stop is
