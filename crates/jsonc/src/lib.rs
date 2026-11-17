@@ -58,7 +58,6 @@ pub struct Doc {
     /// `None` for an empty (or whitespace/comment-only) file.
     pub root: Option<Node>,
     tokens: Vec<Token>,
-    strict: bool,
 }
 
 fn tokenize(text: &str, strict: bool) -> Result<Vec<Token>, String> {
@@ -268,7 +267,7 @@ impl Node {
 pub fn parse(text: &str, strict: bool) -> Result<Doc, String> {
     let tokens = tokenize(text, strict)?;
     if tokens.is_empty() {
-        return Ok(Doc { text: text.to_string(), root: None, tokens, strict });
+        return Ok(Doc { text: text.to_string(), root: None, tokens });
     }
     let mut p = Parser { text, toks: &tokens, pos: 0, strict };
     let root = p.value(0)?;
@@ -278,7 +277,7 @@ pub fn parse(text: &str, strict: bool) -> Result<Doc, String> {
     if !matches!(root.kind, NodeKind::Object { .. }) {
         return Err("the top level must be an object".into());
     }
-    Ok(Doc { text: text.to_string(), root: Some(root), tokens, strict })
+    Ok(Doc { text: text.to_string(), root: Some(root), tokens })
 }
 
 impl Doc {
@@ -367,6 +366,7 @@ impl Doc {
         if self.text.contains("\r\n") { "\r\n" } else { "\n" }
     }
 
+    /// Add `key: value` as the last member of `obj`, indented like the members already there.
     fn insert_member(&self, obj: &Node, key: &str, value: &Value) -> Result<String, String> {
         let NodeKind::Object { members, trailing_comma } = &obj.kind else { return Err("not an object".into()) };
         let close = obj.end.saturating_sub(1);
@@ -377,7 +377,9 @@ impl Doc {
         };
         let eol = self.eol();
         let key_json = serde_json::to_string(key).map_err(|e| e.to_string())?;
-        let member = format!("{indent}{key_json}: {}", render(value, &indent, eol));
+        // An object whose members all end in a comma gets a new member that does too.
+        let comma = if *trailing_comma { "," } else { "" };
+        let member = format!("{indent}{key_json}: {}{comma}", render(value, &indent, eol));
         let mut edits = Vec::new();
         if let Some(last) = members.last()
             && !trailing_comma
@@ -420,9 +422,7 @@ impl Doc {
                 let rest = self.text.get(member_end..).unwrap_or_default();
                 let line_rest = rest.split('\n').next().unwrap_or_default();
                 let own_lines = self.first_on_line(member.key_start) && line_rest.trim().is_empty();
-                let remove_lines = own_lines && (after.is_some() || before.is_none() || !self.strict);
-                let (start, end) = if remove_lines {
-                    // Keep the existing whole-line removal and JSONC trailing-comma style.
+                let (start, end) = if own_lines {
                     (self.line_start(member.key_start), member_end + line_rest.len() + usize::from(rest.len() > line_rest.len()))
                 } else {
                     (member.key_start, member_end)
@@ -431,8 +431,9 @@ impl Doc {
                 if !with_comma && let Some(c) = after {
                     edits.push((c.start, c.end, String::new()));
                 }
+                // The last member had no comma after it, so the one before it goes: leaving it
+                // would add a trailing comma the file didn't have, which plain JSON readers refuse.
                 if after.is_none()
-                    && !remove_lines
                     && let Some(c) = before
                 {
                     edits.push((c.start, c.end, String::new()));
