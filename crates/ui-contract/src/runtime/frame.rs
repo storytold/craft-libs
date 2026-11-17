@@ -451,6 +451,14 @@ pub fn note_shell(ctx: &Context, viewport: ViewportId, window: &WindowKey, root:
     });
 }
 
+/// The root container of the shell the latest pass of `viewport` showed: where a key pressed with nothing focused
+/// matches, so the window's commands take it.
+pub(crate) fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
+    pass_state::with::<FrameState, _>(ctx, |state| {
+        state.shells.iter().filter(|shell| shell.viewport == viewport).max_by_key(|shell| shell.pass).map(|shell| shell.root)
+    })
+}
+
 /// Adds a chrome toggle of `viewport` to the next `FrameOutput` and aims it at the window of the viewport that holds
 /// focus, or at the first shell that asks when none does.
 pub(crate) fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {

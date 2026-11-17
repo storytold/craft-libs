@@ -1,7 +1,7 @@
 //! The registry of command definitions: the sets `#[derive(CommandSet)]` registers, loaded at install.
 
 use craft_behavior::EditCommand;
-use craft_keymap::{Binding, BindingError, CommandDef, Platform};
+use craft_keymap::{Binding, BindingError, CommandDef, CommandScope, Platform};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -21,6 +21,8 @@ pub struct SetEntry {
     pub no_default_on: fn() -> Vec<(&'static str, Platform)>,
     /// The commands of the set a focused component takes as an edit.
     pub edits: fn() -> Vec<(&'static str, EditCommand)>,
+    /// The momentary commands of the set whose held key makes a scope's keys work.
+    pub holds: fn() -> Vec<(&'static str, CommandScope)>,
     /// The defaults of one platform, which replace the command's other defaults there.
     pub platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
     /// A story's set (`#[command(story)]`): loaded only by an install that shows stories.
@@ -34,9 +36,10 @@ impl SetEntry {
         defs: fn() -> Result<Vec<CommandDef>, CommandDefError>,
         no_default_on: fn() -> Vec<(&'static str, Platform)>,
         edits: fn() -> Vec<(&'static str, EditCommand)>,
+        holds: fn() -> Vec<(&'static str, CommandScope)>,
         platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
     ) -> Self {
-        SetEntry { name, defs, no_default_on, edits, platform_defaults, story: false }
+        SetEntry { name, defs, no_default_on, edits, holds, platform_defaults, story: false }
     }
 
     /// The entry as a story's set.
@@ -75,6 +78,7 @@ macro_rules! __register_command_set {
                     <$ty as $crate::runtime::commands::CommandSet>::defs,
                     <$ty as $crate::runtime::commands::CommandSet>::no_default_on,
                     <$ty as $crate::runtime::commands::CommandSet>::edits,
+                    <$ty as $crate::runtime::commands::CommandSet>::holds,
                     <$ty as $crate::runtime::commands::CommandSet>::platform_defaults,
                 ))
             }
@@ -162,6 +166,8 @@ pub(crate) struct Registry {
     edits: HashMap<String, EditCommand>,
     /// Defaults that one platform has instead of the command's others.
     platform_defaults: Vec<(String, Platform, Binding)>,
+    /// The scope each momentary command's held key makes work, by the command's id.
+    holds: HashMap<String, &'static str>,
     /// Whether the stories' sets are loaded.
     stories: bool,
 }
@@ -176,6 +182,7 @@ impl Registry {
             }
             registry.no_default.extend((entry.no_default_on)().into_iter().map(|(id, platform)| (id.to_owned(), platform)));
             registry.edits.extend((entry.edits)().into_iter().map(|(id, edit)| (id.to_owned(), edit)));
+            registry.holds.extend((entry.holds)().into_iter().map(|(id, scope)| (id.to_owned(), scope.name())));
             registry
                 .platform_defaults
                 .extend((entry.platform_defaults)()?.into_iter().map(|(id, platform, binding)| (id.to_owned(), platform, binding)));
@@ -217,6 +224,17 @@ impl Registry {
     /// The edit a focused component takes the command `id` as; `None` for a command with no `EditCommand` link.
     pub(crate) fn edit_of(&self, id: &str) -> Option<EditCommand> {
         self.edits.get(id).copied()
+    }
+
+    /// The scope whose keys work while the key of the momentary command `id` is held.
+    pub(crate) fn held_scope(&self, id: &str) -> Option<&'static str> {
+        self.holds.get(id).copied()
+    }
+
+    /// Whether `scope` is a held scope: its keys work while a momentary command's key is held, and its commands go to
+    /// the application, as no instance is ever of it.
+    pub(crate) fn is_held_scope(&self, scope: &str) -> bool {
+        self.holds.values().any(|held| *held == scope)
     }
 
     pub(crate) fn defs(&self) -> &[CommandDef] {

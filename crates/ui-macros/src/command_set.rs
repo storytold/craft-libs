@@ -1,6 +1,8 @@
 //! `#[derive(CommandSet)]` with `#[command(prefix = "..", scope = "..", story)]` on the enum and
-//! `#[command(label = "..", icon = "..", kind = "..", group = "..", modal = "..", edit = "..", default = "..", path = "..", alias = "..")]` on variants.
+//! `#[command(label = "..", icon = "..", kind = "..", group = "..", modal = "..", edit = "..", holds = "..", default = "..", path = "..", alias = "..")]`
+//! on variants.
 //! `edit = ".."` links the command to the `EditCommand` a focused component takes it as.
+//! `holds = ".."` on a `kind = "momentary"` command names the scope whose keys work while the command's key is held.
 //! `default(mac = "..")` (or `windows`, `linux`) is a default of one platform: it replaces the unqualified defaults there.
 
 use crate::util::ui_crate;
@@ -23,6 +25,7 @@ struct VariantAttrs {
     group: Option<LitStr>,
     modal: Option<LitStr>,
     edit: Option<LitStr>,
+    holds: Option<LitStr>,
     defaults: Vec<LitStr>,
     platform_defaults: Vec<(LitStr, LitStr)>,
     no_default_on: Vec<LitStr>,
@@ -147,6 +150,7 @@ fn variant(variant: &Variant) -> syn::Result<VariantAttrs> {
             () if meta.path.is_ident("group") => attrs.group = Some(value(meta)?),
             () if meta.path.is_ident("modal") => attrs.modal = Some(value(meta)?),
             () if meta.path.is_ident("edit") => attrs.edit = Some(value(meta)?),
+            () if meta.path.is_ident("holds") => attrs.holds = Some(value(meta)?),
             () if meta.path.is_ident("default") && meta.input.peek(syn::Token![=]) => attrs.defaults.push(value(meta)?),
             () if meta.path.is_ident("default") => meta.parse_nested_meta(|inner| {
                 let platform = inner.path.get_ident().map(|ident| LitStr::new(&ident.to_string(), ident.span()));
@@ -229,8 +233,8 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         Some(scope) => quote!(#k::runtime::commands::CommandScope::new(#scope)),
         None => quote!(#k::runtime::commands::CommandScope::APP),
     };
-    let (mut ids, mut arms, mut defs, mut bare, mut per_platform, mut edits) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut ids, mut arms, mut defs, mut bare, mut per_platform, mut edits, mut holds) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for v in &data.variants {
         let attrs = variant(v)?;
         let name = &v.ident;
@@ -259,6 +263,13 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         if let Some(edit) = &attrs.edit {
             let edit = edit_tokens(&k, edit)?;
             edits.push(quote!((#id, #edit)));
+        }
+        if let Some(held) = &attrs.holds {
+            if attrs.kind.as_ref().is_none_or(|kind| kind.value() != "momentary") {
+                return Err(syn::Error::new(held.span(), "`holds` belongs to `kind = \"momentary\"`"));
+            }
+            check_scope(held)?;
+            holds.push(quote!((#id, #k::runtime::commands::CommandScope::new(#held))));
         }
         arms.push(quote!(#id => ::core::option::Option::Some(Self::#name)));
         defs.push(quote! {
@@ -301,6 +312,10 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
 
             fn edits() -> ::std::vec::Vec<(&'static str, #k::runtime::commands::EditCommand)> {
                 ::std::vec![#(#edits),*]
+            }
+
+            fn holds() -> ::std::vec::Vec<(&'static str, #k::runtime::commands::CommandScope)> {
+                ::std::vec![#(#holds),*]
             }
 
             fn platform_defaults() -> ::core::result::Result<

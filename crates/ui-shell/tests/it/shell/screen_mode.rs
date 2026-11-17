@@ -1,15 +1,17 @@
-//! Screen mode: the shell brings its OS window to the bound mode in one pass and follows the OS out of full screen.
+//! Screen mode: the shell brings its OS window to the bound mode in one pass and follows the OS out of full screen, and
+//! its keys reach it with nothing focused and give way to a held key's scope.
 
 use craft_host::target::{Os, ShellInfo};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, CommandSet, Show as _};
 use craft_ui::display::Text;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::WindowKey;
+use craft_ui::runtime::frame::take_output;
 use craft_ui::shell::{AppShell, ScreenMode};
-use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
+use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::windows::{Out, Windows};
-use egui::{Pos2, Rect, ViewportCommand, ViewportId, ViewportInfo};
+use egui::{Event, Key, Modifiers, Pos2, Rect, ViewportCommand, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
 const WINDOW: Rect = Rect { min: Pos2::ZERO, max: Pos2::new(800.0, 600.0) };
@@ -92,4 +94,83 @@ fn on_windows_a_maximized_window_leaves_maximized_before_full_screen_and_returns
     settle(&windows, &mut mode);
     mode = ScreenMode::Standard;
     assert_eq!(screen_commands(&frame(&windows, &mut mode)), [ViewportCommand::Fullscreen(false), ViewportCommand::Maximized(true)]);
+}
+
+/// An application command on F, and a momentary command whose held F12 makes the `trialHeld` scope's keys work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "trialKeys")]
+enum TrialKeys {
+    #[command(label = "App F", default = "F")]
+    AppF,
+    #[command(label = "Hold", kind = "momentary", default = "F12", holds = "trialHeld")]
+    Hold,
+}
+
+/// The command F runs while F12 is held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "trialHeld", scope = "trialHeld")]
+enum HeldKeys {
+    #[command(label = "Next", default = "F")]
+    Next,
+}
+
+/// One frame of a shell over a plain body, with nothing focused, its mode bound to `mode`; the ids of the commands
+/// that reached the application since the last frame.
+fn keyed(frames: &mut Frames, mode: &mut ScreenMode, events: Vec<Event>) -> Vec<String> {
+    frames.frame(events, |ui| {
+        AppShell::new(WindowKey::main())
+            .screen_mode(Bind::bound(&mut *mode))
+            .body(|ui, _, _| {
+                Text::new("Document").show(ui);
+            })
+            .show(ui, &mut ());
+    });
+    take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
+}
+
+fn key(key: Key, pressed: bool) -> Event {
+    Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }
+}
+
+/// Presses and releases `pressed`, then settles; the commands that reached the application.
+fn tap(frames: &mut Frames, mode: &mut ScreenMode, pressed: Key) -> Vec<String> {
+    let mut fired = keyed(frames, mode, vec![key(pressed, true)]);
+    fired.extend(keyed(frames, mode, vec![key(pressed, false)]));
+    for _ in 0..SETTLED_FRAMES {
+        fired.extend(keyed(frames, mode, vec![]));
+    }
+    fired
+}
+
+/// With nothing focused, a key both the window and the application bind runs the window's command: the shell's root
+/// takes the keys.
+#[trial]
+fn a_window_command_takes_its_key_with_nothing_focused() {
+    let mut frames = Frames::new();
+    let mut mode = ScreenMode::Standard;
+    for _ in 0..SETTLED_FRAMES {
+        keyed(&mut frames, &mut mode, vec![]);
+    }
+    let fired = tap(&mut frames, &mut mode, Key::F);
+    assert_eq!(mode, ScreenMode::FullScreenWithMenuBar, "F cycles the screen mode");
+    assert!(!fired.iter().any(|id| id == TrialKeys::AppF.id()), "the application's F does not run: {fired:?}");
+}
+
+/// While a momentary command's key is held, its scope's keys come before the window's; once it is up, the window's
+/// key runs again.
+#[trial]
+fn a_held_keys_scope_takes_its_keys_before_the_window() {
+    let mut frames = Frames::new();
+    let mut mode = ScreenMode::Standard;
+    for _ in 0..SETTLED_FRAMES {
+        keyed(&mut frames, &mut mode, vec![]);
+    }
+    keyed(&mut frames, &mut mode, vec![key(Key::F12, true)]);
+    let fired = tap(&mut frames, &mut mode, Key::F);
+    assert_eq!(mode, ScreenMode::Standard, "F with F12 held leaves the screen mode");
+    assert_eq!(fired.iter().filter(|id| *id == HeldKeys::Next.id()).count(), 1, "and runs the held scope's command: {fired:?}");
+    keyed(&mut frames, &mut mode, vec![key(Key::F12, false)]);
+    let fired = tap(&mut frames, &mut mode, Key::F);
+    assert_eq!(mode, ScreenMode::FullScreenWithMenuBar, "F with F12 up cycles the screen mode");
+    assert!(!fired.iter().any(|id| id == HeldKeys::Next.id()), "{fired:?}");
 }

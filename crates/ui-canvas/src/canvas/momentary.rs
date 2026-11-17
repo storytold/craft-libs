@@ -22,8 +22,9 @@ use craft_keymap::Mods;
 #[command(prefix = "canvasMomentary", scope = "canvasView")]
 #[non_exhaustive]
 pub enum MomentaryCommands {
-    /// The Hand tool while the key is held.
-    #[command(label = "Hand (Hold)", kind = "momentary", modal = "in_dialogs", default = "Space")]
+    /// The Hand tool while the key is held. While it is held, the keys of the `canvasHand` scope come before every
+    /// other scope's: an app binds there what a key does with the Hand held (Photoshop's Space+F).
+    #[command(label = "Hand (Hold)", kind = "momentary", modal = "in_dialogs", default = "Space", holds = "canvasHand")]
     Hand,
     /// The Zoom tool, zooming in, while the keys are held.
     #[command(label = "Zoom In (Hold)", kind = "momentary", modal = "in_dialogs", default = "Cmd+Space")]
