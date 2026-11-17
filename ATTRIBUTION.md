@@ -128,3 +128,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## Screen Video key frames
 
 `crates/video/src/screen_video.rs` extracts AniCraft `crates/xfl/src/video.rs` codec-3 decoding and its synthetic partial-block fixture, introduced by Tanish Manku in `1f3e603b7ff53a3da364e41ec4da8d43dc83aab0` with pixel-loop cleanup `2b7571363b4b647266df758f95b6e397021cfd4d` (MIT OR Apache-2.0). Import commits preserve Tanish as primary author. Caller-owned bounds and neutral RGBA output separate codec work from the consuming app's FLV first-frame/report policy. Boundary tests and integration are subsequent Dylan M. Taylor changes.
+
+## Aligned stored ZIP entries
+
+The USDZ alignment requirement and compatibility fixture for `Writer::add_stored_aligned` come from TextureCraft `crates/formats/src/mesh_export/usd.rs`, introduced by bflatastic in `bdbb52c9` and maintained through `9eb20086` (MIT OR Apache-2.0). The shared API and alignment validation are subsequent Dylan M. Taylor work. Scene/material mapping remains in TextureCraft.
