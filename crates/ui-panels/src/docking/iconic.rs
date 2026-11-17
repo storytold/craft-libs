@@ -17,10 +17,11 @@ use crate::primitives::IconSpec;
 use crate::primitives::TextRun;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, StyleColor, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, GlyphRole, StyleColor, StyleCx, SurfaceKind};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
+use craft_theme::ControlSize;
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
 
@@ -539,7 +540,9 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
                 let ink = if selected { style.name_open } else { style.name };
                 let _ = ui.draw().text(room, &TextRun::new(spec.label.as_str().to_owned()).color(ink).elide());
             }
-            ui.face(CELL.at(at as u64), IconButton::new(icon).label(spec.label).selected(selected));
+            // A cell is a rail button: the tool rail's size and glyphs, so a collapsed column's icons match the tools'.
+            let cell = IconButton::new(icon).label(spec.label).selected(selected).size(ControlSize::Md).glyphs(GlyphRole::ToolRail);
+            ui.face(CELL.at(at as u64), cell);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column.
         let (rect, edge) = (cx.rect, self.edge_divider(cx.rect, &cx.style.sizes.column));
