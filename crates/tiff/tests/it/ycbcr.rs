@@ -223,7 +223,7 @@ fn rgba_decodes_all_subsampling_without_rgb_intermediate_semantics() {
                 let bytes = file(w, h, (sh, sv), &units, packed, &[]);
                 let t = Tiff::parse(&bytes).unwrap();
                 let rgb = ycbcr::decode_rgb8(&bytes, &t.ifds[0], 15).unwrap();
-                let expected: Vec<u8> = rgb.chunks_exact(3).flat_map(|px| [px[0], px[1], px[2], 255]).collect();
+                let expected: Vec<u8> = rgb.as_chunks::<3>().0.iter().flat_map(|px| [px[0], px[1], px[2], 255]).collect();
                 for policy in [ycbcr::ColorPolicy::Libtiff, ycbcr::ColorPolicy::TiffEquation] {
                     assert_eq!(ycbcr::decode_rgba8(&bytes, &t.ifds[0], 15, policy).unwrap(), expected);
                     assert_eq!(ycbcr::decode_rgba8(&bytes, &t.ifds[0], 14, policy), Err(TiffError::Limit("pixel count")));
@@ -251,7 +251,7 @@ fn explicit_tiff_policy_keeps_literal_green_equation_and_rejects_bad_tags() {
         (REFERENCE_BLACK_WHITE, Value::Rational(vec![(0, 1); 6])),
         (REFERENCE_BLACK_WHITE, Value::Double(vec![0.0, 255.0])),
     ] {
-        assert!(matches!(run(&[bad.clone()], TiffEquation), Err(TiffError::Invalid(_))));
+        assert!(matches!(run(std::slice::from_ref(&bad), TiffEquation), Err(TiffError::Invalid(_))));
         assert!(run(&[bad], Libtiff).is_ok());
     }
 }
