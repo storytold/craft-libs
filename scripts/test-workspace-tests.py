@@ -40,65 +40,53 @@ COMMON = [
     "clippy --workspace --all-targets --locked -- -D warnings",
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
-LINUX = [
-    "build --workspace --examples --locked",
-    "nextest run --workspace --locked --profile ci-linux",
-    "test --workspace --doc --locked",
-    "build --workspace --examples --all-features --locked",
-    "nextest run --workspace --all-features --locked --profile ci-linux",
+TESTS = [
+    "nextest run --workspace --all-features --locked --profile ci",
     "test --workspace --doc --all-features --locked",
+    "nextest run -p craft-image-codecs -p craft-text --locked --profile ci",
 ]
 
 
 class WorkspaceTests(unittest.TestCase):
-    def test_linux_keeps_both_feature_sets_examples_and_doctests(self):
-        result = commands("Linux")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), COMMON + LINUX)
+    def test_linux_and_macos_run_one_feature_set_with_doctests(self):
+        for os_name in ("Linux", "macOS"):
+            with self.subTest(os=os_name):
+                result = commands(os_name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), COMMON + TESTS)
 
-    def test_macos_keeps_cargo_test(self):
-        result = commands("macOS")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), COMMON + [
-            "test --workspace --locked", "test --workspace --all-features --locked"])
-
-    def test_each_linux_stage_failure_remains_fatal(self):
-        for index, command in enumerate(COMMON + LINUX):
+    def test_each_stage_failure_remains_fatal(self):
+        for index, command in enumerate(COMMON + TESTS):
             with self.subTest(command=command):
                 result = commands("Linux", command)
                 self.assertEqual(result.returncode, 17, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), (COMMON + LINUX)[:index + 1])
+                self.assertEqual(result.stdout.splitlines(), (COMMON + TESTS)[:index + 1])
 
-    def test_windows_keeps_its_existing_profile_and_doctests(self):
+    def test_windows_runs_the_same_cargo_commands(self):
         source = block(WORKFLOW.read_text(), "windows-command")
         cargo = [line.strip() for line in source.splitlines() if line.strip().startswith("cargo ")]
-        self.assertEqual(cargo, ["cargo " + command for command in COMMON + [
-            "nextest run --workspace --locked --profile ci",
-            "test --workspace --doc --locked",
-            "nextest run --workspace --all-features --locked --profile ci",
-            "test --workspace --doc --all-features --locked",
-        ]])
+        self.assertEqual(cargo, ["cargo " + command for command in COMMON + TESTS])
 
-    def test_linux_inherits_no_retries_no_filtering_and_existing_failure_policy(self):
+    def test_ci_profile_keeps_its_failure_policy_without_retries_or_filtering(self):
         config = tomllib.loads((ROOT / ".config/nextest.toml").read_text())
-        self.assertEqual(config["profile"]["ci-linux"]["inherits"], "ci")
         self.assertIs(config["profile"]["ci"]["fail-fast"], False)
         for profile in config["profile"].values():
             self.assertNotIn("default-filter", profile)
             self.assertNotIn("retries", profile)
         self.assertEqual(config["profile"]["ci"]["slow-timeout"], {"period": "60s"})
 
-    def test_linux_resource_groups_are_serial_and_do_not_change_windows(self):
+    def test_unix_resource_groups_are_serial_and_leave_windows_alone(self):
         config = tomllib.loads((ROOT / ".config/nextest.toml").read_text())
-        overrides = config["profile"]["ci-linux"]["overrides"]
+        overrides = config["profile"]["ci"]["overrides"]
         self.assertEqual(overrides, [
-            {"filter": "package(craft-ui) | package(craft-keymap) | package(craft-update)",
+            {"platform": "cfg(unix)",
+             "filter": "package(craft-ui) | package(craft-keymap) | package(craft-update)",
              "test-group": "gpu"},
-            {"filter": "package(craft-video) & kind(test)", "test-group": "linux-video-fixtures"},
+            {"platform": "cfg(unix)", "filter": "package(craft-video) & kind(test)",
+             "test-group": "video-integration"},
         ])
         for override in overrides:
             self.assertEqual(config["test-groups"][override["test-group"]]["max-threads"], 1)
-        self.assertNotIn("overrides", config["profile"]["ci"])
 
     def test_workflow_stays_shared_and_keeps_platform_gates(self):
         source = WORKFLOW.read_text()

@@ -25,7 +25,7 @@ jobs:
     with:
       os: '["ubuntu-latest","windows-latest","macos-latest"]'
       timeout-minutes: 120
-      # Linux and Windows use nextest with explicit doctests (.config/nextest.toml).
+      # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
       tools: cargo-nextest@0.9.150
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
@@ -45,29 +45,21 @@ jobs:
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        if [ "$RUNNER_OS" = Linux ]; then
-          # Keep example compilation as well as test=true example tests selected by nextest.
-          cargo build --workspace --examples --locked
-          cargo nextest run --workspace --locked --profile ci-linux
-          cargo test --workspace --doc --locked
-          cargo build --workspace --examples --all-features --locked
-          cargo nextest run --workspace --all-features --locked --profile ci-linux
-          cargo test --workspace --doc --all-features --locked
-        else
-          cargo test --workspace --locked
-          cargo test --workspace --all-features --locked
-        fi
+        # The tests run once, with every feature, in parallel across test binaries; nextest skips
+        # doctests, so `cargo test --doc` runs them. The default-feature compile is the first
+        # clippy run's; the second command runs the crates whose tests check behaviour with a
+        # feature off, which an all-features build cannot reach.
+        cargo nextest run --workspace --all-features --locked --profile ci
+        cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
       windows-command: |
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        # The same tests as `cargo test`, run in parallel across test binaries instead of one
-        # binary at a time; nextest skips doctests, so `cargo test --doc` runs them.
-        cargo nextest run --workspace --locked --profile ci
-        cargo test --workspace --doc --locked
         cargo nextest run --workspace --all-features --locked --profile ci
         cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
 
   msrv:
     name: Rust 1.95
