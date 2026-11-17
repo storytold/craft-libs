@@ -42,8 +42,12 @@ Licensed under MIT OR Apache-2.0.
   driver reports no bus id, a second GPU of the same model on the same driver looks like an
   older version, and is used through its other backend (DirectX 12 on Windows, OpenGL
   elsewhere).
-- Only an error that says the device is lost counts as a loss. An error about a destroyed buffer
-  or texture is recorded as an error.
+- Only an error whose cause is wgpu's "Parent device is lost" counts as a loss. The same words in
+  a resource's label do not count. An error about a destroyed buffer or texture is recorded as an
+  error.
+- `wait_timeout` and `wait_timeout_cancelable` wait for one submission index. To wait for
+  everything submitted so far, pass `queue.submit([])`; work submitted later does not extend the
+  wait.
 - `DeviceHealth::watch` replaces the device's uncaptured-error handler. Polls catch the panic that
   `Device::poll` raises on a lost device and record the loss.
 

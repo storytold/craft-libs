@@ -269,14 +269,15 @@ mod tests {
     #[test]
     fn a_zero_timeout_leaves_a_healthy_device_healthy() {
         let opened = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
-        assert!(!opened.health.wait_timeout(&opened.device, None, std::time::Duration::ZERO));
+        let everything = opened.queue.submit([]);
+        assert!(!opened.health.wait_timeout(&opened.device, everything.clone(), std::time::Duration::ZERO));
         assert!(opened.health.is_ok(), "{:?}", opened.health.fault());
-        assert!(opened.health.wait_timeout(&opened.device, None, std::time::Duration::from_secs(5)));
+        assert!(opened.health.wait_timeout(&opened.device, everything, std::time::Duration::from_secs(5)));
         // an index from another device's queue is one this device never issued
         let other = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
         other.queue.submit([]);
         let index = other.queue.submit([]);
-        assert!(!opened.health.wait_timeout(&opened.device, Some(index), std::time::Duration::from_secs(5)));
+        assert!(!opened.health.wait_timeout(&opened.device, index, std::time::Duration::from_secs(5)));
         assert!(opened.health.is_ok(), "{:?}", opened.health.fault());
     }
 

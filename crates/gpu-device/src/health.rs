@@ -257,25 +257,27 @@ impl DeviceHealth {
         }
     }
 
-    /// Like [`Self::wait`], but bounded: returns whether the submitted work finished within
-    /// `timeout`. A timeout marks the device faulted, so later work stops going to a GPU that no
-    /// longer answers. A submission index the device never issued returns `false` and leaves the
-    /// device healthy. A zero `timeout`, or
-    /// one that passes before the first poll, returns `false` and leaves the device healthy. A
-    /// device that was already faulted returns `false` unchanged.
+    /// Like [`Self::wait`], but bounded: returns whether the work up to `index` finished within
+    /// `timeout`. To wait for everything submitted so far, pass the index of an empty submission
+    /// (`queue.submit([])`); work submitted after it does not extend the wait. A timeout marks the
+    /// device faulted, so later work stops going to a GPU that no longer answers. A submission
+    /// index the device never issued returns `false` and leaves the device healthy. A zero
+    /// `timeout`, or one that passes before the first poll, returns `false` and leaves the device
+    /// healthy. A device that was already faulted returns `false` unchanged.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn wait_timeout(&self, device: &wgpu::Device, index: Option<wgpu::SubmissionIndex>, timeout: Duration) -> bool {
+    pub fn wait_timeout(&self, device: &wgpu::Device, index: wgpu::SubmissionIndex, timeout: Duration) -> bool {
         self.wait_timeout_cancelable(device, index, timeout, &|| false) == WaitOutcome::Finished
     }
 
     /// [`Self::wait_timeout`] that polls in slices of at most 100 ms and checks `canceled` between
-    /// them, keeping the same overall deadline. A slice that times out means the work has not
-    /// finished yet; only the overall deadline (or a poll that panics) marks the device faulted.
+    /// them, keeping the same overall deadline. Every slice waits for the same `index`. A slice
+    /// that times out means the work has not finished yet; only the overall deadline (or a poll
+    /// that panics) marks the device faulted.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_timeout_cancelable(
         &self,
         device: &wgpu::Device,
-        index: Option<wgpu::SubmissionIndex>,
+        index: wgpu::SubmissionIndex,
         timeout: Duration,
         canceled: &(dyn Fn() -> bool + Sync),
     ) -> WaitOutcome {
@@ -287,7 +289,7 @@ impl DeviceHealth {
         let outcome = wait_slices(timeout, canceled, |slice| {
             polled = true;
             let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                device.poll(wgpu::PollType::Wait { submission_index: index.clone(), timeout: Some(slice) })
+                device.poll(wgpu::PollType::Wait { submission_index: Some(index.clone()), timeout: Some(slice) })
             }));
             match poll {
                 Ok(Ok(_)) => {
@@ -350,16 +352,29 @@ fn wait_slices(total: Duration, canceled: &(dyn Fn() -> bool + Sync), mut poll: 
     }
 }
 
-/// The fault a wgpu error stands for. An error that names a lost device follows a device loss
-/// whose callback may not have run yet (it runs on the next poll), so it counts as a loss rather
-/// than as an error. An error about a destroyed buffer or texture is an error. Only wgpu's own
-/// out-of-memory error is [`OUT_OF_MEMORY`].
+/// The whole message of wgpu's `DeviceError::Lost`.
+const LOST_CAUSE: &str = "Parent device is lost";
+
+/// Whether one of the errors that caused `e` (its `source` chain) is wgpu's `DeviceError::Lost`:
+/// an error whose whole message is [`LOST_CAUSE`]. A resource label is part of another error's
+/// message, so a label never matches.
+fn caused_by_loss(e: &wgpu::Error) -> bool {
+    let source: &(dyn std::error::Error + 'static) = match e {
+        wgpu::Error::Validation { source, .. } | wgpu::Error::Internal { source, .. } => source.as_ref(),
+        _ => return false,
+    };
+    std::iter::successors(Some(source), |c| c.source()).any(|c| c.to_string().trim().eq_ignore_ascii_case(LOST_CAUSE))
+}
+
+/// The fault a wgpu error stands for. An error caused by a lost device ([`caused_by_loss`])
+/// follows a device loss whose callback may not have run yet (it runs on the next poll), so it
+/// counts as a loss rather than as an error. An error about a destroyed buffer or texture is an
+/// error. Only wgpu's own out-of-memory error is [`OUT_OF_MEMORY`].
 fn fault_of(e: &wgpu::Error) -> Fault {
     let text = e.to_string();
-    let lower = text.to_ascii_lowercase();
     if matches!(e, wgpu::Error::OutOfMemory { .. }) {
         Fault::Error(OUT_OF_MEMORY.into())
-    } else if lower.contains("device is lost") {
+    } else if caused_by_loss(e) {
         Fault::Lost(first_line(&text))
     } else {
         Fault::Error(first_line(&text))
@@ -474,15 +489,46 @@ mod tests {
         assert_eq!(h.fault(), Some(Fault::Lost("reset".into())));
     }
 
+    /// An error and the errors that caused it, outermost first, as wgpu-core chains them.
+    #[derive(Debug)]
+    struct Cause(&'static str, Option<Box<Cause>>);
+
+    impl fmt::Display for Cause {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Cause {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|c| c as _)
+        }
+    }
+
+    /// A validation error with the causes `chain` and wgpu's description of them.
+    fn validation(chain: &[&'static str]) -> wgpu::Error {
+        let source = chain.iter().rev().fold(None, |inner, text| Some(Box::new(Cause(text, inner))));
+        let mut description = String::from("Validation Error\n\nCaused by:\n");
+        for c in chain {
+            description.push_str(&format!("    {c}\n"));
+        }
+        wgpu::Error::Validation { source: source.unwrap_or_else(|| Box::new(Cause("", None))), description }
+    }
+
     #[test]
     fn only_a_lost_device_counts_as_a_loss() {
-        let validation =
-            |description: &str| wgpu::Error::Validation { source: Box::new(std::io::Error::other("x")), description: description.into() };
-        let lost = validation("Validation Error\n\nCaused by:\n  In Device::create_buffer\n    Parent device is lost\n");
+        let lost = validation(&["In Device::create_buffer", "Parent device is lost"]);
         assert!(fault_of(&lost).is_lost(), "{:?}", fault_of(&lost));
-        let destroyed = validation("Validation Error\n\nCaused by:\n  In Queue::submit\n    Buffer 'pc' has been destroyed\n");
+        let destroyed = validation(&["In Queue::submit", "Buffer 'pc' has been destroyed"]);
         assert_eq!(fault_of(&destroyed), Fault::Error("Validation Error".into()));
-        let texture = validation("Validation Error\n\nCaused by:\n    Texture with 'frame' label has been destroyed\n");
+        let texture = validation(&["Texture with 'frame' label has been destroyed"]);
         assert!(!fault_of(&texture).is_lost());
+        // a label is the caller's text, not the cause, even on a line of its own
+        let labeled = validation(&["In Queue::submit", "Buffer 'device is lost' has been destroyed"]);
+        assert_eq!(fault_of(&labeled), Fault::Error("Validation Error".into()));
+        for label in ["Buffer 'Parent device is lost' has been destroyed", "Buffer 'a\nParent device is lost\nb' has been destroyed"] {
+            let labeled = validation(&["In Queue::submit", label]);
+            assert!(!fault_of(&labeled).is_lost(), "{label:?}");
+        }
     }
 }
