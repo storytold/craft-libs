@@ -249,10 +249,11 @@ impl Reader<'_> {
                     .unwrap_or_default();
                 para.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
-            if para.props.numbering.is_some()
-                && let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange"))
-            {
-                let original = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
+            if let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange")) {
+                // Multi-level numbering caches (`w:original`) routinely exceed 256 chars while staying
+                // bounded against hostile attributes.
+                const MAX_CHANGE_ORIGINAL: usize = 4096;
+                let original = ch.attr("w:original").unwrap_or("").chars().take(MAX_CHANGE_ORIGINAL).collect();
                 para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original }));
             }
             if let Some(s) = ppr.child("w:sectPr") {
@@ -332,12 +333,37 @@ impl Reader<'_> {
         }
     }
 
+    /// Omitted table-margin sides inherit from that property set's style.
+    fn table_margin_base(&self, style: Option<&str>) -> [f32; 4] {
+        style.and_then(|id| self.doc.styles.table_style(id)).and_then(|st| st.parts.cell_margins).unwrap_or(if self.no_default_table_style {
+            [0.0; 4]
+        } else {
+            crate::read::props::WORD_CELL_MARGINS
+        })
+    }
+
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
             table.props = self.pc.tblpr(p);
+            // Sides `w:tblCellMar` leaves out keep the style's margins; without a style, Word's
+            // 0.08" left and right, or none in a file with no default table style.
+            if let Some(m) = p.child("w:tblCellMar") {
+                let base = self.table_margin_base(table.props.style.as_deref());
+                table.props.cell_margins = Some(crate::read::props::margins_over(m, base));
+            }
             if let Some(ch) = p.child("w:tblPrChange") {
-                let mut old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                let mut old = ch
+                    .child("w:tblPr")
+                    .map(|o| {
+                        let mut props = self.pc.tblpr(o);
+                        if let Some(m) = o.child("w:tblCellMar") {
+                            let base = self.table_margin_base(props.style.as_deref());
+                            props.cell_margins = Some(crate::read::props::margins_over(m, base));
+                        }
+                        props
+                    })
+                    .unwrap_or_default();
                 // Rejecting the change brings back these properties: with the same margins.
                 self.no_default_margins(&mut old);
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
