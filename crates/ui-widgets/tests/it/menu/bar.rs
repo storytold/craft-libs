@@ -193,3 +193,42 @@ fn built_help_entries_are_collected_only_while_the_help_menu_shows() {
     fixture.settle();
     assert!(fixture.by_label("Copy").is_some(), "the search finds a built entry by its English label");
 }
+
+/// The level keeps its letters between passes and assigns them again when the rows' labels change: a row that read
+/// Save when the menu last opened and reads Open now takes O, so typing O runs it.
+#[trial]
+fn a_row_whose_label_changed_since_the_menu_last_opened_takes_its_new_letter() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let renamed = Rc::new(Cell::new(false));
+    let runs = Rc::new(Cell::new(0));
+    let (label, ran) = (renamed.clone(), runs.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let (label, ran) = (label.clone(), ran.clone());
+        let titles = vec![MenuTitle::new("&File", move |ui| {
+            MenuItem::new("Alpha").show(ui);
+            MenuItem::new("Beta").show(ui);
+            if MenuItem::new(if label.get() { "Open" } else { "Save" }).show(ui).ran {
+                ran.set(ran.get() + 1);
+            }
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+    });
+    fixture.settle();
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("Save").is_some(), "File is open");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Save").is_none(), "File is closed");
+
+    renamed.set(true);
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("Open").is_some(), "File is open again, the row reads Open");
+    fixture.type_key(Key::O, "o");
+    fixture.settle();
+    assert_eq!(runs.get(), 1, "O runs the row that reads Open");
+}
