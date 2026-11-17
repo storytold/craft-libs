@@ -295,7 +295,7 @@ impl Doc {
     }
 
     fn line_start(&self, pos: usize) -> usize {
-        self.text.get(..pos).and_then(|s| s.rfind('\n')).map(|i| i + 1).unwrap_or(0)
+        self.text.get(..pos).and_then(|s| s.rfind(['\r', '\n'])).map(|i| i + 1).unwrap_or(0)
     }
 
     fn indent_at(&self, pos: usize) -> String {
@@ -322,7 +322,7 @@ impl Doc {
             }
             let mut s = self.text.clone();
             let eol = self.eol();
-            if !s.is_empty() && !s.ends_with('\n') {
+            if !s.is_empty() && !s.ends_with(['\r', '\n']) {
                 s.push_str(eol);
             }
             s.push_str(&render(&v, "", eol));
@@ -362,9 +362,15 @@ impl Doc {
         self.insert_member(node, first, &v)
     }
 
-    /// The line ending the document already uses (CRLF if it has any, else LF).
+    /// Preserve CRLF and CR-only documents; otherwise use LF.
     fn eol(&self) -> &'static str {
-        if self.text.contains("\r\n") { "\r\n" } else { "\n" }
+        if self.text.contains("\r\n") {
+            "\r\n"
+        } else if self.text.contains('\r') && !self.text.contains('\n') {
+            "\r"
+        } else {
+            "\n"
+        }
     }
 
     /// Add `key: value` as the last member of `obj`, indented like the members already there.
@@ -421,10 +427,12 @@ impl Doc {
                 let with_comma = after.is_none_or(|c| self.text.get(member.value.end..c.start).is_some_and(|gap| gap.trim().is_empty()));
                 let member_end = if with_comma { after.map(|t| t.end).unwrap_or(member.value.end) } else { member.value.end };
                 let rest = self.text.get(member_end..).unwrap_or_default();
-                let line_rest = rest.split('\n').next().unwrap_or_default();
+                let line_rest = rest.split(['\r', '\n']).next().unwrap_or_default();
                 let own_lines = self.first_on_line(member.key_start) && line_rest.trim().is_empty();
                 let (start, end) = if own_lines {
-                    (self.line_start(member.key_start), member_end + line_rest.len() + usize::from(rest.len() > line_rest.len()))
+                    let line_end = member_end + line_rest.len();
+                    let eol_len = if self.text.get(line_end..).is_some_and(|s| s.starts_with("\r\n")) { 2 } else { usize::from(rest.len() > line_rest.len()) };
+                    (self.line_start(member.key_start), line_end + eol_len)
                 } else {
                     (member.key_start, member_end)
                 };
