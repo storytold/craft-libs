@@ -345,22 +345,45 @@ fn write(root: &Path, entry: &Entry, bytes: &[u8]) -> Result<Entry, Fault> {
 
 /// The next in a run of sibling temporary names, unique within this process.
 /// Not meant to resist a second process picking the same name; the create
-/// this writes with is exclusive (`create_new`), so a collision there is
-/// just retried under a new counter value rather than silently overwritten.
+/// [`open_temp`] does is exclusive (`create_new`), so a collision there is
+/// retried under a new counter value rather than silently overwritten.
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// A hidden temporary name beside `rel`, from [`TEMP_SEQUENCE`]. The name
-/// does not include `rel`'s file name, so a file name near the filesystem's
-/// length limit still gets a temporary name that fits.
-fn temp_sibling(rel: &Path) -> Result<PathBuf, Fault> {
+/// How many temporary names [`open_temp`] tries before it gives up.
+const TEMP_ATTEMPTS: usize = 16;
+
+/// Creates a new hidden temporary file beside `rel`, named from
+/// [`TEMP_SEQUENCE`], and returns its path and handle. A name that already
+/// exists (a file another process or an earlier run left) is skipped for the
+/// next one, and never opened or removed. The name does not include `rel`'s
+/// file name, so a file name near the filesystem's length limit still gets a
+/// temporary name that fits.
+fn open_temp(dir: &Dir, rel: &Path) -> Result<(PathBuf, cap_std::fs::File), Fault> {
     if rel.file_name().is_none() {
         return Err(Fault::Refused("that path names no file".to_owned()));
     }
-    let temp_name = format!(".craft-save-{}-{}.tmp", std::process::id(), TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed));
-    Ok(match rel.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.join(&temp_name),
-        _ => PathBuf::from(&temp_name),
-    })
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    // The clock part keeps a stale file from an earlier run with the same
+    // process id from matching a run of names, so needing all the attempts
+    // takes 16 files made for this exact moment.
+    let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
+    #[cfg(test)]
+    let started = if tests::FIXED_TEMP_CLOCK.with(std::cell::Cell::get) { 0 } else { started };
+    let mut last = None;
+    for _ in 0..TEMP_ATTEMPTS {
+        let temp_name = format!(".craft-save-{}-{started:x}-{}.tmp", std::process::id(), TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed));
+        let temp_rel = match rel.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(&temp_name),
+            _ => PathBuf::from(&temp_name),
+        };
+        match dir.open_with(&temp_rel, &options) {
+            Ok(handle) => return Ok((temp_rel, handle)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => last = Some(error),
+            Err(error) => return Err(io_fault(&error)),
+        }
+    }
+    Err(last.map_or_else(|| Fault::Unreachable("no temporary name was free".to_owned()), |error| io_fault(&error)))
 }
 
 /// Writes `bytes` to a new sibling of `rel` inside `dir`, then renames that
@@ -370,14 +393,9 @@ fn temp_sibling(rel: &Path) -> Result<PathBuf, Fault> {
 /// corrupted along with it. A rename only ever replaces `rel`'s own
 /// directory entry.
 fn write_replacing(dir: &Dir, rel: &Path, bytes: &[u8]) -> Result<(), Fault> {
-    let temp_rel = temp_sibling(rel)?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    let written = (|| -> Result<(), Fault> {
-        let mut handle = dir.open_with(&temp_rel, &options).map_err(|error| io_fault(&error))?;
-        handle.write_all(bytes).map_err(|error| io_fault(&error))?;
-        handle.sync_all().map_err(|error| io_fault(&error))
-    })();
+    let (temp_rel, mut handle) = open_temp(dir, rel)?;
+    let written = handle.write_all(bytes).map_err(|error| io_fault(&error)).and_then(|()| handle.sync_all().map_err(|error| io_fault(&error)));
+    drop(handle);
     if let Err(fault) = written {
         let _ = dir.remove_file(&temp_rel);
         return Err(fault);
@@ -404,10 +422,6 @@ fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, 
     let rel_folder = relative(folder)?;
     dir.create_dir_all(&rel_folder).map_err(|error| io_fault(&error))?;
     let rel = rel_folder.join(name);
-    // The bytes go to a sibling temporary file first. A write that fails part
-    // way (a full disk, a lost share) leaves only that file, which is removed,
-    // so the name stays free for the next Save As instead of holding a partial
-    // file that makes it fail with "already exists".
     // A taken name is refused before any bytes are written. The hard link
     // below is still the check that settles a race.
     match dir.symlink_metadata(&rel) {
@@ -415,12 +429,11 @@ fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(io_fault(&error)),
     }
-    let temp_rel = temp_sibling(&rel)?;
-    let mut temp_options = OpenOptions::new();
-    temp_options.write(true).create_new(true);
-    // Removed only after this call opened it: a name `create_new` refused is
-    // somebody else's file.
-    let mut handle = dir.open_with(&temp_rel, &temp_options).map_err(|error| io_fault(&error))?;
+    // The bytes go to a sibling temporary file first. A write that fails part
+    // way (a full disk, a lost share) leaves only that file, which is removed,
+    // so the name stays free for the next Save As instead of holding a partial
+    // file that makes it fail with "already exists".
+    let (temp_rel, mut handle) = open_temp(&dir, &rel)?;
     let written = write_new(&mut handle, bytes).and_then(|()| handle.sync_all().map_err(|error| io_fault(&error)));
     drop(handle);
     if let Err(fault) = written {
@@ -512,10 +525,36 @@ mod tests {
         /// Makes [`create`] on this thread take the path for a filesystem
         /// without hard links.
         pub(super) static NO_HARD_LINKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// Makes [`open_temp`] on this thread use 0 for its clock part.
+        pub(super) static FIXED_TEMP_CLOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Held by the tests that make temporary files, so the next value of
+    /// [`TEMP_SEQUENCE`] is known to the test that reads it.
+    static TEMP_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_stale_temporary_file_is_skipped_and_kept() {
+        let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = tempfile::tempdir().unwrap();
+        let next = TEMP_SEQUENCE.load(Ordering::Relaxed);
+        let stale: Vec<_> = (next..next + 3).map(|n| format!(".craft-save-{}-0-{n}.tmp", std::process::id())).collect();
+        for name in &stale {
+            std::fs::write(root.path().join(name), b"left by an earlier run").unwrap();
+        }
+        FIXED_TEMP_CLOCK.with(|fixed| fixed.set(true));
+        let made = create(root.path(), "", "Minutes.txt", b"minutes");
+        FIXED_TEMP_CLOCK.with(|fixed| fixed.set(false));
+        made.unwrap();
+        assert_eq!(std::fs::read(root.path().join("Minutes.txt")).unwrap(), b"minutes");
+        for name in &stale {
+            assert_eq!(std::fs::read(root.path().join(name)).unwrap(), b"left by an earlier run", "{name} is not this call's file");
+        }
     }
 
     #[test]
     fn without_hard_links_a_create_still_refuses_a_taken_name_and_cleans_up() {
+        let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = tempfile::tempdir().unwrap();
         NO_HARD_LINKS.with(|off| off.set(true));
         let made = create(root.path(), "", "Minutes.txt", b"first");
@@ -536,6 +575,7 @@ mod tests {
 
     #[test]
     fn a_create_whose_write_fails_leaves_no_file_behind() {
+        let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = tempfile::tempdir().unwrap();
         FAIL_CREATE_WRITE.with(|fail| fail.set(1));
         let failed = create(root.path(), "", "Minutes.txt", b"the whole document");
