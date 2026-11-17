@@ -47,7 +47,6 @@ impl BitWriter {
     }
 
     /// Bits written so far.
-    #[cfg(test)]
     pub fn bits(&self) -> u64 {
         self.out.len() as u64 * 8 + u64::from(self.n)
     }

@@ -41,6 +41,7 @@ pub(crate) const TAG_TILE_WIDTH: u16 = 322;
 pub(crate) const TAG_TILE_LENGTH: u16 = 323;
 pub(crate) const TAG_TILE_OFFSETS: u16 = 324;
 pub(crate) const TAG_SUB_IFDS: u16 = 330;
+pub(crate) const TAG_INK_SET: u16 = 332;
 pub(crate) const TAG_EXTRA_SAMPLES: u16 = 338;
 pub(crate) const TAG_SAMPLE_FORMAT: u16 = 339;
 
@@ -349,6 +350,56 @@ pub struct TiffPage {
     pub tiled: bool,
     /// `PlanarConfiguration` 2: each sample in its own plane.
     pub planar: bool,
+    /// TIFF `InkSet` (tag 332), when present. Only meaningful for photometric 5 (Separated).
+    pub ink_set: Option<InkSet>,
+    /// TIFF `ExtraSamples` (tag 338), one per extra sample. Empty when the tag is absent or
+    /// unreadable.
+    pub extra_samples: Vec<ExtraSampleKind>,
+}
+
+/// The TIFF `InkSet` tag (332) of a separated image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InkSet {
+    /// 1: the samples are cyan, magenta, yellow and black.
+    Cmyk,
+    /// 2: the samples are the inks listed in the `InkNames` tag.
+    InkNames,
+    /// Any other value; TIFF 6.0 defines only 1 and 2.
+    Invalid(u16),
+}
+
+impl InkSet {
+    fn from_tag(value: u16) -> Self {
+        match value {
+            1 => Self::Cmyk,
+            2 => Self::InkNames,
+            v => Self::Invalid(v),
+        }
+    }
+}
+
+/// What one extra sample of a TIFF holds, from the `ExtraSamples` tag (338).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtraSampleKind {
+    /// 0: unspecified data.
+    Unspecified,
+    /// 1: associated (premultiplied) alpha.
+    AssociatedAlpha,
+    /// 2: unassociated (straight) alpha.
+    UnassociatedAlpha,
+    /// Any other value; TIFF 6.0 defines only 0, 1 and 2.
+    Invalid(u16),
+}
+
+impl ExtraSampleKind {
+    fn from_tag(value: u16) -> Self {
+        match value {
+            0 => Self::Unspecified,
+            1 => Self::AssociatedAlpha,
+            2 => Self::UnassociatedAlpha,
+            v => Self::Invalid(v),
+        }
+    }
 }
 
 /// The directory structure of a TIFF file: its byte order, BigTIFF or not, and every image
@@ -405,6 +456,14 @@ fn describe(f: &File<'_>, ifd: &Ifd, parent: Option<usize>) -> TiffPage {
         compression: u16_of(TAG_COMPRESSION, 1),
         tiled: ifd.get(TAG_TILE_OFFSETS).is_some(),
         planar: f.tag_uint(ifd, TAG_PLANAR) == Some(2),
+        ink_set: f.tag_uint(ifd, TAG_INK_SET).map(|v| InkSet::from_tag(u16::try_from(v).unwrap_or(u16::MAX))),
+        // Capped at the sample count: a file cannot have more extra samples than samples.
+        extra_samples: f
+            .tag_uints(ifd, TAG_EXTRA_SAMPLES, u64::from(u16_of(TAG_SAMPLES, 1)))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|v| ExtraSampleKind::from_tag(u16::try_from(v).unwrap_or(u16::MAX)))
+            .collect(),
     }
 }
 

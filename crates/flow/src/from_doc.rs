@@ -18,11 +18,7 @@ pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Document → Flow
 
-/// Is this a monospace family name?
-pub fn is_mono(font: &str) -> bool {
-    let f = font.to_ascii_lowercase();
-    f.contains("courier") || f.contains("mono") || f.contains("consolas") || f.contains("menlo") || f.contains("code") || f == "monaco"
-}
+pub use craft_wordmodel::font_kind::is_mono;
 
 fn is_code_style(doc: &Document, id: &str) -> bool {
     let names = |s: &str| {
@@ -201,7 +197,7 @@ fn para_extra(doc: &Document, p: &craft_wordmodel::props::ParaProps) -> Option<B
     let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
     let x = craft_wordmodel::props::ParaProps {
         tabs,
-        shading: p.shading,
+        shading: doc.styles.resolve_para(p).shading,
         style,
         contextual_spacing: p.contextual_spacing,
         bidi: p.bidi.filter(|b| *b),
@@ -342,6 +338,20 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
     })
 }
 
+/// The freeform a `w` × `h` frame shape with border `corner` (see
+/// [`craft_wordmodel::connector::frame_width`]) draws: its outline clockwise and its hole the
+/// other way, so the hole stays empty under either fill rule.
+fn frame_freeform(corner: Option<u32>, w: f32, h: f32) -> craft_wordmodel::freeform::Freeform {
+    use craft_wordmodel::freeform::{FreePath, Freeform};
+    let (w, h) = (craft_wordmodel::geom::finite(w).max(0.0), craft_wordmodel::geom::finite(h).max(0.0));
+    let t = craft_wordmodel::connector::frame_width(corner, w, h);
+    let mut paths = vec![FreePath { pts: vec![[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]], closed: true }];
+    if w - 2.0 * t > 0.0 && h - 2.0 * t > 0.0 {
+        paths.push(FreePath { pts: vec![[t, t], [t, h - t], [w - t, h - t], [w - t, t]], closed: true });
+    }
+    Freeform { w, h, paths, ..Default::default() }
+}
+
 /// Comment `c` (a reply to `parent`) of `doc` as a flow comment: its text holds no comments or
 /// notes of its own.
 /// The flow inline for picture, shape or group `o` of `doc` (a member of groups `depth` deep),
@@ -358,8 +368,12 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
         {
             // A connector stays one in formats that glue them (ODT, with boxes); elsewhere it is a
             // straight line.
+            // A frame (a border with a hole), which the other formats have no shape for, is the
+            // freeform it draws: its outline and, wound the other way, its hole.
+            let frame = (*kind == ShapeKind::Frame).then(|| std::sync::Arc::new(frame_freeform(extra.corner, *w, *h)));
             let kind = match kind {
                 ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector if !opts.boxes => ShapeKind::Line,
+                ShapeKind::Frame => ShapeKind::Freeform,
                 k => *k,
             };
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
@@ -383,7 +397,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                     Box::new(crate::Chain { name: format!("Frame{id}"), next })
                 }),
             };
-            let path = freeform.clone().filter(|_| kind == ShapeKind::Freeform);
+            let path = frame.or_else(|| freeform.clone()).filter(|_| kind == ShapeKind::Freeform);
             Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })
         }
         InlineObject::Image { media, w, h, alt, float, ole, crop, .. } => {
@@ -493,6 +507,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         kind,
         list,
         align: p.props.align,
+        // Direction can come from the paragraph's style (`w:bidi` in the style's pPr).
+        rtl: doc.styles.resolve_para(&p.props).bidi,
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
@@ -532,10 +548,17 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             if c == PAGE_BREAK {
                 if !hidden {
                     out.push_text(&std::mem::take(&mut buf), &f);
+                    let extra = out.extra.as_ref().and_then(|x| {
+                        let mut x = (**x).clone();
+                        x.drop_cap = None;
+                        x.drop_cap_distance = None;
+                        (x != craft_wordmodel::props::ParaProps::default()).then(|| Box::new(x))
+                    });
                     let next = Para {
                         kind,
                         list: None,
                         align: p.props.align,
+                        rtl: out.rtl,
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),
@@ -545,7 +568,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
-                        extra: None,
+                        extra,
                         mark: None,
                         kept: None,
                         wrap: None,
@@ -658,7 +681,10 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             {
                 (li.list, li.label) = (0, None);
             }
-            let old = Para { kind, list, align: c.old.align, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
+            // Direction resolved like the current paragraph's: the old properties' own `w:bidi`, else
+            // the style's.
+            let rtl = doc.styles.resolve_para(&c.old).bidi;
+            let old = Para { kind, list, align: c.old.align, rtl, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
             Box::new(FmtChange { mark: rev_mark(doc, c.rev), old })
         });
     }
@@ -740,16 +766,21 @@ fn graphic_group(
         .iter()
         .take(10_000)
         .filter_map(|item| match item {
-            GraphicItem::Shape { rect, kind, fill, stroke, stroke_width } if finite(rect) => {
+            GraphicItem::Shape { rect, kind, fill, stroke, stroke_width, alpha } if finite(rect) => {
                 let look = BoxLook {
-                    fill: fill.map(craft_wordmodel::fill::Fill::solid).filter(|_| *kind != ShapeKind::Line),
+                    fill: fill
+                        .map(|color| craft_wordmodel::fill::Fill::Solid {
+                            color,
+                            transparency: (1.0 - if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 }) * 100.0,
+                        })
+                        .filter(|_| *kind != ShapeKind::Line),
                     line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                     ..plain.clone()
                 };
                 let inline = Inline::Shape { kind: *kind, w: rect[2] * sx, h: rect[3] * sy, float: None, blocks: Vec::new(), look, path: None };
                 Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline })
             }
-            GraphicItem::Text { rect, text, size, color, bold, align, font } if finite(rect) && !text.trim().is_empty() => {
+            GraphicItem::Text { rect, text, size, color, bold, align, font, .. } if finite(rect) && !text.trim().is_empty() => {
                 let size = if size.is_finite() { size.clamp(1.0, 400.0) } else { 11.0 };
                 // One line, centred vertically in its place as the graphic draws it.
                 let line = size * 1.2;
@@ -1077,7 +1108,10 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
     let ncols =
         t.rows.iter().map(|r| r.first_grid() + r.cells.iter().map(|c| c.span()).sum::<usize>() + r.grid_after()).max().unwrap_or(0).max(t.grid.len());
     for (ri, r) in t.rows.iter().enumerate() {
-        let header = r.props.header || (ri == 0 && t.props.look.header_row && t.rows.len() > 1);
+        // The look's header row is an option of the table's style (`w:tblLook/@w:firstRow`): with
+        // no table style there is nothing to apply, so the first row stays an ordinary row, as in
+        // Word. Only Repeat as header row makes it one then.
+        let header = r.props.header || (ri == 0 && style.is_some() && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
         for (ci, c) in r.cells.iter().enumerate() {
             let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };

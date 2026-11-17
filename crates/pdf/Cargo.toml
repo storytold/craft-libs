@@ -17,12 +17,18 @@ interpret = ["read", "dep:hayro-interpret"]
 paths = ["interpret", "dep:kurbo"]
 raster = ["interpret", "dep:hayro", "dep:bytemuck"]
 write = ["dep:krilla", "dep:thiserror"]
+write-svg = ["write", "dep:craft-svg", "dep:krilla-svg", "dep:usvg", "craft-svg/tree-text"]
 write-pdf = ["write", "krilla/pdf"]
 write-raster = ["dep:flate2", "dep:roxmltree"]
 write-simple-text = ["write", "krilla/simple-text"]
 filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
 cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
+# Content streams on the object layer (`cos::content`); inline images end where hayro-syntax's
+# tokenizer ends them.
+content = ["cos", "dep:hayro-syntax"]
 crypt = ["dep:aes", "dep:md-5", "dep:sha1", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
+# `testing`: a builder of small synthetic PDF files, for the tests of crates that read them.
+test-support = ["cos"]
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }
@@ -30,6 +36,9 @@ hayro-interpret = { workspace = true, optional = true }
 hayro = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
 krilla = { workspace = true, optional = true }
+craft-svg = { workspace = true, optional = true }
+krilla-svg = { version = "=0.8.1", optional = true }
+usvg = { version = "=0.47.0", features = ["text"], optional = true }
 thiserror = { workspace = true, optional = true }
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
 roxmltree = { version = "0.21", optional = true }
@@ -66,6 +75,10 @@ proptest = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[[test]]
+name = "testing_pdf"
+required-features = ["test-support"]
 
 [[example]]
 name = "cos_info"

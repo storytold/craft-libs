@@ -383,6 +383,21 @@ fn associated_alpha_is_made_straight() {
 }
 
 #[test]
+fn ink_set_and_extra_samples_are_listed() {
+    let px = [10u8, 20, 30, 40, 17, 128];
+    let d = strips(1, 1, 8, 6, 5, 1, &px).tag(332, SHORT, &[2]).tag(338, SHORT, &[0, 1]);
+    let info = tiff_info(&build(true, false, &[d], &[0]).bytes).unwrap();
+    use ExtraSampleKind::*;
+    assert_eq!((info.pages[0].ink_set, &info.pages[0].extra_samples[..]), (Some(InkSet::InkNames), &[Unspecified, AssociatedAlpha][..]));
+    let d = strips(1, 1, 8, 6, 5, 1, &px).tag(332, SHORT, &[7]).tag(338, SHORT, &[2, 5]);
+    let info = tiff_info(&build(true, false, &[d], &[0]).bytes).unwrap();
+    assert_eq!((info.pages[0].ink_set, &info.pages[0].extra_samples[..]), (Some(InkSet::Invalid(7)), &[UnassociatedAlpha, Invalid(5)][..]));
+    let d = strips(1, 1, 8, 4, 5, 1, &px[..4]);
+    let info = tiff_info(&build(true, false, &[d], &[0]).bytes).unwrap();
+    assert_eq!((info.pages[0].ink_set, &info.pages[0].extra_samples[..]), (None, &[][..]));
+}
+
+#[test]
 fn white_is_zero_opens_with_the_right_tones() {
     // #691: 00 FF 00 in a WhiteIsZero file is white, black, white.
     let b = build(true, false, &[strips(3, 1, 8, 1, 0, 1, &[0x00, 0xff, 0x00])], &[0]);
@@ -524,6 +539,7 @@ fn every_ifd_and_subifd_is_listed_and_decodable() {
         // Like Photoshop: the first full-resolution page opens; the thumbnail is skipped.
         let img = decode_ok(&b.bytes);
         assert_eq!((img.dimensions(), img.data()[0]), ((9, 7), 2));
+        assert_eq!(probe_size(&b.bytes).unwrap(), (9, 7), "the header probe sizes the page decode opens");
         assert_eq!(img.warnings, [DecodeWarning::MorePages { total: Some(2) }]);
         // Every directory decodes on request.
         for (i, (w, level)) in [(4, 1u8), (9, 2), (3, 5), (2, 6), (9, 3), (5, 4)].into_iter().enumerate() {
@@ -539,6 +555,7 @@ fn a_file_of_only_thumbnails_still_opens() {
     let b = build(true, false, &[gray_page(4, 3, 7, Some(1))], &[0]);
     assert_eq!(tiff_info(&b.bytes).unwrap().default_page(), Some(0));
     assert_eq!(decode_ok(&b.bytes).data()[0], 7);
+    assert_eq!(probe_size(&b.bytes).unwrap(), (4, 3));
 }
 
 #[test]
@@ -683,6 +700,9 @@ fn hostile_sizes_and_counts_are_refused_without_allocating() {
             patch_value(&mut b, little, big, 0, 256, 0, wv);
             patch_value(&mut b, little, big, 0, 257, 0, hv);
             assert!(decode(&b.bytes).is_err(), "{wv}x{hv}");
+            if wv > 300_000 || hv > 300_000 {
+                assert!(matches!(probe_size(&b.bytes), Err(CodecError::LimitExceeded(_))), "{wv}x{hv}: probe");
+            }
             assert!(decode_with(&b.bytes, &DecodeOptions { limits: Limits::none(), ..Default::default() }).is_err(), "{wv}x{hv} without limits");
         }
         // A strip-offset count far past the end of the file.
@@ -790,6 +810,7 @@ fn poke(bytes: &[u8]) {
     let _ = decode_with(bytes, &DecodeOptions { limits: Limits { max_alloc: 16 << 20, ..Limits::default() }, ..Default::default() });
     let _ = exif_orientation(bytes);
     let _ = tiff_orientation(bytes);
+    let _ = probe_size(bytes);
     if let Ok(info) = tiff_info(bytes) {
         for i in 0..info.pages.len().min(8) {
             let _ = decode_tiff_page(bytes, i, &DecodeOptions::default());
