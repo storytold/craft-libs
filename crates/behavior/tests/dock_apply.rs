@@ -218,6 +218,35 @@ fn column_of(layout: &Layout<u32>, panel: u32) -> &Column<u32> {
     layout.column(&layout.place(&panel).unwrap()).unwrap()
 }
 
+/// A floating window's edge: a save without one loads none, so the area takes the edge nearer the rect as before; a
+/// move or a float of a collapsed column that sets one keeps and saves it; collapsing the column clears it; an
+/// expanded column floated with one keeps none.
+#[test]
+fn a_floating_windows_edge_is_saved_set_by_collapsed_moves_and_floats_and_cleared_by_collapsing() {
+    let saved = r#"{"root": {"Tabs": {"panels": [1], "active": 0}}, "floating": [{"id": 5, "panels": [6], "active": 0, "rect": [100.0, 100.0, 300.0, 400.0]}]}"#;
+    let mut layout: Layout<u32> = serde_json::from_str(saved).unwrap();
+    assert_eq!(layout.floating[0].edge, None, "a save without an edge keeps to the edge nearer its rect");
+
+    layout.apply(Action::set_iconic(6, true)).unwrap();
+    layout.apply(Action::move_floating_with_edge(6, window(), Some(DockEdge::End))).unwrap();
+    assert_eq!(layout.floating[0].edge, Some(DockEdge::End), "a collapsed window's move sets its edge");
+    let back: Layout<u32> = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
+    assert_eq!(back, layout, "the edge is saved");
+    layout.apply(Action::set_iconic(6, false)).unwrap();
+    assert_eq!(layout.floating[0].edge, Some(DockEdge::End), "expanding keeps the edge the strip hung from");
+    layout.apply(Action::set_iconic(6, true)).unwrap();
+    assert_eq!(layout.floating[0].edge, None, "collapsing hangs the strip from the edge nearer the window");
+
+    let mut moved = columns();
+    moved.apply(Action::move_group(3, Target::float_with_edge(window(), Some(DockEdge::End)))).unwrap();
+    let floated = moved.floating.iter().find(|window| window.contains(&3)).unwrap();
+    assert_eq!(floated.edge, Some(DockEdge::End), "a collapsed column floats at the edge its strip was dropped near");
+    let mut moved = columns();
+    moved.apply(Action::move_group(2, Target::float_with_edge(window(), Some(DockEdge::End)))).unwrap();
+    let floated = moved.floating.iter().find(|window| window.contains(&2)).unwrap();
+    assert_eq!(floated.edge, None, "an expanded column keeps to the edge nearer its rect");
+}
+
 /// Collapse to icons is a state of every column: a floating window collapses and stays floating; groups leaving a
 /// column float in its state; groups joining a column, docked or floating, take that column's state.
 #[test]
@@ -229,8 +258,11 @@ fn a_column_keeps_its_collapsed_state_when_it_floats_and_a_joined_column_decides
     layout.apply(Action::set_iconic(6, false)).unwrap();
     assert_eq!(layout.panel_state(&6), PanelState::Front);
 
-    for action in [Action::move_column(3, Target::float(window())), Action::move_group(3, Target::float(window())), Action::move_panel(3, Target::float(window()))]
-    {
+    for action in [
+        Action::move_column(3, Target::float(window())),
+        Action::move_group(3, Target::float(window())),
+        Action::move_panel(3, Target::float(window())),
+    ] {
         let mut moved = columns();
         moved.apply(action.clone()).unwrap();
         assert!(floats(&moved, 3) && column_of(&moved, 3).iconic, "{action:?} floats as icons");
@@ -301,7 +333,8 @@ fn a_panel_that_does_not_collapse_keeps_its_column_expanded() {
 fn a_panel_that_shares_no_column_moves_only_to_a_column_of_its_own() {
     let alone = |p: &u32| if *p == 2 { Permissions::ALL.shares_column(false) } else { Permissions::ALL };
     let layout = columns();
-    let joins = [DockPlacement::tab(None), DockPlacement::Split(DockSide::Center), DockPlacement::group(true, None), DockPlacement::group(false, Some(80.0))];
+    let joins =
+        [DockPlacement::tab(None), DockPlacement::Split(DockSide::Center), DockPlacement::group(true, None), DockPlacement::group(false, Some(80.0))];
     for placement in joins {
         for (panel, anchor) in [(2, 3), (3, 2), (2, 6), (6, 2)] {
             let mut moved = layout.clone();

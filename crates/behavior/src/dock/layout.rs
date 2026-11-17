@@ -301,7 +301,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         let window_open = location.anchor.as_ref().is_some_and(|anchor| proposed.floating.iter().any(|w| w.contains(anchor)));
         if let Some(rect) = location.floating.filter(|_| !window_open) {
             // A window that closed as a whole reopens at its last rect.
-            proposed.insert_moving(moving(), Target::Float { rect }, &|_| false)?;
+            proposed.insert_moving(moving(), Target::Float { rect, edge: None }, &|_| false)?;
         } else if let Some(anchor) = &location.anchor
             && matches!(location.placement, DockPlacement::Group { .. } | DockPlacement::Column { .. })
         {

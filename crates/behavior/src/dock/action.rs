@@ -6,7 +6,7 @@ use crate::placement::Placement;
 
 use super::{
     DockSide,
-    groups::{GroupLocation, Target},
+    groups::{DockEdge, GroupLocation, Target},
     policy::Permissions,
     split::SplitSize,
 };
@@ -161,6 +161,11 @@ pub enum Action<P> {
         /// The window rect in logical points. Saved as `[x, y, width, height]`.
         #[serde(with = "crate::dock::rect_serde")]
         rect: Rect,
+        /// The window's [`Floating::edge`](super::Floating::edge): the edge the area decided from where a collapsed
+        /// window's strip was dropped. `None` (any move of an expanded window, and a sender without the float area)
+        /// leaves the edge to the area, nearer `rect`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edge: Option<DockEdge>,
     },
     /// Path from the root: false is the first child, true the second.
     #[non_exhaustive]
@@ -370,9 +375,14 @@ impl<P> Action<P> {
         Self::OpenAt { panel, anchor, placement }
     }
 
-    /// Builds [`Action::MoveFloating`].
+    /// Builds [`Action::MoveFloating`] with no edge: the area takes the edge nearer `rect`.
     pub fn move_floating(panel: P, rect: Rect) -> Self {
-        Self::MoveFloating { panel, rect }
+        Self::MoveFloating { panel, rect, edge: None }
+    }
+
+    /// Builds [`Action::MoveFloating`] with the window's edge.
+    pub fn move_floating_with_edge(panel: P, rect: Rect, edge: Option<DockEdge>) -> Self {
+        Self::MoveFloating { panel, rect, edge }
     }
 
     /// Builds [`Action::ResizeSplit`].

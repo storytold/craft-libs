@@ -30,7 +30,7 @@ mod sizing;
 
 use bar::panel_names;
 
-pub(super) use bar::{BarRecord, CHEVRON, bar_name, bar_slots, describe_chevron, paint_chevron, show_bar};
+pub(super) use bar::{BarRecord, CHEVRON, bar_band, bar_name, bar_slots, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
 pub use sizing::{GroupSize, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
 
@@ -70,31 +70,39 @@ pub enum ColumnArrow {
     Collapse,
     /// Switches a stepped column ([`stepped`]) between one and two steps. Holds the steps it shows.
     Steps(u16),
+    /// Nothing: the column neither collapses nor has steps. It shows no double arrow, and its menu offers no
+    /// collapse.
+    Fixed,
 }
 
 impl ColumnArrow {
-    /// The arrow of `column`: an expanded stepped column whose panels do not collapse (`collapses` false) switches
-    /// steps; any other column collapses or expands.
+    /// The arrow of `column`: an expanded column whose panels do not collapse (`collapses` false) switches steps
+    /// when it is stepped and has none otherwise; any other column collapses or expands.
     pub fn of<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, collapses: bool) -> Self {
-        match stepped(column, spec) {
-            Some((_, steps)) if !collapses && !column.iconic => ColumnArrow::Steps(steps),
-            _ => ColumnArrow::Collapse,
+        if collapses || column.iconic {
+            return ColumnArrow::Collapse;
+        }
+        stepped(column, spec).map_or(ColumnArrow::Fixed, |(_, steps)| ColumnArrow::Steps(steps))
+    }
+
+    /// The steps a click gives a stepped column: two from one, else one. `None` for any other arrow.
+    pub fn switched_steps(self) -> Option<u16> {
+        match self {
+            ColumnArrow::Steps(steps) => Some(if steps == 1 { 2 } else { 1 }),
+            ColumnArrow::Collapse | ColumnArrow::Fixed => None,
         }
     }
 
-    /// The steps a click gives a stepped column: two from one, else one. `None` for an arrow that collapses.
-    pub fn switched_steps(self) -> Option<u16> {
-        match self {
-            ColumnArrow::Collapse => None,
-            ColumnArrow::Steps(steps) => Some(if steps == 1 { 2 } else { 1 }),
-        }
+    /// Whether the column shows a double arrow.
+    pub(super) fn shown(self) -> bool {
+        self != ColumnArrow::Fixed
     }
 
     /// Whether a click sends the column towards the edge it keeps to: collapsing the `expanded` column, or narrowing a
     /// stepped one.
     pub(super) fn towards_edge(self, expanded: bool) -> bool {
         match self {
-            ColumnArrow::Collapse => expanded,
+            ColumnArrow::Collapse | ColumnArrow::Fixed => expanded,
             ColumnArrow::Steps(steps) => steps > 1,
         }
     }
@@ -102,8 +110,8 @@ impl ColumnArrow {
     /// The arrow's name: what a click on it does to the `expanded` or collapsed column.
     pub(super) fn name(self, words: &DockWords, expanded: bool) -> Label {
         let word = match self {
-            ColumnArrow::Collapse if expanded => &words.collapse_column,
-            ColumnArrow::Collapse => &words.expand_column,
+            ColumnArrow::Collapse | ColumnArrow::Fixed if expanded => &words.collapse_column,
+            ColumnArrow::Collapse | ColumnArrow::Fixed => &words.expand_column,
             ColumnArrow::Steps(1) => &words.two_steps,
             ColumnArrow::Steps(_) => &words.one_step,
         };
@@ -236,7 +244,7 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
         at: Option<Rect>,
         mut view: impl FnMut(&Group<P>, Rect, &mut Ui, &mut BodyCx<'_>) + 'a,
     ) -> DockColumnOutput<P> {
-        let (column, spec, auto_collapse, edge, own) = (self.column, self.spec, self.auto_collapse, self.edge, self.bar);
+        let (column, spec, auto_collapse, edge, own, arrow) = (self.column, self.spec, self.auto_collapse, self.edge, self.bar, self.arrow);
         let mut bar = BarRecord::default();
         let shown = &mut bar;
         let body = move |ui: &mut Ui, body: &mut BodyCx<'_>| {
@@ -252,7 +260,8 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
             if own == ColumnBar::Own
                 && let Some(grip) = column_grip(column, spec, body)
             {
-                *shown = show_bar(ui, body, plan.bar, true, auto_collapse, edge, grip);
+                let band = bar_band(ui, plan.bar, edge);
+                *shown = show_bar(ui, body, band, true, auto_collapse, arrow, grip);
             }
             for (group, rect) in column.groups.iter().zip(&plan.groups) {
                 view(group, *rect, ui, body);
@@ -393,7 +402,7 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sizes = cx.style.sizes;
         let plan = column_plan(self.column, self.spec, rect, self.bar, &sizes, |_, _| None);
-        if self.bar == ColumnBar::Own {
+        if self.bar == ColumnBar::Own && self.arrow.shown() {
             let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
             let name = self.arrow.name(&cx.words::<DockWords>(), true);
             let _ = cx.part(CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
@@ -412,7 +421,7 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         let sizes = cx.style.sizes;
         let (rect, rtl, ctx) = (cx.rect, cx.flow.is_rtl(), cx.core.ctx.clone());
         let own = self.bar == ColumnBar::Own;
-        self.collapse = own && cx.part_activated(CHEVRON).is_some();
+        self.collapse = own && self.arrow.shown() && cx.part_activated(CHEVRON).is_some();
         let Some(base) = self.laid.take() else { return };
         let mut plan = column_plan(self.column, self.spec, rect, self.bar, &sizes, |key, divider| divider::pointer(cx, DIVIDER, key, divider));
         let dividers = base.dividers(rect, sizes.reach);
@@ -449,7 +458,9 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
         if self.bar == ColumnBar::Own {
             ui.draw().surface(plan.bar, SurfaceKind::Background, Corners::None);
-            paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());
+            if self.arrow.shown() {
+                paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());
+            }
         }
     }
 
@@ -482,7 +493,9 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         if self.bar == ColumnBar::Own {
             let edge = self.edge_divider(cx.rect, &sizes);
             divider::describe(access, EDGE, 0, &edge, words.resize.as_str(), sizes.step);
-            describe_chevron(access, &self.arrow.name(&words, true));
+            if self.arrow.shown() {
+                describe_chevron(access, &self.arrow.name(&words, true));
+            }
         }
     }
 

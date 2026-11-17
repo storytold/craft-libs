@@ -49,7 +49,8 @@ pub struct FloatingGroupStyle {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct WindowColumn {
-    /// The edge of the float area, in reading order, that the window keeps to: the one nearer the window.
+    /// The edge of the float area, in reading order, that the window keeps to: the dock model's `Floating::edge`,
+    /// else the one nearer the window.
     pub edge: DockEdge,
     /// The size of the collapsed column under the title row; `None` while the column is expanded.
     pub collapsed: Option<Vec2>,
@@ -91,23 +92,29 @@ impl WindowColumn {
         if at_left != rtl { DockEdge::Start } else { DockEdge::End }
     }
 
-    /// The rect a collapsed window keeps when a move that showed it against `edge` ends at `rect`, so its strip
-    /// stays where it was dropped once the window keeps to the edge nearer it again: `rect` while that edge is still
-    /// `edge`; else `rect` shifted so the strip, against the other edge, is where it was, when the other edge is the
-    /// nearer one of the shifted rect. A strip dropped near the middle of `bounds`, where neither holds, keeps
-    /// `rect`. An expanded window keeps `rect`.
-    pub fn anchored(self, rect: Rect, bounds: Rect, rtl: bool) -> Rect {
-        let Some(size) = self.collapsed else { return rect };
-        if Self::nearer_edge(rect, bounds, rtl) == self.edge {
-            return rect;
-        }
-        let at_left = |edge: DockEdge| (edge == DockEdge::Start) != rtl;
-        let strip = if at_left(self.edge) { rect.left() } else { rect.right() - size.x };
-        let other = if self.edge == DockEdge::Start { DockEdge::End } else { DockEdge::Start };
-        let left = if at_left(other) { strip } else { strip + size.x - rect.width() };
-        let shifted = Rect::from_min_size(Pos2::new(left, rect.top()), rect.size());
-        if Self::nearer_edge(shifted, bounds, rtl) == other { shifted } else { rect }
+    /// Where a window whose move ends at `rect` keeps to, and the rect it keeps: for a collapsed window, the edge of
+    /// `bounds` nearer its strip as it was dropped, shown against [`Self::edge`], and the rect that shows the strip
+    /// at the same place against that edge ([`Self::around_strip`]); an expanded window keeps `rect`, and the edge
+    /// nearer it (`None`).
+    pub fn dropped(self, rect: Rect, bounds: Rect, rtl: bool) -> (Rect, Option<DockEdge>) {
+        let Some(size) = self.collapsed else { return (rect, None) };
+        let left = if at_left(self.edge, rtl) { rect.left() } else { rect.right() - size.x };
+        let (rect, edge) = Self::around_strip(Rect::from_min_size(Pos2::new(left, rect.top()), size), rect.size(), bounds, rtl);
+        (rect, Some(edge))
     }
+
+    /// The edge of `bounds` nearer the strip of a collapsed column at `strip`, whose top is its window's, and the
+    /// window rect of `size` that shows the strip at `strip` against that edge.
+    pub fn around_strip(strip: Rect, size: Vec2, bounds: Rect, rtl: bool) -> (Rect, DockEdge) {
+        let edge = Self::nearer_edge(strip, bounds, rtl);
+        let left = if at_left(edge, rtl) { strip.left() } else { strip.right() - size.x };
+        (Rect::from_min_size(Pos2::new(left, strip.top()), size), edge)
+    }
+}
+
+/// Whether `edge`, in reading order, is the left one of the screen.
+fn at_left(edge: DockEdge, rtl: bool) -> bool {
+    (edge == DockEdge::Start) != rtl
 }
 
 /// What a floating group reports in a pass.
@@ -343,14 +350,14 @@ impl<'a> FloatingGroup<'a> {
     fn collapsed_rect(&self) -> Option<Rect> {
         let column = self.column?;
         let size = column.collapsed? + Vec2::new(0.0, self.header);
-        let at_left = (column.edge == DockEdge::Start) != self.rtl;
-        let left = if at_left { self.rect.left() } else { self.rect.right() - size.x };
+        let left = if at_left(column.edge, self.rtl) { self.rect.left() } else { self.rect.right() - size.x };
         Some(Rect::from_min_size(Pos2::new(left, self.rect.top()), size))
     }
 
     /// The double arrow's square at the end of the title row the window keeps to.
     fn chevron_edge(&self) -> Option<HeaderEdge> {
-        self.column.map(|column| if column.edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start })
+        let column = self.column.filter(|column| column.arrow.shown())?;
+        Some(if column.edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start })
     }
 }
 

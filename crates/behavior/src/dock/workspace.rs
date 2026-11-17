@@ -362,7 +362,7 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             let to = match place {
                 PanelPlace::Dock { .. } => Target::At { anchor, placement: DockPlacement::Column { after: false } },
                 PanelPlace::Floating { window, .. } => match self.layout.floating.get(window) {
-                    Some(window) => Target::Float { rect: window.rect },
+                    Some(window) => Target::Float { rect: window.rect, edge: window.edge },
                     None => continue,
                 },
                 PanelPlace::Node(_) => Target::At { anchor, placement: DockPlacement::Split(DockSide::Start) },

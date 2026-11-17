@@ -582,12 +582,22 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let moved = if floating { pass.windows(ui, body, &open, started) } else { None };
     let mut report = pass.report;
     let label: Arc<str> = Arc::from(body.words::<DockWords>().move_window.as_str());
-    if let Some((anchor, change)) = moved
-        && let Some(event) = window_edit(ctx, current, rights, &mut memory.moving, &anchor, &change, label)
+    if let Some((anchor, change, edge)) = moved
+        && let Some(event) = window_edit(
+            ctx,
+            current,
+            rights,
+            &mut memory.moving,
+            change.phase,
+            Action::move_floating_with_edge(anchor.clone(), change.rect, edge),
+            label,
+        )
     {
-        let rect_in = |layout: &Layout<P>| layout.floating.iter().find(|window| window.contains(&anchor)).map(|window| window.rect);
-        if let Some(rect) = event.landed().and_then(|landed| rect_in(&landed.layout)).filter(|rect| Some(*rect) != rect_in(&current.layout)) {
-            geometry.push(Action::move_floating(anchor.clone(), rect));
+        let place_in = |layout: &Layout<P>| layout.floating.iter().find(|window| window.contains(&anchor)).map(|window| (window.rect, window.edge));
+        if let Some((rect, edge)) =
+            event.landed().and_then(|landed| place_in(&landed.layout)).filter(|place| Some(*place) != place_in(&current.layout))
+        {
+            geometry.push(Action::move_floating_with_edge(anchor.clone(), rect, edge));
         }
         edit.push(event);
     }
@@ -873,7 +883,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     && scene.permissions(panel).floatable
                     && (scene.config.float_on_empty_drop || !ui.ctx().content_rect().contains(*pointer))
             });
-        let torn = torn.map(|(panel, pointer)| float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel))).action);
+        let torn = torn.map(|(panel, pointer)| {
+            float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel)), None, scene.rtl).action
+        });
         if let Some(panel) = output.picked.and_then(|key| scene.panel(key)) {
             self.report.actions.push(Action::activate(panel.clone()));
             self.report.picked = Some(panel.clone());
@@ -954,11 +966,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     }
 
     /// What a click on the double arrow of `column`, whose first panel is `first`, asks for when it reports
-    /// `iconic`: the steps it switches to, or the collapse or expansion of the column.
-    fn arrow(&self, column: &Column<P>, first: &P, iconic: bool) -> Action<P> {
-        match self.arrow_of(column).switched_steps() {
-            Some(steps) => Action::set_column_steps(first.clone(), steps),
-            None => Action::set_iconic(first.clone(), iconic),
+    /// `iconic`: the steps it switches to, or the collapse or expansion of the column; nothing for a column with no
+    /// double arrow, whose bar's double click reports the same.
+    fn arrow(&self, column: &Column<P>, first: &P, iconic: bool) -> Option<Action<P>> {
+        match self.arrow_of(column) {
+            ColumnArrow::Fixed => None,
+            arrow => Some(match arrow.switched_steps() {
+                Some(steps) => Action::set_column_steps(first.clone(), steps),
+                None => Action::set_iconic(first.clone(), iconic),
+            }),
         }
     }
 
@@ -1002,7 +1018,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { return };
         if let Some(iconic) = work.iconic {
             let action = self.arrow(column, first, iconic);
-            self.report.actions.push(action);
+            self.report.actions.extend(action);
         }
         if let Some(item) = work.picked {
             self.pick(first, item);
@@ -1047,18 +1063,25 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// its panels allow one. A window takes the drops over it on its own layer, from the spots its column registers in
     /// its own registry. `open` is the open flyout, which a collapsed window's icons share with the docks'. `started`
     /// is the layout a running move or resize of a window began on. Returns the move or resize of a window in the app
-    /// window this pass, which the area reports as a workspace edit.
+    /// window this pass, with the edge the window keeps to after it, which the area reports as a workspace edit.
     ///
-    /// A window keeps to the edge of the float area nearer it: its title row's double arrow sits at that end, and its
-    /// collapsed column shows against that edge of its rect. A move or resize keeps the edge the window had when it
-    /// began, so nothing jumps while the window crosses the middle; a collapsed window's move ends with the rect
-    /// that keeps its strip where it was dropped ([`WindowColumn::anchored`]).
+    /// A window keeps to its edge of the float area (`Floating::edge`, else the one nearer it): its title row's
+    /// double arrow sits at that end, and its collapsed column shows against that edge of its rect. A move or resize
+    /// keeps the edge the window had when it began, so nothing jumps while the window crosses the middle. A collapsed
+    /// window's move ends at the edge nearer the strip where it was dropped, with the rect that shows the strip there
+    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect.
     ///
     /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
     /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
     /// bottom the fewest whose content fits the height, and the window keeps its place; a drag of its left side keeps
     /// its right edge.
-    fn windows(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, open: &Option<P>, started: Option<&Layout<P>>) -> Option<(P, PlacementChange)> {
+    fn windows(
+        &mut self,
+        ui: &mut Ui,
+        body: &mut BodyCx<'_>,
+        open: &Option<P>,
+        started: Option<&Layout<P>>,
+    ) -> Option<(P, PlacementChange, Option<DockEdge>)> {
         let scene = self.scene;
         let ctx = ui.ctx().clone();
         let policy = |panel: &P| scene.permissions(panel);
@@ -1093,9 +1116,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated), &active);
             let mut commands = Vec::new();
             let spec = scene.spec(&active);
-            let began =
-                started.and_then(|layout| layout.floating.iter().find(|began| began.id == window.id)).map_or(opening.rect, |began| began.rect);
-            let edge = WindowColumn::nearer_edge(began, scene.bounds, scene.rtl);
+            let began = started.and_then(|layout| layout.floating.iter().find(|began| began.id == window.id));
+            let (began_rect, began_edge) = began.map_or((opening.rect, window.edge), |began| (began.rect, began.edge));
+            let edge = began_edge.unwrap_or_else(|| WindowColumn::nearer_edge(began_rect, scene.bounds, scene.rtl));
             let width = scene.sizes.expanded_width(&window.column, &spec_of);
             let shape = if window.column.iconic {
                 let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
@@ -1151,8 +1174,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     self.report.actions.extend(native::reported(&ctx, window, viewport));
                 }
             } else if let Some(mut change) = output.placed {
+                // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
+                let mut keeps = shape.collapsed.map(|_| edge);
                 if change.phase == GesturePhase::Commit {
-                    change.rect = shape.anchored(change.rect, scene.bounds, scene.rtl);
+                    (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
                 }
                 if !matches!(change.kind, PlacementKind::Move)
                     && let Some(fitted) = shape.fitted
@@ -1175,17 +1200,24 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         self.report.actions.push(Action::set_column_steps(anchor.clone(), to));
                     }
                     // The window keeps its place and its steps set its size. A grip on the left keeps the right edge
-                    // where it is, so the window grows or shrinks to the left.
+                    // where it is, and one on the top the bottom edge, so the window grows or shrinks that way.
                     let left = match change.kind {
                         PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - grid.width(to),
                         _ => change.rect.left(),
                     };
-                    change.rect = Rect::from_min_size(Pos2::new(left, change.rect.top()), opening.rect.size());
+                    let top = match change.kind {
+                        PlacementKind::Size(ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight) => {
+                            let content = self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0);
+                            change.rect.bottom() - scene.sizes.strip - content
+                        }
+                        _ => change.rect.top(),
+                    };
+                    change.rect = Rect::from_min_size(Pos2::new(left, top), opening.rect.size());
                 }
                 if change.phase == GesturePhase::Commit {
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });
                 }
-                moved = Some((anchor.clone(), change));
+                moved = Some((anchor.clone(), change, keeps));
             }
             match output.action {
                 // The OS close of a native window arrives here as well, also where the title row offers no Close.
@@ -1211,7 +1243,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // The title row is the column's bar: its double arrow collapses or expands the column.
             if let Some(iconic) = output.iconic {
                 let action = self.arrow(&window.column, &anchor, iconic);
-                self.report.actions.push(action);
+                self.report.actions.extend(action);
             }
         }
         moved
@@ -1238,29 +1270,30 @@ fn split_changes<P>(from: &Node<P>, to: &Node<P>) -> Vec<(Vec<bool>, SplitSize)>
     out
 }
 
-/// The workspace edit of a floating window's move or resize: the gesture runs from the window's `Begin` to its
-/// `Commit`, so one drag is one undo step. `moving` holds the gesture and the workspace it began on; `rights` are the
-/// panels' permissions with the lock applied, which refuse the move of a locked workspace.
+/// The workspace edit of a floating window's move or resize, the step `phase` of a gesture that `action`
+/// (`Action::MoveFloating`) places the window by: the gesture runs from the window's `Begin` to its `Commit`, so one
+/// drag is one undo step. `moving` holds the gesture and the workspace it began on; `rights` are the panels'
+/// permissions with the lock applied, which refuse the move of a locked workspace.
 fn window_edit<P: Clone + Eq + Hash>(
     ctx: &Context,
     current: &Workspace<P>,
     rights: &HashMap<P, Permissions>,
     moving: &mut Option<Moving<P>>,
-    anchor: &P,
-    change: &PlacementChange,
+    phase: GesturePhase,
+    action: Action<P>,
     label: Arc<str>,
 ) -> Option<EditEvent<Workspace<P>>> {
     let moved = || {
         let mut next = current.clone();
         let policy = |panel: &P| rights.get(panel).copied().unwrap_or(Permissions::ALL);
-        next.apply(Action::move_floating(anchor.clone(), change.rect), false, policy).ok().map(|_| next)
+        next.apply(action.clone(), false, policy).ok().map(|_| next)
     };
     let begin = |moving: &mut Option<Moving<P>>| {
         let id = crate::runtime::edit::next_gesture_id(ctx);
         *moving = Some(Moving { id, before: current.clone() });
         EditEvent::begin(id, Mixed::Same(current.clone()), Arc::clone(&label), None)
     };
-    match change.phase {
+    match phase {
         GesturePhase::Begin => Some(begin(moving)),
         GesturePhase::Update => match moving.as_ref() {
             Some(held) => Some(EditEvent::update(held.id, moved()?)),

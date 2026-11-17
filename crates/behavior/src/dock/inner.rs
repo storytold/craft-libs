@@ -50,7 +50,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 // A panel the layout does not hold opens in the new window.
                 let entry = self.take(&panel).unwrap_or(StackEntry { panel: panel.clone(), open: true, height: None });
                 let moving = Moving { id: lone, ..Moving::taken(Group::new(vec![entry.panel], 0), source) };
-                self.insert_moving(moving, Target::Float { rect }, canvas)
+                self.insert_moving(moving, Target::Float { rect, edge: None }, canvas)
             }
             Action::Close { panel } => self.take(&panel).map(|_| ()).ok_or(DockError::MissingPanel),
             Action::Activate { panel } => {
@@ -91,12 +91,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 }
                 self.insert(StackEntry { panel, open: true, height: None }, Column::new(Vec::new()), &anchor, placement, canvas)
             }
-            Action::MoveFloating { panel, rect } => {
+            Action::MoveFloating { panel, rect, edge } => {
                 if !valid_rect(rect) {
                     return Err(DockError::InvalidGeometry);
                 }
                 let window = self.floating.iter_mut().find(|g| g.contains(&panel)).ok_or(DockError::MissingPanel)?;
                 window.rect = rect;
+                window.edge = edge;
                 Ok(())
             }
             Action::ResizeSplit { path, size } => {
@@ -194,6 +195,10 @@ impl<P: Clone + Eq + Hash> Layout<P> {
             }
             Action::SetIconic { panel, iconic } => {
                 self.column_of(&panel)?.iconic = iconic;
+                // A floating column that collapses hangs from the edge nearer its window, which the area takes.
+                if iconic && let Some(window) = self.floating.iter_mut().find(|window| window.contains(&panel)) {
+                    window.edge = None;
+                }
                 Ok(())
             }
             Action::ResizeColumn { panel, width } => {

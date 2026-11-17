@@ -88,11 +88,17 @@ pub struct Floating<P> {
     /// Where the window is on the desktop while it is in its own OS window: the record app windows keep too, placed
     /// with [`place`](crate::placement::place).
     pub native: Option<Placement>,
+    /// The edge of the float area, in reading order, the window keeps to, as the area decided it from where the strip
+    /// of the collapsed column was dropped ([`Action::MoveFloating`](super::Action::MoveFloating),
+    /// [`Target::Float`](super::Target::Float)): the collapsed column shows against that edge of `rect`, and the
+    /// title row's double arrow sits at that end. `None`: the edge nearer `rect`, which the area takes. Collapsing
+    /// the column clears it, so the strip hangs from the edge the expanded window showed.
+    pub edge: Option<DockEdge>,
 }
 
 impl<P: PartialEq> PartialEq for Floating<P> {
     fn eq(&self, other: &Self) -> bool {
-        self.column == other.column && self.rect == other.rect && self.native == other.native
+        self.column == other.column && self.rect == other.rect && self.native == other.native && self.edge == other.edge
     }
 }
 
@@ -138,7 +144,7 @@ impl<P> Floating<P> {
     /// a layout once and keep it, or give its windows ids with [`Self::with_id`]. A layout
     /// built anew each frame without them opens new OS windows each frame.
     pub fn new(column: Column<P>, rect: Rect) -> Self {
-        Self { id: fresh_window_id(), column, rect, native: None }
+        Self { id: fresh_window_id(), column, rect, native: None, edge: None }
     }
 
     /// A window with one group. Each call makes a new window, as [`Self::new`] does.
@@ -188,7 +194,7 @@ impl<P> Floating<P> {
 /// | v1 `{panels, active, rect}` | one window, one group |
 /// | v2 `{groups, rect}` | one window of those groups |
 /// | v3 `{root, rect, native, minimized}` | a window per part the tree's top splits side by side, each at its share of `rect`; each part's leaves in reading order become its groups (an accordion entry a group, minimized when its section was closed); `minimized` minimizes every group |
-/// | v4 `{column, rect, native}` | one window |
+/// | v4 `{column, rect, native, edge}` | one window |
 ///
 /// The first window of a saved one keeps its id; the others get fresh ones.
 pub(super) mod floating_serde {
@@ -196,7 +202,7 @@ pub(super) mod floating_serde {
     use serde::de::IgnoredAny;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use super::{Column, Floating, Group, Node, fresh_window_id};
+    use super::{Column, DockEdge, Floating, Group, Node, fresh_window_id};
     use crate::dock::limits::MAX_NODES;
     use crate::dock::rect_serde::{from_array, to_array};
     use crate::dock::split::SplitSize;
@@ -218,6 +224,8 @@ pub(super) mod floating_serde {
         rect: [f32; 4],
         #[serde(skip_serializing_if = "Option::is_none")]
         native: Option<&'a Placement>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        edge: Option<DockEdge>,
     }
 
     /// One expanded column holding one group with no state of its own: what v1 can hold.
@@ -235,10 +243,11 @@ pub(super) mod floating_serde {
     impl<P: Serialize> Serialize for Floating<P> {
         fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
             match self.column.groups.as_slice() {
-                [group] if self.native.is_none() && plain(&self.column, group) => {
+                [group] if self.native.is_none() && self.edge.is_none() && plain(&self.column, group) => {
                     V1 { id: self.id, panels: &group.panels, active: group.active, rect: to_array(self.rect) }.serialize(serializer)
                 }
-                _ => V4 { id: self.id, column: &self.column, rect: to_array(self.rect), native: self.native.as_ref() }.serialize(serializer),
+                _ => V4 { id: self.id, column: &self.column, rect: to_array(self.rect), native: self.native.as_ref(), edge: self.edge }
+                    .serialize(serializer),
             }
         }
     }
@@ -257,6 +266,7 @@ pub(super) mod floating_serde {
         rect: Option<[f32; 4]>,
         native: Option<Placement>,
         minimized: bool,
+        edge: Option<DockEdge>,
     }
 
     /// A saved value, or nothing in its place when it does not parse.
@@ -281,7 +291,7 @@ pub(super) mod floating_serde {
             use serde::de::{MapAccess, Visitor};
             use std::marker::PhantomData;
 
-            const FIELDS: &[&str] = &["id", "column", "root", "groups", "panels", "active", "rect", "native", "minimized"];
+            const FIELDS: &[&str] = &["id", "column", "root", "groups", "panels", "active", "rect", "native", "minimized", "edge"];
             struct V<P>(PhantomData<P>);
 
             impl<'de, P: Deserialize<'de>> Visitor<'de> for V<P> {
@@ -292,8 +302,18 @@ pub(super) mod floating_serde {
                 }
 
                 fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Repr<P>, A::Error> {
-                    let mut repr =
-                        Repr { id: None, column: None, root: None, groups: None, panels: None, active: 0, rect: None, native: None, minimized: false };
+                    let mut repr = Repr {
+                        id: None,
+                        column: None,
+                        root: None,
+                        groups: None,
+                        panels: None,
+                        active: 0,
+                        rect: None,
+                        native: None,
+                        minimized: false,
+                        edge: None,
+                    };
                     while let Some(key) = map.next_key::<String>()? {
                         match key.as_str() {
                             "id" => repr.id = Some(map.next_value()?),
@@ -305,6 +325,7 @@ pub(super) mod floating_serde {
                             "rect" => repr.rect = Some(map.next_value()?),
                             "native" => repr.native = map.next_value::<Option<Parsed<Placement>>>()?.and_then(Parsed::value),
                             "minimized" => repr.minimized = map.next_value()?,
+                            "edge" => repr.edge = map.next_value()?,
                             _ => {
                                 map.next_value::<IgnoredAny>()?;
                             }
@@ -321,7 +342,7 @@ pub(super) mod floating_serde {
     impl<P> Repr<P> {
         /// The windows the saved window becomes, first to last.
         fn into_windows<E: serde::de::Error>(self) -> Result<Vec<Floating<P>>, E> {
-            let Repr { id, column, root, groups, panels, active, rect, native, minimized } = self;
+            let Repr { id, column, root, groups, panels, active, rect, native, minimized, edge } = self;
             let rect = from_array(rect.ok_or_else(|| E::missing_field("rect"))?);
             let columns = match (column, root, groups, panels) {
                 (Some(column), None, None, None) => vec![(column, rect)],
@@ -349,7 +370,7 @@ pub(super) mod floating_serde {
             let mut id = Some(id.unwrap_or_else(fresh_window_id));
             Ok(columns
                 .into_iter()
-                .map(|(column, rect)| Floating { id: id.take().unwrap_or_else(fresh_window_id), column, rect, native: native.clone() })
+                .map(|(column, rect)| Floating { id: id.take().unwrap_or_else(fresh_window_id), column, rect, native: native.clone(), edge })
                 .collect())
         }
     }

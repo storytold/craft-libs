@@ -434,7 +434,8 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
 }
 
 /// What a drag of a whole group, window or column carries, beside `PanelDrag` for one tab. Every such drag starts
-/// through [`start_group_drag`](super::start_group_drag), so the type is `non_exhaustive` and only the crate builds it.
+/// through [`start_group_drag`](super::start_group_drag) or [`start_icon_drag`](super::start_icon_drag), so the type
+/// is `non_exhaustive` and only the crate builds it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupDrag<P> {
@@ -443,6 +444,9 @@ pub struct GroupDrag<P> {
     /// The size of the group, window or column where the drag started, which a float of it takes; `None` where
     /// that size is not the unit's own (an iconic column's cells).
     pub source: Option<Vec2>,
+    /// The size of the icons the drag started on, for a unit dragged out of a collapsed column
+    /// ([`start_icon_drag`](super::start_icon_drag)): a float of it lands collapsed, its strip under the pointer.
+    pub strip: Option<Vec2>,
     /// The panel the unit shows, for the drag's preview.
     pub active: PanelKey,
     /// The arrangement the drag started on, when it started in a dock area.

@@ -70,23 +70,27 @@ pub(in crate::docking) fn describe_chevron(access: &mut Access, name: &Label) {
     access.node(CHEVRON, Role::BUTTON).name = Name::Text(name.as_str().to_owned());
 }
 
-/// Shows the band of the column bar `bar` and the column menu: a drag on `grip` moves the column, a double click
-/// collapses or expands it, and a context request opens the column menu. The chevron at the bar's outer end is the
-/// column's own part. Returns what the user did.
+/// The band of the column bar `bar` of a column that keeps to `edge`: the bar beside the chevron's slot.
+pub(in crate::docking) fn bar_band(ui: &Ui, bar: Rect, edge: DockEdge) -> Rect {
+    bar_slots(bar, edge, crate::runtime::env::Env::of(ui).direction.is_rtl()).1
+}
+
+/// Shows `band`, the band of a column bar ([`bar_band`]), and the column menu: a drag on `grip` moves the column, a double click
+/// collapses or expands it, and a context request opens the column menu, which offers the collapse only where the
+/// column's double arrow (`arrow`) collapses it. The chevron at the bar's outer end is the column's own part. Returns
+/// what the user did.
 pub(in crate::docking) fn show_bar<P: Clone + Send + Sync + 'static>(
     ui: &mut Ui,
     body: &mut BodyCx<'_>,
-    bar: Rect,
+    band: Rect,
     expanded: bool,
     auto_collapse: bool,
-    edge: DockEdge,
+    arrow: ColumnArrow,
     grip: GroupGrip<P>,
 ) -> BarRecord {
     let words = body.words::<DockWords>();
     let menu_words = body.words::<MenuWords>();
-    let rtl = crate::runtime::env::Env::of(ui).direction.is_rtl();
     let toggle = ColumnArrow::Collapse.name(&words, expanded);
-    let (_, band) = bar_slots(bar, edge, rtl);
     let mut record = BarRecord::default();
     if band.width() <= 0.0 {
         return record;
@@ -95,13 +99,11 @@ pub(in crate::docking) fn show_bar<P: Clone + Send + Sync + 'static>(
     if held.double_pressed {
         record.iconic = Some(expanded);
     }
-    let rows = vec![
-        PanelRow::Item(crate::contract::Entry::new(GroupItem::CollapseToIcons, toggle)),
-        PanelRow::Item(
-            crate::contract::Entry::new(GroupItem::AutoCollapse, Label::from(menu_words.panel_auto_collapse.as_str().to_owned()))
-                .checked(auto_collapse),
-        ),
-    ];
+    let collapse = (arrow == ColumnArrow::Collapse).then(|| PanelRow::Item(crate::contract::Entry::new(GroupItem::CollapseToIcons, toggle)));
+    let auto = PanelRow::Item(
+        crate::contract::Entry::new(GroupItem::AutoCollapse, Label::from(menu_words.panel_auto_collapse.as_str().to_owned())).checked(auto_collapse),
+    );
+    let rows: Vec<_> = collapse.into_iter().chain([auto]).collect();
     let picked = Menu::new(Label::from(words.panels.as_str().to_owned()))
         .opened_by(&held.response, Trigger::Context)
         .show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked);

@@ -599,7 +599,7 @@ name = "GroupGrip"
 old = ""
 new = "craft_ui::docking::GroupGrip"
 status = "replaced"
-note = "The legacy drag bar of a tab group; a double click minimizes the group and a drag starts through `start_group_drag` with a `DragUnit`, carrying a `GroupDrag`."
+note = "The legacy drag bar of a tab group; a double click minimizes the group and a drag starts through `start_group_drag` with a `DragUnit`, carrying a `GroupDrag`. `GroupGrip::icons(true)`, the bar of a collapsed column, starts it through `start_icon_drag`, so a float of the unit lands collapsed under the pointer."
 
 [[type]]
 name = "section_heights"
@@ -642,7 +642,7 @@ name = "ColumnArrow"
 old = ""
 new = "craft_ui::docking::ColumnArrow"
 status = "replaced"
-note = "What a column's double arrow does, which names it and sets where it points: `Collapse`, or `Steps(n)` for a stepped column whose panels do not collapse, which switches between one and two steps. `ColumnArrow::of(&Column<P>, spec, collapses)`; `DockColumn::arrow` and `WindowColumn::arrow` take it. Replaces `ToolRail`'s column toggle."
+note = "What a column's double arrow does, which names it and sets where it points: `Collapse`; `Steps(n)` for a stepped column whose panels do not collapse, which switches between one and two steps; `Fixed` for a column that neither collapses nor has steps, which shows no double arrow and no collapse row in its menu. `ColumnArrow::of(&Column<P>, spec, collapses)`; `DockColumn::arrow` and `WindowColumn::arrow` take it. Replaces `ToolRail`'s column toggle."
 
 [[type]]
 name = "IconicColumn"

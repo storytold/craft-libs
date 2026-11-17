@@ -2,9 +2,9 @@
 
 use super::divider::{self, Divider, Drag};
 use super::dock_column::{
-    BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
+    BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
 };
-use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_group_drag};
+use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
@@ -463,7 +463,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
             {
                 let shown = lead.active_panel().unwrap_or(anchor);
                 let label = Label::from((self.spec)(shown).label.as_str().to_owned());
-                start_group_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), None, Some((extent.size(), label)));
+                start_icon_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), extent.size(), label);
                 began = true;
             }
         }
@@ -473,7 +473,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
                 && let Some(panel) = self.panel(*group, *panel)
             {
                 let label = Label::from((self.spec)(panel).label.as_str().to_owned());
-                start_group_drag(cx, DragUnit::Panel(panel.clone()), PanelKey::of(panel), None, Some((cell.size(), label)));
+                start_icon_drag(cx, DragUnit::Panel(panel.clone()), PanelKey::of(panel), cell.size(), label);
                 began = true;
             }
         }
@@ -699,7 +699,8 @@ impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
             return;
         }
         if let Some(grip) = column_grip(self.column, self.spec, cx) {
-            self.record = show_bar(ui, cx, self.bar_rect, false, self.auto_collapse, self.edge, grip);
+            let band = bar_band(ui, self.bar_rect, self.edge);
+            self.record = show_bar(ui, cx, band, false, self.auto_collapse, ColumnArrow::Collapse, grip.icons(true));
         }
     }
 }

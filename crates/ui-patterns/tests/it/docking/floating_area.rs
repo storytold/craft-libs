@@ -1,7 +1,7 @@
 //! Floating windows of a `DockArea`: a drop over a window lands on it.
 
 use craft_behavior::Axis;
-use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, SplitSize, Workspace};
+use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, PanelSpec, request_actions};
@@ -327,21 +327,57 @@ fn button_rect(bed: &Bed, name: &str) -> Option<Rect> {
 }
 
 /// A collapsed window keeps to the edge it kept when its move began: dragged across the middle of the float area,
-/// its strip stays under the pointer, and it stays where it is dropped.
+/// its strip stays under the pointer, and it stays where it is dropped. So does a strip dropped in the middle band,
+/// where the strip is nearer one edge and its window's expanded rect the other.
 #[trial]
 fn a_collapsed_window_dragged_across_the_middle_keeps_its_strip_under_the_pointer() {
-    let mut bed = bed(collapsed_at(WINDOW_AT), |_| Permissions::ALL);
-    let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
-    // The title row's band, clear of the double arrow at the end the window keeps to.
-    let band = Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0);
-    let by = Vec2::new(-250.0, 0.0);
-    bed.fixture.drag_hold_at(band, by);
-    let held = button_rect(&bed, &title(WINDOW)).expect("the icon shows while the window moves");
-    assert!((held.left() - (icon.left() + by.x)).abs() <= SLACK, "the strip follows the pointer across the middle: {icon:?}, then {held:?}");
-    bed.fixture.release_at(band + by).settle();
-    let dropped = button_rect(&bed, &title(WINDOW)).expect("the icon shows after the move");
-    assert!((dropped.left() - held.left()).abs() <= SLACK, "the strip stays where it was dropped: {held:?}, then {dropped:?}");
-    assert!(bed.workspace.borrow().layout.floating[0].column.iconic, "the window stays collapsed");
+    // Across the middle; then to the strip's centre just past the middle of the 400-point room, on the end side,
+    // while the expanded rect hanging from it reaches past the middle to the start side.
+    for middle in [None, Some(210.0)] {
+        let mut bed = bed(collapsed_at(WINDOW_AT), |_| Permissions::ALL);
+        let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
+        let by = Vec2::new(middle.map_or(-250.0, |x: f32| x - icon.center().x), 0.0);
+        // The title row's band, clear of the double arrow at the end the window keeps to.
+        let band = Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0);
+        bed.fixture.drag_hold_at(band, by);
+        let held = button_rect(&bed, &title(WINDOW)).expect("the icon shows while the window moves");
+        assert!((held.left() - (icon.left() + by.x)).abs() <= SLACK, "by {by:?}: the strip follows the pointer: {icon:?}, then {held:?}");
+        bed.fixture.release_at(band + by).settle();
+        bed.fixture.idle(3);
+        let dropped = button_rect(&bed, &title(WINDOW)).expect("the icon shows after the move");
+        assert!((dropped.left() - held.left()).abs() <= SLACK, "by {by:?}: the strip stays where it was dropped: {held:?}, then {dropped:?}");
+        let window = bed.workspace.borrow().layout.floating[0].clone();
+        assert!(window.column.iconic && window.edge.is_some(), "by {by:?}: the window stays collapsed and keeps its edge: {window:?}");
+    }
+}
+
+/// An icon dragged out of a docked collapsed column and floated in the middle band of the float area floats
+/// collapsed, its strip under the pointer, and stays there.
+#[trial]
+fn an_icon_floated_in_the_middle_band_lands_collapsed_under_the_pointer() {
+    let mut column = Column::new(vec![Group::new(vec![WINDOW], 0)]);
+    column.iconic = true;
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.8), Node::tabs(vec![DOCKED], 0), Node::dock(DockEdge::End, vec![column]));
+    let mut bed = bed(Layout::new(Some(root), Vec::new()), |_| Permissions::ALL);
+    let icon = button_rect(&bed, &title(WINDOW)).expect("the docked collapsed column shows its icon");
+    // Just past the middle of the 400-point room: the strip is nearer the end edge, a window of the float width
+    // around it the start edge.
+    let at = Pos2::new(210.0, 150.0);
+    press_and_move(&mut bed.fixture, icon.center(), at - icon.center());
+    // The key that floats goes down while the pointer still moves, so the drop target marks the float.
+    bed.fixture.hold(Modifiers::COMMAND);
+    bed.fixture.frame(vec![moved(at)]);
+    bed.fixture.frame(vec![release(at)]);
+    bed.fixture.hold(Modifiers::NONE);
+    bed.fixture.settle();
+    let window = bed.workspace.borrow().layout.floating.first().cloned();
+    let window = window.unwrap_or_else(|| panic!("the icon floats: {:?}", bed.actions.borrow()));
+    assert!(window.column.iconic && window.edge.is_some(), "it floats collapsed, keeping to the edge its strip was dropped near: {window:?}");
+    let floated = button_rect(&bed, &title(WINDOW)).expect("the floating window shows its icon");
+    assert!(floated.x_range().contains(at.x), "the strip lands under the pointer: {floated:?}, released at {at:?}");
+    bed.fixture.idle(3);
+    let settled = button_rect(&bed, &title(WINDOW)).expect("the icon still shows");
+    assert!((settled.left() - floated.left()).abs() <= SLACK, "the strip stays: {floated:?}, then {settled:?}");
 }
 
 /// A floating collapsed column opens its flyouts towards the room of the float area, away from the edge it keeps to.

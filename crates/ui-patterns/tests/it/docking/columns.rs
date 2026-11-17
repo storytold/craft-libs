@@ -203,10 +203,8 @@ fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_an
     }
 }
 
-/// A drag of a floating stepped window's left edge widens it in whole steps to the left: its right edge stays.
-#[trial]
-fn a_floating_stepped_windows_left_edge_drag_keeps_its_right_edge() {
-    let at = Rect::from_min_size(Pos2::new(200.0, 80.0), Vec2::new(100.0, 100.0));
+/// A dock area showing only a floating window at `at` with the toolbar in a column of one step.
+fn floating_tools(at: Rect) -> (Fixture, Rc<RefCell<Workspace<u32>>>) {
     let window = Floating::new(Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1), at);
     let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(None, vec![window]))));
     let held = Rc::clone(&workspace);
@@ -216,13 +214,33 @@ fn a_floating_stepped_windows_left_edge_drag_keeps_its_right_edge() {
         *held.borrow_mut() = workspace;
     });
     fixture.settle();
-    let shown = |fixture: &Fixture| fixture.by_role(Role::TAB_PANEL).first().map(|group| group.rect).expect("the window shows its group");
-    let before = shown(&fixture);
+    (fixture, workspace)
+}
+
+/// The rect of the floating toolbar's group.
+fn shown_tools(fixture: &Fixture) -> Rect {
+    fixture.by_role(Role::TAB_PANEL).first().map(|group| group.rect).expect("the window shows its group")
+}
+
+/// A floating stepped window keeps the edge opposite the grip a drag holds: a drag of its left edge widens it in
+/// whole steps to the left with its right edge where it was, and a drag of its top edge keeps its bottom edge.
+#[trial]
+fn a_floating_stepped_windows_left_and_top_edge_drags_keep_the_opposite_edge() {
+    let at = Rect::from_min_size(Pos2::new(200.0, 80.0), Vec2::new(100.0, 100.0));
+    let (mut fixture, workspace) = floating_tools(at);
+    let before = shown_tools(&fixture);
     // The left grip straddles the window's left edge, which is its rect's.
     fixture.drag_at(Pos2::new(at.left(), before.center().y), Vec2::new(-1.5 * grid().step, 0.0)).settle();
-    let after = shown(&fixture);
+    let after = shown_tools(&fixture);
     let steps = workspace.borrow().layout.floating[0].column.steps;
     assert!(steps.is_some_and(|steps| steps > 1), "the drag widened the window by whole steps: {steps:?}");
     assert!((after.right() - before.right()).abs() <= 1.5, "the right edge stays: {before:?}, then {after:?}");
     assert!(after.left() < before.left(), "the window grew to the left: {before:?}, then {after:?}");
+
+    // Raised by its top edge, the content still fits one step: the window keeps its size and its bottom edge.
+    let (mut fixture, _) = floating_tools(at);
+    let before = shown_tools(&fixture);
+    fixture.drag_at(Pos2::new(before.center().x, at.top()), Vec2::new(0.0, -30.0)).settle();
+    let after = shown_tools(&fixture);
+    assert!((after.bottom() - before.bottom()).abs() <= 1.5, "the bottom edge stays: {before:?}, then {after:?}");
 }

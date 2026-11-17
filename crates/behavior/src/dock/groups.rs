@@ -184,6 +184,11 @@ pub enum Target<P> {
         /// `[x, y, width, height]`.
         #[serde(with = "crate::dock::rect_serde")]
         rect: Rect,
+        /// The new window's [`Floating::edge`](super::Floating::edge) when its column is collapsed: the edge the area
+        /// decided from where the strip was dropped. `None` (and any expanded column) leaves the edge to the area,
+        /// nearer `rect`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edge: Option<DockEdge>,
     },
 }
 
@@ -361,8 +366,13 @@ impl<P> Target<P> {
         Self::NewDock { side }
     }
 
-    /// Builds [`Target::Float`].
+    /// Builds [`Target::Float`] with no edge: the area takes the edge nearer `rect`.
     pub fn float(rect: Rect) -> Self {
-        Self::Float { rect }
+        Self::Float { rect, edge: None }
+    }
+
+    /// Builds [`Target::Float`] with the edge a collapsed window keeps to.
+    pub fn float_with_edge(rect: Rect, edge: Option<DockEdge>) -> Self {
+        Self::Float { rect, edge }
     }
 }

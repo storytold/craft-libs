@@ -2,7 +2,7 @@
 //! button, over the body of the active panel. The band and the button are the group's own parts.
 
 use super::commands::DockCommands;
-use super::drop::{self, DragUnit, start_group_drag};
+use super::drop::{self, DragUnit, start_group_drag, start_icon_drag};
 use super::targets::{DockSizes, DockSpot, DockTargets, ZoneRule};
 use super::words::DockWords;
 use super::{PanelDrag, PanelKey, PanelTitle};
@@ -68,6 +68,10 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     /// A drag on the grip drags the unit.
     #[prop]
     movable: bool,
+    /// The grip is a collapsed column's: its drag is an icon drag ([`start_icon_drag`]) whose strip is the ghost's
+    /// extent, so a float of the unit lands collapsed under the pointer.
+    #[prop]
+    icons: bool,
     double: bool,
     started: bool,
 }
@@ -75,7 +79,7 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
 impl<P: Clone + Send + Sync + 'static> GroupGrip<P> {
     /// The grip of `unit`, whose shown panel is `active`.
     pub fn new(unit: DragUnit<P>, active: PanelKey) -> Self {
-        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, double: false, started: false }
+        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, icons: false, double: false, started: false }
     }
 }
 
@@ -102,9 +106,11 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
         if self.movable && matches!(cx.press().phase, PressPhase::DragStart { .. }) {
-            // The ghost's extent is the group's own.
-            let source = self.ghost.as_ref().map(|(size, _)| *size);
-            start_group_drag(cx, self.unit.clone(), self.active, source, self.ghost.clone());
+            match self.ghost.clone() {
+                Some((strip, label)) if self.icons => start_icon_drag(cx, self.unit.clone(), self.active, strip, label),
+                // The ghost's extent is the group's own.
+                ghost => start_group_drag(cx, self.unit.clone(), self.active, ghost.as_ref().map(|(size, _)| *size), ghost),
+            }
             self.started = true;
         }
     }
