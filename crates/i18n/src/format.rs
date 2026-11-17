@@ -4,7 +4,7 @@
 use std::fmt;
 
 use fixed_decimal::{Decimal, Sign};
-use icu_decimal::{DecimalFormatter, parts};
+use icu_decimal::{DecimalFormatter, options::DecimalFormatterOptions, parts};
 use icu_locale_core::Locale;
 use icu_locale_core::extensions::unicode::{key, value};
 use writeable::{Part, PartsWrite, Writeable};
@@ -46,7 +46,8 @@ impl Format {
         if digits == Digits::Latin {
             locale.extensions.unicode.keywords.set(key!("nu"), value!("latn"));
         }
-        let decimal = data::provider().and_then(|p| DecimalFormatter::try_new_with_buffer_provider(p, (&locale).into(), Default::default()).ok());
+        let decimal = data::provider()
+            .and_then(|p| DecimalFormatter::try_new_with_buffer_provider(p, (&locale).into(), DecimalFormatterOptions::default()).ok());
         let mut format = Format { decimal, group: None, point: None, percent: ("", "%"), marks: Marks::default() };
         // The locale's own separators and digits, read from a number that shows them all.
         let probe = format.parts(&Decimal::try_from_str("-1234567.5").unwrap_or_default());
@@ -212,7 +213,7 @@ impl PartsWrite for Sink<'_> {
                 _ => return result,
             };
             if slot.is_empty() {
-                *slot = written.to_owned();
+                written.clone_into(slot);
             }
         }
         result
@@ -370,7 +371,7 @@ mod tests {
         for (tag, want) in
             [("en", "50%"), ("de", "50\u{a0}%"), ("fr", "12,5\u{a0}%"), ("tr", "%50"), ("ar-EG", "٥٠٪\u{61c}"), ("fa", "۵۰٪"), ("hi", "50%")]
         {
-            let decimals = if tag == "fr" { 1 } else { 0 };
+            let decimals = usize::from(tag == "fr");
             let ratio = if tag == "fr" { 0.125 } else { 0.5 };
             assert_eq!(Format::from_tag(tag).percent(ratio, decimals), want, "{tag}");
         }

@@ -369,6 +369,22 @@ fn layer_selection_ids(data: &[u8]) -> Result<Vec<u32>> {
     (0..count).map(|_| r.u32()).collect()
 }
 
+/// Read the unique EXIF and XMP image resources, rejecting duplicates and invalid XMP UTF-8.
+/// EXIF bytes retain any optional container prefix; trailing XMP NULs are removed.
+pub fn unique_exif_xmp(resources: &[ImageResource]) -> Option<(Option<&[u8]>, Option<&str>)> {
+    let (mut exif, mut xmp) = (None, None);
+    for resource in resources {
+        match resource.id {
+            ids::EXIF if exif.is_some() => return None,
+            ids::EXIF => exif = Some(resource.data.as_slice()),
+            ids::XMP if xmp.is_some() => return None,
+            ids::XMP => xmp = Some(std::str::from_utf8(&resource.data).ok()?.trim_end_matches('\0')),
+            _ => {}
+        }
+    }
+    Some((exif, xmp))
+}
+
 impl ImageResource {
     /// A new `8BIM` resource with an empty name.
     pub fn new(id: u16, data: Vec<u8>) -> Self {
