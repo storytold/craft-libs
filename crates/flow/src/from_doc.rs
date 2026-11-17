@@ -197,7 +197,7 @@ fn para_extra(doc: &Document, p: &craft_wordmodel::props::ParaProps) -> Option<B
     let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
     let x = craft_wordmodel::props::ParaProps {
         tabs,
-        shading: p.shading,
+        shading: doc.styles.resolve_para(p).shading,
         style,
         contextual_spacing: p.contextual_spacing,
         bidi: p.bidi.filter(|b| *b),
@@ -548,6 +548,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             if c == PAGE_BREAK {
                 if !hidden {
                     out.push_text(&std::mem::take(&mut buf), &f);
+                    let extra = out.extra.as_ref().and_then(|x| {
+                        let mut x = (**x).clone();
+                        x.drop_cap = None;
+                        x.drop_cap_distance = None;
+                        (x != craft_wordmodel::props::ParaProps::default()).then(|| Box::new(x))
+                    });
                     let next = Para {
                         kind,
                         list: None,
@@ -562,7 +568,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
-                        extra: None,
+                        extra,
                         mark: None,
                         kept: None,
                         wrap: None,
