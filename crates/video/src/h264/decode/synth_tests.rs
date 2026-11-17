@@ -4,8 +4,8 @@
 //! lossless, P_Skip copies the selected reference with a zero motion vector, and deblocking cannot
 //! modify samples at these QPs).
 
-use crate::h264::decode::Decoder;
 use crate::h264::decode::cabac::{Cabac, NEXT_STATE, RANGE_TAB_LPS};
+use crate::h264::decode::{Decoder, PictureStructure};
 use craft_media::bitstream::{BitWriter, escape_rbsp};
 
 const MB_W: usize = 4;
@@ -62,6 +62,11 @@ fn sps(profile: u8, max_refs: u32, gaps: bool, poc: PocType) -> Vec<u8> {
 }
 
 fn pps(cabac: bool, weighted: bool) -> Vec<u8> {
+    pps_with(cabac, weighted, if weighted { 1 } else { 0 })
+}
+
+/// `pps` with weighted_bipred_idc `bipred`.
+fn pps_with(cabac: bool, weighted: bool, bipred: u32) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_ue(0);
     w.write_ue(0);
@@ -71,7 +76,7 @@ fn pps(cabac: bool, weighted: bool) -> Vec<u8> {
     w.write_ue(0); // num_ref_idx_l0_default - 1
     w.write_ue(0);
     w.write_bit(weighted); // weighted_pred
-    w.write_bits(if weighted { 1 } else { 0 }, 2); // explicit weighted bi-prediction
+    w.write_bits(bipred, 2); // weighted_bipred_idc
     w.write_se(0); // pic_init_qp - 26
     w.write_se(0);
     w.write_se(0); // chroma_qp_index_offset
@@ -539,6 +544,46 @@ fn explicit_weighted_prediction_p_and_b_skip() {
     }
 }
 
+/// A picture with MMCO 5 decodes with its own order count; it becomes 0 only when the picture is
+/// stored (8.2.1, tempPicOrderCnt). A reference B picture (POC 2) with MMCO 5 and implicit
+/// weights between POC 0 and POC 8 weighs them 48 and 16; with POC 0 it would copy list 0.
+#[test]
+fn mmco5_picture_decodes_with_its_own_order_count() {
+    for cabac in [false, true] {
+        let mut seed = 11u32;
+        let a: Vec<Option<Vec<u8>>> = (0..NMB).map(|_| Some(random_mb(&mut seed))).collect();
+        let b: Vec<Option<Vec<u8>>> = (0..NMB).map(|_| Some(random_mb(&mut seed))).collect();
+        let pics = [
+            Pic { idr: true, frame_num: 0, ref_idc: 3, poc_lsb: Some(0), mbs: a.clone(), ..Default::default() },
+            Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(8), mbs: b.clone(), ..Default::default() },
+            Pic { frame_num: 2, ref_idc: 1, poc_lsb: Some(2), b: true, mmcos: vec![(5, 0, 0)], mbs: vec![None; NMB], ..Default::default() },
+        ];
+        let mut stream = sps(77, 2, false, PocType::T0);
+        stream.extend(pps_with(cabac, false, 2));
+        for p in &pics {
+            stream.extend(slice_nal(p, cabac));
+        }
+        let (pa, pb) = (render(&a, None), render(&b, None));
+        let mix = |x: &[u8], y: &[u8]| -> Vec<u8> { x.iter().zip(y).map(|(&p, &q)| ((p as i32 * 48 + q as i32 * 16 + 32) >> 6) as u8).collect() };
+        let bi = (mix(&pa.0, &pb.0), mix(&pa.1, &pb.1), mix(&pa.2, &pb.2));
+        let expected = [pa, pb, bi];
+        // ffmpeg has the same samples but outputs the MMCO 5 picture by its order count (before
+        // POC 8); C.4.4 outputs every earlier picture first ("bumping" until the DPB is empty).
+        let ff_order = [expected[0].clone(), expected[2].clone(), expected[1].clone()];
+        cross_check_ffmpeg(&stream, &ff_order, if cabac { "synth_mmco5_poc_cabac" } else { "synth_mmco5_poc_cavlc" });
+        for threads in [1, 3] {
+            let mut dec = Decoder::with_threads(threads);
+            let mut out = dec.decode(&stream, 0).unwrap();
+            out.extend(dec.flush());
+            assert!(dec.take_error().is_none());
+            assert_eq!(out.len(), 3);
+            for (i, (p, e)) in out.iter().zip(expected.iter()).enumerate() {
+                assert!(p.y == e.0 && p.u == e.1 && p.v == e.2, "picture {i} differs (cabac={cabac}, threads={threads})");
+            }
+        }
+    }
+}
+
 /// POC type 1: non-reference pictures are displayed before the preceding reference picture.
 #[test]
 fn poc_type1_reordering() {
@@ -905,7 +950,8 @@ fn weave(top: &Planes3, bottom: &Planes3) -> Planes3 {
 
 /// Decode `pics` as one interlaced stream at 1 and 3 threads and compare with `expected`; with a
 /// name, also check that ffmpeg agrees.
-fn check_interlaced(cabac: bool, pics: &[Pic], expected: &[Planes3], ffmpeg_name: Option<&str>) {
+/// `structures` is the expected [`PictureStructure`] of each output picture.
+fn check_interlaced(cabac: bool, pics: &[Pic], expected: &[Planes3], structures: &[PictureStructure], ffmpeg_name: Option<&str>) {
     let mut stream = interlaced_sps(77);
     stream.extend(pps(cabac, false));
     for p in pics {
@@ -920,6 +966,8 @@ fn check_interlaced(cabac: bool, pics: &[Pic], expected: &[Planes3], ffmpeg_name
         out.extend(dec.flush());
         assert!(dec.take_error().is_none(), "cabac={cabac} threads={threads}");
         assert_eq!(out.len(), expected.len(), "cabac={cabac} threads={threads}");
+        let got: Vec<PictureStructure> = out.iter().map(|p| p.structure).collect();
+        assert_eq!(got, structures, "cabac={cabac} threads={threads}");
         for (i, (p, e)) in out.iter().zip(expected).enumerate() {
             assert_eq!((p.width as usize, p.height as usize), (MB_W * 16, FRAME_MB_H * 16));
             assert!(p.y == e.0 && p.u == e.1 && p.v == e.2, "picture {i} differs (cabac={cabac}, threads={threads})");
@@ -960,7 +1008,8 @@ fn field_pair_then_frame_then_fields(cabac: bool, bottom_first: bool) {
     let p1 = chroma_moved(&p0, if bottom_first { -2 } else { 2 });
     let frame = if bottom_first { weave(&p1, &p0) } else { weave(&p0, &p1) };
     let name = if bottom_first { "synth_fields_bottom_first" } else { "synth_fields_top_first" };
-    check_interlaced(cabac, &pics, &[frame.clone(), frame.clone(), frame], Some(name));
+    use PictureStructure::{FieldPair, Frame};
+    check_interlaced(cabac, &pics, &[frame.clone(), frame.clone(), frame], &[FieldPair, Frame, FieldPair], Some(name));
 }
 
 #[test]
@@ -985,7 +1034,7 @@ fn reference_and_non_reference_fields_are_output_separately() {
             Pic { ref_idc: 0, field: Some(true), poc_lsb: Some(1), mbs: bottom.clone(), ..Default::default() },
         ];
         let (t, b) = (render_pcm(&top, MB_W, FRAME_MB_H / 2), render_pcm(&bottom, MB_W, FRAME_MB_H / 2));
-        check_interlaced(cabac, &pics, &[weave(&t, &t), weave(&b, &b)], None);
+        check_interlaced(cabac, &pics, &[weave(&t, &t), weave(&b, &b)], &[PictureStructure::TopField, PictureStructure::BottomField], None);
     }
 }
 
@@ -1001,6 +1050,12 @@ fn a_lone_field_is_output_with_its_lines_repeated() {
             Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(2), mbs: frame.clone(), ..Default::default() },
         ];
         let t = render_pcm(&top, MB_W, FRAME_MB_H / 2);
-        check_interlaced(cabac, &pics, &[weave(&t, &t), render_pcm(&frame, MB_W, FRAME_MB_H)], None);
+        check_interlaced(
+            cabac,
+            &pics,
+            &[weave(&t, &t), render_pcm(&frame, MB_W, FRAME_MB_H)],
+            &[PictureStructure::TopField, PictureStructure::Frame],
+            None,
+        );
     }
 }

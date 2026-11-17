@@ -365,6 +365,17 @@ pub enum Stored {
 }
 
 impl Stored {
+    /// How the output picture is made up.
+    pub fn structure(&self) -> super::PictureStructure {
+        use super::PictureStructure as S;
+        match self {
+            Stored::Frame(_) => S::Frame,
+            Stored::Fields([Some(_), Some(_)]) => S::FieldPair,
+            Stored::Fields([None, _]) => S::BottomField,
+            Stored::Fields([Some(_), None]) => S::TopField,
+        }
+    }
+
     /// The pictures holding the samples.
     pub fn pictures(&self) -> impl Iterator<Item = &FrameRef> {
         let (a, b) = match self {

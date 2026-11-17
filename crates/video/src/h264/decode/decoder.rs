@@ -534,6 +534,7 @@ impl Decoder {
         self.active_sps = Some(sps.clone());
         self.dpb.capacity = sps.max_dpb_frames();
         self.dpb.max_reorder = sps.max_num_reorder_frames().min(self.dpb.capacity);
+        self.dpb.poc_type0 = sps.pic_order_cnt_type == 0;
         let mb_w = sps.pic_width_in_mbs as usize;
         let mb_h = sps.frame_height_in_mbs() as usize;
         if sh.idr {
@@ -577,8 +578,9 @@ impl Decoder {
             }
         }
         let poc = self.poc_state.compute(sh, sps);
-        // MMCO5: the picture's POC becomes relative to itself (tempPicOrderCnt, 8.2.1).
-        let frame_poc = if sh.has_mmco5() { 0 } else { poc.frame() };
+        // The picture decodes with its own order count; MMCO 5 makes it relative to itself
+        // (tempPicOrderCnt) only after decoding, when it is stored (8.2.1).
+        let frame_poc = poc.frame();
         let id = self.next_id;
         self.next_id += 1;
         // A field is a picture of its own with every other line of the frame (frame_height_in_mbs
@@ -604,7 +606,7 @@ impl Decoder {
         let limits = (sps.max_frame_num(), sps.max_num_ref_frames as usize);
         if first.field_pic {
             let parity = first.bottom_field as usize;
-            let fpoc = frame.poc;
+            let fpoc = if first.has_mmco5() { 0 } else { frame.poc };
             let mut fields = [None, None];
             fields[parity] = Some(frame.clone());
             let size = (frame.mb_w, frame.mb_h());
@@ -823,5 +825,6 @@ fn make_picture(o: &Output<Stored>) -> Picture {
         },
         sar: o.meta.sar,
         draft: o.meta.draft,
+        structure: o.frame.structure(),
     }
 }

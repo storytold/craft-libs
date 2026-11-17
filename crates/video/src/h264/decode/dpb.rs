@@ -125,6 +125,23 @@ pub struct Dpb<F> {
     pub max_long_term_frame_idx: Option<u32>,
     pub capacity: usize,
     pub max_reorder: usize,
+    /// pic_order_cnt_type is 0: "non-existing" frames have no order count and stay out of the
+    /// lists of B slices (8.2.4.2.3, 8.2.4.2.4).
+    pub poc_type0: bool,
+    /// A non-reference first field that C.4.5.2 outputs directly (the DPB is full and it precedes
+    /// everything waiting), held outside the DPB until its second field or the next picture.
+    held: Option<HeldField<F>>,
+}
+
+/// See [`Dpb::held`].
+struct HeldField<F> {
+    frame: F,
+    poc: i32,
+    meta: Arc<OutputMeta>,
+    parity: usize,
+    frame_num: u32,
+    /// Its second field may still follow.
+    open: bool,
 }
 
 /// A picture leaving the DPB for output.
@@ -136,7 +153,7 @@ pub struct Output<F> {
 
 impl<F: Clone> Dpb<F> {
     pub fn new() -> Self {
-        Dpb { entries: Vec::new(), max_long_term_frame_idx: None, capacity: 16, max_reorder: 16 }
+        Dpb { entries: Vec::new(), max_long_term_frame_idx: None, capacity: 16, max_reorder: 16, poc_type0: false, held: None }
     }
 
     fn frame_num_wrap(e: &DpbEntry<F>, cur_frame_num: u32, max_frame_num: u32) -> i32 {
@@ -165,9 +182,17 @@ impl<F: Clone> Dpb<F> {
         true
     }
 
+    /// Output a held field ([`Dpb::held`]) whose second field can no longer follow.
+    fn release_held(&mut self, out: &mut Vec<Output<F>>) {
+        if let Some(h) = self.held.take_if(|h| !h.open) {
+            out.push(Output { frame: h.frame, poc: h.poc, meta: h.meta });
+        }
+    }
+
     /// Output everything in POC order and clear non-reference entries.
     pub fn flush(&mut self, out: &mut Vec<Output<F>>) {
         self.close_open();
+        self.release_held(out);
         while self.bump(out) {}
         self.prune();
     }
@@ -175,6 +200,7 @@ impl<F: Clone> Dpb<F> {
     /// IDR: mark all references unused; output (or drop) prior pictures.
     pub fn idr(&mut self, no_output_of_prior_pics: bool, out: &mut Vec<Output<F>>) {
         self.close_open();
+        self.release_held(out);
         for e in &mut self.entries {
             e.set_mark(RefMark::Unused);
         }
@@ -308,8 +334,9 @@ impl<F: Clone> Dpb<F> {
         } else {
             // frames: before is PicOrderCnt < current; fields: <= current (8.2.4.2.4)
             let is_before = |e: &&DpbEntry<F>| if field { e.poc <= cur_poc } else { e.poc < cur_poc };
-            let mut before: Vec<&DpbEntry<F>> = short.iter().copied().filter(is_before).collect();
-            let mut after: Vec<&DpbEntry<F>> = short.iter().copied().filter(|e| !is_before(e)).collect();
+            let ordered = |e: &&&DpbEntry<F>| !(self.poc_type0 && e.non_existing);
+            let mut before: Vec<&DpbEntry<F>> = short.iter().filter(ordered).copied().filter(is_before).collect();
+            let mut after: Vec<&DpbEntry<F>> = short.iter().filter(ordered).copied().filter(|e| !is_before(e)).collect();
             if !field {
                 after.retain(|e| e.poc > cur_poc);
             }
@@ -535,6 +562,9 @@ impl<F: Clone> Dpb<F> {
         for e in &mut self.entries {
             e.open = false;
         }
+        if let Some(h) = &mut self.held {
+            h.open = false;
+        }
     }
 
     /// Reference marking of the current picture (8.2.5.1) apart from the case of a second field
@@ -622,6 +652,7 @@ impl<F: Clone> Dpb<F> {
     ) -> Result<()> {
         ensure!(!sh.field_pic, "a field picture stored as a frame (use store_field)");
         self.close_open();
+        self.release_held(out);
         let (mark, long_idx, had5) = self.mark_current(sh, limits, None)?;
         if had5 {
             // All earlier pictures are output before the current one (C.4.4).
@@ -681,6 +712,16 @@ impl<F: Clone> Dpb<F> {
         ensure!(sh.field_pic, "a frame stored as a field (use store_frame)");
         let parity = parity & 1;
         let is_ref = sh.nal_ref_idc != 0;
+        let pairs_held = self
+            .held
+            .as_ref()
+            .is_some_and(|h| h.open && h.parity != parity && h.frame_num == sh.frame_num && !is_ref && !sh.idr && !sh.has_mmco5() && fits(&h.frame));
+        if pairs_held && let Some(mut h) = self.held.take() {
+            // the second field of a held non-reference pair: the pair is output directly
+            pair(&mut h.frame, field);
+            out.push(Output { frame: h.frame, poc: h.poc.min(poc), meta: h.meta });
+            return Ok(());
+        }
         let second = self.entries.iter().position(|e| {
             e.open
                 && e.fields == 1 << (parity ^ 1)
@@ -722,20 +763,30 @@ impl<F: Clone> Dpb<F> {
             return Ok(());
         }
         self.close_open();
+        self.release_held(out);
         let (mark, long_idx, had5) = self.mark_current(sh, limits, None)?;
         if had5 {
             // All earlier pictures are output before the current one (C.4.4).
             self.flush(out);
         }
+        let frame_num = if had5 { 0 } else { sh.frame_num };
         // A first field always needs a frame buffer of its own, the second field may join it.
+        // With the DPB full, a non-reference field that precedes everything waiting is output
+        // directly (C.4.5.2); it is held until its second field shows up to be output with it.
         while self.entries.len() >= self.capacity {
+            if mark == RefMark::Unused {
+                let min_poc = self.entries.iter().filter(|e| e.needed_for_output).map(|e| e.poc).min();
+                if min_poc.is_none_or(|m| poc < m) {
+                    self.held = Some(HeldField { frame: field, poc, meta, parity, frame_num, open: true });
+                    return Ok(());
+                }
+            }
             if !self.bump(out) {
                 break;
             }
         }
         let mut field_mark = [RefMark::Unused; 2];
         field_mark[parity] = mark;
-        let frame_num = if had5 { 0 } else { sh.frame_num };
         let mut e = DpbEntry::frame_entry(field, [poc; 2], frame_num, long_idx, mark, true, false, meta);
         e.field_mark = field_mark;
         e.fields = 1 << parity;
@@ -1021,6 +1072,59 @@ mod tests {
         sh.frame_num = 1;
         dpb.store_frame(&sh, 2, [2, 3], (16, 4), meta(), &mut out).unwrap();
         assert_eq!(out.iter().map(|o| o.frame).collect::<Vec<_>>(), [1, 2]);
+    }
+
+    /// With pic_order_cnt_type 0 a "non-existing" frame has no order count and is left out of B
+    /// slice lists (8.2.4.2.3, frames, and 8.2.4.2.4, fields); P lists keep it (8.2.4.2.1).
+    #[test]
+    fn non_existing_frames_stay_out_of_b_lists_with_poc_type_0() {
+        for (poc_type0, field) in [(true, false), (true, true), (false, false)] {
+            let mut dpb: Dpb<u32> = Dpb::new();
+            dpb.poc_type0 = poc_type0;
+            dpb.entries.push(DpbEntry::frame_entry(1, [0, 0], 0, 0, RefMark::Short, false, false, meta()));
+            dpb.entries.push(DpbEntry::frame_entry(2, [0, 0], 1, 0, RefMark::Short, false, true, meta()));
+            dpb.entries.push(DpbEntry::frame_entry(3, [8, 8], 2, 0, RefMark::Short, false, false, meta()));
+            let mut sh = if field { field_slice(3, false, false, SliceType::B) } else { reference_slice() };
+            sh.slice_type = SliceType::B;
+            sh.frame_num = 3;
+            sh.num_ref_idx_active = [8, 8];
+            let lists = dpb.build_field_ref_lists(&sh, 4, 16, |e, _| e.frame).unwrap();
+            let has_gap = lists.iter().any(|l| l.contains(&2));
+            assert_eq!(has_gap, !poc_type0, "poc_type0={poc_type0} field={field}");
+            sh.slice_type = SliceType::P;
+            let lists = dpb.build_field_ref_lists(&sh, 4, 16, |e, _| e.frame).unwrap();
+            assert!(lists[0].contains(&2), "P list, field={field}");
+        }
+    }
+
+    /// C.4.5.2: with the DPB full, a non-reference field pair preceding everything waiting is
+    /// output directly instead of bumping the pictures after it. Two frame buffers hold reference
+    /// frames with POC 0 and 8; a non-reference pair with POC 4 and 5 comes out between them, and
+    /// so does a lone non-reference field.
+    #[test]
+    fn a_full_dpb_outputs_an_earlier_non_reference_field_pair_directly() {
+        for lone in [false, true] {
+            let mut dpb: Dpb<u32> = Dpb::new();
+            dpb.capacity = 2;
+            let mut out = Vec::new();
+            let mut sh = reference_slice();
+            sh.idr = true;
+            dpb.store_frame(&sh, 1, [0, 0], (16, 2), meta(), &mut out).unwrap();
+            let mut sh = reference_slice();
+            sh.frame_num = 1;
+            dpb.store_frame(&sh, 2, [8, 8], (16, 2), meta(), &mut out).unwrap();
+            store_field(&mut dpb, &field_slice(2, false, false, SliceType::B), 3, 4, 2, &mut out).unwrap();
+            if lone {
+                let mut sh = reference_slice();
+                sh.frame_num = 2;
+                dpb.store_frame(&sh, 5, [12, 12], (16, 2), meta(), &mut out).unwrap();
+            } else {
+                store_field(&mut dpb, &field_slice(2, true, false, SliceType::B), 4, 5, 2, &mut out).unwrap();
+            }
+            dpb.flush(&mut out);
+            let want: &[u32] = if lone { &[1, 3, 2, 5] } else { &[1, 304, 2] };
+            assert_eq!(out.iter().map(|o| o.frame).collect::<Vec<_>>(), want, "lone={lone}");
+        }
     }
 
     /// 8.2.5.3: the second field of a pair whose first field is short-term does not run the

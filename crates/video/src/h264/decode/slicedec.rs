@@ -330,8 +330,8 @@ impl<'a> SliceDecoder<'a> {
         if sh.slice_type == SliceType::B && !sh.direct_spatial_mv_pred && !refs[1].is_empty() {
             let poc1 = refs[1][0].poc();
             for r0 in refs[0].iter() {
-                let tb = (pic.poc - r0.poc()).clamp(-128, 127);
-                let td = (poc1 - r0.poc()).clamp(-128, 127);
+                let tb = pic.poc.saturating_sub(r0.poc()).clamp(-128, 127);
+                let td = poc1.saturating_sub(r0.poc()).clamp(-128, 127);
                 if td == 0 || r0.long_term {
                     tdirect.push((256, true));
                 } else {
@@ -394,8 +394,8 @@ impl<'a> SliceDecoder<'a> {
             w.mode = WpMode::Implicit;
             for r0 in refs[0].iter() {
                 for r1 in refs[1].iter() {
-                    let tb = (cur_poc - r0.poc()).clamp(-128, 127);
-                    let td = (r1.poc() - r0.poc()).clamp(-128, 127);
+                    let tb = cur_poc.saturating_sub(r0.poc()).clamp(-128, 127);
+                    let td = r1.poc().saturating_sub(r0.poc()).clamp(-128, 127);
                     let pair = if td == 0 || r0.long_term || r1.long_term {
                         (32, 32)
                     } else {

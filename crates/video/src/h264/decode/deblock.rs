@@ -334,10 +334,11 @@ fn intra_mb_bs(t8: bool, left: Option<usize>, top: Option<usize>, field: bool) -
 }
 
 /// Boundary strengths of the macroblock edge between neighbour `p` and the inter macroblock `q`.
-fn inter_outer_edge_bs(pic: &PicState, p: &MbState, q: &MbState, qm: &mut MbMotion, dir: usize, ylim: i32) -> [u8; 4] {
+fn inter_outer_edge_bs(pic: &PicState, p: &MbState, q: &MbState, qm: &mut MbMotion, dir: usize, field: bool) -> [u8; 4] {
     if p.kind.is_intra() {
-        return [intra_edge_bs(dir, ylim == 2); 4];
+        return [intra_edge_bs(dir, field); 4];
     }
+    let ylim = if field { 2 } else { 4 };
     let same_slice = p.slice_num == q.slice_num;
     let mut pm = MbMotion::new(p, &pic.slices[p.slice_num as usize]);
     let mut out = [0u8; 4];
@@ -382,7 +383,7 @@ fn inter_mb_bs(pic: &PicState, q: &MbState, sq: &SliceInfo, left: Option<usize>,
     let mut qm = MbMotion::new(q, sq);
     for (dir, neighbor) in [left, top].into_iter().enumerate() {
         if let Some(n) = neighbor {
-            bs[dir][0] = inter_outer_edge_bs(pic, &pic.mbs[n], q, &mut qm, dir, ylim);
+            bs[dir][0] = inter_outer_edge_bs(pic, &pic.mbs[n], q, &mut qm, dir, sq.field);
         }
         if q_uniform && q.nz_mask == 0 {
             // one motion for the whole MB and no coefficients: all internal edges have bS 0

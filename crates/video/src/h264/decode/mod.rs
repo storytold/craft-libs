@@ -54,6 +54,20 @@ pub struct ColorInfo {
     pub matrix: u8,
 }
 
+/// How the samples of a [`Picture`] were coded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PictureStructure {
+    /// A coded frame (progressive, or interlaced coded as a frame).
+    Frame,
+    /// Two field pictures, woven line by line.
+    FieldPair,
+    /// A single top field without its second field: every line is repeated once (C.4.5.3 outputs
+    /// the non-paired field), so the picture has full height but half the vertical resolution.
+    TopField,
+    /// As [`PictureStructure::TopField`] for a single bottom field.
+    BottomField,
+}
+
 /// A decoded, cropped picture in 8-bit planar 4:2:0.
 #[derive(Clone, Debug)]
 pub struct Picture {
@@ -81,4 +95,6 @@ pub struct Picture {
     /// filter was skipped. Its samples are approximate (not the conforming output); no other
     /// picture is affected.
     pub draft: bool,
+    /// Frame, field pair or a single line-repeated field.
+    pub structure: PictureStructure,
 }
