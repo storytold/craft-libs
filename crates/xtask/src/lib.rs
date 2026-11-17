@@ -9,6 +9,9 @@
 //! - [`runner`]: the gate's step runner. [`runner::run_steps`] runs the steps in order, stops at the
 //!   first failure and prints the `ok`, `FAIL` and `skip` summary. [`runner::root`],
 //!   [`runner::cargo`], [`runner::run`] and [`runner::nextest_or_test`] build and run the commands.
+//! - [`assets`]: the asset attribution check. The app supplies its attribution document, folders
+//!   and extra extensions as an [`assets::Policy`]; [`assets::run`] lists the files through Git and
+//!   reports each asset without a row.
 //! - [`names`]: the display-name scanner. [`names::scan`] looks for the words an app lists in its
 //!   Rust string literals, `Cargo.toml` descriptions and text files, and returns what it finds.
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
@@ -37,6 +40,7 @@
 //! }
 //! ```
 
+pub mod assets;
 #[cfg(feature = "lock")]
 pub mod lock;
 pub mod names;

@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::io::{Cursor, Read};
+use std::sync::Arc;
 
 use crate::preflight::{ReadError, read_entry};
 use crate::{Budget, Error, check_entry_count};
@@ -21,9 +22,24 @@ pub struct Limits {
 /// caller that reads through a clone keeps its own count.
 #[derive(Clone)]
 pub struct Archive<'a> {
-    zip: zip::ZipArchive<Cursor<&'a [u8]>>,
+    zip: zip::ZipArchive<Cursor<Input<'a>>>,
     budget: Budget,
     duplicates: bool,
+}
+
+#[derive(Clone)]
+enum Input<'a> {
+    Borrowed(&'a [u8]),
+    Owned(Arc<Vec<u8>>),
+}
+
+impl AsRef<[u8]> for Input<'_> {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(bytes) => bytes,
+            Self::Owned(bytes) => bytes.as_slice(),
+        }
+    }
 }
 
 const CENTRAL_HEADER: &[u8; 4] = b"PK\x01\x02";
@@ -46,15 +62,20 @@ impl<'a> Archive<'a> {
     /// Indexes `bytes`. The declared entry count is checked against
     /// [`Limits::max_entries`] before `zip` parses the central directory, and again after.
     pub fn open(bytes: &'a [u8], limits: Limits) -> Result<Self, Error> {
-        check_entry_count(bytes, limits.max_entries)?;
-        let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::NotZip(e.to_string()))?;
+        Self::open_input(Input::Borrowed(bytes), limits)
+    }
+
+    fn open_input(input: Input<'a>, limits: Limits) -> Result<Self, Error> {
+        check_entry_count(input.as_ref(), limits.max_entries)?;
+        let bytes = input.clone();
+        let zip = zip::ZipArchive::new(Cursor::new(input)).map_err(|e| Error::NotZip(e.to_string()))?;
         let found = zip.len() as u64;
         if found > limits.max_entries {
             return Err(Error::TooManyEntries { declared: found, limit: limits.max_entries });
         }
         // `zip` keeps one entry per name, so a directory with more headers than `zip` has entries
         // repeats a name.
-        let duplicates = count_central_headers(bytes, zip.central_directory_start(), zip.len().saturating_add(1)) > zip.len();
+        let duplicates = count_central_headers(bytes.as_ref(), zip.central_directory_start(), zip.len().saturating_add(1)) > zip.len();
         Ok(Archive { zip, budget: Budget::new("archive", limits.max_total_bytes), duplicates })
     }
 
@@ -178,5 +199,30 @@ impl<'a> Archive<'a> {
     /// The total budget, for a caller with its own charging rule (charging a failed read, say).
     pub fn budget_mut(&mut self) -> &mut Budget {
         &mut self.budget
+    }
+}
+
+impl Archive<'static> {
+    /// Indexes owned bytes without copying them. Clones share the backing storage.
+    pub fn open_owned(bytes: Vec<u8>, limits: Limits) -> Result<Self, Error> {
+        Self::open_input(Input::Owned(Arc::new(bytes)), limits)
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn owned_storage_lives_until_last_archive_clone_is_dropped() {
+        let bytes = crate::Writer::new().finish().unwrap();
+        let bytes = Arc::new(bytes);
+        let weak = Arc::downgrade(&bytes);
+        let archive = Archive::open_input(Input::Owned(bytes), Limits { max_entries: 1, max_total_bytes: 1 }).unwrap();
+        let clone = archive.clone();
+        drop(archive);
+        assert!(weak.upgrade().is_some());
+        drop(clone);
+        assert!(weak.upgrade().is_none());
     }
 }
