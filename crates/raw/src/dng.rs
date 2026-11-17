@@ -91,7 +91,7 @@ fn permute<T: Copy + Default, F: Fn(usize, usize) -> usize>(v: &mut Vec<T>, w: u
 }
 
 /// A 3×3 matrix tag: nine finite values that can be inverted.
-fn mat3(v: Option<Vec<f64>>) -> Option<Matrix3> {
+pub(crate) fn mat3(v: Option<Vec<f64>>) -> Option<Matrix3> {
     let v = v?;
     if v.len() != 9 || v.iter().any(|x| !x.is_finite()) {
         return None;
@@ -299,17 +299,11 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         deinterleave(&mut data, w, h, cpp, factor(t::ROW_INTERLEAVE_FACTOR), factor(t::COLUMN_INTERLEAVE_FACTOR))?;
     }
 
-    // linearization table (integer data only)
-    let mut linearized = false;
+    // linearization table (integer data only) and opcode lists. OpcodeList1 runs on the stored
+    // codes first (DNG 1.7 chapter 7); see [`linearization_and_opcodes`].
+    let (linearized, linearization_table, opcodes) = linearization_and_opcodes(pixels, raw, &mut data);
     // the largest value the table can give a sample: the white level when the file states none
-    let mut table_max = None;
-    if let (RawData::U16(v), Some(table)) = (&mut data, pixels.u64s(t::LINEARIZATION_TABLE).filter(|t| !t.is_empty())) {
-        let table: Vec<u16> = table.iter().map(|&x| x.min(65535) as u16).collect();
-        let last = table.len() - 1;
-        v.iter_mut().for_each(|s| *s = table[(*s as usize).min(last)]);
-        linearized = true;
-        table_max = table.iter().copied().max().filter(|&m| m > 0);
-    }
+    let table_max = linearization_table.as_deref().and_then(|t| t.iter().copied().max().filter(|&m| m > 0));
 
     // a reduced copy's own levels, where it states them
     let levels = |tag| if pixels.contains(tag) { pixels } else { raw };
@@ -442,10 +436,6 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         None
     };
 
-    let opcode_list = |tag| raw.bytes(tag).map(opcodes::parse_list).unwrap_or_default();
-    let opcodes =
-        crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
-
     let color = color_data(ifd0, raw, tiff.order);
     let gain_table_omitted = [raw, ifd0].iter().any(|ifd| ifd.contains(t::PROFILE_GAIN_TABLE_MAP) || ifd.contains(t::PROFILE_GAIN_TABLE_MAP_2))
         && color.profile.gain_table_map.is_none();
@@ -465,6 +455,7 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         color,
         wb_multipliers: None,
         linearized,
+        linearization_table,
         pixel_aspect: default_scale_aspect(raw.f64s(t::DEFAULT_SCALE).as_deref()),
         opcodes,
         camera: Camera::from_ifd0(ifd0),
@@ -477,12 +468,43 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     Ok(img)
 }
 
+/// Parse opcode lists and, for integer data, the LinearizationTable.
+///
+/// OpcodeList1 runs on the stored codes, then the table maps them to sensor values (DNG 1.7
+/// chapter 7). Applying opcodes is the develop pipeline's work, so a non-empty list 1 leaves the
+/// table unapplied (`linearized` is false) and available on the image.
+fn linearization_and_opcodes(pixels: &Ifd, raw: &Ifd, data: &mut RawData) -> (bool, Option<Vec<u16>>, crate::OpcodeLists) {
+    let opcode_list = |tag| raw.bytes(tag).map(opcodes::parse_list).unwrap_or_default();
+    let opcodes =
+        crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
+    let linearization_table = if matches!(data, RawData::U16(_)) {
+        pixels.u64s(t::LINEARIZATION_TABLE).filter(|t| !t.is_empty()).map(|table| table.iter().map(|&x| x.min(65535) as u16).collect::<Vec<u16>>())
+    } else {
+        None
+    };
+    let mut linearized = false;
+    if opcodes.list1.is_empty()
+        && let (RawData::U16(v), Some(table)) = (data, linearization_table.as_deref())
+    {
+        let last = table.len() - 1;
+        v.iter_mut().for_each(|s| *s = table[(*s as usize).min(last)]);
+        linearized = true;
+    }
+    (linearized, linearization_table, opcodes)
+}
+
 /// CinemaDNG `TimeCodes` (CinemaDNG Image Data Format Specification 1.0, tag 51043).
 const TIME_CODES: u16 = 51043;
 /// CinemaDNG `FrameRate` (tag 51044).
 const FRAME_RATE: u16 = 51044;
 /// CinemaDNG `ReelName` (tag 51081).
 const REEL_NAME: u16 = 51081;
+
+/// A CinemaDNG `FrameRate` of `n / d` frames a second between 1/1000 and 1000 (shared with the
+/// bounded `dng_metadata` reader).
+pub(crate) fn plausible_frame_rate(n: i64, d: i64) -> bool {
+    n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d
+}
 
 /// The CinemaDNG tags of a frame, from IFD 0 (where the specification puts them), else the raw IFD. A frame rate
 /// outside 1/1000 to 1000 frames a second and a time code that is not valid BCD are ignored.
@@ -494,7 +516,7 @@ fn cinema_tags(ifd0: &Ifd, raw: &Ifd) -> CinemaTags {
         _ => None,
     });
     CinemaTags {
-        frame_rate: frame_rate.filter(|&(n, d)| n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d),
+        frame_rate: frame_rate.filter(|&(n, d)| plausible_frame_rate(n, d)),
         timecode: pick(TIME_CODES).bytes(TIME_CODES).and_then(Timecode::from_bytes),
         reel_name: pick(REEL_NAME).string(REEL_NAME).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
     }

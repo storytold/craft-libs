@@ -8,6 +8,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(feature = "async-lines")]
+pub mod async_lines;
+pub mod control;
+
 use serde_json::{Value, json};
 use std::io::BufRead;
 
@@ -194,4 +198,62 @@ where
     }
     let responses: Vec<_> = batch.iter().filter_map(|v| one(v, limits, &mut on_request, &mut on_notification)).collect();
     Ok((!responses.is_empty()).then_some(Value::Array(responses)))
+}
+/// Process a permissive legacy JSON-RPC envelope. This mode accepts arbitrary IDs and
+/// parameter shapes, ignores response envelopes, and retains legacy diagnostic messages.
+/// The caller supplies dispatch and notification callbacks, and should bound transport input.
+pub fn process_legacy<F, N>(value: &Value, mut on_request: F, mut on_notification: N) -> Option<Value>
+where
+    F: FnMut(Request<'_>) -> Result<Value, RpcError>,
+    N: FnMut(Request<'_>),
+{
+    fn one<F, N>(value: &Value, on_request: &mut F, on_notification: &mut N) -> Option<Value>
+    where
+        F: FnMut(Request<'_>) -> Result<Value, RpcError>,
+        N: FnMut(Request<'_>),
+    {
+        let Some(object) = value.as_object() else { return Some(error_response(Value::Null, RpcError::new(-32600, "message must be an object"))) };
+        let id = object.get("id");
+        let Some(method) = object.get("method").and_then(Value::as_str) else {
+            if object.contains_key("result") || object.contains_key("error") {
+                return None;
+            }
+            return Some(error_response(id.cloned().unwrap_or(Value::Null), RpcError::new(-32600, "missing `method`")));
+        };
+        let request = Request { id, method, params: object.get("params") };
+        let Some(id) = id else {
+            on_notification(request);
+            return None;
+        };
+        Some(match on_request(request) {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            Err(error) => error_response(id.clone(), error),
+        })
+    }
+    if let Some(batch) = value.as_array() {
+        if batch.is_empty() {
+            return Some(error_response(Value::Null, RpcError::new(-32600, "empty batch")));
+        }
+        let replies: Vec<_> = batch.iter().filter_map(|v| one(v, &mut on_request, &mut on_notification)).collect();
+        (!replies.is_empty()).then_some(Value::Array(replies))
+    } else {
+        one(value, &mut on_request, &mut on_notification)
+    }
+}
+
+#[cfg(test)]
+mod legacy_tests {
+    use super::*;
+    #[test]
+    fn preserves_legacy_batch_routing_and_errors() {
+        let input = json!([{"id": [1], "method":"echo", "params":5}, {"method":"notice"}, {"result":1}, {}, 7]);
+        let seen = std::cell::Cell::new(false);
+        let result = process_legacy(&input, |r| Ok(r.params.cloned().unwrap_or(Value::Null)), |_| seen.set(true)).unwrap();
+        assert!(seen.get());
+        assert_eq!(
+            result,
+            json!([{"jsonrpc":"2.0","id":[1],"result":5}, {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"missing `method`"}}, {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"message must be an object"}}])
+        );
+        assert_eq!(process_legacy(&json!([]), |_| Ok(Value::Null), |_| {}).unwrap()["error"]["message"], "empty batch");
+    }
 }

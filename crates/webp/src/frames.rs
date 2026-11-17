@@ -102,6 +102,15 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     let malformed = |e: image::ImageError| FrameError::Malformed(e.to_string());
     let decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(malformed)?;
     let (width, height) = decoder.dimensions();
+    // The scanner and decoder can interpret conflicting headers differently. Validate the
+    // decoder's canvas before it is allowed to allocate a frame or working buffer.
+    let decoder_canvas = u64::from(width) * u64::from(height) * 4;
+    if decoder_canvas > limits.max_canvas_bytes {
+        return Err(FrameError::LimitExceeded(format!("a {width}x{height} canvas is over {} bytes", limits.max_canvas_bytes)));
+    }
+    if (width, height) != (info.width, info.height) {
+        return Err(FrameError::Malformed("conflicting canvas dimensions".into()));
+    }
     if !decoder.has_animation() {
         let mut rgba = vec![0u8; usize::try_from(canvas).map_err(|_| FrameError::LimitExceeded("canvas".into()))?];
         let alpha = decoder.color_type().has_alpha();
@@ -242,6 +251,21 @@ mod tests {
         assert_eq!((a.frames.len(), a.stop), (2, Stop::ByteLimit));
         assert!(matches!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 23, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(_))));
         assert!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 24, ..FrameLimits::default() }).is_ok());
+    }
+
+    #[test]
+    fn conflicting_canvas_is_rejected_before_frame_decode() {
+        let mut bytes = anim(&[(1, 10), (2, 10)]);
+        // The decoder uses the first VP8X, while the scanner sees the last one.
+        // A tiny limit makes this an ordering test without allocating a huge frame.
+        let second = chunk(b"VP8X", &[0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.splice(30..30, second);
+        let size = (bytes.len() - 8) as u32;
+        bytes[4..8].copy_from_slice(&size.to_le_bytes());
+        assert!(matches!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 4, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(_))));
+        assert!(
+            matches!(read_frames(&bytes, &FrameLimits::default()), Err(FrameError::Malformed(message)) if message.contains("conflicting canvas"))
+        );
     }
 
     #[test]
