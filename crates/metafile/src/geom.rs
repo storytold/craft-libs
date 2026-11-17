@@ -13,6 +13,33 @@ pub(crate) enum Op {
     Z,
 }
 
+/// Whether a path can enclose some area: one of its figures has points (curve control points
+/// included) that do not all lie on one line.
+pub(crate) fn encloses_area(ops: &[Op]) -> bool {
+    // The figure's first point and its first point elsewhere.
+    let (mut first, mut second): (Option<P>, Option<P>) = (None, None);
+    for op in ops {
+        let pts = match *op {
+            Op::M(p) => {
+                (first, second) = (None, None);
+                [Some(p), None, None]
+            }
+            Op::L(p) => [Some(p), None, None],
+            Op::C(a, b, c) => [Some(a), Some(b), Some(c)],
+            Op::Z => [None; 3],
+        };
+        for c in pts.into_iter().flatten() {
+            match (first, second) {
+                (None, _) => first = Some(c),
+                (Some(a), None) if c != a => second = Some(c),
+                (Some(a), Some(b)) if ((b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)).abs() > 0.0 => return true,
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn rect(l: f64, t: f64, r: f64, b: f64) -> Vec<Op> {
     vec![Op::M((l, t)), Op::L((r, t)), Op::L((r, b)), Op::L((l, b)), Op::Z]
 }
