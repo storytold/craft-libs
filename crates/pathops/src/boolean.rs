@@ -735,8 +735,15 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
         }
         // Each piece's middle and its end: the joints between pieces are where two input curves that share their ends lie
         // furthest apart (a lens is widest in the middle of its curves), so a run of two halves that only the middles of its
-        // halves were tested against took the wrong curve, 0.003 off, at a precision of 0.0024 to 0.0029.
-        let on_curve = run.iter().all(|s| [s.c.eval(0.5), s.c.p3].into_iter().all(|p| c.nearest(p, 1e-12).distance_sq.sqrt() <= middle_limit));
+        // halves were tested against took the wrong curve, 0.003 off, at a precision of 0.0024 to 0.0029. And its quarters: two
+        // curves that cross in the middle and share their ends have the same points at the ends and the middle of a piece and can be far apart
+        // a quarter of the way along (a long piece of a run cut unevenly was taken for the first of two such curves, 1.9 off at a
+        // precision of 0.01). The middle and the end are tried first, and the quarters only of a piece whose middle and end are on the
+        // curve. These are points of the piece, and how far it is from the curve between them is not bounded: a piece as near at five
+        // points and further apart between them is one that two cubics crossing at all five would have.
+        let on_curve = run.iter().all(|s| {
+            [s.c.eval(0.5), s.c.p3, s.c.eval(0.25), s.c.eval(0.75)].into_iter().all(|p| c.nearest(p, 1e-12).distance_sq.sqrt() <= middle_limit)
+        });
         if !on_curve || (na.t - nb.t).abs() < 1e-12 {
             continue;
         }
@@ -1591,6 +1598,39 @@ mod tests {
         let tidy = Tidy::keeping(0.001, [&input(first), &input(second)]);
         let merged = try_merge(&whole, &tidy).expect("the piece is one curve");
         assert!(!merged.line && off(&merged.c, &second) < 1e-9, "{} from the curve the piece is cut from", off(&merged.c, &second));
+    }
+
+    /// Two curves that share their ends and cross in the middle (they are 1.9 apart a quarter of the way along) have the same points at the ends
+    /// of pieces and at the middles of the pieces of a run cut unevenly from the second: the second cut at a hundred-thousandth has a long piece
+    /// whose end and middle are on the first curve and a quarter of whose length is 1.9 from it, and the first, ahead of the second in the
+    /// input, took it at a precision of 0.01. The pieces are tested at their quarters too, the merge is then the second curve's own, and where
+    /// it is the only curve in the input the run is refitted within the precision or not merged, and is not the first curve.
+    #[test]
+    fn a_run_cut_unevenly_from_a_curve_is_not_taken_for_one_that_crosses_it_in_the_middle() {
+        use kurbo::ParamCurveNearest;
+        let first = CubicBez::new((0.0, 0.0), (150.0, 160.0), (350.0, 340.0), (500.0, 500.0));
+        let second = CubicBez::new((0.0, 0.0), (150.0, 170.0), (350.0, 330.0), (500.0, 500.0));
+        let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
+        let off = |c: &CubicBez, from: &CubicBez| {
+            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
+        };
+        let piece = |r: std::ops::Range<f64>| Seg { c: second.subsegment(r), line: false };
+        // Premise: the curves meet at the ends and in the middle, and are far apart at a quarter.
+        assert!(first.eval(0.5).distance(second.eval(0.5)) < 1e-9 && first.eval(0.25).distance(second.eval(0.25)) > 1.5);
+        let both = Tidy::keeping(DEFAULT_PRECISION, [&input(first), &input(second)]);
+        let only_first = Tidy::keeping(DEFAULT_PRECISION, [&input(first)]);
+        let cuts = |from: &[f64]| -> Vec<Vec<Seg>> {
+            from.iter().map(|&cut| vec![piece(0.0..cut), piece(cut..1.0)]).chain([vec![piece(0.0..1.0)]]).collect()
+        };
+        for run in cuts(&[1e-5, 0.25, 0.5, 0.75, 1.0 - 1e-5]) {
+            let merged = try_merge(&run, &both).expect("the pieces are one curve");
+            assert!(!merged.line && off(&merged.c, &second) < 1e-6, "{} pieces: {} from the curve they are cut from", run.len(), off(&merged.c, &second));
+            // With the second curve not in the input, the first is no curve they are a part of: a refit within the precision, or none.
+            if let Some(refit) = try_merge(&run, &only_first) {
+                let far = (0..=40).map(|k| refit.c.nearest(second.eval(f64::from(k) / 40.0), 1e-9).distance_sq.sqrt()).fold(0.0, f64::max);
+                assert!(far <= DEFAULT_PRECISION + 1e-9, "{} pieces: refitted {far} from the curve they are cut from", run.len());
+            }
+        }
     }
 
     #[test]
