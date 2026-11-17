@@ -334,6 +334,7 @@ fn slop_sense(part: BoxPart) -> Sense {
 /// - The box holds the canvas's session (`KeyUse::session`): with the canvas focused or nothing focused, Enter, Escape
 ///   and the arrows reach it before the canvas's tool, and the arrows move the whole box. With
 ///   [`session_arrows`](Self::session_arrows) off the arrows stay the tool's (the Move tool nudges the layer).
+/// - A [crossed](Self::crossed) box draws its diagonals under the handles; they take no press of their own.
 /// - A [centre mark](Self::centre_mark) draws the reference point's glyph at the middle of the box and takes no press.
 ///   A [live line's look](Self::line) declares only the line's two ends, each standing for the box handle it points
 ///   to, and draws the line's controls in place of the frame.
@@ -374,6 +375,10 @@ pub struct TransformBox<'a> {
     /// Ellipse tool's. It takes no press: a press there is the inside's, or the tool's.
     #[prop]
     centre_mark: bool,
+    /// Whether the frame is crossed corner to corner, under the handles: the box of a placed object that keeps its
+    /// own contents (PhotoCraft's smart object), told apart from a box over pixels.
+    #[prop]
+    crossed: bool,
     /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
     /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
@@ -407,6 +412,7 @@ impl<'a> TransformBox<'a> {
             overflow: false,
             session_arrows: true,
             centre_mark: false,
+            crossed: false,
             line: None,
             reach: TransformReach::Box,
             pivot_held: false,
@@ -813,6 +819,15 @@ fn paint_frame(draw: &Draw<'_>, style: &TransformBoxStyle, corners: [Pos2; 4]) {
     draw.stroke(&outline, StrokeWidth::Medium, style.line);
 }
 
+/// The two diagonals of a box whose corners are `corners` on the screen, drawn as its outline is.
+fn paint_cross(draw: &Draw<'_>, style: &TransformBoxStyle, corners: [Pos2; 4]) {
+    for (from, to) in [(corners[0], corners[2]), (corners[1], corners[3])] {
+        let diagonal = PaintShape::Path(vec![from, to]);
+        draw.stroke(&diagonal, StrokeWidth::Thick, style.halo);
+        draw.stroke(&diagonal, StrokeWidth::Medium, style.line);
+    }
+}
+
 /// The move reach outside the box whose corners are `quad` on the screen: every point within `points` of its border,
 /// as a strip along each side and a round sector outside each corner (PhotoCraft's type move reach measures the
 /// distance to the nearest side, pc-prod-e76 type_transform.rs:156-196).
@@ -1064,6 +1079,9 @@ impl Component for TransformBox<'_> {
             Some(line) => self.paint_line(&draw, cx, &space.view, &line),
             None => {
                 paint_frame(&draw, style, screen.quad.map(pos));
+                if self.crossed {
+                    paint_cross(&draw, style, screen.quad.map(pos));
+                }
                 if self.centre_mark {
                     let centre = screen.quad.iter().fold(Vec2::ZERO, |sum, corner| sum + pos(*corner).to_vec2()) / 4.0;
                     paint_centre_glyph(&draw, centre.to_pos2(), style);
