@@ -2154,17 +2154,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-hdr"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-har"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-hdr"
+version = "0.1.0"
+dependencies = [
  "thiserror 2.0.21",
 ]
 
@@ -2641,6 +2641,16 @@ dependencies = [
 [[package]]
 name = "craft-palette"
 version = "0.1.0"
+
+[[package]]
+name = "craft-pcap"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "craft-pcraft-bundle"
