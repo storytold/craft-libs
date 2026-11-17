@@ -10,6 +10,7 @@
 //!   whether an app can run it.
 //! - [`permissions`]: the allowlist, the refused list every app shares and the app's own.
 //! - [`bundle`]: the `.craftplugin` file, its SHA-256 and version comparison.
+//! - [`store`] (native builds): the per-user `Plug-ins` folder.
 //! - [`catalog`] and [`github`]: catalogs (`index.json`) and installing from a repository's
 //!   releases, as pure functions; [`fetch`] runs them over the app's HTTP client.
 //! - [`widget`]: FigCraft's widget descriptions, which share the ABI.
@@ -25,6 +26,8 @@ pub mod github;
 pub mod manifest;
 pub mod permissions;
 mod sandbox;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod store;
 mod target;
 pub mod widget;
 
@@ -59,6 +62,8 @@ mod manifest_tests;
 mod permissions_tests;
 #[cfg(test)]
 mod save_file_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod store_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
