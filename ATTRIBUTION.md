@@ -107,3 +107,6 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 ## Score serializers
 
 `crates/score` extracts SoundCraft MusicXML and SVG score writing from `crates/engine/src/score.rs` at main `648ed9db9a0e98cc55643babffac381521a556c8`, with per-pitch ties adapted from [SoundCraft #182](https://github.com/storytold/soundcraft/pull/182) at `21cb618d93ec0e8d4771ac534994de8d5996ff10`. Source is MIT OR Apache-2.0. Import commits preserve Brandon Thomas, NetterSilver, Samuel Bacaro and Vikram Bhaskaran as primary authors of their respective changes. The consumer retains session mapping and layout. Shared API wiring, validation and focused tests are subsequent Dylan M. Taylor changes.
+## Non-seeking WAV primitives
+
+`crates/audio/src/wav_stream.rs` is extracted from AniCraft `crates/audio/src/wav.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0). Tanish Manku is retained as the primary import author, from original commit `30c121d269a49d9abe54a3834ed4aa0201542535`. Odd-data padding accounting, shared API documentation and regression tests are subsequent Dylan M. Taylor changes.
