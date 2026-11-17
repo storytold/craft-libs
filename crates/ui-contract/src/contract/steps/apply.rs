@@ -84,9 +84,9 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
             }
             _ => {}
         }
-        let carries = matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. });
+        let carries = matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. });
         if bind.is_given()
-            && let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } = event
+            && let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
         {
             given |= bind.get() != Some(Mixed::Same(value.clone()));
         }
