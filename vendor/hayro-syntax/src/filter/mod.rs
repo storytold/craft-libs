@@ -145,8 +145,12 @@ impl Filter {
 pub const MAX_DECODED_STREAM: usize = 256 << 20;
 
 /// PdfCraft patch: the most bytes they may produce for an image of known size, however large it
-/// says it is.
-const MAX_DECODED_IMAGE: u64 = 1 << 30;
+/// says it is, unless the document's [`DecodeLimits`](crate::DecodeLimits) set another figure.
+pub(crate) const MAX_DECODED_IMAGE: u64 = 1 << 30;
+
+/// The most pixels an image or mask may have for the interpreter to decode it, unless the
+/// document's [`DecodeLimits`](crate::DecodeLimits) set another figure.
+pub(crate) const MAX_IMAGE_PIXELS: u64 = 1 << 28;
 
 /// PdfCraft patch: the output limit for one filter of a stream decoded with `params`; `last`
 /// says whether it is the last filter. The last filter of an image whose size, bits per
@@ -165,7 +169,7 @@ pub(crate) fn decode_limit(params: &ImageDecodeParams, last: bool, limits: crate
     }
     let bits = u64::from(params.width) * u64::from(components) * u64::from(bpc);
     let pixels = bits.div_ceil(8).saturating_mul(u64::from(params.height));
-    let image = pixels.saturating_mul(2).min(MAX_DECODED_IMAGE);
+    let image = pixels.saturating_mul(2).min(limits.max_decoded_image());
     usize::try_from(image).unwrap_or(MAX_DECODED_STREAM)
 }
 
