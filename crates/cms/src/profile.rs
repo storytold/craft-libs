@@ -190,7 +190,7 @@ pub struct Lut {
 pub const SAME_COLORS_MAX_DELTA_E: f64 = 0.5;
 
 /// A parsed ICC profile.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     /// Major version and minor.bugfix byte (e.g. `(4, 0x30)` for 4.3, `(2, 0x10)` for 2.1).
     pub version: (u8, u8),
@@ -225,30 +225,7 @@ pub struct Profile {
     /// The bytes this profile was parsed from (or encoded to), kept for byte-exact embedding.
     pub(crate) bytes: Option<Arc<Vec<u8>>>,
     /// Lazily computed content hash: a cache, not part of the profile's identity.
-    pub(crate) hash: std::sync::OnceLock<u64>,
-}
-
-/// Field-wise equality without the hash cache, whose state depends on whether anything has asked
-/// for the hash yet (a shared built-in profile is hashed by whichever test or caller runs first).
-impl PartialEq for Profile {
-    fn eq(&self, other: &Self) -> bool {
-        self.version == other.version
-            && self.class == other.class
-            && self.color_space == other.color_space
-            && self.pcs == other.pcs
-            && self.rendering_intent == other.rendering_intent
-            && self.description == other.description
-            && self.copyright == other.copyright
-            && self.white_point == other.white_point
-            && self.black_point == other.black_point
-            && self.chad == other.chad
-            && self.matrix == other.matrix
-            && self.trc == other.trc
-            && self.gray_trc == other.gray_trc
-            && self.a2b == other.a2b
-            && self.b2a == other.b2a
-            && self.bytes == other.bytes
-    }
+    pub(crate) hash: HashCache,
 }
 
 impl Profile {
@@ -409,7 +386,7 @@ impl Profile {
     /// fixed-key 64-bit hash, so a crafted profile can share another's: equal hashes only narrow
     /// the search, [`Profile::same_bytes`] decides.
     pub fn content_hash(&self) -> u64 {
-        *self.hash.get_or_init(|| {
+        *self.hash.0.get_or_init(|| {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             self.to_bytes().hash(&mut h);
@@ -655,5 +632,17 @@ mod tests {
         assert_eq!(eval(&cached(&p3, lab, opts).unwrap()), want);
         // Control: sRGB still gets its own transform after the colliding lookup.
         assert_eq!(eval(&cached(srgb, lab, opts).unwrap()), sr);
+    }
+}
+
+/// A profile's lazily computed content hash. Whether it has been computed yet depends on who asked
+/// first (a shared built-in profile is hashed by whichever caller runs first), so it never takes part
+/// in a profile's equality.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HashCache(std::sync::OnceLock<u64>);
+
+impl PartialEq for HashCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }
