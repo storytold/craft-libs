@@ -357,14 +357,21 @@ fn create_brush(cv: &mut Canvas, r: Bytes) -> Option<()> {
 /// EMR_CREATEDIBPATTERNBRUSHPT (94) and EMR_CREATEMONOBRUSH (93): handle, colour usage, then the
 /// bitmap info and bits as offset/size pairs. A mono brush (or one whose palette holds indices,
 /// DIB_PAL_COLORS) takes the text and background colours. An undecodable bitmap leaves the slot
-/// empty.
+/// empty, as does a tile past the side cap; either is counted as a dropped image unless it has no
+/// pixels.
 fn create_dib_brush(cv: &mut Canvas, r: Bytes, mono: bool) -> Option<()> {
     let slot = r.u32(8)? as usize;
     let usage = r.u32(12)?;
     let (bo, bl) = (r.u32(16)? as usize, r.u32(20)? as usize);
     let (po, pl) = (r.u32(24)? as usize, r.u32(28)? as usize);
-    let img = dib::decode(Bytes(r.slice(bo, bl)?), Bytes(r.slice(po, pl)?), false)?;
-    let b = Brush::pattern(img, mono || usage == 1)?;
+    let (info, bits) = (r.slice(bo, bl).map(Bytes), r.slice(po, pl).map(Bytes));
+    let brush = info.zip(bits).and_then(|(info, bits)| dib::decode(info, bits, false)).and_then(|img| Brush::pattern(img, mono || usage == 1));
+    let Some(b) = brush else {
+        if !info.is_some_and(|i| dib::has_no_pixels(i, bits)) {
+            cv.drop_image();
+        }
+        return None;
+    };
     cv.add_object(Some(slot), Obj::Brush(b));
     Some(())
 }
@@ -500,17 +507,35 @@ fn set_dibits(cv: &mut Canvas, r: Bytes) -> Option<()> {
 
 /// Decodes the bitmap at `at` = (offset of the bmi offset/length pair, offset of the bits pair), both
 /// inside the record, and stretches the source rectangle `src` into `dst`. Both are `[x, y, w, h]`; a
-/// non-positive source size means the whole bitmap. `blend` decides how it combines.
+/// non-positive source size means the whole bitmap. `blend` decides how it combines. A record with
+/// pixel bits whose bitmap cannot be read, or is past a limit, is counted as a dropped image. A raster
+/// operation that takes no source fills the destination instead (see [`Canvas::fill_rop`]), with or
+/// without bits.
 fn blit(cv: &mut Canvas, r: Bytes, dst: [f64; 4], src: [f64; 4], at: (usize, usize), blend: Blend) -> Option<()> {
+    if let Blend::Rop(rop) = blend
+        && !dib::uses_source(rop)
+    {
+        cv.fill_rop(dst, rop);
+        return Some(());
+    }
     let (bo, bl) = (r.u32(at.0)? as usize, r.u32(at.0 + 4)? as usize);
     let (po, pl) = (r.u32(at.1)? as usize, r.u32(at.1 + 4)? as usize);
     if pl == 0 {
         return None;
     }
-    let info = Bytes(r.slice(bo, bl)?);
-    let pixels = Bytes(r.slice(po, pl)?);
-    let (mut img, dst) = dib::decode_clip(info, pixels, blend.per_pixel(), src.map(|v| v as i64), dst)?;
+    let src = src.map(|v| v as i64);
+    let (info, bits) = (r.slice(bo, bl).map(Bytes), r.slice(po, pl).map(Bytes));
+    let decoded = info.zip(bits).and_then(|(info, pixels)| dib::decode_clip(info, pixels, blend.per_pixel(), src, dst));
+    let Some((mut img, dst)) = decoded else {
+        if !info.is_some_and(|i| dib::crop_misses(i, bits, src)) {
+            cv.drop_image();
+        }
+        return None;
+    };
     dib::prepare(&mut img, blend);
-    cv.bitmap(dst, img);
+    match blend {
+        Blend::Rop(rop) => cv.bitmap_rop(dst, img, rop),
+        Blend::Alpha { .. } => cv.bitmap(dst, img),
+    }
     Some(())
 }

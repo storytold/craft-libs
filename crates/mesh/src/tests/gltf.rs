@@ -4,7 +4,7 @@ use super::hammer;
 use crate::gltf::{MAX_UV_SETS, MAX_ZERO_COMPONENTS, base64_decode, glb_container, read, split_glb, uri_decode, write_glb};
 use crate::{
     AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, NONE, Node, Part, Projection, Scene,
-    TextureRef, Wrap, face_normal, no_external, transform_point,
+    TextureRef, UvTransform, Wrap, face_normal, no_external, transform_point,
 };
 
 /// Builds the binary chunk with its buffer views and accessors.
@@ -152,6 +152,34 @@ fn gltf_text(buffer: &str, image: &str) -> (Vec<u8>, Vec<u8>) {
     (serde_json::to_vec(&doc).unwrap(), b.bin)
 }
 
+/// What a `.gltf` file holding `buffer` and `image` as URIs reads as: the image's bytes, or
+/// the error.
+fn embedded(buffer: &str, image: &str) -> std::result::Result<Option<Vec<u8>>, Error> {
+    let (doc, _) = gltf_text(buffer, image);
+    read(&doc, &Limits::default(), &mut |_| None).map(|s| s.images[0].data.clone())
+}
+
+/// A data URI may escape any character (RFC 3986 §2.1), base64's `+`, `/` and `=` included.
+#[test]
+fn percent_escapes_in_a_data_uri_are_decoded_to_bytes() {
+    let bin = gltf_text("", "").1;
+    let buffer = format!("data:application/octet-stream;base64,{}", base64(&bin));
+    // 0xFB 0xFF 0xBF: "+/+/" in base64.
+    let image = [0xFB, 0xFF, 0xBF, 0xFB, 0xFF, 0xBF];
+    assert_eq!(base64(&image), "+/+/+/+/");
+    let escaped = |s: &str| s.replace('+', "%2B").replace('/', "%2f").replace('=', "%3D");
+    let want = Some(image.to_vec());
+    let plain_image = format!("data:image/png;base64,{}", base64(&image));
+    let (head, body) = buffer.split_once(',').unwrap();
+    let every = format!("{head},{}", body.bytes().map(|c| format!("%{c:02X}")).collect::<String>());
+    assert_eq!(embedded(&every, &plain_image).unwrap(), want, "a buffer escaped throughout");
+    assert_eq!(embedded(&buffer, &escaped(&plain_image)).unwrap(), want, "an escaped image");
+    // Not base64: the escaped bytes as they are, high bytes too.
+    assert_eq!(embedded(&buffer, "data:image/png,%FB%FF%BF%FB%ff%bf").unwrap(), want);
+    assert_eq!(embedded(&buffer, "data:,a%20b%").unwrap(), Some(b"a b%".to_vec()));
+    assert_eq!(embedded(&buffer, "data:image/png;base64,%25").unwrap(), None, "an escaped % is not base64");
+}
+
 #[test]
 fn embedded_and_external_resources() {
     // Embedded: data URIs for the buffer and the image.
@@ -170,7 +198,7 @@ fn embedded_and_external_resources() {
         (Some(&png[..]), Some("image/png"), None)
     );
     // The texture slot keeps its UV set and wrap modes.
-    assert_eq!(s.materials[0].base_color_texture, Some(TextureRef { image: 0, uv_set: 1, wrap: [Wrap::Clamp, Wrap::Mirror] }));
+    assert_eq!(s.materials[0].base_color_texture, Some(TextureRef { image: 0, uv_set: 1, wrap: [Wrap::Clamp, Wrap::Mirror], transform: None }));
     // No scene in the file: every node that is nobody's child is a root.
     assert_eq!(s.roots, [0]);
 
@@ -194,6 +222,44 @@ fn embedded_and_external_resources() {
     assert!(parse(&gltf_text("data:;base64,!!!", "x.png").0).is_err());
 }
 
+/// A one-material file whose base colour texture info is `info`.
+fn texture_info(info: Value) -> Scene {
+    let (doc, bin) = gltf_text("", "data:image/png;base64,iVBORw0KGgo=");
+    let mut v: Value = serde_json::from_slice(&doc).unwrap();
+    v["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"] = info;
+    v["buffers"][0]["uri"] = json!(format!("data:application/octet-stream;base64,{}", base64(&bin)));
+    parse(&serde_json::to_vec(&v).unwrap()).unwrap()
+}
+
+#[test]
+fn a_texture_transform_is_read_with_its_own_uv_set() {
+    let t = |s: &Scene| s.materials[0].base_color_texture.unwrap();
+    let ext = json!({ "offset": [0.5, 0.25], "rotation": std::f64::consts::FRAC_PI_2, "scale": [2, 3], "texCoord": 1 });
+    let s = texture_info(json!({ "index": 0, "texCoord": 0, "extensions": { "KHR_texture_transform": ext } }));
+    assert_eq!(t(&s).uv_set, 1, "the extension's texCoord wins");
+    let tt = t(&s).transform.unwrap();
+    // (1, 0): scaled to (2, 0), turned to (0, -2), moved to (0.5, -1.75).
+    let [u, v] = tt.apply([1.0, 0.0]);
+    assert!((u - 0.5).abs() < 1e-6 && (v + 1.75).abs() < 1e-6, "({u}, {v})");
+    // Missing or unusable members keep their defaults.
+    let s = texture_info(json!({ "index": 0, "texCoord": 1, "extensions": { "KHR_texture_transform": { "scale": "big", "offset": [2] } } }));
+    assert_eq!((t(&s).uv_set, t(&s).transform), (1, Some(UvTransform { offset: [2.0, 0.0], ..UvTransform::default() })));
+    assert_eq!(texture_info(json!({ "index": 0 })).materials[0].base_color_texture.unwrap().transform, None);
+}
+
+/// The extension's own example (offset (0, 1), a quarter turn, half scale), which draws only the
+/// image's lower-left quadrant; v runs down.
+#[test]
+fn the_extensions_own_example_draws_the_lower_left_quadrant() {
+    let ext = json!({ "offset": [0, 1], "rotation": std::f64::consts::FRAC_PI_2, "scale": [0.5, 0.5] });
+    let s = texture_info(json!({ "index": 0, "extensions": { "KHR_texture_transform": ext } }));
+    let tt = s.materials[0].base_color_texture.unwrap().transform.unwrap();
+    for uv in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
+        let [u, v] = tt.apply(uv);
+        assert!((-1e-6..=0.5 + 1e-6).contains(&u) && (0.5 - 1e-6..=1.0 + 1e-6).contains(&v), "{uv:?} to ({u}, {v})");
+    }
+}
+
 #[test]
 fn texture_and_sampler_inventory_includes_unreferenced_entries() {
     let doc = serde_json::to_vec(&json!({
@@ -209,7 +275,10 @@ fn texture_and_sampler_inventory_includes_unreferenced_entries() {
     let scene = read(&doc, &Limits::default(), &mut |_| Some(vec![])).unwrap();
     assert_eq!(
         scene.texture_variants,
-        [TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Clamp, Wrap::Mirror] }, TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Repeat; 2] },]
+        [
+            TextureRef { image: 0, wrap: [Wrap::Clamp, Wrap::Mirror], ..TextureRef::default() },
+            TextureRef { image: 0, wrap: [Wrap::Repeat; 2], ..TextureRef::default() },
+        ]
     );
     assert!(scene.validate().is_ok());
 
@@ -442,7 +511,7 @@ fn what_is_not_read_is_refused_or_named() {
         json!({ "extensionsRequired": ["KHR_texture_transform", "KHR_materials_clearcoat", "KHR_mesh_quantization", "KHR_materials_unlit"] }),
     ))
     .unwrap();
-    assert_eq!(s.warnings.len(), 2);
+    assert_eq!(s.warnings.len(), 1, "texture transforms are read: {:?}", s.warnings);
     assert!(parse(b"{ not json").is_err());
     assert!(parse(b"").is_err());
 }
@@ -659,7 +728,8 @@ fn painted() -> Scene {
         ],
         ..Mesh::default()
     };
-    let wood = TextureRef { image: 0, uv_set: 1, wrap: [Wrap::Clamp, Wrap::Repeat] };
+    let tile = UvTransform { offset: [0.25, -1.5], rotation: 0.5, scale: [2.0, 4.0] };
+    let wood = TextureRef { image: 0, uv_set: 1, wrap: [Wrap::Clamp, Wrap::Repeat], transform: Some(tile) };
     let materials = vec![
         Material {
             name: "Wood".into(),
@@ -699,6 +769,14 @@ fn written_files_read_back() {
     let back = parse(&glb).unwrap();
     back.validate().unwrap();
     assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let uses_transform = |glb: &[u8]| {
+        let used: Value = serde_json::from_slice(split_glb(glb).unwrap().0).unwrap();
+        used["extensionsUsed"].as_array().map_or(0, |a| a.iter().filter(|e| *e == "KHR_texture_transform").count())
+    };
+    assert_eq!(uses_transform(&glb), 1);
+    let mut plain = painted();
+    plain.materials.iter_mut().filter_map(|m| m.base_color_texture.as_mut()).for_each(|t| t.transform = None);
+    assert_eq!(uses_transform(&write_glb(&plain, &Limits::default()).unwrap()), 0, "listed only when used");
     // The hierarchy: names, placement, and the mesh without triangles gone from its node.
     assert_eq!(back.roots, [2]);
     assert_eq!(
@@ -735,6 +813,10 @@ fn writer_refuses_what_is_not_gltf() {
     let mut s = painted();
     s.materials[0].roughness = f32::NAN;
     assert!(write_glb(&s, &limits).is_err());
+    let mut s = painted();
+    let t = s.materials.iter_mut().find_map(|m| m.base_color_texture.as_mut().and_then(|t| t.transform.as_mut())).unwrap();
+    t.rotation = f32::NAN;
+    assert!(write_glb(&s, &limits).is_err(), "a texture transform that is not finite");
     let mut s = painted();
     s.meshes[0].parts[0].corners[0].position = 50;
     assert!(write_glb(&s, &limits).is_err());
@@ -828,4 +910,43 @@ fn specular_glossiness_and_webp_textures() {
     assert_eq!(m.metallic_roughness_texture, None);
     let plain = &s.materials[1];
     assert_eq!((plain.base_color, plain.metallic, plain.roughness, plain.base_color_texture), ([1.0; 4], 0.0, 0.0, None));
+}
+
+#[test]
+fn morph_targets_and_other_scenes_are_named_in_warnings() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let d = b.f32s(&[0.0; 9], "VEC3", 3);
+    let plain = json!({ "attributes": { "POSITION": p } });
+    let morphed = json!({ "attributes": { "POSITION": p }, "targets": [{ "POSITION": d }] });
+    let doc = |scene: Value, scenes: Value| {
+        b.glb(json!({
+            "scene": scene,
+            "scenes": scenes,
+            "nodes": [{ "mesh": 0 }, { "mesh": 0 }],
+            "meshes": [{ "primitives": [plain, morphed, morphed] }],
+        }))
+    };
+    let s = parse(&doc(json!(1), json!([{ "nodes": [0] }, { "nodes": [1] }, { "nodes": [] }]))).unwrap();
+    assert_eq!(s.roots, [1]);
+    assert_eq!(
+        s.warnings,
+        ["scene 1 of 3 was read; the others were left out", "2 primitive(s) have morph targets, which were left out (drawn in the base shape)",]
+    );
+    // The morphed primitives are still drawn, in their base shape.
+    assert_eq!(s.meshes[0].parts.len(), 3);
+    let morphs = "2 primitive(s) have morph targets, which were left out (drawn in the base shape)";
+    // An out-of-range choice falls back to the first scene.
+    let s = parse(&doc(json!(5), json!([{ "nodes": [1] }, { "nodes": [0] }]))).unwrap();
+    assert_eq!(s.roots, [1]);
+    assert_eq!(s.warnings, ["scene 0 of 2 was read; the others were left out", morphs]);
+    // One scene, or none, is not a warning about scenes.
+    let s = parse(&doc(json!(5), json!([{ "nodes": [0] }]))).unwrap();
+    assert_eq!(s.roots, [0]);
+    assert_eq!(s.warnings, [morphs]);
+    let s = parse(&doc(json!(null), json!(null))).unwrap();
+    assert_eq!(s.roots, [0, 1]);
+    assert_eq!(s.warnings, [morphs]);
+    let s = parse(&one_mesh(&b, plain.clone())).unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
 }
