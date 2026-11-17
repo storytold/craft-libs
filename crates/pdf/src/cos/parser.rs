@@ -33,11 +33,13 @@ pub struct Lexer<'a> {
     pub pos: usize,
     /// Objects built by the current top-level [`Lexer::object`] call.
     nodes: usize,
+    /// Whether the current top-level [`Lexer::object`] call reached [`MAX_DEPTH`].
+    too_deep: bool,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(data: &'a [u8], pos: usize) -> Self {
-        Self { data, pos: pos.min(data.len()), nodes: 0 }
+        Self { data, pos: pos.min(data.len()), nodes: 0, too_deep: false }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -90,6 +92,7 @@ impl<'a> Lexer<'a> {
     /// Parse one direct object. References `N G R` are recognised.
     pub fn object(&mut self) -> Result<Object, CosError> {
         self.nodes = 0;
+        self.too_deep = false;
         self.object_depth(0)
     }
 
@@ -97,8 +100,16 @@ impl<'a> Lexer<'a> {
         self.nodes > MAX_NODES
     }
 
+    /// Whether the last [`Lexer::object`] call failed because the object nests deeper than the
+    /// parser follows. Such an object is refused as soon as it passes the limit, not skipped byte
+    /// by byte as junk, so reading it costs at most the limit's worth of bytes.
+    pub fn too_deep(&self) -> bool {
+        self.too_deep
+    }
+
     fn object_depth(&mut self, depth: usize) -> Result<Object, CosError> {
         if depth > MAX_DEPTH {
+            self.too_deep = true;
             return Err(self.err("nesting too deep"));
         }
         self.nodes = self.nodes.saturating_add(1);
@@ -139,7 +150,7 @@ impl<'a> Lexer<'a> {
                             let before = self.pos;
                             match self.object_depth(depth + 1) {
                                 Ok(o) => items.push(o),
-                                Err(e) if self.over_budget() => return Err(e),
+                                Err(e) if self.over_budget() || self.too_deep => return Err(e),
                                 // Tolerate junk inside arrays by skipping one byte.
                                 Err(_) if self.pos == before => self.pos += 1,
                                 Err(e) => return Err(e),
@@ -297,9 +308,14 @@ impl<'a> Lexer<'a> {
                 Some(_) => {
                     // Tolerate garbage between entries (seen in damaged files): skip a token.
                     let before = self.pos;
-                    let _ = self.object_depth(depth + 1);
+                    let skipped = self.object_depth(depth + 1);
                     if self.over_budget() {
                         return Err(self.err("object too large"));
+                    }
+                    if let Err(e) = skipped
+                        && self.too_deep
+                    {
+                        return Err(e);
                     }
                     if self.pos == before {
                         self.pos += 1;
@@ -857,6 +873,22 @@ mod tests {
         }
         let deep = "[".repeat(10_000);
         assert!(Lexer::new(deep.as_bytes(), 0).object().is_err());
+    }
+
+    #[test]
+    fn an_object_nested_past_the_limit_is_refused_where_it_passes_it() {
+        // Not skipped byte by byte as junk to the end of the data: the bytes after it are unread.
+        for (open, width) in [("[", 1), ("<<", 2), ("<< /A [", 7)] {
+            let deep = open.repeat(10_000);
+            let mut lx = Lexer::new(deep.as_bytes(), 0);
+            assert!(lx.object().is_err());
+            assert!(lx.too_deep(), "{open}");
+            assert!(lx.pos <= (MAX_DEPTH + 2) * width, "{open}: read to {}", lx.pos);
+        }
+        // A new object starts with the flag clear.
+        let mut lx = Lexer::new(b"[[1]]", 0);
+        assert!(lx.object().is_ok());
+        assert!(!lx.too_deep());
     }
 
     #[test]
