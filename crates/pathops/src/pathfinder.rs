@@ -981,6 +981,8 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
     // match has its midpoint within `d` of this one's, so only the chains in the grid cells
     // around it are candidates; the first of them in `out` order is the one a scan would find.
     let mut out: Vec<(Vec<Seg>, u64)> = Vec::new();
+    // A closed chain, compared as it is turned to start at its least corner ([`closed_from_least_corner`]), for each of `out`.
+    let mut turned: Vec<Option<Vec<Seg>>> = Vec::new();
     let mut sigs: Vec<ChainSig> = Vec::new();
     let sig = |c: &[Seg]| -> ChainSig {
         let a = c[0].c.p0;
@@ -998,7 +1000,10 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
     let cell = |p: Point| ((p.x / d).floor() as i64, (p.y / d).floor() as i64);
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (chain, key) in chains {
-        let this = sig(&chain);
+        // Two loops that are one (a shape drawn twice, from different corners) are told as they are turned to start at one corner.
+        let own_turn = closed_from_least_corner(&chain);
+        let mine: &[Seg] = own_turn.as_deref().unwrap_or(&chain);
+        let this = sig(mine);
         let (cx, cy) = cell(this.samples[CHAIN_SAMPLES / 2]);
         // The chains in the cells round it, each compared with this one: charged before it is, as chains
         // with distinct ends and one midpoint (a fan of long ones) all lie in one cell.
@@ -1012,7 +1017,8 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
         candidates.sort_unstable();
         let mut found = None;
         for i in candidates {
-            let (Some(other), Some((kept, _))) = (sigs.get(i), out.get(i)) else { continue };
+            let (Some(other), Some((kept, _)), Some(kept_turn)) = (sigs.get(i), out.get(i), turned.get(i)) else { continue };
+            let kept: &[Seg] = kept_turn.as_deref().unwrap_or(kept);
             let near = (10.0 * (1e-7 * this.size.max(other.size)).max(1e-6)).min(d);
             // The ends and the nine points only pick the candidates: two chains with the same ends and the same points can part
             // between them, so what is between them is walked too, from the same end or from the other.
@@ -1021,12 +1027,12 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
                     continue;
                 }
                 // Charged before it is walked, for every point it may take.
-                let units = walk_units(&chain) + walk_units(kept);
+                let units = walk_units(mine) + walk_units(kept);
                 if !budget.charge(units.saturating_mul(CHAIN_SAMPLE_STEPS)) {
                     return None;
                 }
                 work::add(Work::ChainSamples, units);
-                if chains_run_together(&chain, kept, reversed, near) {
+                if chains_run_together(mine, kept, reversed, near) {
                     found = Some(i);
                     break;
                 }
@@ -1044,6 +1050,7 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
             None => {
                 grid.entry((cx, cy)).or_default().push(out.len());
                 sigs.push(this);
+                turned.push(own_turn);
                 out.push((chain, key));
             }
         }
@@ -1057,6 +1064,22 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
             })
             .collect(),
     )
+}
+
+/// A closed chain (one that ends where it starts) turned to start at its least corner (the least `x` of the start of a segment, and the least `y` of
+/// those), as another chain of the same loop drawn from another corner is: `None` where it is not closed, or already starts there. A loop
+/// is one wherever it starts, so two of them are told apart for what they are drawn through and not for where the drawing began.
+fn closed_from_least_corner(c: &[Seg]) -> Option<Vec<Seg>> {
+    let (first, last) = (c.first()?, c.last()?);
+    if c.len() < 2 || first.c.p0 != last.c.p3 {
+        return None;
+    }
+    let corner = |s: &Seg| (s.c.p0.x, s.c.p0.y);
+    let least = (0..c.len()).reduce(|best, k| {
+        let (a, b) = (corner(&c[best]), corner(&c[k]));
+        if b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)).is_lt() { k } else { best }
+    })?;
+    (least != 0).then(|| c.iter().cycle().skip(least).take(c.len()).copied().collect())
 }
 
 /// What comparing a chain of an Outline with one found beside it costs, in the steps of
@@ -1452,6 +1475,68 @@ mod tests {
         // The pass budget that is the whole of the touching holes' pass is enough, and one unit less is not.
         assert_eq!(all(crate::Limits { pass_work: total, ..crate::Limits::default() }, true).0, Ok(Some(faces)));
         assert_eq!(all(crate::Limits { pass_work: total - 1, ..crate::Limits::default() }, true).0, Err(crate::PathOpsError::TooComplex));
+    }
+
+    /// A shape drawn twice is one outline, whichever corner each drawing starts at and whichever way it goes round (a closed outline is a chain that
+    /// starts and ends at the corner the drawing began at, and two such chains from different corners were two), with the key of the front-most
+    /// drawing; a square of another size, or one moved, is another outline.
+    #[test]
+    fn a_shape_drawn_twice_from_different_corners_is_one_outline() {
+        let corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let square = |start: usize, backwards: bool| {
+            let mut p = BezPath::new();
+            p.move_to(corners[start]);
+            for k in 1..4 {
+                p.line_to(corners[if backwards { (start + 4 - k) % 4 } else { (start + k) % 4 }]);
+            }
+            p.close_path();
+            p
+        };
+        let outline = |paths: Vec<BezPath>| {
+            let shapes: Vec<Shape> = paths.into_iter().enumerate().map(|(i, p)| Shape::new(p, FillRule::NonZero, i as u64 + 1)).collect();
+            try_pathfinder(PathfinderOp::Outline, &shapes).expect("an outline")
+        };
+        for start in 0..4 {
+            for backwards in [false, true] {
+                let made = outline(vec![square(0, false), square(start, backwards)]);
+                assert_eq!(made.iter().map(|s| s.key).collect::<Vec<_>>(), [2], "from corner {start}, backwards {backwards}");
+            }
+        }
+        // Three drawings, from three corners, make what three from one corner make (the sweep cuts three coincident outlines at the corners), with the
+        // key of the front-most.
+        let keys = |paths: Vec<BezPath>| outline(paths).iter().map(|s| s.key).collect::<Vec<_>>();
+        let same_corner = keys(vec![square(0, false), square(0, false), square(0, false)]);
+        assert!(!same_corner.is_empty() && same_corner.iter().all(|&k| k == 3), "{same_corner:?}");
+        assert_eq!(keys(vec![square(0, false), square(2, false), square(3, true)]), same_corner);
+        let circle = |from_arc: usize| {
+            let arcs: Vec<kurbo::PathSeg> = crate::testutil::exact_circle(10.0, 0.0, 0.0).segments().collect();
+            let mut p = BezPath::new();
+            for k in 0..arcs.len() {
+                if let Some(kurbo::PathSeg::Cubic(c)) = arcs.get((from_arc + k) % arcs.len()) {
+                    if k == 0 {
+                        p.move_to(c.p0);
+                    }
+                    p.curve_to(c.p1, c.p2, c.p3);
+                }
+            }
+            p.close_path();
+            p
+        };
+        // A circle of four arcs drawn twice, from the same arc or from another, is its four arcs once over (the sweep may cut them in pieces where the
+        // two drawings meet: one outline of four arcs, or three that are four between them), with the key of the front-most.
+        let arcs_of = |paths: Vec<BezPath>| {
+            let made = outline(paths);
+            (made.iter().all(|s| s.key == 2), made.iter().map(|s| s.path.segments().count()).sum::<usize>())
+        };
+        for from_arc in 0..4 {
+            assert_eq!(arcs_of(vec![circle(0), circle(from_arc)]), (true, 4), "from arc {from_arc}");
+        }
+        // Not the same: a square moved by a unit, one a unit larger, and the square with its neighbour's key.
+        let moved = kurbo::Affine::translate((1.0, 0.0)) * square(0, false);
+        let larger = kurbo::Affine::scale(1.1) * square(1, false);
+        let made = outline(vec![square(0, false), moved, larger]);
+        assert_eq!(made.iter().map(|s| s.key).collect::<Vec<_>>().len(), made.len());
+        assert!(made.len() >= 3, "{} outlines of three different squares", made.len());
     }
 
     #[test]
