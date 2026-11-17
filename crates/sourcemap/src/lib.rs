@@ -13,13 +13,15 @@ pub struct Limits {
     pub max_bytes: usize,
     /// Most decoded segments across the whole map.
     pub max_segments: usize,
+    /// Most generated lines across the whole map, including empty lines and inline sections.
+    pub max_lines: usize,
     /// Deepest section nesting (the format allows one level; we tolerate a few).
     pub max_depth: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_bytes: 64 * 1024 * 1024, max_segments: 4_000_000, max_depth: 8 }
+        Limits { max_bytes: 64 * 1024 * 1024, max_segments: 4_000_000, max_lines: 1_000_000, max_depth: 8 }
     }
 }
 
@@ -37,6 +39,10 @@ pub enum SourceMapError {
     BadSections,
     #[error("source map has more than {0} segments")]
     TooManySegments(usize),
+    #[error("source map has more than {0} generated lines")]
+    TooManyLines(usize),
+    #[error("could not reserve memory for generated source-map lines")]
+    LineAllocationFailed,
     #[error("source map sections nest deeper than {0}")]
     TooDeep(usize),
 }
@@ -156,10 +162,11 @@ pub fn parse(json: &[u8], limits: Limits) -> Result<SourceMap, SourceMapError> {
     let body = if json.starts_with(b")]}") { json.iter().position(|b| *b == b'\n').and_then(|p| json.get(p + 1..)).unwrap_or(&[]) } else { json };
     let v: Value = serde_json::from_slice(body).map_err(|e| SourceMapError::BadJson(e.to_string()))?;
     let mut budget = limits.max_segments;
-    from_value(&v, 0, limits, &mut budget)
+    let mut line_budget = limits.max_lines;
+    from_value(&v, 0, limits, &mut budget, &mut line_budget)
 }
 
-fn from_value(v: &Value, depth: usize, limits: Limits, budget: &mut usize) -> Result<SourceMap, SourceMapError> {
+fn from_value(v: &Value, depth: usize, limits: Limits, budget: &mut usize, line_budget: &mut usize) -> Result<SourceMap, SourceMapError> {
     if depth > limits.max_depth {
         return Err(SourceMapError::TooDeep(limits.max_depth));
     }
@@ -193,7 +200,7 @@ fn from_value(v: &Value, depth: usize, limits: Limits, budget: &mut usize) -> Re
                 return Err(SourceMapError::BadSections);
             }
             let sub = match (section.get("map"), section.get("url")) {
-                (Some(m), None) => from_value(m, depth + 1, limits, budget)?,
+                (Some(m), None) => from_value(m, depth + 1, limits, budget, line_budget)?,
                 // External maps are never fetched here. Retain their start so a lookup
                 // cannot leak through to the previous inline map.
                 (None, Some(Value::String(_))) => SourceMap::default(),
@@ -205,7 +212,7 @@ fn from_value(v: &Value, depth: usize, limits: Limits, budget: &mut usize) -> Re
         return Ok(map);
     }
     let mappings = v.get("mappings").and_then(Value::as_str).unwrap_or_default();
-    decode_mappings(mappings, &mut map, budget)?;
+    decode_mappings(mappings, &mut map, budget, line_budget, limits.max_lines)?;
     Ok(map)
 }
 
@@ -248,7 +255,7 @@ fn vlq(bytes: &[u8], pos: &mut usize) -> Option<i64> {
     })
 }
 
-fn decode_mappings(m: &str, map: &mut SourceMap, budget: &mut usize) -> Result<(), SourceMapError> {
+fn decode_mappings(m: &str, map: &mut SourceMap, budget: &mut usize, line_budget: &mut usize, line_limit: usize) -> Result<(), SourceMapError> {
     let bytes = m.as_bytes();
     let (mut src, mut ol, mut oc, mut name) = (0i64, 0i64, 0i64, 0i64);
     let mut pos = 0usize;
@@ -259,7 +266,12 @@ fn decode_mappings(m: &str, map: &mut SourceMap, budget: &mut usize) -> Result<(
     while pos <= bytes.len() {
         match bytes.get(pos) {
             None | Some(b';') => {
+                if *line_budget == 0 {
+                    return Err(SourceMapError::TooManyLines(line_limit));
+                }
+                *line_budget -= 1;
                 line.sort_by_key(|s| s.generated_column);
+                map.lines.try_reserve(1).map_err(|_| SourceMapError::LineAllocationFailed)?;
                 map.lines.push(std::mem::take(&mut line));
                 col = 0;
                 pos += 1;
