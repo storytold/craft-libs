@@ -1862,6 +1862,67 @@ fn a_link_on_an_office_2016_charts_drawing_is_kept() {
     }
 }
 
+/// A package with one invented waterfall chart (432 x 252 pt) whose `mc:Fallback` is `fallback`.
+fn chartex_text_fallback_docx(fallback: &str) -> Vec<u8> {
+    let chart = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chart><cx:title pos="t"><cx:tx><cx:txData><cx:v>Steps</cx:v></cx:txData></cx:tx></cx:title><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"/></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+    let frame = r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="1" name="Chart 1"/><wp:cNvGraphicFramePr/>"#;
+    let body = format!(
+        r#"<w:p><w:r><w:t>Before</w:t></w:r></w:p><w:p><w:r><mc:AlternateContent><mc:Choice xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent></w:r></w:p>"#
+    );
+    let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="charts/chartEx1.xml"/></Relationships>"#;
+    let types = format!(
+        r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/charts/chartEx1.xml" ContentType="{CT_CHARTEX}"/></Types>"#
+    );
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
+        ("word/charts/chartEx1.xml", chart.as_bytes()),
+    ])
+}
+
+/// #6820: an Office 2016 chart whose fallback is only text keeps its 432 x 252 pt place (as a
+/// placeholder) instead of becoming the fallback words, and is written back unchanged.
+#[test]
+fn office_2016_chart_with_a_text_fallback_keeps_its_size_through_saves() {
+    let mut d = craft_docx::read(&chartex_text_fallback_docx("<w:t>Chart not available.</w:t>")).unwrap();
+    for _ in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { w, h, graphic, .. }] = g.as_slice() else { panic!("the chart is an object: {g:?}") };
+        assert_eq!((*w, *h), (432.0, 252.0));
+        assert_eq!((graphic.w, graphic.h), (432.0, 252.0));
+        assert!(
+            graphic
+                .items
+                .iter()
+                .any(|i| matches!(i, craft_wordmodel::graphic::GraphicItem::Text { text, .. } if text.starts_with("Waterfall chart"))),
+            "{:?}",
+            graphic.items
+        );
+        assert!(!paras(&d).iter().any(|p| p.text.contains("not available")), "the fallback words are not body text");
+        let files = unzip(&craft_docx::write(&d).unwrap());
+        let body = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:extent", "cx"), ["5486400"], "the chart's frame; the text fallback has none: {body}");
+        assert!(body.contains("<w:t>Chart not available.</w:t>"), "the fallback is written back as it was: {body}");
+        let [cx_id] = attr_values(&body, "cx:chart", "r:id").try_into().unwrap_or_else(|_| panic!("chart lost: {body}"));
+        let (kind, target) = rel(&text(&files, "word/_rels/document.xml.rels"), &cx_id);
+        assert!(kind.ends_with("/chartEx"), "{kind}");
+        assert!(text(&files, &part_at("word", &target)).contains(r#"layoutId="waterfall""#));
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        d = craft_docx::read(&zip(&entries)).unwrap();
+    }
+}
+
+/// Guard, not fix proof (it passes before the change too): a fallback that holds a run can't be
+/// written back inside the object's own run, so it is not turned into a chart placeholder.
+#[test]
+fn office_2016_chart_with_a_run_fallback_is_not_made_a_placeholder() {
+    let d = craft_docx::read(&chartex_text_fallback_docx("<w:r><w:t>Chart not available.</w:t></w:r>")).unwrap();
+    assert!(graphics(&d).is_empty(), "{:?}", graphics(&d));
+}
+
 #[test]
 fn resized_office_2016_chart_resizes_its_fallback_too() {
     let mut d = craft_docx::read(&chartex_docx("cx1", "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex")).unwrap();
@@ -2822,6 +2883,39 @@ fn rounded_rectangle_corners_are_read_and_saved() {
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     assert!(xml.contains(r#"<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 3565"/></a:avLst></a:prstGeom>"#), "{xml}");
     assert_eq!(corners(&craft_docx::read(&bytes).unwrap()), expected);
+}
+
+/// A `frame` preset (a letterhead's page border) is a frame, not a filled rectangle: its border
+/// width is its `adj1`, read, capped and written back as the same preset.
+#[test]
+fn frame_presets_keep_their_hole_and_border_width() {
+    let geom =
+        |av: &str| format!(r#"<a:prstGeom prst="frame"><a:avLst>{av}</a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="E3AB48"/></a:solidFill>"#);
+    let gd = |fmla: &str| format!(r#"<a:gd name="adj1" fmla="{fmla}"/>"#);
+    let body = [geom(&gd("val 2604")), geom(""), geom(&gd("val 90000")), geom(r#"<a:gd name="adj" fmla="val 100"/>"#)]
+        .iter()
+        .map(|sppr| anchored_wsp("Frame", 2540000, 1270000, sppr, "", "<wps:cNvSpPr/>"))
+        .collect::<String>();
+    let frames = |d: &Document| -> Vec<(ShapeKind, Option<u32>)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Shape { kind, extra, .. } => Some((*kind, extra.corner)),
+                _ => None,
+            })
+            .collect()
+    };
+    let f = ShapeKind::Frame;
+    let expected = vec![(f, Some(2604)), (f, None), (f, Some(50_000)), (f, None)];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(frames(&d), expected);
+    let bytes = craft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:prstGeom prst="frame"><a:avLst><a:gd name="adj1" fmla="val 2604"/></a:avLst></a:prstGeom>"#), "{xml}");
+    assert_eq!(frames(&craft_docx::read(&bytes).unwrap()), expected);
 }
 
 /// #611: legacy VML lines and rectangles (documents without DrawingML).
@@ -4966,4 +5060,116 @@ fn extreme_raw_orders_share_one_map_across_parts_without_replaying_chunks() {
     assert_eq!(calls.get(), 1);
     let malformed = doc.replace("</w:body>", "");
     assert!(craft_docx::read(&zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", malformed.as_bytes())])).is_err());
+}
+
+#[test]
+fn retained_drawingml_ole_uses_the_shared_stacking_map() {
+    let source = r##"<w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="914400" cy="457200"/><wp:docPr id="7" name="Object 7"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name=""/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId8"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm flipH="1"><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing><o:OLEObject Type="Embed" ProgID="Package" DrawAspect="Content" ObjectID="_1000000002" r:id="rId9"/></w:object></w:r></w:p>"##;
+    let picture = "\u{89}PNG stand-in";
+    let ole = "\u{d0}\u{cf} opaque OLE storage";
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>"#;
+    for raw in [u32::MAX - 2, u32::MAX] {
+        let object = source
+            .replace("<wp:inline ", &format!("<wp:anchor relativeHeight=\"{raw}\" behindDoc=\"0\" odd=\"retain &amp; this\" "))
+            .replace("</wp:inline>", "</wp:anchor>");
+        let shape = anchored_wsp("Other", 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, r#"relativeHeight="4294967294""#);
+        let body = format!("{object}<w:p>{shape}</w:p>");
+        let mut d = craft_docx::read(&docx(
+            &body,
+            &[("rId8", "image", "media/image1.png"), ("rId9", "oleObject", "embeddings/oleObject1.bin")],
+            &[("[Content_Types].xml", types), ("word/media/image1.png", picture), ("word/embeddings/oleObject1.bin", ole)],
+        ))
+        .unwrap();
+        assert!(matches!(paras(&d)[0].objects[0], InlineObject::Image { ole: Some(_), .. }));
+        let mut made = paras(&d)[0].objects[0].clone();
+        made.float_mut().unwrap().z = 0;
+        let mut p = Paragraph::new();
+        p.insert_object(0, made, &Default::default()).unwrap();
+        d.body.push(craft_wordmodel::para_block(p));
+        for _ in 0..3 {
+            let out = craft_docx::write(&d).unwrap();
+            let files = unzip(&out);
+            let xml = text(&files, "word/document.xml");
+            assert_eq!(attr_values(&xml, "wp:anchor", "odd"), ["retain &amp; this", "retain &amp; this"]);
+            assert_eq!(attr_values(&xml, "o:OLEObject", "ProgID"), ["Package", "Package"]);
+            let z: Vec<u32> = attr_values(&xml, "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+            assert_eq!(z.len(), 3);
+            assert!(z[2] > z[0] && z[2] > z[1], "{z:?}");
+            assert_eq!(z[0] < z[1], raw < u32::MAX - 1, "{z:?}");
+            d = craft_docx::read(&out).unwrap();
+            assert!(matches!(paras(&d)[0].objects[0], InlineObject::Image { ole: Some(_), .. }));
+        }
+    }
+    // An inline OLE frame may retain an opaque nested drawing. Its child's rank is not the
+    // outer object's rank, and the inline frame must not allocate an anchored rank at all.
+    let nested = source.replace("</wp:inline>", r#"<a:extLst><wp:anchor relativeHeight="17" odd="nested"/></a:extLst></wp:inline>"#);
+    let mut d = craft_docx::read(&docx(
+        &nested,
+        &[("rId8", "image", "media/image1.png"), ("rId9", "oleObject", "embeddings/oleObject1.bin")],
+        &[("[Content_Types].xml", types), ("word/media/image1.png", picture), ("word/embeddings/oleObject1.bin", ole)],
+    ))
+    .unwrap();
+    for _ in 0..3 {
+        let out = craft_docx::write(&d).unwrap();
+        let files = unzip(&out);
+        let xml = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&xml, "wp:anchor", "relativeHeight"), ["17"], "{xml}");
+        assert_eq!(attr_values(&xml, "wp:anchor", "odd"), ["nested"]);
+        assert!(attr_values(&xml, "wp:inline", "relativeHeight").is_empty());
+        d = craft_docx::read(&out).unwrap();
+        assert!(matches!(paras(&d)[0].objects[0], InlineObject::Image { ole: Some(_), .. }));
+    }
+    // A direct VML preview wins in read_object, even when DrawingML is retained beside it.
+    // Its signed z-index is not a modeled stacking rank. Preserve both representations rather
+    // than assigning a fresh DrawingML rank from the VML-derived model's unset z.
+    for signed in [-17, 17] {
+        let vml = format!(
+            r#"<v:shape style="position:absolute;width:72pt;height:36pt;z-index:{signed}" odd="vml"><v:imagedata r:id="rId8"/></v:shape><w:drawing>"#
+        );
+        let mixed =
+            source.replace("<w:drawing>", &vml).replace("<wp:inline ", r#"<wp:anchor relativeHeight="21" "#).replace("</wp:inline>", "</wp:anchor>");
+        let mut d = craft_docx::read(&docx(
+            &mixed,
+            &[("rId8", "image", "media/image1.png"), ("rId9", "oleObject", "embeddings/oleObject1.bin")],
+            &[("[Content_Types].xml", types), ("word/media/image1.png", picture), ("word/embeddings/oleObject1.bin", ole)],
+        ))
+        .unwrap();
+        assert_eq!(paras(&d)[0].objects[0].frame().unwrap().2.z, 0);
+        for _ in 0..3 {
+            let out = craft_docx::write(&d).unwrap();
+            let files = unzip(&out);
+            let xml = text(&files, "word/document.xml");
+            assert_eq!(attr_values(&xml, "wp:anchor", "relativeHeight"), ["21"]);
+            assert_eq!(attr_values(&xml, "v:shape", "odd"), ["vml"]);
+            let styles = attr_values(&xml, "v:shape", "style");
+            assert_eq!(styles.len(), 1);
+            assert!(styles[0].split(';').any(|p| p == format!("z-index:{signed}")));
+            d = craft_docx::read(&out).unwrap();
+            assert_eq!(paras(&d)[0].objects[0].frame().unwrap().2.z, 0);
+        }
+    }
+}
+
+#[test]
+fn extreme_chart_with_text_fallback_uses_the_package_order_map() {
+    // Both callers need the package map. MAX alone would still saturate to MAX without it;
+    // placing MAX-1 on each representation in turn catches a missing map at either caller.
+    for (chart_raw, shape_raw) in [(u32::MAX, u32::MAX - 1), (u32::MAX - 1, u32::MAX)] {
+        let mut files = unzip(&chartex_text_fallback_docx("<w:t>Chart not available.</w:t>"));
+        let shape = anchored_wsp("Other", 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{shape_raw}""#));
+        let xml = text(&files, "word/document.xml")
+            .replace("<wp:inline ", &format!(r#"<wp:anchor relativeHeight="{chart_raw}" "#))
+            .replace("</wp:inline>", "</wp:anchor>")
+            .replace("</w:body>", &format!("<w:p>{shape}</w:p></w:body>"));
+        files.insert("word/document.xml".to_string(), xml.into_bytes());
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        let d = craft_docx::read(&zip(&entries)).unwrap();
+        let g = graphics(&d);
+        let [InlineObject::Graphic { float, .. }] = g.as_slice() else { panic!("chart placeholder missing") };
+        assert_eq!(float.z, chart_raw);
+        let other = paras(&d).iter().flat_map(|p| &p.objects).find(|o| matches!(o, InlineObject::Shape { .. })).unwrap();
+        assert_eq!(other.frame().unwrap().2.z, shape_raw);
+    }
 }

@@ -5,11 +5,13 @@
 //! ([`super::ftab`]) and its own copies of craft-xls's depth guards and limits. Anything outside the
 //! token set it knows is reported as unsupported, and the caller keeps the cell's cached value.
 //! So is a formula that needs something the reader doesn't read: a defined name whose own
-//! formula could not be read, or Python code stored outside the cell. Defined names' formulas
-//! are decoded here too ([`Mode::Name`]).
+//! formula could not be read, a table whose part could not be read, or Python code stored
+//! outside the cell. Defined names' formulas are decoded here too ([`Mode::Name`]), and
+//! structured references (`PtgList`) are spelled from the tables in [`Links`].
 //!
 //! Names keep their file spelling (`_xlfn.CONCAT`, `_xlpm.x`), as `.xlsx` formula text has them.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS};
@@ -169,6 +171,15 @@ pub(crate) struct Links {
     pub(super) names: Vec<Name>,
     pub(super) books: Vec<Book>,
     pub(super) xti: Vec<Xti>,
+    /// Every table by its `idList`, which `PtgList` names: `None` for an id two tables share.
+    pub(super) tables: HashMap<u32, Option<ListInfo>>,
+}
+
+/// A table as structured references need it: its display name and its columns' names.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ListInfo {
+    pub name: String,
+    pub columns: Vec<String>,
 }
 
 /// Whether a name stands for a LET parameter (`_xlpm.x`), which only the formula itself defines.
@@ -587,7 +598,13 @@ pub(super) fn decode_using(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode, 
             }
             0x01 => return Err(Unsupported("the shared or array formula form")),
             0x02 => return Err(Unsupported("what-if data tables")),
-            0x18 => return Err(Unsupported("structured table references")),
+            0x18 => {
+                if t.u8()? != 0x19 {
+                    return Err(Unsupported("unknown formula token"));
+                }
+                let text = list(&mut t, links)?;
+                push(&mut stack, kids, Expr::Structured(text))?;
+            }
             0x2C => {
                 if mode == Mode::Cell {
                     return Err(Unsupported("relative references in a cell formula"));
@@ -629,6 +646,87 @@ fn bare_function(name: String) -> String {
         Some(bare) if ISO.iter().any(|f| f.eq_ignore_ascii_case(bare)) => bare.to_string(),
         _ => name,
     }
+}
+
+/// `PtgList` ([MS-XLSB] 2.5.98.52), after its two token bytes: a structured reference, spelled
+/// as `.xlsx` has it (`Sales[Val]`, `Sales[[#Headers],[Key]]`, `Sales[[#This Row],[A]:[B]]`).
+/// The two spacing flags put a space inside the outer brackets and after each comma, as Excel
+/// shows the reference.
+fn list(t: &mut Bytes<'_>, links: &Links) -> Result<String, Unsupported> {
+    let ixti = t.u16()?;
+    let bits = t.u16()?;
+    let index = t.u32()?;
+    let (first, last) = (usize::from(t.u16()?), usize::from(t.u16()?));
+    if bits & 0x3000 != 0 {
+        return Err(Unsupported("structured references to deleted tables or to tables in other workbooks"));
+    }
+    // The table's sheet link: a table is always in this workbook, on one of its sheets.
+    links.sheet_sel(ixti)?;
+    let table = links.tables.get(&index).and_then(Option::as_ref).ok_or(Unsupported("structured references to tables the reader could not read"))?;
+    let rows: &[&str] = match (bits >> 2) & 0x1F {
+        0x00 => &[],
+        0x01 => &["#All"],
+        0x02 => &["#Headers"],
+        0x04 => &["#Data"],
+        0x06 => &["#Headers", "#Data"],
+        0x08 => &["#Totals"],
+        0x0C => &["#Data", "#Totals"],
+        0x10 => &["#This Row"],
+        _ => return Err(Unsupported("unknown structured reference rows")),
+    };
+    let column = |i: usize| table.columns.get(i).map(|c| escape_column(c)).ok_or(Unsupported("structured reference to a missing table column"));
+    let columns = match bits & 3 {
+        0 => None,
+        1 => Some((column(first)?, None)),
+        2 if first <= last => Some((column(first)?, Some(column(last)?))),
+        _ => return Err(Unsupported("invalid structured reference columns")),
+    };
+    let pad = if bits & 0x80 != 0 { " " } else { "" };
+    let mut s = table.name.clone();
+    match (rows, &columns) {
+        ([], None) => s.push_str("[]"),
+        ([], Some((c, None))) => {
+            s.push('[');
+            s.push_str(pad);
+            s.push_str(c);
+            s.push_str(pad);
+            s.push(']');
+        }
+        ([row], None) => {
+            s.push('[');
+            s.push_str(pad);
+            s.push_str(row);
+            s.push_str(pad);
+            s.push(']');
+        }
+        _ => {
+            let mut items: Vec<String> = rows.iter().map(|r| format!("[{r}]")).collect();
+            match &columns {
+                Some((a, Some(b))) => items.push(format!("[{a}]:[{b}]")),
+                Some((a, None)) => items.push(format!("[{a}]")),
+                None => {}
+            }
+            let comma = if bits & 0x100 != 0 { ", " } else { "," };
+            s.push('[');
+            s.push_str(pad);
+            s.push_str(&items.join(comma));
+            s.push_str(pad);
+            s.push(']');
+        }
+    }
+    Ok(s)
+}
+
+/// A column name in a structured reference: `'` escapes `[`, `]`, `#` and `'` (`It''s '['#1']`).
+fn escape_column(name: &str) -> String {
+    let mut s = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '[' | ']' | '#' | '\'') {
+            s.push('\'');
+        }
+        s.push(c);
+    }
+    s
 }
 
 /// Text written out in the formula: a string, or strings joined with `&` (how Python code

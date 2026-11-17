@@ -126,16 +126,22 @@ impl Writer<'_> {
             ShapeKind::ArrowDown => "downArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
+            ShapeKind::Frame => "frame",
         };
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
             None => {
                 w.open("a:prstGeom", &[("prst", prst)]);
-                match extra.corner.filter(|_| *kind == ShapeKind::RoundedRectangle) {
-                    Some(c) => {
+                let adj = match kind {
+                    ShapeKind::RoundedRectangle => Some("adj"),
+                    ShapeKind::Frame => Some("adj1"),
+                    _ => None,
+                };
+                match adj.zip(extra.corner) {
+                    Some((name, c)) => {
                         w.open("a:avLst", &[]);
                         let fmla = format!("val {}", c.min(craft_wordmodel::connector::MAX_CORNER));
-                        w.empty("a:gd", &[("name", "adj"), ("fmla", &fmla)]);
+                        w.empty("a:gd", &[("name", name), ("fmla", &fmla)]);
                         w.close("a:avLst");
                     }
                     None => w.empty("a:avLst", &[]),
@@ -257,6 +263,17 @@ impl Writer<'_> {
         w.close("w:drawing");
     }
 
+    /// One order for an anchored object, shared by generated and retained drawings.
+    pub(in crate::write) fn drawing_order(&mut self, float: &Float) -> u32 {
+        let z = if float.z > 0 {
+            self.zmap.get(&float.z).copied().unwrap_or(float.z.saturating_sub(1))
+        } else {
+            self.z = self.z.saturating_add(1);
+            self.z
+        };
+        self.anchor_z = z;
+        z
+    }
     pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
         let DrawingInfo { float, size: (iw, ih), docpr, name, alt, link } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
@@ -267,13 +284,7 @@ impl Writer<'_> {
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
             // A stacking order read from a file is kept (one less: see `Float::z`); objects made
             // here go above those.
-            let z = if float.z > 0 {
-                self.zmap.get(&float.z).copied().unwrap_or(float.z.saturating_sub(1))
-            } else {
-                self.z = self.z.saturating_add(1);
-                self.z
-            };
-            self.anchor_z = z;
+            let z = self.drawing_order(float);
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",

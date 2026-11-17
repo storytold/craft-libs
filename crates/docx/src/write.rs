@@ -178,6 +178,11 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
 }
 
 impl Writer<'_> {
+    /// The document's styles, for writers that need the resolved style chain.
+    pub(crate) fn styles(&self) -> &craft_wordmodel::styles::StyleSheet {
+        &self.doc.styles
+    }
+
     fn assign_media(&mut self) {
         let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (key, bytes) in &self.doc.media {
