@@ -144,6 +144,96 @@ pub struct Certificate {
     pub unknown_critical: Vec<String>,
 }
 
+/// Owned parsed components for adapters. This is not a signature or trust verdict.
+/// Consuming conversion moves buffers without reparsing or cloning signed material.
+pub struct CertificateParts {
+    /// The whole DER encoding.
+    pub raw: Vec<u8>,
+    pub tbs: Vec<u8>,
+    pub sig_alg: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub serial: Vec<u8>,
+    pub issuer: Name,
+    pub subject: Name,
+    pub not_before: Time,
+    pub not_after: Time,
+    pub public_key: PublicKey,
+    /// Basic constraints: a CA certificate.
+    pub is_ca: bool,
+    /// Whether the certificate has a basicConstraints extension at all (old v1 roots don't).
+    pub has_basic_constraints: bool,
+    /// Basic constraints `pathLenConstraint`: how many CA certificates may follow this one
+    /// before the end-entity certificate.
+    pub path_len: Option<u32>,
+    /// Key usage bits (bit 0 = digitalSignature, 1 = nonRepudiation, 5 = keyCertSign), if present.
+    pub key_usage: Option<u16>,
+    pub subject_key_id: Option<Vec<u8>>,
+    /// Authority key identifier (2.5.29.35), when present.
+    pub authority_key_id: Option<Vec<u8>>,
+    /// Extended key usage OIDs (2.5.29.37), when present.
+    pub extended_key_usage: Option<Vec<String>>,
+    /// OCSP responder URLs from the Authority Information Access (1.3.6.1.5.5.7.1.1).
+    pub ocsp_urls: Vec<String>,
+    /// CRL distribution point URLs (2.5.29.31).
+    pub crl_urls: Vec<String>,
+    /// The `version` field: 0 for v1, 1 for v2, 2 for v3.
+    pub version: u64,
+    /// OIDs of extensions marked critical that this crate does not process (RFC 5280 §4.2).
+    pub unknown_critical: Vec<String>,
+}
+
+impl Certificate {
+    /// Move parsed fields into a caller-owned representation; verification remains separate.
+    pub fn into_parts(self) -> CertificateParts {
+        let Self {
+            raw,
+            tbs,
+            sig_alg,
+            signature,
+            serial,
+            issuer,
+            subject,
+            not_before,
+            not_after,
+            public_key,
+            is_ca,
+            has_basic_constraints,
+            path_len,
+            key_usage,
+            subject_key_id,
+            authority_key_id,
+            extended_key_usage,
+            ocsp_urls,
+            crl_urls,
+            version,
+            unknown_critical,
+        } = self;
+        CertificateParts {
+            raw,
+            tbs,
+            sig_alg,
+            signature,
+            serial,
+            issuer,
+            subject,
+            not_before,
+            not_after,
+            public_key,
+            is_ca,
+            has_basic_constraints,
+            path_len,
+            key_usage,
+            subject_key_id,
+            authority_key_id,
+            extended_key_usage,
+            ocsp_urls,
+            crl_urls,
+            version,
+            unknown_critical,
+        }
+    }
+}
+
 /// Extensions this crate reads or may safely ignore when they are critical: the ones
 /// `Extensions::read` handles, subject/issuer alternative names, and certificate policies
 /// (accepted as any policy).
