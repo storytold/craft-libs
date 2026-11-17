@@ -54,7 +54,8 @@ pub enum FaceKind {
 /// and the chevron need, at least a field wide; a [fitted](SelectFace::fit) box is at most a field wide and has no
 /// floor; a thumbnail alone takes only its own width. A host shows it as the look of one of its parts with
 /// `ui.face(part, SelectFace::new(text))` over the field well it paints itself, and gives the box the width of its
-/// widest text so the width does not change with the pick. A thumbnail goes before the text, or alone.
+/// widest text so the width does not change with the pick. A thumbnail goes before the text, or alone. The face is
+/// no node of its own: its text is the pick, which every host reports as its own node's value.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(sample = SelectFace::sample)]
 pub struct SelectFace<'a> {
@@ -71,7 +72,7 @@ pub struct SelectFace<'a> {
     #[prop(into)]
     thumb_caption: Option<Label>,
     /// Whether the text shows beside the thumbnail; `false` shows the thumbnail alone, as wide as the thumbnail and
-    /// the chevron need. The text is the face's accessible name either way.
+    /// the chevron need. The text stays the host's accessible value either way.
     #[style_key]
     #[prop]
     name: bool,
@@ -135,7 +136,7 @@ impl<'a> SelectFace<'a> {
 }
 
 impl Component for SelectFace<'_> {
-    const ROLE: Role = Role::LABEL;
+    const ROLE: Role = Role::None;
     const PARTS: bool = false;
     const STOPS: bool = false;
     const INPUT: craft_behavior::Input = craft_behavior::Input::Display;
