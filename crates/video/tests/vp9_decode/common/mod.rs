@@ -44,6 +44,8 @@ pub const FIXTURES: &[Fixture] = &[
     fx!("profile3_444_10bit", "testsrc2", 176, 144, 6, NOISE, "yuv444p10le", ["-b:v", "500k", "-profile:v", "3", "-frame-parallel", "0"]),
     fx!("profile3_422_12bit", "mandelbrot", 176, 144, 6, NOISE, "yuv422p12le", ["-b:v", "500k", "-profile:v", "3", "-frame-parallel", "0"]),
     fx!("lossless", "testsrc2", 176, 144, 5, NOISE, P420, ["-lossless", "1", "-frame-parallel", "0"]),
+    // RGB (`color_space` 7): libvpx takes it as gbrp, so the coded planes are G, B, R.
+    fx!("profile1_rgb", "testsrc2", 176, 144, 2, "", "gbrp", ["-lossless", "1", "-profile:v", "1", "-frame-parallel", "0"]),
     fx!("lossless_10bit", "mandelbrot", 176, 144, 4, NOISE, P420_10, ["-lossless", "1", "-profile:v", "2", "-frame-parallel", "0"]),
     fx!("tiles_cols4", "testsrc2", 1280, 720, 6, NOISE, P420, ["-b:v", "2M", "-tile-columns", "2", "-speed", "4", "-frame-parallel", "0"]),
     fx!(

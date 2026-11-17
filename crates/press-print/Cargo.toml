@@ -1,0 +1,17 @@
+[package]
+name = "craft-press-print"
+description = "Press-accurate printing for the Craft apps: a PDF page separated into plates, composited into the printer's RGB profile and printed application-managed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cms = { workspace = true }
+craft-prepress = { workspace = true }
+craft-print = { workspace = true }
+thiserror = { workspace = true }

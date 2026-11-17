@@ -207,3 +207,51 @@ fn limits_and_hostile_files() {
         }
     }
 }
+
+#[test]
+fn rgba_decodes_all_subsampling_without_rgb_intermediate_semantics() {
+    for sh in [1u16, 2, 4] {
+        for sv in [1u16, 2, 4] {
+            let (w, h) = (5u32, 3u32);
+            let count = w.div_ceil(u32::from(sh)) * h.div_ceil(u32::from(sv));
+            let mut units = Vec::new();
+            for i in 0..count {
+                units.extend(std::iter::repeat_n(20 + i as u8, usize::from(sh) * usize::from(sv)));
+                units.extend([128, 128]);
+            }
+            for packed in [false, true] {
+                let bytes = file(w, h, (sh, sv), &units, packed, &[]);
+                let t = Tiff::parse(&bytes).unwrap();
+                let rgb = ycbcr::decode_rgb8(&bytes, &t.ifds[0], 15).unwrap();
+                let expected: Vec<u8> = rgb.as_chunks::<3>().0.iter().flat_map(|px| [px[0], px[1], px[2], 255]).collect();
+                for policy in [ycbcr::ColorPolicy::Libtiff, ycbcr::ColorPolicy::TiffEquation] {
+                    assert_eq!(ycbcr::decode_rgba8(&bytes, &t.ifds[0], 15, policy).unwrap(), expected);
+                    assert_eq!(ycbcr::decode_rgba8(&bytes, &t.ifds[0], 14, policy), Err(TiffError::Limit("pixel count")));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_tiff_policy_keeps_literal_green_equation_and_rejects_bad_tags() {
+    use ycbcr::ColorPolicy::{Libtiff, TiffEquation};
+    let run = |extra: &[(u16, Value)], policy| {
+        let bytes = file(1, 1, (1, 1), &[128, 128, 128], false, extra);
+        let t = Tiff::parse(&bytes).unwrap();
+        ycbcr::decode_rgba8(&bytes, &t.ifds[0], 1, policy)
+    };
+    let weights = [(YCBCR_COEFFICIENTS, Value::Rational(vec![(4, 10); 3]))];
+    assert_eq!(run(&weights, Libtiff).unwrap(), [128, 128, 128, 255]);
+    assert_eq!(run(&weights, TiffEquation).unwrap(), [128, 64, 128, 255]);
+    for bad in [
+        (YCBCR_COEFFICIENTS, Value::Rational(vec![(1, 2)])),
+        (YCBCR_COEFFICIENTS, Value::Double(vec![0.3, 0.0, 0.7])),
+        (YCBCR_COEFFICIENTS, Value::Double(vec![f64::NAN, 0.5, 0.5])),
+        (REFERENCE_BLACK_WHITE, Value::Rational(vec![(0, 1); 6])),
+        (REFERENCE_BLACK_WHITE, Value::Double(vec![0.0, 255.0])),
+    ] {
+        assert!(matches!(run(std::slice::from_ref(&bad), TiffEquation), Err(TiffError::Invalid(_))));
+        assert!(run(&[bad], Libtiff).is_ok());
+    }
+}

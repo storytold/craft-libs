@@ -1,0 +1,40 @@
+To: bob@smime.example
+From: alice@smime.example
+Subject: No certificate
+MIME-Version: 1.0
+Content-Type: multipart/signed; protocol="application/pkcs7-signature"; micalg="sha-256"; boundary="----C714793EB4AEA5E36741725AF174BFC1"
+
+This is an S/MIME signed message
+
+------C714793EB4AEA5E36741725AF174BFC1
+Content-Type: text/plain; charset=us-ascii
+
+Hello Bob,
+
+The minutes of Tuesday are attached in spirit.
+
+Alice
+
+------C714793EB4AEA5E36741725AF174BFC1
+Content-Type: application/pkcs7-signature; name="smime.p7s"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="smime.p7s"
+
+MIICsgYJKoZIhvcNAQcCoIICozCCAp8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+hvcNAQcBMYICfDCCAngCAQEwbDBVMQ0wCwYDVQQKEwRJRVRGMREwDwYDVQQLEwhM
+QU1QUyBXRzExMC8GA1UEAxMoU2FtcGxlIExBTVBTIFJTQSBDZXJ0aWZpY2F0aW9u
+IEF1dGhvcml0eQITN0EFee11f0Kpolw69Phqzpqp1zALBglghkgBZQMEAgGggeQw
+GAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjYxMTA5
+MTIwOTUxWjAvBgkqhkiG9w0BCQQxIgQgpd47XK9W43g0XBneB6ES11oZAarzptGM
+JcOx+gGBdqcweQYJKoZIhvcNAQkPMWwwajALBglghkgBZQMEASowCwYJYIZIAWUD
+BAEWMAsGCWCGSAFlAwQBAjAKBggqhkiG9w0DBzAOBggqhkiG9w0DAgICAIAwDQYI
+KoZIhvcNAwICAUAwBwYFKw4DAgcwDQYIKoZIhvcNAwICASgwDQYJKoZIhvcNAQEB
+BQAEggEAnQNd8e5Phn1idVWgZqoGUqKXZQF2ojmQ9duGv5gAIzTmOpI6l4WaKj4t
+T2EFa8cwQaIVhFz9ZKshEPSDep9y7IukzVi379CuHRonelJ9rwPQhkX7KLJVfnmh
+AFc5XH9AdVxHPvpnP59ZankXO6MvzVO9kYKQdflZC8gv5Bl7Sh+FpS/0VGPEXNH+
+tkRGeX2jo5YY5Xsj2gGTBbiZQ07urn+dcETJxeGI+cLa5tkg3YBeLKthGEMekv9t
+JakkfMsvpMW5m4TsiOz0A8gBrk5zP5YWEU+h+jKvSlQXyYcGbU04+Ir+y0HSa2ob
+KUozlJlOmmhYzeok0wAsFf+V6qipCg==
+
+------C714793EB4AEA5E36741725AF174BFC1--
+

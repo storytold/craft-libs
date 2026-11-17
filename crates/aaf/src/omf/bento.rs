@@ -35,8 +35,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-pub(crate) const MAGIC: [u8; 8] = [0xA4, b'C', b'M', 0xA5, b'H', b'd', b'r', 0xD7];
-pub(crate) const LABEL_SIZE: usize = 24;
+pub const MAGIC: [u8; 8] = [0xA4, b'C', b'M', 0xA5, b'H', b'd', b'r', 0xD7];
+pub const LABEL_SIZE: usize = 24;
 
 // standard object ids
 const TOC_OBJECT: u32 = 1;
@@ -82,12 +82,18 @@ const MAX_VALUE_BYTES: usize = 16 << 20;
 const MAX_NAME_BYTES: usize = 4 << 20;
 
 /// Builds a Bento container.
-pub(crate) struct Writer {
+pub struct Writer {
     data: Vec<u8>,
     names: HashMap<(u32, String), u32>,
     next: u32,
     /// (object, property, type, segments)
     entries: Vec<(u32, u32, u32, Vec<Seg>)>,
+}
+
+impl Default for Writer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Writer {
@@ -217,9 +223,9 @@ pub(crate) struct Prop {
 }
 
 /// A parsed Bento container.
-pub(crate) struct Container<'a> {
+pub struct Container<'a> {
     data: &'a [u8],
-    pub objects: BTreeMap<u32, Vec<Prop>>,
+    pub(crate) objects: BTreeMap<u32, Vec<Prop>>,
     names: HashMap<u32, String>,
     by_name: HashMap<String, u32>,
 }
@@ -229,11 +235,16 @@ fn be32(b: &[u8], at: usize) -> Option<u32> {
 }
 
 /// Whether `b` ends with a Bento label.
-pub(crate) fn sniff(b: &[u8]) -> bool {
+pub fn sniff(b: &[u8]) -> bool {
     b.len() >= LABEL_SIZE && b[b.len() - LABEL_SIZE..b.len() - LABEL_SIZE + 8] == MAGIC
 }
 
 impl<'a> Container<'a> {
+    /// Object identifiers in ascending order.
+    pub fn object_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.objects.keys().copied()
+    }
+
     pub fn open(data: &'a [u8]) -> Result<Container<'a>, String> {
         if !sniff(data) {
             return Err("no Bento label at the end of the file".into());
@@ -324,7 +335,7 @@ impl<'a> Container<'a> {
     }
 
     /// The bytes of a value.
-    pub fn value(&self, p: &Prop) -> Result<Vec<u8>, String> {
+    pub(crate) fn value(&self, p: &Prop) -> Result<Vec<u8>, String> {
         let total = p.segs.iter().try_fold(0usize, |total, s| {
             let len = match s {
                 Seg::Imm(b) => b.len(),
