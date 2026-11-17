@@ -32,7 +32,9 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         // Fresh drawing ids start past the shapes' own (connectors refer to those).
         docpr: doc.next_shape_id().saturating_sub(1),
         shape_ids: std::collections::HashSet::new(),
-        z: 251_658_240,
+        z: 0,
+        zmap: BTreeMap::new(),
+        anchor_z: 0,
         footnotes: Vec::new(),
         endnotes: Vec::new(),
         hf: Vec::new(),
@@ -58,6 +60,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             .flat_map(|(n, c)| c.iter().enumerate().map(move |(seq, id)| (*id, (n as u32 + 1, seq as u32))))
             .collect(),
     };
+    (wr.z, wr.zmap) = super::stacking(doc);
     wr.assign_media();
     wr.embeds.reserve_media(wr.media_files.values());
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
