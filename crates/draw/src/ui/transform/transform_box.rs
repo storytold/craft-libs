@@ -922,10 +922,11 @@ impl Component for TransformBox<'_> {
     }
 
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
-    /// side as a pointer-only band outside it, the centre and the move strips where declared, and the outside. A handle, the
-    /// reference point and the centre rank alike, so the nearest wins where they overlap on a small box; they rank above
-    /// a side, which ranks above the inside, which ranks above the outside. A live line's controls declare its two
-    /// ends only.
+    /// side as a pointer-only band outside it, the centre and the move strips where declared, and the outside. A
+    /// handle, the reference point and the centre rank alike, so the nearest wins where they overlap on a small box;
+    /// they rank above a side, which ranks above the inside, which ranks above the outside. Every part takes a press's
+    /// click with its drag, so a press on the box is the box's alone, not split with what lies under it (8.3). A live
+    /// line's controls declare its two ends only.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let (Some(space), Some(state)) = (canvas_space(&cx.env), cx.value().copied()) else { return };
         let style = cx.style;
@@ -946,7 +947,7 @@ impl Component for TransformBox<'_> {
                 }
                 BoxPart::Pivot => (
                     HitShape::circle(pos(screen.pivot), style.hit),
-                    Sense::DRAG | Sense::TAKE_FOCUS,
+                    Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS,
                     HitPriority::new(HitLevel::Handle, HANDLE_SUB),
                     FocusShape::Circle,
                 ),
@@ -954,7 +955,7 @@ impl Component for TransformBox<'_> {
                     let at = self.part_point(&state, handle).map_or(Pos2::ZERO, |at| space.view.to_screen(at));
                     (
                         HitShape::circle(at, style.handle_reach),
-                        Sense::DRAG | Sense::TAKE_FOCUS,
+                        Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS,
                         HitPriority::new(HitLevel::Handle, HANDLE_SUB),
                         FocusShape::Circle,
                     )
@@ -972,7 +973,7 @@ impl Component for TransformBox<'_> {
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
             cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, style.side_band))
-                .sense(Sense::DRAG | slop_sense(BoxPart::Edge(k)))
+                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)))
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
         }

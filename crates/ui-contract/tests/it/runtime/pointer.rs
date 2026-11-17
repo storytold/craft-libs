@@ -347,7 +347,7 @@ fn a_control_takes_its_press_under_a_later_body_sized_widget() {
 
 /// Over a canvas's background part, a root nested in its body (a text editor) and a member shown after it (a text
 /// frame with a corner handle at the editor's corner): exactly one of them starts each press, the one whose shape is
-/// on top under it.
+/// on top under it and takes both its click and its drag.
 #[trial]
 fn one_root_starts_a_press_where_roots_overlap_on_a_layer() {
     const CORNER: PartKey = PartKey::new("corner");
@@ -357,7 +357,7 @@ fn one_root_starts_a_press_where_roots_overlap_on_a_layer() {
         .member(ProbeMember::new("editor", rect(200.0, 150.0, 200.0, 100.0), Sense::CLICK | Sense::DRAG).nested())
         .member(
             ProbeMember::new("frame", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
-                .part(ProbePart::new(CORNER, rect(194.0, 144.0, 12.0, 12.0), Sense::DRAG).level(HitLevel::Handle, 1)),
+                .part(ProbePart::new(CORNER, rect(194.0, 144.0, 12.0, 12.0), Sense::CLICK | Sense::DRAG).level(HitLevel::Handle, 1)),
         );
     let (mut show_frame, log) = scene(vec![canvas]);
     let mut frames = Frames::new();
