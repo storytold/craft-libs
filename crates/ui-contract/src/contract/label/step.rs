@@ -165,6 +165,9 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     leaf.differs = reset.as_ref().is_some_and(|fact| fact.differs);
     leaf.default = reset.as_ref().and_then(|fact| fact.default.clone());
     leaf.named = !input.side.content_only(content);
+    if matches!(input.side.kind, LabelKind::Short(_)) {
+        leaf.words = Some(input.text.as_str().to_owned());
+    }
     leaf.colon = colon(env, input).filter(|_| leaf.named);
     leaf.after = input.side.layout == FieldLayout::After;
     leaf.claimed = input.claims;
