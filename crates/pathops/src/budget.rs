@@ -3389,9 +3389,17 @@ mod tests {
             assert_eq!(pairs, 0, "{count} pies: the pairs walked");
         }
         // The limit is what refuses them: lifted, 30 pies are not refused by anything else, and at the work of three they fit and
-        // under it by one they do not.
-        let lifted = Limits { ends_work: usize::MAX, ..Limits::default() };
-        assert!(with_limits(lifted, || sweep_fits([&stacked_pies(30, 256)])));
+        // under it by one they do not. (Only where a limit can be lifted above their price, about 39 billion: a `usize` of 32 bits
+        // holds 4.29 billion at most, which refuses 30 pies as the default does.)
+        #[cfg(target_pointer_width = "64")]
+        {
+            let (_, thirty, _) = work_of(30);
+            assert!(thirty > u64::from(u32::MAX), "30 pies are priced at {thirty}, which a 32-bit limit cannot lift");
+            let most_of_32_bits = Limits { ends_work: u32::MAX as usize, ..Limits::default() };
+            assert!(!with_limits(most_of_32_bits, || sweep_fits([&stacked_pies(30, 256)])), "refused at the most a 32-bit limit holds");
+            let lifted = Limits { ends_work: usize::MAX, ..Limits::default() };
+            assert!(with_limits(lifted, || sweep_fits([&stacked_pies(30, 256)])));
+        }
         for (limit, fits) in [(three, true), (three - 1, false)] {
             let at = Limits { ends_work: limit as usize, ..Limits::default() };
             assert_eq!(with_limits(at, || sweep_fits([&stacked_pies(3, 256)])), fits, "{limit}");
