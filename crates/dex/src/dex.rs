@@ -156,14 +156,14 @@ pub fn mutf8(r: &Reader<'_>, mut at: usize, max_units: usize) -> (String, usize)
     (String::from_utf16_lossy(&units), consumed)
 }
 
-/// Signed LEB128 at `off`: (value, bytes).
+/// Signed 32-bit DEX LEB128 at `off`: (value, bytes), using at most five bytes.
 pub fn sleb128(r: &Reader<'_>, off: usize) -> Option<(i64, usize)> {
     let mut result = 0i64;
     let mut shift = 0u32;
-    for i in 0..10usize {
+    for i in 0..5usize {
         let b = r.u8(off.checked_add(i)?)?;
-        // Only one value bit remains in the tenth byte; the rest must extend its sign.
-        if i == 9 && !matches!(b, 0x00 | 0x7f) {
+        // Four value bits remain in byte five; the other bits must extend the sign.
+        if i == 4 && !matches!(b, 0x00..=0x07 | 0x78..=0x7f) {
             return None;
         }
         result |= i64::from(b & 0x7f).checked_shl(shift)?;
