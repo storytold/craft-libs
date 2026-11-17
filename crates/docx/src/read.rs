@@ -370,6 +370,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
     let mut doc = r.doc;
+    doc.skipped_parts.extend(pkg.skipped().iter().cloned());
     doc.ensure_nonempty();
     Ok((doc, left, bytes, graphic))
 }

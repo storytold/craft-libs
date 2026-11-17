@@ -9,6 +9,9 @@
 //! - [`runner`]: the gate's step runner. [`runner::run_steps`] runs the steps in order, stops at the
 //!   first failure and prints the `ok`, `FAIL` and `skip` summary. [`runner::root`],
 //!   [`runner::cargo`], [`runner::run`] and [`runner::nextest_or_test`] build and run the commands.
+//! - [`assets`]: the asset attribution check. The app supplies its attribution document, folders
+//!   and extra extensions as an [`assets::Policy`]; [`assets::run`] lists the files through Git and
+//!   reports each asset without a row.
 //! - [`layers`]: the crate-layer check. The app supplies its table of packages and layers as a
 //!   [`layers::Policy`]; [`layers::check`] reports each dependency the policy does not allow, and
 //!   [`layers::wasm_set`] picks the packages the app's wasm step builds.
@@ -38,6 +41,7 @@
 //! }
 //! ```
 
+pub mod assets;
 pub mod layers;
 #[cfg(feature = "lock")]
 pub mod lock;

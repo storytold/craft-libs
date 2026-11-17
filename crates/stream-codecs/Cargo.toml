@@ -15,8 +15,9 @@ workspace = true
 fax = "0.2.7"
 # CCITT fax decoding, the decoder the vendored PDF reader uses. MIT OR Apache-2.0.
 hayro-ccitt = { version = "0.3", default-features = false }
-# JBIG2 decoding, the decoder the vendored PDF reader uses (the workspace patches it to `vendor/hayro-jbig2`).
-hayro-jbig2 = { version = "=0.3.0", default-features = false, features = ["std"] }
+# The bounded JBIG2 API is a local extension: consumers do not inherit workspace patches.
+# Keep the vendored dependency explicit so Git consumers retain its work-budget safeguards.
+hayro-jbig2 = { path = "../../vendor/hayro-jbig2", version = "=0.3.0", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
