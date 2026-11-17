@@ -1226,7 +1226,10 @@ commit of the carve; where VectorCraft has since done what a difference says, th
     distance between them is not bounded; where several input curves pass, the pieces are taken for a part of the nearest of them by those points (the
     first of those as near as the sweep's noise ends the search, and no more than 16 that pass are compared: the first in the input took the pieces
     of the second, 0.003 off at a precision of 0.0029, where the second was in the input all the while); a run that no input curve passes is refitted from
-    samples of its pieces, within the precision, as any run is;
+    samples of its pieces, within the precision, as any run is. The part of the curve a run is rebuilt as is held to the run the other way as well
+    (its quarters, middle and three quarters each within the limit of a piece), because where an input curve crosses itself a point is at two
+    parameters, `nearest` gives the same one for any run that has that end, and the part it gives drops the loop of a run that goes round it
+    or adds it to one that does not (a run of the last quarter of `((0,-4.5),(-16,6.5),(-16,-6.5),(0,4.5))` was rebuilt as the last three quarters, 6.2 from it);
   - the Pathfinder Outline looks for the junctions on a curve inside its bounds, not inside the box of its control points
     (the curve is inside its bounds, and a junction within the sweep's noise of it is inside them widened by that
     and the rounding of the coordinates), and looks them up by blocks that have the segment's heights, not one by one

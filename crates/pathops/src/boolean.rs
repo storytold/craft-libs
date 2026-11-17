@@ -741,13 +741,19 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
         if na.distance_sq.sqrt() > tol || nb.distance_sq.sqrt() > tol {
             continue;
         }
-        let Some(worst) = worst_off(run, c, middle_limit) else { continue };
         if (na.t - nb.t).abs() < 1e-12 {
             continue;
         }
-        work::add(Work::TidyCandidates, 1);
         let sub = part_of(c, na.t, nb.t);
         let merged = CubicBez::new(a, sub.p1, sub.p2, b);
+        // The pieces are near the curve that is made of them and it is near them: the part of the input curve between the places nearest the
+        // ends, which where the curve crosses itself (a loop between two parameters of one point) is the one traversal or the other, whichever
+        // `nearest` finds, for any run that has that end: it drops the loop of a run that goes round it, or adds it to one that does not.
+        let Some(worst) = worst_off(run, &merged, middle_limit) else { continue };
+        if !near_the_pieces(&merged, run, middle_limit) {
+            continue;
+        }
+        work::add(Work::TidyCandidates, 1);
         // As near as the sweep's noise: no other curve is told from this one by the points tried (copies one on another are one
         // curve, and are found at the first).
         if worst <= tol {
@@ -790,6 +796,16 @@ fn worst_off(run: &[Seg], c: &CubicBez, limit: f64) -> Option<f64> {
         }
     }
     Some(worst)
+}
+
+/// Is `merged` near the pieces of `run`: its quarters, middle and three quarters each within `limit` of a piece? (The other way from
+/// [`worst_off`], which is the pieces near the curve: a curve that has a loop the pieces do not go round is not near them.)
+fn near_the_pieces(merged: &CubicBez, run: &[Seg], limit: f64) -> bool {
+    use kurbo::{ParamCurve, ParamCurveNearest};
+    [0.25, 0.5, 0.75].into_iter().all(|t| {
+        let q = merged.eval(t);
+        run.iter().any(|s| s.c.nearest(q, 1e-12).distance_sq.sqrt() <= limit)
+    })
 }
 
 /// The part of `c` from the parameter `from` to `to`, running from `c`'s point at `from` (so reversed where `to` is the smaller).
@@ -1777,6 +1793,34 @@ mod tests {
         let mut first_bent = run;
         first_bent[0].c.p1.y += 0.02;
         assert_eq!(worst_off(&first_bent, &curve, 0.001), None);
+    }
+
+    /// A curve that crosses itself has a point at two parameters (here (-9, 0), at 0.25 and 0.75, with a loop between), and a run that starts or ends
+    /// there is a part of the curve between the parameters of its own, not the ones nearest returns (it returns the same for any run that
+    /// has that end): the part the nearest parameters give leaves the loop out, or adds it. A run is merged into the part between the parameters
+    /// where it is near the part, and the part is near it, and is otherwise refitted, never into the other traversal.
+    #[test]
+    fn a_run_that_starts_or_ends_where_a_curve_crosses_itself_is_not_merged_into_the_other_traversal() {
+        let curve = CubicBez::new((0.0, -4.5), (-16.0, 6.5), (-16.0, -6.5), (0.0, 4.5));
+        let input = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(curve.p0), kurbo::PathEl::CurveTo(curve.p1, curve.p2, curve.p3)]);
+        let tidy = Tidy::keeping(DEFAULT_PRECISION, [&input]);
+        assert!(curve.eval(0.25).distance(curve.eval(0.75)) < 1e-9 && curve.eval(0.25).distance(Point::new(-9.0, 0.0)) < 1e-9);
+        let off = |c: &CubicBez, from: &CubicBez| {
+            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
+        };
+        let mut merged = 0;
+        for (from, to) in [(0.25, 1.0), (0.75, 1.0), (0.0, 0.25), (0.0, 0.75), (0.25, 0.75), (0.75, 0.25), (0.1, 0.2), (0.3, 0.7), (0.8, 0.95)] {
+            let part = if from < to { curve.subsegment(from..to) } else { curve.subsegment(to..from) };
+            let truth = if from < to { part } else { CubicBez::new(part.p3, part.p2, part.p1, part.p0) };
+            let run = [Seg { c: truth, line: false }];
+            if let Some(got) = exact_merge(&run, &tidy) {
+                merged += 1;
+                assert!(off(&got, &truth) < 1e-9, "{from} to {to}: merged into a curve {} from the run", off(&got, &truth));
+            }
+        }
+        // The runs whose ends are at one place of the curve are merged exactly (some of the runs that end at the crossing are not, and are
+        // refitted): at least the ones that do not touch it.
+        assert!(merged >= 3, "{merged} runs merged");
     }
 
     /// The part of a curve between two parameters runs from the first to the second, and is a point where they are one.
