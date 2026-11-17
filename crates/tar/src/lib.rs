@@ -185,7 +185,21 @@ fn tar_with_name_copy_limit(data: &[u8], max_members: usize, mut name_bytes_left
         {
             size = s;
         }
-        let data_off = pos + BLOCK;
+        let mut data_off = pos + BLOCK;
+        let old_gnu_sparse = typeflag == b'S' && h.get(257..265) == Some(b"ustar  \0");
+        if old_gnu_sparse {
+            // Old GNU sparse maps can continue in whole blocks before the stored extents.
+            let mut extended = h.get(482).is_some_and(|&flag| flag != 0);
+            while extended {
+                let Some(block) = r.slice(data_off, BLOCK) else {
+                    out.warnings.push(format!("GNU sparse extension ends early at {data_off:#x}"));
+                    out.length = data.len() as u64;
+                    break 'headers;
+                };
+                extended = block.get(504).is_some_and(|&flag| flag != 0);
+                data_off += BLOCK;
+            }
+        }
         let Some(next) =
             round_up(size, BLOCK as u64).and_then(|s| u64::try_from(data_off).ok()?.checked_add(s)).and_then(|n| usize::try_from(n).ok())
         else {
@@ -262,7 +276,7 @@ fn tar_with_name_copy_limit(data: &[u8], max_members: usize, mut name_bytes_left
                     .or_else(|| Some(text(h.get(157..257).unwrap_or(&[]))))
                     .filter(|l| !l.is_empty());
                 let mut kind = tar_kind(typeflag, &name);
-                if std::mem::take(&mut pax.sparse) || !pax.global_sparse.is_empty() {
+                if std::mem::take(&mut pax.sparse) || !pax.global_sparse.is_empty() || old_gnu_sparse {
                     kind = MemberKind::Other;
                     out.warnings.push(format!("{name}: GNU sparse reconstruction is unsupported; stored extents are not the complete file"));
                 }
