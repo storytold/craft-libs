@@ -140,7 +140,8 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
         events,
         hovered_files,
         dropped_files,
-        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, CHILD_SIZE)),
+        // The pass lays out in the window as large as its facts say, as the OS gives it.
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, info.inner_rect.map_or(CHILD_SIZE, |inner| inner.size()))),
         ..RawInput::default()
     };
     input.time = Some(NOW.with(Cell::get));
