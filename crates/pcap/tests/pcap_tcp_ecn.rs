@@ -1,4 +1,4 @@
-use craft_anything_formats::pcap::decode;
+use craft_pcap::decode;
 
 /// Decode a raw IPv4 packet with a TCP header and the specified control bits.
 fn flags_on_wire(bits: u8) -> String {

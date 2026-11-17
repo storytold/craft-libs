@@ -1,5 +1,8 @@
-use craft_anything_formats::pcap::decode;
-use craft_anything_testkit::pcap::{ipv4_pkt, tcp};
+#[path = "support/mod.rs"]
+mod support;
+
+use craft_pcap::decode;
+use support::{ipv4_pkt, tcp};
 
 /// WebDAV and extension methods retain the same HTTP evidence as core methods.
 #[test]

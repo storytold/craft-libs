@@ -1,12 +1,32 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
 //! Saved packet captures: classic pcap (microsecond and nanosecond, either byte order) and pcapng
 //! (section, interface, enhanced/simple/obsolete packet blocks). Frames are decoded from Ethernet
 //! (with VLAN tags), raw IP, Linux cooked (SLL/SLL2) and BSD loopback links into IPv4/IPv6,
 //! TCP/UDP/ICMP, and the application facts most people ask about: DNS questions and answers,
 //! HTTP/1.x request and status lines with the Host header, and the TLS ClientHello server name
 //! (SNI) and ALPN. Each frame is decoded on its own: no TCP reassembly, no decryption. Pure, no I/O,
-//! every length checked.
+//! every length checked. Input bytes remain caller-owned and must be admitted to a caller budget.
+//! Packet, flow and inventory caps below are retained; they are not a total allocator-byte guarantee.
 
-use crate::FormatError;
+mod bytes;
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
+
+/// Why capture inspection could not start or finish.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PcapError {
+    #[error("the file ends early ({0})")]
+    Truncated(String),
+    #[error("the file is malformed ({0})")]
+    Malformed(String),
+    #[error("not supported: {0}")]
+    Unsupported(String),
+}
+
+use crate::PcapError as FormatError;
 use crate::bytes::Reader;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -245,7 +265,9 @@ impl<'a> Capture<'a> {
         if p >= self.data.len() {
             return None;
         }
-        let (Some(sec), Some(frac), Some(incl), Some(orig)) = (rd_u32(&r, le, p), rd_u32(&r, le, p + 4), rd_u32(&r, le, p + 8), rd_u32(&r, le, p + 12)) else {
+        let (Some(sec), Some(frac), Some(incl), Some(orig)) =
+            (rd_u32(&r, le, p), rd_u32(&r, le, p + 4), rd_u32(&r, le, p + 8), rd_u32(&r, le, p + 12))
+        else {
             return self.stop(format!("record header at offset {p} is cut short"));
         };
         let Some(body) = usize::try_from(incl).ok().and_then(|n| r.slice(p + 16, n)) else {
@@ -1022,7 +1044,8 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str, mdns_wire_format: bool)
         return;
     }
     d.protocols.push(label);
-    let mut out = Dns { id, response: flags & 0x8000 != 0, rcode: (flags & 0xf) as u8, questions: Vec::new(), answers: Vec::new(), incomplete: false };
+    let mut out =
+        Dns { id, response: flags & 0x8000 != 0, rcode: (flags & 0xf) as u8, questions: Vec::new(), answers: Vec::new(), incomplete: false };
     let mut off = 12usize;
     for _ in 0..qd {
         let Some((name, next, _)) = dns_name(msg, off, true) else {
@@ -1236,7 +1259,8 @@ fn tcp_app(p: &[u8], d: &mut Decoded) {
             remaining = remaining.get(end + 2..).unwrap_or(&[]);
         }
         d.protocols.push("http");
-        d.http = Some(Http { kind: "request", method: Some(m.to_string()), target: Some(strip_userinfo(t)), status: None, version: v.to_string(), host });
+        d.http =
+            Some(Http { kind: "request", method: Some(m.to_string()), target: Some(strip_userinfo(t)), status: None, version: v.to_string(), host });
         return;
     }
     tls(p, d);
@@ -1559,7 +1583,8 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
     let mut flows = FlowTable::default();
     let mut flow_rows: Vec<Flow> = Vec::new();
     let (mut protocols, mut stacks, mut endpoints) = (Tally::default(), Tally::default(), Tally::default());
-    let (mut queries, mut answers, mut http, mut sni, mut alpn) = (Tally::default(), Tally::default(), Tally::default(), Tally::default(), Tally::default());
+    let (mut queries, mut answers, mut http, mut sni, mut alpn) =
+        (Tally::default(), Tally::default(), Tally::default(), Tally::default(), Tally::default());
     let mut addresses = Tally::default();
     for f in cap.by_ref() {
         if f.number % 4096 == 0 && cancelled() {
@@ -1680,30 +1705,21 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
 
 /// `YYYY-MM-DDThh:mm:ss.nnnnnnnnnZ` for nanoseconds since the Unix epoch.
 pub fn iso8601(ns: u64) -> String {
-    let secs = ns / 1_000_000_000;
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    // Civil-from-days (proleptic Gregorian), valid for every u64 day count we can reach.
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:09}Z", rem / 3600, rem % 3600 / 60, rem % 60, ns % 1_000_000_000)
+    // u64 nanoseconds span only 1970..2554, entirely within chrono's representable range.
+    chrono::DateTime::from_timestamp((ns / 1_000_000_000) as i64, (ns % 1_000_000_000) as u32)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_anything_testkit::pcap::{dns_query, eth, ipv4_pkt, pcap, pcapng, sample_frames, udp};
+    use crate::test_support::{dns_query, eth, ipv4_pkt, pcap, pcapng, sample_frames, udp};
 
     #[test]
     fn rejected_simple_packets_count_toward_the_scan_limit() {
         let mut data = pcapng(&[]);
-        let rejected = craft_anything_testkit::pcap::block(3, &1u32.to_le_bytes());
+        let rejected = crate::test_support::block(3, &1u32.to_le_bytes());
         for _ in 0..3 {
             data.extend(&rejected);
         }
@@ -1722,7 +1738,7 @@ mod tests {
     #[test]
     fn rejected_simple_packets_at_eof_do_not_report_a_truncated_scan() {
         let mut data = pcapng(&[]);
-        let rejected = craft_anything_testkit::pcap::block(3, &1u32.to_le_bytes());
+        let rejected = crate::test_support::block(3, &1u32.to_le_bytes());
         for _ in 0..2 {
             data.extend(&rejected);
         }
@@ -1737,8 +1753,8 @@ mod tests {
     #[test]
     fn valid_and_rejected_simple_packets_share_the_scan_limit() {
         let mut data = pcapng(&[]);
-        data.extend(craft_anything_testkit::pcap::block(3, &1u32.to_le_bytes()));
-        let valid = craft_anything_testkit::pcap::block(3, &0u32.to_le_bytes());
+        data.extend(crate::test_support::block(3, &1u32.to_le_bytes()));
+        let valid = crate::test_support::block(3, &0u32.to_le_bytes());
         data.extend(&valid);
         data.extend(&valid);
         let mut cap = Capture::new(&data).unwrap();
@@ -1751,7 +1767,7 @@ mod tests {
 
     #[test]
     fn malformed_packet_blocks_share_the_budget_and_report_each_reason_once() {
-        use craft_anything_testkit::pcap::block;
+        use crate::test_support::block;
         let mut data = pcapng(&[]);
         for kind in [2, 6] {
             let mut body = [0; 20];
@@ -1794,7 +1810,7 @@ mod tests {
 
     #[test]
     fn subnanosecond_decimal_resolutions_keep_the_interface_offset() {
-        use craft_anything_testkit::pcap::block;
+        use crate::test_support::block;
         let mut data = pcapng(&[]);
         data.truncate(28);
         let mut idb = vec![1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 1, 0, 127, 0, 0, 0, 14, 0, 8, 0];
@@ -2132,5 +2148,36 @@ mod tests {
         }
         // DNS compression loops are refused.
         assert!(dns_name(&[0xc0, 0x00], 0, true).is_none());
+    }
+}
+
+#[cfg(test)]
+mod timestamp_parity {
+    fn legacy_iso8601(ns: u64) -> String {
+        let secs = ns / 1_000_000_000;
+        let (days, rem) = (secs / 86_400, secs % 86_400);
+        // Civil-from-days (proleptic Gregorian), valid for every u64 day count we can reach.
+        let z = days as i64 + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:09}Z", rem / 3600, rem % 3600 / 60, rem % 60, ns % 1_000_000_000)
+    }
+
+    #[test]
+    fn every_representable_day_and_boundaries_match_legacy() {
+        let day = 86_400_000_000_000u64;
+        for d in 0..=u64::MAX / day {
+            let ns = d * day;
+            assert_eq!(super::iso8601(ns), legacy_iso8601(ns));
+        }
+        for ns in [0, 1, 999_999_999, 1_000_000_000, u64::MAX - 1, u64::MAX] {
+            assert_eq!(super::iso8601(ns), legacy_iso8601(ns));
+        }
     }
 }

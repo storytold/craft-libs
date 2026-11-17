@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Packet-capture fixtures: hand-built Ethernet/IPv4 frames (DNS, TCP handshake, TLS
 //! ClientHello, HTTP request, ARP) written as classic pcap or pcapng.
 
@@ -104,7 +105,12 @@ pub fn sample_frames() -> Vec<Vec<u8>> {
         eth(0x0800, &ipv4_pkt(6, c, web, &tcp(50001, 443, 0x18, &client_hello("example.com")))),
         eth(
             0x0800,
-            &ipv4_pkt(6, c, web, &tcp(50002, 80, 0x18, b"GET http://user:pw@example.com/a?b=1 HTTP/1.1\r\nHost: example.com\r\nUser-Agent: t\r\n\r\n")),
+            &ipv4_pkt(
+                6,
+                c,
+                web,
+                &tcp(50002, 80, 0x18, b"GET http://user:pw@example.com/a?b=1 HTTP/1.1\r\nHost: example.com\r\nUser-Agent: t\r\n\r\n"),
+            ),
         ),
         eth(0x0806, &[0u8; 28]),
     ]

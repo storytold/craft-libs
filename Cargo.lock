@@ -2626,6 +2626,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pcap"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pdf"
 version = "0.1.0"
 dependencies = [

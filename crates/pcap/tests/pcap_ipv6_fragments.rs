@@ -1,5 +1,8 @@
-use craft_anything_formats::pcap::decode;
-use craft_anything_testkit::pcap::{eth, udp};
+#[path = "support/mod.rs"]
+mod support;
+
+use craft_pcap::decode;
+use support::{eth, udp};
 
 fn packet(offset: u16, next: u8, payload: &[u8]) -> Vec<u8> {
     let mut ip = vec![0u8; 40];

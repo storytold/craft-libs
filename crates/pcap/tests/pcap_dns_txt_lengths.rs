@@ -1,5 +1,8 @@
-use craft_anything_formats::pcap::{Dns, decode};
-use craft_anything_testkit::pcap::{ipv4_pkt, udp};
+#[path = "support/mod.rs"]
+mod support;
+
+use craft_pcap::{Dns, decode};
+use support::{ipv4_pkt, udp};
 
 fn response(data: &[u8]) -> Dns {
     let mut msg = vec![0, 1, 0x81, 0x80, 0, 0, 0, 1, 0, 0, 0, 0];

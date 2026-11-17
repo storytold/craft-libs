@@ -1,5 +1,8 @@
-use craft_anything_formats::pcap::{Http, decode};
-use craft_anything_testkit::pcap::{ipv4_pkt, tcp};
+#[path = "support/mod.rs"]
+mod support;
+
+use craft_pcap::{Http, decode};
+use support::{ipv4_pkt, tcp};
 
 fn request(data: &[u8]) -> Http {
     decode(101, &ipv4_pkt(6, [1; 4], [2; 4], &tcp(100, 80, 0x18, data))).http.unwrap()

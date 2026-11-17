@@ -1,5 +1,8 @@
-use craft_anything_formats::pcap::Capture;
-use craft_anything_testkit::pcap::{block, pcapng};
+#[path = "support/mod.rs"]
+mod support;
+
+use craft_pcap::Capture;
+use support::{block, pcapng};
 
 fn capture(original: u32, snaplen: u32, payload: &[u8]) -> Vec<u8> {
     let mut out = pcapng(&[]);

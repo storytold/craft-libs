@@ -132,3 +132,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## JSONC span-preserving editing
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
+
+## Packet capture and protocol inspection
+
+`crates/pcap` extracts Craft Anything `crates/formats/src/pcap.rs`, its checked byte reader primitives and synthetic packet fixtures/regressions at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Brandon Thomas introduced the implementation, byte reader and fixtures in `f64ae3bf3c8863a982af1304e06de20653803968`. Subsequent fixes by phatloi0010, GGWA, BFlat, Afloat, NetterSilver, Max Mittelstädt and RRFZ retain separate primary-author source-history commits with immutable source revisions. Shared error/API wiring and chrono-based timestamp formatting with exhaustive day-boundary parity tests are subsequent Dylan M. Taylor changes. No packet reassembly, decryption, live capture or app analysis policy is imported.

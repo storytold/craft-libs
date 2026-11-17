@@ -1,5 +1,8 @@
-use craft_anything_formats::pcap::{decode, summarize};
-use craft_anything_testkit::pcap::{dns_query, eth, ipv4_pkt, pcap, udp};
+#[path = "support/mod.rs"]
+mod support;
+
+use craft_pcap::{decode, summarize};
+use support::{dns_query, eth, ipv4_pkt, pcap, udp};
 
 fn response(record_type: u16, rdata: &[u8], declared_length: usize) -> Vec<u8> {
     let mut message = dns_query();
