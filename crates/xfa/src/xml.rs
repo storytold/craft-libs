@@ -412,6 +412,23 @@ mod tests {
     }
 
     #[test]
+    fn inherited_namespace_declarations_have_an_aggregate_budget() {
+        use std::fmt::Write;
+        let mut xml = String::from("<r");
+        for i in 0..512 {
+            write!(xml, " xmlns:p{i}='u{i}'").unwrap();
+        }
+        xml.push_str("><child");
+        for i in 512..1024 {
+            write!(xml, " xmlns:p{i}='u{i}'").unwrap();
+        }
+        let accepted = format!("{xml}/></r>");
+        assert!(Document::parse(&accepted).is_ok());
+        let rejected = format!("{xml} xmlns:extra='extra'/></r>");
+        assert!(Document::parse(&rejected).is_err());
+    }
+
+    #[test]
     fn malformed_dtd_and_resource_limits_are_preserved() {
         // Current shared XML rejects duplicate attributes, unlike the older app pin.
         assert!(Document::parse("<r a='1' a='2'/>").is_err());
