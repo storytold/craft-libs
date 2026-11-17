@@ -132,3 +132,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## JSONC span-preserving editing
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
+
+## WebAssembly inspection
+
+`crates/wasm` extracts Craft Anything `crates/formats/src/wasm.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2`, with its checked byte-reader subset and original synthetic WASM/testkit fixtures (MIT OR Apache-2.0). Eight core-history ports preserve Brandon Thomas, Afloat and RRFZ as primary authors; component, repeated-custom-section and referenced-string regression imports retain source authors and commit references. Fixtures come from `crates/testkit/src/formats.rs` and deterministic mutation helpers from `crates/testkit/src/lib.rs`; no third-party binaries. Shared error naming and workspace wiring are subsequent changes. Existing inspection limits and report behavior are unchanged; this crate validates/inspects/renders, never executes modules.

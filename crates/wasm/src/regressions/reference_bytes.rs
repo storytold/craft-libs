@@ -86,7 +86,9 @@ fn repeated_function_signatures_have_a_byte_budget() {
     assert!(report.validation.valid, "{:?}", report.validation);
     assert!(!report.functions.is_empty());
     assert!(report.functions.len() < 16_384);
-    assert!(report.functions.iter().enumerate().all(|(index, function)| function.index as usize == index && function.signature.starts_with("(i32, i32")));
+    assert!(
+        report.functions.iter().enumerate().all(|(index, function)| function.index as usize == index && function.signature.starts_with("(i32, i32"))
+    );
     assert!(!report.warnings.iter().any(|warning| warning.contains("function declarations")));
 }
 

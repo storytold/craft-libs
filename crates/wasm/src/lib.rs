@@ -1,10 +1,13 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
 //! WebAssembly modules: validation, sections, imports, exports, functions with their signatures
 //! and names, memories, tables, globals, tags, custom sections (names, producers, target features,
 //! source map URL) and a text (WAT) rendering. Built on the pure-Rust `wasmparser` and
 //! `wasmprinter` crates; never executes anything.
 
-use crate::FormatError;
 use crate::bytes::Reader;
+use WasmError as FormatError;
 use serde::Serialize;
 use std::collections::{BTreeMap, btree_map::Entry};
 use wasmparser::{CompositeInnerType, Encoding, ExternalKind, FuncType, KnownCustom, Name, Parser, Payload, TypeRef, Validator, WasmFeatures};
@@ -397,7 +400,8 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                         let (kind, type_index, signature) = match imp.ty {
                             TypeRef::Func(t) | TypeRef::FuncExact(t) => {
                                 rep.imported_functions = rep.imported_functions.saturating_add(1);
-                                let signature = if rep.imports.len() < MAX_ITEMS { type_sig(&types, t, &mut type_signatures, &mut strings) } else { None };
+                                let signature =
+                                    if rep.imports.len() < MAX_ITEMS { type_sig(&types, t, &mut type_signatures, &mut strings) } else { None };
                                 ("func", Some(t), signature)
                             }
                             TypeRef::Table(t) => {
@@ -441,8 +445,11 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                             }
                             TypeRef::Tag(t) => {
                                 let keep_tag = cap(rep.tags.len(), &mut rep.truncated);
-                                let signature =
-                                    if rep.imports.len() < MAX_ITEMS { type_sig(&types, t.func_type_idx, &mut type_signatures, &mut strings) } else { None };
+                                let signature = if rep.imports.len() < MAX_ITEMS {
+                                    type_sig(&types, t.func_type_idx, &mut type_signatures, &mut strings)
+                                } else {
+                                    None
+                                };
                                 if keep_tag {
                                     let tag_signature = match &signature {
                                         Some(value) => strings.copy(value),
@@ -580,7 +587,11 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                 Payload::CustomSection(c) => {
                     if cap(rep.custom_sections.len(), &mut rep.truncated) {
                         let range = c.range();
-                        rep.custom_sections.push(WasmCustom { name: c.name().to_string(), offset: range.start, size: range.end.saturating_sub(range.start) });
+                        rep.custom_sections.push(WasmCustom {
+                            name: c.name().to_string(),
+                            offset: range.start,
+                            size: range.end.saturating_sub(range.start),
+                        });
                     }
                     match c.name() {
                         "sourceMappingURL" => rep.source_mapping_url = leading_string(c.data()),
@@ -681,7 +692,8 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
     }
     if strings.exhausted {
         rep.truncated = true;
-        rep.warnings.push(format!("referenced type signatures and function names exceed the {reference_budget}-byte budget; some metadata is omitted"));
+        rep.warnings
+            .push(format!("referenced type signatures and function names exceed the {reference_budget}-byte budget; some metadata is omitted"));
     }
     Ok(rep)
 }
@@ -768,7 +780,7 @@ pub fn scan_glue(text: &str, imports: &[WasmImport]) -> GlueScan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_anything_testkit::formats as fx;
+    use crate::test_support::formats as fx;
 
     /// The output inventory limit applies to retained functions, not the local groups within one retained function.
     #[test]
@@ -882,7 +894,7 @@ mod tests {
     #[test]
     fn hostile_inputs_do_not_panic() {
         let m = fx::wasm_module();
-        for x in craft_anything_testkit::mutations(&m) {
+        for x in crate::test_support::mutations(&m) {
             if let Ok(r) = inspect(&x)
                 && r.validation.valid
             {
@@ -893,10 +905,35 @@ mod tests {
             let _ = inspect(&m[..n]);
         }
         for seed in 0..100 {
-            let mut n = craft_anything_testkit::noise(seed, 256);
+            let mut n = crate::test_support::noise(seed, 256);
             n[..8].copy_from_slice(b"\0asm\x01\0\0\0");
             let _ = inspect(&n);
             let _ = scan_glue(&String::from_utf8_lossy(&n), &[]);
         }
     }
 }
+
+mod bytes;
+#[cfg(test)]
+mod test_support;
+
+/// Admission errors; structural damage stays in the inspection report.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WasmError {
+    #[error("the file is malformed ({0})")]
+    Malformed(String),
+    #[error("too large: {0}")]
+    TooLarge(String),
+}
+
+#[cfg(test)]
+#[path = "regressions/component_layout.rs"]
+mod component_layout;
+
+#[cfg(test)]
+#[path = "regressions/custom_inventory_budget.rs"]
+mod custom_inventory_budget;
+
+#[cfg(test)]
+#[path = "regressions/reference_bytes.rs"]
+mod reference_bytes;

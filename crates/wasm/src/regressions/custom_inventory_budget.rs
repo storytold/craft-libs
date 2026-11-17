@@ -1,5 +1,5 @@
-use crate::{MAX_ITEMS, inspect};
 use crate::test_support::formats::wasm_module;
+use crate::{MAX_ITEMS, inspect};
 
 fn leb(mut value: usize) -> Vec<u8> {
     let mut out = Vec::new();
