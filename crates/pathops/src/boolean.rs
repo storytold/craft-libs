@@ -808,6 +808,26 @@ fn near_the_pieces(merged: &CubicBez, run: &[Seg], limit: f64) -> bool {
     })
 }
 
+/// Does the piece `raw` go along `part`, a part of the curve `c`: each of its quarters, middle and three quarters no further from `part` than from the
+/// whole of `c`, to within `slack`; and each of those of `part` no further from the piece than twice the most the piece is from `c`, to within the same?
+/// A stray piece is off the curve, by what it is off it (and it is no matter by how much): the part of the curve it goes along is the part nearest it,
+/// and a part further from it than the curve is, is another part of the curve (a traversal of a loop that it does not go round); and a part that has
+/// more than the piece does (the loop it does not go round, with the part it does) is not near it the other way.
+fn goes_along(raw: &CubicBez, part: &CubicBez, c: &CubicBez, slack: f64) -> bool {
+    use kurbo::{ParamCurve, ParamCurveNearest};
+    let mut strays = 0.0f64;
+    for t in [0.25, 0.5, 0.75] {
+        let p = raw.eval(t);
+        let (to_part, to_curve) = (part.nearest(p, 1e-12).distance_sq.sqrt(), c.nearest(p, 1e-12).distance_sq.sqrt());
+        // (A distance that is not a number is no distance to go along.)
+        if to_curve.is_nan() || to_part.is_nan() || to_part > to_curve + slack {
+            return false;
+        }
+        strays = strays.max(to_curve);
+    }
+    [0.25, 0.5, 0.75].into_iter().all(|t| raw.nearest(part.eval(t), 1e-12).distance_sq.sqrt() <= 2.0 * strays + slack)
+}
+
 /// The part of `c` from the parameter `from` to `to`, running from `c`'s point at `from` (so reversed where `to` is the smaller).
 fn part_of(c: &CubicBez, from: f64, to: f64) -> CubicBez {
     use kurbo::ParamCurve;
@@ -858,6 +878,9 @@ impl Tidy {
                     let tol = match_tolerance(scale);
                     let mut subs: Vec<CubicBez> = vec![];
                     let mut follows = false;
+                    // A curve whose part between the ends is not the one the piece goes along (where it crosses itself, the part is the one traversal or the other
+                    // for a piece that goes round the loop and one that does not): the piece stays as it is.
+                    let mut other_way = false;
                     for c in self.curves_around(a, b) {
                         let (na, nb) = (c.nearest(a, 1e-12), c.nearest(b, 1e-12));
                         if na.distance_sq.sqrt() > tol || nb.distance_sq.sqrt() > tol || (na.t - nb.t).abs() < 1e-12 {
@@ -867,17 +890,17 @@ impl Tidy {
                             follows = true;
                             break;
                         }
-                        let sub = if na.t < nb.t {
-                            c.subsegment(na.t..nb.t)
-                        } else {
-                            let r = c.subsegment(nb.t..na.t);
-                            CubicBez::new(r.p3, r.p2, r.p1, r.p0)
-                        };
-                        subs.push(CubicBez::new(a, sub.p1, sub.p2, b));
+                        let sub = part_of(c, na.t, nb.t);
+                        let part = CubicBez::new(a, sub.p1, sub.p2, b);
+                        if !goes_along(&raw, &part, c, tol * 10.0) {
+                            other_way = true;
+                            continue;
+                        }
+                        subs.push(part);
                     }
                     let same = |p: &CubicBez, q: &CubicBez| p.p1.distance(q.p1) <= tol * 10.0 && p.p2.distance(q.p2) <= tol * 10.0;
                     match subs.split_first() {
-                        Some((sub, rest)) if !follows && rest.iter().all(|q| same(sub, q)) => out.curve_to(sub.p1, sub.p2, b),
+                        Some((sub, rest)) if !follows && !other_way && rest.iter().all(|q| same(sub, q)) => out.curve_to(sub.p1, sub.p2, b),
                         _ => out.push(el),
                     }
                     cur = b;
@@ -1821,6 +1844,41 @@ mod tests {
         // The runs whose ends are at one place of the curve are merged exactly (some of the runs that end at the crossing are not, and are
         // refitted): at least the ones that do not touch it.
         assert!(merged >= 3, "{merged} runs merged");
+    }
+
+    /// The repair of a stray piece, whose ends are on an input curve and whose middle is not, is the part of the curve between its ends; where the curve
+    /// crosses itself (a point at 0.25 and 0.75 of the one here, with a loop between) the nearest places to the ends are the same for a stray piece that goes
+    /// round the loop and one that does not, so one of them was given the other's traversal. A piece is repaired into the traversal that its interior
+    /// follows, and is left as it is where the part between the ends is not that.
+    #[test]
+    fn a_stray_piece_with_its_ends_where_a_curve_crosses_itself_keeps_its_own_traversal() {
+        let curve = CubicBez::new((0.0, -4.5), (-16.0, 6.5), (-16.0, -6.5), (0.0, 4.5));
+        let input = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(curve.p0), kurbo::PathEl::CurveTo(curve.p1, curve.p2, curve.p3)]);
+        let tidy = Tidy::keeping(DEFAULT_PRECISION, [&input]);
+        let off = |c: &CubicBez, from: &CubicBez| {
+            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
+        };
+        let repaired = |piece: &CubicBez| {
+            let path = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(piece.p0), kurbo::PathEl::CurveTo(piece.p1, piece.p2, piece.p3)]);
+            match tidy.repair(&path).elements() {
+                [kurbo::PathEl::MoveTo(a), kurbo::PathEl::CurveTo(c1, c2, b)] => CubicBez::new(*a, *c1, *c2, *b),
+                other => panic!("{other:?}"),
+            }
+        };
+        let mut repaired_count = 0;
+        for (from, to) in [(0.25, 1.0), (0.75, 1.0), (0.0, 0.25), (0.0, 0.75), (0.4, 0.6), (0.1, 0.2)] {
+            let truth = curve.subsegment(from..to);
+            // The piece with its handles moved off the curve, its ends on it: a stray piece.
+            let stray = CubicBez::new(truth.p0, truth.p1 + kurbo::Vec2::new(0.3, 0.2), truth.p2 + kurbo::Vec2::new(-0.2, 0.3), truth.p3);
+            let got = repaired(&stray);
+            if got == stray {
+                continue;
+            }
+            repaired_count += 1;
+            assert!(off(&got, &truth) < 1e-9, "{from} to {to}: repaired into a curve {} from the part it goes along", off(&got, &truth));
+        }
+        // Pieces whose ends are not at the crossing are repaired as they were.
+        assert!(repaired_count >= 2, "{repaired_count} repaired");
     }
 
     /// The part of a curve between two parameters runs from the first to the second, and is a point where they are one.
