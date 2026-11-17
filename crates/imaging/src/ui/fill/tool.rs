@@ -206,12 +206,12 @@ impl FillCanvasTool<'_> {
         canvas.events.push(FillEvent::Stroke(FillStrokeEvent::Update(added)));
     }
 
-    /// The resize's readout beside the pointer: the diameter only (the brush has no hardness).
+    /// The resize's readout beside the circle's centre: the diameter only (the brush has no hardness).
     fn show_readout(&self, cx: &mut ToolContext<'_>) {
         let Some(dimensions) = self.canvas.resize.dimensions() else { return };
         let words = cx.words::<CanvasControlWords>();
         let pixels = cx.units().pixels(dimensions.diameter.round().max(0.0));
-        cx.hud(vec![(words.diameter.clone(), pixels)]);
+        self.canvas.resize.show_readout(cx, vec![(words.diameter.clone(), pixels)]);
     }
 
     fn begin_resize(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {

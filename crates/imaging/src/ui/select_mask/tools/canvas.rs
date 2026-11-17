@@ -288,15 +288,13 @@ impl SelectMaskCanvasTool<'_> {
         }
     }
 
-    /// The resize's readout beside the pointer. Only the Brush has a hardness to show.
+    /// The resize's readout beside the circle's centre. Only the Brush has a hardness to show.
     fn resize_readout(&self, cx: &mut ToolContext<'_>) {
         if self.tool != SelectMaskTool::Brush {
             return;
         }
         let rows = self.canvas.resize.readout_rows(&cx.units(), &cx.words::<CanvasControlWords>());
-        if !rows.is_empty() {
-            cx.hud(rows);
-        }
+        self.canvas.resize.show_readout(cx, rows);
     }
 
     fn begin_resize(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {

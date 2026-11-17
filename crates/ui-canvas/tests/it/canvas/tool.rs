@@ -1590,6 +1590,64 @@ fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
     assert_eq!(readout_during_a_drag(true, Some(false)), (true, true), "a hud paints with Show Transformation Values off");
 }
 
+/// A tool that asks for a hud beside a fixed screen point on every drag step.
+struct Pinned {
+    at: Pos2,
+}
+
+impl CanvasTool for Pinned {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        cx.hud_at(self.at, vec![(craft_ui::runtime::env::Label::from("W"), "123 px".to_owned())]);
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Pinned command")
+    }
+}
+
+#[trial]
+fn a_hud_at_a_point_stays_there_while_the_pointer_drags() {
+    let reported = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&reported);
+    let pinned = Rc::new(Cell::new(Pos2::ZERO));
+    let pin = Rc::clone(&pinned);
+    let tool = RefCell::new(Pinned { at: Pos2::ZERO });
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let mut reply = None;
+        tool.borrow_mut().at = pin.get();
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        seen.set(reply.unwrap_or_default().readout.map(|readout| readout.at));
+    });
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    pinned.set(centre);
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.frame(vec![pointer::press(centre)]);
+    let mut places = Vec::new();
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(centre + BY * (step as f32 / 4.0))]);
+        let painted = fixture.texts().iter().find(|run| run.text.contains("123 px")).map(|run| run.rect.min);
+        places.push((reported.get(), painted));
+    }
+    assert!(places.iter().all(|(at, _)| *at == Some(centre)), "the host reports the hud at the pinned point: {places:?}");
+    assert!(places[0].1.is_some() && places.iter().all(|(_, painted)| *painted == places[0].1), "and paints it in one place: {places:?}");
+}
+
 /// A tool that keeps the points of its gesture: the press and every drag.
 #[derive(Default)]
 struct Trail {
