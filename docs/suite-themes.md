@@ -227,6 +227,9 @@ Library operations take the same lock and bump `library_revision`:
 
 - **Import** validates the file and writes its original bytes to `library/<id>.json`, never
   replacing a file (`IdExists`); "import as copy" picks the first free `<id>-2`, `<id>-3` ...
+- **Save** replaces a library theme with new bytes when its file still has the stamp the caller
+  loaded it with; a file another app replaced since is `Changed` and stays as it is. Built-ins
+  are refused (`BuiltIn`).
 - **Delete** refuses built-ins and a theme in either suite slot (`InUse`).
 - **Export** returns a library theme's stored bytes, or a built-in written as a theme file.
 
@@ -242,8 +245,8 @@ use every 500 ms, compares bytes every 10 s, and lists the library only when `li
 changes or on `Op::Rescan`. Each change publishes a snapshot and calls `wake` once.
 
 Each frame the app compares `generation()` (one atomic load) with its cache key and rebuilds its
-styles only when it changed. Changes go through `request(Op)`: `Update`, `Import`, `Delete`,
-`Export`, `Rescan` and `AppTheme`; the result appears in `snapshot().result(id)`. `SuiteWatch::memory()`
+styles only when it changed. Changes go through `request(Op)`: `Update`, `Import`, `Save`,
+`Delete`, `Export`, `Rescan` and `AppTheme`; the result appears in `snapshot().result(id)`. `SuiteWatch::memory()`
 runs without a thread, applying each request before it returns.
 
 The lock file and revision protocol follow
