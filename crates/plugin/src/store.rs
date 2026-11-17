@@ -136,15 +136,13 @@ impl Store {
         let sha256 = sha256_hex(bytes);
         let dir = self.dir_of(&manifest.id);
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        let file = dir.join(bundle_file(&sha256));
-        if std::fs::read(&file).ok().is_none_or(|old| old != bytes) {
-            craft_atomic::atomic_write(&file, bytes).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+        let written = write_installation(&dir, bytes, &manifest, sha256, source);
+        if written.is_err() && !dir.join(SOURCE_FILE).exists() {
+            // A first install that failed leaves no folder behind (an update leaves the old one).
+            let _ = std::fs::remove_file(dir.join(bundle_file(&sha256_hex(bytes))));
+            let _ = std::fs::remove_dir(&dir);
         }
-        let record = SourceRecord { id: manifest.id.clone(), version: manifest.version.clone(), sha256, source };
-        let json = serde_json::to_vec_pretty(&record).map_err(|e| e.to_string())?;
-        let record_file = dir.join(SOURCE_FILE);
-        craft_atomic::atomic_write(&record_file, &json).map_err(|e| format!("cannot write {}: {e}", record_file.display()))?;
-        remove_other_bundles(&dir, &record.sha256);
+        let record = written?;
         Ok(Installed { dir, record, manifest, bundle })
     }
 
@@ -193,6 +191,20 @@ impl Store {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("cannot remove {}: {e}", dir.display()))?;
         Ok(true)
     }
+}
+
+/// Write the bundle, then the record that names it, then drop the bundles it replaced.
+fn write_installation(dir: &Path, bytes: &[u8], manifest: &Manifest, sha256: String, source: Source) -> Result<SourceRecord, String> {
+    let file = dir.join(bundle_file(&sha256));
+    if std::fs::read(&file).ok().is_none_or(|old| old != bytes) {
+        craft_atomic::atomic_write(&file, bytes).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+    }
+    let record = SourceRecord { id: manifest.id.clone(), version: manifest.version.clone(), sha256, source };
+    let json = serde_json::to_vec_pretty(&record).map_err(|e| e.to_string())?;
+    let record_file = dir.join(SOURCE_FILE);
+    craft_atomic::atomic_write(&record_file, &json).map_err(|e| format!("cannot write {}: {e}", record_file.display()))?;
+    remove_other_bundles(dir, &record.sha256);
+    Ok(record)
 }
 
 /// A bundle's file name in its folder.

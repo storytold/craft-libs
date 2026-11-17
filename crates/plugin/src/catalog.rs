@@ -403,6 +403,21 @@ impl Package {
         self.versions.iter().find(|r| compare_versions(&r.version, version).is_some_and(|o| o.is_eq()))
     }
 
+    /// Check a downloaded bundle's manifest against the catalog's entry: the same id, kind and
+    /// version as `release`. Run it after [`crate::bundle::open`], before the install confirmation.
+    pub fn check_manifest(&self, release: &Release, manifest: &crate::Manifest) -> Result<(), String> {
+        if !manifest.id.eq_ignore_ascii_case(&self.id) {
+            return Err(format!("the catalog lists {} but the download is {}", self.id, manifest.id));
+        }
+        if manifest.kind != self.kind {
+            return Err(format!("the catalog lists a `{}` plug-in but the download is a `{}` one", self.kind, manifest.kind));
+        }
+        if compare_versions(&manifest.version, &release.version).is_none_or(|o| o.is_ne()) {
+            return Err(format!("the catalog lists version {} but the download is version {}", release.version, manifest.version));
+        }
+        Ok(())
+    }
+
     /// The package's repository, when it names one.
     pub fn repo_ref(&self) -> Option<RepoRef> {
         parse_repo_url(&self.repo).map(|(owner, name)| RepoRef { owner, name, tag: None })

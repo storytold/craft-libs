@@ -52,7 +52,11 @@ fn installs_from_a_catalog() {
     let got = download_release(&mut fake, CATALOG, p, &p.versions[0]).unwrap();
     assert_eq!(got, bytes);
     let (_, manifest) = bundle::open(&got).unwrap();
-    assert_eq!(manifest.id, p.id);
+    assert_eq!(p.check_manifest(&p.versions[0], &manifest), Ok(()));
+    let (_, other) = bundle::open(&bundle_bytes("org.example.other", "1.0.0", "read")).unwrap();
+    assert!(p.check_manifest(&p.versions[0], &other).unwrap_err().contains("org.example.other"));
+    let (_, newer) = bundle::open(&bundle_bytes("org.example.tools", "1.0.1", "read")).unwrap();
+    assert!(p.check_manifest(&p.versions[0], &newer).unwrap_err().contains("1.0.1"));
 }
 
 #[test]
