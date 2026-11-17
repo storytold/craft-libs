@@ -1,3 +1,6 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
 //! A small JSON-with-comments editor that changes only the bytes it must.
 //!
 //! The text is tokenized (comments and trailing commas tolerated), parsed into a tree that keeps
@@ -264,6 +267,11 @@ impl Node {
 }
 
 /// Parse `text`. `strict` rejects comments, trailing commas and a BOM.
+///
+/// Compatibility entry point: no implicit byte cap. Callers must bound input and
+/// edit values according to their context. Nesting is capped at 128; token/tree
+/// storage scales with input. Use [`parse_bounded`] to reject oversized text
+/// before tokenization. This does not impose an edit-output budget.
 pub fn parse(text: &str, strict: bool) -> Result<Doc, String> {
     let tokens = tokenize(text, strict)?;
     if tokens.is_empty() {
@@ -431,7 +439,8 @@ impl Doc {
                 let own_lines = self.first_on_line(member.key_start) && line_rest.trim().is_empty();
                 let (start, end) = if own_lines {
                     let line_end = member_end + line_rest.len();
-                    let eol_len = if self.text.get(line_end..).is_some_and(|s| s.starts_with("\r\n")) { 2 } else { usize::from(rest.len() > line_rest.len()) };
+                    let eol_len =
+                        if self.text.get(line_end..).is_some_and(|s| s.starts_with("\r\n")) { 2 } else { usize::from(rest.len() > line_rest.len()) };
                     (self.line_start(member.key_start), line_end + eol_len)
                 } else {
                     (member.key_start, member_end)
@@ -583,5 +592,28 @@ mod tests {
             let _ = parse(s, true);
         }
         assert!(parse("\u{feff}{}", false).is_ok());
+    }
+}
+
+/// Reject input larger than `max_bytes` before tokenizing, then use [`parse`].
+/// This bounds admitted input, not allocator overhead or subsequent edit output.
+pub fn parse_bounded(text: &str, strict: bool, max_bytes: usize) -> Result<Doc, String> {
+    if text.len() > max_bytes {
+        return Err(format!("JSONC input exceeds {max_bytes} bytes"));
+    }
+    parse(text, strict)
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    #[test]
+    fn byte_limit_is_explicit_and_precedes_syntax_work() {
+        assert!(parse_bounded("{}", false, 2).is_ok());
+        assert_eq!(parse_bounded("{", false, 0).unwrap_err(), "JSONC input exceeds 0 bytes");
+        assert!(parse_bounded("", false, 0).is_ok());
+        let text = "{\"é\":1}";
+        assert!(parse_bounded(text, false, text.len() - 1).is_err());
+        assert_eq!(parse_bounded(text, false, text.len()).unwrap().to_value(), parse(text, false).unwrap().to_value());
     }
 }
