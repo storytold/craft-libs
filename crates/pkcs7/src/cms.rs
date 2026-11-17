@@ -449,25 +449,55 @@ struct SignedDataInput<'a> {
     content_digest: &'a [u8],
 }
 
-fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, Error> {
-    let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
-    let cert_hash = DigestAlg::Sha256.digest(&[&cert.raw]);
-    let general_names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
+/// Public certificate material used by the CMS writer. `serial` is the original INTEGER
+/// contents, including its sign padding; `issuer_der` and `der` are complete DER encodings.
+/// Callers obtain these fields from an already parsed certificate. No private key is held.
+#[derive(Clone, Copy, Debug)]
+pub struct SigningCertificate<'a> {
+    pub der: &'a [u8],
+    pub issuer_der: &'a [u8],
+    pub serial: &'a [u8],
+}
+
+/// Inputs for a CAdES SignedData envelope. The caller computes `content_digest` using `alg`.
+/// `content` is absent for detached signatures, or the bytes to encapsulate for a token.
+/// Certificate-chain entries are complete DER certificates; the signer is deduplicated.
+#[derive(Clone, Copy, Debug)]
+pub struct SigningInput<'a> {
+    pub cert: SigningCertificate<'a>,
+    pub chain: &'a [&'a [u8]],
+    pub alg: DigestAlg,
+    pub content_type: &'a str,
+    pub content: Option<&'a [u8]>,
+    pub content_digest: &'a [u8],
+    /// Complete DER AlgorithmIdentifier matching the callback's signing operation.
+    pub signature_algorithm: &'a [u8],
+}
+
+/// Build the same signed attributes and envelope as [`sign_detached`] / [`sign_encapsulated`],
+/// signing through a caller-owned key provider. The callback receives the exact DER SET
+/// of signed attributes once (not its digest). It must sign those bytes using `alg` and the
+/// supplied signature AlgorithmIdentifier. Its error is returned unchanged, without retry.
+/// This lets apps retain platform/keychain/token signing without exporting a private key.
+pub fn sign_with<E>(input: SigningInput<'_>, sign: impl FnOnce(&[u8]) -> Result<Vec<u8>, E>) -> Result<Vec<u8>, E> {
+    let SigningInput { cert, chain, alg, content_type, content, content_digest, signature_algorithm } = input;
+    let cert_hash = DigestAlg::Sha256.digest(&[cert.der]);
+    let general_names = der::seq(&[&der::explicit(4, cert.issuer_der)]);
     // The serial as the certificate has it: `cert.serial` is the INTEGER's own bytes, so one with
     // its high bit set gets no leading zero here.
-    let serial = der::tlv(tag::INTEGER, if cert.serial.is_empty() { &[0] } else { &cert.serial });
+    let serial = der::tlv(tag::INTEGER, if cert.serial.is_empty() { &[0] } else { cert.serial });
     let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &serial])])])]);
     let attrs =
         [attribute(CONTENT_TYPE, &der::oid(content_type)), attribute(MESSAGE_DIGEST, &der::octets(content_digest)), attribute(SIGNING_CERT_V2, &ess)];
     let refs: Vec<&[u8]> = attrs.iter().map(Vec::as_slice).collect();
     let set = der::set_of(&refs);
-    let signature = key.sign(alg, &set)?;
+    let signature = sign(&set)?;
     let mut signed_attrs = set.clone();
     signed_attrs[0] = tag::ctx(0);
-    let sid = der::seq(&[&cert.issuer.raw, &serial]);
-    let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, &key.signature_algorithm(alg), &der::octets(&signature)]);
-    let mut certs: Vec<&[u8]> = vec![&cert.raw];
-    certs.extend(chain.iter().filter(|c| c.raw != cert.raw).map(|c| c.raw.as_slice()));
+    let sid = der::seq(&[cert.issuer_der, &serial]);
+    let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, signature_algorithm, &der::octets(&signature)]);
+    let mut certs: Vec<&[u8]> = vec![cert.der];
+    certs.extend(chain.iter().copied().filter(|c| *c != cert.der));
     let encap = match content {
         Some(c) => der::seq(&[&der::oid(content_type), &der::explicit(0, &der::octets(c))]),
         None => der::seq(&[&der::oid(content_type)]),
@@ -477,9 +507,75 @@ fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, Error> {
     Ok(der::seq(&[&der::oid(SIGNED_DATA), &der::explicit(0, &signed_data)]))
 }
 
+fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, Error> {
+    let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
+    let chain: Vec<&[u8]> = chain.iter().map(|c| c.raw.as_slice()).collect();
+    sign_with(
+        SigningInput {
+            cert: SigningCertificate { der: &cert.raw, issuer_der: &cert.issuer.raw, serial: &cert.serial },
+            chain: &chain,
+            alg,
+            content_type,
+            content,
+            content_digest,
+            signature_algorithm: &key.signature_algorithm(alg),
+        },
+        |attrs| key.sign(alg, attrs),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn callback_signer_matches_builtin_and_returns_provider_error_once() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::x509::Name;
+        let key = PrivateKey::generate_p256()?;
+        let name = Name::build("Callback signer", "", "", "", "");
+        let from = Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+        let cert = Certificate::self_signed(&name, &key, from, 1, &[1])?;
+        let alg = DigestAlg::Sha256;
+        let bytes = b"content";
+        let digest = alg.digest(&[bytes]);
+        let algorithm = key.signature_algorithm(alg);
+        let chain = [cert.raw.as_slice()];
+        for content in [None, Some(bytes.as_slice())] {
+            let input = SigningInput {
+                cert: SigningCertificate { der: &cert.raw, issuer_der: &cert.issuer.raw, serial: &cert.serial },
+                chain: &chain,
+                alg,
+                content_type: DATA,
+                content,
+                content_digest: &digest,
+                signature_algorithm: &algorithm,
+            };
+            let mut calls = 0;
+            let via_callback = sign_with(input, |attrs| {
+                calls += 1;
+                assert_eq!(Tlv::parse_all(attrs)?.tag, tag::SET);
+                key.sign(alg, attrs)
+            })?;
+            assert_eq!(calls, 1);
+            let builtin = match content {
+                Some(c) => sign_encapsulated(&key, &cert, std::slice::from_ref(&cert), alg, DATA, c)?,
+                None => sign_detached(&key, &cert, std::slice::from_ref(&cert), alg, &digest)?,
+            };
+            assert_eq!(via_callback, builtin);
+            let parsed = SignedData::parse(&via_callback)?;
+            assert_eq!(parsed.certificates.len(), 1);
+            assert!(parsed.verify_signature(&cert, &digest)?);
+            assert_eq!(parsed.content.as_deref(), content);
+            let mut calls = 0;
+            let failed = sign_with(input, |_| {
+                calls += 1;
+                Err(42u32)
+            });
+            assert_eq!(failed, Err(42));
+            assert_eq!(calls, 1);
+        }
+        Ok(())
+    }
 
     #[test]
     fn strip_removes_multiple_leading_zero_bytes() {
