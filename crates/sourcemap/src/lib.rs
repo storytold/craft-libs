@@ -98,7 +98,16 @@ impl SourceMap {
             let Some((l, c, map)) = found else { return Vec::new() };
             let rel_line = line.saturating_sub(*l);
             let rel_col = if rel_line == 0 { column.saturating_sub(*c) } else { column };
-            return map.original_positions(rel_line, rel_col);
+            return map
+                .original_positions(rel_line, rel_col)
+                .into_iter()
+                .filter_map(|mut position| {
+                    if rel_line == 0 {
+                        position.generated_column = position.generated_column.checked_add(*c)?;
+                    }
+                    Some(position)
+                })
+                .collect();
         }
         let Some(segs) = self.lines.get(line as usize) else { return Vec::new() };
         // Greatest generated column <= column.
