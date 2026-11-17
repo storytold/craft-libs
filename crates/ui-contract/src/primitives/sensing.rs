@@ -180,6 +180,8 @@ struct RootInfo {
     rect: Rect,
     /// The part of `rect` inside the root's clip: where its own background lies.
     shown: Rect,
+    /// The root's clip: where its parts and members can be seen, so pressed.
+    clip: Rect,
     own_sense: Sense,
 }
 
@@ -543,7 +545,7 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     let known = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
         state.own.clear();
         state.own.extend_from_slice(spec.own);
-        state.root = Some(RootInfo { id: spec.id, rect: spec.rect, shown, own_sense: spec.own_sense });
+        state.root = Some(RootInfo { id: spec.id, rect: spec.rect, shown, clip, own_sense: spec.own_sense });
         state.widgets = widgets;
         state.last_layer = Some(layer);
         state.last_sense = sense;
@@ -796,12 +798,15 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         let step = machine.step(input, |at| {
             // The press-target rule: egui's click target decides, its drag target only for a drag-only root; the
             // root starts a press when that target is its own or there is none, and a root whose widgets sense
-            // neither, which egui never names, as where there is none. A root under a modal layer starts none.
+            // neither, which egui never names, as where there is none. A press with no target starts only inside the
+            // root's clip: a part beyond it (a handle past the window's edge) is not seen, so not pressed. A root under
+            // a modal layer starts none.
             let root = state.root.map(|root| root.id);
             let takes = |untargeted| crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted);
+            let in_clip = state.root.is_some_and(|root| root.clip.contains(at));
             let mine = |id: Option<Id>| match id {
                 Some(id) => state.widgets.contains(&id) || member_widget_of(&state.previous, id),
-                None => takes(true),
+                None => in_clip && takes(true),
             };
             let targets = pass_pointer.press_targets;
             let allowed = if union_sense.contains(Sense::CLICK) {
