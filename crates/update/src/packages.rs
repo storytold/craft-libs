@@ -222,8 +222,8 @@ pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, li
     Ok(false)
 }
 
-#[cfg(all(test, target_os = "linux", feature = "oci_migration"))]
-#[allow(clippy::unwrap_used, reason = "tests fail by panicking")]
+#[cfg(test)]
+#[cfg(all(target_os = "linux", feature = "oci_migration"))]
 mod migration_tests {
     use super::{oci_ref_available, version};
     use craft_ui::testing::trial;
