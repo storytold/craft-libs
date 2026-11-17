@@ -2,7 +2,7 @@
 //!
 //! Selection, the lead, the focus ring and the drag ghost belong to the collection that shows the tab; the tab draws
 //! the look the item step gives it and reports what its own parts do. The strip gives the tab a rect: the tab's
-//! measure is its natural width (`Proposal::Min` the narrowest it shrinks to), and a narrower rect cuts the label
+//! measure is its natural width (`Proposal::Min` the room for the first letters of its title), and a narrower rect cuts the label
 //! first, then the detail, and shows the whole text as a tooltip.
 
 use super::rules::{CloseSide, TabKind, close_side};
@@ -59,6 +59,9 @@ const TEXT: PartKey = PartKey::new("text");
 const CLOSE: PartKey = PartKey::new("close");
 const PROGRESS: PartKey = PartKey::new("progress");
 
+/// How many of a title's first letters a shrunk tab still shows.
+const MIN_LETTERS: usize = 3;
+
 /// The modified mark.
 const MARK: &str = "*";
 
@@ -72,8 +75,6 @@ struct Sizes {
     close_box: f32,
     /// Room after a text tab's contents.
     tail: f32,
-    /// The narrowest content width: what a shrinking tab keeps.
-    min_content: f32,
     label_line: f32,
     detail_line: f32,
     underline_gap: f32,
@@ -252,7 +253,6 @@ impl Component for Tab<'_> {
             icon: size.icon.sm,
             close_box: size.icon.md,
             tail: if text_only { space.gap.section } else { 0.0 },
-            min_content: size.icon.md,
             label_line: line(role),
             detail_line: line(TypeRole::Caption),
             underline_gap: space.gap.tight,
@@ -276,7 +276,9 @@ impl Component for Tab<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let sizes = &cx.style.sizes;
         if cx.proposal == Proposal::Min {
-            return Vec2::new(sizes.min_content, sizes.label_line);
+            let first: String = cx.resolved.label.chars().take(MIN_LETTERS).collect();
+            let letters = cx.layout_at(&self.label_run(cx.style, &first), f32::INFINITY).size().x;
+            return Vec2::new(letters, sizes.label_line);
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
         let mut natural = sizes.tail + width(&self.label_run(cx.style, cx.resolved.label));
@@ -415,8 +417,12 @@ impl Component for Tab<'_> {
             let line = PaintShape::Path(vec![Pos2::new(placed.label.left(), y), Pos2::new(placed.label.right(), y)]);
             draw.stroke(&line, StrokeWidth::Thick, style.underline);
         }
-        let label = self.label_run(style, cx.resolved.label).color(cx.resolve(&style.label.color)).elide();
-        draw.text(placed.label, &label);
+        let label = self.label_run(style, cx.resolved.label).color(cx.resolve(&style.label.color));
+        if self.kind.clips_label() {
+            draw.clipped(placed.label, |draw| draw.text(placed.label, &label));
+        } else {
+            draw.text(placed.label, &label.elide());
+        }
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());
         }
