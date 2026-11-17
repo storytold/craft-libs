@@ -13,7 +13,7 @@ use crate::contract::{
     Styled as _, WordSetCx as _,
 };
 use crate::display::Progress;
-use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun};
+use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun, Wrap};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
@@ -418,13 +418,7 @@ impl Component for Tab<'_> {
             draw.stroke(&line, StrokeWidth::Thick, style.underline);
         }
         let label = self.label_run(style, cx.resolved.label).color(cx.resolve(&style.label.color));
-        if self.kind.clips_label() {
-            draw.clipped(placed.label, |draw| {
-                draw.text(placed.label, &label);
-            });
-        } else {
-            draw.text(placed.label, &label.elide());
-        }
+        draw.text(placed.label, &if self.kind.clips_label() { label.wrap(Wrap::Clip) } else { label.elide() });
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());
         }
