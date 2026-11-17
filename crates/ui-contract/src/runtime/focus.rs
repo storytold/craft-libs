@@ -154,7 +154,7 @@ pub(crate) struct State {
     /// The frame whose begin hook ran last; a move in the end hook belongs to the next frame.
     pub(super) frame: u64,
     /// The stop focus moved onto and the frame whose passes see it.
-    pub(super) arrived: Option<(u64, StopKey)>,
+    pub(super) arrived: Option<(u64, StopKey, FocusOrigin)>,
     /// The running pass's begin hook left a Tab to egui (`NavKeys::tab_to_egui`); its end hook takes it.
     pub(super) tab_to_egui: bool,
 }
@@ -622,6 +622,15 @@ pub(crate) fn is_focused(ctx: &Context, id: Id) -> bool {
     focused_stop(ctx).is_some_and(|(focused, _)| focused == id)
 }
 
+/// What moved focus onto a stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FocusOrigin {
+    /// A pointer press on the stop.
+    Press,
+    /// The keyboard (Tab, arrows, Page keys) or a focus request.
+    Request,
+}
+
 /// What a component reads of focus in one pass.
 #[derive(Clone, Copy, Default)]
 #[doc(hidden)]
@@ -635,6 +644,8 @@ pub struct Facts {
     pub(crate) part: Option<PartRef>,
     /// The part focus moved onto in this frame, when the component holds focus on it.
     pub(crate) arrived: Option<PartRef>,
+    /// What moved focus onto `arrived`.
+    pub(crate) arrived_origin: Option<FocusOrigin>,
     /// The count of focus writes when the facts were read; see `writes`.
     pub(crate) at: u64,
 }
@@ -644,11 +655,11 @@ pub(crate) fn facts(ctx: &Context, id: Id) -> Facts {
     let at = writes();
     match focused_stop(ctx) {
         Some((focused, part)) if focused == id => {
-            let (visible, arrived) = with(ctx, |state| {
-                let arrived = state.arrived.filter(|(frame, key)| *frame == state.frame && key.0 == id).and_then(|(_, key)| key.1);
-                (state.visible, arrived)
+            let (visible, arrived, arrived_origin) = with(ctx, |state| {
+                let arrival = state.arrived.filter(|(frame, key, _)| *frame == state.frame && key.0 == id);
+                (state.visible, arrival.and_then(|(_, key, _)| key.1), arrival.map(|(.., origin)| origin))
             });
-            Facts { focused: true, visible, part, arrived, at }
+            Facts { focused: true, visible, part, arrived, arrived_origin, at }
         }
         _ => Facts { at, ..Facts::default() },
     }

@@ -633,6 +633,13 @@ pub fn stack_place<R>(ctx: &Context, place: usize, dialog: Id, show: impl FnOnce
     out
 }
 
+/// A dialog host opened a dialog in this pass: it is the top layer from now on, so the Escape that arrived in this
+/// pass is its, and the focused stop beneath it gets no Cancel.
+#[doc(hidden)]
+pub fn take_keys_for_new_dialog(ctx: &Context) {
+    crate::runtime::keys::take_cancel(ctx);
+}
+
 /// A dialog host removed `dialog`: the layers it showed for it (`stack_place`) in the running or the last pass end
 /// their shown life at once (`memory::end_shown`), as a container that shows nothing does, so the next open of the
 /// dialog is a first pass.

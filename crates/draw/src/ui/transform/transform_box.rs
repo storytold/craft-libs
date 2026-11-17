@@ -66,6 +66,10 @@ const OVERFLOW_IN_HANDLES: f32 = 1.5;
 /// The keyboard path of a rotation by the outside parts: the options bar's angle field, which the host shows beside the box.
 const ROTATE_BY_KEY: &str = "the angle field in the options bar";
 
+/// The part the keyboard picked, as the box remembers it between passes.
+#[derive(Clone, Copy, Default)]
+struct KeyPicked(Option<BoxPart>);
+
 /// The distance an arrow key moves a part, in document units; Shift moves it by `NUDGE_FAR`.
 const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
@@ -309,7 +313,8 @@ fn slop_sense(part: BoxPart) -> Sense {
 /// - The box is one Tab stop with one part group, whose arrival is the picked part. Page Down and Page Up pick the
 ///   next and previous part (the whole box, the corners and edges clockwise from the top left, the reference
 ///   point), Home and End the first and last. The arrows move the picked part as a plain drag of it would, one
-///   document unit, Shift ten.
+///   document unit, Shift ten. A part focus reached by a press (the handle a drag ended on) is not picked: the
+///   arrows then move the whole box.
 /// - The box holds the canvas's session (`KeyUse::session`): with the canvas focused or nothing focused, Enter, Escape
 ///   and the arrows reach it before the canvas's tool, and the arrows move the whole box. With
 ///   [`session_arrows`](Self::session_arrows) off the arrows stay the tool's (the Move tool nudges the layer).
@@ -706,9 +711,21 @@ impl<'a> TransformBox<'a> {
     /// The session keys: the arrows nudge the picked part (the whole box when no part has focus), Enter applies and
     /// Escape closes the box. Untaken, a session's arrows go back to the canvas's tool.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, shown: &BoxState, pressing: bool) {
-        let picked = cx.active_part().filter(|part| part.key == BOX).and_then(|part| part.index).and_then(BoxPart::from_index);
+        let focused = cx.active_part().filter(|part| part.key == BOX).and_then(|part| part.index).and_then(BoxPart::from_index);
+        // A part picked from the keyboard (Tab, Page Down, Home, End) holds the arrows; a part that focus reached by
+        // a press (the handle a drag just ended on) is not picked, so the arrows move the whole box.
+        let arrived = cx.focus_arrived_by_key().filter(|part| part.key == BOX).and_then(|part| part.index).and_then(BoxPart::from_index);
+        let keyed = cx.memory::<KeyPicked>();
+        if pressing || focused.is_none() {
+            keyed.0 = None;
+        } else if arrived.is_some() {
+            keyed.0 = arrived;
+        } else if keyed.0 != focused {
+            keyed.0 = None;
+        }
+        let picked = keyed.0;
         self.report.picked = picked;
-        let takes_arrows = self.session_arrows || cx.is_focused();
+        let takes_arrows = self.session_arrows || (cx.is_focused() && (focused.is_none() || picked.is_some()));
         if takes_arrows && let Some((direction, mods)) = cx.intents().take_nudge() {
             let step = if mods.shift { NUDGE_FAR } else { NUDGE };
             let doc = space.view.unmap_vec(direction);
