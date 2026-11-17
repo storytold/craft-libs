@@ -26,3 +26,7 @@ docs/components-index.md text eol=lf
 # token dumps with the dump writer's (craft-theme dumps test): a Windows checkout must not convert their line endings.
 crates/theme/sizes/*.json text eol=lf
 crates/theme/tests/dumps/** text eol=lf
+
+# The facade's [features] table is compared with the table the craft features test writes, with LF (craft test
+# integration::features): a Windows checkout must not convert its line endings.
+crates/craft/Cargo.toml text eol=lf
