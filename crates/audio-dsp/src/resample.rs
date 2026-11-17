@@ -152,6 +152,8 @@ impl StreamResampler {
         let to = self.to as i64;
         let (step, rem_step) = ((self.from / self.to) as i64, (self.from % self.to) as i64);
         let (mut s, mut rem) = (first, first_rem);
+        // Frames past `end` (the position limit) stay at its position.
+        let advancing = (end - out) as usize;
         for i in 0..n {
             let frac = (rem as f64 / to as f64) as f32;
             // held starts at first - 1, so the earlier frame is always held
@@ -162,6 +164,9 @@ impl StreamResampler {
                 if let Some(x) = d.get_mut(i) {
                     *x = a + (b - a) * frac;
                 }
+            }
+            if i >= advancing {
+                continue;
             }
             s = s.wrapping_add(step);
             rem += rem_step;
@@ -378,6 +383,12 @@ mod tests {
             let mut r = StreamResampler::new(1_536_000, 1_000);
             let out = r.process(pos, 8, |_, frames| vec![vec![0.25; frames]]);
             assert!(out[0].iter().all(|v| v.is_finite()), "{pos}");
+        }
+        // Frames of a block past the limit read at the limit.
+        for (from, to) in [(48_000, 48_000), (44_100, 48_000)] {
+            let mut r = StreamResampler::new(from, to);
+            let out = r.process(MAX_RESAMPLE_POSITION - 2, 8, |_, frames| vec![vec![0.5; frames]]);
+            assert!(out[0].iter().all(|&v| v == 0.5), "{from} -> {to}: {:?}", out[0]);
         }
         // A pull that returns too many channels keeps the first `MAX_CHANNELS`.
         let mut r = StreamResampler::new(48_000, 48_000);
