@@ -165,6 +165,31 @@ fn a_file_a_kept_definition_names_is_written_with_it() {
     assert!(m.contains(r#"manifest:full-path="Pictures/paper.png""#), "{m}");
 }
 
+/// An unused namesake's definition written back as read (`MyCustom` beside an edited
+/// `My_20_Custom`) keeps the picture it names in the package.
+#[test]
+fn an_unused_namesakes_picture_stays_when_the_used_style_is_edited() {
+    use std::sync::Arc;
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[5u8; 64]].concat();
+    let styles = format!(
+        r##"<office:document-styles {NS_T} xmlns:xlink="http://www.w3.org/1999/xlink"><office:styles><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties><style:background-image xlink:href="Pictures/only.png" xlink:type="simple"/></style:paragraph-properties></style:style></office:styles></office:document-styles>"##
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">Text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/only.png", &png)]);
+    let mut d = import(&pkg).unwrap();
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = export(&d).unwrap();
+    let s = styles_of(&saved);
+    assert!(def_named(&s, "MyCustom").is_some_and(|d| d.contains(r#"xlink:href="Pictures/only.png""#)), "{s}");
+    let mut z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    assert_eq!(z.read("Pictures/only.png").unwrap(), Some(png));
+    let m = crate::text::tests::entry(&saved, "META-INF/manifest.xml");
+    assert!(m.contains(r#"manifest:full-path="Pictures/only.png""#), "{m}");
+}
+
 /// A file defining what WordCraft doesn't model: a gradient, a paragraph style no text of its
 /// own uses, a default style's writing mode, and a frame style naming them.
 fn file_with_definitions() -> Vec<u8> {
