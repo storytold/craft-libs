@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# A fraction of the fuzz-style cases, as in the Workspace gate; nightly.yml runs them in full.
+env:
+  CRAFT_HOSTILE_DIVISOR: "8"
+  PROPTEST_CASES: "64"
+
 concurrency:
   group: shared-video-${{ github.ref }}
   cancel-in-progress: true
