@@ -94,6 +94,21 @@ pub fn reported<P: Clone>(ctx: &Context, window: &Floating<P>, viewport: Viewpor
     (!settled).then(|| Action::set_native(panel.clone(), Some(next)))
 }
 
+/// Sends the native window shown in `viewport`, which the dock model records at `recorded` (its outer top-left
+/// corner and inner size), to `rect` where it differs by more than rounding: the place the dock gives a window it
+/// sizes itself (a column with steps). The window's next report is that place, which [`reported`] records.
+#[doc(hidden)]
+pub fn place(ctx: &Context, viewport: ViewportId, recorded: Rect, rect: Rect) {
+    let differs = |delta: Vec2| delta.x.abs() > SETTLED || delta.y.abs() > SETTLED;
+    let host = WindowHost::of(ctx);
+    if differs(rect.min - recorded.min) {
+        host.act(viewport, WindowAction::SetOuterPosition(rect.min));
+    }
+    if differs(rect.size() - recorded.size()) {
+        host.act(viewport, WindowAction::SetInnerSize(rect.size()));
+    }
+}
+
 /// Raises the window of the native group that `output` reports on when the user began moving or resizing it this
 /// pass, so a palette comes to the front of the windows it overlaps. False when nothing was raised.
 pub(crate) fn raise(ctx: &Context, output: &FloatingGroupOutput) -> bool {

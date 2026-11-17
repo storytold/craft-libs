@@ -1,11 +1,12 @@
 //! Native dock windows: when a float gets an OS window, what the dock records when the OS moves it, the OS close, and
 //! docking the whole window by dragging its title row.
 
-use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, Workspace};
+use craft_behavior::dock::{Action, Column, Floating, Group, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
-use craft_ui::contract::{Bind, BodyCx, ShowContainer as _};
-use craft_ui::docking::{DockConfig, DockPanels, PanelSpec};
+use craft_ui::contract::{Bind, BodyCx, DropMark, Show as _, ShowContainer as _};
+use craft_ui::display::Text;
+use craft_ui::docking::{DockConfig, DockGrid, DockPanels, PanelSpec};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
@@ -172,20 +173,56 @@ const ROW_AT: Pos2 = Pos2::new(150.0, 10.0);
 /// A desktop point over the middle of the main window's group.
 const OVER_GROUP: Pos2 = Pos2::new(550.0, 400.0);
 
+/// The grid of the stepped palette's content, as a toolbar's.
+fn tools_grid() -> DockGrid {
+    DockGrid::new(40.0, 32.0, 6)
+}
+
+/// A palette whose content lays out in a grid (a toolbar): its column has steps and its window fits its content.
+struct SteppedPalette;
+
+impl DockPanels<u32> for SteppedPalette {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        if *panel == 1 { PanelSpec::new(PALETTE_TITLE).grid(tools_grid()) } else { PanelSpec::new("Canvas") }
+    }
+
+    fn permissions(&self, _: &u32) -> Permissions {
+        Permissions::ALL.collapses(false)
+    }
+
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if *panel == 1 {
+            Text::new("One").show(ui);
+            Text::new("Two").show(ui);
+        }
+    }
+}
+
 /// A dock of one docked group and one native palette.
 struct NativeDock {
     windows: Windows,
     workspace: Workspace<u32>,
+    stepped: bool,
 }
 
 impl NativeDock {
     fn on(os: Os, system: Arc<FakeSystem>) -> Self {
+        let palette = Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
+        Self::with(os, system, palette, false)
+    }
+
+    /// The dock with a stepped palette of one step ([`SteppedPalette`]).
+    fn stepped(os: Os, system: Arc<FakeSystem>) -> Self {
+        let column = Column::new(vec![Group::new(vec![1], 0)]).with_steps(1);
+        Self::with(os, system, Floating::new(column, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size())), true)
+    }
+
+    fn with(os: Os, system: Arc<FakeSystem>, palette: Floating<u32>, stepped: bool) -> Self {
         let shell = ShellInfo::default().os(os).caps(Caps::native(os));
         let windows = Windows::with(InstallSpec::new(shell, system));
         windows.root_info(info(true, MAIN_AT));
         windows.child_info(info(true, FLOAT_AT));
-        let palette = Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
-        let mut dock = NativeDock { windows, workspace: Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])) };
+        let mut dock = NativeDock { windows, workspace: Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])), stepped };
         for _ in 0..3 {
             dock.frame(vec![]);
         }
@@ -194,12 +231,17 @@ impl NativeDock {
 
     /// One frame with `child` events for the palette's window: the dock's actions and the palette's window commands.
     fn frame(&mut self, child: Vec<Event>) -> (Vec<Action<u32>>, Vec<ViewportCommand>) {
+        self.frame_with(vec![], child)
+    }
+
+    /// One frame with `root` events for the main window and `child` events for the palette's window.
+    fn frame_with(&mut self, root: Vec<Event>, child: Vec<Event>) -> (Vec<Action<u32>>, Vec<ViewportCommand>) {
         let mut actions = Vec::new();
         let workspace = &mut self.workspace;
-        let out = self.windows.frame(vec![], child, |ui| {
-            actions.extend(
-                DockArea::new("Native dock", Bind::bound(workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui).actions,
-            );
+        let (mut palettes, mut stepped) = (Palettes(Permissions::ALL), SteppedPalette);
+        let panels: &mut dyn DockPanels<u32> = if self.stepped { &mut stepped } else { &mut palettes };
+        let out = self.windows.frame(root, child, |ui| {
+            actions.extend(DockArea::new("Native dock", Bind::bound(workspace), &mut *panels, DockConfig::default()).show(ui).actions);
         });
         let commands = out.commands.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, command)| command).collect();
         (actions, commands)
@@ -301,6 +343,100 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_window
         docked |= docks_window(&dock.frame(vec![]).0);
     }
     assert!(docked, "the button's release docks the whole window");
+}
+
+/// A point near the main window's start edge, in its own coordinates: away from the middle of its group.
+const STALE: Pos2 = Pos2::new(5.0, 300.0);
+
+/// The main window keeps the place it saw the pointer last when the palette over it takes the pointer, and may never
+/// learn that the pointer left: AppKit sends no exit for a window of the app laid over it, and the press holds the
+/// pointer in the palette's window. A drag of the palette resolves the main window's drops at the system pointer all
+/// the same, never at that place.
+#[trial]
+fn a_palette_drag_resolves_the_main_windows_drops_at_the_system_pointer_not_where_it_saw_the_pointer_last() {
+    let system = Arc::new(FakeSystem::new());
+    let mut dock = NativeDock::on(Os::Mac, system.clone());
+    dock.frame_with(vec![moved(STALE)], vec![]);
+    let pressed_at = FLOAT_AT.min + ROW_AT.to_vec2();
+    system.set_pointer(Some([pressed_at.x, pressed_at.y]));
+    system.set_primary_held(Some(true));
+    dock.frame(vec![moved(ROW_AT)]);
+    dock.frame(vec![press(ROW_AT)]);
+    dock.frame(vec![]);
+    system.set_pointer(Some([OVER_GROUP.x, OVER_GROUP.y]));
+    let mut docked = false;
+    for _ in 0..3 {
+        docked |= docks_window(&dock.frame(vec![]).0);
+    }
+    let mark = drag::mark(&dock.windows.ctx);
+    assert!(matches!(mark, Some(DropMark::Into(_))), "the middle of the group under the system pointer is marked: {mark:?}");
+    system.set_primary_held(Some(false));
+    for _ in 0..3 {
+        docked |= docks_window(&dock.frame(vec![]).0);
+    }
+    assert!(docked, "the release docks the whole window");
+}
+
+/// The steps of the stepped palette's column.
+fn palette_steps(dock: &NativeDock) -> Option<u16> {
+    dock.workspace.layout.floating[0].column.steps
+}
+
+/// One frame of `dock` with `child` events, after which the palette's window is where the app sent it, as the OS
+/// puts it: its commands, with `at` the window's rect.
+fn placed_frame(dock: &mut NativeDock, child: Vec<Event>, at: &mut Rect) -> Vec<ViewportCommand> {
+    let (_, commands) = dock.frame(child);
+    for command in &commands {
+        match command {
+            ViewportCommand::OuterPosition(to) => *at = Rect::from_min_size(*to, at.size()),
+            ViewportCommand::InnerSize(size) => *at = Rect::from_min_size(at.min, *size),
+            _ => {}
+        }
+    }
+    dock.windows.child_info(info(true, *at));
+    commands
+}
+
+/// A native palette whose column has steps (a toolbar) is sized by the app, not the OS: a drag of its side sets whole
+/// steps and the window takes their width at once, a drag of its left side keeps its right edge, and the OS is never
+/// asked to resize it. The drag holds on where the OS resizes undecorated windows (Windows): a size change the app
+/// makes under the held press ends no press.
+#[trial]
+fn a_native_stepped_palette_resizes_in_whole_steps_that_the_app_runs() {
+    let grid = tools_grid();
+    for os in [Os::Mac, Os::Windows] {
+        let mut dock = NativeDock::stepped(os, Arc::new(FakeSystem::new()));
+        let mut at = FLOAT_AT;
+        let mut sent = Vec::new();
+        for _ in 0..3 {
+            sent.extend(placed_frame(&mut dock, vec![], &mut at));
+        }
+        assert_eq!(at.width(), grid.width(1), "{os:?}: the window is as wide as its one step");
+
+        // The right grip straddles the window's right edge.
+        let grip = Pos2::new(at.width() - 1.0, at.height() / 2.0);
+        for events in [vec![moved(grip)], vec![press(grip)], vec![moved(grip + Vec2::new(1.6 * grid.step, 0.0))], vec![]] {
+            sent.extend(placed_frame(&mut dock, events, &mut at));
+        }
+        assert_eq!(palette_steps(&dock), Some(2), "{os:?}: a drag of 1.6 steps sets the whole step it reached");
+        assert_eq!(at.width(), grid.width(2), "{os:?}: the window takes the width of its steps while the drag runs");
+        let end = grip + Vec2::new(1.6 * grid.step, 0.0);
+        for events in [vec![release(end)], vec![], vec![]] {
+            sent.extend(placed_frame(&mut dock, events, &mut at));
+        }
+        assert_eq!(palette_steps(&dock), Some(2), "{os:?}: the release keeps the steps");
+
+        let right = at.right();
+        let grip = Pos2::new(1.0, at.height() / 2.0);
+        let end = grip - Vec2::new(1.6 * grid.step, 0.0);
+        for events in [vec![moved(grip)], vec![press(grip)], vec![moved(end)], vec![], vec![release(end)], vec![], vec![]] {
+            sent.extend(placed_frame(&mut dock, events, &mut at));
+        }
+        assert_eq!(palette_steps(&dock), Some(3), "{os:?}: a drag of the left side sets whole steps too");
+        assert_eq!(at.width(), grid.width(3), "{os:?}: the window takes the width of its steps");
+        assert!((at.right() - right).abs() <= 0.5, "{os:?}: the right edge stays: {right} then {at:?}");
+        assert!(!sent.iter().any(|command| matches!(command, ViewportCommand::BeginResize(_))), "{os:?}: the OS never resizes the window");
+    }
 }
 
 fn placing(commands: &[ViewportCommand]) -> Vec<&ViewportCommand> {

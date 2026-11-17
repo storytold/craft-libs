@@ -399,12 +399,17 @@ fn source_viewport(ctx: &Context) -> Option<ViewportId> {
     board(ctx, |board| board.session.as_ref().map(|session| session.viewport))
 }
 
+/// Whether the running session started in a window other than `viewport`. That window holds the pointer while its
+/// button is down, so `viewport` gets no pointer events of its own and still holds the place it saw the pointer last.
+pub(crate) fn runs_elsewhere(ctx: &Context, viewport: ViewportId) -> bool {
+    source_viewport(ctx).is_some_and(|source| source != viewport)
+}
+
 /// The pointer in `viewport` for a drag that started in another window: the desktop pointer mapped into this
 /// window, when it lies inside. `None` without a session, in the source window, or outside this window.
 #[doc(hidden)]
 pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2> {
-    let source = source_viewport(ctx)?;
-    (source != viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
+    runs_elsewhere(ctx, viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
 }
 
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the

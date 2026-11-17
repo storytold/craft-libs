@@ -942,6 +942,50 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
+    /// The steps a resize `change` of the floating window of the stepped `column`, whose first panel is `first`, sets,
+    /// and the window's rect at them: as wide as its steps and as tall as its title row and its content at that width.
+    /// `fitted` is the content's size under the title row before the change. A grip on the top or bottom edge sets the
+    /// steps by height (the fewest whose content fits), any other grip by width (the most that fit); keyboard Size
+    /// mode, which names no grip, by the side it changed. The window keeps its place: a grip on the left keeps the
+    /// right edge where it is and one on the top the bottom edge, so the window grows or shrinks that way. Reports
+    /// the steps when they change. `None` for a column without steps.
+    fn stepped_resize(
+        &mut self,
+        ui: &mut Ui,
+        body: &mut BodyCx<'_>,
+        column: &Column<P>,
+        first: &P,
+        change: &PlacementChange,
+        fitted: Vec2,
+    ) -> Option<Rect> {
+        let scene = self.scene;
+        let spec_of = |panel: &P| scene.spec(panel);
+        let (grid, steps) = stepped(column, &spec_of)?;
+        let by_height = match change.kind {
+            PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
+            _ => (change.rect.width() - fitted.x).abs() <= 0.5,
+        };
+        let to = if by_height {
+            let room = change.rect.height() - scene.sizes.title_row;
+            grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
+        } else {
+            grid.steps_within(change.rect.width())
+        };
+        if to != steps {
+            self.report.actions.push(Action::set_column_steps(first.clone(), to));
+        }
+        let size = Vec2::new(grid.width(to), scene.sizes.title_row + self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0));
+        let left = match change.kind {
+            PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - size.x,
+            _ => change.rect.left(),
+        };
+        let top = match change.kind {
+            PlacementKind::Size(ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight) => change.rect.bottom() - size.y,
+            _ => change.rect.top(),
+        };
+        Some(Rect::from_min_size(Pos2::new(left, top), size))
+    }
+
     /// The height of the groups of an expanded stepped column ([`stepped`]) measured at `width`, the width of its
     /// steps: what the column shows under its bar. `None` for any other column.
     fn stepped_height(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, width: f32, in_window: bool) -> Option<f32> {
@@ -1074,7 +1118,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
     /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
     /// bottom the fewest whose content fits the height, and the window keeps its place; a drag of its left side keeps
-    /// its right edge.
+    /// its right edge. An OS window takes that rect at once ([`native::place`]); the app runs its grips, so the OS
+    /// sizes it no other way.
     fn windows(
         &mut self,
         ui: &mut Ui,
@@ -1168,8 +1213,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
             }
+            // A resize of a window whose column has steps: the steps it sets, and the window's rect at them.
+            let resized = output
+                .placed
+                .filter(|change| !matches!(change.kind, PlacementKind::Move))
+                .zip(shape.fitted)
+                .and_then(|(change, fitted)| self.stepped_resize(ui, body, &window.column, &anchor, &change, fitted));
             if opening.spec.is_some() {
                 if let Some(viewport) = WindowHost::of(&ctx).viewport_of(output.response.id) {
+                    // The OS window takes the rect of its steps at once, so the place recorded below is that rect.
+                    if let Some(rect) = resized {
+                        native::place(&ctx, viewport, opening.rect, rect);
+                    }
                     self.report.windows.push((anchor.clone(), viewport));
                     self.report.actions.extend(native::reported(&ctx, window, viewport));
                 }
@@ -1179,40 +1234,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 if change.phase == GesturePhase::Commit {
                     (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
                 }
-                if !matches!(change.kind, PlacementKind::Move)
-                    && let Some(fitted) = shape.fitted
-                    && let Some((grid, steps)) = stepped(&window.column, &spec_of)
-                {
-                    let column = &window.column;
-                    // A grip on the top or bottom edge sets the steps by height, any other grip by width; keyboard Size
-                    // mode, which names no grip, by the side it changed.
-                    let by_height = match change.kind {
-                        PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
-                        _ => (change.rect.width() - fitted.x).abs() <= 0.5,
-                    };
-                    let to = if by_height {
-                        let room = change.rect.height() - scene.sizes.title_row;
-                        grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
-                    } else {
-                        grid.steps_within(change.rect.width())
-                    };
-                    if to != steps {
-                        self.report.actions.push(Action::set_column_steps(anchor.clone(), to));
-                    }
-                    // The window keeps its place and its steps set its size. A grip on the left keeps the right edge
-                    // where it is, and one on the top the bottom edge, so the window grows or shrinks that way.
-                    let left = match change.kind {
-                        PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - grid.width(to),
-                        _ => change.rect.left(),
-                    };
-                    let top = match change.kind {
-                        PlacementKind::Size(ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight) => {
-                            let content = self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0);
-                            change.rect.bottom() - scene.sizes.title_row - content
-                        }
-                        _ => change.rect.top(),
-                    };
-                    change.rect = Rect::from_min_size(Pos2::new(left, top), opening.rect.size());
+                // The window keeps the place of its steps; its size is the steps' own, whatever the rect keeps.
+                if let Some(rect) = resized {
+                    change.rect = Rect::from_min_size(rect.min, opening.rect.size());
                 }
                 if change.phase == GesturePhase::Commit {
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });

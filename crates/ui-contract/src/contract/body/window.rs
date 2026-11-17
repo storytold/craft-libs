@@ -97,6 +97,7 @@ pub(super) struct WindowMode {
     restore: Placement,
     began: Option<Rect>,
     moving: Option<WindowMove>,
+    sizing: Option<WindowSize>,
     /// The index in `GRIPS` of the grip a drag holds, from its `DragStart` to its release: `move_parts` keeps it
     /// declared when the drag flips the layer to a side whose placement holds its edge, so the drag keeps its result.
     held: Option<usize>,
@@ -124,6 +125,20 @@ struct WindowMove {
     /// The pointer has passed the click distance from the press, and the move is reported. A tracked move is handed
     /// to the OS on the press, and stays a click, which moves and docks nothing, until then.
     begun: bool,
+}
+
+/// A resize of a viewport mount's OS window that its caller sizes ([`Resize::by_caller`](crate::contract::overlay::Resize::by_caller)),
+/// which the app runs, from its Begin to its Commit or Cancel. Rects are the window's outer rect in desktop points.
+#[derive(Clone, Copy, PartialEq)]
+struct WindowSize {
+    /// The index in `GRIPS` of the grip the drag holds.
+    grip: usize,
+    /// The pressed point in desktop points.
+    pressed: Pos2,
+    /// Where the window was when the resize began; a cancel reports it again.
+    start: Rect,
+    /// The rect the resize reported last.
+    at: Rect,
 }
 
 /// The outer rect of a viewport mount's OS window as the container last learnt it: the window's placement, which the
@@ -334,7 +349,14 @@ impl BodyHooks<'_> {
             if mode.kind == Some(kind) {
                 mode = WindowMode::default();
             } else {
-                mode = WindowMode { kind: Some(kind), restore: current.clone(), began: Some(current.rect_over(rect)), moving: None, held: None };
+                mode = WindowMode {
+                    kind: Some(kind),
+                    restore: current.clone(),
+                    began: Some(current.rect_over(rect)),
+                    moving: None,
+                    sizing: None,
+                    held: None,
+                };
                 self.reports.push(step(current.rect_over(rect), GesturePhase::Begin));
             }
         }
@@ -392,7 +414,7 @@ impl BodyHooks<'_> {
         // A band that moves the window below starts the OS move of the window the layer is shown in.
         if overlay.moves_window {
             let viewport = pass::current_viewport(&cx.core.ctx);
-            self.window_os(viewport, cx);
+            self.window_os(viewport, props, cx);
             return;
         }
         let id = cx.core.id;
@@ -452,9 +474,18 @@ impl BodyHooks<'_> {
     }
 
     /// A press on the move band or a grip of a container in an OS window starts the OS move or resize; the band of a
-    /// window whose move the app runs starts that move instead ([`Self::window_move`]). Where the platform answers the
-    /// hit test (`answered_by_platform`), the parts stand for its sink only.
-    pub(super) fn window_os<C: Container>(&mut self, viewport: ViewportId, cx: &mut Cx<'_, C>) {
+    /// window whose move the app runs starts that move instead ([`Self::window_move`]), and a grip of a window its
+    /// caller sizes that resize ([`Self::window_resize`]). Where the platform answers the hit test
+    /// (`answered_by_platform`), the parts it takes stand for its sink only; the grips of a window its caller sizes
+    /// are never its.
+    pub(super) fn window_os<C: Container>(&mut self, viewport: ViewportId, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+        let by_caller = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
+        if by_caller {
+            let limits = overlay_of(props).map(|overlay| Limits::new(overlay, window_min(props, cx.style.metrics().min_size)));
+            if let Some(limits) = limits {
+                self.window_resize(viewport, &limits, cx);
+            }
+        }
         if answered_by_platform(&cx.core.ctx, viewport) {
             return;
         }
@@ -469,10 +500,66 @@ impl BodyHooks<'_> {
             windows::act(&cx.core.ctx, viewport, WindowAction::StartMove);
         }
         for (index, (dx, dy, _)) in GRIPS.into_iter().enumerate() {
-            if started((GRIP, Some(index as u64))) {
+            if !by_caller && started((GRIP, Some(index as u64))) {
                 windows::act(&cx.core.ctx, viewport, WindowAction::StartResize(edge_of(dx, dy)));
             }
         }
+    }
+
+    /// The resize of an OS window its caller sizes: a drag of a grip moves the edges the grip holds by the pointer's
+    /// travel since the press, within `limits`, and each step is reported through `placement_changed` as a layer's
+    /// resize is, from Begin to Commit or Cancel. The app sends the window no size: the caller places the size it
+    /// makes of the steps. The press holds the pointer, so its moves arrive while it is outside the window. A pointer
+    /// move of this pass is relative to where the window reports itself now, as in [`Self::window_move`].
+    fn window_resize<C: Container>(&mut self, viewport: ViewportId, limits: &Limits, cx: &mut Cx<'_, C>) {
+        let ctx = cx.core.ctx.clone();
+        let Some(facts) = windows::WindowHost::of(&ctx).facts(viewport) else { return };
+        let outer = facts.outer.unwrap_or(facts.inner);
+        let phase = |index: usize| cx.core.results.get(&(GRIP, Some(index as u64))).map(|result| result.press.phase);
+        let change = |rect: Rect, phase: GesturePhase, grip: usize| {
+            let (dx, dy, _) = GRIPS[grip];
+            PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Size(edge_of(dx, dy)) }
+        };
+        let resized = |sizing: &WindowSize, desktop: Pos2| {
+            let (dx, dy, _) = GRIPS[sizing.grip];
+            limits.resized(sizing.start, dx, dy, desktop - sizing.pressed)
+        };
+        let Some(mut sizing) = self.mode.sizing else {
+            let started = (0..GRIPS.len()).find_map(|index| match phase(index)? {
+                PressPhase::DragStart { start, pos, .. } => Some((index, start.origin, pos)),
+                _ => None,
+            });
+            let Some((grip, origin, pos)) = started else { return };
+            let sizing = WindowSize { grip, pressed: facts.inner.min + origin.to_vec2(), start: outer, at: outer };
+            self.reports.push(change(outer, GesturePhase::Begin, grip));
+            let at = resized(&sizing, facts.inner.min + pos.to_vec2());
+            self.reports.push(change(at, GesturePhase::Update, grip));
+            self.mode.sizing = Some(WindowSize { at, ..sizing });
+            self.mode.held = Some(grip);
+            return;
+        };
+        let ended = match phase(sizing.grip) {
+            Some(PressPhase::Cancel { .. }) => Some(GesturePhase::Cancel),
+            Some(PressPhase::Down { .. } | PressPhase::Drag { .. } | PressPhase::Held { .. } | PressPhase::DragStart { .. }) => None,
+            // A release, or a press that ended in a pass the container did not run.
+            _ => Some(GesturePhase::Commit),
+        };
+        if let Some(ended) = ended {
+            let rect = if ended == GesturePhase::Cancel { sizing.start } else { sizing.at };
+            self.reports.push(change(rect, ended, sizing.grip));
+            self.mode.sizing = None;
+            self.mode.held = None;
+            return;
+        }
+        let moved = pointer::pass_pointer(&ctx)
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| if let PointerEvent::Moved { at, .. } = event { Some(*at) } else { None });
+        let Some(at) = moved.map(|at| resized(&sizing, facts.inner.min + at.to_vec2())).filter(|at| *at != sizing.at) else { return };
+        sizing.at = at;
+        self.reports.push(change(at, GesturePhase::Update, sizing.grip));
+        self.mode.sizing = Some(sizing);
     }
 
     /// The move of an OS window whose app runs it ([`windows::keeps_app_drag`]): a drag of the move band keeps the
@@ -577,11 +664,15 @@ impl BodyHooks<'_> {
         let now = facts.outer.unwrap_or(facts.inner);
         let placed = &mut cx.core.memory.shown::<WindowPlaced>(sub(sub(cx.core.id, "body"), "window_placed")).0;
         let before = placed.replace(now);
-        if self.mode.moving.is_some() {
+        if self.mode.moving.is_some() || self.mode.sizing.is_some() {
             return;
         }
         let Some(before) = before.filter(|before| *before != now) else { return };
         let kind = resized_edge(before, now).map_or(PlacementKind::Move, PlacementKind::Size);
+        // The size of a window its caller sizes is the caller's own: the window reports only its moves.
+        if matches!(kind, PlacementKind::Size(_)) && overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller) {
+            return;
+        }
         self.reports.push(PlacementChange { rect: now, phase: GesturePhase::Commit, pointer: None, kind });
     }
 
@@ -635,6 +726,7 @@ impl BodyHooks<'_> {
             return;
         }
         let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
+        let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
             if held != Some(index) && !grip_stands(edges, pinned, dx, dy) {
                 continue;
@@ -654,7 +746,8 @@ impl BodyHooks<'_> {
                 .cursor(cursor)
                 .pointer_only(reason)
                 .over();
-            if let Some(hit) = exclusive(WindowHit::Resize(edge_of(dx, dy))) {
+            // The grips of a window its caller sizes are the app's (`window_resize`), never the platform's.
+            if let Some(hit) = exclusive(WindowHit::Resize(edge_of(dx, dy))).filter(|_| !caller_sizes) {
                 part.exclusive(hit);
             }
         }
