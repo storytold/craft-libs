@@ -1,5 +1,6 @@
 //! Resetting and interrupting the OS composition, and the IME events and output.
 
+use super::input::Arrived;
 use egui::{Context, Event, ImeEvent, Rect, ViewportId};
 
 /// An IME event as the engine reads it.
@@ -27,9 +28,9 @@ pub(crate) enum Raw {
 }
 
 /// Removes the IME events from `events` and returns them in order.
-pub(crate) fn take_events(events: &mut Vec<Event>) -> Vec<Raw> {
+pub(crate) fn take_events(events: &mut Vec<Arrived>) -> Vec<Raw> {
     let mut taken = Vec::new();
-    events.retain(|event| match event {
+    events.retain(|Arrived { event, .. }| match event {
         Event::Ime(ime) => {
             match ime {
                 ImeEvent::Preedit { text, active_range_chars } => {

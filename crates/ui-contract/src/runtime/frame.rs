@@ -1,7 +1,7 @@
 //! The frame plugin: the per-pass and per-frame steps, with the inputs the app sets and the outputs it drains.
 
 use crate::runtime::commands::{self, CommandInput, CommandSet as _, Fired};
-use crate::runtime::egui::input::{self as raw_input, HeldInput, RawInput};
+use crate::runtime::egui::input::{self as raw_input, Arrived, HeldInput, RawInput};
 use crate::runtime::egui::memory as store;
 use crate::runtime::egui::{pass, scale, style};
 use crate::runtime::env::{Env, RootEnv, WindowKey};
@@ -567,15 +567,19 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     raw_input::prepare(ctx, input);
     // H0b: the OS colour scheme egui's integration reports reaches the system reader.
     crate::runtime::env::system::input_hook(ctx, &input.events);
+    // From H0 to H3 the events go with the input time each arrived at (`Arrived`): held events keep theirs, and the key
+    // stage gives each shortcut its own. egui's events are what these stages leave.
+    let mut events = Arrived::take(input);
     // H0: one press per pass.
     let frame = pass::frame_nr(ctx, viewport);
-    let (held_back, refed) = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(input, frame, &mut record.held));
+    let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(&mut events, frame, &mut record.held));
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left.
-    ime::input_hook(ctx, &mut input.events, viewport);
-    let (stripped, later) = keys::input_hook(ctx, input, refed);
+    ime::input_hook(ctx, &mut events, viewport);
+    let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {
         PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.hold_ahead(later));
     }
+    Arrived::into_input(events, input);
     // H3b: a press outside the top menu family goes no further than the menu's dismissal.
     let absorbed = overlay::absorb_presses(ctx, input);
     // H4: release after an OS resize.

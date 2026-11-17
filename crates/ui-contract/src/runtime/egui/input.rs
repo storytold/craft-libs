@@ -11,27 +11,50 @@ use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, 
 
 pub use egui::RawInput;
 
+/// An input event with the input time it arrived at: `None` for an event of the running frame's own input, which
+/// arrived at the frame's time (the begin hook reads it, `HeldInput::stamp`); an event an earlier frame held keeps the
+/// time of the frame it arrived in. The input hook's stages from the one-press rule (H0) to the key stage (H3) keep,
+/// remove and hold these records, and egui's event list is built from the records they leave (`into_input`).
+#[derive(Clone)]
+pub(crate) struct Arrived {
+    pub(crate) event: Event,
+    pub(crate) at: Option<f64>,
+}
+
+impl Arrived {
+    /// Takes the events out of `input`: they arrived in the running frame.
+    pub(crate) fn take(input: &mut RawInput) -> Vec<Arrived> {
+        input.events.drain(..).map(|event| Arrived { event, at: None }).collect()
+    }
+
+    /// Makes `events` egui's input events.
+    pub(crate) fn into_input(events: Vec<Arrived>, input: &mut RawInput) {
+        input.events = events.into_iter().map(|arrived| arrived.event).collect();
+    }
+}
+
 /// The events that wait for the next frame, for one viewport: the one-press rule's and those the key stage cuts at a
-/// focus move (`keys::input_hook`). Each keeps the input time it arrived at, `None` until the begin hook of the frame
-/// it arrived in reads the clock (`stamp`).
+/// focus move (`keys::input_hook`), each with the time it arrived at.
 #[derive(Default)]
 pub(crate) struct HeldInput {
-    events: Vec<(Event, Option<f64>)>,
+    events: Vec<Arrived>,
     frame: Option<u64>,
 }
 
 impl HeldInput {
     /// Holds `events`, which a later step of this pass's input hook cut, for the next frame, ahead of the events held
     /// already: they arrived before them.
-    pub(crate) fn hold_ahead(&mut self, mut events: Vec<(Event, Option<f64>)>) {
+    pub(crate) fn hold_ahead(&mut self, mut events: Vec<Arrived>) {
         events.append(&mut self.events);
         self.events = events;
     }
 
     /// Gives the events this frame's input hook held the frame's input time `now`, which the begin hook reads.
     pub(crate) fn stamp(&mut self, now: f64) {
-        for (_, arrived) in self.events.iter_mut().filter(|(_, arrived)| arrived.is_none()) {
-            *arrived = Some(now);
+        for arrived in &mut self.events {
+            if arrived.at.is_none() {
+                arrived.at = Some(now);
+            }
         }
     }
 
@@ -42,39 +65,21 @@ impl HeldInput {
     }
 }
 
-/// The events an earlier frame held that lead this frame's input, in order, each with the input time it arrived at.
-#[derive(Default)]
-pub(crate) struct Refed(Vec<(Event, f64)>);
-
-impl Refed {
-    /// The input time `event` arrived at when it is a held event, read in input order; `None` for an event of this
-    /// frame's own input, which arrived at the pass time. Held events lead the input and a stage may have removed some,
-    /// so the held events before a match are gone, and the first event that matches none ends them.
-    pub(crate) fn arrival(&mut self, event: &Event) -> Option<f64> {
-        let Some(at) = self.0.iter().position(|(held, _)| held == event) else {
-            self.0.clear();
-            return None;
-        };
-        self.0.drain(..=at).last().map(|(_, arrived)| arrived)
-    }
-}
-
 /// H0: this pass carries at most one pointer press, as its last pointer event. Events after the first press
 /// wait in `held` and lead the next frame's events. A repeated pass of the same frame, a discard pass,
 /// receives no input events, so it gets none of the held ones. Returns whether events were held, so the hook
-/// asks for a repaint, and the held events this pass's input carries with their arrival times.
-pub(crate) fn hold_back_presses(input: &mut RawInput, frame: u64, held: &mut HeldInput) -> (bool, Refed) {
+/// asks for a repaint.
+pub(crate) fn hold_back_presses(events: &mut Vec<Arrived>, frame: u64, held: &mut HeldInput) -> bool {
     if held.frame == Some(frame) {
-        return (false, Refed::default());
+        return false;
     }
     held.frame = Some(frame);
-    let mut events = std::mem::take(&mut held.events);
-    events.extend(input.events.drain(..).map(|event| (event, None)));
-    let (now, later) = split_after_first_press(events, |(event, _)| matches!(event, Event::PointerButton { pressed: true, .. }));
-    let refed = now.iter().filter_map(|(event, arrived)| arrived.map(|arrived| (event.clone(), arrived))).collect();
-    input.events = now.into_iter().map(|(event, _)| event).collect();
+    let mut all = std::mem::take(&mut held.events);
+    all.append(events);
+    let (now, later) = split_after_first_press(all, |arrived| matches!(arrived.event, Event::PointerButton { pressed: true, .. }));
+    *events = now;
     held.events = later;
-    (!held.events.is_empty(), Refed(refed))
+    !held.events.is_empty()
 }
 
 /// Takes key presses and texts out of the running pass's input. `places` and `texts` are the places the key stage
@@ -502,12 +507,12 @@ pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, W
 /// Removes the events a modal layer in another viewport blocks: button and key presses, wheel, text, clipboard and
 /// touch. Pointer moves and releases stay, so the pointer position stays right and no press or key sticks down. The
 /// events `keep` admits stay too (the canvas the modal leaves open, `runtime::sampler`); `pointer` is where the pointer
-/// stood before `input`. Returns whether anything went and whether a pointer press did or was kept.
-pub(crate) fn drop_under_modal(input: &mut RawInput, keep: Option<&crate::runtime::sampler::Hole>, pointer: Option<Pos2>) -> (bool, bool) {
-    let before = input.events.len();
+/// stood before `events`. Returns whether anything went and whether a pointer press did or was kept.
+pub(crate) fn drop_under_modal(events: &mut Vec<Arrived>, keep: Option<&crate::runtime::sampler::Hole>, pointer: Option<Pos2>) -> (bool, bool) {
+    let before = events.len();
     let mut press = false;
     let mut at = pointer;
-    input.events.retain(|event| {
+    events.retain(|Arrived { event, .. }| {
         match event {
             Event::PointerMoved(pos) | Event::PointerButton { pos, .. } => at = Some(*pos),
             _ => {}
@@ -526,7 +531,7 @@ pub(crate) fn drop_under_modal(input: &mut RawInput, keep: Option<&crate::runtim
         press |= matches!(event, Event::PointerButton { pressed: true, .. });
         !blocked || keep.is_some_and(|hole| hole.admits(event, at))
     });
-    (input.events.len() != before, press)
+    (events.len() != before, press)
 }
 
 /// Adds a release of the primary button at `pos` after the events of `input`.
