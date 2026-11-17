@@ -30,7 +30,7 @@ impl ToastStack {
                 (None, true) => Some(ToastEnd::Dismissed),
                 (None, false) => None,
             };
-            CardOutcome::new(out.response.hovered(), end)
+            CardOutcome::new(out.response.contains_pointer(), end)
         });
     }
 }

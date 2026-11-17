@@ -47,7 +47,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
     ) {
         let enabled = cx.core.resolved.enabled;
         let parent = access::fold::owner_of(ctx, id).unwrap_or(id);
-        let hover = sensing::read_outcome(ctx, ArenaId::new(id)).hover.map(|hit| hit.owner);
+        let hover = sensing::read_outcome(ctx, ArenaId::new(id)).hover;
         let mut prepared: Vec<Prepared<C::Key, C::Item<'r>>> = members
             .into_iter()
             .map(|member| {
@@ -55,7 +55,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
                 let member_id = item_id(id, &key);
                 let on = enabled && item.common_mut(Internal::new()).enabled.unwrap_or(true);
                 let item_sense = item.sense();
-                let prep = run::member_prepare(ui, env, member_id, row, hover == Some(member_id), item);
+                let prep = run::member_prepare(ui, env, member_id, row, hover.find(|hit| hit.owner == member_id).is_some(), item);
                 let member = Member { at, key, item: (), row, clip, flags, position, renaming, openers, shown };
                 (member, member_id, on, item_sense, prep)
             })
