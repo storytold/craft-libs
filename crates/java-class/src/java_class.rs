@@ -9,7 +9,7 @@
 
 use crate::bytes::Reader;
 use crate::java_ops::{self, Insn};
-use crate::{FormatError, dex};
+use crate::{FormatError, descriptor as dex};
 use serde::Serialize;
 
 /// Most constant-pool entries, fields, methods, attributes or interfaces we read from one file.
@@ -912,7 +912,7 @@ pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_anything_testkit::java as fx;
+    use crate::test_support::java as fx;
 
     /// Two valid static methods: a one-dimensional allocation and a two-dimensional one.
     fn array_reference_class(component: &str, array: &str) -> ClassFile {
@@ -1055,7 +1055,7 @@ mod tests {
             }
             let _ = references(cf, "java/lang/System", None, 100);
         };
-        for m in craft_anything_testkit::mutations(&data) {
+        for m in crate::test_support::mutations(&data) {
             if let Ok(cf) = parse(&m) {
                 walk(&cf);
             }
@@ -1066,7 +1066,7 @@ mod tests {
             }
         }
         for seed in 0..64 {
-            let mut n = craft_anything_testkit::noise(seed, 2048);
+            let mut n = crate::test_support::noise(seed, 2048);
             n[..4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
             n[6] = 0;
             n[7] = 52;
