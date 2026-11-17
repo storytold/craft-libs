@@ -126,13 +126,26 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         ui.fonts_mut(|fonts| crate::runtime::egui::text_layout::layout_with(fonts, job))
     };
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
-    // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, centred on the
-    // part's centre line: the row's centre is the part's whatever row egui allocates from the top of its rect.
+    // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, placed so the
+    // text's baseline is the line's (`text::line_baseline`): the mono digits of a number field sit on the baseline of
+    // the body text beside them. egui centres the row in the rect, whatever row it allocates from the rect's top.
     let rect = if multiline || galley.is_some() {
         rect
     } else {
-        let row = ui.fonts_mut(|fonts| fonts.row_height(&font_id));
-        Rect::from_center_size(rect.center(), egui::vec2(rect.width(), rect.height().max(row)))
+        let text_env = crate::primitives::text::TextEnv { tokens, direction: env.direction, ink, fonts: facts };
+        let baseline = crate::primitives::text::line_baseline(ui.ctx(), &text_env, role, rect.center().y);
+        let probe = {
+            let mut format = TextFormat::simple(font_id.clone(), ink);
+            if let Some(size) = optical_size {
+                format.coords.push(*b"opsz", size);
+            }
+            let mut job = LayoutJob::default();
+            job.append("x", 0.0, format);
+            crate::primitives::text::TextLayout::new(super::text_layout::layout(ui.ctx(), job), false, String::new())
+        };
+        let row = probe.size().y;
+        let top = baseline - probe.first_baseline;
+        Rect::from_center_size(egui::pos2(rect.center().x, top + row / 2.0), egui::vec2(rect.width(), rect.height().max(row)))
     };
     // The component's root took its place in the flow already: the editor runs in a child that takes none, so the
     // parent's cursor stays past the root, not past the text part inside it.
