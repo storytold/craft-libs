@@ -2,7 +2,8 @@
 
 use crate::contract::SizeLimits;
 use crate::docking::{DockGrid, DockHeights, DockSizes, PanelSpec};
-use craft_behavior::dock::Column;
+use craft_behavior::Flow;
+use craft_behavior::dock::{Column, DockEdge};
 use egui::{Pos2, Rect};
 
 /// The width bounds of an expanded column: no narrower than `least` or the widest minimum of its panels, no wider
@@ -27,6 +28,31 @@ pub fn fit_widths(columns: &[(f32, Option<f32>)], room: f32) -> Vec<f32> {
     let bounded: Vec<(f32, (f32, f32))> =
         columns.iter().map(|&(width, floor)| (width, (floor.map_or(width, |floor| floor.min(width)), width))).collect();
     scale_widths(&bounded, room)
+}
+
+/// The cells of a dock's columns in the dock's `rect`, from its window edge `edge` inwards, each the dock's full
+/// height: the columns' natural widths ([`DockSizes::natural`]) fitted into the dock's width ([`fit_widths`]). `flow`
+/// is the flow of the area the dock is in, which mirrors the edges for right-to-left.
+pub fn column_cells<P>(
+    columns: &[Column<P>],
+    rect: Rect,
+    edge: DockEdge,
+    flow: Flow,
+    sizes: &DockSizes,
+    spec: &dyn Fn(&P) -> PanelSpec,
+) -> Vec<Rect> {
+    let widths = fit_widths(&sizes.natural(columns, spec), rect.width());
+    let reading = flow.to_physical(rect);
+    let start = edge == DockEdge::Start;
+    let mut cursor = if start { reading.left() } else { reading.right() };
+    widths
+        .into_iter()
+        .map(|width| {
+            let span = if start { (cursor, cursor + width) } else { (cursor - width, cursor) };
+            cursor = if start { span.1 } else { span.0 };
+            flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()))
+        })
+        .collect()
 }
 
 /// The grid and steps of a stepped column: its [`Column::steps`] and the [`DockGrid`] of its first panel that

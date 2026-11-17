@@ -13,6 +13,7 @@ mod group;
 
 mod floating;
 mod panels;
+mod placed;
 mod root;
 mod spec;
 mod splitter;
@@ -40,6 +41,7 @@ pub use floating::{FloatingGroup, FloatingGroupOutput, FloatingGroupStyle, Windo
 pub use panels::{DockPanels, request_actions};
 #[doc(hidden)]
 pub use panels::{close_requests, open_requests};
+pub use placed::{Placing, placed_rect, with_area_rules};
 pub use root::{DockRoot, DockRootOutput, DockRootStyle};
 pub use spec::{DockGrid, DockHeights, PanelSpec};
 pub use splitter::{Splitter, SplitterStyle};
@@ -56,8 +58,8 @@ mod flyout;
 mod iconic;
 
 pub use dock_column::{
-    ColumnArrow, ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, fit_widths, group_heights, scale_widths, stacked,
-    stepped, width_bounds,
+    ColumnArrow, ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, column_cells, fit_widths, group_heights,
+    group_rects, scale_widths, stacked, stepped, width_bounds,
 };
 pub use flyout::{Flyout, FlyoutOutput, FlyoutShown, FlyoutStyle, GroupAt};
 pub use iconic::{FlyoutResize, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicSizes};

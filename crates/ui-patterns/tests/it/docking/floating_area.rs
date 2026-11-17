@@ -133,7 +133,7 @@ fn a_tab_dragged_over_a_floating_window_marks_and_joins_the_window() {
     let mark = drag::mark(bed.fixture.ctx()).expect("the window takes the drop");
     let points = match mark {
         DropMark::Line { from, to, .. } => vec![from, to],
-        DropMark::Into(rect) | DropMark::Split(rect) => vec![rect.center()],
+        DropMark::Into(rect) | DropMark::Region { area: rect, .. } => vec![rect.center()],
         _ => Vec::new(),
     };
     assert!(!points.is_empty() && points.iter().all(|point| WINDOW_AT.expand(SLACK).contains(*point)), "the mark is the window's: {mark:?}");
@@ -475,7 +475,7 @@ fn a_drag_over_a_floating_window_joins_or_stacks_and_never_splits() {
     press_and_move(&mut expanded.fixture, tab.center(), side - tab.center());
     expanded.fixture.frame(Vec::new());
     let mark = drag::mark(expanded.fixture.ctx()).expect("the window takes the drop");
-    assert!(matches!(mark, DropMark::Into(_)), "the start side of a floating group joins it: {mark:?}");
+    assert!(matches!(mark, DropMark::Region { .. }), "the start side of a floating group joins it: {mark:?}");
     expanded.fixture.frame(vec![release(side)]).settle();
 
     let mut window = Floating::single(vec![WINDOW], 0, WINDOW_AT);
