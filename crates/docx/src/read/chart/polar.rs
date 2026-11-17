@@ -1,8 +1,8 @@
 use super::canvas::{Rect, clip_text, fill, stroke, text, text_w, widest};
 use super::format::format_value;
-use super::model::{DataLabel, Kind, Series};
+use super::model::{DataLabel, Kind, LabelPos, Series};
 use super::plot::{Axes, has_values};
-use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
+use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, LINE_W, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
 
 pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     let Some(s) = c.series.first() else { return };
@@ -38,7 +38,7 @@ pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             // Halfway across the ring (pie: two thirds out from the centre).
             let at = if inner > 0.0 { (r + inner) / 2.0 } else { r * 0.65 };
             let (x, y) = polar(cx, cy, at, (a + b) / 2.0);
-            labels.push(DataLabel { x: x as f32, y: y as f32, text, inside: true });
+            labels.push(DataLabel { x: x as f32, y: y as f32, text, inside: true, pos: LabelPos::Above, off: 0.0 });
         }
         a = b;
     }
@@ -92,14 +92,14 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         if c.radar_fill {
             fill(out, segs.clone(), col);
         }
-        stroke(out, segs, col, s.line_w);
+        stroke(out, segs, col, s.line_w.unwrap_or(LINE_W));
         for (i, p) in ring.iter().enumerate() {
             if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
                 let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
-                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0 });
+                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0, alpha: 1.0 });
             }
             if let Some(text) = label_of(s, i) {
-                labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false });
+                labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false, pos: LabelPos::Above, off: 0.0 });
             }
         }
     }
@@ -134,13 +134,13 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
 }
 
 /// The data label of point `i` of series `s`, when it shows one: the value as the file has it,
-/// in the series' number format.
+/// in the labels' own number format, else the series' one.
 pub(super) fn label_of(s: &Series, i: usize) -> Option<String> {
     if s.labels != Some(true) {
         return None;
     }
     let v = s.raw.get(i).copied().flatten()?;
-    let fmt = s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General"));
+    let fmt = s.label_fmt.as_ref().map_or(s.fmt.as_deref(), |f| f.as_deref().or(s.fmt.as_deref())).filter(|f| !f.eq_ignore_ascii_case("General"));
     Some(match fmt {
         Some(f) => format_value(v, f, 1.0),
         None => general_value(v),
@@ -165,13 +165,22 @@ pub(super) fn draw_data_labels(out: &mut Vec<GraphicItem>, labels: &[DataLabel],
         let w = text_w(&l.text, fs) + 4.0;
         let (rect, align) = if l.inside {
             (Rect { x: l.x - w / 2.0, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Center)
+        } else if l.off > 0.0 || l.pos != LabelPos::Above {
+            let o = l.off;
+            match l.pos {
+                LabelPos::Right => (Rect { x: l.x + o, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Left),
+                LabelPos::Left => (Rect { x: l.x - o - w, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Right),
+                LabelPos::Below => (Rect { x: l.x - w / 2.0, y: l.y + o, w, h: lh }, TextAlign::Center),
+                LabelPos::Center => (Rect { x: l.x - w / 2.0, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Center),
+                LabelPos::Above => (Rect { x: l.x - w / 2.0, y: l.y - o - lh, w, h: lh }, TextAlign::Center),
+            }
         } else if beside_right {
             (Rect { x: l.x + GAP / 2.0, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Left)
         } else {
             (Rect { x: l.x - w / 2.0, y: l.y - lh, w, h: lh }, TextAlign::Center)
         };
         let color = if l.inside { Rgb::WHITE } else { TEXT };
-        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None });
+        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None, angle: 0.0 });
     }
 }
 
