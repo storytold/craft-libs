@@ -47,6 +47,9 @@ pub struct DockSizes {
     pub strip: f32,
     /// The height of a column bar (a small control).
     pub bar: f32,
+    /// The height of a floating window's title row, which is the bar of the column the window holds: every height of
+    /// a window's body or content is the window's height less this.
+    pub title_row: f32,
     /// The least body size of a column's group and the least width of an expanded column (the panel header height).
     pub least: f32,
     /// How thick a divider is across its boundary (the least hit size).
@@ -84,6 +87,7 @@ impl DockSizes {
             least_pane: size.pane.least,
             strip: size.panel_header,
             bar: size.control.sm,
+            title_row: super::floating::title_row(cx.tokens),
             least: size.panel_header,
             reach: size.hit.target,
             step: cx.control().gap,

@@ -1191,7 +1191,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         _ => (change.rect.width() - fitted.x).abs() <= 0.5,
                     };
                     let to = if by_height {
-                        let room = change.rect.height() - scene.sizes.strip;
+                        let room = change.rect.height() - scene.sizes.title_row;
                         grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
                     } else {
                         grid.steps_within(change.rect.width())
@@ -1208,7 +1208,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     let top = match change.kind {
                         PlacementKind::Size(ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight) => {
                             let content = self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0);
-                            change.rect.bottom() - scene.sizes.strip - content
+                            change.rect.bottom() - scene.sizes.title_row - content
                         }
                         _ => change.rect.top(),
                     };
@@ -1236,7 +1236,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 self.pick(&active, item);
             }
             // The window's commands run from its body, below the title row.
-            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.bar);
+            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.title_row);
             for command in commands {
                 self.run(&active, command, Some(body));
             }

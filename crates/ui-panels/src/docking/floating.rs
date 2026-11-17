@@ -22,7 +22,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::WindowSpec;
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
 use craft_behavior::{GesturePhase, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
@@ -32,6 +32,11 @@ use std::hash::Hash;
 
 #[cfg(feature = "testing")]
 mod stories;
+
+/// The height of a floating group's title row: a strong `TitleRow`, which is as tall as a panel header.
+pub(crate) fn title_row(tokens: &UiTokens) -> f32 {
+    tokens.size.panel_header
+}
 
 /// The actions a floating group's title row shows unless `actions` says otherwise.
 const ACTIONS: [HeaderAction; 3] = [HeaderAction::Menu, HeaderAction::Float, HeaderAction::Close];
@@ -304,7 +309,7 @@ impl<'a> FloatingGroup<'a> {
     /// Shows the group; `body` fills the area under the title row unless the group is minimized.
     pub fn show_group<R>(mut self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<FloatingGroupOutput, R> {
         let env = Env::of(ui);
-        let header = env.tokens.size.panel_header;
+        let header = title_row(&env.tokens);
         (self.header, self.rtl) = (header, env.direction.is_rtl());
         let mount = self.mount(header);
         self.props = self.props.mount(mount);

@@ -11,13 +11,15 @@ use std::hash::Hash;
 pub(super) struct Shown<'a, P: Clone> {
     /// The pruned layout with its write-back map.
     pub(super) view: FrameView<'a, P>,
-    /// Floating windows show: the shell shows them and the panels are not hidden.
+    /// Floating windows show: the shell shows them, or it hides the panels and the view keeps what the host names.
     pub(super) floating: bool,
 }
 
 /// `layout` with the host's `hide`, the shell's panel visibility and the frame of `maximized` applied. Protected
-/// panels always stay, so a canvas shows while the dock is hidden. Size edits made on the view go back through
-/// `FrameView::write_back`.
+/// panels always stay, so a canvas shows while the dock is hidden. While the shell hides the panels and keeps the
+/// tools (Shift+Tab), the panels the host's `HidePanels::Except` names stay, docked or floating, and every other panel
+/// hides; while the shell hides the dock (Tab, body-only mode), every panel hides. Size edits made on the view go back
+/// through `FrameView::write_back`.
 pub(super) fn shown<'a, P: Clone + Eq + Hash>(
     layout: &'a Layout<P>,
     maximized: Option<&P>,
@@ -25,8 +27,10 @@ pub(super) fn shown<'a, P: Clone + Eq + Hash>(
     shell: Option<&ShellCx>,
     protected: &dyn Fn(&P) -> bool,
 ) -> Shown<'a, P> {
-    let dock_hidden = shell.is_some_and(|shell| !shell.dock_visible());
-    let hide = if dock_hidden { HidePanels::All } else { hide };
-    let floating = shell.is_none_or(|shell| shell.floating_visible());
+    let (hide, floating) = match shell {
+        None => (hide, true),
+        Some(shell) if shell.panels_hidden() => (if let HidePanels::Except(keep) = hide { HidePanels::Except(keep) } else { HidePanels::All }, true),
+        Some(shell) => (if shell.dock_visible() { hide } else { HidePanels::All }, shell.floating_visible()),
+    };
     Shown { view: maximize(layout, maximized, hide, protected), floating }
 }

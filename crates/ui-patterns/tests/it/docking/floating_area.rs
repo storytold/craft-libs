@@ -67,6 +67,8 @@ struct Bed {
     second: Rc<Cell<bool>>,
     /// The tallest a floated panel opens (`FloatSpace::default_size`), as the area reported it.
     float_height: Rc<Cell<f32>>,
+    /// The height of a floating window's title row (`FloatSpace::title_row`), as the area reported it.
+    title_row: Rc<Cell<f32>>,
 }
 
 fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
@@ -74,7 +76,9 @@ fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
     let actions: Rc<RefCell<Vec<Action<usize>>>> = Rc::default();
     let second = Rc::new(Cell::new(false));
     let float_height = Rc::new(Cell::new(0.0));
+    let title_row = Rc::new(Cell::new(0.0));
     let (held, seen_actions, shows_second, seen_height) = (Rc::clone(&workspace), Rc::clone(&actions), Rc::clone(&second), Rc::clone(&float_height));
+    let seen_title_row = Rc::clone(&title_row);
     let mut other = Workspace::new(Layout::new(Some(Node::tabs(vec![SECOND], 0)), Vec::new()));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
@@ -84,13 +88,14 @@ fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
         seen_actions.borrow_mut().extend(out.actions);
         if let Some(space) = out.float_space {
             seen_height.set(space.default_size.y);
+            seen_title_row.set(space.title_row);
         }
         if shows_second.get() {
             DockArea::new("Second dock", Bind::bound(&mut other), &mut panels, DockConfig::default()).show(ui);
         }
     });
     fixture.settle();
-    Bed { fixture, workspace, actions, second, float_height }
+    Bed { fixture, workspace, actions, second, float_height, title_row }
 }
 
 /// A point on the floating window's title row.
@@ -228,6 +233,28 @@ fn a_floating_windows_drag_bar_shows_no_title() {
     let bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
     let named = bed.fixture.texts().iter().filter(|text| text.text == title(WINDOW) && WINDOW_AT.contains_rect(text.rect)).count();
     assert_eq!(named, 1, "only the tab names the panel: {:?}", bed.fixture.texts());
+}
+
+/// The title row the area keeps a dropped window's under the pointer and adds to a floated unit's height is the
+/// one the window draws: the window's group starts right under it.
+#[trial]
+fn a_floating_windows_group_starts_under_the_title_row_the_area_sizes_windows_by() {
+    let bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let group = bed
+        .fixture
+        .by_role(Role::TAB_PANEL)
+        .into_iter()
+        .find(|group| WINDOW_AT.expand(SLACK).contains_rect(group.rect))
+        .expect("the window shows its group")
+        .rect;
+    let title_row = bed.title_row.get();
+    assert!(title_row > 0.0, "the area reported its float space");
+    assert!(
+        (group.top() - WINDOW_AT.top() - title_row).abs() <= SLACK,
+        "the group starts at {} in a window from {} with a title row of {title_row}",
+        group.top(),
+        WINDOW_AT.top()
+    );
 }
 
 /// A tab dragged out of the window floats at the width its group had where it was docked, not a default size.

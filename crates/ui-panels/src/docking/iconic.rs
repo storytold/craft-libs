@@ -695,7 +695,7 @@ impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
 
     /// The column bar, over the icons. What the user did on it is read in `finish`.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        if self.bar == ColumnBar::Window || cx.shell().is_some_and(|shell| !shell.dock_visible()) {
+        if self.bar == ColumnBar::Window {
             return;
         }
         if let Some(grip) = column_grip(self.column, self.spec, cx) {

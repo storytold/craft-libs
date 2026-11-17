@@ -147,7 +147,7 @@ pub(crate) fn to_target<P: Clone>(unit: &DragUnit<P>, target: Target<P>) -> Acti
 
 /// Whether the model takes `action` and changes the arrangement by it: a dry run on a copy, so no mark shows for a
 /// drop that `Layout::apply_with_permissions` would refuse or that moves nothing.
-fn takes<P: Clone + Eq + Hash>(layout: &Layout<P>, action: &Action<P>, permissions: &dyn Fn(&P) -> Permissions) -> bool {
+pub(crate) fn takes<P: Clone + Eq + Hash>(layout: &Layout<P>, action: &Action<P>, permissions: &dyn Fn(&P) -> Permissions) -> bool {
     let mut copy = layout.clone();
     copy.apply_with_permissions(action.clone(), permissions).is_ok() && !copy.same_arrangement(layout)
 }

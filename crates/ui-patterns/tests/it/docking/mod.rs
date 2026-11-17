@@ -16,8 +16,10 @@ mod drop_session;
 
 mod floating;
 mod floating_area;
+mod hidden;
 
 mod columns;
+mod dock_back;
 mod group_view;
 mod workspace_dialogs;
 

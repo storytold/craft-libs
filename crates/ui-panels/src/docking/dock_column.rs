@@ -166,7 +166,7 @@ pub struct DockColumnStyle {
 /// them by pointer or with the arrow keys.
 ///
 /// The column registers the drop bands of its two edges (`DockSpot::column`) and of the seams between its groups
-/// (`DockSpot::seam`) with the dock `dock` every pass. A dock hidden by the shell shows nothing.
+/// (`DockSpot::seam`) with the dock `dock` every pass.
 ///
 /// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar and the window's edges
 /// size it: the column shows its groups and their dividers only, and registers its seams.
@@ -248,10 +248,6 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
         let mut bar = BarRecord::default();
         let shown = &mut bar;
         let body = move |ui: &mut Ui, body: &mut BodyCx<'_>| {
-            // A floating window shows where the area shows it; the shell hides docks only.
-            if own == ColumnBar::Own && body.shell().is_some_and(|shell| !shell.dock_visible()) {
-                return;
-            }
             let Some(sizes) = body.style::<DockColumn<'_, P>>().map(|style| style.sizes) else { return };
             // The bar and the groups at the heights this pass's drag leaves them, in the measuring run and the real
             // run alike: the same plan `parts` lays out, so the dividers sit at the seams.

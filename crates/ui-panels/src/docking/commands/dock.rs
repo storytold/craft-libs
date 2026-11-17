@@ -1,6 +1,6 @@
 //! The panel commands of a docked or floating panel and the dock actions they turn into.
 
-use crate::docking::drop::{beside, members, moving_panels, to_target};
+use crate::docking::drop::{beside, members, moving_panels, takes, to_target};
 use crate::docking::{DockEvent, DragUnit, FloatSpace};
 use crate::runtime::commands::CommandState;
 use craft_behavior::DockSide;
@@ -20,7 +20,7 @@ pub enum DockCommands {
     /// Float the panel's tab group into its own frame.
     #[command(label = "Float Tab Group")]
     FloatGroup,
-    /// Dock the floating panel: back where it was docked, else as a tab of the first docked panel.
+    /// Dock the floating panel: back where it was docked, else as a tab of the first docked group that takes it.
     #[command(label = "Dock Panel")]
     DockPanel,
     /// Ask for a group to move the panel to; the host lists [`Layout::move_targets`] and calls [`move_actions`].
@@ -146,7 +146,9 @@ pub enum DockTo<P> {
     Edge(DockSide),
     /// As a new last column of the dock on this window edge, or in a new dock there.
     Dock(DockEdge),
-    /// Back to the docked layout: a tab of the first docked panel outside the unit. Nothing for a docked unit.
+    /// Back to the docked layout: tabs of the first group outside the unit that takes them, as its rights and the
+    /// unit's allow ([`Permissions::accepts_tabs`], [`Permissions::shares_column`]); dock columns come before the
+    /// docked tree. Nothing for a docked unit.
     Docked,
 }
 
@@ -260,10 +262,14 @@ pub fn move_actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, unit: &DragU
             }
             let panels = layout.panels();
             let free = || panels.iter().copied().filter(|p| !moved.contains(p));
-            let docked = free().find(|p| matches!(layout.place(p), Some(PanelPlace::Dock { .. })));
-            let framed = || free().find(|p| matches!(layout.place(p), Some(PanelPlace::Node(_))));
-            let anchor = docked.or_else(framed).cloned().ok_or(DockError::MissingTarget)?;
-            one(beside(unit, anchor, DockPlacement::tab(None)))
+            let docked = free().filter(|p| matches!(layout.place(p), Some(PanelPlace::Dock { .. })));
+            let framed = free().filter(|p| matches!(layout.place(p), Some(PanelPlace::Node(_))));
+            let mut joins = docked.chain(framed).map(|anchor| beside(unit, anchor.clone(), DockPlacement::tab(None))).peekable();
+            if joins.peek().is_none() {
+                return Err(DockError::MissingTarget);
+            }
+            let permissions = |p: &P| scene.policy(p);
+            joins.find(|action| takes(layout, action, &permissions)).map_or(Err(DockError::NotAllowed), one)
         }
     }
 }
