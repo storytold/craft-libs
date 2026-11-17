@@ -623,6 +623,11 @@ pub fn list_style(src: &mut dyn Source, ls: &El) -> ListStyle {
     let mut out = ListStyle::default();
     for e in ls.elements() {
         let n = e.local();
+        if n == "defPPr" {
+            let (_, para, run) = ppr(src, e);
+            out.default_level = Some(Box::new(LevelStyle { para, run: run.unwrap_or_default() }));
+            continue;
+        }
         let Some(l) = n.strip_prefix("lvl").and_then(|r| r.strip_suffix("pPr")).and_then(|d| d.parse::<u8>().ok()) else { continue };
         if !(1..=9).contains(&l) {
             continue;

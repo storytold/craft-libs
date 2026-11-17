@@ -24,8 +24,8 @@
 //! caps, formula nesting is bounded, and nothing indexes by a number from the file.
 //!
 //! ```
-//! # fn main() -> Result<(), craft_xls::Error> {
-//! # let bytes = craft_xls::testing::workbook(&[("Sheet1", vec![vec!["a".into(), "2.5".into()]])]);
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let bytes = craft_xls::testing::workbook(&[("Sheet1", vec![vec!["a".into(), "2.5".into()]])])?;
 //! let read = craft_xls::read(&bytes)?;
 //! let sheet = &read.workbook.sheets[0];
 //! assert_eq!(sheet.name, "Sheet1");
@@ -46,6 +46,7 @@ mod notes;
 mod read;
 mod records;
 mod styles;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
 

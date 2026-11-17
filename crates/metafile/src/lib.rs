@@ -14,7 +14,8 @@
 //! bounds-checked and every count is capped; hostile input yields a shorter picture or an [`Error`],
 //! never a panic. Records follow MS-WMF, MS-EMF and MS-EMFPLUS; the README lists the records read
 //! and the limits. Records of a type the reader does not know are counted in
-//! [`Picture::skipped_records`].
+//! [`Picture::skipped_records`]; a parse stopped at a limit, images left out, clips not applied and
+//! raster operations not played are reported in the other `Picture` fields.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -69,8 +70,38 @@ pub struct Picture {
     pub height: f32,
     pub items: Vec<Item>,
     /// Records of a type the reader does not know (neither drawn nor known to change nothing that
-    /// is kept). A caller can tell its user that part of the file was not read.
+    /// is kept). A caller can tell its user that part of the file was not read. An EMF+ metafile
+    /// image adds the records skipped inside it once, the first time it is drawn.
     pub skipped_records: u32,
+    /// The parse stopped at one of the reader's limits (items, bytes kept, `SAVEDC` depth, clip
+    /// paths; see the README) before the end of the file, or a metafile image drawn inside it did:
+    /// the picture holds what came before. The limits that cut one path, string, region or dash
+    /// pattern short do not set it.
+    pub truncated: bool,
+    /// Images the file asks to draw that the reader did not read: bitmaps past a size, item, byte or
+    /// decode limit or in a form the reader cannot decode, EMF+ metafile images that do not parse or
+    /// are nested deeper than 3 levels, and pattern or texture brushes whose bitmap was not read, a
+    /// pen's brush included (counted when the brush or pen is created). An image whose source rectangle selects none of its pixels, or that
+    /// has no pixels, draws nothing and is not counted. Bitmaps left out while clipping to an EMF+
+    /// clip (see the README's limits) are not counted here.
+    pub dropped_images: u32,
+    /// Clip changes the reader does not apply as the file asks: GDI clip paths selected with
+    /// `RGN_OR`, `RGN_XOR` or `RGN_DIFF` and EMF+ clips combined with XOR, exclude or complement,
+    /// which leave the clip as it was; EMF+ unions, drawn as the rectangle around both areas; and
+    /// EMF+ clips whose area stands in for the one the file gives (a path that is not one convex
+    /// figure, drawn as its rectangle, or a region built with XOR, exclude or complement).
+    /// Drawing after them may show more or less than the file asks. A change that cannot alter the
+    /// clip is not counted: an area whose figures all lie on a line (except in an EMF+ complement of
+    /// a clip that encloses some area, which would empty it), a GDI `RGN_OR` on a clip that is still
+    /// the whole surface, and an EMF+ union whose rectangle is no larger than the union. The reader
+    /// does not work out whether a GDI path changes a clip that is already set, so such a path is
+    /// counted.
+    pub ignored_clips: u32,
+    /// Raster operations the reader does not play: bitmaps drawn as plain copies of their source
+    /// because their operation is not `SRCCOPY`, `SRCAND`, `SRCPAINT` or `SRCINVERT`, and operations
+    /// that take no source bitmap (such as `DSTINVERT` or `PATINVERT`) and are left out. `PATCOPY`,
+    /// `BLACKNESS` and `WHITENESS` are played.
+    pub unplayed_raster_ops: u32,
 }
 
 /// How the ends of an open stroke and of its dashes are drawn (`PS_ENDCAP_*`).
@@ -228,10 +259,10 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
     } else {
         return Err(Error::NotMetafile);
     };
-    let skipped = cv.skipped;
-    let mut pic = build(cv.items, frame);
-    pic.skipped_records = skipped;
-    Ok(pic)
+    let (skipped, truncated) = (cv.skipped, cv.full() || cv.truncated_inside);
+    let (dropped_images, ignored_clips, unplayed_raster_ops) = (cv.dropped_images, cv.ignored_clips, cv.unplayed_raster_ops);
+    let pic = build(cv.items, frame);
+    Ok(Picture { skipped_records: skipped, truncated, dropped_images, ignored_clips, unplayed_raster_ops, ..pic })
 }
 
 /// True when the bytes start like a WMF (placeable or plain header) or an EMF.
@@ -367,7 +398,7 @@ fn build(raw: Vec<Raw>, frame: Option<Frame>) -> Picture {
         }
     });
     let items = items.collect();
-    Picture { width: f(size.0).unwrap_or(0.0), height: f(size.1).unwrap_or(0.0), items, skipped_records: 0 }
+    Picture { width: f(size.0).unwrap_or(0.0), height: f(size.1).unwrap_or(0.0), items, ..Picture::default() }
 }
 
 /// An item's clip in picture units: the region rectangles and the clip paths.

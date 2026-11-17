@@ -365,7 +365,7 @@ impl Build<'_, '_> {
                             .ok_or_else(|| too_large(KIND, format!("textures of more than {} bytes", self.limits.max_data_bytes)))?;
                         self.scene.external.push(t.path.clone());
                         self.scene.images.push(Image { name: String::new(), uri: Some(t.path.clone()), mime_type: t.content_type.clone(), data });
-                        Some(TextureRef { image: self.scene.images.len() - 1, uv_set: 0, wrap: t.wrap })
+                        Some(TextureRef { image: self.scene.images.len() - 1, wrap: t.wrap, ..TextureRef::default() })
                     }
                     None => None,
                 };
