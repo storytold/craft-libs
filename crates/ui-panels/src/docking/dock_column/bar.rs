@@ -6,7 +6,7 @@ use crate::buttons::icon_button::IconButtonStyleKey;
 use crate::contract::overlay::Trigger;
 use crate::contract::{Access, BodyCx, Name, PaintUi, Props as _, Role, Show as _, ShowContainer as _, WordSetCx as _};
 use crate::docking::group::GroupGrip;
-use crate::docking::{DockWords, PanelSpec};
+use crate::docking::{ColumnArrow, DockWords, PanelSpec};
 use crate::menu::{GroupItem, Menu, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::env::Label;
 use craft_behavior::PartKey;
@@ -38,11 +38,11 @@ fn collapse_look(tokens: &Tokens) -> VariantLook {
 
 const COLLAPSE: CustomVariant = CustomVariant::new::<IconButtonStyleKey>("craft_ui.dock-collapse", collapse_look);
 
-/// Whether the column's collapse control points to the right of the screen: towards the window edge when it collapses
-/// to icons and away from it when it expands.
-fn points_right(edge: DockEdge, expanded: bool, rtl: bool) -> bool {
+/// Whether the column's double arrow points to the right of the screen: towards the edge it keeps to when a click sends
+/// the column there (`towards_edge`), else away from it.
+fn points_right(edge: DockEdge, towards_edge: bool, rtl: bool) -> bool {
     let at_left = (edge == DockEdge::Start) != rtl;
-    at_left != expanded
+    at_left != towards_edge
 }
 
 /// The chevron's slot at the bar's outer end, the window edge the dock is on, as high and wide as the bar is high; and
@@ -58,15 +58,11 @@ pub(in crate::docking) fn bar_slots(bar: Rect, edge: DockEdge, rtl: bool) -> (Re
     }
 }
 
-/// The name of the chevron of an expanded or an iconic column.
-pub(in crate::docking) fn chevron_name(words: &DockWords, expanded: bool) -> Label {
-    Label::from(if expanded { words.collapse_column.as_str() } else { words.expand_column.as_str() }.to_owned())
-}
-
-/// Paints the chevron part: a small ghost button with the double chevron pointing where the column goes.
-pub(in crate::docking) fn paint_chevron(ui: &mut PaintUi<'_>, edge: DockEdge, expanded: bool, rtl: bool, name: Label) {
-    let chevrons = crate::collapse::chevrons(points_right(edge, expanded, rtl));
-    ui.face(CHEVRON, IconButton::new(chevrons).size(ControlSize::Sm).variant(Variant::Custom(COLLAPSE)).label(name));
+/// Paints the chevron part of the `expanded` or collapsed column whose double arrow is `arrow`: a small ghost button
+/// with the double chevron pointing where the column goes, named for what a click does.
+pub(in crate::docking) fn paint_chevron(ui: &mut PaintUi<'_>, edge: DockEdge, arrow: ColumnArrow, expanded: bool, rtl: bool, words: &DockWords) {
+    let chevrons = crate::collapse::chevrons(points_right(edge, arrow.towards_edge(expanded), rtl));
+    ui.face(CHEVRON, IconButton::new(chevrons).size(ControlSize::Sm).variant(Variant::Custom(COLLAPSE)).label(arrow.name(words, expanded)));
 }
 
 /// The chevron's node.
@@ -89,7 +85,7 @@ pub(in crate::docking) fn show_bar<P: Clone + Send + Sync + 'static>(
     let words = body.words::<DockWords>();
     let menu_words = body.words::<MenuWords>();
     let rtl = crate::runtime::env::Env::of(ui).direction.is_rtl();
-    let toggle = chevron_name(&words, expanded);
+    let toggle = ColumnArrow::Collapse.name(&words, expanded);
     let (_, band) = bar_slots(bar, edge, rtl);
     let mut record = BarRecord::default();
     if band.width() <= 0.0 {

@@ -1,13 +1,13 @@
 //! Dock columns: room sharing between groups, and a dock side's total width shared between its columns.
 
 use craft_behavior::Axis;
-use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
+use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
 use craft_ui::contract::{Bind, BodyCx, Role, Show as _, SizeLimits};
 use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, PanelSpec, group_heights};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Rect, Ui, Vec2};
+use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -164,7 +164,7 @@ impl DockPanels<u32> for Tools {
 }
 
 /// A docked stepped column is only as tall as its content, not the dock's height; the double arrow of a column that
-/// does not collapse switches it between one and two steps.
+/// does not collapse switches it between one and two steps, and is named for the steps it switches to.
 #[trial]
 fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_and_two_steps() {
     let dock = Node::dock(DockEdge::Start, vec![Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1)]);
@@ -191,14 +191,38 @@ fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_an
         },
         other => panic!("{other:?}"),
     };
-    for expected in [2, 1] {
+    for (name, expected) in [("Show in two columns", 2), ("Show in one column", 1)] {
         let tree = fixture.tree();
         let arrow = fixture
             .by_role(Role::BUTTON)
             .into_iter()
-            .find(|button| craft_ui::testing::access::name(tree, button.node) == Some("Collapse column to icons"))
-            .expect("the column bar shows its double arrow");
+            .find(|button| craft_ui::testing::access::name(tree, button.node) == Some(name))
+            .expect("the column bar shows its double arrow, named for the steps it switches to");
         fixture.click(&arrow).settle();
         assert_eq!(steps(&workspace.borrow()), Some(expected), "the double arrow switches the steps");
     }
+}
+
+/// A drag of a floating stepped window's left edge widens it in whole steps to the left: its right edge stays.
+#[trial]
+fn a_floating_stepped_windows_left_edge_drag_keeps_its_right_edge() {
+    let at = Rect::from_min_size(Pos2::new(200.0, 80.0), Vec2::new(100.0, 100.0));
+    let window = Floating::new(Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1), at);
+    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(None, vec![window]))));
+    let held = Rc::clone(&workspace);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = held.borrow().clone();
+        DockArea::new("Floating tools", Bind::bound(&mut workspace), &mut Tools, DockConfig::default()).show(ui);
+        *held.borrow_mut() = workspace;
+    });
+    fixture.settle();
+    let shown = |fixture: &Fixture| fixture.by_role(Role::TAB_PANEL).first().map(|group| group.rect).expect("the window shows its group");
+    let before = shown(&fixture);
+    // The left grip straddles the window's left edge, which is its rect's.
+    fixture.drag_at(Pos2::new(at.left(), before.center().y), Vec2::new(-1.5 * grid().step, 0.0)).settle();
+    let after = shown(&fixture);
+    let steps = workspace.borrow().layout.floating[0].column.steps;
+    assert!(steps.is_some_and(|steps| steps > 1), "the drag widened the window by whole steps: {steps:?}");
+    assert!((after.right() - before.right()).abs() <= 1.5, "the right edge stays: {before:?}, then {after:?}");
+    assert!(after.left() < before.left(), "the window grew to the left: {before:?}, then {after:?}");
 }

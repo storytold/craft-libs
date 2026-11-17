@@ -638,6 +638,13 @@ status = "replaced"
 note = "A column of a side dock: the column bar over the stacked groups. Replaces the hand-rolled column bar, collapse button and group stacking of the dock renderer."
 
 [[type]]
+name = "ColumnArrow"
+old = ""
+new = "craft_ui::docking::ColumnArrow"
+status = "replaced"
+note = "What a column's double arrow does, which names it and sets where it points: `Collapse`, or `Steps(n)` for a stepped column whose panels do not collapse, which switches between one and two steps. `ColumnArrow::of(&Column<P>, spec, collapses)`; `DockColumn::arrow` and `WindowColumn::arrow` take it. Replaces `ToolRail`'s column toggle."
+
+[[type]]
 name = "IconicColumn"
 old = ""
 new = "craft_ui::docking::IconicColumn"

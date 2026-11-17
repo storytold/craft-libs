@@ -2,7 +2,7 @@
 
 use super::divider::{self, Divider, Drag};
 use super::dock_column::{
-    BarRecord, CHEVRON, ColumnBar, bar_slots, chevron_name, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
+    BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
 };
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_group_drag};
 use crate::buttons::IconButton;
@@ -419,7 +419,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
         self.bar_rect = plan.bar;
         if self.bar == ColumnBar::Own {
             let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
-            let name = chevron_name(&cx.words::<DockWords>(), false);
+            let name = ColumnArrow::Collapse.name(&cx.words::<DockWords>(), false);
             let _ = cx.header_part(chevron_edge(self.edge), CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
         }
         for (at, (_, _, cell)) in plan.cells.iter().enumerate() {
@@ -525,7 +525,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
         if self.bar == ColumnBar::Own {
             ui.draw().surface(self.bar_rect, SurfaceKind::Background, Corners::None);
-            paint_chevron(ui, self.edge, false, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), false));
+            paint_chevron(ui, self.edge, ColumnArrow::Collapse, false, cx.flow.is_rtl(), &cx.words::<DockWords>());
         }
         let flat = self.flat();
         for (at, (group, panel)) in flat.iter().enumerate() {
@@ -562,7 +562,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
         }
         divider::describe(access, EDGE, 0, &self.edge_divider(cx.rect, &sizes.column), words.resize.as_str(), sizes.column.step);
         if self.bar == ColumnBar::Own {
-            describe_chevron(access, &chevron_name(&words, false));
+            describe_chevron(access, &ColumnArrow::Collapse.name(&words, false));
         }
     }
 

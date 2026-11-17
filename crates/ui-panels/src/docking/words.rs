@@ -14,6 +14,10 @@ craft_ui::words! {
         move_column: template "dockColumn.move" = "Move panel column";
         collapse_column: "dockColumn.collapse" = "Collapse column to icons";
         expand_column: "dockColumn.expand" = "Expand column";
+        /// The double arrow of a stepped column at one step, which widens it to two.
+        two_steps: "dockColumn.twoSteps" = "Show in two columns";
+        /// The double arrow of a stepped column at more than one step, which narrows it to one.
+        one_step: "dockColumn.oneStep" = "Show in one column";
         move_window: "floatingGroup.move" = "Move panel window";
         close_window: "floatingGroup.close" = "Close panel window";
         /// The tooltip and accessible name of the panel-menu button.

@@ -6,7 +6,7 @@
 //! opens the `menu` rows. The body step supplies the move band, the edge grips and the keyboard Move and Size modes.
 //! A dock window's title row is also the bar of the column the window holds, with the column's double arrow.
 
-use super::dock_column::{CHEVRON, chevron_name, describe_chevron, paint_chevron};
+use super::dock_column::{CHEVRON, ColumnArrow, describe_chevron, paint_chevron};
 use super::drop::{DragUnit, start_group_drag};
 use super::{DockDropTarget, DockDropped, DockWords, GroupDrag, PanelDrag, PanelKey, native};
 use crate::contract::BodyCx;
@@ -56,24 +56,32 @@ pub struct WindowColumn {
     /// The size of an expanded column whose content sets it (a column with steps) under the title row; `None` for a
     /// column the rect sizes.
     pub fitted: Option<Vec2>,
+    /// What the double arrow does: collapse or expand the column unless [`arrow`](Self::arrow) says otherwise.
+    pub arrow: ColumnArrow,
 }
 
 impl WindowColumn {
     /// An expanded column that keeps to `edge`.
     pub fn expanded(edge: DockEdge) -> Self {
-        WindowColumn { edge, collapsed: None, fitted: None }
+        WindowColumn { edge, collapsed: None, fitted: None, arrow: ColumnArrow::Collapse }
     }
 
     /// A column collapsed to icons, `size` under the title row, that keeps to `edge`.
     pub fn collapsed(edge: DockEdge, size: Vec2) -> Self {
-        WindowColumn { edge, collapsed: Some(size), fitted: None }
+        WindowColumn { edge, collapsed: Some(size), fitted: None, arrow: ColumnArrow::Collapse }
     }
 
     /// An expanded column whose content is `size` under the title row, that keeps to `edge`. The window shows at
     /// that size at its rect's place; a resize the user makes is reported for the host to turn into the column's
     /// steps, and a move keeps the rect's size.
     pub fn fitted(edge: DockEdge, size: Vec2) -> Self {
-        WindowColumn { edge, collapsed: None, fitted: Some(size) }
+        WindowColumn { edge, collapsed: None, fitted: Some(size), arrow: ColumnArrow::Collapse }
+    }
+
+    /// The column with the double arrow `arrow` ([`ColumnArrow::of`]).
+    pub fn arrow(mut self, arrow: ColumnArrow) -> Self {
+        self.arrow = arrow;
+        self
     }
 
     /// The edge of `bounds`, in reading order, nearer the window at `rect`: the start edge when the window's centre is
@@ -363,7 +371,7 @@ impl Component for FloatingGroup<'_> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let (Some(edge), Some(column)) = (self.chevron_edge(), self.column) else { return };
         let Some(slot) = cx.header_slot(edge) else { return };
-        let name = chevron_name(&cx.words::<DockWords>(), column.collapsed.is_none());
+        let name = column.arrow.name(&cx.words::<DockWords>(), column.collapsed.is_none());
         let _ = cx.header_part(edge, CHEVRON, slot).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
         self.chevron_declared = true;
     }
@@ -386,13 +394,12 @@ impl Component for FloatingGroup<'_> {
     /// The double arrow, over the title row's surface.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(column) = self.column.filter(|_| self.chevron_declared) else { return };
-        let expanded = column.collapsed.is_none();
-        paint_chevron(ui, column.edge, expanded, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), expanded));
+        paint_chevron(ui, column.edge, column.arrow, column.collapsed.is_none(), cx.flow.is_rtl(), &cx.words::<DockWords>());
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         if let Some(column) = self.column.filter(|_| self.chevron_declared) {
-            describe_chevron(access, &chevron_name(&cx.words::<DockWords>(), column.collapsed.is_none()));
+            describe_chevron(access, &column.arrow.name(&cx.words::<DockWords>(), column.collapsed.is_none()));
         }
     }
 

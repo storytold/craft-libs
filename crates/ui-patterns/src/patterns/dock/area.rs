@@ -11,16 +11,17 @@ use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
-    ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene, DockSizes,
-    DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels, IconicColumn,
-    IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths, frame, move_actions, stepped,
+    ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
+    DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels,
+    IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths, frame,
+    move_actions, stepped,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
 use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry};
 use crate::runtime::memory::Remember as _;
-use crate::runtime::windows::WindowHost;
+use crate::runtime::windows::{ResizeEdge, WindowHost};
 use crate::sections::HeaderAction;
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, Group, Layout, Location, Node, PanelPlace, Permissions, SplitSize, Workspace, node_at,
@@ -944,16 +945,20 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         Some(height)
     }
 
-    /// What a click on the double arrow of `column`, whose first panel is `first`, asks for when it reports
-    /// `iconic`: an expanded stepped column whose panels do not collapse switches between one and two steps; any
-    /// other column collapses to icons or expands.
-    fn arrow(&self, column: &Column<P>, first: &P, iconic: bool) -> Action<P> {
+    /// What the double arrow of `column` does ([`ColumnArrow::of`]): it names the arrow and decides what a click asks
+    /// for.
+    fn arrow_of(&self, column: &Column<P>) -> ColumnArrow {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
-        let collapses = column.panels().all(|panel| scene.permissions(panel).collapses);
-        match stepped(column, &spec) {
-            Some((_, steps)) if !collapses && !column.iconic => Action::set_column_steps(first.clone(), if steps == 1 { 2 } else { 1 }),
-            _ => Action::set_iconic(first.clone(), iconic),
+        ColumnArrow::of(column, &spec, column.panels().all(|panel| scene.permissions(panel).collapses))
+    }
+
+    /// What a click on the double arrow of `column`, whose first panel is `first`, asks for when it reports
+    /// `iconic`: the steps it switches to, or the collapse or expansion of the column.
+    fn arrow(&self, column: &Column<P>, first: &P, iconic: bool) -> Action<P> {
+        match self.arrow_of(column).switched_steps() {
+            Some(steps) => Action::set_column_steps(first.clone(), steps),
+            None => Action::set_iconic(first.clone(), iconic),
         }
     }
 
@@ -981,6 +986,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let output = DockColumn::new(name, dock, column, &spec)
                 .edge(edge)
                 .bar(bar)
+                .arrow(self.arrow_of(column))
                 .within(within)
                 .auto_collapse(scene.auto_collapse)
                 .show_groups_at(ui, cell, |group, rect, ui, body| {
@@ -1050,7 +1056,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     ///
     /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
     /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
-    /// bottom the fewest whose content fits the height, and the window keeps its place.
+    /// bottom the fewest whose content fits the height, and the window keeps its place; a drag of its left side keeps
+    /// its right edge.
     fn windows(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, open: &Option<P>, started: Option<&Layout<P>>) -> Option<(P, PlacementChange)> {
         let scene = self.scene;
         let ctx = ui.ctx().clone();
@@ -1097,7 +1104,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 WindowColumn::fitted(edge, Vec2::new(width, content))
             } else {
                 WindowColumn::expanded(edge)
-            };
+            }
+            .arrow(self.arrow_of(&window.column));
             let mut group = FloatingGroup::new(spec.label, opening.rect)
                 .limits(scene.spec(&anchor).limits)
                 .sized(Sizing::Fill)
@@ -1151,17 +1159,28 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     && let Some((grid, steps)) = stepped(&window.column, &spec_of)
                 {
                     let column = &window.column;
-                    let to = if (change.rect.width() - fitted.x).abs() > 0.5 {
-                        grid.steps_within(change.rect.width())
-                    } else {
+                    // A grip on the top or bottom edge sets the steps by height, any other grip by width; keyboard Size
+                    // mode, which names no grip, by the side it changed.
+                    let by_height = match change.kind {
+                        PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
+                        _ => (change.rect.width() - fitted.x).abs() <= 0.5,
+                    };
+                    let to = if by_height {
                         let room = change.rect.height() - scene.sizes.strip;
                         grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
+                    } else {
+                        grid.steps_within(change.rect.width())
                     };
                     if to != steps {
                         self.report.actions.push(Action::set_column_steps(anchor.clone(), to));
                     }
-                    // The window keeps its place; its steps set its size.
-                    change.rect = Rect::from_min_size(change.rect.min, opening.rect.size());
+                    // The window keeps its place and its steps set its size. A grip on the left keeps the right edge
+                    // where it is, so the window grows or shrinks to the left.
+                    let left = match change.kind {
+                        PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - grid.width(to),
+                        _ => change.rect.left(),
+                    };
+                    change.rect = Rect::from_min_size(Pos2::new(left, change.rect.top()), opening.rect.size());
                 }
                 if change.phase == GesturePhase::Commit {
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });

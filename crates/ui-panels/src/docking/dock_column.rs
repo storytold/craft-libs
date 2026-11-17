@@ -30,7 +30,7 @@ mod sizing;
 
 use bar::panel_names;
 
-pub(super) use bar::{BarRecord, CHEVRON, bar_name, bar_slots, chevron_name, describe_chevron, paint_chevron, show_bar};
+pub(super) use bar::{BarRecord, CHEVRON, bar_name, bar_slots, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
 pub use sizing::{GroupSize, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
 
@@ -58,6 +58,56 @@ impl ColumnBar {
             ColumnBar::Own => sizes.bar,
             ColumnBar::Window => 0.0,
         }
+    }
+}
+
+/// What a column's double arrow does, which names it and sets where it points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColumnArrow {
+    /// Collapses the column to icons, or expands it.
+    #[default]
+    Collapse,
+    /// Switches a stepped column ([`stepped`]) between one and two steps. Holds the steps it shows.
+    Steps(u16),
+}
+
+impl ColumnArrow {
+    /// The arrow of `column`: an expanded stepped column whose panels do not collapse (`collapses` false) switches
+    /// steps; any other column collapses or expands.
+    pub fn of<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, collapses: bool) -> Self {
+        match stepped(column, spec) {
+            Some((_, steps)) if !collapses && !column.iconic => ColumnArrow::Steps(steps),
+            _ => ColumnArrow::Collapse,
+        }
+    }
+
+    /// The steps a click gives a stepped column: two from one, else one. `None` for an arrow that collapses.
+    pub fn switched_steps(self) -> Option<u16> {
+        match self {
+            ColumnArrow::Collapse => None,
+            ColumnArrow::Steps(steps) => Some(if steps == 1 { 2 } else { 1 }),
+        }
+    }
+
+    /// Whether a click sends the column towards the edge it keeps to: collapsing the `expanded` column, or narrowing a
+    /// stepped one.
+    pub(super) fn towards_edge(self, expanded: bool) -> bool {
+        match self {
+            ColumnArrow::Collapse => expanded,
+            ColumnArrow::Steps(steps) => steps > 1,
+        }
+    }
+
+    /// The arrow's name: what a click on it does to the `expanded` or collapsed column.
+    pub(super) fn name(self, words: &DockWords, expanded: bool) -> Label {
+        let word = match self {
+            ColumnArrow::Collapse if expanded => &words.collapse_column,
+            ColumnArrow::Collapse => &words.expand_column,
+            ColumnArrow::Steps(1) => &words.two_steps,
+            ColumnArrow::Steps(_) => &words.one_step,
+        };
+        Label::from(word.as_str().to_owned())
     }
 }
 
@@ -131,6 +181,9 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     /// Where the column's bar is: its own (a dock column) or its floating window's title row.
     #[prop]
     bar: ColumnBar,
+    /// What the double arrow of the column's own bar does ([`ColumnArrow::of`]).
+    #[prop]
+    arrow: ColumnArrow,
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
@@ -155,6 +208,7 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
             auto_collapse: false,
             edge: DockEdge::Start,
             bar: ColumnBar::Own,
+            arrow: ColumnArrow::Collapse,
             within: Rect::NOTHING,
             laid: None,
             resized: Vec::new(),
@@ -341,7 +395,7 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         let plan = column_plan(self.column, self.spec, rect, self.bar, &sizes, |_, _| None);
         if self.bar == ColumnBar::Own {
             let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
-            let name = chevron_name(&cx.words::<DockWords>(), true);
+            let name = self.arrow.name(&cx.words::<DockWords>(), true);
             let _ = cx.part(CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
         }
         let dividers = plan.dividers(rect, sizes.reach);
@@ -395,7 +449,7 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
         if self.bar == ColumnBar::Own {
             ui.draw().surface(plan.bar, SurfaceKind::Background, Corners::None);
-            paint_chevron(ui, self.edge, true, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), true));
+            paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());
         }
     }
 
@@ -428,7 +482,7 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         if self.bar == ColumnBar::Own {
             let edge = self.edge_divider(cx.rect, &sizes);
             divider::describe(access, EDGE, 0, &edge, words.resize.as_str(), sizes.step);
-            describe_chevron(access, &chevron_name(&words, true));
+            describe_chevron(access, &self.arrow.name(&words, true));
         }
     }
 

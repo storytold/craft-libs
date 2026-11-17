@@ -56,7 +56,7 @@ mod flyout;
 mod iconic;
 
 pub use dock_column::{
-    ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, fit_widths, group_heights, scale_widths, stacked, stepped,
+    ColumnArrow, ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, fit_widths, group_heights, scale_widths, stacked, stepped,
     width_bounds,
 };
 pub use flyout::{Flyout, FlyoutOutput, FlyoutShown, FlyoutStyle, GroupAt};
