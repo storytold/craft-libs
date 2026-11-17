@@ -806,9 +806,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             if !enabled || !allowed {
                 if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
                     eprintln!(
-                        "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: refused root {root:?} enabled {enabled} takes {} targets {targets:?} click mine {} root rect {:?} winner {:?} layer top {:?} own layer {layer:?}",
-                        takes(false),
-                        mine(targets.click),
+                        "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: refused root {root:?} enabled {enabled} untargeted {untargeted} targets {targets:?} root rect {:?} winner {:?} layer top {:?} own layer {layer:?}",
                         state.root.map(|own| own.rect),
                         pointer::press_winner(ctx, at, targets).map(|(winner, root)| (winner.owner, winner.part, root)),
                         areas::layer_at(ctx, at),
