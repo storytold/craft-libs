@@ -96,6 +96,10 @@ fn a_multi_view_part_lists_its_views_default_first() {
     assert_eq!(listed[0].view, None);
     // The decoded part carries the same header facts.
     assert_eq!(decode_part(&bytes, 0, &all, &Limits::default()).unwrap().info.multi_view, ["left", "right"]);
+    // The declared order, not a sorted one: the right view may be the default.
+    let mut right_first = layer(None, 3, 2, &["B", "G", "R", "left.B", "left.G", "left.R"], false, exr::prelude::Compression::ZIP1);
+    right_first.attributes.multi_view_names = Some(vec![Text::from("right"), Text::from("left")]);
+    assert_eq!(parts(&file(vec![right_first], (3, 2)), &Limits::default()).unwrap()[0].multi_view, ["right", "left"]);
 
     // Parts that each name their own view, and a plain file, have no `multiView`.
     let mut left = layer(Some("beauty.left"), 3, 2, &["R"], false, exr::prelude::Compression::ZIP1);
