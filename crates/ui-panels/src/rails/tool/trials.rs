@@ -5,6 +5,7 @@ use super::stories::tools;
 use super::{LastUsed, ToolRail, ToolSlot};
 use crate::buttons::Button;
 use crate::contract::Show as _;
+use crate::contract::Props as _;
 use crate::testing::pointer::{moved, wheel};
 use crate::testing::relations::{above, grows_with};
 use crate::testing::{Fixture, trial};

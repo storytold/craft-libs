@@ -182,7 +182,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// draws from.
     fn prepare(&mut self, ctx: &egui::Context, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Draw<'a, T> {
         self.columns = usize::from(Self::dock_grid(ctx, self.cells()).steps_within(width));
-        self.props = self.props.roving(Roving::new(NavShape::wrapped_grid(self.columns)));
+        self.props = std::mem::take(&mut self.props).roving(Roving::new(NavShape::wrapped_grid(self.columns)));
         self.footer = Some(Box::new(footer));
         Draw {
             slots: self.slots,
