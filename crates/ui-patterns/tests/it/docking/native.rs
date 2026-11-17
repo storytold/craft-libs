@@ -570,6 +570,40 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
     assert!(max.is_none_or(|max| max.x >= expanded.x && max.y >= expanded.y), "the OS lets it take that size: max {max:?}");
 }
 
+/// On a display at 125 % (Windows), a click on the double arrow of a native palette collapsed to icons expands its
+/// column, and the OS window takes its expanded size.
+#[trial]
+fn a_click_on_the_double_arrow_of_a_collapsed_native_palette_expands_it() {
+    const SCALE: f32 = 1.25;
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    dock.windows.root_info(scaled(true, MAIN_AT, SCALE));
+    let mut at = FLOAT_AT;
+    // The OS follows the window commands of each frame, and the window reports where it is.
+    let frame = |dock: &mut NativeDock, at: &mut Rect, events: Vec<Event>| {
+        let (actions, commands) = dock.frame(events);
+        *at = placed_by(&commands, *at);
+        dock.windows.child_info(scaled(true, *at, SCALE));
+        actions
+    };
+    frame(&mut dock, &mut at, vec![]);
+    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    for _ in 0..3 {
+        frame(&mut dock, &mut at, vec![]);
+    }
+    assert!(dock.workspace.layout.floating[0].column.iconic, "the column is collapsed");
+    assert!(at.width() < FLOAT_AT.width(), "the OS window shows the strip: {at:?}");
+
+    // The double arrow is the title row's square at the end the strip keeps to: a point just inside its outer corner.
+    let end = at.max.x >= FLOAT_AT.max.x - 1.0 && at.min.x > FLOAT_AT.min.x + 1.0;
+    let arrow = Pos2::new(if end { at.width() - 4.0 } else { 4.0 }, 4.0);
+    let mut actions = Vec::new();
+    for events in [vec![moved(arrow)], vec![press(arrow)], vec![release(arrow)], vec![], vec![]] {
+        actions.extend(frame(&mut dock, &mut at, events));
+    }
+    assert!(!dock.workspace.layout.floating[0].column.iconic, "the click expands the column: {actions:?}");
+    assert_eq!(at.size(), FLOAT_AT.size(), "the OS window takes its expanded size");
+}
+
 /// Palettes no smaller than `PALETTE_LEAST`.
 struct Least;
 
@@ -711,11 +745,16 @@ fn float() -> Floating<u32> {
 }
 
 fn info(focused: bool, rect: Rect) -> ViewportInfo {
+    scaled(focused, rect, 1.0)
+}
+
+/// The facts of a window at `rect` on a display of `pixels_per_point`.
+fn scaled(focused: bool, rect: Rect, pixels_per_point: f32) -> ViewportInfo {
     ViewportInfo {
         focused: Some(focused),
         inner_rect: Some(rect),
         outer_rect: Some(rect),
-        native_pixels_per_point: Some(1.0),
+        native_pixels_per_point: Some(pixels_per_point),
         ..ViewportInfo::default()
     }
 }
