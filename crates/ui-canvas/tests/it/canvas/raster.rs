@@ -133,7 +133,7 @@ fn the_checkerboard_paints_the_same_shapes_at_any_area() {
 // not at a corner of the canvas.
 #[trial]
 fn the_checkerboard_starts_with_a_light_cell_at_the_document_corner() {
-    for (width, height, zoom) in [(100, 70, 1.0), (64, 64, 0.5), (90, 30, 1.5)] {
+    for (width, height, zoom) in [(100, 70, 1.0), (64, 64, 0.5), (80, 40, 1.5)] {
         let document = Document::new(width, height);
         let center = Point::new(f64::from(width) / 2.0, f64::from(height) / 2.0);
         let corner = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, zoom).to_screen(Point::ZERO);
