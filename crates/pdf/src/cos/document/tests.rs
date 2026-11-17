@@ -3061,3 +3061,68 @@ fn a_comment_that_only_mentions_eof_is_no_footer() {
         assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{footer:?}: {:?}", doc.repair_log());
     }
 }
+
+/// A `startxref` before the tail counts only as a token of its own outside a comment, as the
+/// lexer reads the file. A comment in the trailing data that spells out a whole footer with an
+/// older offset, or a longer word that ends in the keyword, would otherwise read that older
+/// table and drop the newest revision without a note.
+#[test]
+fn a_footer_spelled_out_in_a_comment_before_the_tail_is_passed_over() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let older = base.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let older = std::str::from_utf8(&base[older + 9..]).unwrap().split_whitespace().next().unwrap().to_string();
+    let mut edited = Document::open(Arc::new(base)).unwrap();
+    edited.update_dict(ObjRef::new(1, 0), |dict| dict.set(b"Lang".to_vec(), Object::String(crate::cos::PdfString::literal("en")))).unwrap();
+    let saved = crate::cos::write_incremental(&edited, &crate::cos::SaveOptions::default()).unwrap();
+    for keyword in ["% startxref", "%startxref", "% the old startxref", "nostartxref"] {
+        let mut bytes = saved.clone();
+        bytes.extend_from_slice(format!("\n{keyword} {older}\n%%EOF\n").as_bytes());
+        bytes.extend(std::iter::repeat_n(b' ', 5000));
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert!(doc.repair_log().is_empty(), "{keyword:?}: {:?}", doc.repair_log());
+        assert_eq!(doc.revisions().len(), 2, "{keyword:?}");
+        let lang = doc.get(ObjRef::new(1, 0));
+        assert!(matches!(lang.as_dict().and_then(|d| d.get(b"Lang")), Some(Object::String(_))), "{keyword:?}: the newer revision is kept");
+        assert_compact_matches_materialized(&doc);
+    }
+}
+
+/// The readers take the offset as the lexer reads an integer, so `+123` is one. A footer written
+/// that way before the tail is a whole footer too. Passed over, the footer before it would be
+/// read, and with a revision that only frees an object (nothing follows the older footer but a
+/// table) the freed object would come back.
+#[test]
+fn a_footer_offset_with_a_plus_sign_before_the_tail_is_still_read() {
+    let mut bytes = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let older = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let older = std::str::from_utf8(&bytes[older + 9..]).unwrap().split_whitespace().next().unwrap().to_string();
+    bytes.push(b'\n');
+    let table = bytes.len();
+    bytes.extend_from_slice(format!("xref\n3 1\n0000000000 00001 f \ntrailer\n<< /Size 4 /Root 1 0 R /Prev {older} >>\n").as_bytes());
+    bytes.extend_from_slice(format!("startxref\n+{table}\n%%EOF\n").as_bytes());
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+    assert_eq!(doc.revisions().len(), 2);
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::Null), "the freed object stays free: {:?}", doc.get(ObjRef::new(3, 0)));
+    assert_compact_matches_materialized(&doc);
+}
+
+/// A comment inside a footer is skipped by the lexer whatever it says, so one that mentions an
+/// object header is not an object after the footer, and the file's own table is read. A real
+/// object between the keyword and `%%EOF` is not a comment, and still rebuilds the table
+/// (`an_object_between_the_last_startxref_and_its_eof_still_rebuilds_the_table`).
+#[test]
+fn a_comment_in_a_footer_that_mentions_an_object_is_no_object() {
+    let mut bytes = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let keyword = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let offset = std::str::from_utf8(&bytes[keyword + 9..]).unwrap().split_whitespace().next().unwrap().to_string();
+    bytes.truncate(keyword);
+    bytes.extend_from_slice(format!("startxref\n{offset} % example: 7 0 obj\n%%EOF\n").as_bytes());
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+    assert_eq!(doc.revisions().len(), 1);
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
+    assert_compact_matches_materialized(&doc);
+}

@@ -921,9 +921,9 @@ const STARTXREF_CANDIDATES: usize = 64;
 /// backwards, so its own cross-reference data is read rather than rebuilt from object headers.
 /// The trailing bytes stay in the file (an incremental save appends after them). Out there:
 ///
-/// - A keyword counts only as a whole footer, with its offset and `%%EOF` after it. Text in the
-///   trailing data that mentions `startxref`, with or without a number, is passed over, up to
-///   `STARTXREF_CANDIDATES` keywords.
+/// - A keyword counts only as a whole footer, with its offset and `%%EOF` after it, and only as
+///   a token of its own outside a comment. Text in the trailing data that mentions `startxref`,
+///   with or without a number, is passed over, up to `STARTXREF_CANDIDATES` keywords.
 /// - The last whole footer decides, and its offset must be where a cross-reference section
 ///   starts (`xref` or the `N G obj` of a cross-reference stream), read from the start of the
 ///   file or from a header `header_offset` bytes in. A footer that the trailing data brought
@@ -948,25 +948,27 @@ pub(super) fn find_startxref(data: &[u8], header_offset: usize) -> Result<usize,
     for _ in 0..STARTXREF_CANDIDATES {
         let Some(sx) = rfind(data.get(..end).unwrap_or(&[]), KEYWORD, 0) else { break };
         last.get_or_insert(sx);
-        if let Some(offset) = footer_offset(data, sx) {
-            footer = Some((sx, offset));
+        if let Some((offset, eof)) = footer_offset(data, sx) {
+            footer = Some((sx, offset, eof));
             break;
         }
         end = sx;
     }
     let last = last.ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
-    let sx = footer.map_or(last, |(sx, _)| sx);
+    let sx = footer.map_or(last, |(sx, ..)| sx);
     let before_end = data.len().saturating_sub(sx);
-    // Scan from the end of the keyword, not from its `%%EOF`, so an object between the two is
-    // seen too. The offset digits and the marker that follow are no object header.
-    let after = sx.saturating_add(KEYWORD.len());
+    // A whole footer holds only its offset, whitespace and comments up to its `%%EOF`, and a
+    // comment is no object whatever it mentions, so the scan starts at that marker. Without a
+    // whole footer it starts at the end of the keyword, so an object between the keyword and
+    // an `%%EOF` is seen too.
+    let after = footer.map_or(sx.saturating_add(KEYWORD.len()), |(.., eof)| eof);
     if !object_headers(data.get(after..).unwrap_or(&[])).is_empty() {
         return Err(CosError::Syntax {
             offset: sx,
             detail: format!("startxref is {before_end} bytes before the end of the file and objects follow it"),
         });
     }
-    let Some((sx, offset)) = footer else {
+    let Some((sx, offset, _)) = footer else {
         return Err(CosError::Syntax {
             offset: sx,
             detail: format!("startxref is {before_end} bytes before the end of the file and no offset and %%EOF follow it"),
@@ -988,8 +990,14 @@ pub(super) fn find_startxref(data: &[u8], header_offset: usize) -> Result<usize,
 /// The offset a whole footer at `sx` gives, if one starts there: the `startxref` keyword, an
 /// offset and `%%EOF`. Whitespace and comments may stand between them, as they may for
 /// `Lexer::skip_ws`, which reads the offset. It can't find the end of the gap here because it
-/// would skip `%%EOF` as a comment too. The inner `None` is an offset too large to be a position.
-fn footer_offset(data: &[u8], sx: usize) -> Option<Option<usize>> {
+/// would skip `%%EOF` as a comment too. The offset may have the `+` the lexer accepts on an
+/// integer. The keyword must be a token of its own outside a comment (`footer_keyword_at`).
+///
+/// Returns the offset, `None` for one too large to be a position, and where `%%EOF` starts.
+fn footer_offset(data: &[u8], sx: usize) -> Option<(Option<usize>, usize)> {
+    if !footer_keyword_at(data, sx) {
+        return None;
+    }
     let gap = |mut i: usize| loop {
         while data.get(i).is_some_and(|&b| is_whitespace(b)) {
             i = i.saturating_add(1);
@@ -1001,13 +1009,31 @@ fn footer_offset(data: &[u8], sx: usize) -> Option<Option<usize>> {
         i = i.saturating_add(rest.iter().position(|&b| b == b'\n' || b == b'\r').unwrap_or(rest.len()));
     };
     let start = gap(sx.saturating_add(b"startxref".len()));
+    let start = start.saturating_add(usize::from(data.get(start) == Some(&b'+')));
     let count = data.get(start..).unwrap_or(&[]).iter().take_while(|b| b.is_ascii_digit()).count();
     let digits = data.get(start..start.saturating_add(count)).filter(|digits| !digits.is_empty())?;
     let eof = gap(start.saturating_add(count));
     if !data.get(eof..).is_some_and(|rest| rest.starts_with(b"%%EOF")) {
         return None;
     }
-    Some(std::str::from_utf8(digits).ok().and_then(|digits| digits.parse().ok()))
+    Some((std::str::from_utf8(digits).ok().and_then(|digits| digits.parse().ok()), eof))
+}
+
+/// How far back a line is read to see whether a `startxref` stands in a comment. A footer has
+/// the keyword at the start of a line; a longer line than this is taken as no comment.
+const COMMENT_LOOKBACK: usize = 1024;
+
+/// Whether the `startxref` at `sx` is one the lexer would read as that keyword: a token of its
+/// own (not the end of a longer word) with no `%` before it on its line, which would make it
+/// comment text. Trailing data can spell out a whole footer in a comment, with the offset of a
+/// superseded table.
+fn footer_keyword_at(data: &[u8], sx: usize) -> bool {
+    let before = data.get(sx.saturating_sub(COMMENT_LOOKBACK)..sx).unwrap_or(&[]);
+    if before.last().is_some_and(|&b| !is_whitespace(b) && !crate::cos::parser::is_delimiter(b)) {
+        return false;
+    }
+    let line = before.iter().rposition(|&b| b == b'\n' || b == b'\r').map_or(before, |end| before.get(end.saturating_add(1)..).unwrap_or(&[]));
+    !line.contains(&b'%')
 }
 
 /// Whether a cross-reference section could start at `off`: the `xref` keyword of a table, or the
