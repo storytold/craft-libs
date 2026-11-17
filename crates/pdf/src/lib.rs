@@ -25,6 +25,8 @@ pub use read::*;
 pub mod paths;
 #[cfg(feature = "raster")]
 pub mod raster;
+#[cfg(all(feature = "cos", any(test, feature = "test-support")))]
+pub mod testing;
 #[cfg(feature = "write")]
 pub mod write;
 #[cfg(feature = "write-raster")]

@@ -16,6 +16,7 @@ No feature is enabled by default.
 | `filters` | The `/Filter` chain for editing and writing PDF files: decode and encode, with limits and accounting. No reader or writer dependency |
 | `crypt` | The standard security handler: decrypt, encrypt and create encryption. No reader or writer dependency |
 | `cos` | `crypt` and `filters` plus the object layer: open, edit and save PDF files (incremental and full saves). No reader or writer dependency |
+| `test-support` | `cos` plus `testing::Pdf`, a builder of small synthetic PDF files for tests |
 | `content` | `cos` plus `cos::content`: parse content streams into operators with source spans, write them back, and the matrix arithmetic. Uses hayro-syntax's tokenizer for inline images |
 
 ## Reading and rendering
@@ -164,8 +165,9 @@ The code comes from PdfCraft's `pdfcraft-cos` crate (revision
 comments. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
 `pdfcraft-testkit`) and `tests/cos/oracle.rs` (qpdf runs, from `pdfcraft-oracle`; a missing
 `qpdf` skips those tests, or fails them when `CRAFT_PDF_ORACLES_REQUIRED` is set). Tests:
-`cargo test -p craft-pdf --no-default-features --features cos`. Examples: `cos_info` and
-`cos_protect` (`--features cos`).
+`cargo test -p craft-pdf --no-default-features --features cos`. Other crates' tests use the
+builder as `craft_pdf::testing::Pdf` by enabling `test-support` in their dev-dependency on
+`craft-pdf`. Examples: `cos_info` and `cos_protect` (`--features cos`).
 
 ## Stream filters
 
