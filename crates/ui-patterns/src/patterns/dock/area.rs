@@ -988,8 +988,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         } else {
             grid.steps_within(change.rect.width())
         };
-        // DIAG FW-280
-        eprintln!("DIAG FW-280 stepped_resize: change={change:?} fitted={fitted:?} steps={steps} to={to}");
         if to != steps {
             self.report.actions.push(Action::set_column_steps(first.clone(), to));
         }
@@ -1241,10 +1239,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
-            }
-            // DIAG FW-280
-            if output.placed.is_some() {
-                eprintln!("DIAG FW-280 windows: placed={:?} fitted={:?} native={}", output.placed, shape.fitted, opening.spec.is_some());
             }
             // A resize of a window whose column has steps: the steps it sets, and the window's rect at them.
             let resized = output
