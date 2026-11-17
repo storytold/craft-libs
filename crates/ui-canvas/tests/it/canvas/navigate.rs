@@ -761,15 +761,27 @@ fn zoom_all_windows_sits_between_resize_and_scrubby_and_only_edits_its_app_bindi
     let scrubby = fixture.by_label("Scrubby Zoom").expect("Scrubby checkbox");
     assert_eq!(fixture.by_role(Role::CHECK_BOX).len(), 3);
     assert!(resize.rect.right() <= all.rect.left() && all.rect.right() <= scrubby.rect.left(), "the extra checkbox is between the existing ones");
-    assert!(resize.rect.top() <= all.rect.bottom() && all.rect.top() <= resize.rect.bottom()
-        && all.rect.top() <= scrubby.rect.bottom() && scrubby.rect.top() <= all.rect.bottom(), "all three controls stay on the same row");
+    assert!(
+        resize.rect.top() <= all.rect.bottom()
+            && all.rect.top() <= resize.rect.bottom()
+            && all.rect.top() <= scrubby.rect.bottom()
+            && scrubby.rect.top() <= all.rect.bottom(),
+        "all three controls stay on the same row"
+    );
     let room = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1400.0, 180.0));
-    assert!([resize.rect, all.rect, scrubby.rect].into_iter().all(|rect| room.contains_rect(rect)), "all three complete controls fit inside the fixture's room");
+    assert!(
+        [resize.rect, all.rect, scrubby.rect].into_iter().all(|rect| room.contains_rect(rect)),
+        "all three complete controls fit inside the fixture's room"
+    );
     assert_eq!(fixture.tree().toggled_of(all.node), Some(craft_behavior::Mixed::Same(false)));
     fixture.click(&all).settle();
     let all = fixture.by_label("Zoom All Windows").expect("the option remains after its click");
     assert_eq!(fixture.tree().toggled_of(all.node), Some(craft_behavior::Mixed::Same(true)));
-    assert_eq!(*state.borrow(), ZoomBarState { all_windows: true, ..before }, "only the app's bound setting changes, not its view or navigation choices");
+    assert_eq!(
+        *state.borrow(),
+        ZoomBarState { all_windows: true, ..before },
+        "only the app's bound setting changes, not its view or navigation choices"
+    );
     fixture.click(&all).settle();
     assert_eq!(*state.borrow(), before, "a second click restores exactly the original app state");
 }
@@ -781,6 +793,9 @@ fn zoom_all_windows_shows_its_explanation_after_the_real_hover_delay() {
     let all = fixture.by_label("Zoom All Windows").expect("the app opted in");
     fixture.frame(vec![pointer::moved(all.center())]);
     fixture.advance(craft_ui::contract::tooltip::DELAY).settle();
-    assert!(fixture.texts().iter().any(|run| run.text == "Zoom all open document windows when using the Zoom Tool"), "the hovered checkbox paints the exact explanation");
+    assert!(
+        fixture.texts().iter().any(|run| run.text == "Zoom all open document windows when using the Zoom Tool"),
+        "the hovered checkbox paints the exact explanation"
+    );
     assert_eq!(*state.borrow(), before, "hovering changes no app setting or view");
 }

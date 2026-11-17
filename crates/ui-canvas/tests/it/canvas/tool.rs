@@ -1649,7 +1649,6 @@ fn the_picture_of_a_pass_shows_that_passes_press_and_moves() {
     }
 }
 
-
 /// The real Zoom tool behind a host: keep its returned view and every discrete step receipt across frames.
 struct ZoomReceiptRig {
     fixture: Fixture,
@@ -1732,7 +1731,11 @@ fn a_selected_zoom_click_reports_its_resolved_direction_once_only_when_it_change
                 assert!(rig.steps.borrow().is_empty(), "a press alone is no discrete step");
                 rig.fixture.frame(vec![pointer::release(at)]).idle(30);
                 let resolved_out = out != alt;
-                assert_eq!(&*rig.steps.borrow(), &[resolved_out], "one receipt, with the tool's actual Alt-resolved direction; Shift leaves it unchanged");
+                assert_eq!(
+                    &*rig.steps.borrow(),
+                    &[resolved_out],
+                    "one receipt, with the tool's actual Alt-resolved direction; Shift leaves it unchanged"
+                );
                 assert_ne!(rig.zoom(), before, "the source really zoomed");
                 assert_eq!(rig.zoom() < before, resolved_out, "the receipt agrees with the changed source view");
             }
@@ -1835,7 +1838,11 @@ fn wheel_and_fit_commands_change_the_view_without_selected_zoom_step_receipts() 
     assert_ne!(rig.zoom(), before, "the real canvas wheel route zoomed");
     assert!(rig.steps.borrow().is_empty(), "wheel zoom is no selected-tool click");
     let before = rig.zoom();
-    assert!(craft_ui::runtime::commands::fire(rig.fixture.ctx(), craft_ui::canvas::ViewCommands::FitOnScreen, craft_ui::runtime::commands::FireSource::Menu));
+    assert!(craft_ui::runtime::commands::fire(
+        rig.fixture.ctx(),
+        craft_ui::canvas::ViewCommands::FitOnScreen,
+        craft_ui::runtime::commands::FireSource::Menu
+    ));
     rig.fixture.frame(vec![]).idle(3);
     assert_ne!(rig.zoom(), before, "the real canvas Fit on Screen command ran");
     assert!(rig.steps.borrow().is_empty(), "a canvas command is no selected-tool click");

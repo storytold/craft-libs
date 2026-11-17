@@ -37,9 +37,19 @@ impl Outcome for NavigateBarOutput {
 /// The members of one tool's bar.
 #[allow(clippy::large_enum_variant, reason = "built once per frame and matched at once; boxing the Zoom variant would allocate every frame")]
 enum Members<'a> {
-    Zoom { view: Bind<'a, CanvasView>, target: ViewTarget, options: &'a mut NavigationOptions, out: Bind<'a, bool>, all_windows: Option<Bind<'a, bool>> },
-    RotateView { view: Bind<'a, CanvasView> },
-    Hand { options: &'a mut NavigationOptions },
+    Zoom {
+        view: Bind<'a, CanvasView>,
+        target: ViewTarget,
+        options: &'a mut NavigationOptions,
+        out: Bind<'a, bool>,
+        all_windows: Option<Bind<'a, bool>>,
+    },
+    RotateView {
+        view: Bind<'a, CanvasView>,
+    },
+    Hand {
+        options: &'a mut NavigationOptions,
+    },
 }
 
 /// The options of a navigation tool (Zoom, Rotate View, Hand), shown as children of the app's options bar, as in
@@ -114,10 +124,7 @@ impl<'a> NavigateBar<'a> {
                 Divider::vertical().show(ui);
                 Checkbox::new(Bind::bound(&mut options.zoom_resizes_windows)).label(words.navigate_resize_windows.clone()).show(ui);
                 if let Some(value) = all_windows {
-                    Checkbox::new(value)
-                        .label(words.navigate_zoom_all.clone())
-                        .tooltip(words.navigate_zoom_all_tip.clone())
-                        .show(ui);
+                    Checkbox::new(value).label(words.navigate_zoom_all.clone()).tooltip(words.navigate_zoom_all_tip.clone()).show(ui);
                 }
                 Checkbox::new(Bind::bound(&mut options.scrubby_zoom)).label(words.navigate_scrubby_zoom.clone()).show(ui);
                 Divider::vertical().show(ui);
