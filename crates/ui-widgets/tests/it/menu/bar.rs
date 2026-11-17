@@ -95,8 +95,8 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
 }
 
 /// The pass a pointer move over a menu's rows runs paints the row under the pointer as the active row and no other,
-/// moving down or up, at 1x and at a fractional scale. egui runs one more frame after any frame with input; that frame
-/// changes nothing and asks for none.
+/// moving down or up, at 1x and at a fractional scale. The two frames egui runs after any frame with input change
+/// nothing, and then the menu asks for none.
 #[trial]
 fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
     use craft_behavior::MotionMode;
@@ -136,9 +136,12 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
             fixture.frame(vec![pointer::moved(*center)]);
             let active: Vec<String> = lit.borrow().iter().filter(|(_, on)| **on).map(|(row, _)| row.clone()).collect();
             assert_eq!(active, vec![name.clone()], "at {scale}x the move frame onto {name} lights it and no other row");
-            lit.borrow_mut().clear();
-            fixture.frame(Vec::new());
-            assert_eq!(lit.borrow().get(name), Some(&true), "at {scale}x {name} stays lit with the pointer at rest");
+            // egui repaints twice for a frame with input; the menu asks for nothing beyond that.
+            for _ in 0..2 {
+                lit.borrow_mut().clear();
+                fixture.frame(Vec::new());
+                assert_eq!(lit.borrow().get(name), Some(&true), "at {scale}x {name} stays lit with the pointer at rest");
+            }
             assert!(!fixture.repaint_requested(), "at {scale}x a pointer at rest on {name} asks for no frame");
         }
     }
