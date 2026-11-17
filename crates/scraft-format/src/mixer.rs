@@ -1,6 +1,6 @@
 //! Per-track mixer state: inserts, sends, routing, fader, pan, mute/solo.
 
-use crate::{AutomationMode, BusId, SourceId};
+use crate::{AutomationMode, BusId, SourceId, TrackId};
 use std::collections::BTreeMap;
 
 pub const INSERT_SLOTS: usize = 10;
@@ -418,6 +418,15 @@ pub enum Route {
     Bus(BusId),
     /// Hardware input/output by path name.
     Hardware(String),
+    /// An instrument's auxiliary output bus, picked as another track's input so a
+    /// multi-out instrument's extra outs can land on their own tracks: `track` holds
+    /// the instrument and `bus` is its output bus (0 is the main output the hosting
+    /// track's own channel already carries). Input-side only: it is not a valid
+    /// output or send target.
+    Instrument {
+        track: TrackId,
+        bus: u8,
+    },
 }
 
 /// A plugin instance on an insert slot.
@@ -662,6 +671,15 @@ mod tests {
         }
         assert_eq!(fader_pos_to_db(0.0), -144.0);
         assert_eq!(fader_db_to_pos(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn plugin_output_route_round_trips() {
+        let r = Route::Instrument { track: TrackId(42), bus: 7 };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(serde_json::from_str::<Route>(&json).unwrap(), r);
+        // Routes saved before multi-out routing still load.
+        assert_eq!(serde_json::from_str::<Route>(r#"{"Hardware":"in 1-2"}"#).unwrap(), Route::Hardware("in 1-2".to_string()));
     }
 
     #[test]
