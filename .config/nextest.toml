@@ -13,19 +13,12 @@ nextest-version = "0.9.150"
 # process per test those mutexes no longer serialize anything, so these groups do it instead, one
 # test at a time, as under `cargo test`.
 [test-groups]
-# craft-ui: `gpu_test_lock()` / `gpu_lock()`. Each renderer creates its own wgpu instance and
-# device, and creating or destroying one while another test uses its device can crash.
-gpu = { max-threads = 1 }
 # craft-video h264_decode: `FIXTURE_GENERATION` keeps a second producer from replacing a fixture
 # file another test is reading.
 video-fixtures = { max-threads = 1 }
 # craft-print: `PRINT_TICKET_PROVIDER` serializes the Windows PrintTicket provider, and the tests
 # share the one test print queue the gate installs.
 print = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = 'package(craft-ui) & (binary(visual_regression) | test(/^combo::tests::|selected_tab_erases_a_baseline_centered_on_its_bottom_edge/))'
-test-group = 'gpu'
 
 [[profile.default.overrides]]
 filter = 'package(craft-video) & binary(h264_decode)'
