@@ -104,6 +104,10 @@ and the exact transfer revision are recorded in each vendored crate's SOURCE.jso
 `crates/tga/src/metadata_tests.rs` and metadata-boundary helpers in `crates/tga/src/lib.rs` are adapted from nuclearspike's FilmCraft #1932 at `e7842f76f887005c460c64a8ab51d59d086e6f27` (MIT OR Apache-2.0). Synthetic fixtures are original contributor test data; primary Git author retained.
 The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper are ported from Craft Anything `8f3b775157d331dd31cfa4da911e26d8856b8c77` (same MIT OR Apache-2.0 source licenses). Brandon Thomas is the primary import author; retained hardening credits include Afloat, BFlat, Rahul, RRFZ and NetterSilver. The finite-real fix preserves gmrmad1 as author from Craft Anything #1905 (`d85e104f`); quoted-attribute/line-ending regressions preserve RRFZ. Bounds/adaptation and bounded entity scanning are subsequent Dylan M. Taylor changes. App-specific JSON projections and keyed-archive interpretation remain outside this crate.
 
+## Score serializers
+
+`crates/score` extracts SoundCraft MusicXML and SVG score writing from `crates/engine/src/score.rs` at main `648ed9db9a0e98cc55643babffac381521a556c8`, with per-pitch ties adapted from [SoundCraft #182](https://github.com/storytold/soundcraft/pull/182) at `21cb618d93ec0e8d4771ac534994de8d5996ff10`. Source is MIT OR Apache-2.0. Import commits preserve Brandon Thomas, NetterSilver, Samuel Bacaro and Vikram Bhaskaran as primary authors of their respective changes. The consumer retains session mapping and layout. Shared API wiring, validation and focused tests are subsequent Dylan M. Taylor changes.
+
 ## Source-timed MIDI compatibility
 
 `crates/midi/src/source_timed.rs` is extracted from LoopCraft `crates/midi/src/lib.rs` at `884e67c24b9b68badf6a4a4f7d62492f3673d354` (MIT OR Apache-2.0). The recorded source history for the extracted file is Dylan M. Taylor (`0d150c1f`, `440bc7ed`, `9e50523d`); Git authorship is preserved. It includes the original hostile-file, SMPTE, timing and round-trip tests. UTF-8 truncation and event-budget suffix repairs are subsequent changes. The module is an application-independent source-timed model; it does not depend on LoopCraft.
@@ -118,3 +122,17 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 ## GIMP palette reader
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.
+
+## Aligned stored ZIP entries
+
+The USDZ alignment requirement and compatibility fixture for `Writer::add_stored_aligned` come from TextureCraft `crates/formats/src/mesh_export/usd.rs`, introduced by bflatastic in `bdbb52c9` and maintained through `9eb20086` (MIT OR Apache-2.0). The shared API and alignment validation are subsequent Dylan M. Taylor work. Scene/material mapping remains in TextureCraft.
+The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
+AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
+Sanitization, animation fitting and numeric output policy remain caller-owned.
+## Screen Video key frames
+
+`crates/video/src/screen_video.rs` extracts AniCraft `crates/xfl/src/video.rs` codec-3 decoding and its synthetic partial-block fixture, introduced by Tanish Manku in `1f3e603b7ff53a3da364e41ec4da8d43dc83aab0` with pixel-loop cleanup `2b7571363b4b647266df758f95b6e397021cfd4d` (MIT OR Apache-2.0). Import commits preserve Tanish as primary author. Caller-owned bounds and neutral RGBA output separate codec work from the consuming app's FLV first-frame/report policy. Boundary tests and integration are subsequent Dylan M. Taylor changes.
+
+## JSONC span-preserving editing
+
+`crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.

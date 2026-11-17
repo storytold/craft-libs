@@ -2277,6 +2277,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-jsonc"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-jsonrpc"
 version = "0.1.0"
 dependencies = [
@@ -2948,6 +2955,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-score"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+]
+
+[[package]]
 name = "craft-scraft-format"
 version = "0.1.0"
 dependencies = [
@@ -3290,6 +3304,7 @@ dependencies = [
  "craft-jpeg",
  "craft-media",
  "craft-media-testkit",
+ "miniz_oxide 0.8.9",
  "rav1e",
  "rayon",
  "thiserror 2.0.21",

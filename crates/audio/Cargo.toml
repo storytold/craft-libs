@@ -45,6 +45,8 @@ opus-decode = []
 qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
 qoa-encode = []
+# ITU-T G.722 wideband sub-band ADPCM speech codec (64 kbit/s).
+g722 = []
 opus-encode = []
 # GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
 gsm = ["gsm-decode", "gsm-encode"]
@@ -62,6 +64,9 @@ ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
 mp3-encode = ["craft-media/bitstream"]
+# MPEG-1/2 Layer II (MP2) encoder (`mpa::encoder`). It shares the polyphase analysis filter of the
+# MP3 encoder and the tables of the MP1/MP2 decoder.
+mpa-encode = ["mpa-decode", "mp3-encode"]
 # Bluetooth Low Complexity Subband Coding (SBC) audio codec (`sbc`).
 sbc = []
 # Multi-resolution waveform overviews (`peaks`).
@@ -95,6 +100,10 @@ name = "codecs"
 required-features = ["decode", "encode"]
 
 [[test]]
+name = "mp2_encoder_oracle"
+required-features = ["mpa-encode"]
+
+[[test]]
 name = "flac_decode"
 required-features = ["flac-decode", "flac-encode"]
 
@@ -105,6 +114,10 @@ required-features = ["gsm"]
 [[test]]
 name = "qoa_oracle"
 required-features = ["qoa"]
+
+[[test]]
+name = "g722_oracle"
+required-features = ["g722"]
 
 [[test]]
 name = "sbc_oracle"
