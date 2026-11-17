@@ -402,12 +402,12 @@ impl TempoMap {
             let within = rel % tpb;
             let beat_t = m.ticks_per_beat();
             return BarBeat {
-                bar: bar.saturating_add(bars).saturating_add(self.first_bar.saturating_sub(1)),
+                bar: bar.saturating_add(bars).saturating_sub(1).saturating_add(self.first_bar),
                 beat: within / beat_t + 1,
                 tick: within % beat_t,
             };
         }
-        BarBeat { bar: bar.saturating_add(self.first_bar.saturating_sub(1)), beat: 1, tick: 0 }
+        BarBeat { bar: bar.saturating_sub(1).saturating_add(self.first_bar), beat: 1, tick: 0 }
     }
 
     /// Bar|beat|tick → tick.
@@ -556,6 +556,19 @@ mod tests {
         let old = serde_json::json!({"tempos": [{"tick": 0, "bpm": 120.0}], "meters": [{"tick": 0, "numerator": 4, "denominator": 4}]});
         let back: TempoMap = serde_json::from_value(old).unwrap();
         assert_eq!(back.first_bar(), 1);
+    }
+
+    #[test]
+    fn renumber_bars_saturates_at_extreme_first_bar() {
+        // An absurd renumber must not lose the -1 offset inside a saturating chain:
+        // displayed = physical - 1 + first_bar, so tick 0 (physical bar 1) shows first_bar.
+        let mut m = TempoMap::default();
+        m.set_first_bar(i64::MIN);
+        assert_eq!(m.bar_beat_at_tick(0).bar, i64::MIN);
+        // And the inverse lands bar i64::MIN back at tick 0.
+        assert_eq!(m.tick_at_bar_beat(BarBeat { bar: i64::MIN, beat: 1, tick: 0 }), 0);
+        m.set_first_bar(i64::MAX);
+        assert_eq!(m.bar_beat_at_tick(0).bar, i64::MAX);
     }
 
     #[test]
