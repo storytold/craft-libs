@@ -136,7 +136,11 @@ let bytes = write_full(&doc, &SaveOptions::default())?;        // rewrite what t
 
 With `content`, `cos::content` reads and writes page content streams. `parse` keeps each
 operator's byte span and skips (and counts) what it cannot read instead of failing; inline images
-stay whole, so `parse` → `serialize_ops` round-trips them. `Matrix` holds the arithmetic content
+stay whole, so `parse` → `serialize_ops` round-trips them. Between operands, a token of one or two
+signs with a minus among them (`-`, `--`, `-+`, `+-`), followed by whitespace, a delimiter or the
+end, is read as the number 0, as hayro-syntax reads it. Inside an array or dictionary, or among an
+inline image's parameters, such a token still makes the whole operand unreadable (such an image is
+left out of `ops` and counted in `ambiguous_images`). `Matrix` holds the arithmetic content
 interpretation needs.
 
 - Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
