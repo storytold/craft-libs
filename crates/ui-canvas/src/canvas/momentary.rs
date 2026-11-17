@@ -80,7 +80,7 @@ pub struct Momentary {
 impl Momentary {
     /// The momentary tools under `options`. The Zoom tool reads the document's size from the canvas's space.
     pub fn new(options: NavigationOptions) -> Self {
-        Momentary { held: None, latched: None, hand: HandTool::new(options).lent(), zoom: ZoomTool::new(options), hand_selected: false }
+        Momentary { held: None, latched: None, hand: HandTool::new(options).lent(), zoom: ZoomTool::new(options).lent(), hand_selected: false }
     }
 
     /// Tells the set whether the selected tool is the Hand: with the Hand selected and no Space held, Cmd and Alt at a

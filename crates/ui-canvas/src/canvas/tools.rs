@@ -368,15 +368,17 @@ impl CanvasTool for HandTool {
 
 /// The Zoom tool: a click steps the ladder about the clicked point (Alt: out; Zoom Clicked Point to Center centres
 /// it), a press held still zooms continuously ([`HoldZoom`], Animated Zoom only), a drag scrubs or draws a zoom
-/// rectangle ([`ZoomDrag`], Scrubby Zoom). The cursor is the magnifier, with a minus while Alt is held or `out` is
-/// set (Zoom Out held with Alt+Space). At a zoom limit the view stays put. The tool reads the document's size from
+/// rectangle ([`ZoomDrag`], Scrubby Zoom). The cursor is the magnifier, with a minus while the tool zooms out. At a
+/// zoom limit the view stays put. The tool reads the document's size from
 /// the canvas's [`CanvasSpace`](super::CanvasSpace) (the size given to [`Canvas::document`](super::Canvas::document));
 /// on a canvas given no document it does nothing.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ZoomTool {
-    /// Zoom out instead of in (Alt+Space held); Alt flips it.
+    /// Zoom out instead of in (the tool's zoom-out mode); a held Alt flips it on the selected tool.
     pub out: bool,
+    /// Lent by the momentary set: the held keys chose the direction, Alt included, so Alt flips nothing.
+    lent: bool,
     /// The navigation choices the tool reads.
     pub options: NavigationOptions,
     hold: Option<HoldZoom>,
@@ -392,16 +394,28 @@ pub struct ZoomTool {
 impl ZoomTool {
     /// A Zoom tool under `options`.
     pub fn new(options: NavigationOptions) -> Self {
-        Self { out: false, options, hold: None, drag: None, press: None, last: Pos2::ZERO, dragged: false }
+        Self { out: false, lent: false, options, hold: None, drag: None, press: None, last: Pos2::ZERO, dragged: false }
+    }
+
+    /// This tool as the momentary set lends it: its direction is final.
+    #[must_use]
+    pub(super) fn lent(mut self) -> Self {
+        self.lent = true;
+        self
+    }
+
+    /// Whether the tool zooms out with `mods` held.
+    fn zooms_out(&self, mods: Mods) -> bool {
+        self.out != (mods.alt && !self.lent)
     }
 
     /// One pass of a press in progress, with the pointer at `at`: the hold zooms once past its delay (and then the
     /// drag has nothing to do), else the drag scrubs or moves the rectangle's corner.
     fn advance(&mut self, at: Pos2, mods: Mods, time: f64, cx: &mut ToolContext<'_>) {
+        let out = self.zooms_out(mods);
         let (Some(drag), Some(space)) = (self.drag.as_mut(), cx.space()) else { return };
         let Some(size) = space.document() else { return };
         let ppp = space.pixels_per_point;
-        let out = self.out != mods.alt;
         let mut view = space.view;
         let before = view;
         let mut waiting = false;
@@ -483,7 +497,7 @@ impl CanvasTool for ZoomTool {
         let hold = self.hold.take();
         let Some(size) = space.document() else { return };
         let ppp = space.pixels_per_point;
-        let out = self.out != pointer.mods.alt;
+        let out = self.zooms_out(pointer.mods);
         // A hold that zoomed has already changed the view; the release is no click.
         if hold.is_some_and(|hold| hold.zooming()) {
             return;
@@ -523,7 +537,7 @@ impl CanvasTool for ZoomTool {
     }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
-        PaintedCursor::zoom(self.out != cx.mods.alt).into()
+        PaintedCursor::zoom(self.zooms_out(cx.mods)).into()
     }
 
     fn autoscrolls(&self) -> bool {

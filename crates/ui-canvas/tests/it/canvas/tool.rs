@@ -1012,6 +1012,29 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
     assert!(!calls.iter().any(|call| call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
 }
 
+/// The momentary Zoom's direction comes from the keys that chose it: a click with Alt and Space held zooms out, and the
+/// Alt that turned the Hand into Zoom Out does not flip it back to Zoom In.
+#[trial]
+fn a_click_under_alt_space_zooms_out() {
+    let log = Log::default();
+    let (mut fixture, view, canvas) = momentary_canvas(Probe::new("main", &log));
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    let before = view.get().expect("the canvas ran").zoom;
+    let space = craft_keymap::Key::Space;
+    for input in [
+        ToolInput::hold(space),
+        ToolInput::down(PointerButton::Primary, at).mods(Mods::ALT),
+        ToolInput::up(at).mods(Mods::ALT),
+        ToolInput::let_go(space),
+    ] {
+        ToolHost::inject(fixture.ctx(), canvas.get(), input);
+    }
+    fixture.run_injected();
+    let after = view.get().expect("the canvas ran").zoom;
+    assert!(after < before, "Alt+Space and a click zoom out: {before} -> {after}");
+    assert!(log.borrow().is_empty(), "the selected tool sees nothing: {:?}", log.borrow());
+}
+
 /// A held Space pans over a session member on the canvas's body: a drag on a crop corner pans the view with the Hand
 /// and leaves the crop as it was; without Space the same drag moves the corner and leaves the view.
 #[trial]
