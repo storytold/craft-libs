@@ -156,10 +156,30 @@ pub fn parse(css: &str, sheet: &mut StyleSheet) -> Result<(), Error> {
     let mut rest = css.as_str();
     while let Some(open) = rest.find('{') {
         let sel = rest[..open].trim();
+        if sel.starts_with('@') {
+            // Skip the whole at-rule block, matching nested braces by depth.
+            let mut depth = 0usize;
+            let mut end = None;
+            for (i, c) in rest[open..].char_indices() {
+                match c {
+                    '{' => depth = depth.saturating_add(1),
+                    '}' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            end = Some(open + i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else { break };
+            rest = &rest[end..];
+            continue;
+        }
         let Some(close) = rest[open..].find('}') else { break };
         let body = &rest[open + 1..open + close];
         rest = &rest[open + close + 1..];
-        if sel.starts_with('@') { continue; }
         let mut decls: Vec<_> = declarations(body).take(MAX_CSS_DECLARATIONS + 1).collect();
         sheet.decls = sheet.decls.saturating_add(decls.len());
         if sheet.decls > MAX_CSS_DECLARATIONS {
@@ -262,5 +282,15 @@ mod tests {
         assert!(sheet.rules.iter().all(|r| sheet.blocks.get(r.block).is_some_and(|b| b.len() == 1)));
     }
 
-
+    #[test]
+    fn at_rule_blocks_are_skipped_by_brace_depth() {
+        let mut sheet = StyleSheet::default();
+        parse("@media print { .a{fill:#ff0000} .b{fill:#0000ff} } .c{fill:red}", &mut sheet).unwrap();
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].classes, vec!["c".to_string()]);
+        let mut sheet = StyleSheet::default();
+        parse("@media x { @supports y { .c{} } .d{} } .e{fill:red}", &mut sheet).unwrap();
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].classes, vec!["e".to_string()]);
+    }
 }
