@@ -433,6 +433,13 @@ mod tests {
         let namespaces: Vec<_> = root.namespaces().map(|n| (n.name(), n.uri())).collect();
         assert!(namespaces.contains(&(None, "urn:r")));
         assert!(namespaces.contains(&(Some("p"), "urn:p")));
+    }
+
+    #[test]
+    fn descendants_and_text_nodes_preserve_identity_and_empty_accessors() {
+        let doc =
+            Document::parse("<r xmlns='urn:r' xmlns:p='urn:p'>first<!--gap--><?inside value?>second<empty/><p:child>last</p:child></r>").unwrap();
+        let root = doc.root_element();
         let all: Vec<_> = doc.descendants().collect();
         assert_eq!(all.len(), 5);
         assert!(all.iter().zip(root.descendants()).all(|(a, b)| *a == b));
