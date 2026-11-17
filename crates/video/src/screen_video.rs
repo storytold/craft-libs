@@ -99,4 +99,21 @@ mod tests {
             assert_eq!(&rgba[i..i + 4], &[r, g, b, 255], "({x}, {y})");
         }
     }
+    #[test]
+    fn limits_truncation_and_unchanged_blocks_are_refused() {
+        let p = packet(40, 20, 16, |x, y| [x as u8, y as u8, 7]);
+        assert!(decode_keyframe(&p, 40, 40 * 20 * 4).is_some());
+        assert!(decode_keyframe(&p, 39, usize::MAX).is_none());
+        assert!(decode_keyframe(&p, 40, 40 * 20 * 4 - 1).is_none());
+        for cut in 0..p.len() {
+            let _ = decode_keyframe(&p[..cut], 40, 40 * 20 * 4);
+        }
+        let mut unchanged = p.clone();
+        unchanged[4..6].fill(0);
+        assert!(decode_keyframe(&unchanged, 40, 40 * 20 * 4).is_none());
+        assert!(decode_keyframe(&[0, 0, 0, 0], 40, usize::MAX).is_none());
+        let mut trailing = p.clone();
+        trailing.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(decode_keyframe(&trailing, 40, 3200), decode_keyframe(&p, 40, 3200));
+    }
 }
