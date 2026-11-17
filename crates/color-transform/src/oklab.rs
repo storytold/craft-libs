@@ -87,10 +87,14 @@ impl OkLab {
     /// The conversion for linear RGB in `space`.
     pub fn for_space(space: &RgbSpace) -> OkLab {
         let to_lms = XYZ_TO_LMS.mul(&bradford(space.white, D65)).mul(&space.to_xyz());
-        // XYZ_TO_LMS and the Bradford matrices are invertible, and to_xyz returns an invertible
-        // matrix (the identity when the space does not exist), so the fallback is not reached.
-        let from_lms = to_lms.inverse().unwrap_or(Mat3::IDENTITY);
-        OkLab { to_lms: to_lms.to_f32(), from_lms: from_lms.to_f32() }
+        let pair = to_lms.inverse().map(|from_lms| (to_lms.to_f32(), from_lms.to_f32()));
+        let finite = |m: &[[f32; 3]; 3]| m.iter().flatten().all(|v| v.is_finite());
+        match pair {
+            Some((to_lms, from_lms)) if finite(&to_lms) && finite(&from_lms) => OkLab { to_lms, from_lms },
+            // A matrix with no inverse or with an entry beyond f32 falls back to XYZ_TO_LMS
+            // alone, the matrix a space gets when its primaries and its white are both rejected.
+            _ => OkLab { to_lms: f32s(&XYZ_TO_LMS), from_lms: XYZ_TO_LMS.inverse().unwrap_or(Mat3::IDENTITY).to_f32() },
+        }
     }
 
     /// The `f32` matrices, row-major: linear RGB to cone responses, and back. GPU passes that
@@ -191,5 +195,18 @@ mod tests {
         let bad = crate::RgbSpace { r: Xy::new(0.3, 0.0), ..SRGB };
         let ok = OkLab::for_space(&bad);
         assert!(ok.from_rgb([0.5, 0.5, 0.5]).iter().all(|v| v.is_finite()));
+    }
+
+    /// A white this close to y = 0 gives `f64` matrices with entries beyond `f32`.
+    #[test]
+    fn a_space_whose_matrices_overflow_f32_does_not_produce_nan() {
+        let far = crate::RgbSpace { white: Xy::new(0.5, 1e-40), ..SRGB };
+        let ok = OkLab::for_space(&far);
+        let (to, from) = ok.matrices();
+        assert!(to.iter().chain(from.iter()).flatten().all(|v| v.is_finite()), "{to:?} {from:?}");
+        for c in [[0.0; 3], [0.5, 0.5, 0.5], [1.0, 0.0, 0.0]] {
+            assert!(ok.from_rgb(c).iter().all(|v| v.is_finite()), "{c:?}");
+            assert!(ok.to_rgb(ok.from_rgb(c)).iter().all(|v| v.is_finite()), "{c:?}");
+        }
     }
 }

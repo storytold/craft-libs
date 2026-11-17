@@ -85,20 +85,19 @@ impl MonotoneCurve {
             ms[i] = if d[i - 1] * d[i] <= 0.0 { 0.0 } else { (d[i - 1] + d[i]) / 2.0 };
         }
         // The Fritsch–Carlson limit: tangents inside the circle of radius 3 keep each segment
-        // monotone.
+        // monotone. The length of (m₀, m₁) is compared with 3·|d|, which stays finite when the
+        // secant d is subnormal.
         for i in 0..n - 1 {
             if d[i] == 0.0 {
                 ms[i] = 0.0;
                 ms[i + 1] = 0.0;
                 continue;
             }
-            let a = ms[i] / d[i];
-            let b = ms[i + 1] / d[i];
-            let s = a * a + b * b;
-            if s > 9.0 {
-                let t = 3.0 / s.sqrt();
-                ms[i] = t * a * d[i];
-                ms[i + 1] = t * b * d[i];
+            let r = ms[i].hypot(ms[i + 1]);
+            let limit = 3.0 * d[i].abs();
+            if r > limit {
+                ms[i] = ms[i] / r * limit;
+                ms[i + 1] = ms[i + 1] / r * limit;
             }
         }
         MonotoneCurve { xs, ys, ms }
@@ -193,23 +192,49 @@ impl Lut1 {
         }
         let f = x * (n - 1) as f32;
         let i = (f as usize).min(n - 2);
-        let t = f - i as f32;
-        self.v[i] + (self.v[i + 1] - self.v[i]) * t
+        let t = f64::from(f - i as f32);
+        // Weighted in f64, so entries as far apart as ±f32::MAX do not overflow, and t = 0 and
+        // t = 1 give the entries exactly.
+        (f64::from(self.v[i]) * (1.0 - t) + f64::from(self.v[i + 1]) * t) as f32
     }
 
     /// `self ∘ inner`: `inner` applies first. An empty `inner` is the identity, so the result
-    /// is `self`.
+    /// is `self`. The result is sampled on the densest grid of at most [`MAX_LUT`] entries that
+    /// holds the sample points of both tables. Between two grid points it differs from
+    /// `self.eval(inner.eval(x))` by at most one grid step times the product of the two
+    /// tables' steepest slopes. When no grid of that size holds both tables' points, the result
+    /// uses the longer table's grid.
     pub fn compose(&self, inner: &Lut1) -> Lut1 {
         if inner.v.is_empty() {
             return self.clone();
         }
-        Lut1 { v: inner.v.iter().map(|&x| self.eval(x)).collect() }
+        let on_inner = || Lut1 { v: inner.v.iter().map(|&x| self.eval(x)).collect() };
+        let resampled = |n: usize| Lut1::from_fn(n, |x| self.eval(inner.eval(x)));
+        let (a, b) = (inner.v.len() - 1, self.v.len().saturating_sub(1));
+        if a == 0 || b == 0 {
+            return on_inner();
+        }
+        let common = (a / gcd(a, b)).checked_mul(b).filter(|l| *l < MAX_LUT);
+        let steps = common.map(|l| (MAX_LUT - 1) / l * l);
+        match steps {
+            Some(s) if s == a => on_inner(),
+            Some(s) => resampled(s + 1),
+            None if inner.v.len() >= self.v.len() => on_inner(),
+            None => resampled(self.v.len()),
+        }
     }
 
     pub fn is_identity(&self) -> bool {
         let n = self.v.len();
         n >= 2 && self.v.iter().enumerate().all(|(i, &y)| (y - i as f32 / (n - 1) as f32).abs() < 1e-6)
     }
+}
+
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 #[cfg(test)]
@@ -293,6 +318,51 @@ mod tests {
         assert_eq!(a.compose(&Lut1 { v: vec![] }), a);
     }
 
+    /// A short `inner` does not drop the outer table's points between its own.
+    #[test]
+    fn composing_with_a_short_table_keeps_the_outer_curve() {
+        let peak = Lut1 { v: vec![0.0, 1.0, 0.0] };
+        let c = peak.compose(&Lut1::identity(2));
+        assert_eq!(c.eval(0.5), 1.0);
+        assert_eq!(c.eval(0.0), 0.0);
+        assert_eq!(c.eval(1.0), 0.0);
+        assert_eq!(peak.compose(&Lut1 { v: vec![0.5] }).eval(0.2), 1.0);
+        // Grids that do not hold each other's points, and inner tables that cross the outer
+        // peak between their own points.
+        let cases = [
+            (Lut1::identity(4), peak.clone()),
+            (Lut1 { v: vec![0.0, 1.0, 0.0, 1.0] }, peak.clone()),
+            (peak.clone(), Lut1::identity(4)),
+            (peak.clone(), peak.clone()),
+            (peak.clone(), Lut1 { v: vec![0.0, 0.75] }),
+            (Lut1::from_fn(17, |x| (x * 9.0).sin().abs()), Lut1::from_fn(9, |x| x * x)),
+        ];
+        for (outer, inner) in &cases {
+            let c = outer.compose(inner);
+            for i in 0..=3000 {
+                let x = i as f32 / 3000.0;
+                let want = outer.eval(inner.eval(x));
+                assert!((c.eval(x) - want).abs() < 1e-3, "{outer:?} {inner:?} {x}");
+            }
+        }
+        assert!((peak.compose(&Lut1 { v: vec![0.0, 0.75] }).eval(2.0 / 3.0) - 1.0).abs() < 1e-3);
+        // A grid beyond MAX_LUT entries falls back to the longer table's grid.
+        let big = Lut1::identity(MAX_LUT - 1).compose(&Lut1::identity(MAX_LUT));
+        assert_eq!(big.v.len(), MAX_LUT);
+    }
+
+    /// Entries this far apart overflow a difference taken between them.
+    #[test]
+    fn far_apart_entries_interpolate_without_overflow() {
+        let wide = Lut1 { v: vec![-f32::MAX, f32::MAX] };
+        assert_eq!(wide.eval(0.0), -f32::MAX);
+        assert_eq!(wide.eval(1.0), f32::MAX);
+        assert_eq!(wide.eval(0.5), 0.0);
+        assert!(wide.eval(0.25).is_finite());
+        let high = Lut1 { v: vec![f32::MAX, f32::MAX] };
+        assert_eq!(high.eval(0.3), f32::MAX);
+    }
+
     #[test]
     fn a_curve_saves_as_its_points_and_a_hostile_file_does_not_break_it() {
         let c = MonotoneCurve::new(&[(0.0, 0.0), (0.5, 0.7), (1.0, 1.0)]);
@@ -337,5 +407,14 @@ mod tests {
         assert!(far.is_identity());
         let wide = MonotoneCurve::new(&[(-1e6, -1e6), (1e6, 1e6), (0.0, 0.5)]);
         assert!(wide.eval(3.0).is_finite());
+        // A subnormal secant next to a normal one: the tangent over that secant overflows.
+        let flat_then_steep = MonotoneCurve::new(&[(0.0, 0.0), (0.5, 1e-310), (1.0, 1.0)]);
+        assert!(flat_then_steep.knots().flatten().all(f64::is_finite));
+        let mut prev = -1.0;
+        for i in 0..=1000 {
+            let y = flat_then_steep.eval(f64::from(i) / 1000.0);
+            assert!(y.is_finite() && y >= prev, "{i} {y}");
+            prev = y;
+        }
     }
 }

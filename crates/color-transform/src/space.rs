@@ -44,19 +44,25 @@ impl Mat3 {
     /// rounding (the determinant is below 1e-12 times the cube of the largest entry), or has an
     /// inverse with an entry beyond the range of `f64`.
     pub fn inverse(&self) -> Option<Mat3> {
-        let d = self.determinant();
         let scale = self.0.iter().flatten().fold(0.0f64, |a, v| a.max(v.abs()));
-        if !d.is_finite() || d.abs() <= 1e-12 * scale * scale * scale {
+        if !(scale.is_finite() && scale > 0.0) || self.0.iter().flatten().any(|v| v.is_nan()) {
             return None;
         }
-        let m = &self.0;
-        // Each cofactor is divided by the determinant: its reciprocal can overflow where the
-        // quotients do not.
+        // The determinant of the matrix divided by its largest entry stays within f64 where
+        // the matrix's own determinant would overflow or underflow.
+        let m = &self.0.map(|r| r.map(|v| v / scale));
+        let d = Mat3(*m).determinant();
+        if !d.is_finite() || d.abs() <= 1e-12 {
+            return None;
+        }
+        // Each cofactor is divided by the determinant and then by the scale: the reciprocals
+        // can overflow where the quotients do not.
         let inv = Mat3([
             [(m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d, (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d, (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d],
             [(m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d, (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d, (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d],
             [(m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d, (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d, (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d],
         ]);
+        let inv = Mat3(inv.0.map(|r| r.map(|v| v / scale)));
         inv.0.iter().flatten().all(|v| v.is_finite()).then_some(inv)
     }
 
@@ -291,12 +297,18 @@ mod tests {
         let flat = RgbSpace { r: Xy::new(0.2, 0.2), g: Xy::new(0.3, 0.3), b: Xy::new(0.4, 0.4), white: D65 };
         assert_eq!(flat.to_xyz(), Mat3::IDENTITY);
         assert_eq!(Mat3([[f64::NAN; 3]; 3]).inverse(), None);
-        // The determinant, 1e-312, has no finite reciprocal; the inverse itself is finite. The
-        // determinant is subnormal, so the result is good to about 1e-11 relative.
+        // The determinant, 1e-312, has no finite reciprocal; the inverse itself is finite.
         let tiny = Mat3::diag(1e-104, 1e-104, 1e-104).inverse().unwrap();
         close(&tiny, &[[1e104, 0.0, 0.0], [0.0, 1e104, 0.0], [0.0, 0.0, 1e104]], 1e93);
+        // A determinant beyond f64 in either direction still leaves a finite inverse.
+        let small = Mat3::diag(1e-200, 1e-200, 1e-200).inverse().unwrap();
+        close(&small, &Mat3::diag(1e200, 1e200, 1e200).0, 1e186);
+        let large = Mat3::diag(1e110, 1e110, 1e110).inverse().unwrap();
+        close(&large, &Mat3::diag(1e-110, 1e-110, 1e-110).0, 1e-124);
         // An inverse with entries beyond f64 is no inverse.
-        assert_eq!(Mat3::diag(1e-200, 1e-200, 1e-200).inverse(), None);
+        assert_eq!(Mat3::diag(1e-310, 1e-310, 1e-310).inverse(), None);
+        assert_eq!(Mat3([[0.0; 3]; 3]).inverse(), None);
+        assert_eq!(Mat3::diag(f64::MAX, f64::MAX, f64::MAX).inverse().map(|m| m.0[0][0]), Some(1.0 / f64::MAX));
         // A white on a primary leaves two primaries with no weight: no space.
         let on_red = RgbSpace { white: SRGB.r, ..SRGB };
         assert_eq!(on_red.to_xyz(), Mat3::IDENTITY);
