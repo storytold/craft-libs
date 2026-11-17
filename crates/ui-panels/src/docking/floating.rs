@@ -53,17 +53,27 @@ pub struct WindowColumn {
     pub edge: DockEdge,
     /// The size of the collapsed column under the title row; `None` while the column is expanded.
     pub collapsed: Option<Vec2>,
+    /// The size of an expanded column whose content sets it (a column with steps) under the title row; `None` for a
+    /// column the rect sizes.
+    pub fitted: Option<Vec2>,
 }
 
 impl WindowColumn {
     /// An expanded column that keeps to `edge`.
     pub fn expanded(edge: DockEdge) -> Self {
-        WindowColumn { edge, collapsed: None }
+        WindowColumn { edge, collapsed: None, fitted: None }
     }
 
     /// A column collapsed to icons, `size` under the title row, that keeps to `edge`.
     pub fn collapsed(edge: DockEdge, size: Vec2) -> Self {
-        WindowColumn { edge, collapsed: Some(size) }
+        WindowColumn { edge, collapsed: Some(size), fitted: None }
+    }
+
+    /// An expanded column whose content is `size` under the title row, that keeps to `edge`. The window shows at
+    /// that size at its rect's place; a resize the user makes is reported for the host to turn into the column's
+    /// steps, and a move keeps the rect's size.
+    pub fn fitted(edge: DockEdge, size: Vec2) -> Self {
+        WindowColumn { edge, collapsed: None, fitted: Some(size) }
     }
 
     /// The edge of `bounds`, in reading order, nearer the window at `rect`: the start edge when the window's centre is
@@ -134,7 +144,9 @@ impl Outcome for FloatingGroupOutput {
 ///   `new` keeps the height the group has when restored.
 /// - Column: a dock window holds one column ([`column`](FloatingGroup::column)); its title row is the column's bar,
 ///   with the double arrow at the end the window keeps to. While the column is collapsed the group shows at the
-///   collapsed size against that edge of the rect, the edges do not resize, and a move keeps the rect's size.
+///   collapsed size against that edge of the rect, the edges do not resize, and a move keeps the rect's size. A
+///   column its content sizes ([`WindowColumn::fitted`]) shows at that size at the rect's place; its resizes are
+///   reported as the user makes them.
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
 ///   (`GroupDrag`) for the dock's `DockDropTarget`, which shows the drop mark and docks the window on release.
 /// - Window: with `native` set the group opens in an OS window of that kind, with the layer as the fallback where
@@ -298,6 +310,8 @@ impl<'a> FloatingGroup<'a> {
             Overlay::floating().movable(true).resizable(!self.minimized && collapsed.is_none()).opacity(self.opacity).body_scroll(false);
         overlay = if let Some(shown) = collapsed {
             overlay.placed(shown).size_limits(SizeLimits::new(shown.size(), shown.size()))
+        } else if let Some(size) = self.column.and_then(|column| column.fitted) {
+            overlay.placed(Rect::from_min_size(self.rect.min, size + Vec2::new(0.0, header)))
         } else if self.minimized {
             let width = self.rect.width();
             overlay.placed_at(self.rect.min).size_limits(SizeLimits::new(Vec2::new(width, 0.0), Vec2::new(width, f32::INFINITY)))
@@ -443,9 +457,13 @@ impl Container for FloatingGroup<'_> {
 
     fn placement_changed(&mut self, change: &PlacementChange) {
         let mut change = *change;
+        let fitted = self.column.is_some_and(|column| column.fitted.is_some());
         if let Some(shown) = self.collapsed_rect() {
             // The collapsed window moves; the rect keeps its expanded size.
             change.rect = self.rect.translate(change.rect.min - shown.min);
+        } else if fitted && change.kind == PlacementKind::Move {
+            // A window its content sizes moves; the rect keeps its size.
+            change.rect = Rect::from_min_size(change.rect.min, self.rect.size());
         } else if self.minimized {
             change.rect = Rect::from_min_size(change.rect.min, Vec2::new(change.rect.width(), self.rect.height()));
         }

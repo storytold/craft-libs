@@ -32,7 +32,7 @@ use bar::panel_names;
 
 pub(super) use bar::{BarRecord, CHEVRON, bar_name, bar_slots, chevron_name, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
-pub use sizing::{GroupSize, fit_widths, group_heights, scale_widths, stacked, width_bounds};
+pub use sizing::{GroupSize, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
 
 const DIVIDER: PartKey = PartKey::new("divider");
 const EDGE: PartKey = PartKey::new("edge");
@@ -214,9 +214,10 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
         output
     }
 
-    /// The divider on the column's inner edge, which moves between the width bounds of its panels.
+    /// The divider on the column's inner edge, which moves between the width bounds of its panels, or of its steps
+    /// for a stepped column ([`stepped`](super::stepped)), whose host takes the width as whole steps.
     fn edge_divider(&self, rect: Rect, sizes: &DockSizes) -> Divider {
-        let (least, most) = sizes.width_bounds(self.column, self.spec);
+        let (least, most) = sizes.shown_bounds(self.column, self.spec);
         Divider::column_edge(rect, self.edge, (least, most.min((self.within.width() - sizes.least_pane).max(rect.width()))), sizes.reach)
     }
 

@@ -41,7 +41,7 @@ pub use panels::{DockPanels, request_actions};
 #[doc(hidden)]
 pub use panels::{close_requests, open_requests};
 pub use root::{DockRoot, DockRootOutput, DockRootStyle};
-pub use spec::{DockHeights, PanelSpec};
+pub use spec::{DockGrid, DockHeights, PanelSpec};
 pub use splitter::{Splitter, SplitterStyle};
 pub use targets::{DockSizes, DockSpot, DockTargets, GroupDrag, ZoneRule};
 pub use words::DockWords;
@@ -56,7 +56,8 @@ mod flyout;
 mod iconic;
 
 pub use dock_column::{
-    ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, fit_widths, group_heights, scale_widths, stacked, width_bounds,
+    ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, fit_widths, group_heights, scale_widths, stacked, stepped,
+    width_bounds,
 };
 pub use flyout::{Flyout, FlyoutOutput, FlyoutShown, FlyoutStyle, GroupAt};
 pub use iconic::{FlyoutResize, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicSizes};

@@ -2,7 +2,7 @@
 //! the parts of `docking`, takes the drops of tab and group drags, and applies their actions to the workspace.
 
 use super::hide::{self, Shown};
-use crate::contract::overlay::PlacementChange;
+use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
     Bind, BindMut, BodyCx, Cx, Entry, Lazy, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
@@ -13,7 +13,7 @@ use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_dra
 use crate::docking::{
     ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene, DockSizes,
     DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels, IconicColumn,
-    IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
+    IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths, frame, move_actions, stepped,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
@@ -913,11 +913,44 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         for (column, width) in plan.columns.iter().zip(widths) {
             let span = if start { (cursor, cursor + width) } else { (cursor - width, cursor) };
             cursor = if start { span.1 } else { span.0 };
-            let cell = plan.flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()));
+            let mut cell = plan.flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()));
             let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { continue };
+            // A stepped column is as tall as its bar and content, from the top of the dock; content taller than the
+            // dock gets the dock's height and scrolls inside. The rest of its slot is the dock's empty room.
+            if let Some(content) = self.stepped_height(ui, body, column, cell.width(), false) {
+                cell.max.y = (cell.top() + scene.sizes.bar + content).min(cell.bottom());
+            }
             self.report.placed.push((first.clone(), cell));
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone() };
             self.column(ui, body, column, at);
+        }
+    }
+
+    /// The height of the groups of an expanded stepped column ([`stepped`]) measured at `width`, the width of its
+    /// steps: what the column shows under its bar. `None` for any other column.
+    fn stepped_height(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, width: f32, in_window: bool) -> Option<f32> {
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
+        if column.iconic || stepped(column, &spec).is_none() {
+            return None;
+        }
+        let mut height = 0.0;
+        for group in &column.groups {
+            height += self.group_of(ui, body, group, GroupAt::Measure(width), in_window).unwrap_or(0.0);
+        }
+        Some(height)
+    }
+
+    /// What a click on the double arrow of `column`, whose first panel is `first`, asks for when it reports
+    /// `iconic`: an expanded stepped column whose panels do not collapse switches between one and two steps; any
+    /// other column collapses to icons or expands.
+    fn arrow(&self, column: &Column<P>, first: &P, iconic: bool) -> Action<P> {
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
+        let collapses = column.panels().all(|panel| scene.permissions(panel).collapses);
+        match stepped(column, &spec) {
+            Some((_, steps)) if !collapses && !column.iconic => Action::set_column_steps(first.clone(), if steps == 1 { 2 } else { 1 }),
+            _ => Action::set_iconic(first.clone(), iconic),
         }
     }
 
@@ -959,7 +992,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     fn column_work(&mut self, column: &Column<P>, work: ColumnWork<P>) {
         let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { return };
         if let Some(iconic) = work.iconic {
-            self.report.actions.push(Action::set_iconic(first.clone(), iconic));
+            let action = self.arrow(column, first, iconic);
+            self.report.actions.push(action);
         }
         if let Some(item) = work.picked {
             self.pick(first, item);
@@ -967,12 +1001,23 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         for (anchor, height) in work.resized {
             self.report.actions.push(Action::resize_group(anchor, Some(height)));
         }
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
         if let Some(width) = work.width {
-            self.report.actions.push(if column.iconic {
-                Action::resize_iconic(first.clone(), Some(width))
-            } else {
-                Action::resize_column(first.clone(), width)
-            });
+            match stepped(column, &spec) {
+                // The edge of a stepped column moves in whole steps: the most that fit where it is dragged.
+                Some((grid, steps)) if !column.iconic => {
+                    let to = grid.steps_within(width);
+                    if to != steps {
+                        self.report.actions.push(Action::set_column_steps(first.clone(), to));
+                    }
+                }
+                _ => self.report.actions.push(if column.iconic {
+                    Action::resize_iconic(first.clone(), Some(width))
+                } else {
+                    Action::resize_column(first.clone(), width)
+                }),
+            }
         }
         if let Some(resize) = work.flyout {
             let panel = resize.panel;
@@ -999,7 +1044,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// collapsed column shows against that edge of its rect. A move or resize keeps the edge the window had when it
     /// began, so nothing jumps while the window crosses the middle; a collapsed window's move ends with the rect
     /// that keeps its strip where it was dropped ([`WindowColumn::anchored`]).
-    fn windows(&mut self, ui: &mut Ui, body: &BodyCx<'_>, open: &Option<P>, started: Option<&Layout<P>>) -> Option<(P, PlacementChange)> {
+    ///
+    /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
+    /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
+    /// bottom the fewest whose content fits the height, and the window keeps its place.
+    fn windows(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, open: &Option<P>, started: Option<&Layout<P>>) -> Option<(P, PlacementChange)> {
         let scene = self.scene;
         let ctx = ui.ctx().clone();
         let policy = |panel: &P| scene.permissions(panel);
@@ -1037,9 +1086,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let began =
                 started.and_then(|layout| layout.floating.iter().find(|began| began.id == window.id)).map_or(opening.rect, |began| began.rect);
             let edge = WindowColumn::nearer_edge(began, scene.bounds, scene.rtl);
+            let width = scene.sizes.expanded_width(&window.column, &spec_of);
             let shape = if window.column.iconic {
                 let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
                 WindowColumn::collapsed(edge, size)
+            } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
+                WindowColumn::fitted(edge, Vec2::new(width, content))
             } else {
                 WindowColumn::expanded(edge)
             };
@@ -1090,6 +1142,25 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             } else if let Some(mut change) = output.placed {
                 if change.phase == GesturePhase::Commit {
                     change.rect = shape.anchored(change.rect, scene.bounds, scene.rtl);
+                }
+                if !matches!(change.kind, PlacementKind::Move)
+                    && let Some(fitted) = shape.fitted
+                    && let Some((grid, steps)) = stepped(&window.column, &spec_of)
+                {
+                    let column = &window.column;
+                    let to = if (change.rect.width() - fitted.x).abs() > 0.5 {
+                        grid.steps_within(change.rect.width())
+                    } else {
+                        let room = change.rect.height() - scene.sizes.strip;
+                        grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
+                    };
+                    if to != steps {
+                        self.report.actions.push(Action::set_column_steps(anchor.clone(), to));
+                    }
+                    // The window keeps its place; its steps set its size.
+                    change.rect = Rect::from_min_size(change.rect.min, opening.rect.size());
+                }
+                if change.phase == GesturePhase::Commit {
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });
                 }
                 moved = Some((anchor.clone(), change));
@@ -1117,7 +1188,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             // The title row is the column's bar: its double arrow collapses or expands the column.
             if let Some(iconic) = output.iconic {
-                self.report.actions.push(Action::set_iconic(anchor.clone(), iconic));
+                let action = self.arrow(&window.column, &anchor, iconic);
+                self.report.actions.push(action);
             }
         }
         moved
