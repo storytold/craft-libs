@@ -12,6 +12,9 @@ pub const MAX_PART: u64 = 256 * 1024 * 1024;
 pub const MAX_TOTAL: u64 = 512 * 1024 * 1024;
 /// Most zip entries we look at.
 pub const MAX_ENTRIES: usize = 20_000;
+// ZIP names have at most u16::MAX raw bytes. CP437/lossy UTF-8 decoding can
+// expand each byte to three UTF-8 bytes. Bound from_parts lookup copies too.
+const MAX_SCAN_NAME: usize = 3 * u16::MAX as usize;
 
 /// Relationship type suffixes (after `.../relationships/`).
 pub mod rt {
@@ -270,6 +273,61 @@ impl Package {
         }
     }
 
+    /// Read only XML attributes, once per canonical package part. This never invokes
+    /// an altChunk importer or fetches additional data. Non-XML extensions are valid OPC
+    /// targets too. Errors end a lenient part exactly as the normal XML reader does;
+    /// the subsequent strict main-document parse remains authoritative.
+    pub(crate) fn file_orders(&self) -> Result<craft_wordmodel::para::FileOrders, DocxError> {
+        use craft_wordmodel::para::FileOrderScan;
+        let mut bytes = 0u64;
+        for (i, name) in self.opc.names().enumerate() {
+            if name.len() > MAX_SCAN_NAME {
+                return Err(DocxError::Limit("stacking-order source part name is too long".into()));
+            }
+            if i >= MAX_ENTRIES {
+                return Err(DocxError::Limit("too many stacking-order source parts".into()));
+            }
+            bytes = bytes
+                .checked_add(self.opc.get(name).map_or(0, |b| b.len() as u64))
+                .ok_or_else(|| DocxError::Limit("stacking-order source size overflow".into()))?;
+            if bytes > FileOrderScan::MAX_SOURCE_BYTES {
+                return Err(DocxError::Limit("stacking-order source exceeds 2 GiB".into()));
+            }
+        }
+        let mut scan = FileOrderScan::new(bytes).map_err(DocxError::Limit)?;
+        let limits = craft_xml::Limits {
+            max_input: 2 << 30,
+            max_depth: xml::MAX_DEPTH + 1,
+            max_nodes: 2 * xml::MAX_ELEMENTS,
+            max_elements: xml::MAX_ELEMENTS,
+            max_attrs: xml::MAX_ATTRS,
+            max_attrs_total: 2 * xml::MAX_ELEMENTS,
+        };
+        let opts = craft_xml::Options::default().with_limits(limits);
+        for name in self.opc.names() {
+            let Some(bytes) = self.opc.get(name) else { continue };
+            let text = craft_xml::to_utf8(bytes);
+            // Attribute names cannot contain entity references. This only skips parts
+            // that cannot possibly supply an order, including ordinary binary media.
+            if !text.windows(b"relativeHeight".len()).any(|w| w == b"relativeHeight") {
+                continue;
+            }
+            let mut events = opts.events(&text);
+            while let Ok(Some(ev)) = events.next() {
+                if let craft_xml::Event::Start { attrs, .. } = ev {
+                    for (name, value) in attrs {
+                        if name.rsplit(':').next() == Some("relativeHeight")
+                            && let Ok(raw) = value.trim().parse::<u32>()
+                        {
+                            scan.observe(raw);
+                        }
+                    }
+                }
+            }
+        }
+        scan.finish().map_err(DocxError::Limit)
+    }
+
     /// Relationships of `part` (from `dir/_rels/name.rels`). Internal targets name the part as
     /// stored, so a part reached under several spellings is kept, cached and written once.
     pub fn rels(&self, part: &str) -> Rels {
@@ -389,5 +447,41 @@ mod tests {
         assert_eq!((p.content_type.as_str(), p.rels.len(), p.rels[1].external), ("ct", 2, true));
         let junk = EmbeddedManifest::parse(b"R\tnope\trId1\tk\tt\tI\nP\tonly-two\n\t\t\n\xff\xfe");
         assert!(junk.parts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod file_order_tests {
+    use super::*;
+
+    #[test]
+    fn file_order_scan_bounds_decoded_part_names_before_lookup() {
+        let at_limit = "n".repeat(MAX_SCAN_NAME);
+        assert!(Package::from_parts(BTreeMap::from([(at_limit, Vec::new())])).file_orders().is_ok());
+        let too_long = "n".repeat(MAX_SCAN_NAME + 1);
+        assert!(Package::from_parts(BTreeMap::from([(too_long, Vec::new())])).file_orders().is_err());
+    }
+
+    fn scan(xml: &str) -> craft_wordmodel::para::FileOrders {
+        Package::from_parts(BTreeMap::from([("odd.part".into(), xml.as_bytes().to_vec())])).file_orders().unwrap()
+    }
+
+    #[test]
+    fn file_order_scan_matches_lenient_attributes_entities_and_parser_limits() {
+        let malformed = r#"<r><x alien:relativeHeight="429496729&#53;"></wrong><x relativeHeight="4294967294"/></r>"#;
+        let tree = xml::parse(malformed.as_bytes()).unwrap();
+        assert_eq!(tree.find("?:x").or_else(|| tree.find("x")).unwrap().attr("relativeHeight"), Some("4294967295"));
+        let map = scan(malformed);
+        assert_eq!((map.model_order(Some(u32::MAX - 1)), map.model_order(Some(u32::MAX))), (u32::MAX - 1, u32::MAX));
+        let custom = r#"<!DOCTYPE r [<!ENTITY rank "4294967295">]><r relativeHeight="&rank;"/>"#;
+        assert_ne!(xml::parse(custom.as_bytes()).unwrap().attr("relativeHeight"), Some("4294967295"));
+        assert_eq!(scan(custom).model_order(Some(u32::MAX - 1)), u32::MAX);
+        let too_many =
+            format!(r#"<r {} relativeHeight="4294967295"/>"#, (0..xml::MAX_ATTRS).map(|i| format!(r#"a{i}="x""#)).collect::<Vec<_>>().join(" "));
+        assert!(xml::parse(too_many.as_bytes()).is_err());
+        assert_eq!(scan(&too_many).model_order(Some(u32::MAX - 1)), u32::MAX);
+        let too_deep = format!(r#"{}<r relativeHeight="4294967295"/>{}"#, "<r>".repeat(xml::MAX_DEPTH + 1), "</r>".repeat(xml::MAX_DEPTH + 1));
+        assert!(xml::parse(too_deep.as_bytes()).is_err());
+        assert_eq!(scan(&too_deep).model_order(Some(u32::MAX - 1)), u32::MAX);
     }
 }
