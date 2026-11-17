@@ -202,7 +202,7 @@ impl From<Winner<Id>> for Hit {
 }
 
 /// The arena's shapes that show hover this pass, from what lies under the pointer (`pointer::Under`): the shape a
-/// press at the pointer goes to, and the topmost shape under the pointer when it is the arena's and takes no press.
+/// press at the pointer goes to, and the arena's shape that hovers beside it (`Under::hover_top`).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Hovered {
     press: Option<Hit>,
@@ -840,7 +840,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
     let (under, contains, captured) = pointer::with_hover(ctx, read.viewport, |under, captured| {
         let hovered = under.map_or(Hovered::default(), |under| Hovered {
             press: under.press.hit_of(arena.0).map(Hit::from),
-            only: under.hover_only_of(arena.0).map(Hit::from),
+            only: under.hover_top_of(arena.0).map(Hit::from),
         });
         (hovered, under.is_some_and(|under| under.contains(arena.0)), captured)
     });

@@ -132,6 +132,10 @@ pub(crate) struct Shapes {
     last: LayerRecord,
     this_bodies: BodyRecord,
     last_bodies: BodyRecord,
+    /// The egui widgets components made for their own text (a field's text, a selection part) in the running pass and
+    /// the last, each with its component: such a widget takes its press itself.
+    this_texts: IdMap<Id>,
+    last_texts: IdMap<Id>,
     /// The paint order the running pass's next registration takes.
     next: u32,
     /// What lies under the pass's hover point, found over `last` at the begin hook with the pass's egui targets:
@@ -213,6 +217,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.last = std::mem::take(&mut shapes.this);
         shapes.last_bodies = std::mem::take(&mut shapes.this_bodies);
+        shapes.last_texts = std::mem::take(&mut shapes.this_texts);
         shapes.next = 0;
         shapes.hover = None;
         shapes.winner = None;
@@ -368,6 +373,15 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.shapes.extend(shapes);
         entry.placed.resize(entry.shapes.len(), Placed { order, clip });
+    });
+}
+
+/// Records the egui widget `widget` that the component `owner` made for its own text (a field's text, a selection
+/// part): a press egui gives it is the widget's own and goes to no root, and the hover goes to `owner`.
+pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| record_text_widget(ctx, widget, owner));
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record.this_texts.insert(widget, owner);
     });
 }
 
@@ -592,8 +606,10 @@ impl PressWinners {
 /// transformed body's layer shows its root's own shapes beneath everything on it. A shape counts only where its clip
 /// shows it; at a point no clip on the layer holds (one automation names past the window), a shape counts when some of
 /// it shows inside its clip. The members of an arena whose host withholds them (`withhold_members`) do not count.
-/// Where egui's hit test gives the point to a widget no component registered (a raw egui widget on top), nothing is
-/// under it.
+/// Where egui's hit test gives the point to a widget no component made (a raw egui widget on top), no press or hover
+/// goes to a root; where it gives it to a widget a component made for its own text, the press is that widget's and the
+/// hover goes to that component's topmost shape under the point. The roots that contain the point are those with a
+/// shape under it either way.
 ///
 /// Hover shows where a press goes: the press winners' shapes hover, and so does the topmost shape under the point when
 /// it takes no press (a label with a tooltip over a clickable row). A shape that takes a press and loses it does not.
@@ -601,16 +617,17 @@ impl PressWinners {
 pub(crate) struct Under {
     /// The roots a press at the point starts on.
     pub press: PressWinners,
-    /// The topmost shape under the point, with its root, when it takes no press.
-    pub hover_only: Option<(Winner<Id>, Id)>,
+    /// The shape that hovers beside the press winners, with its root: the topmost shape under the point when it takes
+    /// no press, or the topmost one of the component whose text widget takes the press.
+    pub hover_top: Option<(Winner<Id>, Id)>,
     /// Every root with a shape under the point, on top or not: the roots that contain the pointer.
     pub over: SmallVec<[Id; 4]>,
 }
 
 impl Under {
-    /// The topmost shape under the point when it is `root`'s and takes no press.
-    pub(crate) fn hover_only_of(&self, root: Id) -> Option<Winner<Id>> {
-        self.hover_only.filter(|(_, owner)| *owner == root).map(|(winner, _)| winner)
+    /// The shape of `root` that hovers beside the press winners ([`Under::hover_top`]).
+    pub(crate) fn hover_top_of(&self, root: Id) -> Option<Winner<Id>> {
+        self.hover_top.filter(|(_, owner)| *owner == root).map(|(winner, _)| winner)
     }
 
     /// Whether a shape of `root` lies under the point.
@@ -682,12 +699,12 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             stack.extend(roots.iter().map(|(root, entry)| (1, *root, entry, on_layer)));
         }
         let shown = stack.iter().any(|(_, _, entry, point)| entry.placed.iter().any(|placed| placed.clip.contains(*point)));
-        if targets.click.is_some_and(|widget| !registered_in(&record.last, widget)) {
-            return Under::default();
-        }
+        let text_of = targets.click.and_then(|widget| record.last_texts.get(&widget).copied());
+        let foreign = text_of.is_none() && targets.click.is_some_and(|widget| !registered_in(&record.last, widget));
         let mut under = Under::default();
-        // The topmost shape under the point, and each root's topmost shape that takes a press, ranked by tier and then
-        // by the place in paint order of the registration that recorded it.
+        // The topmost shape under the point (of the text widget's component, when one takes the press), and each root's
+        // topmost shape that takes a press, ranked by tier and then by the place in paint order of the registration
+        // that recorded it.
         let mut top: Option<((u8, u32), Winner<Id>, Id)> = None;
         let mut ranked = Vec::new();
         for (tier, root, entry, point) in stack {
@@ -705,22 +722,59 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             if !under.over.contains(&root) {
                 under.over.push(root);
             }
-            let shapes: Vec<Shape<Id>> = kept.iter().map(|&index| entry.shapes[index].clone()).collect();
-            let placed = |mut winner: Winner<Id>| {
-                winner.index = kept[winner.index];
-                ((tier, entry.placed[winner.index].order), winner)
+            // The winner among the shapes at `indices` by `kind`, with its rank.
+            let pick = |indices: &[usize], kind: ResolveFor| {
+                let shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                resolve(&shapes, point, kind).map(|mut winner| {
+                    winner.index = indices[winner.index];
+                    ((tier, entry.placed[winner.index].order), winner)
+                })
             };
-            if let Some((rank, winner)) = resolve(&shapes, point, ResolveFor::Hover).map(placed)
+            let owned: Vec<usize>;
+            let hovering: &[usize] = match text_of {
+                Some(owner) => {
+                    owned = kept.iter().copied().filter(|&index| entry.shapes[index].owner == owner).collect();
+                    &owned
+                }
+                None => &kept,
+            };
+            if let Some((rank, winner)) = pick(hovering, ResolveFor::Hover)
                 && top.as_ref().is_none_or(|(best, ..)| rank > *best)
             {
                 top = Some((rank, winner, root));
             }
-            if let Some((rank, winner)) = resolve(&shapes, point, ResolveFor::Press).map(placed) {
+            if let Some((rank, winner)) = pick(&kept, ResolveFor::Press) {
                 ranked.push((rank, winner, root, entry.click));
             }
         }
-        under.press = winners_of(ranked);
-        under.hover_only = top.filter(|(_, winner, _)| !winner.sense.takes_press()).map(|(_, winner, root)| (winner, root));
+        // DIAG FW-277 round O: every resolution, its stack and its answer, with CRAFT_DIAG_PRESS set.
+        let diag = std::env::var_os("CRAFT_DIAG_PRESS").is_some();
+        if diag {
+            eprintln!(
+                "DIAG under at={at:?} layer={layer:?} targets={targets:?} text_of={text_of:?} foreign={foreign} withheld={withheld:?} over={:?}",
+                under.over
+            );
+            for (rank, winner, root, clicks) in &ranked {
+                eprintln!(
+                    "DIAG   press-candidate root={root:?} rank={rank:?} owner={:?} part={:?} sense={:?} root_clicks={clicks}",
+                    winner.owner, winner.part, winner.sense
+                );
+            }
+        }
+        if foreign {
+            return under;
+        }
+        if text_of.is_none() {
+            under.press = winners_of(ranked);
+        }
+        if diag {
+            eprintln!(
+                "DIAG   press={:?} top={:?}",
+                under.press,
+                top.as_ref().map(|(rank, winner, root)| (rank, winner.owner, winner.part, winner.sense, root))
+            );
+        }
+        under.hover_top = top.filter(|(_, winner, _)| text_of.is_some() || !winner.sense.takes_press()).map(|(_, winner, root)| (winner, root));
         under
     })
 }
@@ -792,10 +846,12 @@ fn registered_in(layers: &LayerRecord, widget: Id) -> bool {
     layers.values().any(|roots| roots.values().any(|root| root.widgets.contains(&widget)))
 }
 
-/// Whether the egui widget `widget`, one of the latest press's targets, is one no component registered in the pass
-/// the press was hit-tested against: a raw egui widget.
+/// Whether the egui widget `widget`, one of the latest press's targets, is one no component registered or made for its
+/// text in the pass the press was hit-tested against: a raw egui widget.
 pub(crate) fn foreign_target(ctx: &Context, widget: Id) -> bool {
-    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| !registered_in(&record.last, widget))
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        !registered_in(&record.last, widget) && !record.last_texts.contains_key(&widget)
+    })
 }
 
 /// Every shape of the last pass on the topmost layer at `at` (screen points) whose area contains it, as

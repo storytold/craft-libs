@@ -501,7 +501,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         // The pointer counts as over a row only while the sensing pass puts it on this collection, so a popup or another
         // widget above it takes the hover as it does for the rows' parts.
-        let hover_at = ctx.pointer_latest_pos().filter(|_| crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover.any());
+        let outcome = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id));
+        let hover_at = ctx.pointer_latest_pos().filter(|_| outcome.hover.any());
+        let over_at = ctx.pointer_latest_pos().filter(|_| outcome.contains);
         let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
         // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.
         let fit = self.header.fit.as_ref().map(|(column, _)| column.clone());
@@ -539,6 +541,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     current: current.as_ref() == Some(&key),
                     open: self.source.has_children(at) && self.source.open(at),
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
+                    pointer_over: over_at.is_some_and(|pos| row.contains(pos)),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
                     menu_open: self.drags.menu.as_ref() == Some(&key) && menu_open,
                     sub_row: self.source.sub_row(at),
