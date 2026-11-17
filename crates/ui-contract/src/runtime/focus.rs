@@ -225,9 +225,10 @@ pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse>
 pub(crate) fn is_canvas_member(ctx: &Context, rec: &StopRec) -> bool {
     with(ctx, |state| {
         state.record.focused == Some(rec.stop.id)
-            && state.record.root.is_some_and(|root| {
-                state.stops.iter().chain(&state.last_stops).any(|canvas| canvas.stop.keys.chrome_key && canvas.stop.root == root)
-            })
+            && state
+                .record
+                .root
+                .is_some_and(|root| state.stops.iter().chain(&state.last_stops).any(|canvas| canvas.stop.keys.chrome_key && canvas.stop.root == root))
     })
 }
 

@@ -1189,7 +1189,10 @@ impl Component for BezierOverlay<'_> {
                 .pointer_only("⌘A selects every anchor and the arrows move the selected anchors");
         }
         if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor) && !scene.limited {
-            cx.part(EMPTY, HitShape::Rect(rect)).sense(Sense::CLICK).priority(HitPriority::new(HitLevel::Background, 0)).pointer_only("Escape leaves the paths, as a press off them does");
+            cx.part(EMPTY, HitShape::Rect(rect))
+                .sense(Sense::CLICK)
+                .priority(HitPriority::new(HitLevel::Background, 0))
+                .pointer_only("Escape leaves the paths, as a press off them does");
         }
         let arrival = self.selection.path.zip(self.selection.anchors.first().copied());
         for item in &scene.items {
