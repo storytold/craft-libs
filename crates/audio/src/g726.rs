@@ -684,8 +684,12 @@ impl Decoder {
     }
 
     /// Decode a single quantized ADPCM code into an 8 kHz 16-bit linear PCM sample.
+    /// Bits above the configured code width are ignored, as in packed-stream decoding.
     #[inline]
     pub fn decode_sample(&mut self, code: u8) -> i16 {
+        // Adaptation must see the same bounded codeword as the reconstruction table;
+        // otherwise unused high bits can underflow its unsigned inverse-code arithmetic.
+        let code = code & ((1u8 << self.core.rate.code_size()) - 1);
         self.core.step(0, false, code).1
     }
 
@@ -938,6 +942,22 @@ pub fn encode_interleaved(samples: &[i16], channels: usize, rate: BitRate, packi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_api_ignores_unused_codeword_bits() {
+        for rate in [BitRate::Rate16k, BitRate::Rate24k, BitRate::Rate32k, BitRate::Rate40k] {
+            let mask = (1u8 << rate.code_size()) - 1;
+            let mut actual = Decoder::new(rate, BitPacking::BigEndian);
+            let mut expected = Decoder::new(rate, BitPacking::BigEndian);
+            for code in 0..=u8::MAX {
+                assert_eq!(actual.decode_sample(code), expected.decode_sample(code & mask));
+            }
+            // High bits must not leave a different predictor state for later valid codes.
+            for code in 0..=mask {
+                assert_eq!(actual.decode_sample(code), expected.decode_sample(code));
+            }
+        }
+    }
 
     #[test]
     fn reject_invalid_channels() {
