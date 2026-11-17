@@ -34,9 +34,12 @@ struct ReadmeExamples;
 
 pub mod ass;
 pub mod cea608;
+pub mod jacosub;
 pub mod mcc;
 pub mod microdvd;
 pub mod mpl2;
+pub mod pjs;
+pub mod realtext;
 pub mod sami;
 pub mod scc;
 pub mod srt;
@@ -87,10 +90,16 @@ pub enum Format {
     VPlayer,
     /// SAMI (HTML-like).
     Sami,
+    /// Phoenix Japanimation Society (PJS) subtitles.
+    Pjs,
+    /// RealText streaming timed text markup.
+    RealText,
+    /// JACOsub scriptable subtitles.
+    JacoSub,
 }
 
 impl Format {
-    pub const ALL: [Format; 13] = [
+    pub const ALL: [Format; 16] = [
         Format::Srt,
         Format::WebVtt,
         Format::Scc,
@@ -104,6 +113,9 @@ impl Format {
         Format::SubViewer,
         Format::VPlayer,
         Format::Sami,
+        Format::Pjs,
+        Format::RealText,
+        Format::JacoSub,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -120,6 +132,9 @@ impl Format {
             Format::SubViewer => "SubViewer 2",
             Format::VPlayer => "VPlayer",
             Format::Sami => "SAMI",
+            Format::Pjs => "PJS",
+            Format::RealText => "RealText",
+            Format::JacoSub => "JACOsub",
         }
     }
     pub fn extension(self) -> &'static str {
@@ -138,6 +153,9 @@ impl Format {
             Format::SubViewer => "sbv",
             Format::VPlayer => "vpl",
             Format::Sami => "smi",
+            Format::Pjs => "pjs",
+            Format::RealText => "rt",
+            Format::JacoSub => "jss",
         }
     }
     pub fn from_name(s: &str) -> Option<Format> {
@@ -155,6 +173,9 @@ impl Format {
             "subviewer" | "sbv" => Some(Format::SubViewer),
             "vplayer" | "vpl" => Some(Format::VPlayer),
             "smi" | "sami" => Some(Format::Sami),
+            "pjs" => Some(Format::Pjs),
+            "rt" | "realtext" => Some(Format::RealText),
+            "jss" | "js" | "jacosub" => Some(Format::JacoSub),
             _ => None,
         }
     }
@@ -311,6 +332,9 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if head.starts_with("[INFORMATION]") || head.contains("[SUBTITLE]") {
         return Some(Format::SubViewer);
     }
+    if realtext::is_realtext(head) {
+        return Some(Format::RealText);
+    }
     let first_lines: Vec<&str> = head.lines().map(str::trim).filter(|l| !l.is_empty()).take(3).collect();
     if first_lines.first().is_some_and(|l| microdvd::is_cue(l)) {
         return Some(Format::MicroDvd);
@@ -324,6 +348,12 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if !first_lines.is_empty() && first_lines.iter().all(|l| vplayer::split_line(l).is_some()) {
         return Some(Format::VPlayer);
     }
+    if first_lines.first().is_some_and(|l| pjs::split_cue(l).is_some()) {
+        return Some(Format::Pjs);
+    }
+    if first_lines.iter().any(|l| jacosub::is_timed_line(l)) || (head.starts_with('#') && (head.contains("TimeRes") || head.contains("#T"))) {
+        return Some(Format::JacoSub);
+    }
     let ext = ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase());
     if (head.starts_with('<') && (head.contains("<tt ") || head.contains("<tt>") || head.contains(":tt ")))
         && (head.contains("ns/ttml") || head.contains("ttaf1"))
@@ -335,7 +365,10 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     match ext.as_deref() {
         Some("srt") if has_arrow_timing || head.is_empty() => Some(Format::Srt),
         Some("vtt") if has_arrow_timing => Some(Format::WebVtt),
-        Some("srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml" | "ass" | "ssa" | "sub" | "mpl" | "vpl" | "smi" | "sami") => None,
+        Some(
+            "srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml" | "ass" | "ssa" | "sub" | "mpl" | "vpl" | "smi" | "sami" | "pjs" | "rt"
+            | "jss" | "js",
+        ) => None,
         _ if has_arrow_timing => Some(Format::Srt),
         _ => None,
     }
@@ -375,6 +408,9 @@ fn parse_unbounded(bytes: &[u8], format: Format) -> Result<Document> {
         Format::SubViewer => subviewer::parse(&text),
         Format::VPlayer => vplayer::parse(&text),
         Format::Sami => sami::parse(&text),
+        Format::Pjs => pjs::parse(&text),
+        Format::RealText => realtext::parse(&text),
+        Format::JacoSub => jacosub::parse(&text),
         Format::Stl => stl::parse(bytes),
     }
 }
@@ -418,6 +454,9 @@ pub fn write(doc: &Document, format: Format, opts: WriteOptions) -> Vec<u8> {
         Format::SubViewer => subviewer::write(doc).into_bytes(),
         Format::VPlayer => vplayer::write(doc).into_bytes(),
         Format::Sami => sami::write(doc).into_bytes(),
+        Format::Pjs => pjs::write(doc).into_bytes(),
+        Format::RealText => realtext::write(doc).into_bytes(),
+        Format::JacoSub => jacosub::write(doc).into_bytes(),
     }
 }
 

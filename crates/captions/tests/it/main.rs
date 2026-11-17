@@ -3,6 +3,7 @@ mod legacy_text;
 mod limits;
 mod literal_roundtrips;
 mod mcc_708_timing;
+mod pjs_realtext_jacosub;
 mod roundtrip;
 mod ttml_body_styles;
 mod ttml_body_timing;
