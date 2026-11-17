@@ -233,7 +233,7 @@ impl Graphic {
     /// no fill; a gradient, hatch or bitmap stands as its colour.
     fn fill_with(&self, default: Option<&str>, defs: &Defs) -> Option<Fill> {
         let color = self.fill_color.or(self.background.flatten());
-        let solid = |c: Option<Rgb>| c.map(Fill::solid);
+        let solid = |c: Option<Rgb>| c.map(|color| Fill::Solid { color, transparency: (100.0 - self.opacity.unwrap_or(100.0)).clamp(0.0, 100.0) });
         match self.fill.as_deref().or(default) {
             Some("none") => None,
             Some("solid") => solid(color),
