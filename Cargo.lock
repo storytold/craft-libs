@@ -1885,6 +1885,7 @@ dependencies = [
 name = "craft-evm"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3139,6 +3140,7 @@ dependencies = [
 name = "craft-tar"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
 ]
 
