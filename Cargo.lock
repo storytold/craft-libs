@@ -6392,7 +6392,7 @@ dependencies = [
 [[package]]
 name = "harfbuzz-subset-sys"
 version = "0.1.0+harfbuzz-15.0.0"
-source = "git+https://github.com/storytold/harfbuzz.git?rev=639cb004d518ba99e8e8cb5a8ae897fa09e8033e#639cb004d518ba99e8e8cb5a8ae897fa09e8033e"
+source = "git+https://github.com/storytold/harfbuzz.git?rev=f32ed1e548eaa8852bff47e49a90629a013a2faa#f32ed1e548eaa8852bff47e49a90629a013a2faa"
 dependencies = [
  "cc",
 ]
