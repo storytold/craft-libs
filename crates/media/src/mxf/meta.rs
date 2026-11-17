@@ -204,6 +204,8 @@ pub mod tag {
     pub const WHITE_REF_LEVEL: u16 = 0x3305;
     pub const ALPHA_SAMPLE_DEPTH: u16 = 0x3309;
     pub const PIXEL_LAYOUT: u16 = 0x3401;
+    pub const COMPONENT_MAX_REF: u16 = 0x3406;
+    pub const COMPONENT_MIN_REF: u16 = 0x3407;
     pub const AUDIO_SAMPLING_RATE: u16 = 0x3D03;
     pub const LOCKED: u16 = 0x3D02;
     pub const CHANNEL_COUNT: u16 = 0x3D07;

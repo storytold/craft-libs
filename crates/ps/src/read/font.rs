@@ -43,9 +43,27 @@ fn substitute_type42(ip: &mut Interp, font_name: &[u8], bytes: &[u8]) -> R<Optio
     let Ok(font) = skrifa::FontRef::new(bytes) else { return Ok(None) };
     let cmap = font.charmap();
     let charstrings = PDict::new(256);
-    for glyph_name in crate::read::encodings::standard() {
+    // A reencoded font may name any glyph in its bundled substitute, not only
+    // StandardEncoding. Prefer the font's own names; cmap aliases also support
+    // fonts whose post table deliberately omits glyph names.
+    for (gid, glyph_name) in font.glyph_names().iter() {
+        ip.charge(1)?;
+        if glyph_name.is_synthesized() {
+            continue;
+        }
+        let bytes = glyph_name.as_str().as_bytes();
+        ip.alloc(bytes.len().saturating_add(128))?;
+        charstrings.put(Obj::lit(bytes), Obj::Int(i64::from(gid.to_u32())));
+    }
+    for glyph_name in crate::read::encodings::standard().into_iter().chain(crate::read::encodings::iso_latin1()) {
+        ip.charge(1)?;
+        let key = Key::Name(name(glyph_name.as_bytes()));
+        if charstrings.known(&key) {
+            continue;
+        }
         let Some(ch) = standard_glyph_char(glyph_name.as_bytes()) else { continue };
         let Some(gid) = cmap.map(ch) else { continue };
+        ip.alloc(glyph_name.len().saturating_add(128))?;
         charstrings.put(Obj::lit(glyph_name.as_bytes()), Obj::Int(i64::from(gid.to_u32())));
     }
     ip.alloc(bytes.len().saturating_add(bytes.len() % 2))?;
@@ -171,7 +189,14 @@ fn standard_glyph_char(name: &[u8]) -> Option<char> {
         b"oslash" => 'ø',
         b"oe" => 'œ',
         b"germandbls" => 'ß',
-        _ => return None,
+        _ => {
+            return crate::read::encodings::iso_latin1()
+                .iter()
+                .enumerate()
+                .skip(160)
+                .find(|(_, glyph)| glyph.as_bytes() == name)
+                .and_then(|(code, _)| char::from_u32(code as u32));
+        }
     })
 }
 
@@ -429,7 +454,7 @@ type PerGlyph<'a> = dyn FnMut(&mut Interp, u32, usize) -> R<(f64, f64)> + 'a;
 
 /// Show (or, with `draw` false, measure) a string: the total advance in user space.
 /// `per_char` gives each glyph's extra displacement (or, with `replace`, its whole advance).
-fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &mut PerGlyph<'_>) -> R<(f64, f64)> {
+fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &mut PerGlyph<'_>, text: Option<&str>) -> R<(f64, f64)> {
     let font = match ip.gs.font.clone() {
         Some(f) => f,
         None => return err("invalidfont"),
@@ -443,6 +468,12 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
         let fm = font_matrix(&font);
         s.iter().map(|c| (u32::from(*c), font.clone(), fm, crate::read::composite::Key2::Code(*c))).collect()
     };
+    // Glyph procedures can issue arbitrary paint and clip operations. The selected jobs, not
+    // the composite font's family, determine whether this show can have a synthetic wrapper.
+    let marked = text.filter(|_| !jobs.iter().any(|(_, leaf, _, _)| leaf.get_name(b"FontType").and_then(|v| v.num()) == Some(3.0)));
+    if let Some(text) = marked {
+        ip.out.begin_actual_text(text, &ip.gs.clip).map_err(PsErr::Fatal)?;
+    }
     let mut total = (0.0, 0.0);
     let mut text_paths: Vec<(Vec<crate::read::gstate::Seg>, crate::read::gstate::DevColor)> = Vec::new();
     let mut text_segments = 0usize;
@@ -547,11 +578,18 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
         Ok(total)
     })();
     let path_limit = matches!(&result, Err(PsErr::Fatal(message)) if message == "PostScript (path limit)");
-    if (result.is_ok() || !path_limit) && !ip.gs.nulldev {
-        for (path, color) in text_paths {
-            ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+    let paint_result = (|| {
+        if (result.is_ok() || !path_limit) && !ip.gs.nulldev {
+            for (path, color) in text_paths {
+                ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+            }
         }
+        Ok(())
+    })();
+    if marked.is_some() {
+        ip.out.end_actual_text();
     }
+    paint_result?;
     result
 }
 
@@ -568,17 +606,8 @@ fn show_string(ip: &mut Interp, s: &[u8], draw: bool, per_char: &mut PerGlyph<'_
     // Whitespace-only shows advance the text position but emit no painted glyphs; avoid bloating
     // the content stream with an empty semantic marked-content wrapper for them.
     let text = ip.gs.font.as_ref().and_then(|font| actual_text(font, s));
-    if draw
-        && !ip.charpath
-        && let Some(text) = text.filter(|text| text.chars().any(|c| !c.is_whitespace()))
-    {
-        ip.out.begin_actual_text(&text);
-        let result = show_glyphs(ip, s, draw, false, per_char);
-        ip.out.end_actual_text();
-        result
-    } else {
-        show_glyphs(ip, s, draw, false, per_char)
-    }
+    let text = text.filter(|text| draw && !ip.charpath && text.chars().any(|c| !c.is_whitespace()));
+    show_glyphs(ip, s, draw, false, per_char, text.as_deref())
 }
 
 pub fn show(ip: &mut Interp) -> R {
@@ -627,14 +656,21 @@ fn explicit_show(ip: &mut Interp, xs: bool, ys: bool) -> R {
         return err("nocurrentpoint");
     }
     let step = if xs && ys { 2 } else { 1 };
-    show_glyphs(ip, &s, true, true, &mut |_, _, i| {
-        let d = |k: usize| disp.get(i * step + k).copied().unwrap_or(0.0);
-        Ok(match (xs, ys) {
-            (true, true) => (d(0), d(1)),
-            (true, false) => (d(0), 0.0),
-            _ => (0.0, d(0)),
-        })
-    })
+    show_glyphs(
+        ip,
+        &s,
+        true,
+        true,
+        &mut |_, _, i| {
+            let d = |k: usize| disp.get(i * step + k).copied().unwrap_or(0.0);
+            Ok(match (xs, ys) {
+                (true, true) => (d(0), d(1)),
+                (true, false) => (d(0), 0.0),
+                _ => (0.0, d(0)),
+            })
+        },
+        None,
+    )
     .map(|_| ())
 }
 
@@ -747,5 +783,43 @@ mod tests {
         assert_eq!(standard_glyph_char(b"quoteleft"), Some('‘'));
         assert_eq!(standard_glyph_char(b"quoteright"), Some('’'));
         assert_eq!(standard_glyph_char(b"unmapped.custom"), None);
+        assert_eq!(standard_glyph_char(b"eacute"), Some('é'));
+        assert_eq!(standard_glyph_char(b"Adieresis"), Some('Ä'));
+        assert_eq!(standard_glyph_char(b"space"), Some(' '));
+    }
+    /// A tiny generated SFNT directory with named glyphs, not a copied font asset.
+    fn named_font() -> Vec<u8> {
+        let maxp = [0, 0, 0x50, 0, 0, 3];
+        let mut post = vec![0u8; 32];
+        post[..4].copy_from_slice(&[0, 2, 0, 0]);
+        post.extend_from_slice(&[0, 3, 0, 0, 1, 2, 1, 3]);
+        for n in [b"eacute".as_slice(), b"custom.accent"] {
+            post.push(n.len() as u8);
+            post.extend_from_slice(n);
+        }
+        let mut data = vec![0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0];
+        for (tag, offset, len) in [(b"maxp", 44u32, maxp.len()), (b"post", 52u32, post.len())] {
+            data.extend_from_slice(tag);
+            data.extend_from_slice(&0u32.to_be_bytes());
+            data.extend_from_slice(&offset.to_be_bytes());
+            data.extend_from_slice(&(len as u32).to_be_bytes());
+        }
+        data.extend_from_slice(&maxp);
+        data.resize(52, 0);
+        data.extend_from_slice(&post);
+        data
+    }
+
+    #[test]
+    fn substitute_resolves_reencoded_names_and_charges_budget() -> Result<(), String> {
+        let bytes = named_font();
+        let mut ip = Interp::new(vec![], (0.0, 0.0), Default::default());
+        let font = substitute_type42(&mut ip, b"Fallback", &bytes).map_err(|e| format!("{e:?}"))?.ok_or("fixture font rejected")?;
+        assert_eq!(crate::read::type42::glyph_index(&font, b"eacute"), 1);
+        assert_eq!(crate::read::type42::glyph_index(&font, b"custom.accent"), 2);
+        assert_eq!(crate::read::type42::glyph_index(&font, b"unknown"), 0);
+        let mut limited = Interp::new(vec![], (0.0, 0.0), crate::read::Limits { steps: 0, ..Default::default() });
+        assert!(substitute_type42(&mut limited, b"Fallback", &bytes).is_err());
+        Ok(())
     }
 }

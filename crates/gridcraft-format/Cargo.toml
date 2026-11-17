@@ -1,0 +1,16 @@
+[package]
+name = "craft-gridcraft-format"
+description = "GridCraft's native JSON workbook file: its extensions, reader and pretty writer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
