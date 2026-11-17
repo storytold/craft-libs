@@ -122,6 +122,9 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 ## TAR/CPIO compatibility updates
 
 The old GNU sparse-extension traversal, GNU CRC-symlink compatibility and PAX-size precedence fixes and their regression tests in `crates/tar` are ported from RRFZ's Craft Anything PRs #1973 (`8ea2ec66a1bc80f0420f3695baac877a0cb9b9a5`), #1984 (`b226a475f7dce9710e3af7a069386fe7a9720df7`) and #2007 (`d29465c20b0d570ea4973be512a0cb4e212bb60f`). Source is MIT OR Apache-2.0; RRFZ remains the primary Git author of each port. The PAX update adapts to the shared parser's existing `PaxOverrides` structure without changing the source policy.
+The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
+AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
+Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## Screen Video key frames
 
 `crates/video/src/screen_video.rs` extracts AniCraft `crates/xfl/src/video.rs` codec-3 decoding and its synthetic partial-block fixture, introduced by Tanish Manku in `1f3e603b7ff53a3da364e41ec4da8d43dc83aab0` with pixel-loop cleanup `2b7571363b4b647266df758f95b6e397021cfd4d` (MIT OR Apache-2.0). Import commits preserve Tanish as primary author. Caller-owned bounds and neutral RGBA output separate codec work from the consuming app's FLV first-frame/report policy. Boundary tests and integration are subsequent Dylan M. Taylor changes.
