@@ -1861,6 +1861,67 @@ fn a_link_on_an_office_2016_charts_drawing_is_kept() {
     }
 }
 
+/// A package with one invented waterfall chart (432 x 252 pt) whose `mc:Fallback` is `fallback`.
+fn chartex_text_fallback_docx(fallback: &str) -> Vec<u8> {
+    let chart = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chart><cx:title pos="t"><cx:tx><cx:txData><cx:v>Steps</cx:v></cx:txData></cx:tx></cx:title><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"/></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+    let frame = r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="1" name="Chart 1"/><wp:cNvGraphicFramePr/>"#;
+    let body = format!(
+        r#"<w:p><w:r><w:t>Before</w:t></w:r></w:p><w:p><w:r><mc:AlternateContent><mc:Choice xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent></w:r></w:p>"#
+    );
+    let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="charts/chartEx1.xml"/></Relationships>"#;
+    let types = format!(
+        r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/charts/chartEx1.xml" ContentType="{CT_CHARTEX}"/></Types>"#
+    );
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
+        ("word/charts/chartEx1.xml", chart.as_bytes()),
+    ])
+}
+
+/// #6820: an Office 2016 chart whose fallback is only text keeps its 432 x 252 pt place (as a
+/// placeholder) instead of becoming the fallback words, and is written back unchanged.
+#[test]
+fn office_2016_chart_with_a_text_fallback_keeps_its_size_through_saves() {
+    let mut d = craft_docx::read(&chartex_text_fallback_docx("<w:t>Chart not available.</w:t>")).unwrap();
+    for _ in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { w, h, graphic, .. }] = g.as_slice() else { panic!("the chart is an object: {g:?}") };
+        assert_eq!((*w, *h), (432.0, 252.0));
+        assert_eq!((graphic.w, graphic.h), (432.0, 252.0));
+        assert!(
+            graphic
+                .items
+                .iter()
+                .any(|i| matches!(i, craft_wordmodel::graphic::GraphicItem::Text { text, .. } if text.starts_with("Waterfall chart"))),
+            "{:?}",
+            graphic.items
+        );
+        assert!(!paras(&d).iter().any(|p| p.text.contains("not available")), "the fallback words are not body text");
+        let files = unzip(&craft_docx::write(&d).unwrap());
+        let body = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:extent", "cx"), ["5486400"], "the chart's frame; the text fallback has none: {body}");
+        assert!(body.contains("<w:t>Chart not available.</w:t>"), "the fallback is written back as it was: {body}");
+        let [cx_id] = attr_values(&body, "cx:chart", "r:id").try_into().unwrap_or_else(|_| panic!("chart lost: {body}"));
+        let (kind, target) = rel(&text(&files, "word/_rels/document.xml.rels"), &cx_id);
+        assert!(kind.ends_with("/chartEx"), "{kind}");
+        assert!(text(&files, &part_at("word", &target)).contains(r#"layoutId="waterfall""#));
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        d = craft_docx::read(&zip(&entries)).unwrap();
+    }
+}
+
+/// Guard, not fix proof (it passes before the change too): a fallback that holds a run can't be
+/// written back inside the object's own run, so it is not turned into a chart placeholder.
+#[test]
+fn office_2016_chart_with_a_run_fallback_is_not_made_a_placeholder() {
+    let d = craft_docx::read(&chartex_text_fallback_docx("<w:r><w:t>Chart not available.</w:t></w:r>")).unwrap();
+    assert!(graphics(&d).is_empty(), "{:?}", graphics(&d));
+}
+
 #[test]
 fn resized_office_2016_chart_resizes_its_fallback_too() {
     let mut d = craft_docx::read(&chartex_docx("cx1", "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex")).unwrap();
@@ -2195,6 +2256,50 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.body, d.body);
     assert_eq!(again.last_section, d.last_section);
     assert_eq!(again.revisions, d.revisions);
+}
+
+#[test]
+fn numbering_change_without_active_list_roundtrips() {
+    let body = r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:date="2026-10-01T00:00:00Z" w:original="%1:1:0:."/></w:numPr></w:pPr><w:r><w:t>Removed</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert!(p[0].props.numbering.is_none());
+    let nc = p[0].props.num_change.as_deref().expect("numberingChange read back");
+    assert_eq!(nc.original, "%1:1:0:.");
+
+    let bytes = craft_docx::write(&d).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:numPr><w:numberingChange w:id="#), "{xml}");
+    assert!(xml.contains(r#"w:original="%1:1:0:."/></w:numPr>"#), "{xml}");
+
+    let again = craft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert!(ap[0].props.numbering.is_none());
+    let anc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(anc.original, "%1:1:0:.");
+}
+
+#[test]
+fn numbering_change_original_preserves_long_values_within_bound() {
+    let long_orig = "%1:1:0:.".repeat(64); // 512 chars, well past the old 256-char cap
+    assert!(long_orig.len() > 256 && long_orig.len() < 4096);
+    let over_cap = "x".repeat(5000);
+    let body = format!(
+        r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:original="{long_orig}"/></w:numPr></w:pPr><w:r><w:t>Long</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:numberingChange w:id="2" w:author="Alice" w:original="{over_cap}"/></w:numPr></w:pPr><w:r><w:t>Bounded</w:t></w:r></w:p>"#
+    );
+    let d = read_body(&body);
+    let p = paras(&d);
+    assert_eq!(p[0].props.num_change.as_deref().map(|n| n.original.as_str()), Some(long_orig.as_str()));
+    assert_eq!(p[1].props.num_change.as_deref().map(|n| n.original.chars().count()), Some(4096));
+
+    let bytes = craft_docx::write(&d).unwrap();
+    let again = craft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert_eq!(ap[0].props.num_change.as_deref().map(|n| n.original.as_str()), Some(long_orig.as_str()));
 }
 
 /// A package with `styles`, a theme (accent1 4472C4, accent2 ED7D31, major font "Major Face") and,
@@ -2683,6 +2788,39 @@ fn rounded_rectangle_corners_are_read_and_saved() {
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     assert!(xml.contains(r#"<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 3565"/></a:avLst></a:prstGeom>"#), "{xml}");
     assert_eq!(corners(&craft_docx::read(&bytes).unwrap()), expected);
+}
+
+/// A `frame` preset (a letterhead's page border) is a frame, not a filled rectangle: its border
+/// width is its `adj1`, read, capped and written back as the same preset.
+#[test]
+fn frame_presets_keep_their_hole_and_border_width() {
+    let geom =
+        |av: &str| format!(r#"<a:prstGeom prst="frame"><a:avLst>{av}</a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="E3AB48"/></a:solidFill>"#);
+    let gd = |fmla: &str| format!(r#"<a:gd name="adj1" fmla="{fmla}"/>"#);
+    let body = [geom(&gd("val 2604")), geom(""), geom(&gd("val 90000")), geom(r#"<a:gd name="adj" fmla="val 100"/>"#)]
+        .iter()
+        .map(|sppr| anchored_wsp("Frame", 2540000, 1270000, sppr, "", "<wps:cNvSpPr/>"))
+        .collect::<String>();
+    let frames = |d: &Document| -> Vec<(ShapeKind, Option<u32>)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Shape { kind, extra, .. } => Some((*kind, extra.corner)),
+                _ => None,
+            })
+            .collect()
+    };
+    let f = ShapeKind::Frame;
+    let expected = vec![(f, Some(2604)), (f, None), (f, Some(50_000)), (f, None)];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(frames(&d), expected);
+    let bytes = craft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:prstGeom prst="frame"><a:avLst><a:gd name="adj1" fmla="val 2604"/></a:avLst></a:prstGeom>"#), "{xml}");
+    assert_eq!(frames(&craft_docx::read(&bytes).unwrap()), expected);
 }
 
 /// #611: legacy VML lines and rectangles (documents without DrawingML).

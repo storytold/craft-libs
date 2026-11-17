@@ -39,20 +39,25 @@
 //! name is listed in [`Scene::external`]. The names come from the file: a resolver must not trust
 //! them as paths.
 //!
-//! Not read: FBX 5 and older, animation stacks, skin deformers, blend shapes, cameras and
-//! lights, NURBS and patches.
+//! Not read: FBX 5 and older, animation stacks, skin deformers, blend shapes, lights, NURBS and patches.
 //!
-//! [`Limits::max_data_bytes`] bounds what one file may keep in memory: its parsed values (an
-//! array element counts 8 bytes whatever its type in the file), the meshes built from them and
-//! the image bytes.
+//! [`Limits::max_data_bytes`] is the budget the reader charges for one file: its parsed values,
+//! the meshes built from them and the image bytes. A binary file is charged 8 bytes per array
+//! element whatever its type in the file; its scalar, string and raw values are not counted. An
+//! ASCII file is charged `size_of::<Prop>()` for every value, each array element included, plus
+//! the bytes of its strings. Neither form is charged for record names or for the overhead of
+//! records and their containers, so the reader keeps those even with a budget of 0.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
-    AlphaMode, Corner, IDENTITY, Image, Limits, Mat4, Material, Mesh, NONE, Node, Part, Resolver, Result, Scene, TextureRef, base64_decode,
-    count_warning, malformed, mat_mul, srgb_to_linear, too_large,
+    AlphaMode, Camera, Corner, IDENTITY, Image, Limits, Mat4, Material, Mesh, NONE, Node, Part, Projection, Resolver, Result, Scene, TextureRef,
+    base64_decode, count_warning, malformed, mat_mul, srgb_to_linear, too_large,
 };
+
+/// Bounded ZIP packages containing an FBX and its texture files.
+pub mod package;
 
 const KIND: &str = "FBX";
 
@@ -89,7 +94,8 @@ impl Budget {
 }
 
 /// Bytes the values under `records` keep. Used for ASCII files, which hold array elements as one
-/// [`Prop`] each and are parsed before they can be counted (the text itself bounds them).
+/// [`Prop`] each.
+#[cfg(test)]
 pub(crate) fn value_bytes(records: &[Record]) -> Option<usize> {
     records.iter().try_fold(0usize, |acc, n| {
         let own = n.props.iter().try_fold(0usize, |a, p| {
@@ -109,7 +115,13 @@ pub(crate) fn value_bytes(records: &[Record]) -> Option<usize> {
 /// Bytes a mesh keeps.
 pub(crate) fn mesh_bytes(m: &Mesh) -> Option<usize> {
     let uvs = m.uv_sets.iter().try_fold(0usize, |a, s| a.checked_add(s.len().checked_mul(8)?))?;
-    let pools = m.positions.len().checked_mul(24)?.checked_add(m.normals.len().checked_mul(24)?)?.checked_add(uvs)?;
+    let pools = m
+        .positions
+        .len()
+        .checked_mul(24)?
+        .checked_add(m.normals.len().checked_mul(24)?)?
+        .checked_add(uvs)?
+        .checked_add(m.colors.len().checked_mul(16)?)?;
     m.parts.iter().try_fold(pools, |a, p| a.checked_add(p.corners.len().checked_mul(12)?)?.checked_add(p.face_sizes.len().checked_mul(4)?))
 }
 
@@ -229,13 +241,29 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 
 /// Read an FBX file (binary or ASCII) into its records.
 pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
+    read_document_impl(bytes, limits, false)
+}
+
+/// Read records strictly, checking ASCII delimiters and the binary closing record.
+pub fn read_document_strict(bytes: &[u8], limits: &Limits) -> Result<Document> {
+    read_document_impl(bytes, limits, true)
+}
+
+fn read_document_impl(bytes: &[u8], limits: &Limits, strict: bool) -> Result<Document> {
     let budget = Budget::new(limits.max_data_bytes);
     let (version, records) = if is_binary(bytes) {
-        read_binary(bytes, &budget)?
+        read_binary(bytes, &budget, strict)?
     } else {
-        let (version, records) = read_ascii(&String::from_utf8_lossy(bytes))?;
-        budget.take(value_bytes(&records), "its values")?;
-        (version, records)
+        let text = match std::str::from_utf8(bytes) {
+            Ok(text) => std::borrow::Cow::Borrowed(text),
+            Err(_) => {
+                if bytes.len() > limits.max_data_bytes {
+                    return Err(too_large(KIND, "invalid UTF-8 text exceeds the memory limit"));
+                }
+                String::from_utf8_lossy(bytes)
+            }
+        };
+        read_ascii(&text, &budget, strict)?
     };
     Ok(Document { version, records, left: budget.left.get() })
 }
@@ -254,6 +282,7 @@ struct Bin<'a> {
     /// 64-bit record offsets (version 7500 and later).
     wide: bool,
     budget: &'a Budget,
+    records_budget: &'a Budget,
 }
 
 impl Bin<'_> {
@@ -313,6 +342,8 @@ impl Bin<'_> {
         if end <= start || end > limit.min(self.d.len()) {
             return Err(malformed(KIND, format!("bad record end {end} at byte {start}")));
         }
+        // Bound record and property-vector allocations before copying names or reserving storage.
+        self.records_budget.take(std::mem::size_of::<Record>().checked_add(nlen.saturating_mul(3)), "its records")?;
         let name = String::from_utf8_lossy(self.take(pos, nlen)?).into_owned();
         let pstart = *pos;
         let pend =
@@ -321,7 +352,9 @@ impl Bin<'_> {
         if nprops > plen as u64 {
             return Err(malformed(KIND, format!("`{name}`: {nprops} properties in {plen} bytes")));
         }
-        let mut props = Vec::with_capacity(nprops as usize);
+        let count = usize::try_from(nprops).map_err(|_| too_large(KIND, "too many properties"))?;
+        self.records_budget.take(count.checked_mul(std::mem::size_of::<Prop>()), "its properties")?;
+        let mut props = Vec::with_capacity(count);
         for _ in 0..nprops {
             props.push(self.prop(pos, pend)?);
         }
@@ -332,7 +365,12 @@ impl Bin<'_> {
     }
 
     fn prop(&self, pos: &mut usize, pend: usize) -> Result<Prop> {
-        let sub = Bin { d: self.d.get(..pend).ok_or_else(|| malformed(KIND, "truncated property"))?, wide: self.wide, budget: self.budget };
+        let sub = Bin {
+            d: self.d.get(..pend).ok_or_else(|| malformed(KIND, "truncated property"))?,
+            wide: self.wide,
+            budget: self.budget,
+            records_budget: self.records_budget,
+        };
         let t = sub.arr::<1>(pos)?[0];
         Ok(match t {
             b'Y' => Prop::Int(i64::from(i16::from_le_bytes(sub.arr(pos)?))),
@@ -343,10 +381,12 @@ impl Bin<'_> {
             b'D' => Prop::Float(f64::from_le_bytes(sub.arr(pos)?)),
             b'S' => {
                 let n = sub.u32(pos)? as usize;
+                sub.budget.take(n.checked_mul(3), "a string")?;
                 Prop::Str(object_name(sub.take(pos, n)?))
             }
             b'R' => {
                 let n = sub.u32(pos)? as usize;
+                sub.budget.take(Some(n), "binary data")?;
                 Prop::Bytes(sub.take(pos, n)?.to_vec())
             }
             b'f' | b'd' | b'l' | b'i' | b'b' => {
@@ -398,19 +438,27 @@ fn object_name(b: &[u8]) -> String {
     }
 }
 
-fn read_binary(bytes: &[u8], budget: &Budget) -> Result<(u32, Vec<Record>)> {
+fn read_binary(bytes: &[u8], budget: &Budget, strict: bool) -> Result<(u32, Vec<Record>)> {
     let mut pos = BINARY_MAGIC.len();
-    let version = Bin { d: bytes, wide: false, budget }.u32(&mut pos)?;
-    let bin = Bin { d: bytes, wide: version >= 7500, budget };
+    let records_budget = Budget::new(budget.limit);
+    let version = Bin { d: bytes, wide: false, budget, records_budget: &records_budget }.u32(&mut pos)?;
+    let bin = Bin { d: bytes, wide: version >= 7500, budget, records_budget: &records_budget };
     let mut records = vec![];
+    let mut closed = false;
     while pos < bytes.len() {
         match bin.record(&mut pos, bytes.len(), 0) {
             Ok(Some(n)) => records.push(n),
-            Ok(None) => break,
+            Ok(None) => {
+                closed = true;
+                break;
+            }
             // A damaged tail (footer, padding) after complete sections is ignored.
-            Err(crate::Error::Malformed(_)) if records.iter().any(|n| n.name == "Objects") => break,
+            Err(crate::Error::Malformed(_)) if !strict && records.iter().any(|n| n.name == "Objects") => break,
             Err(e) => return Err(e),
         }
+    }
+    if strict && !closed {
+        return Err(malformed(KIND, "missing binary closing record"));
     }
     Ok((version, records))
 }
@@ -418,123 +466,150 @@ fn read_binary(bytes: &[u8], budget: &Budget) -> Result<(u32, Vec<Record>)> {
 // ---------------------------------------------------------------------------------------------
 // ASCII
 
-#[derive(Clone, Debug, PartialEq)]
-enum Tok {
-    Key(String),
-    Val(Prop),
-    /// `*N` array length (the values follow in an `a:` child).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Tok<'a> {
+    Key(&'a str),
+    Value(&'a str, bool),
     Count,
     Comma,
     Open,
     Close,
 }
 
-fn tokenize(text: &str) -> Vec<Tok> {
-    let mut out = vec![];
-    let mut it = text.char_indices().peekable();
-    while let Some(&(i, c)) = it.peek() {
-        match c {
-            c if c.is_whitespace() => {
-                it.next();
+/// Scan on demand so punctuation and ignored input cannot build an unbounded token vector.
+struct Ascii<'a> {
+    text: &'a str,
+    pos: usize,
+    lookahead: Option<Tok<'a>>,
+    strict: bool,
+    unterminated: bool,
+}
+
+impl<'a> Ascii<'a> {
+    fn next_token(&mut self) -> Option<Tok<'a>> {
+        loop {
+            let rest = self.text.get(self.pos..)?;
+            let c = rest.chars().next()?;
+            if c.is_whitespace() {
+                self.pos += c.len_utf8();
+                continue;
             }
-            ';' => {
-                for (_, c) in it.by_ref() {
-                    if c == '\n' {
-                        break;
-                    }
+            if c == ';' {
+                self.pos += rest.find('\n').map_or(rest.len(), |i| i + 1);
+                continue;
+            }
+            match c {
+                ',' | '{' | '}' => {
+                    self.pos += 1;
+                    return Some(match c {
+                        ',' => Tok::Comma,
+                        '{' => Tok::Open,
+                        _ => Tok::Close,
+                    });
                 }
-            }
-            ',' => {
-                it.next();
-                out.push(Tok::Comma);
-            }
-            '{' => {
-                it.next();
-                out.push(Tok::Open);
-            }
-            '}' => {
-                it.next();
-                out.push(Tok::Close);
-            }
-            '"' => {
-                it.next();
-                let start = i + 1;
-                let mut end = text.len();
-                for (j, c) in it.by_ref() {
-                    if c == '"' {
-                        end = j;
-                        break;
-                    }
+                '"' => {
+                    let tail = rest.get(1..).unwrap_or("");
+                    let end = tail.find('"').unwrap_or(tail.len());
+                    self.unterminated |= end == tail.len();
+                    self.pos += 1 + end + usize::from(end < tail.len());
+                    return Some(Tok::Value(tail.get(..end).unwrap_or(""), true));
                 }
-                out.push(Tok::Val(Prop::Str(text.get(start..end).unwrap_or("").replace("&quot;", "\""))));
-            }
-            _ => {
-                let start = i;
-                let mut end = text.len();
-                while let Some(&(j, c)) = it.peek() {
-                    if c.is_whitespace() || matches!(c, ',' | '{' | '}' | '"' | ';' | ':') {
-                        end = j;
-                        break;
+                _ => {
+                    let end = rest.find(|c: char| c.is_whitespace() || matches!(c, ',' | '{' | '}' | '"' | ';' | ':')).unwrap_or(rest.len());
+                    let word = rest.get(..end).unwrap_or("");
+                    self.pos += end;
+                    if rest.as_bytes().get(end) == Some(&b':') {
+                        self.pos += 1;
+                        return Some(Tok::Key(word));
                     }
-                    it.next();
-                }
-                let word = text.get(start..end).unwrap_or("");
-                if it.peek().is_some_and(|(_, c)| *c == ':') {
-                    it.next();
-                    out.push(Tok::Key(word.to_string()));
-                } else if word.starts_with('*') {
-                    out.push(Tok::Count);
-                } else if let Ok(i) = word.parse::<i64>() {
-                    out.push(Tok::Val(Prop::Int(i)));
-                } else if let Ok(f) = word.parse::<f64>() {
-                    out.push(Tok::Val(Prop::Float(f)));
-                } else if !word.is_empty() {
-                    out.push(Tok::Val(Prop::Str(word.to_string())));
-                } else {
+                    if word.starts_with('*') {
+                        return Some(Tok::Count);
+                    }
+                    if !word.is_empty() {
+                        return Some(Tok::Value(word, false));
+                    }
                     // A stray `:` with no key.
-                    it.next();
+                    self.pos += 1;
                 }
             }
         }
     }
-    out
+
+    fn peek(&mut self) -> Option<Tok<'a>> {
+        if self.lookahead.is_none() {
+            self.lookahead = self.next_token();
+        }
+        self.lookahead
+    }
+
+    fn take(&mut self) -> Option<Tok<'a>> {
+        self.lookahead.take().or_else(|| self.next_token())
+    }
 }
 
-fn ascii_list(toks: &[Tok], i: &mut usize, depth: usize) -> Result<Vec<Record>> {
+fn ascii_list(scan: &mut Ascii<'_>, budget: &Budget, records_budget: &Budget, depth: usize) -> Result<Vec<Record>> {
     if depth > MAX_DEPTH {
         return Err(too_large(KIND, "records nested too deeply"));
     }
     let mut out = vec![];
-    while let Some(t) = toks.get(*i) {
-        *i += 1;
+    while let Some(t) = scan.take() {
         match t {
             Tok::Close if depth > 0 => return Ok(out),
+            Tok::Close if scan.strict => return Err(malformed(KIND, "unbalanced closing brace")),
             Tok::Key(name) => {
-                let mut record = Record { name: name.clone(), ..Record::default() };
+                records_budget.take(std::mem::size_of::<Record>().checked_add(name.len()), "its records")?;
+                let mut record = Record { name: name.to_string(), ..Record::default() };
+                let mut needs_comma = false;
                 loop {
-                    match toks.get(*i) {
-                        Some(Tok::Val(v)) => record.props.push(v.clone()),
-                        Some(Tok::Count | Tok::Comma) => {}
+                    match scan.peek() {
+                        Some(Tok::Value(..) | Tok::Count) if scan.strict && needs_comma => break,
+                        Some(Tok::Value(value, quoted)) => {
+                            let number = if quoted {
+                                None
+                            } else {
+                                value.parse::<i64>().ok().map(Prop::Int).or_else(|| value.parse::<f64>().ok().map(Prop::Float))
+                            };
+                            let size = std::mem::size_of::<Prop>().checked_add(if number.is_some() { 0 } else { value.len() });
+                            // Charge before copying a string or growing the property vector.
+                            budget.take(size, "its values")?;
+                            record
+                                .props
+                                .push(number.unwrap_or_else(|| Prop::Str(if quoted { value.replace("&quot;", "\"") } else { value.to_string() })));
+                        }
+                        Some(Tok::Count) => {}
+                        Some(Tok::Comma) => {
+                            needs_comma = false;
+                            scan.take();
+                            continue;
+                        }
                         _ => break,
                     }
-                    *i += 1;
+                    needs_comma = true;
+                    scan.take();
                 }
-                if toks.get(*i) == Some(&Tok::Open) {
-                    *i += 1;
-                    record.children = ascii_list(toks, i, depth + 1)?;
+                if scan.peek() == Some(Tok::Open) {
+                    scan.take();
+                    record.children = ascii_list(scan, budget, records_budget, depth + 1)?;
                 }
                 out.push(record);
             }
+            _ if scan.strict => return Err(malformed(KIND, "expected a property name")),
             _ => {}
         }
+    }
+    if scan.strict && depth > 0 {
+        return Err(malformed(KIND, "missing closing brace"));
     }
     Ok(out)
 }
 
-fn read_ascii(text: &str) -> Result<(u32, Vec<Record>)> {
-    let toks = tokenize(text);
-    let mut i = 0;
-    let records = ascii_list(&toks, &mut i, 0)?;
+fn read_ascii(text: &str, budget: &Budget, strict: bool) -> Result<(u32, Vec<Record>)> {
+    let mut scan = Ascii { text, pos: 0, lookahead: None, strict, unterminated: false };
+    let records_budget = Budget::new(budget.limit);
+    let records = ascii_list(&mut scan, budget, &records_budget, 0)?;
+    if strict && scan.unterminated {
+        return Err(malformed(KIND, "unterminated string"));
+    }
     let version = records
         .iter()
         .find(|n| n.name == "FBXHeaderExtension")
@@ -638,9 +713,9 @@ fn euler(d: [f64; 3], order: i64) -> Mat4 {
 }
 
 /// A Model's local transform: `T · Roff · Rp · Rpre · R · Rpost⁻¹ · Rp⁻¹ · Soff · Sp · S · Sp⁻¹`.
-fn model_local(p: &Props) -> Mat4 {
+fn model_local(p: &Props, apply_inactive_rotation: bool) -> Mat4 {
     let order = p.f("RotationOrder").map_or(0, |o| o as i64);
-    let active = p.f("RotationActive").is_some_and(|a| a != 0.0);
+    let active = apply_inactive_rotation || p.f("RotationActive").is_some_and(|a| a != 0.0);
     let (pre, post) =
         if active { (euler(p.v3("PreRotation", [0.0; 3]), 0), transpose(&euler(p.v3("PostRotation", [0.0; 3]), 0))) } else { (IDENTITY, IDENTITY) };
     let rp = p.v3("RotationPivot", [0.0; 3]);
@@ -669,6 +744,20 @@ fn geometric(p: &Props) -> Option<Mat4> {
         return None;
     }
     Some(chain(&[translate(t), euler(r, 0), scale(s)]))
+}
+
+/// Optional FBX scene compatibility behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SceneOptions {
+    /// Apply pre/post rotations even when `RotationActive` is missing or zero. Some importers
+    /// retain these values regardless of the flag.
+    pub apply_inactive_rotation: bool,
+    /// Refuse malformed geometry arrays and accept an unterminated final polygon.
+    pub strict_geometry: bool,
+    /// If a model names several parents, use the last connection.
+    pub prefer_last_parent: bool,
+    /// Restrict model hierarchy, geometry and material links to object connections.
+    pub only_object_connections: bool,
 }
 
 impl Document {
@@ -720,6 +809,16 @@ impl Document {
     /// The scene the records describe. `resolve` is asked for texture image files (see the
     /// module documentation).
     pub fn scene(&self, limits: &Limits, resolve: Resolver) -> Result<Scene> {
+        self.scene_with_options(limits, resolve, &SceneOptions::default())
+    }
+
+    /// Build a scene with explicitly selected compatibility behavior.
+    pub fn scene_with_options(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<Scene> {
+        self.scene_with_placements(limits, resolve, options).map(|(scene, _)| scene)
+    }
+
+    /// Build a scene and list its mesh nodes in FBX placement order.
+    pub fn scene_with_placements(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<(Scene, Vec<Placement>)> {
         if self.version != 0 && self.version < 6000 {
             return Err(crate::Error::Unsupported(format!(
                 "FBX {}.{} (only FBX 6.x and 7.x files are read)",
@@ -730,10 +829,13 @@ impl Document {
         let objects = self.top("Objects").ok_or_else(|| malformed(KIND, "no Objects section"))?;
         let mut b = Build {
             limits,
+            strict_geometry: options.strict_geometry,
+            only_object_connections: options.only_object_connections,
             budget: Budget { left: Cell::new(self.left), limit: limits.max_data_bytes },
             resolve,
             by_key: objects.children.iter().filter_map(|o| Some((key(o.props.first())?, o))).collect(),
             children: HashMap::new(),
+            object_children: HashMap::new(),
             scene: Scene::default(),
             material_of: HashMap::new(),
             texture_of: HashMap::new(),
@@ -746,8 +848,14 @@ impl Document {
         let mut links: Vec<(Key, Key)> = vec![];
         for e in self.top("Connections").into_iter().flat_map(|c| c.children.iter()).filter(|e| e.name == "C" || e.name == "Connect") {
             let (Some(child), Some(parent)) = (key(e.props.get(1)), key(e.props.get(2))) else { continue };
-            links.push((child, parent));
+            let object = e.str_at(0) == Some("OO");
+            if !options.only_object_connections || object {
+                links.push((child, parent));
+            }
             b.children.entry(parent).or_default().push((child, e.str_at(3)));
+            if options.only_object_connections && object {
+                b.object_children.entry(parent).or_default().push((child, e.str_at(3)));
+            }
         }
 
         let models: Vec<(Key, &Record)> =
@@ -761,7 +869,7 @@ impl Document {
             node_of.insert(*id, b.scene.nodes.len());
             b.scene.nodes.push(Node {
                 name: short_name(o.first_str().unwrap_or("")).to_string(),
-                transform: model_local(&Props::of(o)),
+                transform: model_local(&Props::of(o), options.apply_inactive_rotation),
                 ..Node::default()
             });
         }
@@ -772,7 +880,11 @@ impl Document {
             if let (Some(ci), Some(pi)) = (node_of.get(c), node_of.get(p))
                 && ci != pi
             {
-                parent.entry(*ci).or_insert(*pi);
+                if options.prefer_last_parent {
+                    parent.insert(*ci, *pi);
+                } else {
+                    parent.entry(*ci).or_insert(*pi);
+                }
             }
         }
         for i in 0..b.scene.nodes.len() {
@@ -782,50 +894,289 @@ impl Document {
             }
         }
 
-        // One mesh per Model with Mesh geometry (material slots are per Model). Models instancing
-        // the same geometry with the same materials share one mesh rather than each building a
-        // copy.
-        let mut mesh_of: HashMap<(Key, Vec<usize>), usize> = HashMap::new();
-        for (id, o) in &models {
+        // FBX cameras look along +X; a child turns the neutral camera's -Z onto +X.
+        // Keep this separate from the Model so its children retain their original transforms.
+        for (id, model) in &models {
+            let class_index = if matches!(model.props.first(), Some(Prop::Int(_))) { 2 } else { 1 };
+            if model.str_at(class_index) != Some("Camera") {
+                continue;
+            }
+            let name = short_name(model.first_str().unwrap_or(""));
+            if name.starts_with("Producer ") {
+                continue;
+            }
             let Some(ni) = node_of.get(id).copied() else { continue };
-            let Some((gid, geom)) = b.geometry_of(*id) else { continue };
-            let mut mats: Vec<usize> = vec![];
+            let lens = b.children_of(*id, "NodeAttribute").last().and_then(|(key, _)| b.by_key.get(key)).copied().unwrap_or(model);
+            let props = Props::of(lens);
+            let positive = |key| props.f(key).filter(|v| *v > 0.0);
+            let projection = if props.f("CameraProjectionType") == Some(1.0) {
+                let mag = positive("OrthoZoom").unwrap_or(1.0);
+                Projection::Orthographic { xmag: mag, ymag: mag, znear: 0.01, zfar: 1000.0 }
+            } else {
+                let yfov = match positive("FocalLength") {
+                    Some(focal) => 2.0 * (positive("FilmHeight").unwrap_or(0.612) * 25.4 / (2.0 * focal)).atan(),
+                    None => positive("FieldOfViewY").or_else(|| positive("FieldOfView")).unwrap_or(40.0).to_radians(),
+                };
+                Projection::Perspective { yfov, aspect: None, znear: 0.01, zfar: None }
+            };
+            if b.scene.cameras.len() >= limits.max_extras {
+                return Err(too_large(KIND, "too many cameras"));
+            }
+            b.node_room()?;
+            let ci = b.scene.cameras.len();
+            b.scene.cameras.push(Camera { name: name.to_string(), projection });
+            let child = b.scene.nodes.len();
+            b.scene.nodes.push(Node { name: format!("{name} camera"), transform: rotate(1, -90.0), camera: Some(ci), ..Node::default() });
+            if let Some(node) = b.scene.nodes.get_mut(ni) {
+                node.children.push(child);
+            }
+        }
+
+        // One mesh per geometry and material-slot combination, shared by instances.
+        let mut mesh_of: HashMap<(Key, Vec<usize>), usize> = HashMap::new();
+        let mut placed = HashSet::new();
+        let mut placement_nodes = HashMap::new();
+        for (id, model) in &models {
+            let Some(ni) = node_of.get(id).copied() else { continue };
+            let geometries = b.geometries_of(*id);
+            if geometries.is_empty() {
+                continue;
+            }
+            let mut mats = Vec::new();
             for (mid, _) in b.children_of(*id, "Material") {
                 mats.extend(b.material(mid)?);
             }
             let name = b.scene.nodes.get(ni).map(|n| n.name.clone()).unwrap_or_default();
-            let mesh_index = match mesh_of.get(&(gid, mats.clone())) {
-                Some(i) => *i,
-                None => {
-                    let Some(mesh) = b.mesh(&name, geom, &mats)? else { continue };
-                    b.budget.take(mesh_bytes(&mesh), &format!("mesh `{name}`"))?;
-                    if b.scene.meshes.len() >= limits.max_meshes {
-                        return Err(too_large(KIND, format!("more than {} meshes", limits.max_meshes)));
-                    }
-                    b.scene.meshes.push(mesh);
-                    mesh_of.insert((gid, mats), b.scene.meshes.len() - 1);
-                    b.scene.meshes.len() - 1
+            for (gid, geom) in geometries {
+                if !placed.insert((gid, Some(*id))) {
+                    continue;
                 }
-            };
-            match geometric(&Props::of(o)) {
-                Some(transform) => {
+                let mesh_index = match mesh_of.get(&(gid, mats.clone())) {
+                    Some(i) => *i,
+                    None => {
+                        let Some(mesh) = b.mesh(&name, geom, &mats)? else { continue };
+                        b.budget.take(mesh_bytes(&mesh), &format!("mesh `{name}`"))?;
+                        if b.scene.meshes.len() >= limits.max_meshes {
+                            return Err(too_large(KIND, format!("more than {} meshes", limits.max_meshes)));
+                        }
+                        b.scene.meshes.push(mesh);
+                        mesh_of.insert((gid, mats.clone()), b.scene.meshes.len() - 1);
+                        b.scene.meshes.len() - 1
+                    }
+                };
+                let transform = geometric(&Props::of(model));
+                let occupied = b.scene.nodes.get(ni).is_some_and(|n| n.mesh.is_some());
+                let placement_node = if transform.is_some() || occupied {
                     b.node_room()?;
-                    let gi = b.scene.nodes.len();
-                    b.scene.nodes.push(Node { name: format!("{name} geometry"), transform, mesh: Some(mesh_index), ..Node::default() });
-                    if let Some(n) = b.scene.nodes.get_mut(ni) {
-                        n.children.push(gi);
+                    let child = b.scene.nodes.len();
+                    b.scene.nodes.push(Node {
+                        name: format!("{name} geometry"),
+                        transform: transform.unwrap_or(IDENTITY),
+                        mesh: Some(mesh_index),
+                        ..Node::default()
+                    });
+                    if let Some(node) = b.scene.nodes.get_mut(ni) {
+                        node.children.push(child);
                     }
+                    child
+                } else {
+                    if let Some(node) = b.scene.nodes.get_mut(ni) {
+                        node.mesh = Some(mesh_index);
+                    }
+                    ni
+                };
+                placement_nodes.insert((gid, Some(*id)), Placement { node: placement_node, model: Some(ni) });
+            }
+        }
+        // Geometry with no Model connection still contributes a mesh at the origin.
+        let placed_ids: HashSet<Key<'_>> = placed.iter().map(|(gid, _)| *gid).collect();
+        let mut unplaced = Vec::new();
+        for geom in objects.children.iter().filter(|o| o.name == "Geometry" && o.child("Vertices").is_some()) {
+            let Some(gid) = key(geom.props.first()) else { continue };
+            if placed_ids.contains(&gid) {
+                continue;
+            }
+            let Some(mesh) = b.mesh("", geom, &[])? else { continue };
+            b.budget.take(mesh_bytes(&mesh), "unplaced mesh")?;
+            if b.scene.meshes.len() >= limits.max_meshes {
+                return Err(too_large(KIND, format!("more than {} meshes", limits.max_meshes)));
+            }
+            b.node_room()?;
+            let mesh_index = b.scene.meshes.len();
+            b.scene.meshes.push(mesh);
+            let node_index = b.scene.nodes.len();
+            b.scene.roots.push(node_index);
+            b.scene.nodes.push(Node { mesh: Some(mesh_index), ..Node::default() });
+            unplaced.push((key_text(gid), Placement { node: node_index, model: None }));
+        }
+        let placements = ordered_placements(&models, &links, &placement_nodes, unplaced);
+        let mut scene = b.scene;
+        count_warning(&mut scene.warnings, b.skipped, "polygons with fewer than three corners or a vertex that is not there were left out");
+        Ok((scene, placements))
+    }
+}
+
+fn ordered_placements<'a>(
+    models: &[(Key<'a>, &Record)],
+    links: &[(Key<'a>, Key<'a>)],
+    placement_nodes: &HashMap<(Key<'a>, Option<Key<'a>>), Placement>,
+    mut unplaced: Vec<(String, Placement)>,
+) -> Vec<Placement> {
+    let mut placements = Vec::new();
+    let mut seen = HashSet::new();
+    let mut add = |key| {
+        if let Some(placement) = placement_nodes.get(&key).copied()
+            && seen.insert(placement.node)
+        {
+            placements.push(placement);
+        }
+    };
+    // FBX 6 stores geometry in its model; connected FBX 7 geometry follows connection order.
+    for (id, model) in models {
+        if model.child("Vertices").is_some() {
+            add((*id, Some(*id)));
+        }
+    }
+    for (child, parent) in links {
+        add((*child, Some(*parent)));
+    }
+    unplaced.sort_by(|a, b| a.0.cmp(&b.0));
+    placements.extend(unplaced.into_iter().map(|(_, index)| index));
+    placements
+}
+
+/// One placed FBX mesh, with its scene node and source model node (if any).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placement {
+    /// The scene node holding the mesh.
+    pub node: usize,
+    /// The node of the model the mesh is placed by; `None` for geometry no model is connected to.
+    pub model: Option<usize>,
+}
+
+/// Diffuse material values as stored in FBX, before color-space conversion.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffuseMaterial {
+    pub name: String,
+    pub factor: [f32; 4],
+    /// Encoded embedded or resolved image bytes, when available.
+    pub image: Option<Vec<u8>>,
+}
+
+impl Document {
+    /// Read all FBX diffuse materials, including unconnected materials. The resolver receives
+    /// the relative path followed by the absolute path's leaf, in preference order.
+    pub fn diffuse_materials(&self, limits: &Limits, resolve: &mut dyn FnMut(&[&str]) -> Option<Vec<u8>>) -> Result<Vec<DiffuseMaterial>> {
+        let objects = self.top("Objects").ok_or_else(|| malformed(KIND, "no Objects section"))?;
+        let mut materials = HashMap::new();
+        let mut textures = HashMap::new();
+        let mut videos = HashMap::new();
+        for record in &objects.children {
+            let Some(id) = key(record.props.first()) else { continue };
+            match record.name.as_str() {
+                "Material" => {
+                    materials.insert(id, record);
                 }
-                None => {
-                    if let Some(n) = b.scene.nodes.get_mut(ni) {
-                        n.mesh = Some(mesh_index);
+                "Texture" => {
+                    textures.insert(id, record);
+                }
+                "Video" => {
+                    videos.insert(id, record);
+                }
+                _ => {}
+            }
+        }
+        if materials.len() > limits.max_materials {
+            return Err(too_large(KIND, "too many materials"));
+        }
+        let mut video_of = HashMap::new();
+        let mut diffuse = HashMap::new();
+        for link in self.top("Connections").into_iter().flat_map(|c| c.children.iter()).filter(|c| c.name == "C" || c.name == "Connect") {
+            let (Some(child), Some(parent)) = (key(link.props.get(1)), key(link.props.get(2))) else { continue };
+            if videos.contains_key(&child) && textures.contains_key(&parent) {
+                video_of.insert(parent, child);
+            } else if textures.contains_key(&child) && materials.contains_key(&parent) {
+                match (link.str_at(0), link.str_at(3)) {
+                    (Some("OP"), Some("DiffuseColor" | "Maya|baseColor")) => {
+                        diffuse.insert(parent, child);
                     }
+                    (Some("OO"), _) => {
+                        diffuse.entry(parent).or_insert(child);
+                    }
+                    _ => {}
                 }
             }
         }
-        let mut scene = b.scene;
-        count_warning(&mut scene.warnings, b.skipped, "polygons with fewer than three corners or a vertex that is not there were left out");
-        Ok(scene)
+        let budget = Budget { left: Cell::new(self.left.min(limits.max_data_bytes)), limit: limits.max_data_bytes };
+        let mut out = Vec::new();
+        for (id, material) in materials {
+            let tex = diffuse.get(&id).and_then(|t| textures.get(t)).copied();
+            let video = diffuse.get(&id).and_then(|t| video_of.get(t)).and_then(|v| videos.get(v)).copied();
+            let mut image = None;
+            if let Some(content) = video.or(tex).and_then(|n| n.child("Content")) {
+                match content.props.first() {
+                    Some(Prop::Bytes(bytes)) if !bytes.is_empty() => {
+                        budget.take(Some(bytes.len()), "an embedded image")?;
+                        image = Some(bytes.clone());
+                    }
+                    Some(Prop::Str(_)) => {
+                        let size = content.props.iter().filter_map(Prop::as_str).try_fold(0usize, |n, s| n.checked_add(s.len()));
+                        // Reserve a conservative bound before concatenating and decoding.
+                        budget.take(size, "an embedded image")?;
+                        let text: String = content.props.iter().filter_map(Prop::as_str).collect();
+                        image = base64_decode(text.trim()).filter(|b| !b.is_empty());
+                    }
+                    _ => {}
+                }
+            }
+            if image.is_none() {
+                for record in [tex, video].into_iter().flatten() {
+                    let relative = record.child("RelativeFilename").and_then(|n| n.str_at(0)).unwrap_or("");
+                    let absolute = ["FileName", "Filename"]
+                        .into_iter()
+                        .find_map(|n| record.child(n).and_then(|v| v.str_at(0)).filter(|s| !s.is_empty()))
+                        .unwrap_or("");
+                    let leaf = absolute.rsplit(['/', '\\']).next().unwrap_or("");
+                    let mut paths = Vec::new();
+                    for path in [relative, leaf] {
+                        if !path.is_empty() && !paths.contains(&path) {
+                            paths.push(path);
+                        }
+                    }
+                    if !paths.is_empty()
+                        && let Some(bytes) = resolve(&paths)
+                    {
+                        budget.take(Some(bytes.len()), "a resolved image")?;
+                        image = Some(bytes);
+                        break;
+                    }
+                }
+            }
+            let props = Props::of(material);
+            let values = props.values("DiffuseColor");
+            let factor = match values.as_slice() {
+                [r, g, b, ..] => {
+                    let f = props.f("DiffuseFactor").unwrap_or(1.0);
+                    [(*r * f) as f32, (*g * f) as f32, (*b * f) as f32, 1.0]
+                }
+                _ => [1.0; 4],
+            };
+            if factor.iter().any(|v| !v.is_finite()) || (image.is_none() && values.len() < 3) {
+                continue;
+            }
+            let raw_name = short_name(material.first_str().unwrap_or(""));
+            let name = if raw_name.is_empty() {
+                match id {
+                    Key::Id(i) => format!("Material_{i}"),
+                    Key::Name(s) => format!("Material_{s}"),
+                }
+            } else {
+                raw_name.to_string()
+            };
+            out.push(DiffuseMaterial { name, factor, image });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
     }
 }
 
@@ -834,6 +1185,13 @@ impl Document {
 enum Key<'a> {
     Id(i64),
     Name(&'a str),
+}
+
+fn key_text(key: Key<'_>) -> String {
+    match key {
+        Key::Id(i) => i.to_string(),
+        Key::Name(s) => s.to_string(),
+    }
 }
 
 fn key(p: Option<&Prop>) -> Option<Key<'_>> {
@@ -867,7 +1225,7 @@ struct Layer {
 impl Layer {
     /// The layer and its flat array of `width` numbers per entry.
     fn of(geom: &Record, element: &str, data: &str, index: &[&str], width: usize) -> Option<(Layer, Vec<f64>)> {
-        let e = geom.child(element)?;
+        let e = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0))?;
         let mapping = match e.child("MappingInformationType").and_then(|m| m.str_at(0)).unwrap_or("ByPolygonVertex") {
             "ByPolygonVertex" => Mapping::PolygonVertex,
             "ByVertex" | "ByVertice" | "ByControlPoint" => Mapping::Vertex,
@@ -876,7 +1234,7 @@ impl Layer {
             _ => return None,
         };
         let reference = e.child("ReferenceInformationType").and_then(|m| m.str_at(0)).unwrap_or("Direct");
-        let index = (reference != "Direct").then(|| index.iter().find_map(|n| e.child(n)).map(Record::ints)).flatten();
+        let index = if matches!(reference, "IndexToDirect" | "Index") { Some(index.iter().find_map(|n| e.child(n))?.ints()) } else { None };
         let data = e.child(data)?.floats();
         Some((Layer { mapping, index, len: data.len() / width }, data))
     }
@@ -942,10 +1300,13 @@ fn material(name: &str, record: &Record) -> Material {
 /// A scene under construction.
 struct Build<'a, 'r> {
     limits: &'a Limits,
+    strict_geometry: bool,
+    only_object_connections: bool,
     budget: Budget,
     resolve: Resolver<'r>,
     by_key: HashMap<Key<'a>, &'a Record>,
     children: HashMap<Key<'a>, Vec<(Key<'a>, Option<&'a str>)>>,
+    object_children: HashMap<Key<'a>, Vec<(Key<'a>, Option<&'a str>)>>,
     scene: Scene,
     material_of: HashMap<Key<'a>, usize>,
     texture_of: HashMap<Key<'a>, Option<usize>>,
@@ -960,7 +1321,12 @@ struct Build<'a, 'r> {
 impl<'a> Build<'a, '_> {
     /// The objects of `kind` connected under `id`, with the property each connects to.
     fn children_of(&self, id: Key<'a>, kind: &str) -> Vec<(Key<'a>, Option<&'a str>)> {
-        let all = self.children.get(&id).map(Vec::as_slice).unwrap_or_default();
+        let source = if self.only_object_connections && matches!(kind, "Geometry" | "Material" | "NodeAttribute") {
+            &self.object_children
+        } else {
+            &self.children
+        };
+        let all = source.get(&id).map(Vec::as_slice).unwrap_or_default();
         all.iter().filter(|l| self.by_key.get(&l.0).is_some_and(|o| o.name == kind)).copied().collect()
     }
 
@@ -971,14 +1337,18 @@ impl<'a> Build<'a, '_> {
         Ok(())
     }
 
-    /// The mesh geometry of Model `id`, and what it is shared by.
-    fn geometry_of(&self, id: Key<'a>) -> Option<(Key<'a>, &'a Record)> {
-        // 6.x: the Model holds its own mesh.
+    /// The geometries connected to a Model, including its own FBX 6 mesh.
+    fn geometries_of(&self, id: Key<'a>) -> Vec<(Key<'a>, &'a Record)> {
+        let mut geometries = Vec::new();
         if let Some(model) = self.by_key.get(&id).copied().filter(|o| o.child("Vertices").is_some()) {
-            return Some((id, model));
+            geometries.push((id, model));
         }
-        let (gid, _) = self.children_of(id, "Geometry").into_iter().next()?;
-        Some((gid, self.by_key.get(&gid).copied()?))
+        for (gid, _) in self.children_of(id, "Geometry") {
+            if let Some(geometry) = self.by_key.get(&gid).copied().filter(|o| o.child("Vertices").is_some()) {
+                geometries.push((gid, geometry));
+            }
+        }
+        geometries
     }
 
     /// The image of Texture `tid`.
@@ -1046,7 +1416,18 @@ impl<'a> Build<'a, '_> {
             return Ok(Some(*m));
         }
         let Some(record) = self.by_key.get(&mid).copied() else { return Ok(None) };
-        let mut m = material(short_name(record.first_str().unwrap_or("")), record);
+        let name = short_name(record.first_str().unwrap_or(""));
+        let fallback;
+        let name = if name.is_empty() {
+            fallback = match mid {
+                Key::Id(i) => format!("Material_{i}"),
+                Key::Name(s) => format!("Material_{s}"),
+            };
+            &fallback
+        } else {
+            name
+        };
+        let mut m = material(name, record);
         for (tid, prop) in self.children_of(mid, "Texture") {
             let slot = match prop {
                 Some("DiffuseColor") => &mut m.base_color_texture,
@@ -1074,16 +1455,60 @@ impl<'a> Build<'a, '_> {
     fn mesh(&mut self, name: &str, geom: &Record, materials: &[usize]) -> Result<Option<Mesh>> {
         let limits = self.limits;
         let (Some(vertices), Some(pvi)) = (geom.child("Vertices"), geom.child("PolygonVertexIndex")) else { return Ok(None) };
+        if self.strict_geometry {
+            let valid = |record: &Record, integers: bool| {
+                let values = record.child("a").unwrap_or(record);
+                values.props.iter().all(|p| match p {
+                    Prop::Int(_) | Prop::Ints(_) => true,
+                    Prop::Float(f) => f.is_finite() && (!integers || f.fract() == 0.0),
+                    Prop::Floats(a) => a.iter().all(|f| f.is_finite() && (!integers || f.fract() == 0.0)),
+                    _ => false,
+                })
+            };
+            if !valid(vertices, false) || !valid(pvi, true) {
+                return Err(malformed(KIND, "mesh array contains a non-numeric, non-finite or fractional index value"));
+            }
+            for (element, names) in [
+                ("LayerElementNormal", &["Normals", "NormalsIndex", "NormalIndex"][..]),
+                ("LayerElementUV", &["UV", "UVIndex"][..]),
+                ("LayerElementMaterial", &["Materials"][..]),
+                ("LayerElementColor", &["Colors", "ColorIndex", "ColorsIndex"][..]),
+            ] {
+                if let Some(layer) = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0))
+                    // index arrays and material ids are integers; the data arrays are floats
+                    && names.iter().filter_map(|n| layer.child(n).map(|r| (r, n.ends_with("Index") || *n == "Materials"))).any(|(r, integers)| !valid(r, integers))
+                {
+                    return Err(malformed(KIND, "mesh array contains a non-numeric or non-finite value"));
+                }
+            }
+        }
         let pool = |what: &str, n: usize| {
             if n > limits.max_vertices { Err(too_large(KIND, format!("more than {} {what}", limits.max_vertices))) } else { Ok(()) }
         };
-        let positions: Vec<[f64; 3]> = vertices.floats().as_chunks::<3>().0.iter().map(|c| c.map(finite)).collect();
+        let mut positions: Vec<[f64; 3]> = vertices.floats().as_chunks::<3>().0.iter().map(|c| c.map(finite)).collect();
         pool("vertices", positions.len())?;
+        let original_positions = positions.len();
         let normals = Layer::of(geom, "LayerElementNormal", "Normals", &["NormalsIndex", "NormalIndex"], 3);
         let uvs = Layer::of(geom, "LayerElementUV", "UV", &["UVIndex"], 2);
-        let slots = geom.child("LayerElementMaterial").and_then(|e| {
+        let colors = Layer::of(geom, "LayerElementColor", "Colors", &["ColorIndex", "ColorsIndex"], 4);
+        if colors.is_some() && positions.len().checked_mul(16).is_none_or(|n| n > self.budget.left.get()) {
+            return Err(too_large(KIND, "vertex colors exceed the memory limit"));
+        }
+        let mut vertex_colors = colors.as_ref().map(|_| vec![[1.0; 4]; positions.len()]).unwrap_or_default();
+        let mut color_indices = HashMap::<(u32, u32), u32>::new();
+        let mut first_color = HashMap::<u32, u32>::new();
+        let mut colors_complete = colors.is_some();
+        let slots = geom.children_named("LayerElementMaterial").min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0)).and_then(|e| {
             let mapping = e.child("MappingInformationType").and_then(|m| m.str_at(0)).unwrap_or("AllSame");
-            Some((mapping == "ByPolygon", e.child("Materials")?.ints()))
+            // a polygon goes to one part, so per-corner and per-vertex IDs use its first corner
+            let by = match mapping {
+                "ByPolygon" => Mapping::Polygon,
+                "ByPolygonVertex" => Mapping::PolygonVertex,
+                "ByVertex" | "ByVertice" | "ByControlPoint" => Mapping::Vertex,
+                "AllSame" => Mapping::AllSame,
+                _ => return None,
+            };
+            Some((by, e.child("Materials")?.ints()))
         });
         let (normal_layer, uv_layer) = (normals.as_ref().map(|l| &l.0), uvs.as_ref().map(|l| &l.0));
 
@@ -1091,15 +1516,61 @@ impl<'a> Build<'a, '_> {
         let mut part_of: HashMap<Option<usize>, usize> = HashMap::new();
         let mut face: Vec<Corner> = vec![];
         let (mut broken, mut poly) = (false, 0usize);
-        for (pv, raw) in pvi.ints().into_iter().enumerate() {
+        let polygon_indices = pvi.ints();
+        let index_count = polygon_indices.len();
+        let mut poly_start = 0usize;
+        for (pv, raw) in polygon_indices.iter().copied().enumerate() {
             // The last corner of a polygon is stored as `-index - 1`.
-            let (v, last) = if raw < 0 { (!raw, true) } else { (raw, false) };
-            match u32::try_from(v).ok().filter(|v| (*v as usize) < positions.len()) {
-                Some(p) => face.push(Corner {
-                    position: p,
-                    normal: Layer::at(normal_layer, pv, p as usize, poly),
-                    uv: Layer::at(uv_layer, pv, p as usize, poly),
-                }),
+            let (v, last) = if raw < 0 { (!raw, true) } else { (raw, self.strict_geometry && pv + 1 == index_count) };
+            match u32::try_from(v).ok().filter(|v| (*v as usize) < original_positions) {
+                Some(p) => {
+                    let normal = Layer::at(normal_layer, pv, p as usize, poly);
+                    let uv = Layer::at(uv_layer, pv, p as usize, poly);
+                    let mut position = p;
+                    if let Some((layer, values)) = &colors {
+                        let color = Layer::at(Some(layer), pv, p as usize, poly);
+                        let rgba = usize::try_from(color)
+                            .ok()
+                            .and_then(|i| i.checked_mul(4))
+                            .and_then(|i| i.checked_add(4).and_then(|end| values.get(i..end)));
+                        if let Some(rgba) = rgba {
+                            if let Some(existing) = color_indices.get(&(p, color)) {
+                                position = *existing;
+                            } else {
+                                // Color seams need two maps as well as the output pools; do not
+                                // grow them past the remaining file budget on hostile corner lists.
+                                let staging = color_indices
+                                    .len()
+                                    .checked_add(1)
+                                    .and_then(|n| n.checked_mul(64))
+                                    .and_then(|n| positions.len().checked_mul(40).and_then(|pool| n.checked_add(pool)));
+                                if staging.is_none_or(|n| n > self.budget.left.get()) {
+                                    return Err(too_large(KIND, "color seams exceed the memory limit"));
+                                }
+                                if first_color.insert(p, color).is_some() {
+                                    pool("vertices", positions.len().saturating_add(1))?;
+                                    if positions.len().saturating_add(1).checked_mul(40).is_none_or(|n| n > self.budget.left.get()) {
+                                        return Err(too_large(KIND, "colored vertices exceed the memory limit"));
+                                    }
+                                    position = u32::try_from(positions.len()).map_err(|_| too_large(KIND, "too many vertices"))?;
+                                    let Some(original) = positions.get(p as usize).copied() else { continue };
+                                    positions.push(original);
+                                    vertex_colors.push([1.0; 4]);
+                                }
+                                if let Some(dst) = vertex_colors.get_mut(position as usize)
+                                    && let [r, g, b, a] = rgba
+                                {
+                                    *dst = [finite(*r) as f32, finite(*g) as f32, finite(*b) as f32, finite(*a) as f32];
+                                }
+                                color_indices.insert((p, color), position);
+                            }
+                        } else {
+                            colors_complete = false;
+                        }
+                    }
+                    face.push(Corner { position, normal, uv });
+                }
+                None if self.strict_geometry => return Err(malformed(KIND, format!("polygon vertex index {raw} out of range"))),
                 None => broken = true,
             }
             if face.len() > limits.max_face_corners {
@@ -1109,6 +1580,7 @@ impl<'a> Build<'a, '_> {
                 continue;
             }
             let (corners, p_index, was_broken) = (std::mem::take(&mut face), poly, std::mem::take(&mut broken));
+            let first_pv = std::mem::replace(&mut poly_start, pv + 1);
             poly += 1;
             if was_broken || corners.len() < 3 {
                 self.skipped += 1;
@@ -1118,13 +1590,29 @@ impl<'a> Build<'a, '_> {
             if self.triangles > limits.max_triangles {
                 return Err(too_large(KIND, format!("more than {} triangles", limits.max_triangles)));
             }
-            let slot = slots.as_ref().and_then(|(by_poly, ids)| {
-                let k = if *by_poly { *ids.get(p_index)? } else { *ids.first()? };
-                materials.get(usize::try_from(k).ok()?).copied()
-            });
-            let slot = slot.or_else(|| materials.first().copied());
-            let at = match part_of.get(&slot) {
-                Some(at) => *at,
+            let slot = match &slots {
+                Some((by, ids)) => {
+                    let k = match by {
+                        Mapping::Polygon => ids.get(p_index),
+                        Mapping::PolygonVertex => ids.get(first_pv),
+                        Mapping::Vertex => polygon_indices
+                            .get(first_pv)
+                            .map(|&r| if r < 0 { !r } else { r })
+                            .and_then(|v| usize::try_from(v).ok())
+                            .and_then(|v| ids.get(v)),
+                        Mapping::AllSame => ids.first(),
+                    };
+                    k.and_then(|k| usize::try_from(*k).ok()).and_then(|k| materials.get(k)).copied()
+                }
+                None => materials.first().copied(),
+            };
+            let existing = if self.strict_geometry {
+                parts.last().filter(|part| part.material == slot).map(|_| parts.len() - 1)
+            } else {
+                part_of.get(&slot).copied()
+            };
+            let at = match existing {
+                Some(at) => at,
                 None => {
                     if parts.len() >= limits.max_parts {
                         return Err(too_large(KIND, format!("more than {} material slots in a mesh", limits.max_parts)));
@@ -1152,6 +1640,20 @@ impl<'a> Build<'a, '_> {
         let uvs: Option<Vec<[f32; 2]>> =
             uvs.map(|(_, d)| d.as_chunks::<2>().0.iter().map(|c| [finite(c[0]) as f32, 1.0 - finite(c[1]) as f32]).collect());
         pool("UVs", uvs.as_ref().map_or(0, Vec::len))?;
-        Ok(Some(Mesh { name: name.to_string(), positions, normals, uv_sets: uvs.into_iter().collect(), parts, ..Mesh::default() }))
+        if !colors_complete {
+            vertex_colors.clear();
+            if colors.is_some() {
+                self.scene.warnings.push("FBX: incomplete vertex color layer was omitted".into());
+            }
+        }
+        Ok(Some(Mesh {
+            name: name.to_string(),
+            positions,
+            normals,
+            uv_sets: uvs.into_iter().collect(),
+            colors: vertex_colors,
+            parts,
+            ..Mesh::default()
+        }))
     }
 }

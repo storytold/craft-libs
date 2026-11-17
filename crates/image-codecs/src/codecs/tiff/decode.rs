@@ -13,6 +13,17 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     decode_page(bytes, None, limits)
 }
 
+/// The stored size and Orientation (1–8) of the page [`decode`] opens, from its directory alone:
+/// the same page choice and refusals (camera raw, no directory), checked against `limits`,
+/// without reading any strips or tiles.
+pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, u16), CodecError> {
+    let (file, dir, _) = open_page(bytes, None)?;
+    let side = |tag: u16| file.tag_uint(&dir, tag).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+    let (w, h) = (side(ifd::TAG_WIDTH), side(ifd::TAG_HEIGHT));
+    limits.check_size(w, h)?;
+    Ok((w, h, ifd::orientation_of(&file, &dir)))
+}
+
 /// Decodes page `page` of [`ifd::tiff_info`]'s list (`None`: the default page). The image
 /// carries the page's metadata, a [`DecodeWarning::MorePages`] when the file holds more
 /// full-resolution pages, and a [`DecodeWarning::Truncated`] when image data is cut off.
