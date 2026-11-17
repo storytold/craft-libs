@@ -1037,7 +1037,7 @@ fn tls(p: &[u8], d: &mut Decoded) {
         0x0302 => "TLS 1.1".into(),
         0x0303 => "TLS 1.2".into(),
         0x0304 => "TLS 1.3".into(),
-        v if v & 0x0f0f == 0x0a0a => "GREASE".into(),
+        v if v & 0x0f0f == 0x0a0a && v >> 8 == v & 0xff => "GREASE".into(),
         v => format!("{v:#06x}"),
     };
     let mut hello = TlsHello {
@@ -1057,18 +1057,24 @@ fn tls(p: &[u8], d: &mut Decoded) {
     let hello_end = handshake_end.min(record_end_available);
     let r = Reader::new(p.get(..hello_end).unwrap_or(&[]));
     // Every variable-length field must fit inside this handshake, not merely the packet.
-    let skip8 = |off: usize| {
+    let skip8 = |off: usize, min: usize, max: usize| {
         let n = usize::from(r.u8(off)?);
+        if !(min..=max).contains(&n) {
+            return None;
+        }
         r.slice(off + 1, n)?;
         Some(off + 1 + n)
     };
-    let skip16 = |off: usize| {
+    let cipher_suites_end = |off: usize| {
         let n = usize::from(r.u16_be(off)?);
+        if n < 2 || n % 2 != 0 {
+            return None;
+        }
         r.slice(off + 2, n)?;
         Some(off + 2 + n)
     };
     // Record header (5) + handshake header (4) + client_version (2) + random (32).
-    let Some(off) = skip8(5 + 4 + 2 + 32).and_then(skip16).and_then(skip8) else {
+    let Some(off) = skip8(5 + 4 + 2 + 32, 0, 32).and_then(cipher_suites_end).and_then(|p| skip8(p, 1, 255)) else {
         hello.partial = true;
         d.tls = Some(hello);
         return;
@@ -1087,6 +1093,7 @@ fn tls(p: &[u8], d: &mut Decoded) {
     hello.partial |= declared_end != handshake_end;
     let end = declared_end.min(hello_end);
     let extensions = Reader::new(p.get(..end).unwrap_or(&[]));
+    let mut seen_extensions = BTreeSet::new();
     let mut e = off + 2;
     while e + 4 <= end {
         let (Some(t), Some(l)) = (extensions.u16_be(e), extensions.u16_be(e + 2)) else { break };
@@ -1095,12 +1102,17 @@ fn tls(p: &[u8], d: &mut Decoded) {
             hello.partial = true;
             break;
         };
+        if !seen_extensions.insert(t) {
+            hello.partial = true;
+            e = body + usize::from(l);
+            continue;
+        }
         let dr = Reader::new(data);
         match t {
             0 => {
                 if let Some(len) = dr.u16_be(0) {
                     let list_end = 2 + usize::from(len);
-                    hello.partial |= list_end != data.len();
+                    hello.partial |= len == 0 || list_end != data.len();
                     let names = Reader::new(data.get(..list_end.min(data.len())).unwrap_or(&[]));
                     let mut a = 2;
                     while a < list_end.min(data.len()) {
@@ -1113,9 +1125,9 @@ fn tls(p: &[u8], d: &mut Decoded) {
                             break;
                         };
                         if kind == 0 {
-                            if name.is_empty() {
+                            if name.is_empty() || hello.sni.is_some() {
                                 hello.partial = true;
-                            } else if hello.sni.is_none() {
+                            } else {
                                 hello.sni = Some(name.iter().map(|&c| if c.is_ascii_graphic() { char::from(c) } else { '?' }).collect());
                             }
                         }
@@ -1128,10 +1140,10 @@ fn tls(p: &[u8], d: &mut Decoded) {
             16 => {
                 if let Some(len) = dr.u16_be(0) {
                     let list_end = 2 + usize::from(len);
-                    hello.partial |= list_end != data.len();
+                    hello.partial |= len == 0 || list_end != data.len();
                     let protocols = Reader::new(data.get(..list_end.min(data.len())).unwrap_or(&[]));
                     let mut a = 2usize;
-                    while a < list_end.min(data.len()) && hello.alpn.len() < 16 {
+                    while a < list_end.min(data.len()) {
                         let Some(n) = protocols.u8(a).filter(|&n| n > 0) else {
                             hello.partial = true;
                             break;
@@ -1140,7 +1152,9 @@ fn tls(p: &[u8], d: &mut Decoded) {
                             hello.partial = true;
                             break;
                         };
-                        hello.alpn.push(String::from_utf8_lossy(proto).into_owned());
+                        if hello.alpn.len() < 16 {
+                            hello.alpn.push(String::from_utf8_lossy(proto).into_owned());
+                        }
                         a += 1 + usize::from(n);
                     }
                 } else {
@@ -1150,7 +1164,7 @@ fn tls(p: &[u8], d: &mut Decoded) {
             43 => {
                 if let Some(len) = dr.u8(0) {
                     let list_end = 1 + usize::from(len);
-                    hello.partial |= list_end != data.len() || len % 2 != 0;
+                    hello.partial |= len < 2 || list_end != data.len() || len % 2 != 0;
                     let versions = Reader::new(data.get(..list_end.min(data.len())).unwrap_or(&[]));
                     let mut a = 1usize;
                     while let Some(v) = versions.u16_be(a) {

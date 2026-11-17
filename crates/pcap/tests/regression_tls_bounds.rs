@@ -100,3 +100,74 @@ fn complete_hello_metadata_is_unchanged() {
     assert_eq!(hello.supported_versions, ["TLS 1.3", "TLS 1.2"]);
     assert!(!hello.partial);
 }
+
+fn hello_with_vectors(session: &[u8], suites: &[u8], compression: &[u8], extensions: &[(u16, &[u8])]) -> craft_anything_formats::pcap::TlsHello {
+    let mut record = client_hello("unused.test");
+    record.truncate(43);
+    record.push(session.len() as u8);
+    record.extend(session);
+    record.extend((suites.len() as u16).to_be_bytes());
+    record.extend(suites);
+    record.push(compression.len() as u8);
+    record.extend(compression);
+    let mut ext = Vec::new();
+    for (kind, bytes) in extensions {
+        ext.extend(kind.to_be_bytes());
+        ext.extend((bytes.len() as u16).to_be_bytes());
+        ext.extend(*bytes);
+    }
+    record.extend((ext.len() as u16).to_be_bytes());
+    record.extend(ext);
+    let len = record.len();
+    record[3..5].copy_from_slice(&((len - 5) as u16).to_be_bytes());
+    record[6..9].copy_from_slice(&((len - 9) as u32).to_be_bytes()[1..]);
+    decoded(&record).tls.unwrap()
+}
+
+#[test]
+fn hello_vectors_must_have_protocol_lengths() {
+    assert!(!hello_with_vectors(&[0; 32], &[0, 47], &[0], &[]).partial);
+    assert!(hello_with_vectors(&[0; 33], &[0, 47], &[0], &[]).partial);
+    for suites in [&[][..], &[0, 47, 0][..]] {
+        assert!(hello_with_vectors(&[], suites, &[0], &[]).partial);
+    }
+    assert!(hello_with_vectors(&[], &[0, 47], &[], &[]).partial);
+    for (kind, empty) in [(0, &[0, 0][..]), (16, &[0, 0][..]), (43, &[0][..])] {
+        assert!(hello_with_vectors(&[], &[0, 47], &[0], &[(kind, empty)]).partial);
+    }
+}
+
+#[test]
+fn only_registered_grease_patterns_are_removed() {
+    let hello = hello_with_vectors(&[], &[0, 47], &[0], &[(43, &[6, 0x1a, 0x2a, 0x4a, 0x4a, 3, 4])]);
+    assert!(!hello.partial);
+    assert_eq!(hello.supported_versions, ["0x1a2a", "TLS 1.3"]);
+}
+
+#[test]
+fn duplicate_extensions_and_repeated_host_names_are_incomplete() {
+    let hello = hello_with_vectors(&[], &[0, 47], &[0], &[(43, &[2, 3, 4]), (43, &[2, 3, 3])]);
+    assert!(hello.partial);
+    assert_eq!(hello.supported_versions, ["TLS 1.3"]);
+    let hello = hello_with_vectors(&[], &[0, 47], &[0], &[(0, &[0, 8, 0, 0, 1, b'a', 0, 0, 1, b'b'])]);
+    assert!(hello.partial);
+    assert_eq!(hello.sni.as_deref(), Some("a"));
+}
+
+#[test]
+fn the_alpn_display_limit_does_not_hide_a_damaged_tail() {
+    let mut protocols = vec![0, 33];
+    for _ in 0..16 {
+        protocols.extend([1, b'x']);
+    }
+    protocols.push(3);
+    let hello = hello_with_vectors(&[], &[0, 47], &[0], &[(16, &protocols)]);
+    assert_eq!(hello.alpn.len(), 16);
+    assert!(hello.partial);
+    protocols[1] = 34;
+    protocols.pop();
+    protocols.extend([1, b'y']);
+    let hello = hello_with_vectors(&[], &[0, 47], &[0], &[(16, &protocols)]);
+    assert_eq!(hello.alpn.len(), 16);
+    assert!(!hello.partial);
+}
