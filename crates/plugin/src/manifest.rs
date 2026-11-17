@@ -1,13 +1,22 @@
-//! The plugin manifest, `figcraft-plugin.json`: who the plugin is, which module to run, the menu
+//! The plugin manifest, `craft-plugin.json` (FigCraft's `figcraft-plugin.json` is read the same
+//! way): who the plugin is, which module to run, its kind, the apps it was written for, the menu
 //! commands it adds (with their parameters) and the permissions it asks for. Also the panel a
 //! plugin shows while it runs (ABI v2), whose controls are parameters too.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// The manifest's file name.
-pub const MANIFEST_FILE: &str = "figcraft-plugin.json";
-/// The plugin API version this build implements (`api` in the manifest).
+pub const MANIFEST_FILE: &str = "craft-plugin.json";
+/// FigCraft's manifest file name before the manifest was shared; read the same way.
+pub const LEGACY_MANIFEST_FILE: &str = "figcraft-plugin.json";
+/// Every manifest file name, the preferred one first.
+pub const MANIFEST_FILES: [&str; 2] = [MANIFEST_FILE, LEGACY_MANIFEST_FILE];
+/// The shared kind: a plug-in that acts through the app's commands (this crate's ABI).
+pub const KIND_COMMAND: &str = "command";
+/// The command plug-in API version (ABI) this build implements (`api` in the manifest).
 pub const API_VERSION: u32 = 6;
 /// Largest manifest read.
 pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
@@ -20,6 +29,11 @@ const MAX_COMMANDS: usize = 64;
 const MAX_PARAMS: usize = 32;
 const MAX_OPTIONS: usize = 64;
 const MAX_ALLOW: usize = 256;
+const MAX_KIND: usize = 32;
+const MAX_APPS: usize = 64;
+const MAX_APP_ID: usize = 32;
+const MAX_LICENSE: usize = 128;
+const MAX_REPO: usize = 200;
 /// Largest panel spec a plugin may show (images included, as base64), and its most controls.
 pub const MAX_PANEL_BYTES: usize = 1024 * 1024;
 /// Largest image in a panel (its file's bytes).
@@ -45,7 +59,8 @@ pub struct Manifest {
     /// The WebAssembly module, relative to the manifest (`plugin.wasm`).
     pub main: String,
     /// The plugin API version the plugin was written for (1 when not given; panels and settings
-    /// need 2, widgets 3, `saveFile`, widget fields and property menus 4).
+    /// need 2, widgets 3, `saveFile`, widget fields and property menus 4). For a kind other than
+    /// [`KIND_COMMAND`] it is that kind's own API, which the app checks.
     #[serde(default = "api_version", deserialize_with = "api_from_number_or_string")]
     pub api: u32,
     #[serde(default)]
@@ -56,6 +71,41 @@ pub struct Manifest {
     /// API 3: the plugin draws a widget (Plugins ▸ Widgets, `widget.insert`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub widget: bool,
+    /// [`KIND_COMMAND`] (the default) or an app's own kind (`filter`, `effect`…): lower-case
+    /// letters, digits and `-`. An app refuses a kind it doesn't know.
+    #[serde(default = "command_kind", skip_serializing_if = "is_command_kind")]
+    pub kind: String,
+    /// The apps the plug-in was written for, by app id (`figcraft`, `designcraft`…). Empty: a
+    /// legacy manifest, which names no app (see [`Manifest::target`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub apps: BTreeMap<String, AppTarget>,
+    /// The licence as an SPDX expression, as the author typed it (shown, never checked).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub license: String,
+    /// The source repository, `https://github.com/<owner>/<repo>`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repo: String,
+}
+
+/// What a plug-in needs of one app: the API version it was written for and, optionally, the
+/// oldest version of the app it runs in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppTarget {
+    /// The API the plug-in uses in that app: for [`KIND_COMMAND`], the command ABI
+    /// ([`API_VERSION`]); for an app's own kind, that kind's API.
+    #[serde(deserialize_with = "api_from_number_or_string")]
+    pub api: u32,
+    /// The oldest app version it runs in (dotted numbers, `0.30.0`).
+    #[serde(default, rename = "minApp", skip_serializing_if = "Option::is_none")]
+    pub min_app: Option<String>,
+}
+
+fn command_kind() -> String {
+    KIND_COMMAND.to_string()
+}
+
+fn is_command_kind(kind: &str) -> bool {
+    kind == KIND_COMMAND
 }
 
 /// A manifest without `api` was written for the first one.
@@ -345,9 +395,16 @@ impl Manifest {
         self.description = clean("description", &self.description, MAX_TEXT)?;
         self.author = clean("author", &self.author, MAX_NAME)?;
         check_main(&self.main)?;
-        if self.api == 0 || self.api > API_VERSION {
-            return Err(format!("plugin API {} isn't supported (this FigCraft runs API {API_VERSION})", self.api));
+        check_kind(&self.kind)?;
+        if self.api == 0 || (self.kind == KIND_COMMAND && self.api > API_VERSION) {
+            return Err(format!("plugin API {} isn't supported (this app runs plugin API {API_VERSION})", self.api));
         }
+        self.license = clean("license", &self.license, MAX_LICENSE)?;
+        self.repo = clean("repo", &self.repo, MAX_REPO)?;
+        if !self.repo.is_empty() && crate::github::parse_repo_url(&self.repo).is_none() {
+            return Err(format!("`repo` must be a GitHub repository, https://github.com/<owner>/<repo> (got `{}`)", truncate(&self.repo)));
+        }
+        check_apps(&self.apps)?;
         if self.permissions.commands.len() > MAX_ALLOW {
             return Err(format!("more than {MAX_ALLOW} entries in `permissions.commands`"));
         }
@@ -393,6 +450,38 @@ impl Manifest {
         }
         Ok(())
     }
+}
+
+/// A kind: 1–32 lower-case ASCII letters, digits or `-`.
+fn check_kind(kind: &str) -> Result<(), String> {
+    if kind.is_empty() || kind.len() > MAX_KIND || !kind.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+        return Err(format!("kind `{}` must be 1–{MAX_KIND} lower-case letters, digits or `-`", truncate(kind)));
+    }
+    Ok(())
+}
+
+/// An app id as `apps` names it: 1–32 lower-case ASCII letters, digits or `-`.
+pub fn valid_app_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= MAX_APP_ID && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Check `apps`: few entries, plain app ids, an API of at least 1 and a dotted `minApp`.
+pub(crate) fn check_apps(apps: &BTreeMap<String, AppTarget>) -> Result<(), String> {
+    if apps.len() > MAX_APPS {
+        return Err(format!("more than {MAX_APPS} entries in `apps`"));
+    }
+    for (id, t) in apps {
+        if !valid_app_id(id) {
+            return Err(format!("app id `{}` in `apps` must be 1–{MAX_APP_ID} lower-case letters, digits or `-`", truncate(id)));
+        }
+        if t.api == 0 {
+            return Err(format!("`apps.{id}.api` must be 1 or more"));
+        }
+        if t.min_app.as_deref().is_some_and(|v| crate::bundle::parse_version(v).is_none()) {
+            return Err(format!("`apps.{id}.minApp` must be a version like 0.30.0"));
+        }
+    }
+    Ok(())
 }
 
 /// A panel a plugin shows while it runs (ABI v2): a title and controls drawn with FigCraft's own

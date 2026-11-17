@@ -1,11 +1,11 @@
-//! Plugin bundles: a plugin as a plugin directory keeps and serves it (its manifest, its module and
+//! Plugin bundles (`.craftplugin` files): a plugin as a catalog, a release or a plugin directory keeps and serves it (its manifest, its module and
 //! a few optional asset files) in one uncompressed binary form, so nothing about it can expand
 //! beyond the bytes that arrived. The SHA-256 of those bytes names the bundle: a server lists it
 //! with every entry and the app checks a download against it before reading anything else.
 //!
 //! ```text
 //! "FCPLUGB1"                          magic
-//! u32 LE length, manifest JSON        (UTF-8, `figcraft-plugin.json`)
+//! u32 LE length, manifest JSON        (UTF-8, `craft-plugin.json`)
 //! u32 LE length, WebAssembly module
 //! u32 LE asset count, then per asset: u32 LE length, name (UTF-8), u32 LE length, bytes
 //! ```
@@ -18,11 +18,15 @@ use std::cmp::Ordering;
 
 use sha2::{Digest, Sha256};
 
-use crate::manifest::Manifest;
+use crate::manifest::{KIND_COMMAND, Manifest};
 use crate::sandbox::{Limits, check_module};
 
-/// The first bytes of every bundle.
+/// The first bytes of every bundle (FigCraft's bundle format, shared unchanged).
 pub const MAGIC: &[u8; 8] = b"FCPLUGB1";
+/// A bundle file's extension (without the dot).
+pub const BUNDLE_EXTENSION: &str = "craftplugin";
+/// Largest bundle read: a module at the sandbox's limit, its manifest and its assets.
+pub const MAX_BUNDLE_BYTES: usize = 32 << 20;
 /// Most asset files in a bundle, and their longest name.
 pub const MAX_ASSETS: usize = 32;
 const MAX_ASSET_NAME: usize = 64;
@@ -158,7 +162,7 @@ impl Bundle {
         }
         let mut r = Reader(bytes);
         if r.take(MAGIC.len()).ok() != Some(MAGIC.as_slice()) {
-            return Err("that isn't a FigCraft plugin bundle".into());
+            return Err("that isn't a Craft plugin bundle".into());
         }
         let manifest = r.text("manifest")?;
         let wasm = r.part()?.to_vec();
@@ -182,7 +186,17 @@ impl Bundle {
     /// API version it asks for), a directory version (`1.2.0`), the module (compiled and checked
     /// for what it imports, never run) and the asset names (plain, unique ignoring case). The
     /// manifest.
+    ///
+    /// The module is checked against this crate's sandbox, so this is for [`KIND_COMMAND`]
+    /// plug-ins (and FigCraft's widgets, which share the ABI); an app's own kind, with its own
+    /// imports, uses [`Bundle::check_with`].
     pub fn check(&self) -> Result<Manifest, String> {
+        self.check_with(&check_command_module)
+    }
+
+    /// [`Bundle::check`] with the module checked by `check_module` (compiled, never run), for an
+    /// app's own kind of plug-in.
+    pub fn check_with(&self, check_module: &ModuleCheck) -> Result<Manifest, String> {
         let m = Manifest::parse(&self.manifest)?;
         if parse_version(&m.version).is_none() {
             return Err(format!(
@@ -190,7 +204,7 @@ impl Bundle {
                 m.version.chars().take(40).collect::<String>()
             ));
         }
-        check_module(&self.wasm, &Limits::default()).map_err(|e| format!("{}: {e}", m.name))?;
+        check_module(&m, &self.wasm).map_err(|e| format!("{}: {e}", m.name))?;
         if self.assets.len() > MAX_ASSETS {
             return Err(format!("more than {MAX_ASSETS} assets"));
         }
@@ -203,4 +217,33 @@ impl Bundle {
         }
         Ok(m)
     }
+}
+
+/// Checks a plug-in's module before it is kept or installed (compiles it, never runs it), given
+/// its manifest; why not, when it can't be used.
+pub type ModuleCheck = dyn Fn(&Manifest, &[u8]) -> Result<(), String>;
+
+/// The module check [`Bundle::check`] uses: a [`KIND_COMMAND`] module compiled against this crate's
+/// sandbox (never run); any other kind is refused, since only the app that runs it can check it.
+pub fn check_command_module(manifest: &Manifest, wasm: &[u8]) -> Result<(), String> {
+    match manifest.kind.as_str() {
+        KIND_COMMAND => check_module(wasm, &Limits::default()).map_err(|e| e.to_string()),
+        kind => Err(format!("a `{kind}` plugin's module is checked by the app that runs that kind")),
+    }
+}
+
+/// Read a downloaded or picked `.craftplugin` file and check it ([`Bundle::decode`] at most
+/// [`MAX_BUNDLE_BYTES`], then [`Bundle::check`]): what an install confirmation shows, before
+/// anything is written.
+pub fn open(bytes: &[u8]) -> Result<(Bundle, Manifest), String> {
+    let bundle = Bundle::decode(bytes, MAX_BUNDLE_BYTES)?;
+    let manifest = bundle.check()?;
+    Ok((bundle, manifest))
+}
+
+/// [`open`] for an app's own kind of plug-in, whose module `check_module` checks.
+pub fn open_with(bytes: &[u8], check_module: &ModuleCheck) -> Result<(Bundle, Manifest), String> {
+    let bundle = Bundle::decode(bytes, MAX_BUNDLE_BYTES)?;
+    let manifest = bundle.check_with(check_module)?;
+    Ok((bundle, manifest))
 }
