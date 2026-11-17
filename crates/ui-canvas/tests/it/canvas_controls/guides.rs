@@ -235,7 +235,8 @@ fn a_deleted_guide_hands_focus_on_without_selecting_the_next_guide() {
     let selected: Shared<Option<GuideKey>> = Rc::default();
     let (shown, picked) = (Rc::clone(&guides), Rc::clone(&selected));
     let mut fixture = ToolFixture::with_view("Document", Recorder::default(), view_at(1.0), move |ui, cx| {
-        let mut built = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *shown.borrow_mut())).interactive(true);
+        let mut list = shown.borrow_mut();
+        let mut built = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *list)).interactive(true);
         let current = *picked.borrow();
         if let Some(key) = current {
             built = built.selected_guide(key);
