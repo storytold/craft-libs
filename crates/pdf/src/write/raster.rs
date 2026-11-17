@@ -3,6 +3,10 @@
 //! Callers map their page and color models to these neutral records. This module owns PDF object
 //! layout, image streams, ICC/Separation resources, page labels, marks, xref and trailer syntax.
 
+/// Multi-image 8/16-bit print pages with per-image ICC resources and explicit byte budgets.
+#[path = "raster_print.rs"]
+pub mod print;
+
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::Write as _;

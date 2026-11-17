@@ -24,7 +24,7 @@ impl Document {
             unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
-            unreadable: Arc::default(),
+            object_notes: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: crate::cos::object::MAX_DECODED,
             overlay: BTreeMap::new(),
@@ -113,7 +113,7 @@ impl Document {
             unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
-            unreadable: Arc::default(),
+            object_notes: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::cos::object::MAX_DECODED),
             overlay: BTreeMap::new(),
@@ -178,6 +178,12 @@ impl Document {
             && let Some(enc) = doc.trailer.get(b"Encrypt").cloned()
         {
             doc.authenticate(&enc, &credentials)?;
+        }
+        // Algorithm 13 (ISO 32000-2 §7.6.4.4.12) says byte 8 of /Perms "should" match
+        // /EncryptMetadata: a should, so the file opens and the dictionary decides, as qpdf (which
+        // warns), MuPDF and PDFium read it.
+        if doc.security.as_deref().is_some_and(crate::crypt::SecurityHandler::perms_metadata_mismatch) {
+            Arc::make_mut(&mut doc.repair_log).push(PERMS_MISMATCH.into());
         }
         if Arc::make_mut(&mut doc.entries).remove_exhausted() {
             Arc::make_mut(&mut doc.repair_log).push("skipped exhausted xref object number 4294967295".into());
@@ -256,7 +262,7 @@ impl Document {
         // Objects read while locating the catalog were read before decryption was possible.
         self.cache = Arc::default();
         self.objstms = Arc::default();
-        self.unreadable = Arc::default();
+        self.object_notes = Arc::default();
         Ok(())
     }
 
@@ -414,7 +420,20 @@ impl Document {
 
     /// Protect the document with a password (§7.6.4). Takes effect on the next save, which is
     /// always a full rewrite. Returns the handler (authenticated as owner).
+    ///
+    /// The legacy RC4 schemes are refused (RC4 is broken, `RFC 7465`): [`Self::set_encryption_legacy`]
+    /// writes them for a file an old reader must open.
     pub fn set_encryption(&mut self, params: &crate::crypt::NewEncryption) -> Result<(), CosError> {
+        self.set_encryption_with(params, false)
+    }
+
+    /// [`Self::set_encryption`] with the legacy RC4-40 and RC4-128 schemes allowed. Pass it only
+    /// for a file that must stay readable by a reader without AES.
+    pub fn set_encryption_legacy(&mut self, params: &crate::crypt::NewEncryption) -> Result<(), CosError> {
+        self.set_encryption_with(params, true)
+    }
+
+    fn set_encryption_with(&mut self, params: &crate::crypt::NewEncryption, legacy: bool) -> Result<(), CosError> {
         // The file identifier is part of the key; make sure it exists and keep it.
         let id = self.trailer.get(b"ID").map(|id| self.resolve(id));
         let id0 = match id.as_deref() {
@@ -426,7 +445,8 @@ impl Document {
                 id
             }
         };
-        let h = crate::crypt::create(params, &id0).map_err(|e| CosError::Security(e.to_string()))?;
+        let built = if legacy { crate::crypt::create_legacy(params, &id0) } else { crate::crypt::create(params, &id0) };
+        let h = built.map_err(|e| CosError::Security(e.to_string()))?;
         let d = h.dict();
         let s = |b: &[u8]| Object::String(crate::cos::PdfString { bytes: b.to_vec(), hex: true });
         let mut e = Dict::new();
@@ -492,6 +512,11 @@ impl Document {
         }
     }
 }
+
+/// The repair-log line for an R5/R6 `/Perms` whose byte 8 isn't the `T` or `F` `/EncryptMetadata`
+/// gives (Algorithm 13, ISO 32000-2 §7.6.4.4.12).
+pub(super) const PERMS_MISMATCH: &str =
+    "the encryption dictionary's /Perms disagrees with its /EncryptMetadata (Algorithm 13); metadata is read as /EncryptMetadata says";
 
 /// The repair-log line for a file rebuilt because its last update has no `/Prev`.
 const UNLINKED_UPDATE: &str = "the file's last update has no /Prev link to its earlier revisions, so their objects (the page tree among them) are unreachable through the cross-reference chain; rebuilding from object headers";
