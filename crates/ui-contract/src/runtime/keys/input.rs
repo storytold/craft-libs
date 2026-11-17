@@ -370,16 +370,36 @@ pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Ve
 /// canvas (a stop with `KeyUse::chrome_key`) in its last pass; `layer` is what the layer stack says about the focus
 /// and `focused` is the `KeyUse` of the focused component, `None` when nothing is focused.
 ///
+/// `pressed` is whether a pointer press moved focus onto the focused component (`focus::origin`).
+///
 /// A modal or dialog layer never toggles: Tab moves focus inside it. In a window with a canvas the toggle is on when
-/// nothing is focused or the canvas is; elsewhere it is on only when the canvas is focused. A component that keeps
-/// Tab never reaches this function: the press is its own.
-fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&KeyUse>) -> bool {
+/// nothing is focused, the canvas is, or a press focused the component, as clicking a panel's row and pressing Tab hides
+/// the panels in Photoshop; Tab moves focus from a component the keyboard or a request focused. Elsewhere it is on only
+/// when the canvas is focused. A component that keeps Tab never reaches this function: the press is its own.
+fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&KeyUse>, pressed: bool) -> bool {
     let closed = matches!(layer, overlay::LayerKeys::Blocked | overlay::LayerKeys::Class(OwnerClass::Dialog));
     if !enabled || closed {
         return false;
     }
     let on_canvas = focused.is_some_and(|keys| keys.chrome_key);
-    if canvas { focused.is_none() || on_canvas } else { on_canvas }
+    if canvas { focused.is_none() || on_canvas || pressed } else { on_canvas }
+}
+
+/// Whether a bare Tab pressed now in the running viewport would toggle its panels rather than move focus, by
+/// [`tab_toggles_chrome`] over the viewport's root env, canvas, layers and focus.
+pub(super) fn tab_toggles_now(ctx: &Context) -> bool {
+    let viewport = crate::runtime::egui::pass::current_viewport(ctx);
+    let enabled = Env::root_for(ctx, viewport).is_some_and(|env| env.tab_toggles_chrome);
+    let focused = focus::focused_rec(ctx);
+    let canvas = focus::canvas_keys(ctx, viewport).is_some();
+    let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
+    let pressed = focused.as_ref().is_some_and(|rec| focus::origin(ctx, rec) == Some(focus::FocusOrigin::Press));
+    tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys), pressed)
+}
+
+/// Whether `chord` is the key of a chrome command (`ChromeCommand`), as the window's keymap binds it.
+pub(super) fn is_chrome_chord(ctx: &Context, chord: &Chord) -> bool {
+    commands::window_shortcuts(ctx).iter().any(|(key, bound)| matches!(key, WindowShortcut::Chrome(_)) && bound == chord)
 }
 
 /// The toggle of the chrome command whose bound chord `input` presses, when that command is enabled.
@@ -522,11 +542,7 @@ pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
         return nav;
     }
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
-    let enabled = Env::root_for(ctx, viewport).is_some_and(|env| env.tab_toggles_chrome);
-    let focused = focus::focused_rec(ctx);
-    let canvas = focus::canvas_keys(ctx, viewport).is_some();
-    let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
-    let gate = tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys));
+    let gate = tab_toggles_now(ctx);
     for press in tabs {
         match gate.then(|| chrome_toggle_of(ctx, &press.input)).flatten() {
             Some(toggle) if !press.repeat => request_chrome_toggle(ctx, viewport, toggle),
