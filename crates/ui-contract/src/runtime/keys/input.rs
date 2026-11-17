@@ -300,7 +300,13 @@ impl Strip<'_> {
             PressUse::Press => {
                 batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: false, at });
+                    batch.shortcuts.push(Shortcut {
+                        input: *input,
+                        phase: FirePhase::Press,
+                        press: Some(batch.presses.len() - 1),
+                        canvas: false,
+                        at,
+                    });
                 }
                 true
             }
