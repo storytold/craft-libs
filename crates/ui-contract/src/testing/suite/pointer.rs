@@ -38,7 +38,10 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
         match plan {
             Plan::Activate if !probe.carries_value() && fixture.tree().declares_key(root_target(fixture).node, Declared::Click) => {
                 let part = fixture.click_part().zip(fixture.root_id());
-                let target = |fixture: &Fixture| part.and_then(|(part, id)| fixture.part(id, part)).unwrap_or_else(|| root_target(fixture));
+                let target = |fixture: &Fixture| {
+                    let target = part.and_then(|(part, id)| fixture.part(id, part)).unwrap_or_else(|| root_target(fixture));
+                    fixture.visible(&target).unwrap_or(target)
+                };
                 for (by, expected) in [(0.5 * slop, 1), (2.0 * slop, 0)] {
                     let mut fixture = input_fixture(story);
                     let target = target(&fixture);
@@ -57,7 +60,9 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
                 let within = senses(Sense::SETS_ON_PRESS) || senses(Sense::FOLLOWS_IN_SLOP);
                 for (by, begins) in [(0.5 * slop, usize::from(within)), (2.0 * slop, 1)] {
                     let mut fixture = input_fixture(story);
-                    let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
+                    let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|grip| fixture.visible(&grip)) else {
+                        continue;
+                    };
                     fixture.take_outputs();
                     gesture(&mut fixture, &grip, by);
                     let kinds: Vec<EditKind> = fixture.take_outputs().into_iter().flat_map(|output| output.edits).collect();
@@ -91,8 +96,8 @@ fn at(target: &Target, point: Pos2) -> Target {
     Target { node: target.node, rect: Rect::from_center_size(point, Vec2::ZERO) }
 }
 
-/// A press inside a part's hit area, also where it lies outside the root's rect, is taken by the component; on the
-/// part a drag moves, a press off its middle moves the value.
+/// A press inside the visible piece of a part's hit area (inside the root's clip), also where it lies outside the root's
+/// rect, is taken by the component; on the part a drag moves, a press off its middle moves the value.
 fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String> {
     let probe = subject.probe;
     for story in &subject.stories {
@@ -106,7 +111,10 @@ fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String
         }
         for part in parts {
             let mut fixture = input_fixture(story);
-            let Some(target) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
+            // A press lands on the part's visible piece: one past the window's edge cannot be seen, so not pressed.
+            let Some(target) = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|target| fixture.visible(&target)) else {
+                continue;
+            };
             if fixture.tree().data_of(target.node).is_none_or(|node| node.is_disabled()) || target.rect.area() <= 0.0 {
                 continue;
             }
@@ -120,7 +128,7 @@ fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String
             }
         }
         if let (Plan::Drag(Grip { part, .. }), true) = (plan, probe.carries_value()) {
-            let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
+            let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|grip| fixture.visible(&grip)) else { continue };
             let off_middle = Pos2::new(grip.rect.center().x + 0.25 * grip.rect.width(), grip.rect.center().y);
             let mut fixture = input_fixture(story);
             let before = fixture.data().snapshot();

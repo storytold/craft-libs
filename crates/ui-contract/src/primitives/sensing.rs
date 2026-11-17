@@ -379,6 +379,13 @@ pub(crate) fn members(ctx: &Context, viewport: ViewportId, arena: ArenaId) -> Sm
     })
 }
 
+/// The clip the root `root` registered in its latest run, in the current viewport: where its parts and members can be
+/// seen, so where a press egui names no target for can start. `None` for a root that has not run.
+#[cfg(feature = "testing")]
+pub(crate) fn root_clip(ctx: &Context, root: Id) -> Option<Rect> {
+    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| arenas.by_root.get(&root).and_then(|state| state.root).map(|info| info.clip))
+}
+
 /// Whether a member of the arena root `arena` (a canvas control in a canvas, say) has a running gesture, in
 /// `viewport`: begun and not yet committed, cancelled or removed. It reads each member's own gesture record, so a
 /// reader before or after the arena's pass reads the same fact.

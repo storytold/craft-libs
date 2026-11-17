@@ -239,12 +239,14 @@ pub(super) fn run(fixture: &mut Fixture, plan: Plan, variant: usize) {
         Plan::Step => step(fixture, variant, &target),
         Plan::Drag(grip) => {
             let pressed = fixture.root_id().and_then(|id| fixture.part(id, grip.part)).unwrap_or(target);
+            let pressed = fixture.visible(&pressed).unwrap_or(pressed);
             drag(fixture, pressed.center(), grip.toward, variant == 1);
         }
         Plan::DragChild(grip) => {
             let owner = fixture.root_id().unwrap_or(Id::NULL);
             let from = crate::runtime::pointer::child_part_bounds(fixture.ctx(), owner, grip.part, Sense::DRAG)
-                .map_or(target.center(), |rect| rect.center());
+                .map(|rect| Target { node: target.node, rect })
+                .map_or(target.center(), |part| fixture.visible(&part).unwrap_or(part).center());
             drag(fixture, from, grip.toward, variant == 1);
         }
         Plan::Type(text, story) => {
@@ -383,7 +385,7 @@ fn a_double_click_resets_with_one_set(subject: &Subject) -> Result<(), String> {
         let Plan::Drag(Grip { part, .. }) = plan else { continue };
         let mut fixture = input_fixture(story);
         run(&mut fixture, plan, 0);
-        let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
+        let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|grip| fixture.visible(&grip)) else { continue };
         let before = fixture.data().snapshot();
         fixture.take_outputs();
         fixture.click(&grip);
