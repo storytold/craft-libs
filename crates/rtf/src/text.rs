@@ -12,8 +12,9 @@ fn multibyte(code_page: u16) -> Option<&'static encoding_rs::Encoding> {
 /// else the default font's, else the document's) and how many fallback characters follow a
 /// `\uN` (`\ucN`, 1 when not set).
 ///
-/// - `\uN` is one UTF-16 code unit. A high surrogate pairs only with a low surrogate in the
-///   very next `\u`; every surrogate that does not pair reads as U+FFFD, as in Word.
+/// - `\uN` is one UTF-16 code unit in the signed/unsigned 16-bit range. A high surrogate pairs
+///   only with a low surrogate in the very next `\u`; unmatched surrogates and out-of-range
+///   values are dropped, matching the historical DesignCraft reader.
 /// - After a `\uN`, the next `\ucN` characters are its fallback and are skipped: a text byte,
 ///   a `\'hh`, a control word and a control symbol each count as one ([`TextDecoder::skip`]).
 ///   The skipping ends with the group ([`TextDecoder::group`]).
@@ -36,27 +37,34 @@ impl TextDecoder {
     }
 
     /// A held high surrogate that nothing paired with.
-    fn flush_high(&mut self, out: &mut String) {
-        if self.high.take().is_some() {
-            out.push('\u{FFFD}');
-        }
+    fn flush_high(&mut self) {
+        self.high = None;
     }
 
     /// `\uN` with `uc` fallback characters to skip after it.
     pub fn unicode(&mut self, param: i32, uc: usize, out: &mut String) {
         self.finish_multibyte(out);
+        if !(-32_768..=65_535).contains(&param) {
+            self.skip = uc;
+            return;
+        }
         let u = i64::from(param).rem_euclid(65_536) as u16;
         if (0xD800..0xDC00).contains(&u) {
-            self.flush_high(out);
+            self.flush_high();
             self.high = Some(u);
         } else {
             match self.high.take() {
-                Some(h) if (0xDC00..0xE000).contains(&u) => out.push(char::decode_utf16([h, u]).next().and_then(Result::ok).unwrap_or('\u{FFFD}')),
-                Some(_) => {
-                    out.push('\u{FFFD}');
-                    out.push(char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'));
+                Some(h) if (0xDC00..0xE000).contains(&u) => {
+                    if let Some(c) = char::decode_utf16([h, u]).next().and_then(Result::ok) {
+                        out.push(c);
+                    }
                 }
-                None => out.push(char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}')),
+                Some(_) | None if (0xDC00..0xE000).contains(&u) => {}
+                Some(_) | None => {
+                    if let Some(c) = char::from_u32(u32::from(u)) {
+                        out.push(c);
+                    }
+                }
             }
         }
         self.skip = uc;
@@ -73,7 +81,7 @@ impl TextDecoder {
     /// A character a control word or symbol stands for (`\emdash`, `\~`).
     pub fn char(&mut self, c: char, out: &mut String) {
         self.finish_multibyte(out);
-        self.flush_high(out);
+        self.flush_high();
         out.push(c);
     }
 
@@ -95,7 +103,7 @@ impl TextDecoder {
     }
 
     fn decode(&mut self, chunk: &[u8], cp: u16, out: &mut String) {
-        self.flush_high(out);
+        self.flush_high();
         if self.mb.is_none() && chunk.is_ascii() {
             // ASCII is itself in every code page here; with no lead byte pending, as it is.
             out.push_str(std::str::from_utf8(chunk).unwrap_or_default());
@@ -143,7 +151,7 @@ impl TextDecoder {
     /// for a partner any longer.
     pub fn finish(&mut self, out: &mut String) {
         self.finish_multibyte(out);
-        self.flush_high(out);
+        self.flush_high();
     }
 }
 
@@ -165,12 +173,13 @@ mod tests {
         assert_eq!(units(&[-10179, -8704], 0), "\u{1F600}");
         assert_eq!(units(&[0xD83D, 0xDE00], 0), "\u{1F600}", "written unsigned");
         assert_eq!(units(&[8364], 0), "€");
-        assert_eq!(units(&[-10179], 0), "\u{FFFD}", "a lone high surrogate at the end");
-        assert_eq!(units(&[-8704], 0), "\u{FFFD}", "a lone low surrogate");
-        assert_eq!(units(&[-8704, -10179], 0), "\u{FFFD}\u{FFFD}", "low then high");
-        assert_eq!(units(&[-10179, -10179, -8704], 0), "\u{FFFD}\u{1F600}", "a high surrogate before a pair");
-        assert_eq!(units(&[-10179, 65, -8704], 0), "\u{FFFD}A\u{FFFD}");
-        assert_eq!(units(&[65536 + 65, -65536 + 66], 0), "AB", "taken modulo 65536");
+        assert_eq!(units(&[-10179], 0), "", "a lone high surrogate is dropped");
+        assert_eq!(units(&[-8704], 0), "", "a lone low surrogate is dropped");
+        assert_eq!(units(&[-8704, -10179], 0), "", "low then high are dropped");
+        assert_eq!(units(&[-10179, -10179, -8704], 0), "\u{1F600}", "an unpaired high is dropped before a pair");
+        assert_eq!(units(&[-10179, 65, -8704], 0), "A");
+        assert_eq!(units(&[65_536 + 65, -65_536 + 66], 0), "", "out-of-range units are dropped");
+        assert_eq!(units(&[i32::MAX, 65, i32::MIN], 0), "A", "extreme units are dropped");
     }
 
     #[test]
@@ -187,7 +196,7 @@ mod tests {
         d.group(&mut out);
         d.unicode(-8704, 1, &mut out);
         d.finish(&mut out);
-        assert_eq!(out, "\u{FFFD}x\u{FFFD}\u{FFFD}\u{2014}\u{1F600}");
+        assert_eq!(out, "x\u{2014}\u{1F600}");
     }
 
     #[test]

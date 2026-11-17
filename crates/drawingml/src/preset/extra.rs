@@ -764,20 +764,32 @@ mod tests {
     /// Sizes the digests were taken at: wide, tall and square.
     const GOLD_SIZES: [(f64, f64); 4] = [(120.0, 80.0), (300.0, 50.0), (64.0, 64.0), (50.0, 300.0)];
 
+    /// `v` as the digest prints it: a value that prints as zero at 3 decimal places becomes
+    /// `0.0`, so a residue such as `-1.4e-14` left by a sine or cosine of a right angle prints
+    /// `0.000` whatever its sign. Its sign depends on the platform's libm, and `{:.3}` prints a
+    /// negative residue as `-0.000`.
+    fn digest_coord(v: f64) -> f64 {
+        if v.abs() < 0.0005 { 0.0 } else { v }
+    }
+
     /// FNV-1a over each outline's path elements, for every adjust set and size. Coordinates are
-    /// printed to 3 decimal places so last-bit libm differences between platforms do not change it.
+    /// printed to 3 decimal places through [`digest_coord`] so last-bit libm differences between
+    /// platforms do not change it.
     fn outline_digest(name: &str) -> u64 {
         use std::fmt::Write;
+        let c = digest_coord;
         let mut text = String::new();
         for adj in GOLD_ADJ {
             for (w, h) in GOLD_SIZES {
                 let g = build(name, w, h, adj).unwrap_or_else(|| panic!("{name} builds no outline"));
                 for el in g.outline().elements() {
                     let _ = match *el {
-                        PathEl::MoveTo(p) => write!(text, "M{:.3},{:.3}", p.x, p.y),
-                        PathEl::LineTo(p) => write!(text, "L{:.3},{:.3}", p.x, p.y),
-                        PathEl::QuadTo(a, p) => write!(text, "Q{:.3},{:.3},{:.3},{:.3}", a.x, a.y, p.x, p.y),
-                        PathEl::CurveTo(a, b, p) => write!(text, "C{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}", a.x, a.y, b.x, b.y, p.x, p.y),
+                        PathEl::MoveTo(p) => write!(text, "M{:.3},{:.3}", c(p.x), c(p.y)),
+                        PathEl::LineTo(p) => write!(text, "L{:.3},{:.3}", c(p.x), c(p.y)),
+                        PathEl::QuadTo(a, p) => write!(text, "Q{:.3},{:.3},{:.3},{:.3}", c(a.x), c(a.y), c(p.x), c(p.y)),
+                        PathEl::CurveTo(a, b, p) => {
+                            write!(text, "C{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}", c(a.x), c(a.y), c(b.x), c(b.y), c(p.x), c(p.y))
+                        }
                         PathEl::ClosePath => write!(text, "Z"),
                     };
                 }
@@ -789,21 +801,23 @@ mod tests {
 
     /// Digests of every name's outlines as the string dispatch built them (craft-libs 2b35d243;
     /// DeckCraft's fc35ad67 gave other digests for curvedRightArrow and curvedDownArrow), so
-    /// this refactor is proven output-identical: any changed outline fails here.
+    /// this refactor is proven output-identical: any changed outline fails here. pieWedge,
+    /// curvedRightArrow and curvedDownArrow were taken again when [`digest_coord`] began printing
+    /// their near-zero residues as `0.000`; their outlines are unchanged.
     const GOLDEN: [(&str, u64); 38] = [
         ("lineInv", 0x4a58a16923e54a4f),
         ("nonIsoscelesTrapezoid", 0x79eca0b36812e282),
-        ("pieWedge", 0x2a0d3ffe5e9a481d),
+        ("pieWedge", 0x5fb58e0214989f4d),
         ("leftRightArrowCallout", 0x9cd88f0ab55f76e5),
         ("upDownArrowCallout", 0x568bc91708855007),
         ("quadArrowCallout", 0xca59015298b1584b),
         ("circularArrow", 0x4227aa468cfe990e),
         ("leftCircularArrow", 0x6fc3779ce4b08914),
         ("leftRightCircularArrow", 0x9dd43d9ba80e47df),
-        ("curvedRightArrow", 0x83e7dd251401715d),
+        ("curvedRightArrow", 0xf60d53e01a88930c),
         ("curvedLeftArrow", 0x82472848de4a9fec),
         ("curvedUpArrow", 0xcfbd88c1aea4bf9d),
-        ("curvedDownArrow", 0xa6f75eaf0ee71d49),
+        ("curvedDownArrow", 0x01b1ac2f13de11b9),
         ("swooshArrow", 0x63ff193fdf1d0427),
         ("callout1", 0xe7e0410f96282e8d),
         ("callout2", 0xcaa7730106a9ee1b),
@@ -830,6 +844,19 @@ mod tests {
         ("chartStar", 0x6ebb545c66f313dd),
         ("chartPlus", 0x979031aae16250d7),
     ];
+
+    /// A near-zero residue prints the same whichever sign the platform's libm left on it, and
+    /// values that round away from zero keep their sign.
+    #[test]
+    fn digest_prints_near_zero_residues_without_a_sign() {
+        let print = |v: f64| format!("{:.3}", digest_coord(v));
+        for v in [-1.4210854715202004e-14, 1.4210854715202004e-14, -7.105427357601002e-15, -0.0, 0.0, -0.00049, 0.00049] {
+            assert_eq!(print(v), "0.000", "{v:e}");
+        }
+        assert_eq!(print(-0.0006), "-0.001");
+        assert_eq!(print(-12.25), "-12.250");
+        assert_eq!(print(0.0006), "0.001");
+    }
 
     /// Every name builds the same outline as before the `Name` enum, and unknown names build nothing.
     #[test]

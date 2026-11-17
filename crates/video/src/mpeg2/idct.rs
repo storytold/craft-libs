@@ -6,7 +6,7 @@
 use std::sync::OnceLock;
 
 /// `M[x][u] = C(u)/2 · cos((2x+1)uπ/16)`, `C(0) = 1/√2`, `C(u>0) = 1`.
-fn basis() -> &'static [[f32; 8]; 8] {
+pub(crate) fn basis() -> &'static [[f32; 8]; 8] {
     static B: OnceLock<[[f32; 8]; 8]> = OnceLock::new();
     B.get_or_init(|| {
         let mut m = [[0f32; 8]; 8];
