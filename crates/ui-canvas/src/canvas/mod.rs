@@ -177,6 +177,8 @@ pub struct Canvas<'a> {
     /// disabled for this canvas.
     #[prop]
     layer_bounds: Option<LayerBounds<'a>>,
+    /// The view commands the app asks of this canvas ([`queued`](Self::queued)).
+    queued: &'a [ViewCommands],
     /// The user's navigation options: how the wheel and a pinch move the view ([`WheelNavigation`]), whether a zoom
     /// eases (Animated Zoom) and whether the view may leave the document (Overscroll).
     #[prop]
@@ -252,6 +254,7 @@ impl<'a> Canvas<'a> {
             given: None,
             document: None,
             layer_bounds: None,
+            queued: &[],
             navigation: NavigationOptions::default(),
             show_rulers: false,
             keys_to_body: false,
@@ -313,6 +316,16 @@ impl<'a> Canvas<'a> {
         self
     }
 
+    /// View commands the app asks of this canvas's view (a menu row or an action step it runs, a new document's fit):
+    /// the canvas runs them in this pass, in order and before the ones fired to it, as it runs those, eases included.
+    /// A measuring run runs none. The app asks for them until a pass that is not a measuring run showed the canvas,
+    /// then drops them.
+    #[must_use]
+    pub fn queued(mut self, commands: &'a [ViewCommands]) -> Self {
+        self.queued = commands;
+        self
+    }
+
     /// Leaves the view commands to the instance around the canvas that owns its view (a full-window dialog's): the
     /// canvas is no instance of them, so the chords reach that instance while the canvas has the focus.
     #[must_use]
@@ -321,8 +334,8 @@ impl<'a> Canvas<'a> {
         self
     }
 
-    /// Publishes the view commands' state for this canvas and applies the ones routed to it, in order, to `view`:
-    /// the view they ask for, and whether they zoom.
+    /// Publishes the view commands' state for this canvas and applies the ones the app queued, then the ones routed to
+    /// it, in order, to `view`: the view they ask for, and whether they zoom.
     fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, bool)> {
         self.props.command_scope?;
         let pixels_per_point = cx.env.scale().0;
@@ -333,6 +346,10 @@ impl<'a> Canvas<'a> {
         }
         let (view, document) = target?;
         let (mut next, mut zoomed) = (view, false);
+        let queued = if measure::active(&cx.core.ctx) { &[][..] } else { self.queued };
+        for command in queued {
+            zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point) && command.zooms();
+        }
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
             zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point) && command.zooms();
         }

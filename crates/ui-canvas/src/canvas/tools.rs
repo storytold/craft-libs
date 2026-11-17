@@ -29,6 +29,9 @@ const ARTBOARD_MARGIN: Vec2 = Vec2::new(30.0, 40.0); // design: allow[literal-si
 /// The room Fit Layers on Screen leaves around the layers' bounds, in points.
 const LAYERS_MARGIN: Vec2 = Vec2::new(20.0, 20.0); // design: allow[literal-size/vec2](view-fit room in screen points, not a look)
 
+/// The room Fit on Screen leaves around the document on each side, in points.
+const FIT_MARGIN: f64 = 20.0;
+
 /// Photoshop's default Screen Resolution (Preferences, Units & Rulers), in pixels per inch.
 const SCREEN_PPI: f64 = 72.0;
 
@@ -48,12 +51,15 @@ pub struct ViewTarget {
     /// The screen resolution Print Size shows the document at, in pixels per inch (Preferences, Units & Rulers).
     /// Default: 72.
     pub screen_ppi: f64,
+    /// The highest device zoom Fit on Screen reaches (1 = 100 %). Default: 1, so a document window never opens a small
+    /// document magnified; a full-window dialog magnifies a small image to fill its canvas.
+    pub fit_ceiling: f64,
 }
 
 impl ViewTarget {
     /// A document of `size` with no artboard and no resolution.
     pub fn new(document: Size) -> Self {
-        Self { document, artboard: None, ppi: None, screen_ppi: SCREEN_PPI }
+        Self { document, artboard: None, ppi: None, screen_ppi: SCREEN_PPI, fit_ceiling: 1.0 }
     }
 
     /// The artboard Fit Artboard on Screen shows.
@@ -74,6 +80,13 @@ impl ViewTarget {
     #[must_use]
     pub fn screen_ppi(mut self, screen_ppi: f64) -> Self {
         self.screen_ppi = screen_ppi;
+        self
+    }
+
+    /// The highest device zoom Fit on Screen reaches.
+    #[must_use]
+    pub fn fit_ceiling(mut self, device: f64) -> Self {
+        self.fit_ceiling = device;
         self
     }
 
@@ -179,8 +192,7 @@ impl ViewCommands {
             ViewCommands::ZoomOut => {
                 zoom::step(view, -1, size, pixels_per_point);
             }
-            // Photoshop fits the image to the view, with no margin.
-            ViewCommands::FitOnScreen => zoom::fit(view, size, pixels_per_point, 0.0),
+            ViewCommands::FitOnScreen => zoom::fit_up_to(view, size, pixels_per_point, target.fit_ceiling, FIT_MARGIN),
             ViewCommands::FillScreen => zoom::fill(view, size, pixels_per_point),
             ViewCommands::ActualPixels => zoom_about_centre(view, 1.0),
             ViewCommands::TwoHundredPercent => zoom_about_centre(view, 2.0),
