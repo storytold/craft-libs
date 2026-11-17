@@ -70,6 +70,32 @@ impl TryFrom<crate::h264::decode::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "hap")]
+impl TryFrom<crate::hap::Image> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit RGB frame with an alpha plane, full range, identity matrix (Hap Q's YCoCg is
+    /// already converted to RGB by the decoder). The picture does not say whether the variant has
+    /// alpha: Hap and Hap Q give an opaque (255) alpha plane. The decoder returns interleaved RGBA,
+    /// so this conversion copies the samples into planes.
+    fn try_from(p: crate::hap::Image) -> Result<Self, FrameError> {
+        let (w, h) = (p.width, p.height);
+        let pixels = usize::try_from(w)
+            .ok()
+            .zip(usize::try_from(h).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .ok_or(FrameError::Plane("plane size overflows"))?;
+        if pixels.checked_mul(4) != Some(p.rgba.len()) {
+            return Err(FrameError::Shape("sample count does not fit the frame"));
+        }
+        let plane = |c: usize| Plane::packed(w, h, 8, Samples::U8(p.rgba.iter().skip(c).step_by(4).copied().collect()));
+        let planes = vec![plane(0)?, plane(1)?, plane(2)?];
+        let mut f = VideoFrame::new(w, h, ColorFamily::Rgb, Subsampling::S444, planes, Some(plane(3)?))?;
+        f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "hevc-decode")]
 impl TryFrom<crate::hevc::decode::Picture> for VideoFrame {
     type Error = FrameError;
