@@ -160,7 +160,8 @@ pub struct DockStyle {
     /// Radius of the corners of a group of the split tree (0: square). The group's border follows
     /// it, and once its body is drawn the four corners outside the radius are painted with
     /// [`Self::corner_fill`], so a body that fills its rect (a canvas) is rounded too. At most
-    /// half the group's narrower side. The groups of a dock column (stacked flush on the column's
+    /// half the group's narrower side and, for a group with a tab strip, half the strip's height (the
+    /// corners never cover the tabs or the header). The groups of a dock column (stacked flush on the column's
     /// [`Self::background`]), of an iconic flyout and of a floating window keep square corners.
     pub corner_radius: f32,
     /// The color around the groups of the split tree, painted over their corners outside

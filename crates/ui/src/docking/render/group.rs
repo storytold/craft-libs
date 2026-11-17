@@ -67,7 +67,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             if !minimized {
                 self.contents(ui, selected, rect);
             }
-            round_corners(ui.painter(), rect, self.corner_radius(rect, kind), self.style.corner_fill);
+            round_corners(ui.painter(), rect, self.corner_radius(rect, kind, None), self.style.corner_fill);
             self.targets.push(DropTarget {
                 anchor: selected.clone(),
                 rect,
@@ -180,7 +180,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if !minimized {
             self.contents(ui, selected, Rect::from_min_max(pos2(rect.left(), strip.bottom()), rect.max));
         }
-        let radius = self.corner_radius(rect, kind);
+        let radius = self.corner_radius(rect, kind, Some(strip.height()));
         round_corners(ui.painter(), rect, radius, self.style.corner_fill);
         ui.painter().rect_stroke(rect, CornerRadius::same(radius), self.style.border, StrokeKind::Inside);
         false
@@ -188,14 +188,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     /// [`crate::docking::DockStyle::corner_radius`] for a group of `kind` at `rect`, in whole
     /// points as egui rounds it: 0 but for a group of the split tree (`Frame`), at most half the
-    /// narrower side.
-    fn corner_radius(&self, rect: Rect, kind: GroupKind) -> u8 {
+    /// narrower side and, when the group has a tab strip of `strip` height, half of it, so that the
+    /// corner mask never reaches the tabs or the header.
+    fn corner_radius(&self, rect: Rect, kind: GroupKind, strip: Option<f32>) -> u8 {
         let wanted = self.style.corner_radius;
         // Also 0 for a NaN radius and for a rect that is not finite.
         if kind != GroupKind::Frame || wanted.is_nan() || wanted <= 0.0 || !rect.is_finite() {
             return 0;
         }
-        let most = (rect.width().min(rect.height()) / 2.0).clamp(0.0, f32::from(u8::MAX));
+        let most = (rect.width().min(rect.height()).min(strip.unwrap_or(f32::INFINITY)) / 2.0).clamp(0.0, f32::from(u8::MAX));
         // In 0..=255 and whole: the cast loses nothing.
         wanted.min(most).floor() as u8
     }

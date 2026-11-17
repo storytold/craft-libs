@@ -911,7 +911,7 @@ fn a_corner_radius_rounds_each_group_and_its_border() {
 }
 
 #[test]
-fn the_corner_radius_is_at_most_half_the_narrower_side_and_a_nan_is_square() {
+fn the_corner_radius_is_at_most_half_the_strip_and_a_nan_is_square() {
     let mut d = Driver::new(frames());
     d.tweak = |style| {
         style.corner_radius = 10_000.0;
@@ -920,9 +920,8 @@ fn the_corner_radius_is_at_most_half_the_narrower_side_and_a_nan_is_square() {
     d.step(vec![]);
     let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
     let (_, radii) = corners(&d, CORNER_FILL, border);
-    // Two groups 600 pt high and at least 296 pt wide: half of the narrower side.
-    assert_eq!(radii.len(), 2);
-    assert!(radii.iter().all(|r| r.nw >= 148 && r.nw <= 150 && *r == egui::CornerRadius::same(r.nw)), "{radii:?}");
+    // Two groups 600 pt high with a 26 pt strip each: half of the strip.
+    assert_eq!(radii, vec![egui::CornerRadius::same(13); 2]);
     d.tweak = |style| {
         style.corner_radius = f32::NAN;
         style.corner_fill = CORNER_FILL;
@@ -978,4 +977,21 @@ fn a_stripless_group_is_rounded_without_a_border() {
     // Lone protected panel 1 draws no strip and no border, but its corners are cut as [2, 3]'s.
     assert_eq!(meshes.len(), 2, "{meshes:?}");
     assert_eq!(radii, vec![egui::CornerRadius::same(6)]);
+}
+
+#[test]
+fn a_stripless_group_is_at_most_half_its_narrower_side() {
+    let content = TestContent { protected: vec![1], ..Default::default() };
+    let mut d = Driver::with(frames(), content, Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 600.0)));
+    d.tweak = |style| {
+        style.corner_radius = 10_000.0;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
+    let (meshes, _) = corners(&d, CORNER_FILL, border);
+    // No strip to protect: the lone protected panel 1 (about 300 pt wide) takes half its width.
+    let group = |m: &egui::Mesh| Rect::from_min_max(m.vertices[0].pos, m.vertices[20].pos);
+    let widest = meshes.iter().map(|m| group(m).width()).fold(0.0, f32::max);
+    assert!(meshes.iter().any(|m| (m.vertices[1].pos.distance(m.vertices[0].pos) - widest.min(600.0) / 2.0).abs() < 1.0), "{meshes:?}");
 }
