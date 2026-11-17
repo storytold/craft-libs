@@ -83,7 +83,6 @@ impl<'a> NavigateBar<'a> {
     /// Adds the app-owned Zoom All Windows option after Resize Windows to Fit. Absent by default,
     /// so apps that do not synchronize document views keep their existing bar. The app owns the
     /// option's default and persistence; this control changes no view or document.
-    #[must_use]
     pub fn zoom_all_windows(mut self, value: Bind<'a, bool>) -> Self {
         if let Members::Zoom { all_windows, .. } = &mut self.members {
             *all_windows = Some(value);
