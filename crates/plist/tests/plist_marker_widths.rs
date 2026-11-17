@@ -45,3 +45,26 @@ fn supported_maximum_widths_keep_their_values() {
     empty.extend_from_slice(&0u64.to_be_bytes());
     assert!(matches!(parse_binary(&single_object(&empty)), Ok(Value::Data(d)) if d.is_empty()));
 }
+
+#[test]
+fn minor_version_compatibility_is_explicit_and_keeps_bounds() {
+    use craft_plist::{BinaryOptions, FormatError, Limits, parse_binary_with_options};
+    let compat = BinaryOptions { allow_unknown_minor_version: true };
+    for minor in [b'0', b'1', b'9', 0xff] {
+        let mut data = single_object(&[0x00]);
+        data[7] = minor;
+        assert!(matches!(parse_binary_with_options(&data, Limits::default(), compat), Ok(Value::Null)));
+        assert_eq!(parse_binary(&data).is_ok(), minor == b'0');
+        let limited = Limits { max_nodes: 0, ..Limits::default() };
+        assert!(matches!(parse_binary_with_options(&data, limited, compat), Err(FormatError::TooLarge(_))));
+        data[6] = b'1';
+        assert!(matches!(parse_binary_with_options(&data, Limits::default(), compat), Err(FormatError::Unsupported(_))));
+    }
+    let mut invalid = single_object(&[0x15]);
+    invalid[7] = b'1';
+    assert!(matches!(parse_binary_with_options(&invalid, Limits::default(), compat), Err(FormatError::Malformed(_))));
+    let mut cycle = single_object(&[0xa1, 0]);
+    cycle[7] = b'1';
+    assert!(matches!(parse_binary_with_options(&cycle, Limits::default(), compat), Err(FormatError::Malformed(_))));
+    assert!(parse_binary_with_options(b"bplist01", Limits::default(), compat).is_err());
+}
