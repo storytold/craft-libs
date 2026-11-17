@@ -66,7 +66,7 @@ fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
         let (fixture, _) = rail_in(grid.width(steps), 800.0);
         assert_eq!(columns_of(&fixture), usize::from(steps), "a width of {steps} steps shows {steps} columns");
         let rail = rect(&fixture, "Tools");
-        assert!((rail.width() - grid.width(steps)).abs() < 1.0, "{steps} steps: the rail is as wide as its columns: {rail:?}");
+        assert!(near(rail.width(), grid.width(steps)), "{steps} steps: the rail is as wide as its columns: {rail:?}");
         if steps > 1 {
             let (short, _) = rail_in(grid.width(steps) - 1.0, 800.0);
             assert_eq!(columns_of(&short), usize::from(steps) - 1, "a width short of {steps} steps shows one column fewer");
@@ -86,13 +86,10 @@ fn a_tool_rail_measures_its_rows_plus_its_footer_at_a_width() {
         let (fixture, measured) = rail_in(grid.width(steps), 800.0);
         let (rail, foot, first) = (rect(&fixture, "Tools"), rect(&fixture, "Foot"), rect(&fixture, "Move"));
         let size = measured.get();
-        assert!((size.y - rail.height()).abs() < 1.0, "{steps} steps: the measure ({size:?}) is the shown rail ({rail:?})");
-        assert!((size.x - rail.width()).abs() < 1.0, "{steps} steps: the measure is as wide as the shown rail");
+        assert!(near(size.y, rail.height()), "{steps} steps: the measure ({size:?}) is the shown rail ({rail:?})");
+        assert!(near(size.x, rail.width()), "{steps} steps: the measure is as wide as the shown rail");
         let (top, bottom) = (first.top() - rail.top(), rail.bottom() - foot.bottom());
-        assert!(
-            (top - bottom).abs() < 1.0,
-            "{steps} steps: the rows and the footer fill the rail between equal paddings ({top} above, {bottom} below)"
-        );
+        assert!(near(top, bottom), "{steps} steps: the rows and the footer fill the rail between equal paddings ({top} above, {bottom} below)");
         heights.push(size.y);
     }
     assert!(grows_with(heights[1], heights[0]), "one column is taller than two: {heights:?}");
@@ -147,4 +144,8 @@ fn the_tool_rail_shows_its_buttons_icons_in_its_glyph_role() {
     let (alone, tool) = (glyphs(false), glyphs(true));
     assert!(tool.side > alone.side, "a tool rail icon ({}) is larger than a lone one ({})", tool.side, alone.side);
     assert!(tool.color.off.rest != tool.color.off.hover, "a tool rail icon rests quieter than under the pointer");
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1.0
 }
