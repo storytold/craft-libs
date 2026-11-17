@@ -27,6 +27,8 @@ cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
 # tokenizer ends them.
 content = ["cos", "dep:hayro-syntax"]
 crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
+# `testing`: a builder of small synthetic PDF files, for the tests of crates that read them.
+test-support = ["cos"]
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }
@@ -71,6 +73,10 @@ proptest = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[[test]]
+name = "testing_pdf"
+required-features = ["test-support"]
 
 [[example]]
 name = "cos_info"

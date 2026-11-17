@@ -13,6 +13,17 @@ pub(crate) struct OcgState {
 }
 
 impl OcgState {
+    /// Knockout patch (pdfcraft #4898): the marked-content visibility now, to put back after
+    /// content that may leave it unbalanced is interpreted once more (`draw_knockout_passes`).
+    pub(crate) fn visibility(&self) -> Vec<bool> {
+        self.visibility_stack.clone()
+    }
+
+    /// Knockout patch (pdfcraft #4898): see `visibility`.
+    pub(crate) fn set_visibility(&mut self, visibility: Vec<bool>) {
+        self.visibility_stack = visibility;
+    }
+
     fn dummy() -> Self {
         Self {
             inactive_ocgs: HashSet::default(),

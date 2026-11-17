@@ -30,7 +30,9 @@ decode = ["dep:heic-rs", "dep:rayon"]
 # `read_metadata` is this reader.
 metadata = []
 # `craft_heif::testdata`: lossless synthetic HEIF files, for the tests of the crates above.
-testdata = []
+test-support = []
+# The former name of `test-support`, kept until every crate that enables it uses `test-support`.
+testdata = ["test-support"]
 
 [lints]
 workspace = true

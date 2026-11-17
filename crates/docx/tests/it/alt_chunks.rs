@@ -48,7 +48,7 @@ fn package_styled(body: &str, chunk: Option<(&str, &str, &[u8])>, styles: Option
     files.push(("[Content_Types].xml".into(), types.into_bytes()));
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, bytes) in files {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.start_file(name, zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
         zw.write_all(&bytes).unwrap();
     }
     zw.finish().unwrap().into_inner()
@@ -74,6 +74,19 @@ fn a_chunk_comes_in_through_the_importer_where_it_stands() {
     assert_eq!(*seen.borrow(), [("application/xhtml+xml".to_string(), "word/afchunk.htm".to_string(), html.to_vec())]);
     // Without an importer the chunk is left out.
     assert_eq!(body_lines(&read(&bytes).unwrap()), ["Before", "After"]);
+}
+
+#[test]
+fn unreadable_nested_main_part_is_reported_with_its_chunk() {
+    let mut inner = package(&p("Chunk"), None);
+    let document = inner.windows(b"<w:document".len()).position(|w| w == b"<w:document").unwrap();
+    inner[document] ^= 1; // A bad ZIP checksum makes the required main part unreadable.
+    let outer = package(&format!("{}{}", p("Before"), CHUNK), Some(("docx", DOCX_MAIN, &inner)));
+
+    let d = read(&outer).unwrap();
+
+    assert_eq!(d.skipped_parts, vec!["word/afchunk.docx > word/document.xml".to_string()]);
+    assert_eq!(body_lines(&d), ["Before"]);
 }
 
 #[test]
@@ -443,4 +456,16 @@ fn a_chunk_imported_twice_counts_its_dropped_pictures_past_the_list_once() {
     let d = read(&package(&format!("{}{CHUNK}{CHUNK}", p("Before")), Some(("docx", DOCX_MAIN, &inner)))).unwrap();
     assert_eq!(d.missing_pictures.list.len(), craft_wordmodel::MAX_MISSING_PICTURES);
     assert_eq!(d.missing_pictures.total, n as u64);
+}
+
+#[test]
+fn a_part_a_chunk_could_not_read_is_listed_with_the_chunk() {
+    let bytes = package(&format!("{}{CHUNK}", p("Before")), Some(("htm", "application/xhtml+xml", b"<p>x</p>")));
+    let import = |_: &AltChunk| {
+        let mut d = Document::from_text("Chunk");
+        d.skipped_parts = vec!["word/media/image1.png".to_string()];
+        Some(d)
+    };
+    let d = read_with(&bytes, &ReadOptions { chunks: Some(&import), ..Default::default() }).unwrap();
+    assert_eq!(d.skipped_parts, vec!["word/afchunk.htm > word/media/image1.png".to_string()]);
 }

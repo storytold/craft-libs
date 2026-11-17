@@ -26,6 +26,45 @@ impl Align {
     }
 }
 
+/// The kashida (tatweel) length a justified paragraph uses (`ST_Jc` in ECMA-376 §17.18.44).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Kashida {
+    /// No kashidas: justified lines widen their word spaces (`both`, `justify`).
+    #[default]
+    None,
+    /// `lowKashida`.
+    Short,
+    /// `mediumKashida`.
+    Medium,
+    /// `highKashida`.
+    Long,
+}
+
+impl Kashida {
+    /// The length named by a `w:jc` value, if that value is a kashida or ordinary justify form.
+    /// Other alignments return `None` so they leave an inherited length.
+    pub fn from_jc(value: &str) -> Option<Kashida> {
+        match value {
+            "both" | "justify" => Some(Kashida::None),
+            "lowKashida" => Some(Kashida::Short),
+            "mediumKashida" => Some(Kashida::Medium),
+            "highKashida" => Some(Kashida::Long),
+            _ => None,
+        }
+    }
+
+    /// The `w:jc` value for a justified paragraph of this length.
+    pub fn jc(self) -> &'static str {
+        match self {
+            Kashida::None => "both",
+            Kashida::Short => "lowKashida",
+            Kashida::Medium => "mediumKashida",
+            Kashida::Long => "highKashida",
+        }
+    }
+}
+
 /// Paragraph-level text flow (`w:pPr/w:textDirection`, ECMA-376 §17.3.1.41).
 ///
 /// Kept separate from [`super::TextDirection`], whose three values model the table-cell direction
@@ -383,6 +422,10 @@ pub struct ParaProps {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<Align>,
+    /// Kashida length for a justified paragraph. `None` inherits; `Some(Kashida::None)` is
+    /// ordinary justification (`both` / `justify`) and cancels an inherited length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kashida: Option<Kashida>,
     /// Left indent, points.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indent_left: Option<f32>,
@@ -516,7 +559,7 @@ impl ParaProps {
     }
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
+        overlay_fields!(self, patch; style, align, kashida, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
             space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, shading, borders);
     }
 
