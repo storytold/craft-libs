@@ -492,6 +492,21 @@ mod tests {
 mod subsampling_tests {
     use super::*;
 
+    /// storytold/photocraft#11342: an optimized flat baseline JPEG has a one-bit Huffman code,
+    /// which zune-jpeg 0.5 decodes as black/green at the bottom. The Save for Web preview must
+    /// route these files through craft-jpeg so it shows the pixels the export actually contains.
+    #[test]
+    fn flat_optimized_baseline_decodes_to_the_source() {
+        let (w, h) = (100u32, 100u32);
+        let rgb = vec![128u8; (w * h * 3) as usize];
+        let bytes = encode_jpeg_rgb8(w, h, &rgb, 60, false, true, None, None, None, None).unwrap();
+        assert!(crate::codecs::jpeg::scan_metadata(&bytes).one_bit_huffman);
+        let ours = crate::decode(&bytes).unwrap().convert(crate::ChannelLayout::Rgb, crate::SampleType::U8);
+        assert_eq!(ours.dimensions(), (w, h));
+        let err = ours.data().iter().zip(&rgb).map(|(a, b)| i32::from(*a).abs_diff(i32::from(*b))).max().unwrap();
+        assert!(err <= 2, "max error {err}");
+    }
+
     /// jpeg-encoder 0.6 writes broken scans for baseline 4:2:0 with optimised Huffman tables;
     /// `encode_jpeg_rgb8` must avoid that combination.
     #[test]
