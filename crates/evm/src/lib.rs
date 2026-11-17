@@ -427,26 +427,9 @@ fn base58(b: &[u8]) -> String {
     s
 }
 
-/// Analyse bytecode (already decoded from hex if needed).
-pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
-    if code.is_empty() {
-        return Err(FormatError::Truncated("no bytecode".into()));
-    }
-    if code.len() > MAX_CODE {
-        return Err(FormatError::TooLarge(format!("{} bytes; the limit is {MAX_CODE}", code.len())));
-    }
-    if code.starts_with(&[0xef, 0x00]) {
-        return Err(FormatError::Unsupported("EVM Object Format (EOF, 0xEF00) containers are not analysed".into()));
-    }
-    let mut warnings = Vec::new();
-    let (end, metadata) = split_metadata(code);
-    let body = code.get(..end).unwrap_or(code);
-    let ins = sweep(body);
-    let jumpdests = ins.iter().filter(|i| i.op == 0x5b).count();
+fn selector_extraction(body: &[u8], ins: &[Ins]) -> Option<(&'static str, usize)> {
     let at = |k: usize| ins.get(k);
     let op_at = |k: usize| at(k).map(|i| i.op);
-    let index_of = |off: usize| ins.binary_search_by_key(&off, |i| i.off).ok();
-
     // Selector extraction: CALLDATALOAD followed by SHR 224, DIV 2^224 or a 4-byte mask.
     let mut extraction: Option<(&'static str, usize)> = None;
     for (k, i) in ins.iter().enumerate() {
@@ -479,6 +462,55 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
             break;
         }
     }
+    extraction
+}
+
+fn short_calldata_path(body: &[u8], ins: &[Ins], disp_start: usize) -> (bool, &'static str) {
+    let at = |k: usize| ins.get(k);
+    let op_at = |k: usize| at(k).map(|i| i.op);
+    // Short calldata path and receive().
+    let mut short_calldata = false;
+    let mut receive = "not-detected";
+    for (k, i) in ins.iter().enumerate().take(disp_start.saturating_add(64)) {
+        if i.op != 0x36 {
+            continue;
+        }
+        if op_at(k + 1) == Some(0x15) && at(k + 2).is_some_and(|p| is_push(p.op)) && op_at(k + 3) == Some(0x57) {
+            receive = "present";
+        }
+        // LT pops the size first in PUSH 4, CALLDATASIZE, LT.
+        if k.checked_sub(1).and_then(at).is_some_and(|p| is_push(p.op) && imm_u64(body, p) == Some(4))
+            && op_at(k + 1) == Some(0x10)
+            && at(k + 2).is_some_and(|p| is_push(p.op))
+            && op_at(k + 3) == Some(0x57)
+        {
+            short_calldata = true;
+        }
+    }
+    (short_calldata, receive)
+}
+
+/// Analyse bytecode (already decoded from hex if needed).
+pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
+    if code.is_empty() {
+        return Err(FormatError::Truncated("no bytecode".into()));
+    }
+    if code.len() > MAX_CODE {
+        return Err(FormatError::TooLarge(format!("{} bytes; the limit is {MAX_CODE}", code.len())));
+    }
+    if code.starts_with(&[0xef, 0x00]) {
+        return Err(FormatError::Unsupported("EVM Object Format (EOF, 0xEF00) containers are not analysed".into()));
+    }
+    let mut warnings = Vec::new();
+    let (end, metadata) = split_metadata(code);
+    let body = code.get(..end).unwrap_or(code);
+    let ins = sweep(body);
+    let jumpdests = ins.iter().filter(|i| i.op == 0x5b).count();
+    let at = |k: usize| ins.get(k);
+    let op_at = |k: usize| at(k).map(|i| i.op);
+    let index_of = |off: usize| ins.binary_search_by_key(&off, |i| i.off).ok();
+
+    let extraction = selector_extraction(body, &ins);
     let disp_start = extraction.map(|(_, k)| k).unwrap_or(0);
     if extraction.is_none() {
         warnings.push("no selector extraction (CALLDATALOAD then SHR/DIV/AND) was seen; matches below are less certain".into());
@@ -592,26 +624,8 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         warnings.push("some destinations are not JUMPDESTs; those matches may be data, not dispatch".into());
     }
 
-    // Short calldata path and receive().
-    let mut short_calldata = false;
-    let mut receive = "not-detected";
+    let (short_calldata, receive) = short_calldata_path(body, &ins, disp_start);
     let mut fallback = "unknown";
-    for (k, i) in ins.iter().enumerate().take(disp_start.saturating_add(64)) {
-        if i.op != 0x36 {
-            continue;
-        }
-        if op_at(k + 1) == Some(0x15) && at(k + 2).is_some_and(|p| is_push(p.op)) && op_at(k + 3) == Some(0x57) {
-            receive = "present";
-        }
-        // LT pops the size first in PUSH 4, CALLDATASIZE, LT.
-        if k.checked_sub(1).and_then(at).is_some_and(|p| is_push(p.op) && imm_u64(body, p) == Some(4))
-            && op_at(k + 1) == Some(0x10)
-            && at(k + 2).is_some_and(|p| is_push(p.op))
-            && op_at(k + 3) == Some(0x57)
-        {
-            short_calldata = true;
-        }
-    }
     if let Some(j) = last_jumpi
         && solc_like > 0
     {
