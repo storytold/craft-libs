@@ -131,8 +131,8 @@ impl<'a> Capture<'a> {
             let major = rd_u16(&r, le, 4).ok_or_else(|| FormatError::Truncated("pcap header".into()))?;
             let minor = rd_u16(&r, le, 6).unwrap_or(0);
             let snaplen = rd_u32(&r, le, 16).ok_or_else(|| FormatError::Truncated("pcap header".into()))?;
-            // The top bits of the link field can carry FCS information; the type is the low 28 bits.
-            let link = rd_u32(&r, le, 20).ok_or_else(|| FormatError::Truncated("pcap header".into()))? & 0x0fff_ffff;
+            // Link type: bits 0–15; reserved: 16–25 and 27; FCS-present: 26; FCS length in 16-bit words: 28–31.
+            let link = rd_u32(&r, le, 20).ok_or_else(|| FormatError::Truncated("pcap header".into()))? & 0xffff;
             let res = if nanos { (10, 9) } else { (10, 6) };
             let iface = Interface { link_type: link, link_name: link_name(link), snaplen, tsresol: res, tsoffset: 0 };
             Ok((Kind::Classic { le, nanos }, format!("{major}.{minor}"), iface))
@@ -1186,6 +1186,87 @@ pub fn iso8601(ns: u64) -> String {
 mod tests {
     use super::*;
     use craft_anything_testkit::pcap::{dns_query, pcap, pcapng, sample_frames, udp};
+
+    fn classic_link_word(link_word: u32, le: bool, nanos: bool, trailer: usize) {
+        let link = link_word & 0xffff;
+        let mut frame = sample_frames()[1].clone();
+        if link == 101 {
+            frame.drain(..14);
+        }
+        frame.extend(vec![0xab; trailer]);
+        let word = |v: u32| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+        let short = |v: u16| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+        let mut data = word(if nanos { CLASSIC_NS } else { CLASSIC_US }).to_vec();
+        data.extend(short(2));
+        data.extend(short(4));
+        data.extend([0; 8]);
+        data.extend(word(65535));
+        data.extend(word(link_word));
+        data.extend(word(1_700_000_000));
+        data.extend(word(500));
+        data.extend(word(frame.len() as u32));
+        data.extend(word(frame.len() as u32));
+        data.extend(&frame);
+
+        let mut cap = Capture::new(&data).unwrap();
+        assert_eq!(cap.interfaces[0].link_type, link);
+        assert_eq!(cap.interfaces[0].link_name, if link == 1 { "Ethernet" } else { "raw IP" });
+        let packet = cap.next().unwrap();
+        assert_eq!(packet.link_type, link);
+        assert_eq!(packet.data, frame);
+        assert_eq!(packet.ts_ns, Some(1_700_000_000_000_000_000 + if nanos { 500 } else { 500_000 }));
+        let d = decode(packet.link_type, packet.data);
+        assert_eq!(d.stack(), if link == 1 { "eth:ipv4:udp:dns" } else { "raw:ipv4:udp:dns" });
+        let ip = d.ip.unwrap();
+        assert_eq!(ip.src.to_string(), "8.8.8.8");
+        assert_eq!(ip.dst.to_string(), "192.168.1.10");
+        let dns = d.dns.unwrap();
+        assert!(dns.response);
+        assert_eq!(dns.answers[0].value, "93.184.216.34");
+        assert!(cap.next().is_none());
+
+        let s = summarize(&data, &|| false).unwrap();
+        assert_eq!(s.packets, 1);
+        assert_eq!(s.undecoded_frames, 0);
+        assert_eq!(s.dns_answers[0].value, "example.com A 93.184.216.34");
+        assert_eq!(s.flows[0].protocol, "udp");
+        assert!(s.warnings.is_empty());
+    }
+
+    #[test]
+    fn fcs_bits_do_not_change_the_ethernet_link_type() {
+        classic_link_word(0x24000001, true, false, 4);
+    }
+
+    #[test]
+    fn fcs_bits_are_masked_in_big_endian_files() {
+        classic_link_word(0x24000001, false, false, 4);
+    }
+
+    #[test]
+    fn fcs_bits_are_masked_in_nanosecond_files() {
+        classic_link_word(0x24000001, true, true, 4);
+    }
+
+    #[test]
+    fn a_one_word_fcs_length_is_masked() {
+        classic_link_word(0x14000001, true, false, 2);
+    }
+
+    #[test]
+    fn fcs_bits_do_not_change_the_raw_ip_link_type() {
+        classic_link_word(0x24000065, true, false, 4);
+    }
+
+    #[test]
+    fn ethernet_without_fcs_bits_still_decodes() {
+        classic_link_word(1, true, false, 0);
+    }
+
+    #[test]
+    fn raw_ip_without_fcs_bits_still_decodes() {
+        classic_link_word(101, true, false, 0);
+    }
 
     #[test]
     fn decodes_dns_tls_http() {
