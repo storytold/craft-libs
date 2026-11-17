@@ -231,7 +231,8 @@ pub struct Updater {
     /// A prompt the updater dropped is still on the host; it is withdrawn when it shows.
     stale: bool,
     /// The newest release a check found or the app offered, with whether this copy can install it
-    /// itself; [`Updater::request_install`] works from it after the prompt closed.
+    /// itself; [`Updater::request_install`] works from it after the prompt closed. `None` while an
+    /// offered release is being inspected.
     known: Option<(Release, bool)>,
     /// A finished installation waiting for the app to exit: what still has to start then, and
     /// the release it installs.
@@ -447,8 +448,10 @@ impl Updater {
         }
         self.status = Status::Idle;
         // The prompt for an earlier release closes while this one is inspected: nothing installs
-        // the earlier release from it, and a save it asked for installs nothing.
+        // the earlier release from it, and a save it asked for installs nothing. Nor does
+        // `request_install`, which would reopen it from `known`.
         self.drop_prompt();
+        self.known = None;
         if self.offered.is_some() {
             self.next_offer = Some(release);
             return;
