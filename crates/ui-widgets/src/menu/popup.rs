@@ -298,7 +298,8 @@ impl Component for Menu<'_> {
         Sense::empty()
     }
 
-    /// A row of a submenu level that took Back closes the menu. A typed letter runs the row its mnemonic names; the
+    /// A pointer move onto an enabled row of the level makes it the active row, before the rows run. A row of a
+    /// submenu level that took Back closes the menu. A typed letter runs the row its mnemonic names; the
     /// container claims the letters, so a letter works whichever row is focused. A level the pointer opened with no active row has no lead:
     /// the first key enters it at an end. The active row is the lead, so the first key after the pointer lit a row
     /// moves from that row; a row lit in this pass leads from the next, so only a key in the same frame as the pointer
@@ -322,6 +323,12 @@ impl Component for Menu<'_> {
             cx.keep_open();
             level.run(row);
             frame::request_repaint(&cx.core.ctx);
+        }
+        // The rows run after this, so the pass that moved the pointer onto a row paints it, and the row it left, as the
+        // level now has them.
+        if crate::runtime::pointer::frame(&cx.core.ctx).delta != egui::Vec2::ZERO {
+            let ctx = cx.core.ctx.clone();
+            level.follow_pointer(|row| crate::runtime::pointer::hovers(&ctx, row));
         }
         let keyboard = crate::runtime::focus::keyboard_in_menu(&cx.core.ctx);
         self.props.roving = self.props.roving.map(|roving| roving.no_lead(!keyboard && !level.has_active()));
