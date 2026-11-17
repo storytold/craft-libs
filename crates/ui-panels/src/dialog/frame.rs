@@ -183,12 +183,24 @@ pub(crate) fn footer_in(
             bar.show(ui, |ui, bar| content(ui, &mut FooterCx { bar, dialog: cx, close }));
         }
     };
-    if !column {
+    if buttons.is_empty() {
         show_content(ui, cx, content, &mut close);
-    }
-    if !buttons.is_empty() {
+    } else {
         let bar = FooterBar::buttons(buttons.iter().cloned()).enter_activates(enter);
-        *picked = if column { bar.column() } else { bar }.show_footer(ui).picked;
+        *picked = if column {
+            bar.column().show_footer(ui).picked
+        } else if content.is_some() {
+            // The content stands at the start of the buttons' line.
+            bar.show_footer_leading(ui, |ui, bar| {
+                if let Some(content) = content.as_mut() {
+                    content(ui, &mut FooterCx { bar, dialog: cx, close: &mut close });
+                }
+            })
+            .0
+            .picked
+        } else {
+            bar.show_footer(ui).picked
+        };
         if let Some(at) = *picked {
             if let Some(act) = on_pick.as_mut() {
                 act(&buttons[at], cx);
@@ -202,9 +214,9 @@ pub(crate) fn footer_in(
                 }
             }
         }
-    }
-    if column {
-        show_content(ui, cx, content, &mut close);
+        if column {
+            show_content(ui, cx, content, &mut close);
+        }
     }
     if let Some(why) = close {
         cx.request_close_as(why);

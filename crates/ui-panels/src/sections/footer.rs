@@ -3,7 +3,7 @@
 use super::words::SectionWords;
 use crate::buttons::{Button, IconButton, PopupMark};
 use crate::contract::{
-    Access, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, LeastWidth, NoValue, Outcome, Pad,
+    Access, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, LeastWidth, NoValue, Outcome, Pad,
     PaintUi, Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
 };
 use crate::layout_components::Row;
@@ -582,21 +582,21 @@ impl FooterBar {
 
     /// Shows the bar with the actions or buttons it was made with and reports what happened to them.
     pub fn show_footer(self, ui: &mut Ui) -> FooterOutput {
-        self.show_footer_with(ui, None::<fn(&mut Ui)>).0
+        self.show_footer_with(ui, None::<fn(&mut Ui, &mut BodyCx<'_>)>).0
     }
 
-    /// Shows a bar of actions with the host's `leading` controls at its start edge, before the actions placed there by
-    /// [`at_start`](FooterBar::at_start), under the same rule: a preset panel's size slider. Returns what `leading`
-    /// returned on its last run.
-    pub fn show_footer_leading<R>(self, ui: &mut Ui, leading: impl FnMut(&mut Ui) -> R) -> (FooterOutput, Option<R>) {
+    /// Shows a bar of actions or buttons with the host's `leading` controls at its start edge, before the actions
+    /// placed there by [`at_start`](FooterBar::at_start), under the same rule: a preset panel's size slider, a filter
+    /// dialog's Preview box. `leading` gets the bar's body context. Returns what `leading` returned on its last run.
+    pub fn show_footer_leading<R>(self, ui: &mut Ui, leading: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> (FooterOutput, Option<R>) {
         self.show_footer_with(ui, Some(leading))
     }
 
-    fn show_footer_with<R>(mut self, ui: &mut Ui, mut leading: Option<impl FnMut(&mut Ui) -> R>) -> (FooterOutput, Option<R>) {
+    fn show_footer_with<R>(mut self, ui: &mut Ui, mut leading: Option<impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R>) -> (FooterOutput, Option<R>) {
         let content = std::mem::take(&mut self.content);
         let (enter, column, start) = (self.enter, self.column, self.start);
         let mut led = None;
-        let shown = self.show(ui, |ui, _| match &content {
+        let shown = self.show(ui, |ui, bar| match &content {
             Content::Body => Shown::default(),
             Content::Actions(actions) => {
                 let mut shown = Shown::default();
@@ -605,7 +605,7 @@ impl FooterBar {
                 if let Some(leading) = leading.as_mut() {
                     // The leading controls are units of the bar's row, so they narrow to leave the actions their
                     // width; the end group fills the rest.
-                    led = Some(leading(ui));
+                    led = Some(leading(ui, bar));
                     show_actions(ui, actions, 0..start, &mut shown);
                     Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
                 } else if start == 0 {
@@ -627,6 +627,7 @@ impl FooterBar {
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
+                let mut place = |ui: &mut Ui, shown: &mut Shown| {
                 for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
                     let button = &buttons[at];
                     let variant = match button.role {
@@ -662,6 +663,15 @@ impl FooterBar {
                             shown.picked = Some(at);
                         }
                     }
+                }
+                };
+                if let Some(leading) = leading.as_mut() {
+                    // The leading controls stand at the start edge of the buttons' line; the buttons fill the rest and
+                    // sit at the end edge.
+                    led = Some(leading(ui, bar));
+                    Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| place(ui, &mut shown));
+                } else {
+                    place(ui, &mut shown);
                 }
                 if enter && shown.picked.is_none() && !ui.is_sizing_pass() {
                     shown.picked = default_at.filter(|_| enter_reaches_footer(&ctx) && keys::take_submit(&ctx));
