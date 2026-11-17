@@ -1,6 +1,6 @@
 # craft-prc
 
-A reader for PRC (ISO 14739-1), the 3D model format a PDF `/3D` stream of `/Subtype /PRC` carries (ISO 32000-2 §13.6.3).
+A reader and triangle-mesh writer for PRC (ISO 14739-1), the 3D model format a PDF `/3D` stream of `/Subtype /PRC` carries (ISO 32000-2 §13.6.3).
 
 - Standalone: no PDF code and no app code. The caller hands it the stream's bytes; drawing the model stays in the app.
 - **Licence:** MIT OR Apache-2.0. Inflation through `flate2` with a pure-Rust backend (`miniz_oxide` unless the app's build selects `zlib-rs`).
@@ -29,7 +29,7 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
 - `Unsupported` names constructs the reader cannot step over (schema pointer fields, `Value_CurveIs3D`).
 - `Tessellation::Mesh` is a `TriangleMesh`: positions, triangles, one triangle range per face, the stored normals and
   texture coordinates with each triangle's corner indices into them, and per-triangle line-attribute styles.
-  `Wire` is polylines; `Markup` is read past.
+  `Wire` is a `WireTessellation`: polylines and, when stored, each point's RGBA colour; `Markup` is read past.
 - `Tessellation::Compressed` is read to its end so later entities decode. Recalculated-normal meshes in the accepted 3T form are rebuilt when their arrays fit; stored-normal meshes and unsupported traversals stay `Compressed`.
 - A face may carry at most 8 texture-coordinate sets; more is `Malformed`. Optimised vertex colours are `Unsupported`.
 - The product tree: each drawable tessellation placed by its occurrence path's locations and the item's coordinate
@@ -42,3 +42,15 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
 - Not yet in the crate: stored-normal or one-status compressed mesh reconstruction, textures.
 - The `Double` code table's rows come from [prc-rs](https://github.com/ralovich/prc-rs) (MIT); its notice is in `src/acof/table.rs`.
   A few reading choices also follow prc-rs; each is marked `// prc-rs:` in the source.
+
+## Writing
+
+```rust
+write_prc(&MeshScene) -> Result<PrcWriteReport, PrcWriteError>   // one file structure, readable by PrcFile::parse
+MeshScene::bounds() -> Option<[[f64; 3]; 2]>                      // the placed triangles' box, for a 3D view
+```
+
+- A `MeshScene` is nodes (name, optional 4x4 matrix, optional mesh, children), roots, meshes of triangle primitives (positions, optional per-vertex normals and texture coordinates, a material), materials (RGBA and emissive) and PNG or JPEG textures with S and T wraps.
+- The whole scene is checked before a bit is written: indices, finite numbers, a tree (one parent per node, no repeated root, nesting at most `MAX_NODE_DEPTH`, 64, the reader's walk limit), and each texture's header. A failure is `PrcWriteError`, never a partial stream.
+- `PrcWriteReport` holds the stream and counts what the writer supplied itself: flat normals for primitives without normals, and empty primitives dropped.
+- Not written: lights, markups, views, B-rep, compressed tessellation.

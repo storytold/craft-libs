@@ -8,10 +8,25 @@ fn line_at_ys(line: Line, y0: f64, y1: f64) -> (f64, f64) {
     let dy_recip = (line.p1.y - line.p0.y).recip();
     let t0 = (y0 - line.p0.y) * dy_recip;
     let t1 = (y1 - line.p0.y) * dy_recip;
-    (
-        (1.0 - t0) * line.p0.x + t0 * line.p1.x,
-        (1.0 - t1) * line.p0.x + t1 * line.p1.x,
-    )
+    (x_at_t(line, t0), x_at_t(line, t1))
+}
+
+/// Returns `(1 - t) * line.p0.x + t * line.p1.x`.
+fn x_at_t(line: Line, t: f64) -> f64 {
+    // Craft patch (subnormal x): a product of t and a subnormal x coordinate
+    // loses bits, so x = 5e-324 times 0.5 rounds to 0. When both x coordinates
+    // have a magnitude below 2^-500, take the weighted sum of the x coordinates
+    // times 2^600 and scale the sum back. Multiplying by a power of two is
+    // exact for normal numbers, and multiplying by 1 changes nothing.
+    const SMALL: f64 = f64::from_bits((1023 - 500) << 52);
+    const UP: f64 = f64::from_bits((1023 + 600) << 52);
+    const DOWN: f64 = f64::from_bits((1023 - 600) << 52);
+    let (up, down) = if line.p0.x.abs().max(line.p1.x.abs()) < SMALL {
+        (UP, DOWN)
+    } else {
+        (1.0, 1.0)
+    };
+    ((1.0 - t) * (line.p0.x * up) + t * (line.p1.x * up)) * down
 }
 
 /// Checks the relative order of two line segments.
@@ -155,5 +170,16 @@ mod tests {
         assert_eq!(order.cmps[0].order, Order::Right);
         assert_eq!(order.cmps[1].order, Order::Ish);
         assert!((order.cmps[0].end - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn subnormal_x() {
+        let x = f64::from_bits(1);
+        let l = Line::new((x, 0.0), (x, 2.0));
+        assert_eq!(line_at_ys(l, 0.5, 1.0), (x, x));
+
+        let l = Line::new((-3.0 * x, 0.0), (3.0 * x, 2.0));
+        assert_eq!(line_at_ys(l, 0.0, 2.0), (-3.0 * x, 3.0 * x));
+        assert_eq!(line_at_ys(l, 1.0, 1.0), (0.0, 0.0));
     }
 }

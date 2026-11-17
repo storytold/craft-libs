@@ -150,12 +150,14 @@ fn we_decode_what_ffmpeg_encodes_to_what_ffmpeg_decodes() {
     let Some(ff) = craft_media_testkit::ffmpeg() else { return };
     let dir = craft_media_testkit::fixture_subdir("mjpeg");
     let s = |p: &Path| p.to_str().expect("path").to_string();
+    // the same input every run: ffmpeg's own test sources draw random colors
+    let input = dir.join("input.rgb");
+    std::fs::write(&input, picture(67, 41, 3)).expect("write");
+    let input = s(&input);
+    let source = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "67x41", "-i", input.as_str()];
     for (name, pix_fmt, rgb_pix, channels) in [("420", "yuvj420p", "rgb24", 3), ("422", "yuvj422p", "rgb24", 3), ("444", "yuvj444p", "rgb24", 3)] {
         let jpg = dir.join(format!("{name}.jpg"));
-        ffmpeg(
-            &ff,
-            &["-f", "lavfi", "-i", "gradients=size=67x41:rate=1", "-frames:v", "1", "-c:v", "mjpeg", "-pix_fmt", pix_fmt, "-q:v", "2", &s(&jpg)],
-        );
+        ffmpeg(&ff, &[&source[..], &["-frames:v", "1", "-c:v", "mjpeg", "-pix_fmt", pix_fmt, "-q:v", "2", &s(&jpg)]].concat());
         let reference = dir.join(format!("{name}.raw"));
         ffmpeg(&ff, &["-i", &s(&jpg), "-f", "rawvideo", "-pix_fmt", rgb_pix, &s(&reference)]);
         let packet = std::fs::read(&jpg).expect("read");
@@ -170,23 +172,7 @@ fn we_decode_what_ffmpeg_encodes_to_what_ffmpeg_decodes() {
         let plain = dir.join(format!("{name}_default_tables.jpg"));
         ffmpeg(
             &ff,
-            &[
-                "-f",
-                "lavfi",
-                "-i",
-                "gradients=size=67x41:rate=1",
-                "-frames:v",
-                "1",
-                "-c:v",
-                "mjpeg",
-                "-pix_fmt",
-                pix_fmt,
-                "-q:v",
-                "2",
-                "-huffman",
-                "default",
-                &s(&plain),
-            ],
+            &[&source[..], &["-frames:v", "1", "-c:v", "mjpeg", "-pix_fmt", pix_fmt, "-q:v", "2", "-huffman", "default", &s(&plain)]].concat(),
         );
         let stripped = without_huffman_tables(&std::fs::read(&plain).expect("read"));
         let with_tables = Decoder::new().decode(&std::fs::read(&plain).expect("read")).expect("decode");
@@ -222,5 +208,43 @@ fn ffmpeg_decodes_what_we_encode() {
         println!("{name}: ffmpeg decode against ours {p:.1} dB, against the input {q:.1} dB");
         assert!(p >= 38.0, "{name}: ffmpeg's decode of our packet differs from ours: {p:.1} dB");
         assert!(q >= 28.0, "{name}: ffmpeg's decode is far from the input: {q:.1} dB");
+    }
+}
+
+/// `packet` with an Adobe APP14 segment carrying `transform`, right after SOI.
+fn with_app14(packet: &[u8], transform: u8) -> Vec<u8> {
+    let mut out = packet[..2].to_vec();
+    out.extend_from_slice(&[0xFF, 0xEE, 0, 14]);
+    out.extend_from_slice(b"Adobe");
+    out.extend_from_slice(&[0, 100, 0, 0, 0, 0, transform]);
+    out.extend_from_slice(&packet[2..]);
+    out
+}
+
+#[test]
+fn adobe_transform_zero_keeps_numeric_id_components_as_rgb() {
+    // The encoder stores YCbCr under component ids 1, 2, 3. An Adobe APP14 transform of 0 says the
+    // three components are R, G and B as stored, so the decoder must not convert them again.
+    let (r, g, b) = (200.0f32, 60.0f32, 30.0f32);
+    let pixels: Vec<u8> = [r as u8, g as u8, b as u8].repeat(16 * 16);
+    let enc = Encoder::new(EncoderConfig { quality: 100, subsampling: ChromaSubsampling::S444 }).unwrap();
+    let packet = enc.encode(16, 16, 3, &pixels).unwrap();
+    let dec = Decoder::new();
+    let ycc = [0.299 * r + 0.587 * g + 0.114 * b, 128.0 - 0.168_736 * r - 0.331_264 * g + 0.5 * b, 128.0 + 0.5 * r - 0.418_688 * g - 0.081_312 * b];
+    let as_rgb = dec.decode(&with_app14(&packet, 0)).unwrap();
+    assert_eq!(as_rgb.channels, 3);
+    for px in bytes(&as_rgb).as_chunks::<3>().0 {
+        for (got, want) in px.iter().zip(ycc) {
+            assert!((f32::from(*got) - want).abs() <= 3.0, "{px:?} against stored {ycc:?}");
+        }
+    }
+    // Transform 1 (YCbCr), and no APP14 at all, convert back to the picture's colour.
+    for packet in [with_app14(&packet, 1), packet] {
+        let f = dec.decode(&packet).unwrap();
+        for px in bytes(&f).as_chunks::<3>().0 {
+            for (got, want) in px.iter().zip([r, g, b]) {
+                assert!((f32::from(*got) - want).abs() <= 3.0, "{px:?}");
+            }
+        }
     }
 }
