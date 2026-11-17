@@ -1010,7 +1010,7 @@ const NAMES_XML: &str = r#"<workbook xmlns="http://schemas.openxmlformats.org/sp
 fn xml_names(xml: &str) -> Vec<craft_xlsx::DefinedName> {
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#;
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
-    let bytes = zip(&[("[Content_Types].xml", types.as_bytes()), ("_rels/.rels", root.as_bytes()), ("xl/workbook.xml", xml.as_bytes())]);
+    let bytes = zip(&[("[Content_Types].xml", types.as_bytes()), ("_rels/.rels", root.as_bytes()), ("xl/workbook.xml", xml.as_bytes())]).unwrap();
     Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap().defined_names
 }
 
@@ -1146,7 +1146,8 @@ fn xml_sheet(xml: &str) -> (Vec<Row>, SheetPart) {
         ("xl/workbook.xml", book.as_bytes()),
         ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
         ("xl/sheet.xml", xml.as_bytes()),
-    ]);
+    ])
+    .unwrap();
     let (rows, part, _) = sizes_of(&bytes).unwrap();
     (rows, part)
 }
@@ -1256,6 +1257,7 @@ fn styled_file(styles: &[u8], types: &str) -> Vec<u8> {
         ("data/two.bin", &worksheet(&[], &[])),
         ("look/styles.bin", styles),
     ])
+    .unwrap()
 }
 
 /// The styles part of a package, and the warnings reading it gave.
@@ -1440,7 +1442,8 @@ fn xml_styles(xml: &str) -> Styles {
         ("xl/workbook.xml", br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#),
         ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
         ("xl/styles.xml", xml.as_bytes()),
-    ]);
+    ])
+    .unwrap();
     styles_of(&bytes).0.unwrap()
 }
 
@@ -1793,7 +1796,7 @@ fn book_with_tables(data: &[u8], tables: &[Vec<u8>]) -> Vec<u8> {
         ("text/strings.bin", &strings),
     ];
     entries.extend(names.iter().map(String::as_str).zip(tables.iter().map(Vec::as_slice)));
-    zip(&entries)
+    zip(&entries).unwrap()
 }
 
 /// Sheet one's tables through `Package`, and its warnings.
@@ -1834,7 +1837,8 @@ fn a_name_using_a_structured_reference_is_decoded_after_tables_are_indexed() {
         ("data/two.bin", two.as_slice()),
         ("text/strings.bin", strings.as_slice()),
         ("tables/t1.bin", table.as_slice()),
-    ]);
+    ])
+    .unwrap();
     let names = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap().defined_names;
     assert_eq!(names.iter().find(|n| n.name == "Vals").map(|n| n.formula.as_str()), Some("Sales[Val]"));
     let wb = read(&bytes).unwrap();
