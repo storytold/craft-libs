@@ -1,7 +1,8 @@
 //! The editor's own commands: Photoshop's type formatting keys, the commit and cancel chords and the Character panel
-//! toggle. They sit in the `textEditor` scope, so they reach the editor before an app's shortcut on the same chord
-//! (Cmd+T is Free Transform elsewhere) while the editor holds the keys. The editor reads them with
-//! `take_command`, so the keymap rebinds them like any command; the editor reads no raw keys.
+//! toggle. They sit in the `textEditor` scope, a typing scope: while the editor holds the keys they reach it before an
+//! app's shortcut on the same chord (Cmd+T is Free Transform elsewhere), and the keymap's typing rule, which keeps Alt
+//! chords with a text field's text, lets them through (Alt+arrows kern and step leading, baseline and tracking). The
+//! editor reads them with `take_command`, so the keymap rebinds them like any command; the editor reads no raw keys.
 
 use craft_behavior::{Granularity, MoveMods, NavMove};
 
@@ -17,7 +18,7 @@ const FAR: f32 = 5.0;
 /// The commands of a type session. Each runs on the editor that holds the keyboard; the host decides what a
 /// formatting command means for its text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::CommandSet)]
-#[command(prefix = "textEditor", scope = "textEditor")]
+#[command(prefix = "textEditor", scope = "textEditor", typing)]
 #[non_exhaustive]
 pub enum TextEditorCommand {
     /// Commit the session and keep the text.

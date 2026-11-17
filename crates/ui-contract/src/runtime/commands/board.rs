@@ -242,7 +242,9 @@ impl Board {
     /// The keymap and the scopes a key matches in while `chain` (outermost first) has the keys.
     fn key_scopes(&self, chain: &[Id]) -> Option<KeyScopes> {
         let keymap = self.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap))?;
-        Some(KeyScopes { keymap, scopes: self.scopes_around(chain), held: self.held_scopes() })
+        let scopes = self.scopes_around(chain);
+        let typing = scopes.iter().copied().filter(|scope| self.registry.is_typing_scope(scope)).collect();
+        Some(KeyScopes { keymap, scopes, held: self.held_scopes(), typing })
     }
 
     /// The scopes whose keys work now: those of the momentary commands whose key is held.
@@ -421,16 +423,19 @@ struct KeyScopes {
     scopes: Vec<&'static str>,
     /// The held scopes ([`Board::held_scopes`]): the keymap's contexts, whose keys come before every scope's.
     held: Vec<&'static str>,
+    /// The typing scopes among `scopes` (`CommandSet::TYPING`): contexts of the keymap too, active while typing.
+    typing: Vec<&'static str>,
 }
 
 impl KeyScopes {
     /// What a press of `input` runs, read through `layout`, with `typing` when a text field has the keys. With
     /// `matcher` and the press's time the press counts toward a double press; without, it is matched on its own. A
-    /// held scope's keys stay with the text while typing.
+    /// held scope's keys stay with the text while typing; a typing scope's keys are the text component's own.
     fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
         let (panel, outer) = self.scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
-        let held: &[&str] = if typing { &[] } else { &self.held };
-        let active = Active { panel, contexts: held, typing };
+        let held: &[&'static str] = if typing { &[] } else { &self.held };
+        let contexts: Vec<&str> = self.typing.iter().chain(held).copied().collect();
+        let active = Active { panel, contexts: &contexts, typing };
         match matcher {
             Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }),
             None => Matcher::single(layout, &self.keymap, input, &active, outer),
@@ -490,10 +495,11 @@ pub fn keymap_builds() -> u64 {
 fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
     #[cfg(feature = "testing")]
     KEYMAP_BUILDS.with(|builds| builds.set(builds.get() + 1));
-    // A held scope is a context of the keymap: its keys work while it is active, before any panel's.
+    // A held scope and a typing scope are contexts of the keymap: their keys work while they are active, before any
+    // panel's, and a typing scope's while typing too.
     let mut scopes = Scopes::new();
     for def in registry.defs() {
-        if registry.is_held_scope(def.scope.as_str()) {
+        if registry.is_held_scope(def.scope.as_str()) || registry.is_typing_scope(def.scope.as_str()) {
             scopes = scopes.with_context(def.scope.as_str());
         } else if !def.scope.is_app() {
             scopes = scopes.with_panel(def.scope.as_str());

@@ -83,6 +83,11 @@ pub trait CommandSet: Copy + Send + Sync + 'static {
     /// The scope the set's commands belong to.
     const SCOPE: CommandScope;
 
+    /// The set's keys are those of a text component, meant for typing (`#[command(typing)]`): its scope is a keymap
+    /// context, active while an instance of it is around the focus, so its keys come before every other scope's and
+    /// work while the component types, as a type tool's formatting keys do.
+    const TYPING: bool = false;
+
     /// The command of this set that `command` names.
     fn from_ref(command: &CommandRef) -> Option<Self>;
 
