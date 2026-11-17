@@ -160,6 +160,9 @@ pub enum Error {
     Offset(u64),
     /// The planes were made for another format than the converter's.
     Mismatch { converter: Format, planes: Format },
+    /// A frame layout's fields are not what [`crate::FrameLayout::new`] gives for its format and
+    /// size.
+    Layout,
 }
 
 impl fmt::Display for Error {
@@ -173,6 +176,7 @@ impl fmt::Display for Error {
             Error::BufferSize { needed, actual } => write!(f, "{actual} bytes where {needed} are needed"),
             Error::Offset(offset) => write!(f, "buffer offset {offset} is not a multiple of {}", wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
             Error::Mismatch { converter, planes } => write!(f, "{planes} planes given to a {converter} converter"),
+            Error::Layout => f.write_str("the frame layout does not match its format and size"),
         }
     }
 }

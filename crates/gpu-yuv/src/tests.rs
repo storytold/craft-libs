@@ -146,6 +146,27 @@ fn layouts_pad_rows_for_copies_and_unpack_without_the_padding() {
 }
 
 #[test]
+fn unpack_refuses_a_layout_that_was_changed_after_it_was_made() {
+    let l = FrameLayout::new(Format::I420, 4, 2).unwrap();
+    let padded = vec![0u8; l.buffer_size as usize];
+    let changes: [fn(&mut FrameLayout); 6] = [
+        |l| l.planes[0].bytes_per_row = 0,
+        |l| l.planes[0].width = 0,
+        |l| l.planes[0].texel_bytes = 0,
+        |l| l.planes[0].offset = 768,
+        |l| l.planes[0].bytes_per_row = 2,
+        |l| l.planes.truncate(1),
+    ];
+    for (n, change) in changes.iter().enumerate() {
+        let mut bad = l.clone();
+        change(&mut bad);
+        let mut frame = vec![0u8; bad.frame_bytes()];
+        assert_eq!(bad.unpack(&padded, &mut frame), Err(Error::Layout), "change {n}");
+    }
+    assert_eq!(Error::Layout.to_string(), "the frame layout does not match its format and size");
+}
+
+#[test]
 fn an_enlarged_solid_color_keeps_its_codes() {
     for format in ALL {
         let c = Conversion::new(format, Matrix::Bt709, Range::Limited);

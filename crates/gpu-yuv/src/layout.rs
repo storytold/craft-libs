@@ -75,7 +75,11 @@ impl FrameLayout {
 
     /// Copy the planes from `padded` (a mapped read-back buffer, from the offset it was copied to)
     /// into `frame` without the row padding. `frame` must be [`FrameLayout::frame_bytes`] long.
+    /// A layout whose fields differ from what [`FrameLayout::new`] gives is [`Error::Layout`].
     pub fn unpack(&self, padded: &[u8], frame: &mut [u8]) -> Result<(), Error> {
+        if FrameLayout::new(self.format, self.width, self.height).as_ref() != Ok(self) {
+            return Err(Error::Layout);
+        }
         if (padded.len() as u64) < self.buffer_size {
             return Err(Error::BufferSize { needed: self.buffer_size, actual: padded.len() as u64 });
         }
@@ -89,7 +93,7 @@ impl FrameLayout {
             let (dst, rest) = out.split_at_mut(row * p.height as usize);
             let src = padded.get(p.offset as usize..).unwrap_or_default();
             for (d, s) in dst.chunks_exact_mut(row).zip(src.chunks(padded_row)) {
-                // The size check above leaves every row whole.
+                // The layout and size checks above leave every row whole.
                 if let Some(s) = s.get(..row) {
                     d.copy_from_slice(s);
                 }
