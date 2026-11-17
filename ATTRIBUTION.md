@@ -121,6 +121,10 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 The legacy ZIP Zstandard method-20 mapping and bounded-read regression in `crates/zip/src/lenient` are ported from RRFZ's Craft Anything commit `29badae7c9280fdf4c24795927bf3a91f51694c6` (MIT OR Apache-2.0). RRFZ remains the primary Git author. Firmware scanner detection remains app-owned and is not part of this port.
 
+## Aligned stored ZIP entries
+
+The USDZ alignment requirement and compatibility fixture for `Writer::add_stored_aligned` come from TextureCraft `crates/formats/src/mesh_export/usd.rs`, introduced by bflatastic in `bdbb52c9` and maintained through `9eb20086` (MIT OR Apache-2.0). The shared API and alignment validation are subsequent Dylan M. Taylor work. Scene/material mapping remains in TextureCraft.
+
 The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
 AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
 Sanitization, animation fitting and numeric output policy remain caller-owned.
