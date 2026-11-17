@@ -324,6 +324,32 @@ fn nonempty_comment_eocd_candidate_does_not_mask_valid_archive() {
 }
 
 #[test]
+fn overstated_comment_eocd_does_not_mask_valid_archive() {
+    let mut bytes = zip(&[("a.xml", b"x", false)]);
+    let end = bytes.len() - 22;
+    let size = u32_at(&bytes, end + 12).unwrap();
+    let start = u32_at(&bytes, end + 16).unwrap() as usize;
+    let fake_start = bytes.len();
+
+    // Copy the directory and end record into the real comment, then corrupt the copies.
+    bytes.extend_from_within(start..);
+    let comment_len = u16::try_from(bytes.len() - fake_start).unwrap();
+    bytes[end + 20..end + 22].copy_from_slice(&comment_len.to_le_bytes());
+    bytes[fake_start + 42..fake_start + 46].copy_from_slice(&1u32.to_le_bytes());
+    let fake_end = bytes.len() - 22;
+    bytes[fake_end + 12..fake_end + 16].copy_from_slice(&(size + 1).to_le_bytes());
+    bytes[fake_end + 16..fake_end + 20].copy_from_slice(&u32::try_from(fake_start).unwrap().to_le_bytes());
+
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+
+    // If both candidates need recovery, the record before the comment still wins.
+    bytes[end + 12..end + 16].copy_from_slice(&(size + 1).to_le_bytes());
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+}
+
+#[test]
 fn repeated_eocd_directory_candidates_reuse_entry_validation() {
     let entries = (0..1024).map(|index| Raw::new(&format!("entry-{index:04}.xml"), b"", false)).collect::<Vec<_>>();
     let mut bytes = write(&entries, false);
