@@ -123,7 +123,7 @@ impl<'a> Lexer<'a> {
         if let Some((command, language)) = line.split_once("LANGUAGE")
             && command.split_ascii_whitespace().eq(["@PJL", "ENTER"])
         {
-            let lang = language.trim_start_matches([' ', '=']).trim();
+            let lang = language.trim_start_matches([' ', '\t', '=']).trim();
             self.mode = if lang.starts_with("HPGL") { Mode::Hpgl } else { Mode::Pcl };
         }
         self.at += end;
@@ -442,6 +442,11 @@ mod tests {
             assert_eq!(Lexer::new(bytes.as_bytes()).op(true), Some(*b"IN"));
         }
         assert_eq!(Lexer::new(b"\x1b%-12345X@pjl\tenter\tlanguage=HPGL2\r\nIN;").op(true), Some(*b"IN"));
+    }
+
+    #[test]
+    fn pjl_language_separator_accepts_horizontal_tabs() {
+        assert_eq!(Lexer::new(b"\x1b%-12345X@PJL ENTER LANGUAGE\t=\tHPGL2\nIN;").op(true), Some(*b"IN"));
     }
 
     #[test]
