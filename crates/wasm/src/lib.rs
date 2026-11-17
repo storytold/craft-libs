@@ -223,6 +223,36 @@ fn section_name(id: u8) -> &'static str {
     }
 }
 
+/// Read the outer component layout without interpreting the contents of embedded binaries.
+fn component_sections(reader: &mut wasmparser::BinaryReader<'_>, rep: &mut WasmReport) -> Result<(), wasmparser::BinaryReaderError> {
+    while !reader.eof() {
+        if rep.sections.len() == MAX_ITEMS {
+            rep.truncated = true;
+            break;
+        }
+        let id = reader.read_u8()?;
+        let body = reader.read_reader()?;
+        let range = body.range();
+        let name = match id {
+            0 => format!("custom:{}", wasmparser::CustomSectionReader::new(body)?.name()),
+            1 => "core module".into(),
+            2 => "core instance".into(),
+            3 => "core type".into(),
+            4 => "component".into(),
+            5 => "instance".into(),
+            6 => "alias".into(),
+            7 => "type".into(),
+            8 => "canonical".into(),
+            9 => "start".into(),
+            10 => "import".into(),
+            11 => "export".into(),
+            _ => "unknown".into(),
+        };
+        rep.sections.push(WasmSection { id, name, offset: range.start, size: range.end.saturating_sub(range.start) });
+    }
+    Ok(())
+}
+
 fn kind_name(k: ExternalKind) -> &'static str {
     match k {
         ExternalKind::Func | ExternalKind::FuncExact => "func",
@@ -335,11 +365,14 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                 rep.sections.push(WasmSection { id, name, offset: range.start, size: range.end.saturating_sub(range.start) });
             }
             match payload {
-                Payload::Version { num, encoding, .. } => {
+                Payload::Version { num, encoding, range } => {
                     rep.version = num;
                     if encoding == Encoding::Component {
                         rep.encoding = "component";
                         rep.warnings.push("this is a component, not a core module; only validation and the top-level layout are reported".into());
+                        if let Some(body) = usize::try_from(range.end).ok().and_then(|end| data.get(end..)) {
+                            component_sections(&mut wasmparser::BinaryReader::new(body, range.end), &mut rep)?;
+                        }
                         break;
                     }
                 }
