@@ -33,6 +33,9 @@ pub struct Interface {
     /// Timestamp units per second, as a power: (base 10 or 2, exponent).
     #[serde(skip)]
     tsresol: (u8, u8),
+    /// Signed offset in seconds added to timestamps on this interface (`if_tsoffset`).
+    #[serde(skip)]
+    tsoffset: i64,
 }
 
 /// The plain name of a link-layer type.
@@ -96,6 +99,10 @@ fn rd_u32(r: &Reader<'_>, le: bool, off: usize) -> Option<u32> {
     if le { r.u32_le(off) } else { r.u32_be(off) }
 }
 
+fn rd_i64(r: &Reader<'_>, le: bool, off: usize) -> Option<i64> {
+    if le { r.u64_le(off) } else { r.u64_be(off) }.map(|v| v as i64)
+}
+
 /// True when the bytes start like a pcap or pcapng file.
 pub fn is_capture(data: &[u8]) -> bool {
     let r = Reader::new(data);
@@ -127,7 +134,8 @@ impl<'a> Capture<'a> {
             // The top bits of the link field can carry FCS information; the type is the low 28 bits.
             let link = rd_u32(&r, le, 20).ok_or_else(|| FormatError::Truncated("pcap header".into()))? & 0x0fff_ffff;
             let res = if nanos { (10, 9) } else { (10, 6) };
-            Ok((Kind::Classic { le, nanos }, format!("{major}.{minor}"), Interface { link_type: link, link_name: link_name(link), snaplen, tsresol: res }))
+            let iface = Interface { link_type: link, link_name: link_name(link), snaplen, tsresol: res, tsoffset: 0 };
+            Ok((Kind::Classic { le, nanos }, format!("{major}.{minor}"), iface))
         };
         match (magic_le, magic_be) {
             (CLASSIC_US, _) | (_, CLASSIC_US) | (CLASSIC_NS, _) | (_, CLASSIC_NS) => {
@@ -162,12 +170,14 @@ impl<'a> Capture<'a> {
 
     fn ts(&self, iface: usize, units: u64) -> Option<u64> {
         let (base, exp) = self.interfaces.get(iface).map(|i| i.tsresol).unwrap_or((10, 6));
+        let offset_s = self.interfaces.get(iface).map(|i| i.tsoffset).unwrap_or(0);
         let ns = if base == 10 {
             if exp <= 9 { u128::from(units) * 10u128.pow(u32::from(9 - exp)) } else { u128::from(units) / 10u128.checked_pow(u32::from(exp - 9))? }
         } else {
             (u128::from(units) * 1_000_000_000) >> exp.min(127)
         };
-        u64::try_from(ns).ok()
+        let adjusted = i128::try_from(ns).ok()?.checked_add(i128::from(offset_s) * 1_000_000_000)?;
+        u64::try_from(adjusted).ok()
     }
 
     fn frame(&mut self, iface: usize, ts_units: u64, data: &'a [u8], original_len: u32) -> Frame<'a> {
@@ -231,6 +241,7 @@ impl<'a> Capture<'a> {
                     let link = u32::from(rd_u16(&r, le, body).unwrap_or(u16::MAX));
                     let snaplen = rd_u32(&r, le, body + 4).unwrap_or(0);
                     let mut tsresol = (10u8, 6u8);
+                    let mut tsoffset = 0i64;
                     let mut o = body + 8;
                     while o + 4 <= body_end {
                         let (Some(code), Some(len)) = (rd_u16(&r, le, o), rd_u16(&r, le, o + 2)) else { break };
@@ -239,13 +250,20 @@ impl<'a> Capture<'a> {
                         }
                         if code == 9
                             && len == 1
+                            && o + 5 <= body_end
                             && let Some(v) = r.u8(o + 4)
                         {
                             tsresol = if v & 0x80 == 0 { (10, v) } else { (2, v & 0x7f) };
+                        } else if code == 14
+                            && len == 8
+                            && o + 12 <= body_end
+                            && let Some(v) = rd_i64(&r, le, o + 4)
+                        {
+                            tsoffset = v;
                         }
                         o += 4 + usize::from(len).div_ceil(4) * 4;
                     }
-                    self.interfaces.push(Interface { link_type: link, link_name: link_name(link), snaplen, tsresol });
+                    self.interfaces.push(Interface { link_type: link, link_name: link_name(link), snaplen, tsresol, tsoffset });
                 }
                 6 | 2 => {
                     let (iface, hi, lo, cap, orig) = if btype == 6 {
@@ -1220,6 +1238,26 @@ mod tests {
         assert_eq!(summarize(&pcap(&frames), &|| false).unwrap().format, "pcap");
         assert_eq!(iso8601(1_700_000_000_000_000_500), "2023-11-14T22:13:20.000000500Z");
         assert_eq!(iso8601(0), "1970-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn pcapng_interface_tsoffset_adjusts_timestamps() {
+        let base = pcapng(&sample_frames());
+        for offset_s in [3600i64, -50i64] {
+            let mut data = base[..52].to_vec();
+            data.extend(14u16.to_le_bytes());
+            data.extend(8u16.to_le_bytes());
+            data.extend(offset_s.to_le_bytes());
+            data.extend(&base[52..]);
+            data[32..36].copy_from_slice(&44u32.to_le_bytes());
+            data[68..72].copy_from_slice(&44u32.to_le_bytes());
+            let expected0 = (1_700_000_000_000_000_000i128 + i128::from(offset_s) * 1_000_000_000) as u64;
+            let frames: Vec<_> = Capture::new(&data).unwrap().collect();
+            assert_eq!(frames[0].ts_ns, Some(expected0));
+            let s = summarize(&data, &|| false).unwrap();
+            assert_eq!((s.first_ts_ns, s.last_ts_ns), (Some(expected0), Some(expected0 + 6)));
+            assert_eq!((s.flows[0].first_ts_ns, s.flows[0].last_ts_ns), (Some(expected0), Some(expected0 + 1)));
+        }
     }
 
     #[test]
