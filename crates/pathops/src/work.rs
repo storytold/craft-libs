@@ -70,6 +70,9 @@ pub(crate) enum Work {
     CoverageEntries,
     /// Segments of the sweep that a contour pass walks, for each pass of the batches of a classified walk.
     PassSegments,
+    /// What the grouping of the contours of a pass by where they lie was charged to the pass budget (the contours filed, each hole looked up, and the
+    /// elements of each contour it was wound against): part of [`Work::PassSegments`].
+    GroupingSteps,
     /// Entries of windings hashed to find the remembered answer of a predicate.
     WindingKeys,
     /// Lookups of the answer for a winding that found none stored (the predicate was asked).

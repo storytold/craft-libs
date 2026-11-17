@@ -15,6 +15,7 @@ use crate::FillRule;
 use crate::boolean::{Arrangement, DEFAULT_PRECISION, Multi, all_contours_to_path, contours_to_path, unite_all, unite_all_with};
 use crate::budget::{NEAREST_STEPS, SearchBudget};
 use crate::path::{Seg, control_bounds, fill_bezpath, guarded, segs_to_bezpath, subs};
+use crate::planar::index::RectIndex;
 use crate::work::{self, Work};
 
 #[cfg(test)]
@@ -481,7 +482,8 @@ fn each_classified_face_until(
                 crate::work::add(crate::work::Work::PassSegments, segments);
                 let c = arr.contours_where(|w| classify(w) == Some(m));
                 let owner = vec![m; c.contours().count()];
-                for (_, group) in face_groups(&c, &owner) {
+                let Some(groups) = face_groups(&c, &owner, &mut left) else { return FaceWalk::OverWork };
+                for (_, group) in groups {
                     if f(m, &c, &group).is_break() {
                         return FaceWalk::Stopped;
                     }
@@ -489,7 +491,8 @@ fn each_classified_face_until(
             }
             continue;
         };
-        for (m, group) in face_groups(&c, &owner) {
+        let Some(groups) = face_groups(&c, &owner, &mut left) else { return FaceWalk::OverWork };
+        for (m, group) in groups {
             if f(m, &c, &group).is_break() {
                 return FaceWalk::Stopped;
             }
@@ -561,10 +564,13 @@ impl CoverIds {
 /// island inside the hole). Such a loop winds the same way as the contour it was cut from, against
 /// its flag ([`Contour::outer`](linesweeper::topology::Contour::outer)), and the pass is then
 /// grouped by where the contours lie instead ([`face_groups_by_winding`]).
-fn face_groups(c: &Contours, owner: &[usize]) -> Vec<(usize, Vec<ContourIdx>)> {
+///
+/// The grouping by where the contours lie is charged to `left`, what is left of the pass budget ([`crate::Limits::pass_work`]), as the passes are:
+/// `None` where it is more than is left.
+fn face_groups(c: &Contours, owner: &[usize], left: &mut usize) -> Option<Vec<(usize, Vec<ContourIdx>)>> {
     let areas: Vec<f64> = c.contours().map(|ct| crate::path::area_about_starts(&ct.path)).collect();
     if c.contours().zip(&areas).any(|(ct, &a)| ct.outer != (a > 0.0)) {
-        return face_groups_by_winding(c, owner, &areas);
+        return face_groups_by_winding(c, owner, &areas, left);
     }
     let mut children = vec![Vec::new(); owner.len()];
     let mut roots = Vec::new();
@@ -579,27 +585,42 @@ fn face_groups(c: &Contours, owner: &[usize]) -> Vec<(usize, Vec<ContourIdx>)> {
             None => roots.push(i),
         }
     }
-    roots
-        .into_iter()
-        .map(|r| {
-            let mut group = Vec::new();
-            let mut stack = vec![r];
-            while let Some(i) = stack.pop() {
-                group.push(ContourIdx(i));
-                stack.extend(children[i].iter().rev());
-            }
-            (owner[r], group)
-        })
-        .collect()
+    Some(
+        roots
+            .into_iter()
+            .map(|r| {
+                let mut group = Vec::new();
+                let mut stack = vec![r];
+                while let Some(i) = stack.pop() {
+                    group.push(ContourIdx(i));
+                    stack.extend(children[i].iter().rev());
+                }
+                (owner[r], group)
+            })
+            .collect(),
+    )
 }
 
 /// [`face_groups`] without the sweep's tree: each hole (a contour whose area in `areas` isn't
 /// positive) goes with the smallest outer contour of its mask around it, and each outer contour,
 /// or hole with none around it, starts a face. Faces come in the order of their first contour,
 /// each with its contours in pass order.
-fn face_groups_by_winding(c: &Contours, owner: &[usize], areas: &[f64]) -> Vec<(usize, Vec<ContourIdx>)> {
+///
+/// The outer contours are filed by their boxes, and a hole is looked up at the middle of its first piece: the contours that can be around it are
+/// those whose box holds the point, not every contour (a pass of tens of thousands of holes, each looked for among them all, took as many
+/// seconds). What is done is charged to `left`: each contour filed, each lookup, and for each outer contour tried the elements of its path (the winding
+/// of the point against it): `None` where that is more than is left.
+fn face_groups_by_winding(c: &Contours, owner: &[usize], areas: &[f64], left: &mut usize) -> Option<Vec<(usize, Vec<ContourIdx>)>> {
+    let mut charge = |n: usize| -> Option<()> {
+        *left = left.checked_sub(n)?;
+        crate::work::add(crate::work::Work::PassSegments, n);
+        crate::work::add(crate::work::Work::GroupingSteps, n);
+        Some(())
+    };
+    charge(c.contours().count())?;
     let boxes: Vec<kurbo::Rect> = c.contours().map(|ct| ct.path.bounding_box()).collect();
     let outer = |i: usize| areas.get(i).is_some_and(|&a| a > 0.0);
+    let filed = RectIndex::new((0..owner.len()).filter(|&j| outer(j)).filter_map(|j| Some((*boxes.get(j)?, j))).collect());
     let mut root: Vec<usize> = (0..owner.len()).collect();
     for (i, ct) in c.contours().enumerate() {
         // Contours of one mask share no edge, so the middle of a hole's first piece is strictly
@@ -607,18 +628,23 @@ fn face_groups_by_winding(c: &Contours, owner: &[usize], areas: &[f64]) -> Vec<(
         let (false, Some(p), Some(b)) = (outer(i), ct.path.segments().next().map(|s| s.eval(0.5)), boxes.get(i)) else {
             continue;
         };
-        let around = c
-            .contours()
-            .enumerate()
-            .filter(|&(j, o)| {
-                outer(j)
-                    && owner.get(j) == owner.get(i)
-                    && boxes.get(j).is_some_and(|bj| bj.union(*b) == *bj)
-                    && crate::winding::winding(&o.path, p) != 0
-            })
-            .min_by(|(j, _), (k, _)| areas.get(*j).unwrap_or(&f64::INFINITY).total_cmp(areas.get(*k).unwrap_or(&f64::INFINITY)))
-            .map(|(j, _)| j);
-        if let (Some(j), Some(r)) = (around, root.get_mut(i)) {
+        charge(1)?;
+        let mut around: Option<(usize, f64)> = None;
+        for &j in filed.at(p, 0.0) {
+            if owner.get(j) != owner.get(i) || !boxes.get(j).is_some_and(|bj| bj.union(*b) == *bj) {
+                continue;
+            }
+            let o = &c[ContourIdx(j)];
+            charge(1 + o.path.elements().len())?;
+            if crate::winding::winding(&o.path, p) != 0 {
+                let area = areas.get(j).copied().unwrap_or(f64::INFINITY);
+                // The smallest, the first of equals.
+                if around.is_none_or(|(_, least)| area.total_cmp(&least).is_lt()) {
+                    around = Some((j, area));
+                }
+            }
+        }
+        if let (Some((j, _)), Some(r)) = (around, root.get_mut(i)) {
             *r = j;
         }
     }
@@ -634,7 +660,7 @@ fn face_groups_by_winding(c: &Contours, owner: &[usize], areas: &[f64]) -> Vec<(
             g.push(ContourIdx(i));
         }
     }
-    groups
+    Some(groups)
 }
 
 /// A point as a map key (the arrangement's vertices are exact).
@@ -1380,6 +1406,52 @@ mod tests {
             Shape::new(rect(30.0, 50.0, 40.0, 60.0), FillRule::NonZero, 0),
         ];
         assert_eq!(sorted(&s), [(vec![0], 9800.0), (vec![0, 1], 100.0), (vec![0, 2], 100.0)]);
+    }
+
+    /// `cells` squares 40 across, 50 apart, in one shape, each with a pair of holes in it (two squares, each a shape of its own): the two touch at a
+    /// corner (the sweep makes the second an island inside the first, and the faces are grouped by where the contours lie,
+    /// [`face_groups_by_winding`]), or apart when `touching` is false.
+    fn cells_with_pairs_of_holes(cells: usize, touching: bool) -> Vec<Shape> {
+        let side = (cells as f64).sqrt().ceil() as usize;
+        let mut ground = BezPath::new();
+        let mut holes = Vec::new();
+        for i in 0..cells {
+            let (x, y) = ((i % side) as f64 * 50.0, (i / side) as f64 * 50.0);
+            ground.extend(rect(x, y, x + 40.0, y + 40.0).iter());
+            let gap = if touching { 0.0 } else { 5.0 };
+            holes.push(Shape::new(rect(x + 5.0, y + 5.0, x + 15.0, y + 15.0), FillRule::NonZero, 0));
+            holes.push(Shape::new(rect(x + 15.0 + gap, y + 15.0 + gap, x + 25.0 + gap, y + 25.0 + gap), FillRule::NonZero, 0));
+        }
+        let mut shapes = vec![Shape::new(ground, FillRule::NonZero, 0)];
+        shapes.extend(holes);
+        shapes
+    }
+
+    /// The grouping of faces by where their contours lie is charged to the pass budget, and by the contours that can be around a hole, not by all of
+    /// them: 50 cells, each with a pair of touching holes, make 100 holes among 150 contours of one pass, and the grouping costs 2 to 16 units for
+    /// each hole (a lookup, and the winding against the contours whose boxes hold it: its cell, and the island the sweep makes of the other hole),
+    /// where looking for each among every outer contour made the pass cost the holes times the cells (tens of thousands of pairs took tens of
+    /// seconds). A pass that has one unit less to spend than the whole of it is refused, and so it is by the grouping alone.
+    #[test]
+    fn the_grouping_of_faces_by_where_contours_lie_is_charged_to_the_pass_budget_by_the_holes_not_by_all_contours() {
+        let cells = 50;
+        let holes = 2 * cells;
+        let faces = 3 * cells;
+        let all = |limits: crate::Limits, touching: bool| {
+            work::reset();
+            let made = crate::with_limits(limits, || try_regions_within(&cells_with_pairs_of_holes(cells, touching), usize::MAX));
+            (made.map(|r| r.map(|v| v.len())), work::take(Work::PassSegments), work::take(Work::GroupingSteps))
+        };
+        let (made, total, grouping) = all(crate::Limits::default(), true);
+        assert_eq!(made, Ok(Some(faces)));
+        assert!((2 * holes..=16 * holes).contains(&grouping), "the grouping of {holes} holes cost {grouping} units");
+        // Holes apart are grouped by the sweep's tree and cost the grouping nothing.
+        let (made, apart, none) = all(crate::Limits::default(), false);
+        assert_eq!((made, none), (Ok(Some(faces)), 0));
+        assert!(apart < total);
+        // The pass budget that is the whole of the touching holes' pass is enough, and one unit less is not.
+        assert_eq!(all(crate::Limits { pass_work: total, ..crate::Limits::default() }, true).0, Ok(Some(faces)));
+        assert_eq!(all(crate::Limits { pass_work: total - 1, ..crate::Limits::default() }, true).0, Err(crate::PathOpsError::TooComplex));
     }
 
     #[test]
