@@ -16,8 +16,7 @@ fn a_digit_key_sets_the_opacity_and_shift_with_it_the_second_value() {
     let mut keys = DigitKeys::default();
     let mut press = |frames: &mut Frames, key: Key, modifiers: Modifiers| {
         frames.frame(vec![key_press(key, modifiers)], &mut show);
-        let now = frames.ctx.input(|input| input.time);
-        let entries: Vec<_> = take_output(&frames.ctx).fired.iter().filter_map(|fired| OpacityDigit::entry(&mut keys, fired, now)).collect();
+        let entries: Vec<_> = take_output(&frames.ctx).fired.iter().filter_map(|fired| OpacityDigit::entry(&mut keys, fired)).collect();
         assert_eq!(entries.len(), 1, "{key:?} with {modifiers:?} makes one entry");
         (entries[0].percent, entries[0].second)
     };

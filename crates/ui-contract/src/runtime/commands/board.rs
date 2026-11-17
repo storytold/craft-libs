@@ -923,7 +923,7 @@ pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) 
     let Some(command) = EditCommands::of(command) else { return };
     let command = CommandRef::from(command);
     let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here).0.instance);
-    let fired = Fired { target, ..Fired::new(command, FireSource::Key, FirePhase::Press) };
+    let fired = Fired { target, ..Fired::new(command, FireSource::Key, FirePhase::Press, pass::now(ctx)) };
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
     repaint::request_of(ctx, ViewportId::ROOT);
 }
@@ -938,7 +938,7 @@ pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: Fi
     if !command.enabled || !crate::runtime::measure::effect(ctx, "board::fire_resolved") {
         return false;
     }
-    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press) });
+    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press, pass::now(ctx)) });
     true
 }
 
@@ -964,7 +964,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
     }
     // An app-scope command a modal layer's instance declares is delivered to that instance.
     let target = if app { resolved.instance } else { instance };
-    queue(ctx, Fired { target, ..Fired::new(command.clone(), source, FirePhase::Press) });
+    queue(ctx, Fired { target, ..Fired::new(command.clone(), source, FirePhase::Press, pass::now(ctx)) });
     true
 }
 
@@ -1186,6 +1186,8 @@ pub(crate) fn begin(ctx: &Context) {
     let Some((keys, mut matcher)) = taken else { return };
     let mut fired = Vec::new();
     for shortcut in &shortcuts.keys {
+        // When the key event arrived: a frame may run it later, and a double press and a hold read the key's own times.
+        let time = shortcut.at.unwrap_or(now);
         match shortcut.phase {
             FirePhase::Release => {
                 let key = shortcut.input.physical.or(shortcut.input.typed);
@@ -1198,11 +1200,12 @@ pub(crate) fn begin(ctx: &Context) {
                         phase: FirePhase::Release,
                         cycle: false,
                         alt_variant: false,
+                        time,
                     });
                 }
             }
             _ => {
-                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing && !shortcut.canvas, Some((&mut matcher, now))) else {
+                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing && !shortcut.canvas, Some((&mut matcher, time))) else {
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
@@ -1228,6 +1231,7 @@ pub(crate) fn begin(ctx: &Context) {
                     phase: FirePhase::Press,
                     cycle: hit.cycle.len() > 1,
                     alt_variant: hit.alt_variant,
+                    time,
                 });
             }
         }

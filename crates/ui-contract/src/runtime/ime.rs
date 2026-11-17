@@ -3,6 +3,7 @@
 //! the one writer of `PlatformOutput.ime`; otherwise both stay with egui and the app's own widgets.
 
 use crate::runtime::egui::ime as os;
+use crate::runtime::egui::input::Arrived;
 use crate::runtime::egui::pass;
 use crate::runtime::frame::{PerViewport, Stored};
 use craft_behavior::EditorInput;
@@ -69,14 +70,14 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Engine) -> R) -> R {
 /// The input hook: takes the IME events out of raw input while a framework editor owns the IME, or while the reset
 /// the engine asked for is pending (the late events of the interrupted composition, and the OS's answer), and removes
 /// the keys that would end the composition.
-pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Event>, viewport: ViewportId) {
+pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: ViewportId) {
     with(ctx, viewport, |engine| {
         if engine.owner.is_some() || engine.reset.is_some() {
             engine.queue.extend(os::take_events(events));
         }
         let guarded = engine.composing || engine.guard > 0;
         if guarded {
-            events.retain(|event| {
+            events.retain(|Arrived { event, .. }| {
                 !matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. })
             });
         }
