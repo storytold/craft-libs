@@ -114,3 +114,7 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 ## GIMP palette reader
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.
+
+## TAR/CPIO compatibility updates
+
+The old GNU sparse-extension traversal, GNU CRC-symlink compatibility and PAX-size precedence fixes and their regression tests in `crates/tar` are ported from RRFZ's Craft Anything PRs #1973 (`8ea2ec66a1bc80f0420f3695baac877a0cb9b9a5`), #1984 (`b226a475f7dce9710e3af7a069386fe7a9720df7`) and #2007 (`d29465c20b0d570ea4973be512a0cb4e212bb60f`). Source is MIT OR Apache-2.0; RRFZ remains the primary Git author of each port. The PAX update adapts to the shared parser's existing `PaxOverrides` structure without changing the source policy.
