@@ -16,7 +16,7 @@ pub(crate) struct LockGraph {
 }
 impl LockGraph {
     pub(crate) fn parse(text: &str) -> Self {
-        let lock: toml::Value = text.parse().unwrap();
+        let lock: toml::Value = toml::from_str(text).unwrap();
         let packages = lock
             .get("package")
             .unwrap()
