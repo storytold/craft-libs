@@ -311,6 +311,49 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_app_moves_windo
     assert!(!docked, "a cancelled move docks nothing");
 }
 
+/// Where the app moves windows itself and the platform tells the system pointer (Windows): the window follows the
+/// system pointer, not the pass's pointer event, which can be an older sample than the window's current place (the
+/// window moves between passes). Measured from such an event the window lands a step behind the pointer each pass and
+/// stays behind after the release; from the system pointer the pressed point stays under the pointer, also at the
+/// release that comes a move after the last pass.
+#[trial]
+fn a_native_palette_the_app_moves_follows_the_system_pointer_not_a_stale_event() {
+    let system = Arc::new(FakeSystem::new());
+    let mut dock = NativeDock::on(Os::Linux, Arc::clone(&system));
+    let mut window = FLOAT_AT;
+    let mut desktop = FLOAT_AT.min + ROW_AT.to_vec2();
+    system.set_pointer(Some([desktop.x, desktop.y]));
+    for events in [vec![moved(ROW_AT)], vec![press(ROW_AT)]] {
+        window = Rect::from_min_size(*outer_positions(&dock.frame(events).1).last().unwrap_or(&window.min), window.size());
+    }
+    // Away from the main window, so the release docks nothing.
+    let step = Vec2::new(40.0, 25.0);
+    let mut moves = 0;
+    for _ in 0..4 {
+        let older = desktop;
+        desktop += step;
+        system.set_pointer(Some([desktop.x, desktop.y]));
+        // The pass's event is the previous sample, relative to where the window is now. The first one is still the
+        // pressed point, so the drag starts a pass later.
+        let event = moved(older - window.min.to_vec2());
+        if let Some(to) = outer_positions(&dock.frame(vec![event]).1).last() {
+            window = Rect::from_min_size(*to, window.size());
+            moves += 1;
+            assert_eq!(window.min + ROW_AT.to_vec2(), desktop, "the pressed point stays under the system pointer");
+        }
+    }
+    assert_eq!(moves, 3, "the window follows every pass once the drag has started");
+    // The pointer moves once more before the release reaches the app.
+    desktop += step;
+    system.set_pointer(Some([desktop.x, desktop.y]));
+    for events in [vec![release(desktop - window.min.to_vec2())], vec![], vec![]] {
+        if let Some(to) = outer_positions(&dock.frame(events).1).last() {
+            window = Rect::from_min_size(*to, window.size());
+        }
+    }
+    assert_eq!(window.min + ROW_AT.to_vec2(), desktop, "the window lands where the pointer let go");
+}
+
 /// Where the OS moves windows and the app reads the system pointer and button meanwhile (macOS): the title row's press
 /// hands the move to the OS in its own pass, the system pointer over the main window's group marks it (Cmd keeps the
 /// drop floating), and the window docks when the system tells the button is up, not on the first pass after the
