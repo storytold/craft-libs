@@ -30,7 +30,11 @@ fn press_phases(report: &SenseReport, key: Option<PartKey>) -> Vec<PressPhase> {
 
 impl Log {
     fn last(&self) -> &RootReport {
-        &self.frames[self.frames.len() - 1][0]
+        self.last_root(0)
+    }
+
+    fn last_root(&self, root: usize) -> &RootReport {
+        &self.frames[self.frames.len() - 1][root]
     }
 
     fn root_phases(&self, root: usize, key: Option<PartKey>) -> Vec<PressPhase> {
@@ -310,6 +314,12 @@ fn downs(phases: &[PressPhase]) -> usize {
     phases.iter().filter(|phase| matches!(phase, PressPhase::Down { .. })).count()
 }
 
+/// The pointer moving to `at`, then one idle frame: the frames after it read the hover at `at`.
+fn move_to(frames: &mut Frames, at: Pos2, show: &mut impl FnMut(&mut Ui)) {
+    frames.frame(vec![pointer::moved(at)], &mut *show);
+    frames.idle(1, show);
+}
+
 /// A press that enters and goes down in one frame, as an automation click does, then its release.
 fn enter_and_click(frames: &mut Frames, at: Pos2, show: &mut impl FnMut(&mut Ui)) {
     frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut *show);
@@ -345,28 +355,33 @@ fn a_control_takes_its_press_under_a_later_body_sized_widget() {
     assert!(log.member_phases(0, "body", None).is_empty(), "the body's own shape saw no press");
 }
 
-/// Over a canvas's background part, a root nested in its body (a text editor) and a member shown after it (a text
-/// frame with a corner handle at the editor's corner): exactly one of them starts each press, the one whose shape is
-/// on top under it and takes both its click and its drag.
-#[trial]
-fn one_root_starts_a_press_where_roots_overlap_on_a_layer() {
-    const CORNER: PartKey = PartKey::new("corner");
-    let canvas = ProbeRoot::new("canvas", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
+const CORNER: PartKey = PartKey::new("corner");
+const OVER_CORNER: Pos2 = Pos2::new(202.0, 152.0);
+const OVER_EDITOR: Pos2 = Pos2::new(300.0, 200.0);
+const OVER_CANVAS: Pos2 = Pos2::new(150.0, 350.0);
+
+/// A canvas with a background part, a root nested in its body (a text editor) and a member shown after it (a text
+/// frame with a corner handle at the editor's corner).
+fn overlapping_canvas() -> ProbeRoot {
+    ProbeRoot::new("canvas", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
         .arena()
         .part(ProbePart::new(BACKGROUND, rect(100.0, 100.0, 500.0, 300.0), Sense::CLICK | Sense::DRAG).level(HitLevel::Background, 0))
         .member(ProbeMember::new("editor", rect(200.0, 150.0, 200.0, 100.0), Sense::CLICK | Sense::DRAG).nested())
         .member(
             ProbeMember::new("frame", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
                 .part(ProbePart::new(CORNER, rect(194.0, 144.0, 12.0, 12.0), Sense::CLICK | Sense::DRAG).level(HitLevel::Handle, 1)),
-        );
-    let (mut show_frame, log) = scene(vec![canvas]);
+        )
+}
+
+/// Over the overlapping canvas: exactly one of the canvas background, the editor and the frame's corner starts each
+/// press, the one whose shape is on top under it and takes both its click and its drag.
+#[trial]
+fn one_root_starts_a_press_where_roots_overlap_on_a_layer() {
+    let (mut show_frame, log) = scene(vec![overlapping_canvas()]);
     let mut frames = Frames::new();
     frames.idle(2, &mut show_frame);
 
-    let corner = Pos2::new(202.0, 152.0);
-    let inside = Pos2::new(300.0, 200.0);
-    let free = Pos2::new(150.0, 350.0);
-    for (at, expected) in [(corner, [0, 0, 1]), (inside, [0, 1, 0]), (free, [1, 0, 0])] {
+    for (at, expected) in [(OVER_CORNER, [0, 0, 1]), (OVER_EDITOR, [0, 1, 0]), (OVER_CANVAS, [1, 0, 0])] {
         log.borrow_mut().clear();
         enter_and_click(&mut frames, at, &mut show_frame);
         let log = log.borrow();
@@ -377,4 +392,112 @@ fn one_root_starts_a_press_where_roots_overlap_on_a_layer() {
         ];
         assert_eq!(started, expected, "at {at:?}: presses started on [canvas background, editor, frame corner]");
     }
+}
+
+/// Hover shows where a press goes: over the overlapping canvas, the shapes that read the pointer over them before a
+/// press are the ones the press then starts on, and nothing a press would not reach hovers.
+#[trial]
+fn hover_shows_where_a_press_goes_where_roots_overlap() {
+    let (mut show_frame, log) = scene(vec![overlapping_canvas()]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+
+    for at in [OVER_CORNER, OVER_EDITOR, OVER_CANVAS] {
+        move_to(&mut frames, at, &mut show_frame);
+        let hovered = {
+            let log = log.borrow();
+            let report = log.last_root(0);
+            let editor = report.member("editor").expect("the editor shows");
+            let frame = report.member("frame").expect("the frame shows");
+            [report.root.part_hovered(BACKGROUND), editor.hovered, frame.part_hovered(CORNER)]
+        };
+        log.borrow_mut().clear();
+        enter_and_click(&mut frames, at, &mut show_frame);
+        let log = log.borrow();
+        let started = [
+            downs(&log.root_phases(0, Some(BACKGROUND))) > 0,
+            downs(&log.member_phases(0, "editor", None)) > 0,
+            downs(&log.member_phases(0, "frame", Some(CORNER))) > 0,
+        ];
+        assert_eq!(hovered, started, "at {at:?}: [canvas background, editor, frame corner] hovered as a press there starts");
+        assert_eq!(hovered.iter().filter(|hovered| **hovered).count(), 1, "at {at:?}: one shape hovers");
+    }
+}
+
+/// A clickable row with a nested button and a nested label that only shows a tooltip: over the button only the button
+/// hovers, though the row contains the pointer; over the label both the label and the row hover, and the click goes to
+/// the row.
+#[trial]
+fn a_root_under_a_nested_control_hovers_only_where_its_press_lands() {
+    let row = ProbeRoot::new("row", rect(100.0, 100.0, 300.0, 40.0), Sense::CLICK)
+        .member(ProbeMember::new("button", rect(320.0, 108.0, 60.0, 24.0), Sense::CLICK))
+        .member(ProbeMember::new("label", rect(110.0, 108.0, 120.0, 24.0), Sense::HOVER));
+    let (mut show_frame, log) = scene(vec![row]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+
+    let hovered = |log: &Log| {
+        let report = log.last_root(0);
+        let (button, label) = (report.member("button").expect("the button shows"), report.member("label").expect("the label shows"));
+        [report.root.hovered, button.hovered, label.hovered]
+    };
+    move_to(&mut frames, Pos2::new(350.0, 120.0), &mut show_frame);
+    assert_eq!(hovered(&log.borrow()), [false, true, false], "over the button: [row, button, label] hovered");
+    assert!(log.borrow().last_root(0).root.contains_pointer, "the row contains the pointer over its button");
+    move_to(&mut frames, Pos2::new(150.0, 120.0), &mut show_frame);
+    assert_eq!(hovered(&log.borrow()), [true, false, true], "over the label: [row, button, label] hovered");
+    move_to(&mut frames, Pos2::new(260.0, 120.0), &mut show_frame);
+    assert_eq!(hovered(&log.borrow()), [true, false, false], "over the row alone: [row, button, label] hovered");
+
+    log.borrow_mut().clear();
+    enter_and_click(&mut frames, Pos2::new(150.0, 120.0), &mut show_frame);
+    let log = log.borrow();
+    assert_eq!(downs(&log.root_phases(0, None)), 1, "a press on the label starts on the row");
+    assert!(log.member_phases(0, "label", None).is_empty(), "the label takes no press");
+}
+
+/// Hover and presses read one resolution of what lies under the pointer per pass, however many roots stack there.
+#[trial]
+fn one_pointer_resolution_per_pass_whatever_the_number_of_roots() {
+    const NAMES: [&str; 8] = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"];
+    let counts = |roots: usize| {
+        let stack = NAMES[..roots].iter().map(|name| ProbeRoot::new(*name, rect(100.0, 100.0, 200.0, 100.0), Sense::CLICK)).collect();
+        let (mut show_frame, _log) = scene(stack);
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show_frame);
+        let at = Pos2::new(200.0, 150.0);
+        let mut counts = Vec::new();
+        for events in [vec![pointer::moved(at)], vec![pointer::press(at)], vec![pointer::release(at)], Vec::new()] {
+            frames.frame(events, &mut show_frame);
+            counts.push(pointer::resolutions(&frames.ctx));
+        }
+        counts
+    };
+    let (one, eight) = (counts(1), counts(8));
+    assert_eq!(one, eight, "resolutions per pass with one root and with eight stacked roots");
+    assert!(one.iter().all(|count| *count <= 1), "at most one resolution per pass: {one:?}");
+    assert!(one.contains(&1), "the pointer in the window is resolved: {one:?}");
+}
+
+/// While a press on one root is held, another root the pointer moves over does not hover; it hovers once the press
+/// ends.
+#[trial]
+fn a_held_press_keeps_hover_off_other_roots() {
+    let a = ProbeRoot::new("a", rect(100.0, 100.0, 100.0, 40.0), Sense::CLICK);
+    let b = ProbeRoot::new("b", rect(250.0, 100.0, 100.0, 40.0), Sense::CLICK);
+    let (mut show_frame, log) = scene(vec![a, b]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    let (on_a, on_b) = (Pos2::new(150.0, 120.0), Pos2::new(300.0, 120.0));
+
+    frames.frame(vec![pointer::moved(on_a), pointer::press(on_a)], &mut show_frame);
+    log.borrow_mut().clear();
+    frames.frame(vec![pointer::moved(on_b)], &mut show_frame);
+    frames.idle(1, &mut show_frame);
+    assert!(log.borrow().frames.iter().all(|reports| !reports[1].root.hovered), "b does not hover while a's press is held");
+    assert!(log.borrow().last_root(1).root.contains_pointer, "b contains the pointer");
+
+    frames.frame(vec![pointer::release(on_b)], &mut show_frame);
+    frames.idle(1, &mut show_frame);
+    assert!(log.borrow().last_root(1).root.hovered, "b hovers once the press ends");
 }

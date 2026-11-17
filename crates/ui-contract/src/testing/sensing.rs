@@ -213,12 +213,19 @@ pub struct SenseReport {
     pub clicked: bool,
     /// The `Response` reports a hover.
     pub hovered: bool,
+    /// The `Response` reports the pointer over the component, on top or not.
+    pub contains_pointer: bool,
 }
 
 impl SenseReport {
     /// The press phase of the part `key`, `Idle` when the part is unknown.
     pub fn phase(&self, key: PartKey) -> PressPhase {
         self.parts.iter().find(|part| part.key == key).map_or(PressPhase::Idle, |part| part.press.phase)
+    }
+
+    /// Whether the part `key` reads the pointer over it.
+    pub fn part_hovered(&self, key: PartKey) -> bool {
+        self.parts.iter().any(|part| part.key == key && part.hovered)
     }
 }
 
@@ -291,6 +298,7 @@ fn show_members(ui: &mut Ui, arena: ArenaId, root: &ProbeRoot, ctx: &Context) ->
                 activated: result.activated,
                 clicked: fixture::clicked(&result.response),
                 hovered: result.response.hovered(),
+                contains_pointer: result.response.contains_pointer(),
             }
         })
         .collect()
@@ -313,6 +321,7 @@ fn show_leaf(ui: &mut Ui, root: &ProbeRoot, member: &ProbeMember, ctx: &Context)
         activated: result.activation || fixture::clicked(&result.response),
         clicked: fixture::clicked(&result.response),
         hovered: result.response.hovered(),
+        contains_pointer: result.response.contains_pointer(),
     }
 }
 
@@ -364,6 +373,7 @@ fn show_root(ui: &mut Ui, ctx: &Context, root: &ProbeRoot) -> RootReport {
             activated: result.activation,
             clicked: fixture::clicked(&result.response),
             hovered: result.response.hovered(),
+            contains_pointer: result.response.contains_pointer(),
         },
         activated_member: result.activated_member,
         members,

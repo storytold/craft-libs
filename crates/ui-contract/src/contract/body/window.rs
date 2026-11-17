@@ -7,7 +7,7 @@ use crate::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use crate::contract::{Container, ContainerProps, Cx, Mount, PartsCx};
 use crate::runtime::commands::{self, CommandSet as _, WindowCommand};
 use crate::runtime::egui::pass;
-use crate::runtime::egui::{input, viewports};
+use crate::runtime::egui::viewports;
 use crate::runtime::env::{EnvView, ShellEntry};
 use crate::runtime::memory::sub;
 use crate::runtime::windows::{self, ResizeEdge, WindowAction, WindowHit};
@@ -674,9 +674,9 @@ impl BodyHooks<'_> {
             return;
         }
         let takes_press = band.hovered
-            && pointer::pass_pointer(ctx).hover.is_some_and(|at| {
-                let (click, drag) = input::hit_targets(ctx);
-                pointer::press_winner(ctx, at, pointer::PressTargets { click, drag })
+            && pointer::with_hover(ctx, pass::current_viewport(ctx), |under, _| {
+                under
+                    .and_then(|under| under.press.click.or(under.press.drag))
                     .is_some_and(|(winner, root)| root == cx.core.id && winner.part.is_some_and(|part| part.key == MOVE_BAND))
             });
         let this_pass = viewports::pass_number(ctx);

@@ -501,7 +501,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         // The pointer counts as over a row only while the sensing pass puts it on this collection, so a popup or another
         // widget above it takes the hover as it does for the rows' parts.
-        let hover_at = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover.and(ctx.pointer_latest_pos());
+        let hover_at = ctx.pointer_latest_pos().filter(|_| crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover.any());
         let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
         // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.
         let fit = self.header.fit.as_ref().map(|(column, _)| column.clone());

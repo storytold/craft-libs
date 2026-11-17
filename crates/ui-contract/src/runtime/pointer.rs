@@ -14,6 +14,7 @@ use craft_behavior::{
 use craft_keymap::Mods;
 use craft_theme::HitSizes;
 use egui::{Context, Id, IdMap, Pos2, Rect, Vec2, ViewportId};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -133,9 +134,17 @@ pub(crate) struct Shapes {
     last_bodies: BodyRecord,
     /// The paint order the running pass's next registration takes.
     next: u32,
-    /// The press winner found over `last`, for the point and targets it was asked for: every root asks for the
-    /// same press.
-    winner: Option<(Pos2, PressTargets, PressWinners)>,
+    /// What lies under the pass's hover point, found over `last` at the begin hook with the pass's egui targets:
+    /// every root's hover reads it, and a press at the same point and targets reuses it.
+    hover: Option<(Pos2, PressTargets, Under)>,
+    /// A press was open when the pass began: only its target hovers.
+    captured: bool,
+    /// What lies under another point a press asked for in the pass, with its targets: every root asks for the same
+    /// press.
+    winner: Option<(Pos2, PressTargets, Under)>,
+    /// The resolutions the running pass made (`find_under`), for the count trials.
+    #[cfg(feature = "testing")]
+    resolutions: u32,
 }
 
 /// The begin hook (H5): converts the pass's pointer input.
@@ -199,12 +208,27 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         focus_lost: read.focus_lost,
         stirred: read.stirred,
     };
+    let hover_at = pass_pointer.hover;
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.last = std::mem::take(&mut shapes.this);
         shapes.last_bodies = std::mem::take(&mut shapes.this_bodies);
         shapes.next = 0;
+        shapes.hover = None;
         shapes.winner = None;
+        #[cfg(feature = "testing")]
+        {
+            shapes.resolutions = 0;
+        }
+    });
+    // The pointer's hover is resolved once for the pass, over last pass's complete record, with the targets egui's hit
+    // test gives at the pointer now.
+    let hover_targets = PressTargets { click: hits.0, drag: hits.1 };
+    let hover = hover_at.map(|at| (at, hover_targets, find_under(ctx, viewport, at, hover_targets)));
+    let captured = press_captured(ctx);
+    PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
+        shapes.hover = hover;
+        shapes.captured = captured;
     });
 }
 
@@ -296,10 +320,13 @@ pub fn withhold_members(ctx: &Context, root: Id, withheld: bool) {
     });
 }
 
-/// Whether the arena of `root` resolves the running pass of `viewport` (`pass_nr`) without its members: its host
+/// The arena roots of `viewport` whose presses and hover the running pass resolves without their members: their host
 /// asked so in this pass or the one before, the pass whose shapes this one resolves over.
-pub(crate) fn members_withheld(ctx: &Context, viewport: ViewportId, pass_nr: u64, root: Id) -> bool {
-    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.withheld.get(&root).is_some_and(|asked| asked + 1 >= pass_nr))
+fn withheld_roots(ctx: &Context, viewport: ViewportId) -> SmallVec<[Id; 2]> {
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Memory>::with(ctx, viewport, |memory| {
+        memory.withheld.iter().filter(|(_, asked)| **asked + 1 >= pass_nr).map(|(root, _)| *root).collect()
+    })
 }
 
 /// Registers how the viewport tells that a press is captured. Sensing owns the arenas' machines.
@@ -529,15 +556,12 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
     })
 }
 
-/// The roots a press at `at` (screen points) goes to, each with the shape of it that wins it: its click's and its
-/// drag's (8.3, H7). On the topmost layer under the press, each root recorded there in the last pass resolves its own
-/// shapes by the arena rule, and the roots rank by their winning shapes' place in the pass's paint order, top first. The
-/// top one takes every kind of press its shape senses. Under a top shape that only drags (a window's resize grip), the
-/// click goes to the first root below whose shape clicks; under one that only clicks (a button), the drag goes to the
-/// first root below whose shape drags, when that root takes no click anywhere. A transformed body's layer shows its root's own shapes
-/// beneath everything on it. A shape counts only where its clip shows it; at a point no clip on the layer holds (one
-/// automation names past the window), a shape counts when some of it shows inside its clip. A press egui's hit test
-/// gives to a widget no component registered (a raw egui widget on top) goes to no root.
+/// The roots a press at a point goes to, each with the shape of it that wins it: its click's and its drag's (8.3, H7).
+/// Among the roots under the point ([`Under`]), each resolves its own shapes by the arena rule, and the roots rank by
+/// their winning shapes' place in the pass's paint order, top first. The top one takes every kind of press its shape
+/// senses. Under a top shape that only drags (a window's resize grip), the click goes to the first root below whose
+/// shape clicks; under one that only clicks (a button), the drag goes to the first root below whose shape drags, when
+/// that root takes no click anywhere.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PressWinners {
     pub click: Option<(Winner<Id>, Id)>,
@@ -556,18 +580,62 @@ impl PressWinners {
         }
         sense
     }
+
+    /// The shape of `root` a press goes to: its click's, else its drag's.
+    pub(crate) fn hit_of(&self, root: Id) -> Option<Winner<Id>> {
+        [self.click, self.drag].into_iter().flatten().find(|(_, owner)| *owner == root).map(|(winner, _)| winner)
+    }
 }
 
+/// What lies under one point of a viewport, from last pass's shape record: the one answer a press and the hover read
+/// (8.3). On the topmost layer under the point, the roots recorded there in the last pass stack in paint order; a
+/// transformed body's layer shows its root's own shapes beneath everything on it. A shape counts only where its clip
+/// shows it; at a point no clip on the layer holds (one automation names past the window), a shape counts when some of
+/// it shows inside its clip. The members of an arena whose host withholds them (`withhold_members`) do not count.
+/// Where egui's hit test gives the point to a widget no component registered (a raw egui widget on top), nothing is
+/// under it.
+///
+/// Hover shows where a press goes: the press winners' shapes hover, and so does the topmost shape under the point when
+/// it takes no press (a label with a tooltip over a clickable row). A shape that takes a press and loses it does not.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Under {
+    /// The roots a press at the point starts on.
+    pub press: PressWinners,
+    /// The topmost shape under the point, with its root, when it takes no press.
+    pub hover_only: Option<(Winner<Id>, Id)>,
+    /// Every root with a shape under the point, on top or not: the roots that contain the pointer.
+    pub over: SmallVec<[Id; 4]>,
+}
+
+impl Under {
+    /// The topmost shape under the point when it is `root`'s and takes no press.
+    pub(crate) fn hover_only_of(&self, root: Id) -> Option<Winner<Id>> {
+        self.hover_only.filter(|(_, owner)| *owner == root).map(|(winner, _)| winner)
+    }
+
+    /// Whether a shape of `root` lies under the point.
+    pub(crate) fn contains(&self, root: Id) -> bool {
+        self.over.contains(&root)
+    }
+}
+
+/// The press winners at `at` for egui's press targets `targets` ([`Under::press`]): the pass's hover answer when the
+/// press is at the hover point, else found once per point and targets.
 pub(crate) fn press_winners(ctx: &Context, at: Pos2, targets: PressTargets) -> PressWinners {
     let viewport = pass::current_viewport(ctx);
     let found = PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        record.winner.filter(|(point, asked, _)| *point == at && *asked == targets).map(|(_, _, found)| found)
+        [&record.hover, &record.winner]
+            .into_iter()
+            .flatten()
+            .find(|(point, asked, _)| *point == at && *asked == targets)
+            .map(|(_, _, under)| under.press)
     });
     if let Some(found) = found {
         return found;
     }
-    let found = find_press_winners(ctx, viewport, at, targets);
-    PerViewport::<Shapes>::with(ctx, viewport, |record| record.winner = Some((at, targets, found)));
+    let under = find_under(ctx, viewport, at, targets);
+    let found = under.press;
+    PerViewport::<Shapes>::with(ctx, viewport, |record| record.winner = Some((at, targets, under)));
     found
 }
 
@@ -578,14 +646,30 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
     winners.click.or(winners.drag)
 }
 
-fn find_press_winners(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> PressWinners {
+/// Reads what lies under the running pass's hover point in `viewport` (`None` while the pointer is not in the window),
+/// and whether a press was open when the pass began: then only that press's target hovers. `f` runs inside the shape
+/// record's borrow.
+pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(Option<&Under>, bool) -> R) -> R {
+    PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
+}
+
+/// The resolutions of what lies under a point the running viewport's latest pass made.
+#[cfg(feature = "testing")]
+pub(crate) fn resolutions(ctx: &Context) -> u32 {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| record.resolutions)
+}
+
+fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> Under {
+    #[cfg(feature = "testing")]
+    PerViewport::<Shapes>::with(ctx, viewport, |record| record.resolutions += 1);
     let Some(layer) = areas::layer_at(ctx, at).or_else(|| layer_past_window(ctx, viewport, at)) else {
-        return PressWinners::default();
+        return Under::default();
     };
     let to_layer = |layer: Layer| areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
     let body = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last_bodies.get(&layer).copied());
     let beneath = body.map(|(root, parent)| (root, parent, to_layer(parent)));
     let on_layer = to_layer(layer);
+    let withheld = withheld_roots(ctx, viewport);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         // Bottom to top: the body layer's root on its own layer, then the roots on the layer in paint order.
         let mut stack: Vec<(u8, Id, &RootRecord, Pos2)> = Vec::new();
@@ -599,60 +683,86 @@ fn find_press_winners(ctx: &Context, viewport: ViewportId, at: Pos2, targets: Pr
         }
         let shown = stack.iter().any(|(_, _, entry, point)| entry.placed.iter().any(|placed| placed.clip.contains(*point)));
         if targets.click.is_some_and(|widget| !registered_in(&record.last, widget)) {
-            return PressWinners::default();
+            return Under::default();
         }
-        let mut ranked: Vec<_> = stack
-            .into_iter()
-            .filter_map(|(tier, root, entry, point)| {
-                let shows = |index: usize| {
-                    let (shape, placed) = (&entry.shapes[index], entry.placed[index]);
-                    if shown { placed.clip.contains(point) } else { shape.shape.bounds().intersects(placed.clip) }
-                };
-                let kept: Vec<usize> = (0..entry.shapes.len())
-                    .filter(|&index| entry.shapes[index].sense.takes_press() && entry.shapes[index].hits(point) && shows(index))
-                    .collect();
-                let shapes: Vec<Shape<Id>> = kept.iter().map(|&index| entry.shapes[index].clone()).collect();
-                let mut winner = resolve(&shapes, point, ResolveFor::Press)?;
+        let mut under = Under::default();
+        // The topmost shape under the point, and each root's topmost shape that takes a press, ranked by tier and then
+        // by the place in paint order of the registration that recorded it.
+        let mut top: Option<((u8, u32), Winner<Id>, Id)> = None;
+        let mut ranked = Vec::new();
+        for (tier, root, entry, point) in stack {
+            let members = !withheld.contains(&root);
+            let shows = |index: usize| {
+                let (shape, placed) = (&entry.shapes[index], entry.placed[index]);
+                if shown { placed.clip.contains(point) } else { shape.shape.bounds().intersects(placed.clip) }
+            };
+            let kept: Vec<usize> = (0..entry.shapes.len())
+                .filter(|&index| (members || entry.shapes[index].owner == root) && entry.shapes[index].hits(point) && shows(index))
+                .collect();
+            if kept.is_empty() {
+                continue;
+            }
+            if !under.over.contains(&root) {
+                under.over.push(root);
+            }
+            let shapes: Vec<Shape<Id>> = kept.iter().map(|&index| entry.shapes[index].clone()).collect();
+            let placed = |mut winner: Winner<Id>| {
                 winner.index = kept[winner.index];
-                Some(((tier, entry.placed[winner.index].order), winner, root, entry.click))
-            })
-            .collect();
-        ranked.sort_by(|a, b| b.0.cmp(&a.0));
-        let mut winners = PressWinners::default();
-        for (_, winner, root, root_clicks) in ranked {
-            let (clicks, drags) = (winner.sense.contains(craft_behavior::Sense::CLICK), winner.sense.contains(craft_behavior::Sense::DRAG));
-            match (winners.click.is_some(), winners.drag.is_some()) {
-                // The top root takes what its shape senses; one that takes both kinds takes the whole press.
-                (false, false) => {
-                    winners.click = clicks.then_some((winner, root));
-                    winners.drag = drags.then_some((winner, root));
-                    if clicks && drags {
-                        break;
-                    }
-                }
-                // Under a top shape that only drags, the first one below that clicks takes the click.
-                (false, true) => {
-                    if clicks {
-                        winners.click = Some((winner, root));
-                        break;
-                    }
-                }
-                // Under a top shape that only clicks, the first root below whose shape drags takes the drag, unless the
-                // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it.
-                (true, false) => {
-                    if clicks || root_clicks {
-                        break;
-                    }
-                    if drags {
-                        winners.drag = Some((winner, root));
-                        break;
-                    }
-                }
-                (true, true) => break,
+                ((tier, entry.placed[winner.index].order), winner)
+            };
+            if let Some((rank, winner)) = resolve(&shapes, point, ResolveFor::Hover).map(placed)
+                && top.as_ref().is_none_or(|(best, ..)| rank > *best)
+            {
+                top = Some((rank, winner, root));
+            }
+            if let Some((rank, winner)) = resolve(&shapes, point, ResolveFor::Press).map(placed) {
+                ranked.push((rank, winner, root, entry.click));
             }
         }
-        winners
+        under.press = winners_of(ranked);
+        under.hover_only = top.filter(|(_, winner, _)| !winner.sense.takes_press()).map(|(_, winner, root)| (winner, root));
+        under
     })
+}
+
+/// The press winners among `ranked`, each root's topmost shape under a point that takes a press with its rank and
+/// whether the root takes clicks anywhere: by the per-kind rule of [`PressWinners`].
+fn winners_of(mut ranked: Vec<((u8, u32), Winner<Id>, Id, bool)>) -> PressWinners {
+    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut winners = PressWinners::default();
+    for (_, winner, root, root_clicks) in ranked {
+        let (clicks, drags) = (winner.sense.contains(craft_behavior::Sense::CLICK), winner.sense.contains(craft_behavior::Sense::DRAG));
+        match (winners.click.is_some(), winners.drag.is_some()) {
+            // The top root takes what its shape senses; one that takes both kinds takes the whole press.
+            (false, false) => {
+                winners.click = clicks.then_some((winner, root));
+                winners.drag = drags.then_some((winner, root));
+                if clicks && drags {
+                    break;
+                }
+            }
+            // Under a top shape that only drags, the first one below that clicks takes the click.
+            (false, true) => {
+                if clicks {
+                    winners.click = Some((winner, root));
+                    break;
+                }
+            }
+            // Under a top shape that only clicks, the first root below whose shape drags takes the drag, unless the
+            // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it.
+            (true, false) => {
+                if clicks || root_clicks {
+                    break;
+                }
+                if drags {
+                    winners.drag = Some((winner, root));
+                    break;
+                }
+            }
+            (true, true) => break,
+        }
+    }
+    winners
 }
 
 /// The layer a press past the window goes to, where egui has none (only automation names such a point: a document
@@ -705,6 +815,25 @@ pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
             .filter(|shape| shape.hits(at))
             .map(|shape| (shape.owner, shape.part))
             .collect()
+    })
+}
+
+/// The clip the root of the arena `component` is in (its own, or that of the root it is a member of) was shown
+/// through, from its latest record in the running viewport: where its parts and members can be seen. `None` for a
+/// component no root recorded.
+#[cfg(feature = "testing")]
+pub(crate) fn arena_clip(ctx: &Context, component: Id) -> Option<Rect> {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        [&record.this, &record.last].into_iter().find_map(|layers| {
+            let holds = |root: Id, entry: &RootRecord| root == component || entry.shapes.iter().any(|shape| shape.owner == component);
+            let root = layers.values().find_map(|roots| roots.iter().find(|(root, entry)| holds(**root, *entry)).map(|(root, _)| *root))?;
+            let background =
+                |shape: &Shape<Id>| shape.owner == root && shape.part.is_none() && shape.priority.level == craft_behavior::HitLevel::Background;
+            layers
+                .values()
+                .filter_map(|roots| roots.get(&root))
+                .find_map(|entry| entry.shapes.iter().zip(&entry.placed).find(|(shape, _)| background(*shape)).map(|(_, placed)| placed.clip))
+        })
     })
 }
 

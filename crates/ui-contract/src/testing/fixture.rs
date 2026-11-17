@@ -545,7 +545,7 @@ impl Fixture {
     /// press on it lands; `None` when none of it is visible. A part past the window's edge is pressed on its visible
     /// piece, and one wholly past it cannot be pressed.
     pub fn visible(&self, target: &Target) -> Option<Target> {
-        let clip = self.root_id().and_then(|root| crate::primitives::sensing::arena_clip(self.ctx(), root));
+        let clip = self.root_id().and_then(|root| crate::runtime::pointer::arena_clip(self.ctx(), root));
         let rect = clip.map_or(target.rect, |clip| target.rect.intersect(clip));
         (rect.width() >= 0.0 && rect.height() >= 0.0).then_some(Target { node: target.node, rect })
     }
