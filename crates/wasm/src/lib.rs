@@ -261,6 +261,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
     let mut types: Vec<Option<FuncType>> = Vec::new();
     let mut func_types: Vec<u32> = Vec::new();
     let mut fn_names: BTreeMap<u32, String> = BTreeMap::new();
+    let mut producer_values = 0usize;
     let mut imported_tables = 0u32;
     let mut imported_memories = 0u32;
     let mut imported_globals = 0u32;
@@ -500,7 +501,11 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                     match c.as_known() {
                         KnownCustom::Name(names) => {
                             // A damaged name section is reported but does not stop the rest.
-                            for sub in names.into_iter().take(64) {
+                            for (i, sub) in names.into_iter().take(65).enumerate() {
+                                if i == 64 {
+                                    rep.truncated = true;
+                                    break;
+                                }
                                 let Ok(sub) = sub else {
                                     rep.warnings.push("the name section is damaged".into());
                                     break;
@@ -508,10 +513,19 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                                 match sub {
                                     Name::Module { name, .. } => rep.module_name = Some(name.to_string()),
                                     Name::Function(map) => {
-                                        for n in map.into_iter().take(MAX_ITEMS) {
+                                        for (i, n) in map.into_iter().take(MAX_ITEMS + 1).enumerate() {
+                                            if i == MAX_ITEMS {
+                                                rep.truncated = true;
+                                                break;
+                                            }
                                             match n {
                                                 Ok(n) => {
-                                                    fn_names.insert(n.index, n.name.to_string());
+                                                    if let Some(name) = fn_names.get_mut(&n.index) {
+                                                        // Repeated sections may replace an already retained name at the limit.
+                                                        *name = n.name.to_string();
+                                                    } else if cap(fn_names.len(), &mut rep.truncated) {
+                                                        fn_names.insert(n.index, n.name.to_string());
+                                                    }
                                                 }
                                                 Err(_) => {
                                                     rep.warnings.push("a function name entry is damaged".into());
@@ -525,18 +539,26 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                             }
                         }
                         KnownCustom::Producers(p) => {
-                            for f in p.into_iter().take(64) {
+                            for (i, f) in p.into_iter().take(65).enumerate() {
+                                if i == 64 || !cap(rep.producers.len(), &mut rep.truncated) {
+                                    rep.truncated = true;
+                                    break;
+                                }
                                 let Ok(f) = f else {
                                     rep.warnings.push("the producers section is damaged".into());
                                     break;
                                 };
-                                let values = f
-                                    .values
-                                    .into_iter()
-                                    .take(64)
-                                    .filter_map(Result::ok)
-                                    .map(|v| ProducerValue { name: v.name.to_string(), version: v.version.to_string() })
-                                    .collect();
+                                let mut values = Vec::new();
+                                for (i, value) in f.values.into_iter().take(65).enumerate() {
+                                    if i == 64 || !cap(producer_values, &mut rep.truncated) {
+                                        rep.truncated = true;
+                                        break;
+                                    }
+                                    if let Ok(value) = value {
+                                        values.push(ProducerValue { name: value.name.to_string(), version: value.version.to_string() });
+                                        producer_values += 1;
+                                    }
+                                }
                                 rep.producers.push(ProducerField { field: f.name.to_string(), values });
                             }
                         }
