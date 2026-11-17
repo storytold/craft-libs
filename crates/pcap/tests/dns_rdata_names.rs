@@ -182,3 +182,88 @@ fn value_dependent_update_name_prerequisites_keep_their_values() {
         }
     }
 }
+
+#[test]
+fn an_in_address_requires_the_right_wire_size_but_update_prerequisites_may_be_empty() {
+    for (kind, bad) in [(1, &[1, 2, 3][..]), (28, &[0; 15][..])] {
+        let mut msg = response(kind, bad, bad.len());
+        assert!(decode(1, &packet(&msg)).dns.unwrap().incomplete);
+        msg = response(kind, &[], 0);
+        msg[2..4].copy_from_slice(&0x2800u16.to_be_bytes());
+        let n = msg.len();
+        msg[n - 8..n - 6].copy_from_slice(&255u16.to_be_bytes());
+        msg[n - 6..n - 2].fill(0);
+        let dns = decode(1, &packet(&msg)).dns.unwrap();
+        assert!(!dns.incomplete);
+        assert_eq!(dns.answers[0].value, "");
+    }
+}
+
+#[test]
+fn questionless_announcements_and_truncated_responses_keep_their_address() {
+    let mut message = vec![0, 0, 0x86, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+    message.extend(b"\x04node\x05local\x00\x00\x01\x80\x01\x00\x00\x00\x3c\x00\x04\xc0\x00\x02\x04");
+    let frame = eth(0x0800, &ipv4_pkt(17, [192, 0, 2, 4], [224, 0, 0, 251], &udp(5353, 5353, &message)));
+    let dns = decode(1, &frame).dns.unwrap();
+    assert!(dns.incomplete);
+    assert_eq!(dns.answers.len(), 1);
+    assert_eq!(summarize(&pcap(&[frame]), &|| false).unwrap().dns_addresses[0].value, "node.local A 192.0.2.4");
+    assert!(decode(1, &packet(&message[..8])).dns.is_none());
+}
+
+#[test]
+fn service_records_report_their_fields_and_refuse_invalid_framing() {
+    let mut soa = vec![0xc0, 12, 0xc0, 12];
+    for n in 1u32..=5 {
+        soa.extend(n.to_be_bytes());
+    }
+    for (kind, data, expected) in [
+        (33, &b"\x00\x01\x00\x02\x01\xbb\x03srv\x00"[..], "1 2 443 srv"),
+        (6, soa.as_slice(), "example.com example.com 1 2 3 4 5"),
+        (257, &b"\x80\x05issueca.test"[..], "128 issue ca.test"),
+    ] {
+        let dns = decode(1, &packet(&response(kind, data, data.len()))).dns.unwrap();
+        assert!(!dns.incomplete);
+        assert_eq!(dns.answers[0].value, expected);
+    }
+    for (kind, bad) in [(33, &b"\x00\x01\x00\x02\x01\xbb\xc0\x0c"[..]), (6, &soa[..soa.len() - 1]), (257, &b"\x00\x06issue"[..])] {
+        let dns = decode(1, &packet(&response(kind, bad, bad.len()))).dns.unwrap();
+        assert!(dns.incomplete);
+        assert!(dns.answers.is_empty());
+    }
+}
+
+#[test]
+fn mdns_srv_targets_can_be_compressed_except_in_legacy_replies() {
+    let data = [0, 1, 0, 2, 1, 187, 0xc0, 12];
+    let msg = response(33, &data, data.len());
+    for (port, legacy) in [(5353, false), (51000, true)] {
+        let frame = eth(0x0800, &ipv4_pkt(17, [192, 0, 2, 4], [192, 0, 2, 1], &udp(5353, port, &msg)));
+        let dns = decode(1, &frame).dns.unwrap();
+        assert_eq!(dns.incomplete, legacy);
+        if !legacy {
+            assert_eq!(dns.answers[0].value, "1 2 443 example.com");
+        }
+    }
+}
+
+#[test]
+fn caa_binary_values_remain_distinct_in_the_inventory() {
+    for (bytes, display) in [(&b"\xff"[..], r"\xff"), (b"\xfe", r"\xfe"), (br"\xff", r"\\xff")] {
+        let mut data = b"\x00\x01x".to_vec();
+        data.extend(bytes);
+        let dns = decode(1, &packet(&response(257, &data, data.len()))).dns.unwrap();
+        assert_eq!(dns.answers[0].value, format!("0 x {display}"));
+    }
+}
+
+#[test]
+fn only_mdns_masks_the_cache_flush_bit_in_an_address_class() {
+    let mut msg = response(1, &[192, 0, 2, 1], 4);
+    let class = msg.len() - 12;
+    msg[class..class + 2].copy_from_slice(&0x8001u16.to_be_bytes());
+    for (port, expected) in [(53, "<4 bytes>"), (5353, "192.0.2.1")] {
+        let frame = eth(0x0800, &ipv4_pkt(17, [192, 0, 2, 4], [192, 0, 2, 1], &udp(port, port, &msg)));
+        assert_eq!(decode(1, &frame).dns.unwrap().answers[0].value, expected);
+    }
+}

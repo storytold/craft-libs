@@ -768,7 +768,7 @@ fn transport(proto: u8, p: &[u8], d: &mut Decoded) {
                     Some(length) if length < 12 => d.note = Some("DNS over TCP length is smaller than its header".into()),
                     Some(length) => {
                         if let Some(message) = framed.slice(2, usize::from(length)) {
-                            dns(message, d, "dns");
+                            dns(message, d, "dns", false);
                         } else {
                             d.note = Some("DNS over TCP message cut short".into());
                         }
@@ -800,9 +800,9 @@ fn transport(proto: u8, p: &[u8], d: &mut Decoded) {
             };
             d.transport = Some(Transport { protocol: "udp", src_port: Some(sp), dst_port: Some(dp), payload_len: payload.len(), ..empty });
             if sp == 53 || dp == 53 {
-                dns(payload, d, "dns");
+                dns(payload, d, "dns", false);
             } else if sp == 5353 || dp == 5353 {
-                dns(payload, d, "mdns");
+                dns(payload, d, "mdns", dp == 5353);
             }
         }
         1 | 58 => {
@@ -827,6 +827,7 @@ pub fn qtype_name(t: u16) -> String {
         33 => "SRV".into(),
         64 => "SVCB".into(),
         65 => "HTTPS".into(),
+        257 => "CAA".into(),
         255 => "ANY".into(),
         n => format!("TYPE{n}"),
     }
@@ -844,7 +845,7 @@ fn dns_sd_service_label(label: &[u8]) -> bool {
 }
 
 /// A DNS name, the offset after it, and whether its wire labels name a DNS-SD instance.
-fn dns_name(msg: &[u8], mut off: usize) -> Option<(String, usize, bool)> {
+fn dns_name(msg: &[u8], mut off: usize, allow_compression: bool) -> Option<(String, usize, bool)> {
     let mut out = String::new();
     // Count the expanded wire name, including label lengths and the terminating root.
     let mut wire_len = 1usize;
@@ -855,7 +856,7 @@ fn dns_name(msg: &[u8], mut off: usize) -> Option<(String, usize, bool)> {
         let len = *msg.get(off)?;
         match len {
             0 => return Some((if out.is_empty() { ".".into() } else { out }, after.unwrap_or(off + 1), labels >= 4 && service_instance)),
-            l if l & 0xc0 == 0xc0 => {
+            l if allow_compression && l & 0xc0 == 0xc0 => {
                 let ptr = usize::from(u16::from_be_bytes([l & 0x3f, *msg.get(off + 1)?]));
                 after.get_or_insert(off + 2);
                 if ptr >= off {
@@ -891,9 +892,12 @@ fn dns_name(msg: &[u8], mut off: usize) -> Option<(String, usize, bool)> {
 
 /// Decode a bounded set of DNS questions and answer/prerequisite records from one message.
 /// Preserve complete entries before malformed data and mark the message incomplete.
-fn dns(msg: &[u8], d: &mut Decoded, label: &'static str) {
+fn dns(msg: &[u8], d: &mut Decoded, label: &'static str, mdns_wire_format: bool) {
     let r = Reader::new(msg);
     let (Some(id), Some(flags), Some(qd), Some(an)) = (r.u16_be(0), r.u16_be(2), r.u16_be(4), r.u16_be(6)) else { return };
+    if msg.len() < 12 {
+        return;
+    }
     let opcode = (flags >> 11) & 0xf;
     // Sanity: opcode 0–6 and no absurd counts, so random payload on port 53 isn't misread.
     if opcode > 6 || qd > 64 || qd == 0 && an == 0 {
@@ -903,7 +907,7 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str) {
     let mut out = Dns { id, response: flags & 0x8000 != 0, rcode: (flags & 0xf) as u8, questions: Vec::new(), answers: Vec::new(), incomplete: false };
     let mut off = 12usize;
     for _ in 0..qd {
-        let Some((name, next, _)) = dns_name(msg, off) else {
+        let Some((name, next, _)) = dns_name(msg, off, true) else {
             out.incomplete = true;
             break;
         };
@@ -917,7 +921,7 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str) {
     }
     if !out.incomplete {
         for _ in 0..an.min(64) {
-            let Some((name, next, service_instance)) = dns_name(msg, off) else {
+            let Some((name, next, service_instance)) = dns_name(msg, off, true) else {
                 out.incomplete = true;
                 break;
             };
@@ -930,7 +934,13 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str) {
                 out.incomplete = true;
                 break;
             };
+            let end = rd_off + rd.len();
+            let within_record = msg.get(..end).unwrap_or(&[]);
+            let record_class = if mdns_wire_format { class & 0x7fff } else { class };
+            let empty_prerequisite = rd.is_empty() && opcode == 5 && matches!(class, 254 | 255) && ttl == 0;
             let value = match (rt, rd.len()) {
+                (1 | 28 | 6 | 33 | 257, 0) if empty_prerequisite => String::new(),
+                (1 | 28, _) if record_class != 1 => format!("<{} bytes>", rd.len()),
                 (1, 4) => Ipv4Addr::new(
                     rd.first().copied().unwrap_or(0),
                     rd.get(1).copied().unwrap_or(0),
@@ -939,16 +949,65 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str) {
                 )
                 .to_string(),
                 (28, 16) => Ipv6Addr::from(<[u8; 16]>::try_from(rd).unwrap_or([0; 16])).to_string(),
+                (1 | 28, _) => {
+                    out.incomplete = true;
+                    break;
+                }
+                (33, _) => {
+                    let fields = Reader::new(rd);
+                    let Some((target, _, _)) = dns_name(within_record, rd_off + 6, mdns_wire_format).filter(|(_, after, _)| *after == end) else {
+                        out.incomplete = true;
+                        break;
+                    };
+                    let (Some(priority), Some(weight), Some(port)) = (fields.u16_be(0), fields.u16_be(2), fields.u16_be(4)) else {
+                        out.incomplete = true;
+                        break;
+                    };
+                    format!("{priority} {weight} {port} {target}")
+                }
+                (6, _) => {
+                    let soa = dns_name(within_record, rd_off, true).and_then(|(primary, pos, _)| {
+                        let (mailbox, pos, _) = dns_name(within_record, pos, true)?;
+                        let (words, tail) = within_record.get(pos..)?.as_chunks::<4>();
+                        if !tail.is_empty() {
+                            return None;
+                        }
+                        let words: &[[u8; 4]; 5] = words.try_into().ok()?;
+                        let [serial, refresh, retry, expire, minimum] = words.map(u32::from_be_bytes);
+                        Some(format!("{primary} {mailbox} {serial} {refresh} {retry} {expire} {minimum}"))
+                    });
+                    let Some(soa) = soa else {
+                        out.incomplete = true;
+                        break;
+                    };
+                    soa
+                }
+                (257, _) => {
+                    let Some((&flags, rest)) = rd.split_first() else {
+                        out.incomplete = true;
+                        break;
+                    };
+                    let caa = rest.split_first().and_then(|(&n, body)| body.split_at_checked(usize::from(n))).and_then(|(tag, value)| {
+                        (!tag.is_empty() && tag.iter().all(u8::is_ascii_alphanumeric)).then(|| {
+                            let value: String = value.iter().flat_map(|&byte| std::ascii::escape_default(byte)).map(char::from).collect();
+                            format!("{flags} {} {value}", String::from_utf8_lossy(tag))
+                        })
+                    });
+                    let Some(caa) = caa else {
+                        out.incomplete = true;
+                        break;
+                    };
+                    caa
+                }
                 (2 | 5 | 12 | 15, _) => {
                     // RFC 2136 prerequisites can name an RRset without carrying its value.
                     if rd.is_empty() && opcode == 5 && matches!(class, 254 | 255) && ttl == 0 {
                         String::new()
                     } else {
-                        let end = rd_off + rd.len();
                         let start = rd_off + if rt == 15 { 2 } else { 0 };
                         // Keep earlier bytes available to compression pointers, but the encoded
                         // name itself must fit the record and account for all of its RDATA.
-                        let Some((name, _, _)) = dns_name(msg.get(..end).unwrap_or(&[]), start).filter(|(_, after, _)| *after == end) else {
+                        let Some((name, _, _)) = dns_name(within_record, start, true).filter(|(_, after, _)| *after == end) else {
                             out.incomplete = true;
                             break;
                         };
@@ -991,6 +1050,7 @@ fn dns(msg: &[u8], d: &mut Decoded, label: &'static str) {
             off = rd_off + usize::from(rdlen);
         }
     }
+    out.incomplete |= flags & 0x0200 != 0;
     d.dns = Some(out);
 }
 
@@ -1313,7 +1373,7 @@ pub struct Summary {
     /// "name TYPE value" from DNS responses.
     pub dns_answers: Vec<Count>,
     /// "question A|AAAA address" from DNS responses: each address answered, keyed by the response's first
-    /// question (so CNAME chains end at the name that was asked), as Wireshark's fields report them.
+    /// question (so CNAME chains end at the name that was asked), or the record owner in a questionless reply.
     pub dns_addresses: Vec<Count>,
     /// "METHOD host target" from HTTP/1.x requests.
     pub http_requests: Vec<Count>,
@@ -1438,11 +1498,11 @@ pub fn summarize(data: &[u8], cancelled: &dyn Fn() -> bool) -> Result<Summary, F
             for a in &dns.answers {
                 answers.add(format!("{} {} {}", a.name, a.rtype, a.value));
             }
-            if dns.response
-                && let Some(q) = dns.questions.first()
-            {
+            if dns.response {
                 for a in dns.answers.iter().filter(|a| matches!(a.rtype.as_str(), "A" | "AAAA") && a.value.parse::<IpAddr>().is_ok()) {
-                    addresses.add(format!("{} {} {}", q.name, a.rtype, a.value));
+                    // Questionless replies (including unsolicited mDNS) name the address in the answer.
+                    let name = dns.questions.first().map_or(&a.name, |q| &q.name);
+                    addresses.add(format!("{name} {} {}", a.rtype, a.value));
                 }
             }
         }
@@ -1919,6 +1979,6 @@ mod tests {
             let _ = summarize(&pcap(&f), &|| false);
         }
         // DNS compression loops are refused.
-        assert!(dns_name(&[0xc0, 0x00], 0).is_none());
+        assert!(dns_name(&[0xc0, 0x00], 0, true).is_none());
     }
 }
