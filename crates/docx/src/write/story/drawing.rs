@@ -263,6 +263,17 @@ impl Writer<'_> {
         w.close("w:drawing");
     }
 
+    /// One order for an anchored object, shared by generated and retained drawings.
+    pub(in crate::write) fn drawing_order(&mut self, float: &Float) -> u32 {
+        let z = if float.z > 0 {
+            self.zmap.get(&float.z).copied().unwrap_or(float.z.saturating_sub(1))
+        } else {
+            self.z = self.z.saturating_add(1);
+            self.z
+        };
+        self.anchor_z = z;
+        z
+    }
     pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
         let DrawingInfo { float, size: (iw, ih), docpr, name, alt, link } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
@@ -271,9 +282,9 @@ impl Writer<'_> {
         } else {
             let d = emu(float.dist.clamp(0.0, 1584.0));
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
-            // The stacking order read from the file is kept; objects without one stack in
-            // document order above it.
-            self.z = if float.z > 0 { float.z } else { self.z.saturating_add(1) };
+            // A stacking order read from a file is kept (one less: see `Float::z`); objects made
+            // here go above those.
+            let z = self.drawing_order(float);
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",
@@ -283,7 +294,7 @@ impl Writer<'_> {
                     ("distL", &d),
                     ("distR", &d),
                     ("simplePos", "0"),
-                    ("relativeHeight", &self.z.to_string()),
+                    ("relativeHeight", &z.to_string()),
                     ("behindDoc", behind),
                     ("locked", "0"),
                     ("layoutInCell", if float.outside_cell { "0" } else { "1" }),
