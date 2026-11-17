@@ -107,6 +107,19 @@ pub trait Device<'a> {
     fn begin_knockout_erase(&mut self) {}
     /// Knockout patch (pdfcraft #2974): see `knockout_erase_wanted`.
     fn end_knockout_erase(&mut self) {}
+    /// Knockout patch (pdfcraft #4898): the knockout group just pushed (`set_knockout`) is drawn
+    /// once per blend mode its elements use, each pass into a layer of its own composited with
+    /// that mode. In this pass only elements whose blend mode is `mode` paint; every other
+    /// element clears what is under its shape, as it would replace it. Each pixel then holds the
+    /// last element covering it in exactly one pass, which composites it with the group's
+    /// backdrop in that element's own blend mode (#870).
+    fn begin_knockout_pass(&mut self, _mode: BlendMode) {}
+    /// Knockout patch (pdfcraft #4898): ends the pass `begin_knockout_pass` started, before the
+    /// layer is popped. Returns the other blend modes the pass's elements used, each once. A
+    /// device that doesn't track them returns none, and the group is drawn in one Normal pass.
+    fn end_knockout_pass(&mut self) -> Vec<BlendMode> {
+        Vec::new()
+    }
     /// Craft patch (flatten): the overprint parameters for the paints that follow, until the
     /// next call: `op` (`fill`, for fills, glyph fills and images), `OP` (`stroke`) and `OPM`
     /// (`mode`, 0 or 1; ISO 32000-2 §8.6.7). Called where `set_blend_mode` is called for a

@@ -365,6 +365,52 @@ pub struct TextureRef {
     pub image: usize,
     pub uv_set: u32,
     pub wrap: [Wrap; 2],
+    /// Where the slot's UVs land before the image is looked up (glTF `KHR_texture_transform`).
+    pub transform: Option<UvTransform>,
+}
+
+/// A UV transform: scale, then rotate by `rotation` radians, then add `offset`, in the order and
+/// with the signs of glTF's `KHR_texture_transform` (v runs down the image).
+///
+/// Compared and hashed by bits, so [`TextureRef`] keeps `Eq` and `Hash`.
+#[derive(Clone, Copy, Debug)]
+pub struct UvTransform {
+    pub offset: [f32; 2],
+    pub rotation: f32,
+    pub scale: [f32; 2],
+}
+
+impl Default for UvTransform {
+    fn default() -> Self {
+        Self { offset: [0.0; 2], rotation: 0.0, scale: [1.0; 2] }
+    }
+}
+
+impl UvTransform {
+    /// The transformed coordinate.
+    pub fn apply(&self, [u, v]: [f32; 2]) -> [f32; 2] {
+        let (sin, cos) = self.rotation.sin_cos();
+        let (su, sv) = (u * self.scale[0], v * self.scale[1]);
+        [cos * su + sin * sv + self.offset[0], cos * sv - sin * su + self.offset[1]]
+    }
+
+    fn bits(&self) -> [u32; 5] {
+        [self.offset[0], self.offset[1], self.rotation, self.scale[0], self.scale[1]].map(f32::to_bits)
+    }
+}
+
+impl PartialEq for UvTransform {
+    fn eq(&self, other: &Self) -> bool {
+        self.bits() == other.bits()
+    }
+}
+
+impl Eq for UvTransform {}
+
+impl std::hash::Hash for UvTransform {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bits().hash(state);
+    }
 }
 
 /// A metallic-roughness material: the simple parameters every format here can carry.

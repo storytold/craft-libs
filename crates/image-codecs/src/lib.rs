@@ -34,6 +34,7 @@ pub mod orientation;
 pub mod png_probe;
 pub mod raw_metadata;
 pub mod resolution;
+pub mod resolution_probe;
 pub mod source_settings;
 pub mod tiff_probe;
 pub mod web;
@@ -67,6 +68,7 @@ pub use crate::options::{
 };
 pub use crate::orientation::{OrientSteps, exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
+pub use crate::resolution_probe::file_resolution;
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 

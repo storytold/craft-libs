@@ -24,7 +24,7 @@ impl Document {
             unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
-            unreadable: Arc::default(),
+            object_notes: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: crate::cos::object::MAX_DECODED,
             overlay: BTreeMap::new(),
@@ -113,7 +113,7 @@ impl Document {
             unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
-            unreadable: Arc::default(),
+            object_notes: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::cos::object::MAX_DECODED),
             overlay: BTreeMap::new(),
@@ -178,6 +178,12 @@ impl Document {
             && let Some(enc) = doc.trailer.get(b"Encrypt").cloned()
         {
             doc.authenticate(&enc, &credentials)?;
+        }
+        // Algorithm 13 (ISO 32000-2 §7.6.4.4.12) says byte 8 of /Perms "should" match
+        // /EncryptMetadata: a should, so the file opens and the dictionary decides, as qpdf (which
+        // warns), MuPDF and PDFium read it.
+        if doc.security.as_deref().is_some_and(crate::crypt::SecurityHandler::perms_metadata_mismatch) {
+            Arc::make_mut(&mut doc.repair_log).push(PERMS_MISMATCH.into());
         }
         if Arc::make_mut(&mut doc.entries).remove_exhausted() {
             Arc::make_mut(&mut doc.repair_log).push("skipped exhausted xref object number 4294967295".into());
@@ -256,7 +262,7 @@ impl Document {
         // Objects read while locating the catalog were read before decryption was possible.
         self.cache = Arc::default();
         self.objstms = Arc::default();
-        self.unreadable = Arc::default();
+        self.object_notes = Arc::default();
         Ok(())
     }
 
@@ -506,6 +512,11 @@ impl Document {
         }
     }
 }
+
+/// The repair-log line for an R5/R6 `/Perms` whose byte 8 isn't the `T` or `F` `/EncryptMetadata`
+/// gives (Algorithm 13, ISO 32000-2 §7.6.4.4.12).
+pub(super) const PERMS_MISMATCH: &str =
+    "the encryption dictionary's /Perms disagrees with its /EncryptMetadata (Algorithm 13); metadata is read as /EncryptMetadata says";
 
 /// The repair-log line for a file rebuilt because its last update has no `/Prev`.
 const UNLINKED_UPDATE: &str = "the file's last update has no /Prev link to its earlier revisions, so their objects (the page tree among them) are unreachable through the cross-reference chain; rebuilding from object headers";
