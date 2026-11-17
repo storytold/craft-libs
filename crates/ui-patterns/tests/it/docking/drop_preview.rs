@@ -3,7 +3,7 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{Layout, Node, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, Role};
-use craft_ui::docking::{DockConfig, DockPanels, GroupAt, PanelSpec};
+use craft_ui::docking::{DockConfig, DockPanels, DragUnit, FloatSpace, GroupAt, PanelSpec, float_drop};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag::{self, DropMark};
 use craft_ui::testing::pointer::{moved, press, release};
@@ -150,4 +150,15 @@ fn a_tab_dropped_on_a_strip_at_the_layouts_top_edge_joins_its_group_and_the_edge
     let DropMark::Region { area: row, line: None, .. } = mark else { panic!("the top edge marks the row a drop adds: {mark:?}") };
     assert!((row.width() - area.width()).abs() <= SLACK, "the edge drop takes the full width {area:?}: {row:?}");
     assert!(group_rect(&bed, 1).width() >= area.width() - SLACK, "the panel went to a full-width row on top");
+}
+
+/// A drop that floats a panel in open room marks the region the window takes, as a docked drop marks its group's: one
+/// outline with a light fill around the pointer, where the window lands.
+#[trial]
+fn a_float_drop_marks_the_region_its_window_takes_under_the_pointer() {
+    let space = FloatSpace::new(Rect::from_min_size(Pos2::ZERO, ROOM), &super::sizes(4.0, 60.0, 20.0));
+    let at = Pos2::new(400.0, 250.0);
+    let dropped = float_drop(&DragUnit::Panel(2_usize), &space, at, Some(Vec2::new(52.0, 400.0)), None, false);
+    let DropMark::Region { area, line: None, .. } = dropped.mark else { panic!("a float marks a region: {:?}", dropped.mark) };
+    assert!(area.contains(at), "the region {area:?} lies under the pointer {at:?}");
 }
