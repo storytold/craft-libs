@@ -350,6 +350,18 @@ fn an_edge_takes_a_press_along_its_side_and_a_corner_wins_where_both_reach() {
 }
 
 #[trial]
+fn the_arrows_move_the_whole_box_after_a_handle_drag_leaves_focus_on_the_handle() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    drag(&mut h, Point::new(300.0, 220.0), Point::new(320.0, 240.0));
+    let before = h.state().quad;
+    h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE).settle();
+    let after = h.state().quad;
+    for (a, b) in before.iter().zip(&after) {
+        assert!((b.x - a.x - 1.0).abs() < 1e-6 && (b.y - a.y).abs() < 1e-6, "every corner moved one unit right: {before:?} -> {after:?}");
+    }
+}
+
+#[trial]
 fn a_hidden_reference_point_still_follows_alt_and_the_centre_moves_a_small_box() {
     // An Alt press inside moves the hidden point to the press, and a drag moves it on.
     let mut h = harness(BoxState::from_rect(RECT), |config| {
