@@ -27,7 +27,7 @@ pub use char_props::{
 };
 pub use color::{Rgb, TextColor};
 pub use para_props::{
-    Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, TAB_POS_EPS, TabAlign, TabLeader, TabStop,
+    Align, Border, BorderStyle, Borders, Kashida, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, TAB_POS_EPS, TabAlign, TabLeader, TabStop,
     TextAlignment, TextFrame,
 };
 pub use table_props::{

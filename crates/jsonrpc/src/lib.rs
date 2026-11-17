@@ -8,6 +8,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(feature = "async-lines")]
+pub mod async_lines;
 pub mod control;
 
 use serde_json::{Value, json};

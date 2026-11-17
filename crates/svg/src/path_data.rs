@@ -214,6 +214,10 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
                     }
                     cur = start;
                     cmd = 0;
+                    // Z is not a cubic or quadratic, so a following S or T starts from the
+                    // current point rather than reflecting the pre-close control.
+                    prev_cubic = None;
+                    prev_quad = None;
                     continue;
                 }
                 cmd = c;
@@ -432,6 +436,15 @@ mod tests {
     fn smooth_quadratic_consumes_both_coordinates() {
         let paths = parse_path("M0 0 Q3 3 6 0 T12 0").unwrap();
         assert_eq!(paths[0].segs[1], Segment::Cubic(Point::new(8.0, -2.0), Point::new(10.0, -2.0), Point::new(12.0, 0.0)));
+    }
+
+    #[test]
+    fn close_resets_smooth_control_history() {
+        // After Z, S must not reflect the preceding C's control (20,20) → (0,0).
+        let paths = parse_path("M10 10 C10 20 20 20 20 10 Z S30 0 30 10").unwrap();
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].closed);
+        assert_eq!(paths[1].segs[0], Segment::Cubic(Point::new(10.0, 10.0), Point::new(30.0, 0.0), Point::new(30.0, 10.0)));
     }
 
     #[test]
