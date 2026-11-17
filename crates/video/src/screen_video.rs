@@ -60,3 +60,43 @@ pub fn decode_keyframe(p: &[u8], max_edge: u32, max_rgba_bytes: usize) -> Option
     }
     Some(Frame { width: w as u32, height: h as u32, rgba })
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    fn packet(w: usize, h: usize, block: usize, px: impl Fn(usize, usize) -> [u8; 3]) -> Vec<u8> {
+        let mut packet = Vec::new();
+        let n = (block / 16 - 1) as u16;
+        packet.extend_from_slice(&((n << 12) | w as u16).to_be_bytes());
+        packet.extend_from_slice(&((n << 12) | h as u16).to_be_bytes());
+        for by in 0..h.div_ceil(block) {
+            for bx in 0..w.div_ceil(block) {
+                let (x0, y0) = (bx * block, by * block);
+                let mut bgr = Vec::new();
+                for row in 0..block.min(h - y0) {
+                    for col in 0..block.min(w - x0) {
+                        let [r, g, b] = px(x0 + col, h - 1 - (y0 + row));
+                        bgr.extend_from_slice(&[b, g, r]);
+                    }
+                }
+                let z = miniz_oxide::deflate::compress_to_vec_zlib(&bgr, 6);
+                packet.extend_from_slice(&(z.len() as u16).to_be_bytes());
+                packet.extend_from_slice(&z);
+            }
+        }
+        packet
+    }
+    #[test]
+    fn a_screen_video_key_frame_decodes_with_its_blocks_in_place() {
+        // 40 × 20 in 16-pixel blocks: partial blocks on the right and at the top.
+        let px = |x: usize, y: usize| [(x * 6) as u8, (y * 12) as u8, if x < 20 { 255 } else { 0 }];
+        let Frame { width, height, rgba } = decode_keyframe(&packet(40, 20, 16, px), 8192, 64 << 20).unwrap();
+        assert_eq!((width, height), (40, 20));
+        for (x, y) in [(0, 0), (39, 0), (0, 19), (39, 19), (17, 3), (21, 18)] {
+            let i = (y * 40 + x) * 4;
+            let [r, g, b] = px(x, y);
+            assert_eq!(&rgba[i..i + 4], &[r, g, b, 255], "({x}, {y})");
+        }
+    }
+}
