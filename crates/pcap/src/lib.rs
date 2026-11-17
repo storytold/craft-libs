@@ -10,6 +10,7 @@ use crate::FormatError;
 use crate::bytes::Reader;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Most accepted and rejected packet records read from one capture.
@@ -887,7 +888,18 @@ fn dns_name(msg: &[u8], mut off: usize, allow_compression: bool) -> Option<(Stri
                 if !out.is_empty() {
                     out.push('.');
                 }
-                out.extend(label.iter().map(|&c| if c.is_ascii_graphic() { char::from(c) } else { '?' }));
+                for &c in label {
+                    match c {
+                        b'.' | b'\\' => {
+                            out.push('\\');
+                            out.push(char::from(c));
+                        }
+                        c if c.is_ascii_graphic() => out.push(char::from(c)),
+                        _ => {
+                            let _ = write!(out, "\\{c:03}");
+                        }
+                    }
+                }
                 off += 1 + usize::from(l);
             }
             _ => return None,
@@ -1179,19 +1191,28 @@ pub fn strip_userinfo(target: &str) -> String {
 
 fn tcp_app(p: &[u8], d: &mut Decoded) {
     let head = p.get(..p.len().min(16 << 10)).unwrap_or(p);
-    let line_end = head.windows(2).position(|w| w == b"\r\n").unwrap_or(head.len().min(2048));
-    let line = String::from_utf8_lossy(head.get(..line_end.min(2048)).unwrap_or(&[])).into_owned();
-    if let Some(rest) = line.strip_prefix("HTTP/1.") {
-        let status = rest.split(' ').nth(1).and_then(|s| s.parse().ok());
+    let Some(line_end) = head.windows(2).position(|w| w == b"\r\n") else {
+        tls(p, d);
+        return;
+    };
+    let line = String::from_utf8_lossy(head.get(..line_end).unwrap_or(&[]));
+    let version = |v: &str| matches!(v.as_bytes(), [b'H', b'T', b'T', b'P', b'/', b'1', b'.', b'0'..=b'9']);
+    let mut parts = line.splitn(3, ' ');
+    let fields = (parts.next(), parts.next(), parts.next());
+    if let (Some(v), Some(code), reason) = fields
+        && version(v)
+        && matches!(code.as_bytes(), [b'1'..=b'5', b'0'..=b'9', b'0'..=b'9'])
+        && reason.is_none_or(|text| text.bytes().all(|b| b == b'\t' || !b.is_ascii_control()))
+    {
         d.protocols.push("http");
-        d.http =
-            Some(Http { kind: "response", method: None, target: None, status, version: format!("HTTP/1.{}", rest.chars().next().unwrap_or('?')), host: None });
+        d.http = Some(Http { kind: "response", method: None, target: None, status: code.parse().ok(), version: v.to_string(), host: None });
         return;
     }
-    let mut parts = line.splitn(3, ' ');
-    if let (Some(m), Some(t), Some(v)) = (parts.next(), parts.next(), parts.next())
+    if let (Some(m), Some(t), Some(v)) = fields
         && METHODS.contains(&m)
-        && v.starts_with("HTTP/1.")
+        && !t.is_empty()
+        && !t.bytes().any(|b| b.is_ascii_control())
+        && version(v)
     {
         let mut remaining = head.get(line_end + 2..).unwrap_or(&[]);
         let mut host = None;

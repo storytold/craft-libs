@@ -149,3 +149,16 @@ fn root_name_rdata_remains_valid() {
         assert_eq!(dns.answers[1].value, "203.0.113.1");
     }
 }
+
+#[test]
+fn dns_label_escapes_distinguish_wire_names_in_question_and_answer_owners() {
+    let mut message = vec![0, 1, 0x81, 0x80, 0, 2, 0, 1, 0, 0, 0, 0];
+    message.extend(b"\x03a.b\x03\\\x00\xff\x00\x00\x01\x00\x01");
+    message.extend(b"\x01a\x01b\x03\\\x00\xff\x00\x00\x01\x00\x01");
+    message.extend([0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3, 4]);
+    let dns = decode(101, &ipv4_pkt(17, [1; 4], [2; 4], &udp(53, 100, &message))).dns.unwrap();
+    assert!(!dns.incomplete);
+    assert_eq!(dns.questions[0].name, r"a\.b.\\\000\255");
+    assert_eq!(dns.questions[1].name, r"a.b.\\\000\255");
+    assert_eq!(dns.answers[0].name, dns.questions[0].name);
+}

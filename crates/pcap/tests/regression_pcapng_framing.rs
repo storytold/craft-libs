@@ -64,3 +64,14 @@ fn big_endian_block_footers_use_the_sections_byte_order() {
     data[end - 4..].copy_from_slice(&20u32.to_le_bytes());
     assert!(!summarize(&data, &|| false).unwrap().warnings.is_empty());
 }
+
+#[test]
+fn a_skipped_packet_before_the_first_interface_preserves_later_frames() {
+    let original = pcapng(&sample_frames());
+    let mut data = original[..28].to_vec();
+    data.extend(block(3, &[0; 4]));
+    data.extend(&original[28..]);
+    let summary = summarize(&data, &|| false).unwrap();
+    assert_eq!(summary.packets, 7);
+    assert!(summary.warnings.iter().any(|w| w.contains("undeclared interface")));
+}
