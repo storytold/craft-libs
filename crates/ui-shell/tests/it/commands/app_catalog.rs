@@ -109,7 +109,8 @@ fn a_keys_press_and_release_fire_with_the_times_they_arrived_at() {
     let mut frames = Frames::new();
     frames.commands(catalog(1));
     frames.idle(3, &mut show);
-    let times = |frames: &Frames| take_output(&frames.ctx).fired.into_iter().map(|fired| (fired.command.id, fired.phase, fired.time)).collect::<Vec<_>>();
+    let times =
+        |frames: &Frames| take_output(&frames.ctx).fired.into_iter().map(|fired| (fired.command.id, fired.phase, fired.time)).collect::<Vec<_>>();
     let now = |frames: &Frames| frames.ctx.input(|input| input.time);
     frames.frame(vec![key_press(Key::J, Modifiers::NONE)], &mut show);
     let pressed = now(&frames);
