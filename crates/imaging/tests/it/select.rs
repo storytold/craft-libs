@@ -891,6 +891,20 @@ fn magnetic_closes_by_start_click_double_click_or_enter_and_retracts_to_the_firs
     assert!(rig.tool_mut().events().is_empty(), "retracting commits nothing");
 }
 
+// The first point snaps to the edge a few points from the press that placed it, farther than the slop: a click back
+// where the outline began closes it, as a click on the start itself does.
+#[trial]
+fn a_click_where_the_magnetic_outline_began_closes_it() {
+    let (mut rig, _) = magnetic();
+    let began = CENTRE + circle_offset(0.0) * ((RADIUS + 5.0) / RADIUS);
+    click(&mut rig, pt(began), NONE);
+    glide_along(&mut rig, 0.0, std::f64::consts::TAU);
+    rig.fixture().advance(1.0);
+    click(&mut rig, pt(began), NONE);
+    let points = committed_polygon(&rig.tool_mut().events());
+    assert!(points.len() >= 3 && points.iter().all(|&p| on_circle(p)), "a click where the outline began closes: {points:?}");
+}
+
 // `[` and `]` change the width by 1 within 1..=256 while an outline is open.
 
 // With `pressure_width` on, a pen sample at pressure 0.5 halves the searched width (minus one); a mouse sample never
