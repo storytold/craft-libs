@@ -43,7 +43,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Limits {
-    /// Most pixels (width × height) a picture may have; each takes 12 bytes decoded. Default 2^26.
+    /// Most pixels (width × height) a picture may have; each takes 12 bytes as RGB or 16 as RGBA. Default 2^26.
     /// A picture over the target's largest allocation is refused at any setting.
     pub max_pixels: u64,
     /// Longest header read, in bytes (real ones are a few hundred). Default 64 KiB.
