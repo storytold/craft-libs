@@ -804,17 +804,6 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             };
             let won_kinds = root.map_or(Sense::empty(), |own| pointer::press_winners(ctx, at, targets).senses_of(own));
             let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted) && !won_kinds.is_empty();
-            if let Some(test) = pointer::diag_test()
-                && state.root.is_some_and(|own| own.rect.contains(at))
-            {
-                eprintln!(
-                    "DIAG {test}: start root {:?} enabled {enabled} allowed {allowed} won {won_kinds:?} untargeted {untargeted} takes {} layer {layer:?} rect {:?} clip {:?}",
-                    root.map(pointer::diag_id),
-                    crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted),
-                    state.root.map(|own| own.rect),
-                    state.root.map(|own| own.clip),
-                );
-            }
             if !enabled || !allowed {
                 return None;
             }

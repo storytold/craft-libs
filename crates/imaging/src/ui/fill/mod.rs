@@ -651,17 +651,6 @@ impl ContentAwareFillWorkspace {
                 self.apply_reset(FillReset::FillArea);
             }
 
-            {
-                let test = std::thread::current().name().unwrap_or("?").rsplit("::").next().unwrap_or("?").to_owned();
-                if test.starts_with("an_erased_sampling") || test.starts_with("brush_strokes_change") {
-                    eprintln!(
-                        "DIAG {test}: fill body max_rect {:?} available {:?} measuring {}",
-                        ui.max_rect(),
-                        ui.available_size(),
-                        craft_ui::runtime::measure::active(ui.ctx())
-                    );
-                }
-            }
             Row::new().fill().show(ui, |ui, _| {
                 let rail = ToolRail::new(words.tools.clone(), slots, &self.tool, &self.last_used).show_rail(ui, |_, _| {});
                 if let Some(next) = rail.last_used {
