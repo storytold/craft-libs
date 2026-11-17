@@ -184,6 +184,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gpu-device`](crates/gpu-device/README.md): choosing and opening a wgpu device: Auto,
+  low power, a named adapter that survives a reordered list and a driver update, or software;
+  corrections for drivers that crash; the next adapter and then a software one when a device fails
+  to open; a capability report; device-loss and error recording without panics; and what to reopen
+  after a loss. Settings pages and the window stay in each app.
 - [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
   (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
   unread and written back into a list. The workbook model and what follows a read stay in GridCraft.

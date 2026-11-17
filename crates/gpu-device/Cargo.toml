@@ -1,0 +1,29 @@
+[package]
+name = "craft-gpu-device"
+description = "Choosing and opening a wgpu device: an adapter choice the user can set (Auto, high performance, low power, a named adapter, software), fixes for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["serde"]
+# Reading and writing `Preference` and `AdapterKey` with serde.
+serde = ["dep:serde"]
+
+[dependencies]
+wgpu = "30"
+log = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"
+
+[dev-dependencies]
+# The noop backend opens devices without a GPU in the tests.
+wgpu = { version = "30", features = ["noop"] }
+serde_json = { workspace = true }
