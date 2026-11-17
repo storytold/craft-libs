@@ -582,25 +582,37 @@ fn ipv6(p: &[u8], d: &mut Decoded) {
     d.protocols.push("ipv6");
     let ip6 = |b: &[u8]| IpAddr::V6(Ipv6Addr::from(<[u8; 16]>::try_from(b).unwrap_or([0; 16])));
     let end = (40 + usize::from(plen)).min(p.len());
+    let payload_reader = Reader::new(p.get(..end).unwrap_or(&[]));
     let mut off = 40usize;
     let mut fragment = false;
     for _ in 0..8 {
         match next {
             0 | 43 | 60 => {
-                let (Some(n), Some(l)) = (r.u8(off), r.u8(off + 1)) else { break };
+                let (Some(n), Some(l)) = (payload_reader.u8(off), payload_reader.u8(off + 1)) else { break };
+                let len = (usize::from(l) + 1) * 8;
+                if off.checked_add(len).is_none_or(|next_off| next_off > end) {
+                    break;
+                }
                 next = n;
-                off += (usize::from(l) + 1) * 8;
+                off += len;
             }
             44 => {
-                let (Some(n), Some(fo)) = (r.u8(off), r.u16_be(off + 2)) else { break };
+                if off.checked_add(8).is_none_or(|next_off| next_off > end) {
+                    break;
+                }
+                let (Some(n), Some(fo)) = (payload_reader.u8(off), payload_reader.u16_be(off + 2)) else { break };
                 next = n;
                 fragment = fo & 0xfff8 != 0;
                 off += 8;
             }
             51 => {
-                let (Some(n), Some(l)) = (r.u8(off), r.u8(off + 1)) else { break };
+                let (Some(n), Some(l)) = (payload_reader.u8(off), payload_reader.u8(off + 1)) else { break };
+                let len = (usize::from(l) + 2) * 4;
+                if off.checked_add(len).is_none_or(|next_off| next_off > end) {
+                    break;
+                }
                 next = n;
-                off += (usize::from(l) + 2) * 4;
+                off += len;
             }
             _ => break,
         }
@@ -1471,6 +1483,18 @@ mod tests {
             assert_eq!((s.first_ts_ns, s.last_ts_ns), (Some(expected0), Some(expected0 + 6)));
             assert_eq!((s.flows[0].first_ts_ns, s.flows[0].last_ts_ns), (Some(expected0), Some(expected0 + 1)));
         }
+    }
+
+    #[test]
+    fn ipv6_extension_outside_declared_payload_is_ignored() {
+        let mut v6 = vec![0x60, 0, 0, 0];
+        v6.extend(0u16.to_be_bytes());
+        v6.extend([60, 64]);
+        v6.extend([0u8; 32]);
+        v6.extend([17, 0, 0, 0, 0, 0, 0, 0]);
+
+        let d = decode(101, &v6);
+        assert_eq!(d.ip.unwrap().protocol, 60);
     }
 
     #[test]
