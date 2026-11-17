@@ -848,8 +848,21 @@ fn level_def(ordered: bool, l: usize) -> String {
     }
 }
 
-/// RTF text of a document.
+/// The application [`export`] names in the `\generator` group.
+pub const GENERATOR: &str = "WordCraft";
+
+/// Longest application name [`export_with_generator`] writes, characters.
+const MAX_GENERATOR: usize = 255;
+
+/// RTF text of a document, naming [`GENERATOR`] as the application that wrote it.
 pub fn export(doc: &Document) -> String {
+    export_with_generator(doc, GENERATOR)
+}
+
+/// [`export`], naming `generator` as the application that wrote it (`{\*\generator …;}`), for an
+/// app that embeds the writer under its own name. Control characters are dropped and the name is
+/// cut at [`MAX_GENERATOR`] characters; a blank name leaves the group out.
+pub fn export_with_generator(doc: &Document, generator: &str) -> String {
     let (marked, marks) = match mark_doc(doc) {
         Some((d, m)) => (Some(d), m),
         None => (None, Vec::new()),
@@ -868,10 +881,10 @@ pub fn export(doc: &Document) -> String {
         w.sections = secs;
     }
     w.blocks(&flow.blocks, false, "\\par", &mut body, 0);
-    export_with(&flow.meta, &w, &body, &doc.last_section)
+    export_with(&flow.meta, &w, &body, &doc.last_section, generator)
 }
 
-fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionProps) -> String {
+fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionProps, generator: &str) -> String {
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.items.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
@@ -881,7 +894,12 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionP
     for c in &w.t.colors.items {
         out.push_str(&format!("\\red{}\\green{}\\blue{};", c.0, c.1, c.2));
     }
-    out.push_str("}\n{\\*\\generator WordCraft;}\n{\\stylesheet{\\s0\\snext0 Normal;}");
+    out.push('}');
+    let name: String = generator.chars().filter(|c| !c.is_control()).take(MAX_GENERATOR).collect();
+    if !name.trim().is_empty() {
+        out.push_str(&format!("\n{{\\*\\generator {};}}", esc_font(name.trim())));
+    }
+    out.push_str("\n{\\stylesheet{\\s0\\snext0 Normal;}");
     for n in 1..=6u32 {
         let sz = HEAD_SIZES.get(n as usize - 1).copied().unwrap_or(12.0);
         out.push_str(&format!("{{\\s{n}\\sbasedon0\\snext0\\outlinelevel{}\\keepn\\b\\fs{} heading {n};}}", n - 1, (sz * 2.0) as i32));

@@ -108,9 +108,24 @@ implicit `@`, the spaces and line breaks typed in the formula, numbers as Excel 
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
 file keeps the tokens once. A formula whose decoding needs something the reader does not read keeps
-only its saved result, with a warning saying why: a defined name left out, table references, other
-workbooks, Python code stored outside the cell, data tables. The XLSB function table
-(`xlsb/ftab.rs`) and the expression printer are this crate's own, apart from `craft-xls`'s.
+only its saved result, with a warning saying why: a defined name left out, a table whose part can't
+be read, other workbooks, Python code stored outside the cell, data tables.
+
+A binary workbook's tables (`tableN.bin`, listed by the sheet's `BrtListPart`s) read through
+`Package::tables` into the same `Table`, as Excel writes the table in `.xlsx`: the calculated and
+totals formulas decoded as cell formulas are, an XML map's column properties, and the AutoFilter and
+sort state built as the `autoFilter` and `sortState` elements, with numbers in a filter spelled as
+Excel writes them there (17 significant digits; Excel writes a few values shorter, such as `0.1`,
+which read back the same). A filter column the reader can't spell is left out with a warning (Excel
+keeps date-group filters in an extension the reader skips; a custom filter on a Boolean value has no
+`.xlsx` spelling Excel has shown), as is a sort by stroke or PinYin order. The revision ids Excel
+writes (`xr:uid`) are in alternate-content blocks, which are skipped. A structured reference in a
+formula (`PtgList`) is spelled as `.xlsx` has it (`Sales[Val]`, `Sales[[#Headers],[Key]]`,
+`Sales[[#This Row],[A]:[B]]`, with Excel's spacing flags), from the table's id, which is
+workbook-wide: the workbook's table parts are indexed when its workbook part is read. A reference to
+a table that can't be read, to a deleted table or into another workbook keeps the cell's saved
+result. The XLSB function table (`xlsb/ftab.rs`) and the expression printer are this crate's own,
+apart from `craft-xls`'s.
 
 ## Hostile input
 

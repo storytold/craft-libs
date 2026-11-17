@@ -1,14 +1,15 @@
 //! Binary workbooks ([MS-XLSB]): the workbook part with its defined names, shared strings and
 //! worksheets (rows, cells, columns, default sizes, merged cells), from their records. Cell
 //! formulas are decoded from their tokens ([`formula`]) into the text an `.xlsx` file holds;
-//! one that can't be keeps only its saved result, with a warning saying why. The styles part
-//! is read into the same [`crate::styles::Styles`] ([`styles`]). A record that does not parse
-//! fails the read.
+//! one that can't be keeps only its saved result, with a warning saying why. Table parts are
+//! read in `table`; the styles part is read into the same [`crate::styles::Styles`]
+//! ([`styles`]). A record that does not parse fails the read.
 
 mod expr;
 mod formula;
 mod ftab;
 mod styles;
+mod table;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -24,6 +25,7 @@ use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
 pub(crate) use styles::styles;
+pub(crate) use table::{TABLE, index_table, table};
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
@@ -37,6 +39,8 @@ const MAX_SHEETS: usize = 1024;
 const MAX_BOOKS: usize = 65_536;
 /// Most merged ranges in one worksheet.
 const MAX_MERGES: usize = 100_000;
+/// Table parts one worksheet lists at most.
+const MAX_TABLE_PARTS: usize = 65_536;
 /// Most column records in one worksheet: one per column.
 const MAX_COLUMNS: usize = MAX_COLS as usize;
 /// The tallest row, in twips (409.6 points).
@@ -189,11 +193,13 @@ struct Records<'a, 'l> {
     /// Read the alternate content meant for Excel 2007 (version 12), as an `.xlsx` reader sees
     /// the main attribute where Excel keeps a newer spelling in an extension.
     excel_2007: bool,
+    /// Future-record and alternate-content blocks skipped so far.
+    skipped: usize,
 }
 
 impl<'a, 'l> Records<'a, 'l> {
     fn new(bytes: &'a [u8], limits: &'l Limits, budget: &'l Budget) -> Self {
-        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![], excel_2007: false }
+        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![], excel_2007: false, skipped: 0 }
     }
 
     fn next(&mut self, warnings: &mut Warnings) -> Result<Option<(u16, &'a [u8])>, Error> {
@@ -246,6 +252,7 @@ impl<'a, 'l> Records<'a, 'l> {
                     let read = read && self.blocks.iter().all(|(_, r)| *r);
                     self.blocks.push((id + 1, read));
                     if !read {
+                        self.skipped += 1;
                         warnings.warn("unsupported XLSB future-record and alternate-content blocks were skipped");
                     }
                 }
@@ -282,14 +289,16 @@ impl<'a, 'l> Records<'a, 'l> {
 
 /// The workbook part: BrtBeginBook, BrtWbProp, the BrtBundleSh list.
 /// The workbook part, and the tables its formulas refer to ([`Links`]): `None` when those can't
-/// be read, so that the workbook still opens, with every formula kept as its saved result.
+/// be read, so that the workbook still opens, with every formula kept as its saved result. Its
+/// defined names come back undecoded ([`Names`]): [`read_names`] decodes them once the workbook's
+/// tables are indexed, so a name's formula can use a structured reference.
 pub(crate) fn workbook(
     bytes: &[u8],
     rels: &Rels,
     limits: &Limits,
     budget: &Budget,
     warnings: &mut Warnings,
-) -> Result<(Workbook, Option<Links>), Error> {
+) -> Result<(Workbook, Option<Links>, Names), Error> {
     let mut records = Records::new(bytes, limits, budget);
     records.first(131, warnings)?;
     let mut wb = Workbook::default();
@@ -313,11 +322,7 @@ pub(crate) fn workbook(
                 if wb.sheets.is_empty() {
                     return Err(invalid("no supported worksheets"));
                 }
-                match links.as_mut() {
-                    Some(l) => wb.defined_names = defined_names(pending, &bundle_sheets, l, limits, budget, warnings),
-                    None => warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results"),
-                }
-                return Ok((wb, links));
+                return Ok((wb, links, Names { pending, sheets: bundle_sheets }));
             }
             39 | 355 | 357 | 358 | 362 | 667 => {
                 if let Some(l) = links.as_mut()
@@ -414,6 +419,22 @@ struct PendingName {
     comment: Option<String>,
     description: Option<String>,
     help: Option<String>,
+}
+
+/// The workbook part's defined names, not yet decoded, and each BrtBundleSh's place in
+/// [`Workbook::sheets`] (`None` for a skipped one).
+pub(crate) struct Names {
+    pending: Vec<PendingName>,
+    sheets: Vec<Option<u32>>,
+}
+
+/// Decodes the workbook part's defined names `names` into `wb`, after the tables in `links` are
+/// indexed. Without `links` none can be read, and formulas keep their saved results.
+pub(crate) fn read_names(wb: &mut Workbook, names: Names, links: Option<&mut Links>, limits: &Limits, budget: &Budget, warnings: &mut Warnings) {
+    match links {
+        Some(l) => wb.defined_names = defined_names(names.pending, &names.sheets, l, limits, budget, warnings),
+        None => warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results"),
+    }
 }
 
 /// The workbook's defined names, as `.xlsx` has them in `definedNames`: every `BrtName` but the
@@ -1216,6 +1237,18 @@ pub(crate) fn worksheet(
                 });
                 col = Some(c);
             }
+            // BrtListPart: one of the sheet's tables, by relationship id.
+            661 => {
+                if data {
+                    return Err(invalid("table part inside worksheet data"));
+                }
+                let rel = b.text(255)?;
+                b.finish()?;
+                if sheet.features.table_parts.len() >= MAX_TABLE_PARTS {
+                    return Err(Error::TooLarge(format!("XLSB exceeds {MAX_TABLE_PARTS} tables on a sheet")));
+                }
+                sheet.features.table_parts.push(rel);
+            }
             485 => {
                 if data_seen {
                     return Err(invalid("sheet format after worksheet data"));
@@ -1263,4 +1296,26 @@ pub(crate) fn worksheet(
         }
     }
     Err(invalid("missing worksheet end record"))
+}
+
+#[cfg(test)]
+mod records_merge_tests {
+    use super::*;
+
+    #[test]
+    fn table_skip_count_preserves_excel_2007_style_blocks() {
+        // BrtACBegin for Excel 2007, an empty record, BrtACEnd.
+        let bytes = [37, 6, 1, 0, 12, 0, 0, 0, 1, 0, 38, 0];
+        let limits = Limits::default();
+        let budget = Budget::default();
+        let mut warnings = Warnings::default();
+        let mut styles = Records::new(&bytes, &limits, &budget);
+        styles.excel_2007 = true;
+        assert_eq!(styles.next(&mut warnings).unwrap(), Some((1, &[][..])));
+        assert_eq!(styles.skipped, 0, "supported style content was read, not skipped");
+        assert!(styles.next(&mut warnings).unwrap().is_none());
+        let mut tables = Records::new(&bytes, &limits, &budget);
+        assert!(tables.next(&mut warnings).unwrap().is_none());
+        assert_eq!(tables.skipped, 1, "table filters still detect skipped alternate content");
+    }
 }
