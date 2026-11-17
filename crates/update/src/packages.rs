@@ -171,3 +171,100 @@ mod tests {
         assert_eq!(found.installation.as_deref(), Some("user"));
     }
 }
+
+/// Matches the OCI URL from https://getartcraft.com/artcraft-oci.flatpakrepo,
+/// independently of its local remote name (normally `artcraft-oci`).
+pub fn is_artcraft_remote(origin: &str, remotes: &str) -> bool {
+    remotes.lines().any(|line| {
+        let Some((name, url)) = line.split_once('\t') else { return false };
+        let url = url.trim().trim_end_matches('/');
+        name.trim() == origin && url == "oci+https://getartcraft.com"
+    })
+}
+
+#[cfg(test)]
+mod remote_url_tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn recognizes_custom_names_and_rejects_unrelated_urls() {
+        assert!(is_artcraft_remote("artcraft-oci", "artcraft-oci\toci+https://getartcraft.com\n"));
+        assert!(is_artcraft_remote("custom", "custom\toci+https://getartcraft.com/\n"));
+        for url in [
+            "oci+https://getartcraft.com.evil",
+            "oci+https://getartcraft.com/other",
+            "oci+http://getartcraft.com",
+            "https://getartcraft.com/linux",
+            "https://getartcraft.com/artcraft-oci.flatpakrepo",
+            "https://getartcraft.com",
+        ] {
+            assert!(!is_artcraft_remote("custom", &format!("custom\t{url}")));
+        }
+        assert!(!is_artcraft_remote("other", "custom\toci+https://getartcraft.com"));
+    }
+}
+
+/// A missing ref permits bundle fallback; an unknown or different version must not replace it.
+#[cfg(all(target_os = "linux", feature = "oci_migration"))]
+pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, listing: &str) -> Result<bool, String> {
+    for line in listing.lines() {
+        let mut fields = line.split('\t');
+        if fields.next().map(str::trim) != Some(reference) {
+            continue;
+        }
+        let candidate = fields.next().and_then(|value| version::parse(value.trim()));
+        if candidate.as_ref() != Some(expected) {
+            return Err("The ArtCraft OCI repository does not yet provide the selected version".into());
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(all(test, target_os = "linux", feature = "oci_migration"))]
+mod migration_tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn migration_requires_the_exact_ref_and_selected_version() {
+        let reference = "app/ai.storyteller.photocraft/x86_64/stable";
+        let expected = version::parse("1.2.3").unwrap();
+        assert_eq!(oci_ref_available(reference, &expected, &format!("{reference}\t1.2.3")), Ok(true));
+        assert_eq!(oci_ref_available(reference, &expected, "app/ai.storyteller.photocraft/aarch64/stable\t1.2.3"), Ok(false));
+        for value in ["", "1.2.2", "1.2.4", "unknown"] {
+            assert!(oci_ref_available(reference, &expected, &format!("{reference}\t{value}")).is_err());
+        }
+    }
+}
+
+/// Only a confirmed bundle origin with no repository URL permits bundle replacement.
+/// Missing rows are unknown, so preserve remote ownership conservatively.
+pub fn remote_manages_flatpak(origin: &str, remotes: &str) -> bool {
+    remotes
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split('\t');
+            if fields.next().map(str::trim) != Some(origin) {
+                return None;
+            }
+            Some(fields.next().is_some_and(|url| !url.trim().is_empty()))
+        })
+        .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod remote_ownership_tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn only_confirmed_empty_urls_allow_bundle_replacement() {
+        assert!(!remote_manages_flatpak("app-origin", "app-origin\t\n"));
+        assert!(remote_manages_flatpak("renamed", "renamed\thttps://example.org/repo\n"));
+        assert!(remote_manages_flatpak("renamed", "renamed\toci+https://getartcraft.com\n"));
+        assert!(remote_manages_flatpak("missing", "other\t\n"));
+        assert!(!remote_manages_flatpak("app-origin", "app-origin"));
+    }
+}

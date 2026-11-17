@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::canvas::MAX_CLIP_PATHS;
 use crate::{Cap, ClipPath, Join, LineStyle, PlacedItem};
 
 fn line_of(item: &Item) -> &LineStyle {

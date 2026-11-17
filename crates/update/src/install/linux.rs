@@ -24,8 +24,11 @@ fn system_tool(name: &str) -> Option<PathBuf> {
 
 /// Where commands that need root go: the installer's queue, then `pkexec`.
 pub struct Root<'a> {
+    /// The queue root commands wait their turn in.
     pub queue: &'a crate::queue::Queue,
+    /// Runs a command line as root.
     pub run: &'a (dyn Fn(&[&OsStr]) -> Result<(), String> + Sync),
+    /// A `flatpak` command, set up as the installer runs it.
     pub flatpak: &'a (dyn Fn() -> std::process::Command + Sync),
 }
 
@@ -413,6 +416,7 @@ pub fn install_package(kind: PackageKind, file: &Path, bundle: Option<&str>, sto
     install_package_via(&SYSTEM, kind, file, bundle, stop, phase)
 }
 
+/// [`install_package`] through `root` in place of the installer's queue and `pkexec`.
 pub fn install_package_via(
     root: &Root<'_>,
     kind: PackageKind,
@@ -431,6 +435,7 @@ pub fn install_package_via(
     }
 }
 
+/// Removes the app's system package with the tools of the package manager that installed it.
 pub fn remove_package(app: &App, installed: &Installed, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
     let mut remove = |command: &[&str], package: &str| as_root(&SYSTEM, command, OsStr::new(package), stop, phase, JobPhase::Removing);
     match installed.source {
@@ -464,6 +469,10 @@ pub fn remove_package(app: &App, installed: &Installed, stop: &Stop, phase: &mut
     }
 }
 
+/// Puts the AppImage `file` in place as `name`, in `destination` or the AppImage folder, made
+/// executable. It writes over a file of that name only when `replace` or when `previous` records
+/// it, and removes the earlier AppImage `previous` records elsewhere. Returns the path it wrote
+/// and the files it removed.
 pub fn install_appimage(
     file: &Path,
     name: &str,
