@@ -37,6 +37,5 @@ jobs:
           components: clippy
           # The macOS code is linted on Linux: it compiles for the target without the SDK.
           targets: aarch64-apple-darwin
-      - run: cargo clippy -p craft-dialogs --all-targets --locked -- -D warnings
+      # Native clippy and the tests run in the Workspace gate.
       - run: cargo clippy -p craft-dialogs --target aarch64-apple-darwin --locked -- -D warnings
-      - run: cargo test -p craft-dialogs --locked
