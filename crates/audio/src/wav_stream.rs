@@ -33,11 +33,16 @@ const PCM: u16 = 1;
 const FLOAT: u16 = 3;
 
 /// A WAV header for `frames` frames of `channels` channels.
+/// Returns `None` for zero rate/channels or any size/byte-rate field overflow.
 pub fn header(rate: u32, channels: u16, bits: Bits, frames: u64) -> Option<Vec<u8>> {
+    if rate == 0 || channels == 0 {
+        return None;
+    }
     let b = bits.bytes();
     let data = u32::try_from(frames.checked_mul(u64::from(b) * u64::from(channels))?).ok()?;
     let riff = data.checked_add(36)?.checked_add(data & 1)?;
     let block = channels.checked_mul(b)?;
+    let byte_rate = rate.checked_mul(u32::from(block))?;
     let tag = if bits == Bits::Float32 { FLOAT } else { PCM };
     let mut h = Vec::with_capacity(44);
     h.extend_from_slice(b"RIFF");
@@ -47,7 +52,7 @@ pub fn header(rate: u32, channels: u16, bits: Bits, frames: u64) -> Option<Vec<u
     h.extend_from_slice(&tag.to_le_bytes());
     h.extend_from_slice(&channels.to_le_bytes());
     h.extend_from_slice(&rate.to_le_bytes());
-    h.extend_from_slice(&(rate.saturating_mul(u32::from(block))).to_le_bytes());
+    h.extend_from_slice(&byte_rate.to_le_bytes());
     h.extend_from_slice(&block.to_le_bytes());
     h.extend_from_slice(&(b * 8).to_le_bytes());
     h.extend_from_slice(b"data");
@@ -86,6 +91,9 @@ mod tests {
         let h = header(8_000, 1, Bits::Int24, 1).unwrap();
         assert_eq!(&h[4..8], &40u32.to_le_bytes());
         assert_eq!(&h[40..44], &3u32.to_le_bytes());
+        assert!(header(0, 2, Bits::Int16, 1).is_none());
+        assert!(header(48_000, 0, Bits::Int16, 1).is_none());
+        assert!(header(u32::MAX, 2, Bits::Int16, 1).is_none());
         assert!(header(48_000, 2, Bits::Float32, u64::MAX).is_none());
         assert!(header(48_000, u16::MAX, Bits::Float32, 0).is_none());
     }
