@@ -1,6 +1,7 @@
 //! `BodyLayout` and the layout of a body: the physical egui layout, the measured placement of `Row` End and
 //! Center and of each row child on the row's line, and the cursors of `Grid` and of a `Row` that spreads its children.
 
+use super::column_group::{ColumnGroup, Columns};
 use crate::contract::InBar;
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{ColumnSweep, Env, RowLine, Shrink};
@@ -744,6 +745,14 @@ impl Cursor {
     fn in_content_column(&self) -> bool {
         matches!(self, Cursor::Grid(grid) if grid.in_content_column())
     }
+
+    /// The grid column the next child goes in; `None` for a spread row.
+    fn grid_column(&self) -> Option<usize> {
+        match self {
+            Cursor::Grid(grid) => Some(grid.column()),
+            Cursor::Spread(_) => None,
+        }
+    }
 }
 
 /// The cursor of a `SpaceBetween` row: each child in flow takes the next place along the row, and the room the
@@ -1049,6 +1058,16 @@ pub(crate) fn in_grid_content_column(ui: &Ui) -> bool {
         .is_some_and(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).is_some_and(Cursor::in_content_column)))
 }
 
+/// The cell the next child shown in flow in `ui` takes, when the body that encloses `ui` directly is a `Grid`: the
+/// grid's body, the cell's column and whether the column is a `Content` one.
+pub(crate) fn grid_cell(ui: &Ui) -> Option<(Id, usize, bool)> {
+    let grid = Env::of(ui).grid?;
+    pass_state::with::<Cursors, _>(ui.ctx(), |cursors| {
+        let cursor = cursors.0.get(&grid)?;
+        Some((grid, cursor.grid_column()?, cursor.in_content_column()))
+    })
+}
+
 fn column_id(grid: Id, index: usize) -> Id {
     sub(grid, ("column", index))
 }
@@ -1075,7 +1094,8 @@ fn measured_tracks(ctx: &egui::Context, sizing: bool, grid: Id, columns: usize) 
 /// The one column a grid lays its cells in, one under another, when its columns do not fit beside each other.
 const STACKED: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 
-/// Runs `body`, the cells of the `Grid` body `id` over `columns`, in `ui`.
+/// Runs `body`, the cells of the `Grid` body `id` over `columns`, in `ui`. Each column is a column group
+/// (`ColumnGroup::grid`): the labels beside the controls of one column share a width.
 ///
 /// A measuring run sweeps the cells once, each `Content` column in the room the other columns leave at their least
 /// (`GridCursor::each_alone`). When the columns do not fit beside each other (`GridCursor::short`), it sweeps them again
@@ -1088,14 +1108,16 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
     let ctx = ui.ctx().clone();
     let rtl = env.direction.is_rtl();
     let layout = child::column_layout(rtl);
-    // One sweep of the cells in `ui` with the cursor `make` gives the flow of `ui`'s layout; returns what the cursor
-    // measured.
-    let mut sweep = |ui: &mut Ui, scoped: &Env, make: &dyn Fn(Flow) -> GridCursor| {
+    // One sweep of the cells in `ui` over `columns`, with the cursor `make` given the flow of `ui`'s layout and the
+    // column groups opened at `seed`; returns what the cursor measured, and from a measuring sweep the groups' widths
+    // when they have to settle (`ColumnGroup::grid`).
+    let mut sweep = |ui: &mut Ui, scoped: &Env, seed: Option<Vec<Columns>>, columns: &[ColumnWidth], make: &dyn Fn(Flow) -> GridCursor| {
         let top = ui.available_rect_before_wrap().top();
         let cursor = make(Flow::new(ui.available_rect_before_wrap(), rtl));
+        let count = columns.len();
         pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Grid(cursor)));
         let installed = Env::install_for(ui, scoped.derive_local(|scoped| scoped.grid = Some(id)));
-        let inner = body(ui);
+        let (inner, unsettled) = ColumnGroup::grid(ui, id, count, seed, &mut body);
         Env::restore(&ctx, installed);
         let cursor = match pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
             Some(Cursor::Grid(cursor)) => Some(cursor),
@@ -1107,13 +1129,13 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
         // down as the rows this pass measured, whichever pass it is.
         let rows = measured.rows.iter().sum::<f32>() + gap.y * measured.rows.len().saturating_sub(1) as f32;
         alloc::reach_down_to(ui, top + rows);
-        (inner, measured, short)
+        (inner, measured, short, unsettled)
     };
     if !measure::active(&ctx) {
         let stacked = this_pass(&ctx, false, sub(id, "stacked")).is_some_and(|stacked| stacked.x > 0.0);
         let columns = if stacked { STACKED } else { columns };
         let last = measured_tracks(&ctx, false, id, columns.len());
-        return child::block(ui, None, layout, |ui| sweep(ui, env, &|flow| GridCursor::new(flow, columns, gap, &last)).0).0;
+        return child::block(ui, None, layout, |ui| sweep(ui, env, None, columns, &|flow| GridCursor::new(flow, columns, gap, &last)).0).0;
     }
     // A measuring run under a body sized from its content gives each fill column the width its cells take, as a
     // content column: the room it would share is not the body's to claim.
@@ -1123,11 +1145,30 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
         false => GridCursor::new(flow, columns, gap, last),
     };
     let none = GridMeasure::default();
-    let (inner, measured, rect, short) = crate::contract::keeping_ids(&ctx, || {
-        let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
-        let (inner, measured, short) = sweep(&mut first, env, &|flow| cursor(columns, &none, flow).each_alone());
-        ((inner, measured, first.min_rect(), short), short)
-    });
+    // The first sweep, each column alone. When a cell read a label column narrower than its group settled on, the
+    // sweep is taken back and runs once more with the groups opened at the widths it found.
+    let mut alone = |ui: &mut Ui, seed: Option<Vec<Columns>>| {
+        let seeded = seed.is_some();
+        crate::contract::keeping_ids(&ctx, || {
+            let (out, kept) = layout_memory::draft(
+                &ctx,
+                || {
+                    let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
+                    let (inner, measured, short, unsettled) =
+                        sweep(&mut first, env, seed, columns, &|flow| cursor(columns, &none, flow).each_alone());
+                    (inner, measured, first.min_rect(), short, unsettled)
+                },
+                |out| seeded || out.4.is_none(),
+            );
+            let restore = !kept || out.3;
+            (out, restore)
+        })
+    };
+    let mut first = alone(ui, None);
+    if let Some(widths) = first.4.take() {
+        first = alone(ui, Some(widths));
+    }
+    let (inner, measured, rect, short, _) = first;
     let record = |measured: &GridMeasure, least: &[f32], stacked: bool, room: Vec2| {
         for (i, width) in measured.columns.iter().enumerate() {
             found(&ctx, true, column_id(id, i), room, Vec2::new(*width, 0.0));
@@ -1155,7 +1196,7 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
     let least = crate::contract::keeping_ids(&ctx, || {
         let least = layout_memory::probing(&ctx, || {
             let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
-            sweep(&mut least, &probe, &|flow| GridCursor::unbounded(flow, columns, gap)).1.columns
+            sweep(&mut least, &probe, None, columns, &|flow| GridCursor::unbounded(flow, columns, gap)).1.columns
         });
         (least, true)
     });
@@ -1172,7 +1213,7 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
         true => (STACKED, GridMeasure::default()),
         false => (columns, GridMeasure::default().with_least(least.clone())),
     };
-    let (inner, measured, _) = child::block(ui, None, layout, |ui| sweep(ui, env, &|flow| cursor(columns, &last, flow))).0;
+    let (inner, measured, ..) = child::block(ui, None, layout, |ui| sweep(ui, env, None, columns, &|flow| cursor(columns, &last, flow))).0;
     record(&measured, &last.least, stacked, ui.available_rect_before_wrap().size());
     inner
 }

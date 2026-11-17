@@ -231,14 +231,19 @@ impl GridCursor {
     pub fn fill_room(&self) -> Vec2 {
         let mut room = self.room();
         if self.in_content_column() {
-            room.x = self.widths.get(self.next % self.columns.len().max(1)).copied().unwrap_or(0.0);
+            room.x = self.widths.get(self.column()).copied().unwrap_or(0.0);
         }
         room
     }
 
     /// Whether the next child goes in a `Content` column.
     pub fn in_content_column(&self) -> bool {
-        matches!(self.columns.get(self.next % self.columns.len().max(1)), Some(ColumnWidth::Content))
+        matches!(self.columns.get(self.column()), Some(ColumnWidth::Content))
+    }
+
+    /// The column the next child goes in.
+    pub fn column(&self) -> usize {
+        self.next % self.columns.len().max(1)
     }
 
     /// The cell last placed measured `size` after all: its column and row record that, and a `Content` column offers
