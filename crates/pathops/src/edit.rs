@@ -624,7 +624,8 @@ fn rdp(pts: &[Point], tol: f64, fit: &mut Fit) -> Option<Vec<Point>> {
 
 /// Remove anchors that can be deleted without changing the shape by more than `tolerance`
 /// (collinear corner points, duplicate points, and curve joints that one cubic can replace). A tolerance under 1e-9, or none
-/// that is a number, is taken as 1e-9.
+/// that is a number, is taken as 1e-9. A segment of no length is dropped at once; a short one that is not is merged like any other,
+/// within the tolerance of it.
 ///
 /// A path of more than [`crate::MAX_ELEMENTS`] elements is returned as it is. The search for what
 /// one pass along each subpath leaves (at a closed subpath's start), the checks of a run against
@@ -647,8 +648,10 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
         if segs.is_empty() {
             continue;
         }
-        // Drop zero-length segments.
-        segs.retain(|s| !(s.c.p0.distance(s.c.p3) < 1e-9 && s.c.p1.distance(s.c.p0) < 1e-9 && s.c.p2.distance(s.c.p0) < 1e-9));
+        // Drop zero-length segments: those whose four points are one. Dropping one moves nothing, where a segment of any length, however
+        // short, moves the chain on from where it ended, and a run of them moves it by their sum; the short ones that are not nothing
+        // stay for the merges below, which measure what each merge moves against every segment it replaces.
+        segs.retain(|s| !(s.c.p0 == s.c.p3 && s.c.p1 == s.c.p0 && s.c.p2 == s.c.p0));
         let min_segs = if sp.closed { 2 } else { 1 };
         // Each segment stands for the run of the original ones it replaced, and remembers how far
         // they can be from it (see [`merge_pieces`]).
@@ -1681,6 +1684,50 @@ mod tests {
         assert_eq!(work::take(Work::Redundant), 0);
         // And the public function has room for it.
         assert_eq!(anchor_count(&remove_redundant_points(&square, 1e-6)), 4);
+    }
+
+    /// The top of a sliver 2e-6 across and a unit tall is a run of 4,096 segments of 5e-10: each was dropped for being under a billionth long, and all
+    /// of them were, though together they are more than the tolerance (1e-6) and the chain went on from where the run ended, so the top edge ran
+    /// 2e-6 from the corner it ought to end in. Only a segment of no length is dropped; the others are merged with what they are near, within the
+    /// tolerance of every segment the merge replaces.
+    #[test]
+    fn a_run_of_short_segments_is_not_dropped_past_the_tolerance() {
+        let step = 5e-10;
+        let sliver = |n: usize| {
+            let mut pts = vec![(0.0, 0.0), (0.0, 1.0)];
+            pts.extend((1..=n).map(|i| (i as f64 * step, 1.0)));
+            pts.push((n as f64 * step, 0.0));
+            polyline(&pts, true)
+        };
+        // The distance of `p` from the outline of `path`.
+        let from = |path: &BezPath, p: Point| {
+            use kurbo::ParamCurveNearest;
+            path.segments().map(|s| s.nearest(p, 1e-12).distance_sq).fold(f64::INFINITY, f64::min).sqrt()
+        };
+        let n = 4096;
+        let width = n as f64 * step;
+        let corners = [Point::new(0.0, 0.0), Point::new(0.0, 1.0), Point::new(width, 1.0), Point::new(width, 0.0)];
+        for tol in [1e-6, 1e-7, 1e-9, 0.0] {
+            let sliver = sliver(n);
+            let out = remove_redundant_points(&sliver, tol);
+            let tol = tol.max(1e-9);
+            for p in corners {
+                assert!(from(&out, p) <= tol + 1e-12, "the corner {p:?} is {:e} from the result at a tolerance of {tol:e}", from(&out, p));
+            }
+            for p in out.elements().iter().filter_map(|el| el.end_point()) {
+                assert!(from(&sliver, p) <= tol + 1e-12, "a point {p:?} of the result is {:e} from the sliver at {tol:e}", from(&sliver, p));
+            }
+        }
+        // Segments of no length are dropped, and a run of short ones within the tolerance still merges into its neighbour's line.
+        let mut doubled = BezPath::new();
+        doubled.move_to((0.0, 0.0));
+        for p in [(0.0, 0.0), (5.0, 0.0), (5.0, 0.0), (5.0, 5.0), (5.0, 5.0), (0.0, 5.0)] {
+            doubled.line_to(p);
+        }
+        doubled.close_path();
+        assert_eq!(anchor_count(&remove_redundant_points(&doubled, 1e-6)), 4);
+        let near = remove_redundant_points(&sliver(100), 1e-6);
+        assert!(anchor_count(&near) <= 5, "{} anchors", anchor_count(&near));
     }
 
     /// A circle of radius `r` in `n` cubics, each the standard arc of its angle, from `(r, 0)` round.

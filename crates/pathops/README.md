@@ -1015,6 +1015,10 @@ commit of the carve; where VectorCraft has since done what a difference says, th
     in 17, 23, 18 and 23 of them, up to 1.8 times, the carve in none (0.99 at the most). Against e2351f5, 1, 7,
     4 and 1 runs have more elements and 8, 6, 11 and 5 fewer (5,919, 5,814, 5,841 and 5,656 elements in all, now
     5,910, 5,816, 5,833 and 5,653);
+  - `remove_redundant_points` drops only a segment of no length (its four points one) before the merges. VectorCraft dropped every segment
+    under a billionth long, one at a time, and the chain goes on from where a dropped segment ended, so a run of 4,096 of 5e-10 (2e-6 across)
+    was dropped whole, and the corner it ended in was left 2e-6 from the result at a tolerance of 1e-6. The short segments that are no
+    more than that stay for the merges, which measure each merge against every segment it replaces;
   - an inset (`offset_path` with a negative delta) strokes the boundary of the area the closed subpaths
     fill, not every subpath, so a rectangle inside another one wound the same way leaves no moat; and an
     open subpath is outlined by its stroke for a negative delta too, as the documentation says (it gave
