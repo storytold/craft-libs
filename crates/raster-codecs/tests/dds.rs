@@ -320,7 +320,8 @@ fn refuses_cubemaps_arrays_and_volumes() {
     unsupported(&dx10(4, 4, 71, 3, 0, 6), "array");
     unsupported(&dx10(4, 4, 71, 4, 0, 1), "2D");
     unsupported(&dx10(4, 4, 98, 3, 0, 1), "98"); // BC7_UNORM
-    unsupported(&compressed(4, 4, b"ATI2"), "ATI2");
+    unsupported(&compressed(4, 4, b"ATI3"), "ATI3");
+    unsupported(&compressed(4, 4, b"BC5S"), "SNORM");
     unsupported(&compressed(4, 4, b"DXT2"), "premultiplied");
 }
 

@@ -13,7 +13,10 @@ workspace = true
 [features]
 corpus = []
 default = []
+# Opt in to threaded AVIF encoding without enabling AVIF (or assembly) by itself.
+threads = ["ravif?/threading", "rav1e?/threading"]
 sgi = []
+sunraster = []
 avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 heif = ["dep:craft-heif"]
 # AVIF decode: craft-video's clean-room pure-Rust AV1 decoder. Native targets only (on wasm32 a
@@ -21,6 +24,7 @@ heif = ["dep:craft-heif"]
 avif-decode = ["dep:craft-video", "craft-video/av1-decode"]
 
 [dependencies]
+craft-dds = { workspace = true }
 crc32fast = "1.5"
 thiserror = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "gif", "bmp", "tga", "ico", "qoi", "hdr"] }
@@ -45,6 +49,8 @@ avif-serialize = { version = "0.8", optional = true }
 hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# DDS encodes rows of blocks on several threads, as the other parallel codecs here do on native targets.
+craft-dds = { workspace = true, features = ["parallel"] }
 rayon = { workspace = true }
 craft-video = { workspace = true, optional = true }
 exr = { version = "1.73", default-features = false, features = ["rayon"] }
