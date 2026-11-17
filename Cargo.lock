@@ -1723,6 +1723,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-develop"
+version = "0.1.0"
+dependencies = [
+ "craft-render-parity",
+ "rayon",
+]
+
+[[package]]
 name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
@@ -2123,17 +2131,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-hdr"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-har"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-hdr"
+version = "0.1.0"
+dependencies = [
  "thiserror 2.0.21",
 ]
 
