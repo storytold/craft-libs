@@ -294,6 +294,22 @@ fn a_deleted_text_box_writes_its_text_deleted() {
 }
 
 #[test]
+fn a_deleted_opaque_object_writes_its_fallback_text_deleted() {
+    // The Opaque fallback is ordinary run text: in a deleted run it goes in `w:delText`,
+    // where readers look for deleted text, not `w:t` inside `w:del`.
+    use craft_wordmodel::{CharProps, Revision, RevisionKind};
+    let mut d = Document::from_text("x");
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.settings.track_changes = true;
+    let opaque = InlineObject::Opaque { format: "docx".into(), xml: "<broken".into(), text: "Fallback gone".into() };
+    let del = CharProps { del: Some(0), ..Default::default() };
+    d.insert_object(&craft_wordmodel::Pos::body(0, 0), opaque, &del).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    assert!(xml.contains(">Fallback gone</w:delText>"), "{xml}");
+    assert!(!xml.contains(">Fallback gone</w:t>"), "{xml}");
+}
+
+#[test]
 fn a_text_box_moved_away_keeps_plain_text() {
     // Text that moved away stays in `w:t` (§17.13.5.22), and so does its box's text.
     let xml = document_xml(&box_anchored_in_a_deletion("Moved with it", Some("move1")));
