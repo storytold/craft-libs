@@ -500,6 +500,8 @@ pub enum AccessActionKind {
     ScrollLeft,
     /// AccessKit `ScrollRight`.
     ScrollRight,
+    /// AccessKit `ScrollIntoView`.
+    ScrollIntoView,
 }
 
 impl AccessActionKind {
@@ -521,6 +523,7 @@ impl AccessActionKind {
             AccessActionKind::ScrollDown => accesskit::Action::ScrollDown,
             AccessActionKind::ScrollLeft => accesskit::Action::ScrollLeft,
             AccessActionKind::ScrollRight => accesskit::Action::ScrollRight,
+            AccessActionKind::ScrollIntoView => accesskit::Action::ScrollIntoView,
         }
     }
 

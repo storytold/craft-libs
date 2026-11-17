@@ -611,7 +611,8 @@ fn nudge_of(key: Key, mods: Mods) -> Option<(Vec2, Mods)> {
 fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
     let Some(node) = nodes.get(&request.node()).copied() else { return };
     let owner = Some(node.owner);
-    if node.focusable {
+    // A request that only scrolls (a screen reader's Scroll Into View) shows the node and leaves focus where it is.
+    if node.focusable && !request.scrolls() {
         let target = node.part.map_or(focus::FocusTarget::Id(node.owner), |part| focus::FocusTarget::Part(node.owner, part));
         focus::request_now(ctx, target);
     }

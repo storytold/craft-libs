@@ -200,6 +200,12 @@ impl Action {
         }
     }
 
+    /// Whether the request asks a node to scroll or to be scrolled into view: it moves no focus.
+    pub(crate) fn scrolls(&self) -> bool {
+        use accesskit::Action as A;
+        matches!(self.0.action, A::ScrollIntoView | A::ScrollUp | A::ScrollDown | A::ScrollLeft | A::ScrollRight | A::SetScrollOffset)
+    }
+
     /// The request as an `Intent::Access` payload for the sub-node `part`.
     pub(crate) fn request(&self, part: Option<craft_behavior::PartRef>) -> craft_behavior::AccessRequest {
         craft_behavior::AccessRequest::new(self.0.action, part, self.0.data.clone())
