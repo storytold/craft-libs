@@ -68,6 +68,9 @@ fn from_manifest(app: &App, manifest: &Manifest) -> Option<Installed> {
         source: InstallSource::Launcher,
         location: rec.path.display().to_string(),
         package: None,
+        externally_managed: false,
+        origin: None,
+        installation: None,
     })
 }
 

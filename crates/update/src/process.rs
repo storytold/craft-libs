@@ -95,7 +95,41 @@ pub fn run_command(cmd: Command, program: &str, timeout: Duration) -> Result<Str
     run_command_detailed(cmd, program, timeout).map_err(HelperFailure::into_reason)
 }
 
-fn run_command_detailed(mut cmd: Command, program: &str, timeout: Duration) -> Result<String, HelperFailure> {
+fn run_command_detailed(cmd: Command, program: &str, timeout: Duration) -> Result<String, HelperFailure> {
+    let mut start = None;
+    run_command_until(cmd, program, timeout, move |_| {
+        let start = *start.get_or_insert_with(Instant::now);
+        let more = within(start, Instant::now(), timeout);
+        if more {
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        more
+    })
+}
+
+/// Whether a helper run that started waiting at `start` may still wait at `now`.
+fn within(start: Instant, now: Instant, timeout: Duration) -> bool {
+    now.saturating_duration_since(start) < timeout
+}
+
+/// What a helper run still waits for when it asks whether to keep waiting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    /// The helper is still running.
+    Helper,
+    /// The helper has exited, and a process it started still holds its output open.
+    Output,
+}
+
+/// [`run_command_detailed`], asking `keep_waiting` each time the run finds the helper or its
+/// output unfinished. `keep_waiting` returns `false` when the time limit has passed; `timeout` is
+/// the limit the error message names.
+fn run_command_until(
+    mut cmd: Command,
+    program: &str,
+    timeout: Duration,
+    mut keep_waiting: impl FnMut(Pending) -> bool,
+) -> Result<String, HelperFailure> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -113,11 +147,10 @@ fn run_command_detailed(mut cmd: Command, program: &str, timeout: Duration) -> R
         }
     };
     let timed_out = || HelperFailure::Unfinished(format!("{program} didn't finish within {} seconds", timeout.as_secs()));
-    let start = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(15)),
+            Ok(None) if keep_waiting(Pending::Helper) => {}
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -128,10 +161,9 @@ fn run_command_detailed(mut cmd: Command, program: &str, timeout: Duration) -> R
     // A descendant may retain a pipe after the direct child exits. Keep reader completion
     // under the same deadline; on timeout the readers detach, as in the child timeout path.
     while !stdout.is_finished() || !stderr.is_finished() {
-        if start.elapsed() >= timeout {
+        if !keep_waiting(Pending::Output) {
             return Err(timed_out());
         }
-        std::thread::sleep(Duration::from_millis(15));
     }
     let text = |pipe: std::thread::JoinHandle<Vec<u8>>| String::from_utf8_lossy(&pipe.join().unwrap_or_default()).into_owned();
     let (out, err) = (text(stdout), text(stderr));
@@ -547,6 +579,17 @@ mod run_tests {
     #[cfg(unix)]
     const NO_LIMIT: Duration = Duration::from_secs(86_400);
 
+    #[craft_ui::testing::trial]
+    fn a_time_limit_ends_when_its_length_has_passed() {
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        assert!(within(start, start, second));
+        assert!(within(start, start + Duration::from_millis(999), second));
+        assert!(!within(start, start + second, second));
+        assert!(!within(start, start + Duration::from_secs(60), second));
+        assert!(!within(start, start, Duration::ZERO));
+    }
+
     /// Callers such as the signature check read an exit code as the helper's answer, so a helper
     /// that timed out, couldn't start or was stopped by a signal must not look like one.
     #[cfg(unix)]
@@ -590,103 +633,173 @@ mod run_tests {
 mod inherited_pipe_tests {
     use super::*;
     use craft_ui::testing::trial;
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{TcpListener, TcpStream};
 
     fn fixture_args(name: &str, marker: &str) -> Vec<String> {
         let (_, module) = module_path!().split_once("::").unwrap();
-        // libtest accepts arbitrary skip filters; this one carries our private fixture path.
+        // libtest accepts arbitrary skip filters; this one carries the test's address.
         vec!["--ignored".into(), "--exact".into(), format!("{module}::{name}"), "--nocapture".into(), "--skip".into(), marker.into()]
     }
 
-    fn fixture_dir() -> std::path::PathBuf {
+    fn fixture_address() -> String {
         let args: Vec<String> = std::env::args().collect();
-        std::path::PathBuf::from(&args[args.iter().position(|arg| arg == "--skip").unwrap() + 1])
+        args[args.iter().position(|arg| arg == "--skip").unwrap() + 1].clone()
     }
+
+    /// Stops a broken test: how long the descendant holds the pipes when the test neither answers
+    /// nor closes its connection, as when a capture waits for the pipes instead of timing out, and
+    /// how long the test waits for each step of the fixtures.
+    const HOLD: Duration = Duration::from_secs(60);
 
     #[trial]
     #[ignore = "self-spawned subprocess fixture"]
     fn pipe_holder() {
-        let dir = fixture_dir();
+        let mut test = TcpStream::connect(fixture_address()).unwrap();
         let buffer = [b'x'; 64 << 10];
-        // Both streams exceed the capture cap before the direct child exits.
+        // Both streams exceed the capture cap before the test lets the time limit pass.
         for _ in 0..144 {
             std::io::stdout().write_all(&buffer).unwrap();
             std::io::stderr().write_all(&buffer).unwrap();
         }
-        std::fs::write(dir.join("ready"), []).unwrap();
-        // Hold the pipes far longer than any deadline the test tries, so a capture that waited
-        // for them would show; the test's guard stops this early.
-        let start = Instant::now();
-        while !dir.join("stop").exists() && start.elapsed() < HOLD {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        std::fs::write(dir.join("done"), []).unwrap();
+        std::io::stdout().flush().unwrap();
+        test.write_all(b"ready\n").unwrap();
+        // Holds the pipes until the test closes its side of the connection. Closing this side
+        // tells the test that the pipes are about to close.
+        test.set_read_timeout(Some(HOLD)).unwrap();
+        let _ = test.read(&mut [0; 1]);
+        drop(test);
     }
 
     #[trial]
     #[ignore = "self-spawned subprocess fixture"]
     fn pipe_parent() {
-        let dir = fixture_dir();
-        let descendant = command(std::env::current_exe().unwrap()).args(fixture_args("pipe_holder", dir.to_str().unwrap())).spawn().unwrap();
-        std::fs::write(dir.join("spawned"), []).unwrap();
-        // No deadline of its own: run() kills this process at its deadline if it is too slow.
-        let start = Instant::now();
-        while !dir.join("ready").exists() && start.elapsed() < HOLD {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(dir.join("ready").exists(), "descendant did not fill both captured pipes");
-        std::fs::write(dir.join("parent-returning"), []).unwrap();
-        // Dropping Child leaves the finite fixture running with inherited stdout/stderr.
-        drop(descendant);
-    }
-
-    /// How long the descendant holds the pipes when nothing stops it.
-    const HOLD: Duration = Duration::from_secs(120);
-
-    struct StopHolder(tempfile::TempDir);
-
-    impl Drop for StopHolder {
-        fn drop(&mut self) {
-            let _ = std::fs::write(self.0.path().join("stop"), []);
-            if !self.0.path().join("spawned").exists() {
-                return;
-            }
-            let start = Instant::now();
-            while !self.0.path().join("done").exists() && start.elapsed() < Duration::from_secs(30) {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
+        let address = fixture_address();
+        // Dropping Child leaves the descendant running with the inherited stdout and stderr.
+        drop(command(std::env::current_exe().unwrap()).args(fixture_args("pipe_holder", &address)).spawn().unwrap());
     }
 
     #[trial]
     fn exited_helper_does_not_wait_past_deadline_for_inherited_pipes() {
-        let exe = std::env::current_exe().unwrap();
-        // The direct child has to start a second test process and fill both pipes before the
-        // deadline, which can take seconds on a slow or emulated machine. An attempt where it
-        // didn't get that far says nothing about inherited pipes: retry with a longer deadline.
-        let mut deadline = Duration::from_secs(1);
-        loop {
-            let holder = StopHolder(tempfile::tempdir().unwrap());
-            let args = fixture_args("pipe_parent", holder.0.path().to_str().unwrap());
-            let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            let start = Instant::now();
-            let result = run(exe.to_str().unwrap(), &args, deadline);
-            let elapsed = start.elapsed();
-            if !holder.0.path().join("parent-returning").exists() && deadline < Duration::from_secs(16) {
-                deadline *= 4;
-                continue;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut cmd = command(std::env::current_exe().unwrap());
+        cmd.args(fixture_args("pipe_parent", &listener.local_addr().unwrap().to_string()));
+        let mut holder = None;
+        // Only stops a broken test: a direct child that never exits, or a descendant that never
+        // connects.
+        let guard = Instant::now();
+        let result = run_command_until(cmd, "the fixture", Duration::from_secs(5), |pending| match pending {
+            Pending::Helper => {
+                std::thread::yield_now();
+                guard.elapsed() < HOLD
             }
-            assert!(holder.0.path().join("parent-returning").exists(), "direct child did not exit its fixture within {deadline:?}");
-            assert!(
-                matches!(&result, Err(error) if error.contains("didn't finish within")),
-                "expected a pipe deadline error; helper returned success: {}, elapsed: {elapsed:?}",
-                result.is_ok()
-            );
-            // The descendant would hold the pipes for HOLD, far past this bound.
-            assert!(deadline * 2 < HOLD);
-            assert!(elapsed < deadline * 2, "capture exceeded its caller deadline {deadline:?}: {elapsed:?}");
-            // The guard stops the finite descendant and waits for its completion marker on failures too.
-            break;
+            // The direct child has exited and the descendant holds the helper's pipes. Once the
+            // descendant has filled both, the time limit passes.
+            Pending::Output => {
+                assert!(holder.is_none(), "the run kept waiting after its time limit passed");
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && guard.elapsed() < HOLD => std::thread::yield_now(),
+                        Err(e) => panic!("the descendant didn't connect ({e})"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(HOLD)).unwrap();
+                let mut ready = String::new();
+                BufReader::new(&stream).read_line(&mut ready).unwrap();
+                assert_eq!(ready, "ready\n");
+                holder = Some(stream);
+                false
+            }
+        });
+        // The output is more than 8 MB, so a failure shows only its length.
+        assert_eq!(result.map(|output| output.len()), Err(HelperFailure::Unfinished("the fixture didn't finish within 5 seconds".into())));
+        // Lets the descendant go and waits until it has closed its end. The read time limit only
+        // stops a broken test.
+        let mut holder = holder.expect("the direct child didn't exit while the descendant held its output");
+        holder.shutdown(std::net::Shutdown::Write).unwrap();
+        holder.set_read_timeout(Some(HOLD)).unwrap();
+        assert_eq!(holder.read_to_end(&mut Vec::new()).unwrap(), 0);
+    }
+}
+
+/// Runs a helper while polling cancellation and draining its bounded output.
+#[cfg(target_os = "linux")]
+pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<(), String>) -> Result<std::process::Output, String> {
+    check()?;
+    let mut child =
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't run flatpak ({e})"))?;
+    let stdout = read_all(child.stdout.take()).map_err(|e| format!("couldn't read flatpak output ({e})"))?;
+    let stderr = read_all(child.stderr.take()).map_err(|e| format!("couldn't read flatpak output ({e})"))?;
+    let started = Instant::now();
+    let status = loop {
+        if started.elapsed() >= Duration::from_secs(60 * 60) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Flatpak did not finish within one hour".into());
         }
+        if let Err(e) = check() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("couldn't wait for flatpak ({e})"));
+            }
+        }
+    };
+    let deadline = Instant::now();
+    while !stdout.is_finished() || !stderr.is_finished() {
+        check()?;
+        if deadline.elapsed() > Duration::from_secs(5) {
+            return Err("Flatpak output did not close after completion".into());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod update_cancel_tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn cancels_a_running_helper_promptly() {
+        let mut cmd = command("sleep");
+        cmd.arg("30");
+        let start = Instant::now();
+        let result = cancellable_output(cmd, || if start.elapsed() >= Duration::from_millis(100) { Err("cancelled".into()) } else { Ok(()) });
+        assert_eq!(result.unwrap_err(), "cancelled");
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// A descendant that outlives the helper keeps the pipes open; the caller gets an error at
+    /// the deadline instead of waiting for it.
+    #[trial]
+    fn output_held_open_by_a_descendant_fails_at_the_deadline() {
+        let mut cmd = command("sh");
+        cmd.args(["-c", "sleep 8 &"]);
+        let start = Instant::now();
+        let err = cancellable_output(cmd, || Ok(())).expect_err("a descendant holding the pipes should time out");
+        assert!(err.contains("did not close after completion"), "{err}");
+        assert!(start.elapsed() < Duration::from_secs(8), "{:?}", start.elapsed());
+    }
+
+    #[trial]
+    fn retains_both_output_streams_and_exit_status() {
+        let mut cmd = command("sh");
+        cmd.args(["-c", "printf output; printf error >&2; exit 7"]);
+        let output = cancellable_output(cmd, || Ok(())).unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"output");
+        assert_eq!(output.stderr, b"error");
     }
 }

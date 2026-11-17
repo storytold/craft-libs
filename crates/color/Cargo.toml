@@ -1,6 +1,6 @@
 [package]
 name = "craft-color"
-description = "Colour for Craft apps: the colour picker, wells, swatch tables, ramps and the hex field."
+description = "Colour for Craft apps: the colour picker, wells, swatch tables, ramps and the hex field, and the colour tags, Y'CbCr matrices, transfer functions and HDR static metadata of compositor and display frames."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

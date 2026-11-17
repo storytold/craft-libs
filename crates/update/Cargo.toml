@@ -17,6 +17,8 @@ harness = false
 workspace = true
 
 [features]
+# Opt-in migration of first party Flatpak bundles to the ArtCraft OCI remote.
+oci_migration = []
 default = []
 ui = ["dep:egui", "dep:image", "dep:craft-ui", "dep:craft-host", "dep:craft-theme"]
 # The dialog stories, the updater's test seams and the integration binary `tests/it`.

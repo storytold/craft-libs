@@ -48,6 +48,9 @@ struct Faulty {
     /// Simulate a network filesystem exposing the same fixed mode on every new file.
     #[cfg(unix)]
     fixed_mode: Option<u32>,
+    /// Simulate a filesystem that refuses the stage's group change.
+    #[cfg(unix)]
+    fail_set_group: bool,
 }
 
 impl AtomicFs for Faulty {
@@ -91,6 +94,14 @@ impl AtomicFs for Faulty {
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         self.events.borrow_mut().push("sync_dir");
         RealFs.sync_dir(dir)
+    }
+    #[cfg(unix)]
+    fn set_group(&self, file: &File, gid: u32) -> io::Result<()> {
+        self.events.borrow_mut().push("set_group");
+        if self.fail_set_group {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected: set_group failed"));
+        }
+        RealFs.set_group(file, gid)
     }
     /// Record permission restoration, then inject a configured error or delegate the
     /// mode change to the real filesystem.
@@ -160,6 +171,36 @@ fn unchanged_replacement_modes_need_no_chmod() -> io::Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn group_bits_are_dropped_when_the_stage_cannot_join_the_replaced_group() -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let d = TempDir::new("group-fallback");
+    let file = File::create(d.0.join("stage"))?;
+    let gid = file.metadata()?.gid();
+    let elsewhere = gid.wrapping_add(1);
+
+    let fs = Faulty { fail_set_group: true, ..Default::default() };
+    let mode = adopt_group(&fs, &file, gid, elsewhere, std::fs::Permissions::from_mode(0o640))?.mode();
+    assert_eq!(mode & 0o777, 0o600, "group bits are dropped when the group cannot be joined");
+    assert!(fs.events.borrow().contains(&"set_group"));
+
+    // No group bits: the group change is never attempted.
+    let fs = Faulty { fail_set_group: true, ..Default::default() };
+    let mode = adopt_group(&fs, &file, gid, elsewhere, std::fs::Permissions::from_mode(0o600))?.mode();
+    assert_eq!(mode & 0o777, 0o600);
+    assert!(!fs.events.borrow().contains(&"set_group"));
+
+    // A stage already in the replaced file's group keeps its bits untouched.
+    let fs = Faulty { fail_set_group: true, ..Default::default() };
+    let mode = adopt_group(&fs, &file, gid, gid, std::fs::Permissions::from_mode(0o640))?.mode();
+    assert_eq!(mode & 0o777, 0o640);
+    assert!(!fs.events.borrow().contains(&"set_group"));
+
+    assert_no_temp(&d.0);
     Ok(())
 }
 

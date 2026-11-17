@@ -182,6 +182,16 @@ craft-mcp-server = { workspace = true, optional = true }
 craft-pe = { workspace = true, optional = true }
 craft-sniff = { workspace = true, optional = true }
 craft-tar = { workspace = true, optional = true }
+craft-ai = { workspace = true, optional = true }
+craft-control = { workspace = true, optional = true }
+craft-dds = { workspace = true, optional = true }
+craft-frame = { workspace = true, optional = true }
+craft-ipc = { workspace = true, optional = true }
+craft-media-source = { workspace = true, optional = true }
+craft-palette = { workspace = true, optional = true }
+craft-press-print = { workspace = true, optional = true }
+craft-score = { workspace = true, optional = true }
+craft-ssip = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -233,6 +243,9 @@ aep = ["dep:craft-aep"]
 
 affinity = ["dep:craft-affinity"]
 affinity-synth = ["affinity", "craft-affinity/synth"]
+
+ai = ["dep:craft-ai"]
+ai-local = ["ai", "craft-ai/local"]
 
 ai-core = ["dep:craft-ai-core"]
 
@@ -288,6 +301,8 @@ codepage = ["dep:craft-codepage"]
 
 color = ["dep:craft-color", "keymap", "settings", "window", "platform"]
 
+control = ["dep:craft-control"]
+
 control-protocol = ["dep:craft-control-protocol"]
 
 crs = ["dep:craft-crs"]
@@ -297,6 +312,9 @@ crw = ["dep:craft-crw"]
 csv = ["dep:craft-csv"]
 
 dav = ["dep:craft-dav"]
+
+dds = ["dep:craft-dds"]
+dds-parallel = ["dds", "craft-dds/parallel"]
 
 deckcraft-format = ["dep:craft-deckcraft-format"]
 
@@ -386,6 +404,8 @@ font-subset = ["dep:craft-font-subset"] # native only: HarfBuzz's C++ builds wit
 
 format = ["dep:craft-format"]
 
+frame = ["dep:craft-frame"]
+
 gainmap = ["dep:craft-gainmap"]
 
 gcode = ["dep:craft-gcode"]
@@ -427,6 +447,8 @@ image-codecs-threads = ["image-codecs", "craft-image-codecs/threads"]
 imaging = ["dep:craft-imaging", "color", "keymap"]
 
 indd = ["dep:craft-indd"]
+
+ipc = ["dep:craft-ipc"]
 
 jmap = ["dep:craft-jmap"]
 
@@ -478,6 +500,8 @@ media-mxf = ["media", "craft-media/mxf"]
 media-ogg = ["media", "craft-media/ogg"]
 media-serde = ["media", "craft-media/serde"]
 
+media-source = ["dep:craft-media-source"]
+
 menu = ["dep:craft-menu"]
 
 mesh = ["dep:craft-mesh"]
@@ -514,6 +538,8 @@ openpgp = ["dep:craft-openpgp"]
 ora = ["dep:craft-ora"]
 
 pages = ["dep:craft-pages"]
+
+palette = ["dep:craft-palette"]
 
 pcraft-bundle = ["dep:craft-pcraft-bundle"]
 
@@ -564,6 +590,8 @@ prc = ["dep:craft-prc"]
 prepress = ["dep:craft-prepress"]
 prepress-flatten = ["prepress", "craft-prepress/flatten"]
 
+press-print = ["dep:craft-press-print"]
+
 print = ["dep:craft-print"]
 
 proof = ["dep:craft-proof"]
@@ -613,6 +641,8 @@ rtf = ["dep:craft-rtf"]
 rtf-doc = ["rtf", "craft-rtf/doc"]
 rtf-outlook = ["rtf", "craft-rtf/outlook"]
 
+score = ["dep:craft-score"]
+
 scraft-format = ["dep:craft-scraft-format"]
 
 settings = ["dep:craft-settings"]
@@ -632,6 +662,8 @@ sketch = ["dep:craft-sketch"]
 smime = ["dep:craft-smime"]
 
 sniff = ["dep:craft-sniff"]
+
+ssip = ["dep:craft-ssip"]
 
 stencilcraft-document = ["dep:craft-stencilcraft-document"]
 

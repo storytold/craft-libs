@@ -12,6 +12,8 @@ pub use craft_aaf as aaf;
 pub use craft_aep as aep;
 #[cfg(feature = "affinity")]
 pub use craft_affinity as affinity;
+#[cfg(feature = "ai")]
+pub use craft_ai as ai;
 #[cfg(feature = "ai-core")]
 pub use craft_ai_core as ai_core;
 #[cfg(feature = "anicraft-format")]
@@ -39,6 +41,8 @@ pub use craft_cms as cms;
 pub use craft_codepage as codepage;
 #[cfg(feature = "color")]
 pub use craft_color as color;
+#[cfg(feature = "control")]
+pub use craft_control as control;
 #[cfg(feature = "control-protocol")]
 pub use craft_control_protocol as control_protocol;
 #[cfg(feature = "crs")]
@@ -49,6 +53,8 @@ pub use craft_crw as crw;
 pub use craft_csv as csv;
 #[cfg(feature = "dav")]
 pub use craft_dav as dav;
+#[cfg(feature = "dds")]
+pub use craft_dds as dds;
 #[cfg(feature = "deckcraft-format")]
 pub use craft_deckcraft_format as deckcraft_format;
 #[cfg(feature = "designcraft-format")]
@@ -113,6 +119,8 @@ pub use craft_font_store as font_store;
 pub use craft_font_subset as font_subset;
 #[cfg(feature = "format")]
 pub use craft_format as format;
+#[cfg(feature = "frame")]
+pub use craft_frame as frame;
 #[cfg(feature = "gainmap")]
 pub use craft_gainmap as gainmap;
 #[cfg(feature = "gcode")]
@@ -143,6 +151,8 @@ pub use craft_image_codecs as image_codecs;
 pub use craft_imaging as imaging;
 #[cfg(feature = "indd")]
 pub use craft_indd as indd;
+#[cfg(feature = "ipc")]
+pub use craft_ipc as ipc;
 #[cfg(feature = "jmap")]
 pub use craft_jmap as jmap;
 #[cfg(feature = "jpeg")]
@@ -179,6 +189,8 @@ pub use craft_mcp as mcp;
 pub use craft_mcp_server as mcp_server;
 #[cfg(feature = "media")]
 pub use craft_media as media;
+#[cfg(feature = "media-source")]
+pub use craft_media_source as media_source;
 #[cfg(feature = "menu")]
 pub use craft_menu as menu;
 #[cfg(feature = "mesh")]
@@ -205,6 +217,8 @@ pub use craft_openpgp as openpgp;
 pub use craft_ora as ora;
 #[cfg(feature = "pages")]
 pub use craft_pages as pages;
+#[cfg(feature = "palette")]
+pub use craft_palette as palette;
 #[cfg(feature = "pcraft-bundle")]
 pub use craft_pcraft_bundle as pcraft_bundle;
 #[cfg(feature = "pcraft-format")]
@@ -231,6 +245,8 @@ pub use craft_pptx as pptx;
 pub use craft_prc as prc;
 #[cfg(feature = "prepress")]
 pub use craft_prepress as prepress;
+#[cfg(feature = "press-print")]
+pub use craft_press_print as press_print;
 #[cfg(feature = "print")]
 pub use craft_print as print;
 #[cfg(feature = "proof")]
@@ -253,6 +269,8 @@ pub use craft_raw as raw;
 pub use craft_review as review;
 #[cfg(feature = "rtf")]
 pub use craft_rtf as rtf;
+#[cfg(feature = "score")]
+pub use craft_score as score;
 #[cfg(feature = "scraft-format")]
 pub use craft_scraft_format as scraft_format;
 #[cfg(feature = "settings")]
@@ -271,6 +289,8 @@ pub use craft_sketch as sketch;
 pub use craft_smime as smime;
 #[cfg(feature = "sniff")]
 pub use craft_sniff as sniff;
+#[cfg(feature = "ssip")]
+pub use craft_ssip as ssip;
 #[cfg(feature = "stencilcraft-document")]
 pub use craft_stencilcraft_document as stencilcraft_document;
 #[cfg(feature = "stencilcraft-format")]

@@ -270,6 +270,34 @@ fn canvas_stops_at_the_byte_budget() {
 }
 
 #[test]
+fn a_bitmap_the_byte_budget_refuses_is_counted_once() {
+    let img = || Rgba { w: 4, h: 4, px: vec![0u8; 64] };
+    let diamond = || Some(vec![(2.0, 0.0), (4.0, 2.0), (2.0, 4.0), (0.0, 2.0)]);
+    let mut cv = Canvas::new();
+    cv.set_clip(diamond());
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(!cv.full() && !cv.items.is_empty() && cv.dropped_images == 0, "a bitmap that is kept");
+    // The clip cuts the bitmap into pieces, and none of them fits: one image is counted.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.set_clip(diamond());
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(cv.full() && cv.items.is_empty());
+    assert_eq!(cv.dropped_images, 1);
+    // A clip that leaves none of the bitmap refuses nothing.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.set_clip(Some(vec![(100.0, 100.0), (110.0, 100.0), (110.0, 110.0)]));
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(!cv.full() && cv.dropped_images == 0);
+    // A bitmap drawn with a raster operation is counted the same way.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.bitmap_rop([0.0, 0.0, 4.0, 4.0], img(), 0x00CC_0020);
+    assert!(cv.full() && cv.dropped_images == 1 && cv.unplayed_raster_ops == 0);
+}
+
+#[test]
 fn oversized_dib_header_size_is_rejected_without_overflow() {
     let mut info = info_header(2, 2, 24, 16);
     info[0..4].copy_from_slice(&0xFFFF_FFF0u32.to_le_bytes());
@@ -529,7 +557,7 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
                 clips: Vec::new(),
             },
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
@@ -554,7 +582,7 @@ fn a_huge_pen_is_held_to_what_covers_the_frame() {
                 region: None,
                 clips: Vec::new(),
             }],
-            skipped_records: 0,
+            ..Default::default()
         };
         match pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]).first() {
             Some(crate::PlacedItem::Path { stroke, .. }) => stroke.map(|s| s.1),
@@ -573,7 +601,7 @@ fn a_huge_pen_is_held_to_what_covers_the_frame() {
 fn crop_window_keeps_a_sliver_and_stays_finite() {
     let [x, y, w, h] = crate::crop_window([0.0, 0.51771, 0.0, 0.45485]);
     assert!(x == 0.0 && w == 1.0 && (y - 0.51771).abs() < 1e-6 && (h - 0.02744).abs() < 1e-5, "{y} {h}");
-    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new(), ..Default::default() };
     let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 27.44), [0.0, 0.51771, 0.0, 0.45485]).unwrap();
     // The kept band of the source (517.71..545.15) is the frame (0..27.44).
     let top = tf * kurbo::Point::new(0.0, 517.71);
@@ -602,7 +630,7 @@ fn crop_window_with_negative_sides_pads_the_source() {
     let [x, _, w, _] = crate::crop_window([f32::MIN, 0.0, -1e9, 0.0]);
     assert!(x == -100.0 && w == 201.0, "{x} {w}");
     // The source sits in the middle half of the frame.
-    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), ..Default::default() };
     let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), [0.0, -0.5, 0.0, -0.5]).unwrap();
     let (top, bottom) = (tf * kurbo::Point::new(0.0, 0.0), tf * kurbo::Point::new(100.0, 50.0));
     assert!((top.y - 25.0).abs() < 1e-9 && (bottom.y - 75.0).abs() < 1e-9 && (bottom.x - 100.0).abs() < 1e-9, "{top:?} {bottom:?}");
@@ -635,7 +663,7 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
                 clips: Vec::new(),
             },
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let frame = kurbo::Rect::new(1584.0, 1584.0, 5584.0, 5584.0);
     // The last sliver, the first sliver, and sides that overlap.
@@ -662,7 +690,7 @@ fn place_counts_the_items_own_clip_region_before_keeping_it() {
     let region = || Some(vec![[0.0, 0.0, 50.0, 25.0], [10.0, 10.0, 20.0, 20.0]]);
     let frame = kurbo::Rect::new(0.0, 0.0, 100.0, 50.0);
     let placed = |second: Item| {
-        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], skipped_records: 0 };
+        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], ..Default::default() };
         pic.place(frame, [0.0; 4]).len()
     };
     let small = vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)];
@@ -693,7 +721,7 @@ fn place_expands_a_clip_region_once_for_the_items_that_share_it() {
         region: Some(region.clone()),
         clips: Vec::new(),
     };
-    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), ..Default::default() };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 100.0, 50.0), [0.0; 4]);
     assert_eq!(placed.len(), 2000);
     let regions: Vec<_> = placed
@@ -1359,6 +1387,7 @@ fn pattern_brush_pixels_count_against_the_byte_budget() {
     recs.push(wrec(0x041B, &cat(vec![h16(9), h16(9), h16(0), h16(0)])));
     let p = wmf200(&recs);
     assert!(p.items.is_empty(), "the parse stopped at the budget: {:?}", p.items.len());
+    assert!(p.truncated);
 }
 
 fn item_region(item: &Item) -> Option<&[[f32; 4]]> {

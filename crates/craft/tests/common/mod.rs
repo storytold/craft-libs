@@ -13,6 +13,7 @@ pub const NOT_IN_FACADE: &[(&str, &str)] = &[
     ("plate-test", "a test harness: reference PDFs and PDF structure checks"),
     ("render-parity", "test support: compares two renders of a photo against a stated tolerance"),
     ("story-render", "a tool: renders a component's stories to PNG files offscreen"),
+    ("testkit", "test support for the apps' own tests: source guards, deadlines and hostile-input runs"),
     ("ui-bench", "a tool: the release-mode benchmark of the UI library"),
     ("ui-gallery", "a tool: the story gallery application"),
     ("ui-macros", "a proc-macro crate that craft-ui re-exports"),
@@ -25,6 +26,7 @@ pub const NOT_IN_FACADE: &[(&str, &str)] = &[
     ("ui-test-kit", "test support shared by craft-ui's integration binaries"),
     ("ui-widgets", "part of craft-ui, which the facade exposes as `ui`"),
     ("win32", "the `unsafe` Win32 calls behind a safe API, used by craft-window"),
+    ("xtask", "a build tool: the step runner and reports of the apps' `cargo xtask` binaries"),
 ];
 
 /// Crates every app gets without a feature.

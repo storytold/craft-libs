@@ -342,7 +342,13 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
     for c in &chunks {
         let n = c.w.checked_mul(c.h).and_then(|v| v.checked_mul(spp)).ok_or(Error::TooLarge)?;
         let budget = decode_budget(c, &l).filter(|&b| b <= MAX_SAMPLES).ok_or(Error::TooLarge)?;
-        decoded_samples = decoded_samples.checked_add(budget).ok_or(Error::TooLarge)?;
+        // the chunk's own `w` × `h` × `spp` output is allocated whatever its coded frame declares
+        // (a lossy JPEG smaller than its tile still fills a whole tile), so it is charged too
+        let alloc = budget.max(n);
+        if alloc > MAX_SAMPLES {
+            return Err(Error::TooLarge);
+        }
+        decoded_samples = decoded_samples.checked_add(alloc).ok_or(Error::TooLarge)?;
         if decoded_samples > MAX_DECODED_TILE_SAMPLES {
             return Err(Error::TooLarge);
         }

@@ -3,6 +3,51 @@
 use super::*;
 use craft_ui::testing::trial;
 
+#[cfg(target_os = "linux")]
+#[trial]
+fn appimage_staging_left_by_an_install_that_ended_partway_is_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path();
+    let staging = |name: &str, files: &[&str]| {
+        let path = folder.join(name);
+        std::fs::create_dir(&path).unwrap();
+        for file in files {
+            std::fs::write(path.join(file), "partial").unwrap();
+        }
+        path
+    };
+    let left = [
+        staging(".artcraft-launcher-Ab12Cd", &["photocraft-0.6.0-linux-x86_64.AppImage"]),
+        staging(".artcraft-launcher-Ef34Gh", &["pdfcraft.appimage"]),
+        staging(".artcraft-launcher-Ij56Kl", &[]),
+    ];
+    let link = staging(".artcraft-launcher-Fg78Hi", &[]);
+    std::os::unix::fs::symlink(folder.join("elsewhere.AppImage"), link.join("linked.AppImage")).unwrap();
+    let file = folder.join(".artcraft-launcher-Jk90Lm");
+    std::fs::write(&file, "the user's").unwrap();
+    let now = std::time::SystemTime::now();
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    // An install still copying: its folder is old, its partial copy changed later.
+    let copying = staging(".artcraft-launcher-No12Pq", &["vectorcraft.AppImage"]);
+    std::fs::File::options().write(true).open(copying.join("vectorcraft.AppImage")).unwrap().set_modified(now + day).unwrap();
+    let kept = [
+        staging(".artcraft-launcher-Mn78Op", &["a.AppImage", "notes.txt"]),
+        staging(".artcraft-launcher-Qr90St", &["notes.txt"]),
+        staging(".artcraft-launcher-backup-Uv12Wx", &["old"]),
+        staging(".artcraft-launcher-Yz34A", &["a.AppImage"]),
+        staging(".artcraft-launcher-Bc56De7", &["a.AppImage"]),
+        staging("Cd78Ef", &["a.AppImage"]),
+        link,
+        file,
+        copying,
+    ];
+    linux::clear_staging(folder, now);
+    assert!(left.iter().chain(&kept).all(|p| p.exists()), "a folder changed within a day was removed");
+    linux::clear_staging(folder, now + day + std::time::Duration::from_secs(60));
+    assert!(left.iter().all(|p| !p.exists()), "a partial copy was left behind");
+    assert!(kept.iter().all(|p| p.exists()), "a folder that isn't a partial install was removed");
+}
+
 #[trial]
 fn swap_keeps_the_old_copy_until_the_new_one_is_in_place() {
     let dir = tempfile::tempdir().unwrap();
@@ -219,6 +264,213 @@ fn a_self_update_never_uninstalls_the_app_it_runs_from() {
     }
 }
 
+#[trial]
+fn flatpark_flatpaks_are_externally_managed_and_not_updated_via_bundle() {
+    let app = crate::App::by_id("photocraft").unwrap();
+    let flatpark_installed = Installed {
+        version: version::parse("0.19.0"),
+        source: InstallSource::Flatpak,
+        location: "ai.storyteller.photocraft".into(),
+        package: Some("ai.storyteller.photocraft".into()),
+        externally_managed: true,
+        origin: Some("flatpark".into()),
+        installation: Some("user".into()),
+    };
+    assert!(flatpark_installed.is_externally_managed());
+    assert_eq!(choose_kinds_with(app, Some(&flatpark_installed), None, &[], &[PackageKind::Flatpak], false), Vec::<PackageKind>::new());
+    let hint = managed_elsewhere_with(app, &flatpark_installed, false, |_| None);
+    assert_eq!(
+        hint.as_deref(),
+        Some("PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --user ai.storyteller.photocraft")
+    );
+    // During uninstall, managed_elsewhere returns None so it can be removed
+    assert_eq!(managed_elsewhere_with(app, &flatpark_installed, true, |_| None), None);
+
+    // When installed under a former bundle ID, the hint targets that detected ID
+    let former_installed = Installed {
+        version: version::parse("0.19.0"),
+        source: InstallSource::Flatpak,
+        location: "ai.storyteller.photocraft-old".into(),
+        package: Some("ai.storyteller.photocraft-old".into()),
+        externally_managed: true,
+        origin: Some("flatpark".into()),
+        installation: Some("system".into()),
+    };
+    let hint_former = managed_elsewhere_with(app, &former_installed, false, |_| None);
+    assert_eq!(
+        hint_former.as_deref(),
+        Some("PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --system ai.storyteller.photocraft-old")
+    );
+
+    let bundle_installed = Installed {
+        version: version::parse("0.19.0"),
+        source: InstallSource::Flatpak,
+        location: "ai.storyteller.photocraft".into(),
+        package: Some("ai.storyteller.photocraft".into()),
+        externally_managed: false,
+        origin: Some("photocraft-origin".into()),
+        installation: Some("user".into()),
+    };
+    assert!(!bundle_installed.is_externally_managed());
+    assert_eq!(choose_kinds_with(app, Some(&bundle_installed), None, &[], &[PackageKind::Flatpak], false), vec![PackageKind::Flatpak]);
+    assert_eq!(managed_elsewhere_with(app, &bundle_installed, false, |_| None), None);
+}
+
+/// A copy in a named Flatpak installation is addressed through that installation, not the
+/// default system scope.
+#[trial]
+fn a_named_flatpak_installation_is_addressed_by_name() {
+    let app = crate::App::by_id("photocraft").unwrap();
+    let installed = Installed {
+        version: version::parse("0.19.0"),
+        source: InstallSource::Flatpak,
+        location: "ai.storyteller.photocraft".into(),
+        package: Some("ai.storyteller.photocraft".into()),
+        externally_managed: true,
+        origin: Some("flatpark".into()),
+        installation: Some("work".into()),
+    };
+    assert_eq!(
+        managed_elsewhere_with(app, &installed, false, |_| None).as_deref(),
+        Some("PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --installation=work ai.storyteller.photocraft")
+    );
+}
+
+/// A Flatpak the user installed from a repository is never replaced by the launcher's bundle:
+/// the refusal names the repository's own update command, and nothing is downloaded.
+#[cfg(target_os = "linux")]
+#[trial]
+fn a_repository_flatpak_is_not_replaced_by_a_bundle_install() {
+    let app = crate::App::by_id("photocraft").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    let http = Http::new(crate::TEST_AGENT).unwrap();
+    let mut phases = Vec::new();
+    let mut phase = |p: JobPhase| phases.push(p);
+    let mut job = Job {
+        http: &http,
+        paths: &paths,
+        stop: &Stop::default(),
+        phase: &mut phase,
+        install_locations: &InstallLocations::default(),
+        replace: false,
+    };
+    let release = Release { version: version::parse("0.20.0"), tag: "v0.20.0".into(), ..Release::default() };
+    let asset = Asset { name: "photocraft-0.20.0-linux-x86_64.flatpak".into(), ..Asset::default() };
+    let installed = Installed {
+        version: version::parse("0.19.0"),
+        source: InstallSource::Flatpak,
+        location: app.bundle_id(),
+        package: Some(app.bundle_id()),
+        externally_managed: true,
+        origin: Some("flatpark".into()),
+        installation: Some("work".into()),
+    };
+    let error = install(app, &release, &asset, PackageKind::Flatpak, Some(&installed), None, &mut job).unwrap_err();
+    assert_eq!(
+        error,
+        "PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --installation=work ai.storyteller.photocraft"
+    );
+    assert!(phases.is_empty(), "the bundle installer started for a Flatpak the user manages");
+    assert!(!paths.cache.exists(), "the refusal must come before anything is downloaded");
+}
+
+/// `update_flatpak_app` drives the user's own copy: the scope flag for the installation it sits
+/// in, a successful update, and Flatpak's error text with its `error: ` prefix removed. A
+/// stand-in `flatpak` on PATH reports what it was asked to run; the test runs in child
+/// processes so that PATH stays private to it (as `updater`'s pretend-version test does).
+#[cfg(target_os = "linux")]
+#[trial]
+fn a_flatpak_from_a_repository_is_updated_through_its_own_installation() {
+    const NAME: &str = "install::tests::a_flatpak_from_a_repository_is_updated_through_its_own_installation";
+    const DIR: &str = "CRAFT_UPDATE_FAKE_FLATPAK_DIR";
+    if std::env::var_os(DIR).is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = r#"#!/bin/sh
+echo "$(basename "$0") $*" >> "$CRAFT_UPDATE_FAKE_FLATPAK_CALLS"
+case "$*" in
+*denied.app*) echo "error: Permission denied" >&2; exit 1 ;;
+*diskfull.app*) echo "Error: Disk full" >&2; exit 1 ;;
+*silent.app*) exit 1 ;;
+esac
+exit 0
+"#;
+        for program in ["flatpak", "flatpak-spawn"] {
+            let path = dir.path().join(program);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!("{}:{}", dir.path().display(), std::env::var("PATH").unwrap_or_default());
+        for sandboxed in [false, true] {
+            let calls = dir.path().join(format!("calls-{sandboxed}"));
+            let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+            cmd.args(["--exact", NAME, "--nocapture"])
+                .env(DIR, dir.path())
+                .env("CRAFT_UPDATE_FAKE_FLATPAK_CALLS", &calls)
+                .env("PATH", &path)
+                .env_remove("FLATPAK_ID");
+            if sandboxed {
+                cmd.env("FLATPAK_ID", "ai.storyteller.photocraft");
+            }
+            let status = cmd.status().unwrap();
+            assert!(status.success(), "the sandboxed={sandboxed} run failed");
+        }
+        return;
+    }
+    let calls = std::env::var_os("CRAFT_UPDATE_FAKE_FLATPAK_CALLS").map(PathBuf::from).unwrap();
+    let app = crate::App::by_id("photocraft").unwrap();
+    let stop = Stop::default();
+    let mut phase = |_| ();
+    let id = app.bundle_id();
+    assert_eq!(linux::update_flatpak_app(app, &id, None, &stop, &mut phase), Ok(()));
+    assert_eq!(
+        linux::update_flatpak_app(app, "denied.app", Some("user"), &stop, &mut phase),
+        Err("Flatpak couldn't update PhotoCraft: Permission denied".to_string())
+    );
+    assert_eq!(
+        linux::update_flatpak_app(app, "diskfull.app", Some("work"), &stop, &mut phase),
+        Err("Flatpak couldn't update PhotoCraft: Disk full".to_string())
+    );
+    assert_eq!(
+        linux::update_flatpak_app(app, "silent.app", Some("system"), &stop, &mut phase),
+        Err("Flatpak couldn't update PhotoCraft".to_string())
+    );
+    let prefix = if process::in_sandbox() { "flatpak-spawn --host --watch-bus flatpak" } else { "flatpak" };
+    let expected: Vec<String> = vec![
+        format!("{prefix} update --system -y --noninteractive {id}"),
+        format!("{prefix} update --user -y --noninteractive denied.app"),
+        format!("{prefix} update --installation=work -y --noninteractive diskfull.app"),
+        format!("{prefix} update --system -y --noninteractive silent.app"),
+    ];
+    let calls = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(calls.lines().map(str::to_string).collect::<Vec<_>>(), expected);
+}
+
+#[cfg(target_os = "linux")]
+#[trial]
+fn update_flatpak_app_respects_cancellation() {
+    let app = crate::App::by_id("photocraft").unwrap();
+    let stop = Stop::default();
+    stop.cancel();
+    let mut phase = |_| ();
+    assert_eq!(linux::update_flatpak_app(app, "ai.storyteller.photocraft", Some("user"), &stop, &mut phase), Err(CANCELLED.into()));
+}
+
+#[cfg(target_os = "linux")]
+#[trial]
+fn pause_lets_a_running_flatpak_command_finish_and_only_cancel_ends_it() {
+    let stop = Stop::default();
+    stop.pause();
+    assert_eq!(kill_on_cancel(&stop)(), Ok(()));
+    let app = crate::App::by_id("photocraft").unwrap();
+    let mut phase = |_| ();
+    // A paused job starts no further command.
+    assert_eq!(linux::update_flatpak_app(app, "ai.storyteller.photocraft", Some("user"), &stop, &mut phase), Err(crate::protocol::PAUSED.into()));
+    stop.cancel();
+    assert_eq!(kill_on_cancel(&stop)(), Err(CANCELLED.into()));
+}
+
 /// An asset whose file name, link tag or link file name isn't the release's is refused before
 /// the download, and so is one in another app's releases or with a foreign `SHA256SUMS.txt`.
 #[trial]
@@ -371,8 +623,15 @@ fn a_download_that_fails_its_checksum_replaces_nothing() {
     let old = dir.path().join("Apps").join("PhotoCraft.AppImage");
     std::fs::create_dir_all(old.parent().unwrap()).unwrap();
     std::fs::write(&old, b"the installed 0.4.0").unwrap();
-    let installed =
-        Installed { version: version::parse("0.4.0"), source: InstallSource::Launcher, location: old.display().to_string(), package: None };
+    let installed = Installed {
+        externally_managed: false,
+        origin: None,
+        installation: None,
+        version: version::parse("0.4.0"),
+        source: InstallSource::Launcher,
+        location: old.display().to_string(),
+        package: None,
+    };
     let previous = record("0.4.0", PackageKind::AppImage, old.clone(), vec![], false);
     let mut phases = Vec::new();
     let mut phase = |p: JobPhase| phases.push(p);
@@ -413,7 +672,15 @@ fn install_refuses_while_the_installed_copy_is_running() {
     #[cfg(unix)]
     let _probe = crate::process::tests::RunningProbe::start(&location);
     assert!(process::is_running(Path::new(&location)), "{location} should be seen as running");
-    let installed = Installed { version: version::parse("0.4.0"), source: InstallSource::Launcher, location, package: None };
+    let installed = Installed {
+        externally_managed: false,
+        origin: None,
+        installation: None,
+        version: version::parse("0.4.0"),
+        source: InstallSource::Launcher,
+        location,
+        package: None,
+    };
     let stop = Stop::default();
     stop.cancel();
     let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
@@ -452,33 +719,23 @@ mod macos_checks {
         app
     }
 
-    /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The
-    /// disk-image helper turns requests away while it is busy (`attach` retries for the same
-    /// reason), so `hdiutil create` is tried a few times, and what it said is kept for the
-    /// failure message.
+    /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The tests,
+    /// in this process and in others, ask the disk-image helper one at a time; when a program
+    /// that is not one of these tests keeps it busy, the test fails with what `hdiutil create`
+    /// said.
     fn dmg(dir: &Path, version: &str) -> PathBuf {
         let src = dir.join(format!("src-{version}"));
         bundle(&src, version);
         let dmg = dir.join(format!("photocraft-{version}-macos-universal.dmg"));
-        let _one_at_a_time = super::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut said = String::new();
-        for attempt in 0..5u64 {
-            if attempt > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
-                let _ = std::fs::remove_file(&dmg);
-            }
-            let output = std::process::Command::new("hdiutil")
-                .args(["create", "-quiet", "-format", "UDZO", "-volname", "PhotoCraft", "-srcfolder"])
-                .arg(&src)
-                .arg(&dmg)
-                .output()
-                .unwrap();
-            if output.status.success() {
-                return dmg;
-            }
-            said = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        }
-        panic!("hdiutil create failed after 5 tries: {said}");
+        let _one_at_a_time = macos::disk_image_turn();
+        let output = std::process::Command::new("hdiutil")
+            .args(["create", "-quiet", "-format", "UDZO", "-volname", "PhotoCraft", "-srcfolder"])
+            .arg(&src)
+            .arg(&dmg)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "hdiutil create failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+        dmg
     }
 
     #[trial]
@@ -544,7 +801,15 @@ mod macos_checks {
     }
 
     fn found_at(bundle: &Path) -> Installed {
-        Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None }
+        Installed {
+            version: None,
+            source: InstallSource::MacApp,
+            location: bundle.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        }
     }
 
     /// Runs `behind` while a signature check of another app holds the turn, and frees the turn
@@ -629,7 +894,15 @@ mod macos_checks {
         let dir = tempfile::tempdir().unwrap();
         let apps = dir.path().join("Applications");
         let current = bundle(&apps, "0.5.0");
-        let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
+        let existing = Installed {
+            version: None,
+            source: InstallSource::MacApp,
+            location: current.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         let paths = Paths::under(dir.path());
         let image = dmg(dir.path(), "0.6.0");
 
@@ -640,31 +913,18 @@ mod macos_checks {
         ended.wait().unwrap();
         let mount = paths.cache.join(format!("mount-photocraft-{pid}-1"));
         std::fs::create_dir_all(&mount).unwrap();
-        // The disk-image helper turns requests away while it is busy, as in `dmg`.
-        let attached = {
-            let _one_at_a_time = super::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut said = String::new();
-            let mut attached = false;
-            for attempt in 0..5u64 {
-                if attempt > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
-                }
-                let output = std::process::Command::new("hdiutil")
-                    .args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-noverify", "-mountpoint"])
-                    .arg(&mount)
-                    .arg(&image)
-                    .output()
-                    .unwrap();
-                if output.status.success() {
-                    attached = true;
-                    break;
-                }
-                said = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            }
-            attached.then_some(()).ok_or(said)
+        // One request at a time, as in `dmg`.
+        let output = {
+            let _one_at_a_time = macos::disk_image_turn();
+            std::process::Command::new("hdiutil")
+                .args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-noverify", "-mountpoint"])
+                .arg(&mount)
+                .arg(&image)
+                .output()
+                .unwrap()
         };
         let _attached = Attached(mount.clone());
-        assert_eq!(attached, Ok(()), "hdiutil attach failed after 5 tries");
+        assert!(output.status.success(), "hdiutil attach failed: {}", String::from_utf8_lossy(&output.stderr).trim());
         let staging = apps.join(format!(".artcraft-launcher-staging-{pid}-Ab12Cd"));
         bundle(&staging, "0.6.0");
         std::fs::write(staging.join(".artcraft-launcher-staging"), "").unwrap();
@@ -732,7 +992,12 @@ mod macos_checks {
                 other
             },
         ];
-        let now = std::time::SystemTime::now();
+        // The earlier launcher versions' folders last changed at a fixed time, which stands
+        // for now.
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+        for copy in [&old].into_iter().chain(&old_kept) {
+            std::fs::File::open(copy.parent().unwrap()).unwrap().set_modified(now).unwrap();
+        }
 
         super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now);
         assert!(!left.exists(), "the partial copy of an install that ended is still there");
@@ -742,8 +1007,11 @@ mod macos_checks {
         }
         assert_eq!(std::fs::read_to_string(elsewhere.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.4.0");
 
-        // A day later, with every process still in the same state.
+        // A minute short of a day later, and then a day later, with every process still in the
+        // same state.
         let day = std::time::Duration::from_secs(24 * 60 * 60);
+        super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now + day - std::time::Duration::from_secs(60));
+        assert!(old.exists(), "the copy of an earlier launcher version's install was removed before a day had passed");
         super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now + day + std::time::Duration::from_secs(60));
         assert!(!old.exists(), "the partial copy of an earlier launcher version's install is still there");
         for path in kept.iter().chain([&file, &link]).chain(&old_kept) {

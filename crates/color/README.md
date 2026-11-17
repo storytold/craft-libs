@@ -6,4 +6,6 @@ Stories: `patterns/color/{picker-dialog, panel, swatches, eyedropper-bar, sample
 
 Without `ui`: `CmykModel` (CMYK through a craft-cms profile), swatch files (`palette`: `.aco`, `.act`, `.ase`, `.gpl`, `.css`), the display transform and its caches (`display`), and colour harmonies (`harmony`).
 
+The colour tags of compositor and display frames (`tags`, re-exported at the root; from FilmCraft's `filmcraft-color`): `ColorInfo` (matrix, transfer, primaries, range), `HdrMetadata`, Y'CbCr matrices, transfer functions (sRGB, PQ, HLG), sRGB tables, HSL and hex. craft-frame and craft-media-source use them.
+
 The colour model and conversions are in `craft-theme`; profiles and transforms in `craft-cms`.
