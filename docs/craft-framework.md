@@ -994,7 +994,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.groove` | Groove of a value track |
 | `size.ramp.bar` | Colour band: a gradient ramp drawn as a bar of its own (levels output bar, gradient thumb row) or as the face of a triangle-pointer channel slider |
 | `size.ramp.groove` | Gradient drawn as the groove of a value track (faced sliders) and the span between two thumbs of a gradient's thumb row |
-| `size.rail.width`, `size.rail.button` | Tool rail and panel rail |
+| `size.rail.width`, `size.rail.button` | Tool rail buttons and the cells of iconic dock columns |
 | `size.length.field.sm`, `size.length.field.md` | Text or value field, one width per control size: a field in a small options bar is narrower than one in a dialog |
 | `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |
 | `size.length.track`, `size.length.short` | Value track, short field |
@@ -1735,7 +1735,7 @@ The derives and macros of the UI library: `Component`, `Props`, `ComponentStyle`
 | `canvas_data` | The canvas data patterns read and write without the canvas: guides and the navigator's panel options | exists |
 | `dialog` | `Dialog`, `DialogFrame`, `BlockingOverlay`, `Prompt` and its configurations, `DialogStack`, `DialogHost` ([ui-dialogs.md](ui-dialogs.md)) | exists |
 | `docking` | `SplitArea`, `Splitter`, `DockGroup`, floating groups, the dock column, drop resolution and the dock commands ([ui-docking.md](ui-docking.md)) | exists |
-| `rails` | `PanelRail`, `ToolRail`, `FlyoutButton`, `ToolbarDrawer` | exists |
+| `rails` | `ToolRail`, `FlyoutButton`, `ToolbarDrawer` | exists |
 | `sections` | `TitleRow`, `FooterBar`, `Section`, `GroupBox`, `Panel` | exists |
 
 #### craft-ui-patterns
