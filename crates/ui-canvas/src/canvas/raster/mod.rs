@@ -534,8 +534,10 @@ impl Component for RasterDisplay<'_> {
                     [areas.next(), areas.next()]
                 }
             };
+            // A light cell sits at the picture's top-left corner on screen, wherever the view puts the picture.
+            let origin = corners.map_or(shown.view.rect.min, |corners| corners[0]);
             for area in areas.into_iter().flatten() {
-                painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(area), shown.view.rect.min));
+                painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(area), origin));
             }
         }
         match (&mut self.picture, &shown.textures, &self.mapping) {
