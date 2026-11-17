@@ -206,10 +206,34 @@ pub mod packbits {
     /// `-128` no-op bytes (which are always permitted). Errors, rather than
     /// overflowing, when `out.len() + expected` does not fit in `usize`.
     pub(crate) fn decode_into(src: &[u8], expected: usize, out: &mut Vec<u8>) -> Result<()> {
+        decode_row(src, expected, out, false)
+    }
+
+    /// Appends a recovery row: complete oversized packets are clipped and a short
+    /// row is zero-padded. Truncated packet payloads still fail; trailing packets
+    /// after the row is full are ignored. Strict decoding remains the default.
+    ///
+    /// Appended row bytes are bounded by `max_row_bytes` and the PSD decoded-size
+    /// limit; callers enforce their aggregate image budget. Allocation is fallible.
+    /// Existing output is retained; an error may leave a partially appended row.
+    pub fn decode_padded_into(src: &[u8], expected: usize, max_row_bytes: usize, out: &mut Vec<u8>) -> Result<()> {
+        if expected > max_row_bytes || expected as u64 > super::MAX_DECODED_BYTES {
+            return Err(PsdError::LimitExceeded("PackBits recovery row exceeds limit"));
+        }
+        out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
+        out.try_reserve_exact(expected).map_err(|_| PsdError::OutOfMemory("PackBits recovery row allocation failed"))?;
+        decode_row(src, expected, out, true)
+    }
+
+    fn decode_row(src: &[u8], expected: usize, out: &mut Vec<u8>, padded: bool) -> Result<()> {
         let target = out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
         let mut i = 0;
         while out.len() < target {
             let Some(&h) = src.get(i) else {
+                if padded {
+                    out.resize(target, 0);
+                    break;
+                }
                 return Err(PsdError::Decompress("PackBits row ended early".into()));
             };
             i += 1;
@@ -219,10 +243,10 @@ pub mod packbits {
                 let Some(lit) = src.get(i..i + len) else {
                     return Err(PsdError::Decompress("PackBits literal truncated".into()));
                 };
-                if len > target - out.len() {
+                if !padded && len > target - out.len() {
                     return Err(PsdError::Decompress("PackBits literal overflows row".into()));
                 }
-                out.extend_from_slice(lit);
+                out.extend_from_slice(&lit[..len.min(target - out.len())]);
                 i += len;
             } else if h != -128 {
                 let len = 1 - h as isize;
@@ -231,10 +255,10 @@ pub mod packbits {
                     return Err(PsdError::Decompress("PackBits run truncated".into()));
                 };
                 i += 1;
-                if len > target - out.len() {
+                if !padded && len > target - out.len() {
                     return Err(PsdError::Decompress("PackBits run overflows row".into()));
                 }
-                out.extend(std::iter::repeat_n(b, len));
+                out.extend(std::iter::repeat_n(b, len.min(target - out.len())));
             }
         }
         Ok(())
@@ -745,8 +769,42 @@ pub fn unpredict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
     if rb == 0 {
         return Ok(());
     }
+    let mut scratch = if layout.depth == 32 && buf.len() >= rb { vec![0; rb] } else { Vec::new() };
+    unpredict_rows(buf, layout, &mut scratch)
+}
+
+/// Reverses prediction without allocating, using caller-accounted scratch memory.
+///
+/// `buf` must contain exactly `planes * height` complete rows. For 32-bit samples,
+/// `scratch` must hold at least one row (`width * 4` bytes); other depths need none.
+/// Layout, input length and scratch capacity are checked before any bytes are changed.
+/// Scratch contents are overwritten. Unlike [`unpredict`], partial or surplus rows
+/// are rejected, making this suitable for callers with explicit decode budgets.
+pub fn unpredict_with_scratch(buf: &mut [u8], layout: &PlaneLayout, scratch: &mut [u8]) -> Result<()> {
+    let rb = match layout.depth {
+        1 => layout.width.div_ceil(8),
+        8 => layout.width,
+        16 => layout.width.checked_mul(2).ok_or(PsdError::LimitExceeded("row size overflow"))?,
+        32 => layout.width.checked_mul(4).ok_or(PsdError::LimitExceeded("row size overflow"))?,
+        d => return Err(PsdError::Unsupported(format!("prediction for depth {d}"))),
+    };
+    let expected =
+        rb.checked_mul(layout.height).and_then(|n| n.checked_mul(layout.planes)).ok_or(PsdError::LimitExceeded("decoded size overflow"))?;
+    if buf.len() != expected {
+        return Err(PsdError::Invalid("prediction buffer length does not match layout".into()));
+    }
+    if rb == 0 || buf.is_empty() {
+        return Ok(());
+    }
+    if layout.depth == 32 && scratch.len() < rb {
+        return Err(PsdError::Invalid("prediction scratch is shorter than one row".into()));
+    }
+    unpredict_rows(buf, layout, scratch)
+}
+
+fn unpredict_rows(buf: &mut [u8], layout: &PlaneLayout, scratch: &mut [u8]) -> Result<()> {
+    let rb = layout.row_bytes();
     let w = layout.width;
-    let mut scratch = Vec::new();
     for row in buf.chunks_exact_mut(rb) {
         match layout.depth {
             1 | 8 => {
@@ -763,8 +821,8 @@ pub fn unpredict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
                 }
             }
             32 => {
-                scratch.clear();
-                scratch.extend_from_slice(row);
+                scratch[..rb].copy_from_slice(row);
+                let scratch = &scratch[..rb];
                 // The byte-wise running sum runs across the four planes, so
                 // plane k starts at the wrapping total of planes 0..k.
                 let (p0, rest) = scratch.split_at(w);

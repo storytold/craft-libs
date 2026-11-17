@@ -12,8 +12,10 @@ use crate::{Error, corrupt};
 const MAX_META: u64 = 1 << 20;
 /// Largest file [`write_archive`] writes (the canvas and the images together).
 const MAX_FILE: u64 = 2 * 1024 * 1024 * 1024;
-/// Most entries an archive may declare; checked before the archive is indexed.
-pub const MAX_ENTRIES: u64 = 1_000_000;
+/// Most entries an archive may declare; checked before the archive is indexed. The archive holds one
+/// entry per image, so 100 000 leaves room for far more than a `.fig` file carries, and a header
+/// count can no longer make the index alone cost a hundred megabytes.
+pub const MAX_ENTRIES: u64 = 100_000;
 
 /// What one open may read from `images/`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
