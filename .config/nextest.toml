@@ -1,0 +1,44 @@
+# cargo-nextest (https://nexte.st) runs every test in its own process, in parallel across test
+# binaries. The Windows leg of the Workspace gate uses it (.github/workflows/workspace.yml); every
+# other leg, and local runs, keep `cargo test`. Nextest does not run doctests, so the Windows leg
+# also runs `cargo test --doc`.
+#
+#   cargo nextest run --workspace --profile ci
+#   cargo test --workspace --doc
+#
+# Refuse an older nextest: CI installs exactly this version (GHSA-vc25-qg58-w57c is fixed in it).
+nextest-version = "0.9.150"
+
+# Some tests share a resource that an in-process mutex keeps to one test at a time. With one
+# process per test those mutexes no longer serialize anything, so these groups do it instead, one
+# test at a time, as under `cargo test`.
+[test-groups]
+# craft-ui: `gpu_test_lock()` / `gpu_lock()`. Each renderer creates its own wgpu instance and
+# device, and creating or destroying one while another test uses its device can crash.
+gpu = { max-threads = 1 }
+# craft-video h264_decode: `FIXTURE_GENERATION` keeps a second producer from replacing a fixture
+# file another test is reading.
+video-fixtures = { max-threads = 1 }
+# craft-print: `PRINT_TICKET_PROVIDER` serializes the Windows PrintTicket provider, and the tests
+# share the one test print queue the gate installs.
+print = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(craft-ui) & (binary(visual_regression) | test(/^combo::tests::|selected_tab_erases_a_baseline_centered_on_its_bottom_edge/))'
+test-group = 'gpu'
+
+[[profile.default.overrides]]
+filter = 'package(craft-video) & binary(h264_decode)'
+test-group = 'video-fixtures'
+
+[[profile.default.overrides]]
+filter = 'package(craft-print)'
+test-group = 'print'
+
+# The gate (`--profile ci`). Run every test and list all failures at the end, as `cargo test`
+# reports a whole binary. Slow tests are named every 60 seconds; none is stopped for being slow,
+# so a hang is still ended by the gate's own timeout, as before.
+[profile.ci]
+fail-fast = false
+slow-timeout = { period = "60s" }
+failure-output = "immediate-final"

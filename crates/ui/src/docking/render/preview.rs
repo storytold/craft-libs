@@ -117,7 +117,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             // release outside the window floats.
             let gone = !has_pointer && !touch_ended;
             let floats_outside = !self.style.float_on_empty_drop && drag.gesture != GroupGesture::Window;
-            if !(released && !gone) && !(gone && floats_outside) {
+            if !(released && !gone || gone && floats_outside) {
                 return;
             }
             let Some(pointer) = pointer.filter(|p| !self.blockers.iter().any(|r| r.contains(*p))) else { return };

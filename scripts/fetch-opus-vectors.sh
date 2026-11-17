@@ -11,7 +11,7 @@ URL=https://opus-codec.org/static/testvectors/opus_testvectors-rfc8251.tar.gz
 SHA256=6b26a22f9ba87b2b836906a9bb7afec5f8e54d49553b1200382520ee6fedfa55
 DEST=${1:-target/fixtures/opus/vectors}
 
-if [ -f "$DEST/testvector01.bit" ] && [ -f "$DEST/testvector12m.dec" ]; then
+if [[ -f "$DEST/testvector01.bit" && -f "$DEST/testvector12m.dec" ]]; then
     echo "Opus vectors already in $DEST"
     exit 0
 fi
@@ -20,7 +20,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 len=$(curl -fsSIL --proto '=https' --proto-redir '=https' --retry 10 --retry-delay 2 --retry-all-errors --connect-timeout 20 --max-time 60 "$URL" | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print n }')
-[ -n "$len" ] || { echo "could not read the archive size" >&2; exit 1; }
+[[ -n "$len" ]] || { echo "could not read the archive size" >&2; exit 1; }
 
 # Small ranges, eight at a time: a range whose connection drops below 50 KB/s for 15 s is
 # abandoned and fetched again, which costs little for a 2 MB range.
@@ -46,12 +46,12 @@ for attempt in 1 2 3 4 5; do
         range=${ranges[$i]}
         want=$((${range#*-} - ${range%-*} + 1))
         part=$(printf '%s/part.%04d' "$tmp" "$i")
-        if [ "$(wc -c < "$part" 2> /dev/null || echo 0)" -ne "$want" ]; then
+        if [[ "$(wc -c < "$part" 2> /dev/null || echo 0)" -ne "$want" ]]; then
             short=1
             fetch "$range" "$part" || true
         fi
     done
-    [ "$short" -eq 0 ] && break
+    [[ "$short" -eq 0 ]] && break
 done
 cat "$tmp"/part.* > "$tmp/vectors.tar.gz"
 

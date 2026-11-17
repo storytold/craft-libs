@@ -74,7 +74,14 @@ pub fn parse_multistatus(bytes: &[u8]) -> Result<El, Error> {
     if !text.chars().all(craft_xml::is_xml_char) {
         return Err(Error::Characters);
     }
-    let limits = Limits { max_input: MAX_BYTES, max_depth: MAX_DEPTH, max_nodes: MAX_NODES, max_attrs: MAX_ATTRS, max_attrs_total: MAX_ATTRS_TOTAL };
+    let limits = Limits {
+        max_input: MAX_BYTES,
+        max_depth: MAX_DEPTH,
+        max_nodes: MAX_NODES,
+        max_elements: MAX_NODES,
+        max_attrs: MAX_ATTRS,
+        max_attrs_total: MAX_ATTRS_TOTAL,
+    };
     let options = Options { doctype: Doctype::Reject, ..Options::canonical(&CANONICAL).strict().with_limits(limits) };
     let root = options.parse(bytes).map_err(Error::Xml)?;
     if root.name != "d:multistatus" {
