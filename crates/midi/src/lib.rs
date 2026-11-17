@@ -13,6 +13,8 @@
 mod sequence;
 mod smf;
 pub mod sync;
+/// Source-timed SMF compatibility model, including tolerant and SMPTE reading.
+pub mod source_timed;
 
 pub use sequence::{CtrlEvent, CtrlKind, Note, Sequence};
 pub use smf::{
