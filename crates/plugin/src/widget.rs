@@ -27,8 +27,8 @@ const MAX_IMAGES_BYTES: usize = 2 * 1024 * 1024;
 /// Longest value of an editable text field (the same as any text layer's).
 pub const MAX_FIELD_CHARS: usize = MAX_TEXT;
 /// Most items in a widget's property menu, most colours in one colour item, longest item label.
-const MAX_MENU: usize = 8;
-const MAX_SWATCHES: usize = 8;
+pub const MAX_MENU: usize = 8;
+pub const MAX_SWATCHES: usize = 8;
 const MAX_MENU_LABEL: usize = 32;
 
 /// What a widget is made of: FigCraft's own layer kinds.

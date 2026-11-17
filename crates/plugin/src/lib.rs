@@ -25,7 +25,7 @@ pub mod fetch;
 pub mod github;
 pub mod manifest;
 pub mod permissions;
-mod sandbox;
+pub mod sandbox;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 mod target;
