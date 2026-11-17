@@ -1202,7 +1202,7 @@ pub(crate) fn begin(ctx: &Context) {
                 }
             }
             _ => {
-                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing, Some((&mut matcher, now))) else {
+                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing && !shortcut.canvas, Some((&mut matcher, now))) else {
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));

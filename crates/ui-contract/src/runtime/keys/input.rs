@@ -68,8 +68,13 @@ impl Strip<'_> {
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
                 let kept = self.press(batch, key, &input, repeat);
-                batch.last_press =
-                    Some(LastPress { input, pressed: (batch.presses.len() > pushed).then_some(pushed), claimed: batch.claimed.len() > claims });
+                // The canvas's Space keeps its text from every field, as a claim does.
+                let canvas = batch.presses.get(pushed).is_some_and(|press| press.canvas);
+                batch.last_press = Some(LastPress {
+                    input,
+                    pressed: (batch.presses.len() > pushed).then_some(pushed),
+                    claimed: batch.claimed.len() > claims || canvas,
+                });
                 if kept {
                     if let Some(press) = batch.presses.get_mut(pushed) {
                         press.in_egui = Some(batch.egui_presses);
@@ -100,7 +105,7 @@ impl Strip<'_> {
                 if key == Some(Key::Enter) {
                     batch.enter_down = Some(false);
                 }
-                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None });
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false });
                 true
             }
             KeyEvent::Text(text) => {
@@ -147,7 +152,7 @@ impl Strip<'_> {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
                     self.press(batch, key, &input, false);
                 } else if !sent {
-                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None });
+                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -251,12 +256,12 @@ impl Strip<'_> {
                 false
             }
             PressUse::CanvasSpace => {
-                // The canvas has Space (`runtime::sampler`): only the shortcut dispatcher reads it, so the dialog's
-                // focused control does not activate. Its shortcut follows the held rule: a space a text field types is
-                // the field's.
+                // The canvas has Space while the pointer is over it (`runtime::sampler`): only the shortcut dispatcher reads
+                // it, so the dialog's focused control does not activate, and a focused field neither types its space nor
+                // keeps its momentary command from firing (production pans under a dialog whatever has focus).
                 batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
+                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true });
                 }
                 false
             }
@@ -295,7 +300,7 @@ impl Strip<'_> {
             PressUse::Press => {
                 batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
+                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: false });
                 }
                 true
             }

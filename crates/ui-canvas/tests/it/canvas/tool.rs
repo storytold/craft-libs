@@ -19,6 +19,7 @@ use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
 use craft_ui::runtime::frame;
 use craft_ui::runtime::windows::WindowHost;
 use craft_ui::style::DataColor;
+use craft_ui::text::NumberField;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
@@ -1143,6 +1144,47 @@ fn a_view_only_tool_drags_under_a_modal_that_keeps_the_canvas() {
     let at = rect.get().center();
     fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]);
     assert_eq!(tool.borrow().count(Call::Press), 0, "a drawing tool's press stays blocked: {:?}", tool.borrow().calls);
+}
+
+/// Space over the canvas a dialog keeps open is the canvas's while a field in the dialog has focus (production pans
+/// under a dialog whatever has focus): its momentary Hand pans the press held over it, and the selected tool sees none.
+#[trial]
+fn space_over_a_kept_canvas_pans_while_a_field_in_the_dialog_has_focus() {
+    let log = Log::default();
+    let main = RefCell::new(Probe::new("main", &log));
+    let (view, rect) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Rect::NOTHING)));
+    let (shown_view, shown_rect) = (Rc::clone(&view), Rc::clone(&rect));
+    let mut set = Momentary::new(NavigationOptions::default());
+    let mut amount = Some(5.0);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
+        let mut reply = None;
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().momentary(&mut set).run(ui, &pass, &mut *main.borrow_mut()));
+            }
+        });
+        shown_rect.set(room);
+        let id = shown.output.response.id;
+        let mut open = true;
+        Dialog::new("Keeps the canvas").opened(Bind::bound(&mut open)).show(ui, |ui, cx| {
+            cx.keep_view_open(id);
+            NumberField::new("Amount", Bind::bound(&mut amount)).show(ui);
+        });
+        let reply = reply.unwrap_or_default();
+        shown_view.set(Some(reply.view.or(shown.output.view).unwrap_or(current)));
+    });
+    fixture.settle();
+    assert!(fixture.focused().is_some(), "the dialog's field has focus");
+    // Near the canvas's corner, clear of the centred dialog.
+    let at = rect.get().min + Vec2::splat(40.0);
+    let before = view.get().expect("the canvas ran").center;
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![key_press(Key::Space, Modifiers::NONE)]);
+    fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::moved(at + BY * 2.0)]);
+    fixture.frame(vec![pointer::release(at + BY * 2.0)]);
+    assert_ne!(view.get().expect("the canvas ran").center, before, "Space's Hand pans under the dialog");
+    assert!(!log.borrow().iter().any(|call| call == "main press"), "the selected tool sees no press: {:?}", log.borrow());
 }
 
 #[trial]

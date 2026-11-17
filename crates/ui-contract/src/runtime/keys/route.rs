@@ -200,7 +200,8 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         .presses
         .iter()
         .zip(consumed)
-        .map(|(press, taken)| holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
+        // The canvas's Space is never the focused stop's.
+        .map(|(press, taken)| !press.canvas && holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
         .collect();
     // A shortcut without a press of its own (a release, or the clipboard event that stands for ⌘C) follows the owner by
     // its modifiers, as its press would.

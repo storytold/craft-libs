@@ -76,8 +76,8 @@ struct Press {
     release: Option<Key>,
     /// The place in `Batch::texts` of the text the press typed.
     text: Option<usize>,
-    /// The Space of the canvas a dialog keeps open (`runtime::sampler`): no component's routing reads it, and only the
-    /// held rule decides whether its shortcut runs.
+    /// The Space of the canvas a dialog keeps open (`runtime::sampler`): the canvas's press, which no component's
+    /// routing reads, no focused stop holds and no field types.
     canvas: bool,
 }
 
@@ -89,6 +89,8 @@ pub(crate) struct Shortcut {
     pub(crate) phase: FirePhase,
     /// The index of the press in `Batch::presses`.
     press: Option<usize>,
+    /// The press is the canvas's Space ([`Press::canvas`]): it fires its command whatever the focused stop types.
+    pub(crate) canvas: bool,
 }
 
 /// What the intent routing did with one press.
