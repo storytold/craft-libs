@@ -3,7 +3,7 @@
 use super::BodyHooks;
 use super::placement::opener_of;
 use crate::contract::{Container, ContainerProps, Cx, Internal, Mount};
-use crate::runtime::memory::{MemoryStage, SaveKey, sub};
+use crate::runtime::memory::{MemoryStage, SaveKey, open_slot as session_open_slot, sub};
 use craft_behavior::{EditEvent, Mixed};
 use egui::{Context, Id};
 use serde::{Deserialize, Serialize};
@@ -15,15 +15,8 @@ struct OpenState(Option<bool>);
 fn open_slot<'s>(stage: &'s mut MemoryStage, id: Id, save: Option<&SaveKey>) -> &'s mut OpenState {
     match save {
         Some(key) => stage.saved::<OpenState>(key),
-        None => stage.session::<OpenState>(sub(id, "open")),
+        None => stage.session::<OpenState>(session_open_slot(id)),
     }
-}
-
-/// Forgets the open state the container `id` keeps for the session, so its next show starts at its initial state. A
-/// dialog host calls it for each layer of a dialog it removed (`overlay::end_stack_dialog`): a dialog that closed
-/// itself and opens again under the same id opens. A binding or a save key keeps the state elsewhere and is untouched.
-pub(crate) fn forget_open(ctx: &Context, id: Id) {
-    crate::runtime::memory::forget(ctx, sub(id, "open"));
 }
 
 /// Whether the container is open this pass: its binding, else its opener's state, else its slot.

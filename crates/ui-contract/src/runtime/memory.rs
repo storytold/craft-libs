@@ -772,6 +772,13 @@ pub fn sub(base: Id, tag: impl Hash + Debug) -> Id {
     base.with(Sub(tag))
 }
 
+/// The slot a container with no binding or save key keeps its open state in for the session (`body::open`). A dialog
+/// host forgets it for each layer of a dialog it removed (`overlay::end_stack_dialog`), so a dialog that closed itself
+/// and opens again under the same id opens.
+pub(crate) fn open_slot(id: Id) -> Id {
+    sub(id, "open")
+}
+
 /// The id of a runtime singleton named `name`, optionally under a `scope` such as a viewport.
 #[doc(hidden)]
 pub fn global(name: &'static str, scope: impl Hash + Debug) -> Id {
