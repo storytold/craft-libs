@@ -208,14 +208,18 @@ fn is_windows_reserved_name(name: &str) -> bool {
 /// outright first, because a Unix build's [`Component`] parser does not
 /// treat either as a separator and would wave a Windows drive letter or UNC
 /// prefix (`C:`, `\\server\share`) straight through as one ordinary name. A
-/// Windows reserved device name is refused the same way. None of this costs
-/// anything here, unlike applying it to a name `list` merely discovered.
+/// Windows reserved device name is refused the same way, and so is a name
+/// [`is_temp_name`] matches, which [`list`] would leave out. None of this
+/// costs anything here, unlike applying it to a name `list` merely discovered.
 fn confine_name(name: &str) -> Result<&str, Fault> {
     if name.contains('\\') || name.contains(':') {
         return Err(Fault::Refused(format!("{name} is not a plain file name")));
     }
     if is_windows_reserved_name(name) {
         return Err(Fault::Refused(format!("{name} is a reserved device name on Windows")));
+    }
+    if is_temp_name(name) {
+        return Err(Fault::Refused(format!("{name} is a name this backend uses for its temporary files")));
     }
     confine_segment(name)
 }
@@ -252,6 +256,13 @@ fn io_fault(error: &std::io::Error) -> Fault {
     }
 }
 
+/// Lists the files and folders in `path`.
+///
+/// A regular file whose name [`is_temp_name`] matches is left out before its
+/// metadata is read. Such a file is a save in progress, or one that was
+/// stopped between its create and its rename, and it is not a document.
+/// [`confine_name`] refuses these names for a new file. A folder or a link
+/// with such a name is listed.
 fn list(root: &Path, path: &str) -> Result<Vec<Entry>, Fault> {
     let rel = relative(path)?;
     let dir = open_root(root)?;
@@ -260,8 +271,11 @@ fn list(root: &Path, path: &str) -> Result<Vec<Entry>, Fault> {
     let mut entries = Vec::new();
     for item in read {
         let item = item.map_err(|error| io_fault(&error))?;
-        let meta = item.metadata().map_err(|error| io_fault(&error))?;
         let name = item.file_name().to_string_lossy().into_owned();
+        if is_temp_name(&name) && item.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let meta = item.metadata().map_err(|error| io_fault(&error))?;
         let id = child_path(path, &name);
         entries.push(Entry {
             room: format!("local:{id}"),
@@ -352,6 +366,38 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// How many temporary names [`open_temp`] tries before it gives up.
 const TEMP_ATTEMPTS: usize = 16;
 
+/// The start of every name [`temp_name`] makes.
+const TEMP_PREFIX: &str = ".craft-save-";
+
+/// The end of every name [`temp_name`] makes.
+const TEMP_SUFFIX: &str = ".tmp";
+
+/// The temporary name for process `pid`, clock part `started` and sequence
+/// value `n`. [`is_temp_name`] matches every name this returns.
+fn temp_name(pid: u32, started: u128, n: u64) -> String {
+    format!("{TEMP_PREFIX}{pid}-{started:x}-{n}{TEMP_SUFFIX}")
+}
+
+/// Whether [`temp_name`] returns exactly `name` for some process id, clock
+/// part and sequence value. The three parts are read back from `name` and
+/// passed to `temp_name`, so a name the two would format differently (a
+/// leading zero, an uppercase hexadecimal digit, a sign) does not match.
+/// [`list`] leaves these names out. A name with only the same prefix and
+/// suffix, such as `.craft-save-notes.tmp`, does not match and is listed.
+fn is_temp_name(name: &str) -> bool {
+    let Some(middle) = name.strip_prefix(TEMP_PREFIX).and_then(|rest| rest.strip_suffix(TEMP_SUFFIX)) else {
+        return false;
+    };
+    let mut parts = middle.split('-');
+    let (Some(pid), Some(started), Some(n), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    match (pid.parse::<u32>(), u128::from_str_radix(started, 16), n.parse::<u64>()) {
+        (Ok(pid), Ok(started), Ok(n)) => temp_name(pid, started, n) == name,
+        _ => false,
+    }
+}
+
 /// Creates a new hidden temporary file beside `rel`, named from
 /// [`TEMP_SEQUENCE`], and returns its path and handle. A name that already
 /// exists (a file another process or an earlier run left) is skipped for the
@@ -372,7 +418,7 @@ fn open_temp(dir: &Dir, rel: &Path) -> Result<(PathBuf, cap_std::fs::File), Faul
     let started = if tests::FIXED_TEMP_CLOCK.with(std::cell::Cell::get) { 0 } else { started };
     let mut last = None;
     for _ in 0..TEMP_ATTEMPTS {
-        let temp_name = format!(".craft-save-{}-{started:x}-{}.tmp", std::process::id(), TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed));
+        let temp_name = temp_name(std::process::id(), started, TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed));
         let temp_rel = match rel.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent.join(&temp_name),
             _ => PathBuf::from(&temp_name),
@@ -617,7 +663,7 @@ mod tests {
         let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = tempfile::tempdir().unwrap();
         let next = TEMP_SEQUENCE.load(Ordering::Relaxed);
-        let stale: Vec<_> = (next..next + 3).map(|n| format!(".craft-save-{}-0-{n}.tmp", std::process::id())).collect();
+        let stale: Vec<_> = (next..next + 3).map(|n| temp_name(std::process::id(), 0, n)).collect();
         for name in &stale {
             std::fs::write(root.path().join(name), b"left by an earlier run").unwrap();
         }
@@ -628,6 +674,59 @@ mod tests {
         assert_eq!(std::fs::read(root.path().join("Minutes.txt")).unwrap(), b"minutes");
         for name in &stale {
             assert_eq!(std::fs::read(root.path().join(name)).unwrap(), b"left by an earlier run", "{name} is not this call's file");
+        }
+    }
+
+    #[test]
+    fn a_listing_leaves_out_a_temporary_file_a_stopped_save_left() {
+        let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("Archive")).unwrap();
+        std::fs::write(root.path().join("Minutes.txt"), b"minutes").unwrap();
+        std::fs::write(root.path().join(".craft-save-notes.tmp"), b"a person's own file").unwrap();
+        let folder = temp_name(1, 2, 3);
+        std::fs::create_dir(root.path().join(&folder)).unwrap();
+        let dir = open_root(root.path()).unwrap();
+        // A save stopped after its create and before its rename leaves the
+        // temporary file, at the root and inside a folder.
+        let (at_root, handle) = open_temp(&dir, Path::new("Minutes.txt")).unwrap();
+        drop(handle);
+        let (in_folder, handle) = open_temp(&dir, &Path::new("Archive").join("Agenda.txt")).unwrap();
+        drop(handle);
+        assert!(root.path().join(&at_root).exists() && root.path().join(&in_folder).exists());
+
+        let names: Vec<_> = list(root.path(), "").unwrap().into_iter().map(|entry| entry.name).collect();
+        assert_eq!(names, [".craft-save-1-2-3.tmp", "Archive", ".craft-save-notes.tmp", "Minutes.txt"], "a folder with the pattern stays listed");
+        assert!(list(root.path(), "/Archive").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_create_refuses_a_name_a_listing_would_leave_out() {
+        let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = tempfile::tempdir().unwrap();
+        let name = temp_name(1, 2, 3);
+        assert!(matches!(create(root.path(), "", &name, b"bytes"), Err(Fault::Refused(_))));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+        create(root.path(), "", ".craft-save-notes.tmp", b"bytes").unwrap();
+    }
+
+    #[test]
+    fn is_temp_name_matches_only_the_names_temp_name_makes() {
+        assert!(is_temp_name(&temp_name(4242, 0x1a2b, 7)));
+        assert!(is_temp_name(&temp_name(u32::MAX, u128::MAX, u64::MAX)));
+        for other in [
+            ".craft-save-notes.tmp",
+            ".craft-save-1-2.tmp",
+            ".craft-save-1-2-3-4.tmp",
+            ".craft-save--2-3.tmp",
+            ".craft-save-1-xy-3.tmp",
+            "craft-save-1-2-3.tmp",
+            ".craft-save-1-2-3.tmp.txt",
+            ".craft-save-01-2-3.tmp",
+            ".craft-save-1-2A-3.tmp",
+            ".craft-save-+1-2-3.tmp",
+        ] {
+            assert!(!is_temp_name(other), "{other} is not a temporary name");
         }
     }
 
