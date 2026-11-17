@@ -644,6 +644,57 @@ fn para_of_objects(objs: Vec<InlineObject>) -> Paragraph {
     p
 }
 
+/// push_text and push_object build the same paragraph as inserting at the end.
+#[test]
+fn pushing_matches_inserting_at_the_end() {
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let plain = CharProps::default();
+    let (mut pushed, mut inserted) = (Paragraph::new(), Paragraph::new());
+    let steps: [(&str, &CharProps, bool); 7] = [
+        ("Hello ", &plain, false),
+        ("world", &bold, false),
+        ("", &bold, true),
+        (", again", &bold, false),
+        ("", &bold, false),
+        ("x\u{FFFC}y", &plain, false),
+        ("", &plain, true),
+    ];
+    for (i, (text, props, object)) in steps.into_iter().enumerate() {
+        if object {
+            let obj = InlineObject::BookmarkStart { name: format!("b{i}") };
+            pushed.push_object(obj.clone(), props);
+            inserted.insert_object(inserted.len(), obj, props).unwrap();
+        } else {
+            let n = pushed.push_text(text, props);
+            assert_eq!(n, inserted.insert_text(inserted.len(), text, props).unwrap());
+        }
+        assert_eq!(pushed, inserted, "after step {i}");
+    }
+    assert_eq!(pushed.text, "Hello world\u{FFFC}, againxy\u{FFFC}");
+    assert_eq!(pushed.runs.len(), 3, "equal neighbours merge: {:?}", pushed.runs);
+    assert_eq!(pushed.objects.len(), 2);
+}
+
+#[test]
+fn pushing_a_long_paragraph_is_linear() {
+    // Appending through insert_text/insert_object walked every run (and counted every object) on
+    // each call: 64k alternating runs took minutes. Pushing takes milliseconds.
+    let n = 64_000;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let plain = CharProps::default();
+    let t = std::time::Instant::now();
+    let mut p = Paragraph::new();
+    for i in 0..n {
+        p.push_text("word ", if i % 2 == 0 { &bold } else { &plain });
+        if i % 8 == 0 {
+            p.push_object(InlineObject::BookmarkStart { name: format!("b{i}") }, &plain);
+        }
+    }
+    assert_eq!(p.runs.iter().map(|r| r.len).sum::<usize>(), p.text.len());
+    assert_eq!(p.objects.len(), n / 8);
+    assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
+}
+
 #[test]
 fn object_walks_are_linear_in_the_paragraph() {
     // #3614: loops of object_offsets + object_at recounted the objects before each one, so a

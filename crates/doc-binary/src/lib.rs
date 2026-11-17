@@ -1,11 +1,12 @@
-//! Reader for the Word 97-2003 binary file format (`.doc`, [MS-DOC]), WordCraft's.
+//! Reader and writer for the Word 97-2003 binary file format (`.doc`, [MS-DOC]), WordCraft's.
 //!
-//! [`read`] turns the bytes of a `.doc` file into a [`craft_wordmodel::Document`]. There is no
-//! writer: saving always goes through the other formats. The reader is written from the public
-//! specification ([MS-DOC], Word (.doc) Binary File Format, Microsoft Open Specifications) and,
-//! like the other Craft parsers, is lenient by design (unknown structures are skipped, bad numbers
-//! fall back to defaults) and bounded (stream sizes, piece counts and property counts are
-//! capped), so hostile input yields an error or a best-effort document, never a panic.
+//! [`read`] turns the bytes of a `.doc` file into a [`craft_wordmodel::Document`], and [`write`]
+//! turns a document into a Word 97-2003 `.doc` file (the `write` module lists what it keeps).
+//! Both follow the public specification ([MS-DOC], Word (.doc) Binary File Format, Microsoft Open
+//! Specifications). The reader, like the other Craft parsers, is lenient by design (unknown
+//! structures are skipped, bad numbers fall back to defaults) and bounded (stream sizes, piece
+//! counts and property counts are capped), so hostile input yields an error or a best-effort
+//! document, never a panic.
 //!
 //! Word 6.0/95 files, which that specification does not cover, are read by `word6` from their
 //! observed layout: their text, formatting and tables so far.
@@ -28,11 +29,15 @@ mod metadata;
 mod notes;
 mod officeart;
 mod piece;
+mod rmark;
 mod sections;
 mod sprm;
 mod stsh;
 mod table;
 mod word6;
+mod write;
+
+pub use write::write;
 
 use std::sync::Arc;
 
@@ -303,6 +308,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     // tight against aliasing — and never past the absolute ceiling.
     let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
     let work = Work::new(MAX_WORK);
+    let revs = rmark::Revisions::new(&table, &fib);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
 
     let ctx = WalkCtx {
@@ -321,6 +327,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         budget: &budget,
         paragraphs: &paragraphs,
         work: &work,
+        revs: &revs,
     };
 
     // Drawings: text box stories become parts first, then the floating shapes and pictures
@@ -432,6 +439,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         return Err(paragraph_limit(max_paragraphs));
     }
     doc.media.extend(pics.media);
+    doc.revisions = revs.take();
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();
@@ -460,6 +468,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     let work = Work::new(MAX_WORK);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
     let mut pics = media::Pictures::for_input(word.len());
+    let revs = rmark::Revisions::none();
     let ctx = WalkCtx {
         word,
         data: &[],
@@ -476,6 +485,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
         budget: &budget,
         paragraphs: &paragraphs,
         work: &work,
+        revs: &revs,
     };
     let paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
     if paragraphs.exceeded.get() {
@@ -574,6 +584,8 @@ struct WalkCtx<'a> {
     paragraphs: &'a ParaBudget,
     /// Repeated-work bytes left ([`MAX_WORK`]), and what they left out.
     work: &'a Work,
+    /// Tracked insertions and deletions met so far.
+    revs: &'a rmark::Revisions,
 }
 
 /// The paragraph and cell marks still allowed in this document, and whether a walk ran into
@@ -748,7 +760,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     pb.props.numbering = Some(NumRef { num, level: ilvl });
                 }
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
-                pb.mark = char_props(ctx.chpx_bins.chpx(ctx.word, fc), ctx.fonts, &CharProps::default());
+                let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
+                pb.mark = char_props(chpx, ctx.fonts, &CharProps::default());
+                // A tracked paragraph mark: an inserted or deleted paragraph break.
+                ctx.revs.mark(&mut pb.mark, chpx, ctx.pieces.piece_prm(cp));
                 let done = std::mem::take(&mut pb);
                 out.push(ParaOut {
                     para: Paragraph {
@@ -769,7 +784,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     Some(f) => {
                         f.depth = f.depth.saturating_add(1);
                     }
-                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None }),
+                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None, anchor: anchor_props(ctx, cp) }),
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -799,13 +814,16 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             '\u{1}' => {
                 // Inline picture: the CHPX of the anchor carries sprmCPicLocation.
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
-                let fc_pic = pic_location(ctx.chpx_bins.chpx(ctx.word, fc));
+                let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
+                let fc_pic = pic_location(chpx);
                 match fc_pic.and_then(|at| pics.get(ctx.data, at)) {
                     Some(p) => {
                         // Every anchor of a picture gets its own copy of the alt text; the
                         // copies are charged to the work budget (#3709).
                         let alt = if ctx.work.charge(p.alt.len() as u64, Cost::AltText) { p.alt.clone() } else { String::new() };
-                        pb.push('\u{FFFC}', CharProps::default());
+                        let mut props = CharProps::default();
+                        ctx.revs.mark(&mut props, chpx, ctx.pieces.piece_prm(cp));
+                        pb.push('\u{FFFC}', props);
                         pb.objects.push(InlineObject::Image {
                             media: p.key.clone(),
                             w: p.w,
@@ -829,7 +847,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     if !ctx.work.charge(object_cost(obj), Cost::FloatingObject) {
                         continue;
                     }
-                    pb.push('\u{FFFC}', CharProps::default());
+                    pb.push('\u{FFFC}', anchor_props(ctx, cp));
                     pb.objects.push(obj.clone());
                 }
             }
@@ -837,7 +855,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // Footnote or endnote reference; custom symbols share the same character.
                 let at = ctx.notes.partition_point(|(c, _, _)| *c < cp);
                 if let Some((_, kind, id)) = ctx.notes.get(at).filter(|(c, _, _)| *c == cp) {
-                    pb.push('\u{FFFC}', CharProps::default());
+                    pb.push('\u{FFFC}', anchor_props(ctx, cp));
                     pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
                 }
             }
@@ -871,6 +889,8 @@ struct FieldBuild {
     depth: u32,
     instr: String,
     sep: Option<FieldResult>,
+    /// The begin character's revision marks, for the field object's anchor.
+    anchor: CharProps,
 }
 
 /// A field's cached result: its text and, as runs, the formatting of that text. A run is added
@@ -905,6 +925,15 @@ fn object_cost(obj: &InlineObject) -> u64 {
     }
 }
 
+/// The properties of an object anchor at `cp`: only its revision marks, so a tracked
+/// insertion or deletion of a picture, note reference or field survives.
+fn anchor_props(ctx: &WalkCtx<'_>, cp: u32) -> CharProps {
+    let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
+    let mut props = CharProps::default();
+    ctx.revs.mark(&mut props, ctx.chpx_bins.chpx(ctx.word, fc), ctx.pieces.piece_prm(cp));
+    props
+}
+
 /// Emit a finished field: HYPERLINK keeps its result text as a linked run; every other
 /// field becomes one inline object with its cached result.
 ///
@@ -934,7 +963,7 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
         }
         return;
     }
-    pb.push('\u{FFFC}', CharProps::default());
+    pb.push('\u{FFFC}', f.anchor);
     pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
 }
 
@@ -1012,7 +1041,9 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
             }
         };
         let mut props = char_props(grpprl, ctx.fonts, base);
-        apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
+        let piece_prm = ctx.pieces.piece_prm(cp);
+        apply_prm(&mut props, piece_prm, ctx.fonts, base, ctx.work);
+        ctx.revs.mark(&mut props, grpprl, piece_prm);
         st.memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props });
         st.generation += 1;
     }
@@ -1083,7 +1114,7 @@ fn prm_paragraph_sprms(prm: PrmRef<'_>, work: &Work) -> Vec<u8> {
                 out.push(val);
             }
         }
-        PrmRef::Grpprl(Some(g)) => {
+        PrmRef::Grpprl { grpprl: Some(g), .. } => {
             if !work.charge(g.len() as u64, Cost::Formatting) {
                 return out;
             }
@@ -1092,7 +1123,7 @@ fn prm_paragraph_sprms(prm: PrmRef<'_>, work: &Work) -> Vec<u8> {
                 out.extend_from_slice(prl.operand);
             }
         }
-        PrmRef::None | PrmRef::Grpprl(None) => {}
+        PrmRef::None | PrmRef::Grpprl { grpprl: None, .. } => {}
     }
     out
 }
@@ -1111,7 +1142,7 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
                 }
             }
         }
-        PrmRef::Grpprl(Some(g)) => {
+        PrmRef::Grpprl { grpprl: Some(g), .. } => {
             if !work.charge(g.len() as u64, Cost::Formatting) {
                 return;
             }
@@ -1121,7 +1152,7 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
                 }
             }
         }
-        PrmRef::Grpprl(None) => {}
+        PrmRef::Grpprl { grpprl: None, .. } => {}
     }
 }
 

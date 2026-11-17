@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 decoder and encoder, Opus decoder and encoder, MP1/MP2 decoders."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 decoder and encoder, Opus decoder and encoder, Vorbis encoder, MP1/MP2 decoders."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,10 +29,13 @@ encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-en
 lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
 pcm-encode = []
+# Decode FLAC files and frames natively (`flac::decode`, `flac::Decoder`).
+flac-decode = []
 # Encode FLAC files.
 flac-encode = ["craft-media/bitstream"]
-# Encode Ogg Vorbis files (desktop only: builds the reference libvorbis from its C sources).
-vorbis-encode = ["dep:vorbis_rs"]
+# The pure-Rust Vorbis encoder (`vorbis::encoder`) and Ogg Vorbis files through `encode` and
+# `encode_ogg_vorbis`.
+vorbis-encode = ["craft-media/ogg"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
 # The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
@@ -43,6 +46,10 @@ qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
 qoa-encode = []
 opus-encode = []
+# GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
+gsm = ["gsm-decode", "gsm-encode"]
+gsm-decode = []
+gsm-encode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) decoder (`mp3::Decoder`).
@@ -55,6 +62,8 @@ ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
 mp3-encode = ["craft-media/bitstream"]
+# Bluetooth Low Complexity Subband Coding (SBC) audio codec (`sbc`).
+sbc = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).
@@ -72,9 +81,6 @@ rayon = { workspace = true, optional = true }
 # symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 symphonia = { version = "0.6.1", optional = true, default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-vorbis_rs = { version = "0.5", optional = true }
-
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
 proptest = { workspace = true }
@@ -89,8 +95,20 @@ name = "codecs"
 required-features = ["decode", "encode"]
 
 [[test]]
+name = "flac_decode"
+required-features = ["flac-decode", "flac-encode"]
+
+[[test]]
+name = "gsm_oracle"
+required-features = ["gsm"]
+
+[[test]]
 name = "qoa_oracle"
 required-features = ["qoa"]
+
+[[test]]
+name = "sbc_oracle"
+required-features = ["sbc"]
 
 [[example]]
 name = "info"

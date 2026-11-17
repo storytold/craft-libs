@@ -4,9 +4,17 @@ PostScript and EPS for the Craft apps. No feature is enabled by default.
 
 | Feature | Provides |
 | --- | --- |
+| `write` | PostScript writing primitives: numbers, strings, matrices, path data and Flate |
 | `read` | An EPS interpreter: runs the program and returns what it paints as a one-page PDF |
 
-Writing PostScript and EPS (craft-libs #115) is planned as a separate feature next to `read`.
+## Writing PostScript
+
+`write` emits the tokens of a PostScript or EPS program. The caller writes the page program and
+any short operator names a prolog binds; this module formats numbers (non-finite values as zero),
+escapes string and byte literals, writes matrices, raises quadratic segments to cubics, and
+compresses or inflates Flate (`FlateDecode`) payloads. Path and paint operators can use the
+Language Reference names or the one-letter names a bound prolog defines. Container concerns (DSC
+comments, a binary preview header, ASCII85) stay in `craft-eps`.
 
 ## Reading EPS
 

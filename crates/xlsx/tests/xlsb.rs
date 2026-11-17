@@ -5,7 +5,10 @@ mod common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::zip;
-use craft_xlsx::{CellError, CellRef, Error, FormulaKind, Limits, Range, SheetKind, Value, Visibility, is_xlsb};
+use craft_xlsx::{
+    CellError, CellRef, Color, ColorSource, Error, Fill, FormulaKind, Limits, Package, Pattern, PatternFill, Protection, Range, Row, SheetKind,
+    SheetPart, Styles, Table, Value, Visibility, is_xlsb,
+};
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
 const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
@@ -111,6 +114,7 @@ fn package(book: &[u8], sheet: &[u8], strings: &[u8], roots: &str, rels: &str, t
         ("data/two.bin", &worksheet(&[], &[])),
         ("text/strings.bin", strings),
     ])
+    .unwrap()
 }
 fn file(sheet: &[u8]) -> Vec<u8> {
     package(&book(false), sheet, &sst(), ROOT, RELS, TYPES)
@@ -343,6 +347,7 @@ fn two_sheets(one: &[u8], two: &[u8]) -> Vec<u8> {
         ("data/two.bin", two),
         ("text/strings.bin", &sst()),
     ])
+    .unwrap()
 }
 
 #[test]
@@ -463,6 +468,9 @@ fn name(flags: u32, text: &str) -> Vec<u8> {
     data.extend(wide(text));
     data.extend([2, 0, 0, 0, 0x1c, 0x1d, 0, 0, 0, 0]); // Formula `#NAME?`, no extra data.
     data.extend(u32::MAX.to_le_bytes()); // No comment.
+    if flags & 0x08 != 0 {
+        data.extend(u32::MAX.to_le_bytes().repeat(4)); // A macro's four strings, all null.
+    }
     record(39, &data)
 }
 
@@ -543,8 +551,8 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
         ),
         (9, ref3d(3, 0, 0), vec![]),
         (10, [&[0x25u8][..], &0u32.to_le_bytes(), &1u32.to_le_bytes(), &REL.to_le_bytes(), &REL.to_le_bytes(), &[0x41, 20, 0]].concat(), vec![]),
-        // Kept as their saved results:
         (11, vec![0x43, 4, 0, 0, 0, 0x1E, 2, 0, 0x05], vec![]),
+        // Kept as their saved results:
         (12, ref3d(4, 0, REL), vec![]),
         (13, vec![0x01, 0, 0, 0, 0], vec![0, 0, 0, 0]), // Part of a shared formula at A1 that isn't one.
     ];
@@ -572,7 +580,7 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
         Some("_xlfn.LET(_xlpm.x,1,_xlpm.x+1)"),
         Some("#REF!"),
         Some("SQRT(A1:A2)"),
-        None,
+        Some("Rate*2"),
         None,
         None,
         // A BrtCellMeta before a cell gives it cell metadata, as `cm` does in .xlsx.
@@ -584,7 +592,7 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&CellRef::new(0, 14), &1)]);
     // Every formula cell keeps its saved result as its value.
     assert!((1..=15).all(|c| sheet.value(CellRef::new(0, c)) == Value::Number(0.0)));
-    for why in ["defined names", "other workbooks", "missing from the file", "structured table references"] {
+    for why in ["other workbooks", "missing from the file", "tables the reader could not read"] {
         assert!(warned(&wb, why), "{why}: {:?}", wb.warnings);
     }
 }
@@ -931,6 +939,580 @@ fn a_dynamic_array_kept_as_its_value_has_no_cell_metadata() {
     assert!(warned(&wb, "missing from the file"), "{:?}", wb.warnings);
 }
 
+// Defined names ([MS-XLSB] 2.4.718): `BrtName` records, and the `definedNames` Excel writes for
+// the same names when it saves the workbook as `.xlsx`.
+
+/// `BrtName`. A macro's name (`fProc`, 0x08) has four more strings, null here.
+fn brt_name(flags: u32, key: u8, itab: u32, text: &str, rgce: &[u8], comment: Option<&str>) -> Vec<u8> {
+    let mut data = flags.to_le_bytes().to_vec();
+    data.push(key);
+    data.extend(itab.to_le_bytes());
+    data.extend(wide(text));
+    data.extend((rgce.len() as u32).to_le_bytes());
+    data.extend(rgce);
+    data.extend(0u32.to_le_bytes());
+    data.extend(comment.map_or_else(|| u32::MAX.to_le_bytes().to_vec(), wide));
+    if flags & 0x08 != 0 {
+        data.extend(u32::MAX.to_le_bytes().repeat(4));
+    }
+    record(39, &data)
+}
+fn ref3d_name(ixti: u16, row: u32, col: u16) -> Vec<u8> {
+    [&[0x3Au8][..], &ixti.to_le_bytes(), &loc(row, col)].concat()
+}
+const WORKBOOK: u32 = u32::MAX;
+
+/// `book(false)` with the supporting links of `book_with_links` (sheet links Data, Hidden,
+/// Data:Hidden, a deleted sheet, the other workbook, and this workbook as a whole, which
+/// `PtgNameX` uses), and `names`.
+fn book_with_names(names: &[Vec<u8>]) -> Vec<u8> {
+    let plain = book(false);
+    let end = record(132, &[]);
+    let mut xti = 6u32.to_le_bytes().to_vec();
+    for (book, first, last) in [(0u32, 0i32, 0i32), (0, 1, 1), (0, 0, 1), (0, -1, -1), (1, 0, 0), (0, -2, -2)] {
+        xti.extend([book.to_le_bytes(), first.to_le_bytes(), last.to_le_bytes()].concat());
+    }
+    let links = [record(353, &[]), record(357, &[]), record(355, &wide("rId9")), record(362, &xti), record(354, &[])];
+    [&plain[..plain.len() - end.len()], &links.concat(), &names.concat(), &end].concat()
+}
+
+/// The names below, in record order, as `PtgName` numbers them from 1.
+fn names() -> Vec<Vec<u8>> {
+    vec![
+        // 1: a newer function's hidden name: not a defined name in `.xlsx`.
+        brt_name(0x0002_000b, 0, WORKBOOK, "_xlfn.CONCAT", &[0x1C, 0x1D], None),
+        // 2: built-in and hidden, on Data.
+        brt_name(0x21, 0, 0, "_FilterDatabase", &[&[0x3Bu8, 0, 0][..], &0u32.to_le_bytes(), &9u32.to_le_bytes(), &[0, 0, 2, 0]].concat(), None),
+        // 3: refers to another workbook: left out.
+        brt_name(0, 0, WORKBOOK, "External", &ref3d_name(4, 0, 0), None),
+        // 4: a deleted cell.
+        brt_name(0, 0, WORKBOOK, "Gone", &[0x3C, 0, 0, 0, 0, 0, 0, 0, 0], None),
+        brt_name(1, 0, WORKBOOK, "Hid", &[0x1E, 42, 0], None),
+        // 6, 7: the same name on two sheets.
+        brt_name(0, 0, 0, "Local", &ref3d_name(0, 1, 1), None),
+        brt_name(0, 0, 1, "Local", &ref3d_name(1, 0, 1), None),
+        // 8: an XLM macro with a shortcut key, in the "User Defined" group (14).
+        brt_name(0x388, b'k', WORKBOOK, "MacroName", &ref3d_name(0, 0, 0), None),
+        // 9
+        brt_name(0, 0, WORKBOOK, "Rate", &[&[0x1Fu8][..], &0.05f64.to_le_bytes()].concat(), Some("a note")),
+        // 10, 11: relative references are offsets from A1, wrapping around the grid.
+        brt_name(0, 0, WORKBOOK, "Rel", &ref3d_name(0, 0, 0xFFFF), None),
+        brt_name(0, 0, WORKBOOK, "RelN", &[&[0x2Cu8][..], &loc(u32::MAX, REL)].concat(), None),
+        // 12: on a sheet the workbook doesn't have: left out.
+        brt_name(0, 0, 5, "Skipped", &[0x1E, 1, 0], None),
+        // 13: a name of a name.
+        brt_name(0, 0, WORKBOOK, "Twice", &[0x23, 9, 0, 0, 0, 0x1E, 2, 0, 0x05], None),
+    ]
+}
+
+const NAMES_XML: &str = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Data!$A$1:$C$10</definedName><definedName name="Gone">Data!#REF!</definedName><definedName name="Hid" hidden="1">42</definedName><definedName name="Local" localSheetId="0">Data!$B$2</definedName><definedName name="Local" localSheetId="1">Hidden!$B$1</definedName><definedName name="MacroName" xlm="1" functionGroupId="14" shortcutKey="k">Data!$A$1</definedName><definedName name="Rate" comment="a note">0.05</definedName><definedName name="Rel">Data!XFD1</definedName><definedName name="RelN">A1048576</definedName><definedName name="Twice">Rate*2</definedName></definedNames></workbook>"#;
+
+fn xml_names(xml: &str) -> Vec<craft_xlsx::DefinedName> {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let bytes = zip(&[("[Content_Types].xml", types.as_bytes()), ("_rels/.rels", root.as_bytes()), ("xl/workbook.xml", xml.as_bytes())]);
+    Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap().defined_names
+}
+
+#[test]
+fn defined_names_are_read_as_their_xlsx_spelling() {
+    let cells: Vec<Vec<u8>> = vec![
+        vec![0x23, 9, 0, 0, 0, 0x1E, 100, 0, 0x05],
+        vec![0x23, 6, 0, 0, 0],
+        // PtgNameX through this workbook's own link: a sheet-scoped name used from another sheet.
+        vec![0x39, 5, 0, 7, 0, 0, 0],
+        vec![0x23, 2, 0, 0, 0],
+        vec![0x3C, 1, 0, 0, 0, 0, 0, 0, 0],
+        // Kept as their saved results: a name left out, a name in another workbook, and a
+        // workbook name through PtgNameX.
+        vec![0x23, 3, 0, 0, 0],
+        vec![0x39, 4, 0, 9, 0, 0, 0],
+        vec![0x39, 5, 0, 9, 0, 0, 0],
+    ];
+    let mut data = row(0);
+    for (i, rgce) in cells.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, rgce, &[]));
+    }
+    let bytes = package(&book_with_names(&names()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    assert_eq!(wb.defined_names, xml_names(NAMES_XML));
+    let book = read(&bytes).unwrap();
+    let got: Vec<_> = (1..=8).map(|c| book.sheets[0].formula(CellRef::new(0, c))).collect();
+    let want = [Some("Rate*100"), Some("Local"), Some("Hidden!Local"), Some("_xlnm._FilterDatabase"), Some("Hidden!#REF!"), None, None, None];
+    assert_eq!(got, want);
+    for why in ["defined names whose formula could not be read", "other workbooks", "names in other workbooks or on other sheets"] {
+        assert!(warned(&book, why), "{why}: {:?}", book.warnings);
+    }
+    for why in ["(references to other workbooks (external links))", "(names of sheets the reader skips)"] {
+        assert!(book.warnings.iter().any(|w| w.contains("defined names were left out") && w.contains(why)), "{why}: {:?}", book.warnings);
+    }
+}
+
+#[test]
+fn a_damaged_name_leaves_names_and_formulas_as_values() {
+    // A truncated BrtName: the workbook opens with no names, and every formula keeps its value.
+    let mut list = names();
+    let full = brt_name(0, 0, WORKBOOK, "Rate", &[0x1E, 1, 0], None);
+    list[8] = record(39, &full[2..full.len() - 2]); // The payload without its record header and last two bytes.
+    let data = [row(0), formula_cell(1, &[0x1E, 1, 0], &[])].concat();
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    assert!(wb.defined_names.is_empty());
+    let book = read(&bytes).unwrap();
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 1)), None);
+    assert!(book.warnings.iter().any(|w| w.contains("names could not be read")), "{:?}", book.warnings);
+}
+
+#[test]
+fn names_on_macro_sheets_spans_over_chart_sheets_and_empty_built_ins() {
+    // Sheets Data, a chart sheet, an XLM macro sheet, Hidden; sheet links Macro1, Data:Hidden
+    // (over both) and Data.
+    let mut book = record(131, &[]);
+    book.extend(record(153, &[[0u8; 8].as_slice(), &wide("")].concat()));
+    book.extend(record(143, &[]));
+    for (id, rel, name) in [(1u32, "one", "Data"), (3, "c", "Chart1"), (4, "m", "Macro1"), (2, "two", "Hidden")] {
+        book.extend(record(156, &[&0u32.to_le_bytes()[..], &id.to_le_bytes(), &wide(rel), &wide(name)].concat()));
+    }
+    book.extend(record(144, &[]));
+    let mut xti = 3u32.to_le_bytes().to_vec();
+    for (first, last) in [(2i32, 2i32), (0, 3), (0, 0)] {
+        xti.extend([0u32.to_le_bytes(), first.to_le_bytes(), last.to_le_bytes()].concat());
+    }
+    book.extend([record(353, &[]), record(357, &[]), record(362, &xti), record(354, &[])].concat());
+    let area = [&[0x3Bu8][..], &2u16.to_le_bytes(), &0u32.to_le_bytes(), &1u32.to_le_bytes(), &0u16.to_le_bytes(), &1u16.to_le_bytes()].concat();
+    // A sheet's built-in Database, then the workbook-level one Excel writes with no formula.
+    book.extend(brt_name(0x20, 0, 0, "Database", &area, None));
+    book.extend(brt_name(0x20, 0, WORKBOOK, "Database", &[], None));
+    book.extend(brt_name(0x388, b'k', WORKBOOK, "Cmd", &ref3d_name(0, 0, 0), None));
+    book.extend(brt_name(0, 0, WORKBOOK, "Span", &ref3d_name(1, 0, 0), None));
+    book.extend(record(132, &[]));
+    let rels = RELS.replace(
+        "</Relationships>",
+        r#"<Relationship Id="c" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="../data/c.bin"/><Relationship Id="m" Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="../data/m.bin"/></Relationships>"#,
+    );
+    let ref3d_cell = |ixti: u16| [&[0x5Au8][..], &ixti.to_le_bytes(), &loc(0, 0)].concat();
+    let data = [
+        row(0),
+        formula_cell(1, &[0x23, 2, 0, 0, 0], &[]),
+        formula_cell(2, &[0x23, 4, 0, 0, 0], &[]),
+        formula_cell(3, &ref3d_cell(0), &[]),
+        formula_cell(4, &ref3d_cell(1), &[]),
+    ]
+    .concat();
+    let bytes = package(&book, &worksheet(&data, &[]), &sst(), ROOT, &rels, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="_xlnm.Database" localSheetId="0">Data!$A$1:$B$2</definedName><definedName name="Cmd" xlm="1" functionGroupId="14" shortcutKey="k">Macro1!$A$1</definedName><definedName name="Span">Data:Hidden!$A$1</definedName></definedNames></workbook>"#;
+    assert_eq!(wb.defined_names, xml_names(xml));
+    let read = read(&bytes).unwrap();
+    let got: Vec<_> = (1..=4).map(|c| read.sheets[0].formula(CellRef::new(0, c))).collect();
+    assert_eq!(got, [Some("_xlnm.Database"), Some("Span"), Some("Macro1!$A$1"), Some("Data:Hidden!$A$1")]);
+    assert!(read.warnings.iter().all(|w| !w.contains("left out") && !w.contains("saved results")), "{:?}", read.warnings);
+}
+
+/// `BrtRowHdr` with its style, height and three flag bytes, and no column spans.
+fn row_hdr(r: u32, ixfe: u32, twips: u16, flags: [u8; 3]) -> Vec<u8> {
+    record(0, &[&r.to_le_bytes()[..], &ixfe.to_le_bytes(), &twips.to_le_bytes(), &flags, &0u32.to_le_bytes()].concat())
+}
+/// `BrtColInfo`.
+fn col_info(first: u32, last: u32, coldx: u32, ixfe: u32, flags: u16) -> Vec<u8> {
+    record(60, &[&first.to_le_bytes()[..], &last.to_le_bytes(), &coldx.to_le_bytes(), &ixfe.to_le_bytes(), &flags.to_le_bytes()].concat())
+}
+/// `BrtWsFmtInfo`.
+fn ws_fmt_info(dx: u32, base: u16, twips: u16, flags: u16, levels: [u8; 2]) -> Vec<u8> {
+    record(485, &[&dx.to_le_bytes()[..], &base.to_le_bytes(), &twips.to_le_bytes(), &flags.to_le_bytes(), &levels].concat())
+}
+/// A worksheet with `head` before its data (the sheet format and columns) and `rows` in it.
+fn sized_sheet(head: &[u8], rows: &[u8]) -> Vec<u8> {
+    [&record(129, &[])[..], head, &record(145, &[]), rows, &record(146, &[]), &record(130, &[])].concat()
+}
+fn sizes_of(bytes: &[u8]) -> Result<(Vec<Row>, SheetPart, Vec<String>), Error> {
+    let mut p = Package::open(bytes, &Limits::default())?;
+    let wb = p.workbook()?;
+    let mut rows = vec![];
+    let part = p.sheet(&wb.sheets[0], |r| {
+        rows.push(r);
+        Ok(())
+    })?;
+    Ok((rows, part, p.warnings().to_vec()))
+}
+fn xml_sheet(xml: &str) -> (Vec<Row>, SheetPart) {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/sheet.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="sheet.xml"/></Relationships>"#;
+    let book = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sizes" sheetId="1" r:id="s"/></sheets></workbook>"#;
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root.as_bytes()),
+        ("xl/workbook.xml", book.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/sheet.xml", xml.as_bytes()),
+    ]);
+    let (rows, part, _) = sizes_of(&bytes).unwrap();
+    (rows, part)
+}
+
+/// The binary sheet below as Excel spells it in `.xlsx`. Excel writes `ht` for a row whose
+/// height differs from the default even when it was not set by hand.
+const SIZES_XML: &str = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetFormatPr baseColWidth="10" defaultColWidth="12.59765625" defaultRowHeight="14.25" zeroHeight="1" thickBottom="1" outlineLevelRow="2" outlineLevelCol="1"/><cols><col min="3" max="3" width="20.59765625" customWidth="1"/><col min="4" max="6" width="0" hidden="1" customWidth="1" outlineLevel="1"/><col min="8" max="8" width="9.06640625" style="7"/><col min="9" max="9" width="23.73046875" bestFit="1" customWidth="1"/><col min="10" max="10" width="9.06640625" collapsed="1"/><col min="16384" max="16384" width="30.59765625" customWidth="1"/></cols><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2" ht="30" customHeight="1"/><row r="3" ht="26.65"/><row r="4" hidden="1"/><row r="5" ht="15" thickTop="1" thickBot="1"/><row r="6" outlineLevel="2"/><row r="7" hidden="1" outlineLevel="1"/><row r="8" collapsed="1"/><row r="9" s="3" customFormat="1"/><row r="10"/><row r="11" ph="1"/><row r="12"/></sheetData></worksheet>"#;
+
+fn sizes_bin() -> Vec<u8> {
+    let head = [
+        ws_fmt_info(3225, 10, 285, 0x0A, [2, 1]),
+        record(390, &[]),
+        col_info(2, 2, 5273, 0, 0x0002),
+        col_info(3, 5, 0, 0, 0x0103),
+        col_info(7, 7, 2321, 7, 0),
+        col_info(8, 8, 6075, 0, 0x0006),
+        col_info(9, 9, 2321, 0, 0x1000),
+        col_info(16_383, 16_383, 7833, 0, 0x0002),
+        record(391, &[]),
+    ]
+    .concat();
+    let rows = [
+        row_hdr(0, 0, 285, [0, 0, 0]),
+        cell(2, 0, &((1u32 << 2) | 2).to_le_bytes()),
+        row_hdr(1, 0, 600, [0, 0x20, 0]),
+        row_hdr(2, 0, 533, [0, 0, 0]),
+        row_hdr(3, 0, 285, [0, 0x10, 0]),
+        row_hdr(4, 0, 300, [3, 0, 0]),
+        row_hdr(5, 0, 285, [0, 2, 0]),
+        row_hdr(6, 0, 285, [0, 0x11, 0]),
+        row_hdr(7, 0, 285, [0, 0x08, 0]),
+        row_hdr(8, 3, 285, [0, 0x40, 0]),
+        // A style without fGhostDirty is not applied.
+        row_hdr(9, 5, 285, [0, 0, 0]),
+        row_hdr(10, 0, 285, [0, 0, 1]),
+        // Past 8192 twips the height is ignored, set by hand or not.
+        row_hdr(11, 0, 9000, [0, 0x20, 0]),
+    ]
+    .concat();
+    sized_sheet(&head, &rows)
+}
+
+#[test]
+fn row_heights_and_column_widths_are_read_as_their_xlsx_spelling() {
+    let (rows, part, _) = sizes_of(&file(&sizes_bin())).unwrap();
+    let (xml_rows, xml_part) = xml_sheet(SIZES_XML);
+    assert_eq!(rows, xml_rows);
+    assert_eq!(part.columns, xml_part.columns);
+    assert_eq!(part.features.format, xml_part.features.format);
+    // A few of the conversions, spelled out.
+    assert_eq!((rows[1].height, rows[1].custom_height), (Some(30.0), true));
+    assert_eq!((rows[2].height, rows[2].custom_height), (Some(26.65), false));
+    assert_eq!(rows[8].style, Some(3));
+    assert_eq!(part.columns[0].width, Some(5273.0 / 256.0));
+    let format = part.features.format.clone().unwrap();
+    assert_eq!((format.default_col_width, format.default_row_height), (Some(12.59765625), Some(14.25)));
+    // Written as SpreadsheetML, the binary sheet has its default sizes and columns.
+    let written = String::from_utf8(part.to_xml(&rows)).unwrap();
+    assert!(written.contains(r#"<sheetFormatPr baseColWidth="10" defaultColWidth="12.59765625" defaultRowHeight="14.25""#), "{written}");
+    assert!(written.contains(r#"<cols><col min="3" max="3" width="20.59765625" customWidth="1"/>"#), "{written}");
+    assert!(written.contains(r#"<row r="2" ht="30" customHeight="1"/>"#), "{written}");
+}
+
+#[test]
+fn damaged_sizes_are_skipped_or_refused() {
+    // A column range outside the grid, or backwards, is skipped with a warning.
+    let head = [record(390, &[]), col_info(0, 16_384, 2321, 0, 0), col_info(5, 4, 2321, 0, 0), col_info(1, 1, 512, 0, 2), record(391, &[])].concat();
+    let (_, part, warnings) = sizes_of(&file(&sized_sheet(&head, &row(0)))).unwrap();
+    assert_eq!(part.columns.len(), 1);
+    assert_eq!((part.columns[0].first, part.columns[0].width), (1, Some(2.0)));
+    assert!(warnings.iter().any(|w| w.contains("column ranges")), "{warnings:?}");
+    // Without a sheet format, only a height set by hand is a row's `ht`.
+    let (rows, _, _) = sizes_of(&file(&sized_sheet(&[], &[row_hdr(0, 0, 300, [0, 0, 0]), row_hdr(1, 0, 400, [0, 0x20, 0])].concat()))).unwrap();
+    assert_eq!((rows[0].height, rows[1].height), (None, Some(20.0)));
+    // More column records than columns are refused.
+    let many = [&record(390, &[])[..], &col_info(0, 0, 2321, 0, 0).repeat(16_385), &record(391, &[])].concat();
+    assert!(matches!(sizes_of(&file(&sized_sheet(&many, &[]))), Err(Error::TooLarge(_))));
+    // Skipped (reversed) column records count toward that cap too.
+    let reversed = [&record(390, &[])[..], &col_info(5, 4, 2321, 0, 0).repeat(16_385), &record(391, &[])].concat();
+    assert!(matches!(sizes_of(&file(&sized_sheet(&reversed, &[]))), Err(Error::TooLarge(_))));
+    // A sheet format or column after the data, or a record of the wrong size, fails the read.
+    for (why, sheet) in [
+        ("format after data", worksheet(&[], &ws_fmt_info(u32::MAX, 8, 285, 0, [0, 0]))),
+        ("column after data", worksheet(&[], &col_info(0, 0, 2321, 0, 0))),
+        ("short column", sized_sheet(&record(60, &[0; 16]), &[])),
+        ("short format", sized_sheet(&record(485, &[0; 11]), &[])),
+        ("long row header", sized_sheet(&[], &record(0, &[0; 18]))),
+    ] {
+        assert!(matches!(sizes_of(&file(&sheet)), Err(Error::Invalid(_))), "{why}");
+    }
+}
+
+// Styles ([MS-XLSB] 2.1.7.50): a styles part assembled from records, and the `styles.xml` Excel
+// writes for the same formats when it saves the workbook as `.xlsx`.
+
+const STYLES_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="../look/styles.bin"/></Relationships>"#;
+const STYLES_TYPES: &str = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/records/book.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/data/one.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/data/two.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/look/styles.bin" ContentType="application/vnd.ms-excel.styles"/></Types>"#;
+
+fn styled_file(styles: &[u8], types: &str) -> Vec<u8> {
+    let sheet = worksheet(&[row(0), cell(5, 0, &1.0f64.to_le_bytes())].concat(), &[]);
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &book(false)),
+        ("records/_rels/book.bin.rels", STYLES_RELS.as_bytes()),
+        ("data/one.bin", &sheet),
+        ("data/two.bin", &worksheet(&[], &[])),
+        ("look/styles.bin", styles),
+    ])
+}
+
+/// The styles part of a package, and the warnings reading it gave.
+fn styles_of(bytes: &[u8]) -> (Option<Styles>, Vec<String>) {
+    let mut p = Package::open(bytes, &Limits::default()).unwrap();
+    let styles = p.styles().unwrap();
+    (styles, p.warnings().to_vec())
+}
+
+/// `BrtColor`: auto 0, indexed 1, RGB 2, theme 3.
+fn color(kind: u8, index: u8, tint: i16, rgba: [u8; 4]) -> Vec<u8> {
+    [&[kind << 1 | 1, index][..], &tint.to_le_bytes(), &rgba].concat()
+}
+fn indexed(i: u8) -> Vec<u8> {
+    color(1, i, 0, [0, 0, 0, 255])
+}
+fn theme(i: u8, tint: i16) -> Vec<u8> {
+    color(3, i, tint, [0, 0, 0, 255])
+}
+fn rgb(r: u8, g: u8, b: u8) -> Vec<u8> {
+    color(2, 255, 0, [r, g, b, 255])
+}
+#[allow(clippy::too_many_arguments)]
+fn font(twips: u16, flags: u16, weight: u16, script: u16, underline: u8, family: u8, charset: u8, c: &[u8], scheme: u8, name: &str) -> Vec<u8> {
+    let head =
+        [&twips.to_le_bytes()[..], &flags.to_le_bytes(), &weight.to_le_bytes(), &script.to_le_bytes(), &[underline, family, charset, 0]].concat();
+    record(43, &[&head[..], c, &[scheme], &wide(name)].concat())
+}
+fn pattern_fill(fls: u32, fg: &[u8], bg: &[u8]) -> Vec<u8> {
+    record(45, &[&fls.to_le_bytes()[..], fg, bg, &[0; 48]].concat())
+}
+fn edge(dg: u8, c: &[u8]) -> Vec<u8> {
+    [&[dg, 0][..], c].concat()
+}
+#[allow(clippy::too_many_arguments)]
+fn brt_xf(parent: u16, fmt: u16, font: u16, fill: u16, border: u16, rotation: u8, indent: u8, flags: u16, apply: u8) -> Vec<u8> {
+    let ids = [parent, fmt, font, fill, border].map(u16::to_le_bytes).concat();
+    record(47, &[&ids[..], &[rotation, indent], &flags.to_le_bytes(), &[apply, 0]].concat())
+}
+fn style(xf: u32, flags: u16, builtin: u8, level: u8, name: &str) -> Vec<u8> {
+    record(48, &[&xf.to_le_bytes()[..], &flags.to_le_bytes(), &[builtin, level], &wide(name)].concat())
+}
+fn prop(kind: u16, data: &[u8]) -> Vec<u8> {
+    [&kind.to_le_bytes()[..], &(data.len() as u16 + 4).to_le_bytes(), data].concat()
+}
+fn short(text: &str) -> Vec<u8> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    [(units.len() as u16).to_le_bytes().to_vec(), units.iter().flat_map(|u| u.to_le_bytes()).collect()].concat()
+}
+fn brt_dxf(props: &[Vec<u8>]) -> Vec<u8> {
+    record(507, &[&[0, 0x80, 0, 0][..], &(props.len() as u16).to_le_bytes(), &props.concat()].concat())
+}
+fn begin(id: u16, count: u32) -> Vec<u8> {
+    record(id, &count.to_le_bytes())
+}
+
+/// Every kind of record the styles part has, as Excel writes them.
+fn styles_bin() -> Vec<u8> {
+    let normal = font(220, 0, 400, 0, 0, 2, 0, &theme(1, 0), 2, "Aptos Narrow");
+    // Bold, italic, struck out, superscript, double accounting underline; family and
+    // character set 0 and scheme "none" are not written in `.xlsx`.
+    let fancy = font(290, 0x0A, 700, 1, 0x22, 0, 2, &rgb(0, 128, 255), 0, "Wingdings");
+    let heading = font(220, 0, 400, 0, 0, 2, 0, &theme(4, 13106), 1, "Aptos Display");
+    // An automatic colour: no `<color>` in `.xlsx`.
+    let auto = font(220, 0x02, 400, 0, 0, 2, 0, &color(0, 64, 0, [0, 0, 0, 255]), 2, "Aptos Narrow");
+    let gradient = [
+        &0x28u32.to_le_bytes()[..],
+        &indexed(64),
+        &indexed(65),
+        &1u32.to_le_bytes(),
+        &[0.0f64, 0.5, 0.5, 0.5, 0.5].map(f64::to_le_bytes).concat(),
+        &2u32.to_le_bytes(),
+        &theme(0, 0),
+        &0.0f64.to_le_bytes(),
+        &theme(4, 0),
+        &1.0f64.to_le_bytes(),
+    ]
+    .concat();
+    let none = edge(0, &color(0, 0, 0, [0, 0, 0, 0]));
+    let parts: Vec<Vec<u8>> = vec![
+        record(278, &[]),
+        begin(615, 2),
+        record(44, &[&164u16.to_le_bytes()[..], &wide(r"yyyy\-mm\-dd")].concat()),
+        // A format in two alternate-content blocks: the newer spelling for version 13 and later
+        // (skipped), and the one for versions 12 and 13, which `.xlsx` has as `formatCode`.
+        record(37, &[1, 0, 13, 0, 0, 0x80]),
+        record(44, &[&165u16.to_le_bytes()[..], &wide("[$-ja-JP-x-gannen]ge")].concat()),
+        record(38, &[]),
+        record(37, &[2, 0, 12, 0, 0, 0, 13, 0, 0, 0]),
+        record(44, &[&165u16.to_le_bytes()[..], &wide("[$]ge")].concat()),
+        record(38, &[]),
+        record(616, &[]),
+        begin(611, 4),
+        normal,
+        fancy,
+        heading,
+        auto,
+        record(612, &[]),
+        begin(603, 6),
+        pattern_fill(0, &indexed(64), &indexed(65)),
+        pattern_fill(17, &indexed(64), &indexed(65)),
+        pattern_fill(1, &rgb(255, 255, 0), &indexed(64)),
+        pattern_fill(9, &theme(5, -8191), &indexed(65)),
+        record(45, &gradient),
+        // A tinted pattern colour: `.xlsx` states the system background, as for darkGrid above.
+        pattern_fill(1, &theme(4, 26213), &indexed(65)),
+        record(604, &[]),
+        begin(613, 2),
+        record(46, &[&[0][..], &none, &none, &none, &none, &none].concat()),
+        record(
+            46,
+            &[&[3][..], &edge(2, &rgb(200, 0, 0)), &none, &edge(7, &indexed(64)), &edge(13, &color(0, 0, 0, [0, 0, 0, 0])), &edge(1, &theme(4, 0))]
+                .concat(),
+        ),
+        record(614, &[]),
+        begin(626, 3),
+        brt_xf(0xFFFF, 0, 0, 0, 0, 0, 0, 0x1010, 0),
+        brt_xf(0xFFFF, 9, 0, 0, 0, 0, 0, 0x1010, 0x3E),
+        brt_xf(0xFFFF, 0, 2, 0, 0, 0, 0, 0x1010, 0),
+        record(627, &[]),
+        begin(617, 4),
+        brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0),
+        brt_xf(0, 164, 0, 0, 0, 0, 0, 0x1010, 0x01),
+        // Left, top, wrapped, shrunk, right to left, unlocked, hidden, quote prefix.
+        brt_xf(0, 0, 0, 0, 0, 180, 2, 0x01 | 0x40 | 0x100 | 0x800 | 0x2000 | 0x8000, 0x24),
+        brt_xf(1, 0, 1, 4, 1, 0, 0, 0x1010, 0x1A),
+        record(618, &[]),
+        begin(619, 3),
+        style(0, 1, 0, 0, "Normal"),
+        // Excel wraps each style in alternate content, which is skipped.
+        record(37, &[1, 0, 2, 0x0e, 0, 0x80]),
+        record(3072, &[0; 16]),
+        record(38, &[]),
+        style(1, 1 | 4, 1, 1, "RowLevel_2"),
+        style(2, 2, 0, 0, "Probe Style"),
+        record(620, &[]),
+        begin(505, 2),
+        brt_dxf(&[
+            prop(0x05, &rgb(0x9C, 0, 6)),
+            prop(0x19, &700u16.to_le_bytes()),
+            prop(0x1C, &[0]),
+            prop(0x1A, &0x21u16.to_le_bytes()),
+            prop(0x24, &240u32.to_le_bytes()),
+            prop(0x18, &short("Arial")),
+            prop(0x29, &170u16.to_le_bytes()),
+            prop(0x26, &short("0.0")),
+            prop(0x02, &rgb(0xFF, 0xC7, 0xCE)),
+            prop(0x0F, &[2]),
+            prop(0x14, &[1]),
+            prop(0x2B, &[0]),
+            prop(0x07, &[&color(0, 0, 0, [0, 0, 0, 0])[..], &1u16.to_le_bytes()].concat()),
+        ]),
+        brt_dxf(&[
+            prop(0x03, &[&0u32.to_le_bytes()[..], &[90.0f64, 0.0, 0.0, 0.0, 0.0].map(f64::to_le_bytes).concat()].concat()),
+            prop(0x04, &[&[0, 0][..], &0.0f64.to_le_bytes(), &rgb(255, 255, 255)].concat()),
+            prop(0x04, &[&[0, 0][..], &1.0f64.to_le_bytes(), &theme(4, 0)].concat()),
+        ]),
+        record(506, &[]),
+        record(508, &[&0u32.to_le_bytes()[..], &wide("TableStyleMedium2"), &wide("PivotStyleLight16")].concat()),
+        record(509, &[]),
+        record(473, &[]),
+        record(565, &[]),
+        record(475, &[0x11, 0x22, 0x33, 0]),
+        record(475, &[0xFF, 0xFF, 0xFF, 0]),
+        record(566, &[]),
+        record(474, &[]),
+        record(279, &[]),
+    ];
+    parts.concat()
+}
+
+const STYLES_XML: &str = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="yyyy\-mm\-dd"/><numFmt numFmtId="165" formatCode="[$]ge"/></numFmts><fonts count="3"><font><sz val="11"/><color theme="1"/><name val="Aptos Narrow"/><family val="2"/><scheme val="minor"/></font><font><b/><i/><strike/><u val="doubleAccounting"/><vertAlign val="superscript"/><sz val="14.5"/><color rgb="FF0080FF"/><name val="Wingdings"/><charset val="2"/></font><font><sz val="11"/><color theme="4" tint="0.39997558519241921"/><name val="Aptos Display"/><family val="2"/><scheme val="major"/></font><font><i/><sz val="11"/><name val="Aptos Narrow"/><family val="2"/><scheme val="minor"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="darkGrid"><fgColor theme="5" tint="-0.249977111117893"/><bgColor indexed="65"/></patternFill></fill><fill><gradientFill type="path" left="0.5" right="0.5" top="0.5" bottom="0.5"><stop position="0"><color theme="0"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill><fill><patternFill patternType="solid"><fgColor theme="4" tint="0.79998168889431442"/><bgColor indexed="65"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border diagonalUp="1" diagonalDown="1"><left style="hair"><color indexed="64"/></left><right style="slantDashDot"><color auto="1"/></right><top style="medium"><color rgb="FFC80000"/></top><bottom/><diagonal style="thin"><color theme="4"/></diagonal></border></borders><cellStyleXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" applyFont="0" applyFill="0" applyBorder="0" applyAlignment="0" applyProtection="0"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" quotePrefix="1" applyAlignment="1" applyProtection="1"><alignment horizontal="left" vertical="top" textRotation="180" wrapText="1" indent="2" shrinkToFit="1" readingOrder="2"/><protection locked="0" hidden="1"/></xf><xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="1" applyFont="1" applyFill="1" applyBorder="1"/></cellXfs><cellStyles count="3"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="RowLevel_2" xfId="1" builtinId="1" iLevel="1" customBuiltin="1"/><cellStyle name="Probe Style" xfId="2" hidden="1"/></cellStyles><dxfs count="2"><dxf><font><b/><i val="0"/><u val="singleAccounting"/><sz val="12"/><color rgb="FF9C0006"/><name val="Arial"/></font><numFmt numFmtId="170" formatCode="0.0"/><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill><alignment horizontal="center" wrapText="1"/><protection locked="0"/><border><bottom style="thin"><color auto="1"/></bottom></border></dxf><dxf><fill><gradientFill degree="90"><stop position="0"><color rgb="FFFFFFFF"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill></dxf></dxfs><colors><indexedColors><rgbColor rgb="00112233"/><rgbColor rgb="00FFFFFF"/></indexedColors></colors></styleSheet>"#;
+
+/// The same styles from a SpreadsheetML package.
+fn xml_styles(xml: &str) -> Styles {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root.as_bytes()),
+        ("xl/workbook.xml", br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/styles.xml", xml.as_bytes()),
+    ]);
+    styles_of(&bytes).0.unwrap()
+}
+
+/// What both readers lift out: an `<xf>`'s element keeps only its `apply*` flags, and the XML
+/// part's own element is dropped.
+fn lifted(mut s: Styles) -> Styles {
+    for xf in s.cell_style_xfs.iter_mut().chain(&mut s.cell_xfs) {
+        let attrs = xf.el.attrs.iter().filter(|(k, _)| k.starts_with("apply")).cloned().collect();
+        xf.el = craft_xml::El::new("xf");
+        xf.el.attrs = attrs;
+    }
+    s.root = craft_xml::El::default();
+    s
+}
+
+#[test]
+fn styles_are_read_as_their_xlsx_spelling() {
+    let (binary, warnings) = styles_of(&styled_file(&styles_bin(), STYLES_TYPES));
+    let binary = binary.expect("styles are read");
+    assert_eq!(lifted(binary.clone()), lifted(xml_styles(STYLES_XML)));
+    // A few of the conversions, spelled out.
+    assert_eq!(binary.fonts[1].size, Some(14.5));
+    assert_eq!(binary.fonts[1].family, None);
+    let solid = Fill::Pattern(PatternFill {
+        pattern: Some(Pattern::Solid),
+        fg: Some(Color { source: ColorSource::Rgb(0xFFFF_FF00), tint: 0.0 }),
+        bg: Some(Color { source: ColorSource::Indexed(64), tint: 0.0 }),
+    });
+    assert_eq!(binary.fills[2], solid);
+    assert_eq!(binary.cell_xfs[2].protection, Some(Protection { locked: Some(false), hidden: Some(true) }));
+    assert_eq!(binary.palette()[0], 0x11_2233);
+    // Written back as SpreadsheetML, a cell style format says what it leaves out, as Excel's does.
+    let written = String::from_utf8(binary.to_xml()).unwrap();
+    assert!(written.contains(r#"applyFont="0" applyFill="0" applyBorder="0" applyAlignment="0" applyProtection="0""#), "{written}");
+    assert!(warnings.iter().any(|w| w.contains("alternate-content")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("table styles")), "{warnings:?}");
+}
+
+#[test]
+fn damaged_styles_are_a_warning_and_the_workbook_opens() {
+    let good = styles_bin();
+    let end = record(279, &[]);
+    let body = &good[..good.len() - end.len()];
+    let with = |extra: &[u8]| [body, extra, &end].concat();
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        ("truncated", good[..good.len() - 1].to_vec(), STYLES_TYPES),
+        ("no end record", body.to_vec(), STYLES_TYPES),
+        ("unknown fill pattern", with(&pattern_fill(99, &indexed(64), &indexed(65))), STYLES_TYPES),
+        ("unknown border style", with(&record(46, &[&[0][..], &edge(14, &indexed(64)), &[0; 40]].concat())), STYLES_TYPES),
+        ("cell format outside its list", with(&brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0)), STYLES_TYPES),
+        ("short property", with(&brt_dxf(&[vec![0x19, 0, 2, 0]])), STYLES_TYPES),
+        ("wrong content type", good.clone(), TYPES),
+    ];
+    for (why, part, types) in cases {
+        let bytes = styled_file(&part, types);
+        let (styles, warnings) = styles_of(&bytes);
+        assert!(styles.is_none(), "{why}");
+        assert!(warnings.iter().any(|w| w.contains("look/styles.bin")), "{why}: {warnings:?}");
+        assert_eq!(read(&bytes).unwrap().sheets[0].value(CellRef::new(0, 0)), Value::Number(1.0), "{why}");
+    }
+    // A table past 65,536 entries is past a fixed cap: refused before it is held, as too large.
+    let xfs = brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0).repeat(65_537);
+    let bytes = styled_file(&with(&[&begin(617, 65_537)[..], &xfs, &record(618, &[])].concat()), STYLES_TYPES);
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    assert!(matches!(p.styles(), Err(Error::TooLarge(m)) if m.contains("65536 entries")));
+    // Custom table styles are not read, and say so.
+    let table_styles = [body, &record(508, &[&1u32.to_le_bytes()[..], &wide("Probe Table"), &wide("")].concat()), &end].concat();
+    let (styles, warnings) = styles_of(&styled_file(&table_styles, STYLES_TYPES));
+    assert!(styles.is_some());
+    assert!(warnings.iter().any(|w| w.contains("table styles")), "{warnings:?}");
+}
+
 /// `PtgAttrSpace` ([MS-XLSB] 2.5.98.31): its type (0 spaces before the next token, 1 line breaks
 /// before it, 2 spaces before a `(`, 4 spaces before a `)`) and count.
 fn space(kind: u8, n: u8) -> Vec<u8> {
@@ -1036,6 +1618,370 @@ fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
     assert!(warned(&wb, "references to sheets with no cells"), "{:?}", wb.warnings);
 }
 
+// Tables ([MS-XLSB] 2.1.7.51): table parts assembled from the specification's records, and the
+// `<table>` Excel writes for the same table in `.xlsx`.
+
+fn rfx(r0: u32, r1: u32, c0: u32, c1: u32) -> Vec<u8> {
+    [r0, r1, c0, c1].iter().flat_map(|n| n.to_le_bytes()).collect()
+}
+/// `BrtBeginList`: a worksheet table with no formats or cell styles, its name as its display name.
+fn begin_list(range: &[u8], id: u32, header: u32, totals: u32, flags: u32, name: &str) -> Vec<u8> {
+    begin_list_of(0, range, id, header, totals, flags, name)
+}
+/// `BrtBeginList` of a table type (`lt`): 0 a worksheet table, 2 an XML table.
+fn begin_list_of(lt: u32, range: &[u8], id: u32, header: u32, totals: u32, flags: u32, name: &str) -> Vec<u8> {
+    let mut data = range.to_vec();
+    for n in [lt, id, header, totals, flags] {
+        data.extend(n.to_le_bytes());
+    }
+    data.extend(u32::MAX.to_le_bytes().repeat(6));
+    data.extend(0u32.to_le_bytes());
+    data.extend([wide(name), wide(name), wide("")].concat());
+    data.extend(u32::MAX.to_le_bytes().repeat(3));
+    record(343, &data)
+}
+/// `BrtBeginListCol` with its totals function (`ilta`), data format and totals label.
+fn list_col(id: u32, ilta: u32, data_dxf: u32, name: &str, total: Option<&str>) -> Vec<u8> {
+    let mut data: Vec<u8> = [id, ilta, u32::MAX, data_dxf, u32::MAX, 0, u32::MAX].iter().flat_map(|n| n.to_le_bytes()).collect();
+    data.extend(wide(name));
+    data.extend(total.map_or_else(|| u32::MAX.to_le_bytes().to_vec(), wide));
+    data.extend(u32::MAX.to_le_bytes().repeat(3));
+    record(347, &data)
+}
+/// `BrtListCCFmla` (351) or `BrtListTrFmla` (352).
+fn list_formula(id: u16, rgce: &[u8]) -> Vec<u8> {
+    record(id, &[&[0u8][..], &(rgce.len() as u32).to_le_bytes(), rgce, &0u32.to_le_bytes()].concat())
+}
+/// `PtgList`: the flags hold the columns (bits 0-1), the rows (2-6) and the two spacing bits.
+fn ptg_list(ixti: u16, flags: u16, list: u32, first: u16, last: u16) -> Vec<u8> {
+    [&[0x18u8, 0x19][..], &ixti.to_le_bytes(), &flags.to_le_bytes(), &list.to_le_bytes(), &first.to_le_bytes(), &last.to_le_bytes()].concat()
+}
+fn filter_column(col: u32, flags: u16, criteria: &[Vec<u8>]) -> Vec<u8> {
+    [record(163, &[&col.to_le_bytes()[..], &flags.to_le_bytes()].concat()), criteria.concat(), record(164, &[])].concat()
+}
+fn custom_filter(vts: u8, op: u8, union: [u8; 8], text: Option<&str>) -> Vec<u8> {
+    record(174, &[&[vts, op][..], &union, &text.map(wide).unwrap_or_default()].concat())
+}
+fn table_style(flags: u16, name: &str) -> Vec<u8> {
+    record(513, &[&flags.to_le_bytes()[..], &wide(name)].concat())
+}
+/// The rows of a `PtgList` (bits 2-6).
+const fn rows(t: u16) -> u16 {
+    t << 2
+}
+
+/// The filters of Sales: a value list with blanks, two custom criteria (OR), a bottom-percent
+/// filter applied with its button hidden, and "today" applied.
+fn sales_filters() -> Vec<Vec<u8>> {
+    vec![
+        filter_column(0, 0, &[record(165, &[1, 0, 0, 0, 0, 0, 0, 0]), record(167, &wide("k3")), record(167, &wide("k4")), record(166, &[])]),
+        filter_column(
+            1,
+            0,
+            &[
+                record(172, &0u32.to_le_bytes()),
+                custom_filter(4, 1, 20f64.to_le_bytes(), None),
+                custom_filter(6, 2, [0; 8], Some("k*")),
+                record(173, &[]),
+            ],
+        ),
+        filter_column(2, 1, &[record(170, &[&[0b110u8][..], &10f64.to_le_bytes(), &23.25f64.to_le_bytes()].concat())]),
+        filter_column(3, 0, &[record(171, &[&9u32.to_le_bytes()[..], &[1], &46340f64.to_le_bytes(), &46341f64.to_le_bytes()].concat())]),
+    ]
+}
+
+/// Sales (B2:E8, id 1) with a totals row, a calculated column, a column name needing escapes,
+/// `filters` and a sort.
+fn sales(filters: &[Vec<u8>]) -> Vec<u8> {
+    [
+        begin_list(&rfx(1, 7, 1, 4), 1, 1, 1, 1, "Sales"),
+        record(161, &rfx(1, 6, 1, 4)),
+        filters.concat(),
+        record(162, &[]),
+        record(530, &[&0u16.to_le_bytes()[..], &rfx(2, 6, 1, 4)].concat()),
+        record(532, &[&1u16.to_le_bytes()[..], &rfx(1, 7, 1, 1), &[0; 8], &u32::MAX.to_le_bytes()].concat()),
+        record(533, &[]),
+        record(531, &[]),
+        record(345, &4u32.to_le_bytes()),
+        list_col(1, 0, u32::MAX, "Key", Some("Total")),
+        record(348, &[]),
+        list_col(2, 6, u32::MAX, "Val", None),
+        record(348, &[]),
+        list_col(3, 0, 2, "It's [#1]", None),
+        record(348, &[]),
+        list_col(4, 9, u32::MAX, "Calc", None),
+        list_formula(351, &[ptg_list(0, 1 | rows(0x10), 1, 1, 1), vec![0x1E, 2, 0, 0x05]].concat()),
+        list_formula(352, &[ptg_list(0, 1, 1, 3, 3), vec![0x42, 1, 7, 0]].concat()),
+        record(348, &[]),
+        record(346, &[]),
+        table_style(0b101, "TableStyleMedium9"),
+        record(344, &[]),
+    ]
+    .concat()
+}
+
+/// NoHead (H10:I11, id 2): no header row, a totals row never shown, no stripes.
+fn no_head() -> Vec<u8> {
+    [
+        begin_list(&rfx(9, 10, 7, 8), 2, 0, 0, 0, "NoHead"),
+        record(345, &2u32.to_le_bytes()),
+        list_col(1, 0, u32::MAX, "Column1", None),
+        record(348, &[]),
+        list_col(2, 0, u32::MAX, "Column2", None),
+        record(348, &[]),
+        record(346, &[]),
+        table_style(0, "TableStyleMedium2"),
+        record(344, &[]),
+    ]
+    .concat()
+}
+
+/// XmlT (K1:L2, id 3): an XML table, its columns mapped to an XML map's elements.
+fn xml_table_part() -> Vec<u8> {
+    let col = |id: u32, name: &str, kind: u32, xpath: &str| {
+        let mut data: Vec<u8> = [id, 0, u32::MAX, u32::MAX, u32::MAX, 0].iter().flat_map(|n| n.to_le_bytes()).collect();
+        data.extend([wide(name), wide(name)].concat());
+        data.extend(u32::MAX.to_le_bytes().repeat(4));
+        let map = [&1u32.to_le_bytes()[..], &(if id == 2 { 2u32 } else { 0 }).to_le_bytes(), &kind.to_le_bytes(), &wide(xpath)].concat();
+        [record(347, &data), record(349, &map), record(350, &[]), record(348, &[])].concat()
+    };
+    [
+        begin_list_of(2, &rfx(0, 1, 10, 11), 3, 1, 0, 0, "XmlT"),
+        record(345, &2u32.to_le_bytes()),
+        col(1, "a", 0x0D, "/rows/r/a"),
+        col(2, "b", 0x01, "/rows/@b"),
+        record(346, &[]),
+        table_style(0b100, "TableStyleMedium2"),
+        record(344, &[]),
+    ]
+    .concat()
+}
+
+const XML_TABLE_XML: &str = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="3" name="XmlT" displayName="XmlT" ref="K1:L2" tableType="xml" totalsRowShown="0"><tableColumns count="2"><tableColumn id="1" uniqueName="a" name="a"><xmlColumnPr mapId="1" xpath="/rows/r/a" xmlDataType="int"/></tableColumn><tableColumn id="2" uniqueName="b" name="b"><xmlColumnPr mapId="1" xpath="/rows/@b" denormalized="1" xmlDataType="string"/></tableColumn></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#;
+const SALES_XML: &str = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Sales" displayName="Sales" ref="B2:E8" totalsRowCount="1"><autoFilter ref="B2:E7"><filterColumn colId="0"><filters blank="1"><filter val="k3"/><filter val="k4"/></filters></filterColumn><filterColumn colId="1"><customFilters><customFilter operator="lessThan" val="20"/><customFilter val="k*"/></customFilters></filterColumn><filterColumn colId="2" hiddenButton="1"><top10 top="0" percent="1" val="10" filterVal="23.25"/></filterColumn><filterColumn colId="3"><dynamicFilter type="today" val="46340" maxVal="46341"/></filterColumn></autoFilter><sortState ref="B3:E7"><sortCondition descending="1" ref="B2:B8"/></sortState><tableColumns count="4"><tableColumn id="1" name="Key" totalsRowLabel="Total"/><tableColumn id="2" name="Val" totalsRowFunction="sum"/><tableColumn id="3" name="It's [#1]" dataDxfId="2"/><tableColumn id="4" name="Calc" totalsRowFunction="custom"><calculatedColumnFormula>Sales[[#This Row],[Val]]*2</calculatedColumnFormula><totalsRowFormula>MAX(Sales[Calc])</totalsRowFormula></tableColumn></tableColumns><tableStyleInfo name="TableStyleMedium9" showFirstColumn="1" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#;
+const NO_HEAD_XML: &str = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="2" name="NoHead" displayName="NoHead" ref="H10:I11" headerRowCount="0" totalsRowShown="0"><tableColumns count="2"><tableColumn id="1" name="Column1"/><tableColumn id="2" name="Column2"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="0" showColumnStripes="0"/></table>"#;
+
+fn xml_table(xml: &str) -> Table {
+    let root = craft_xml::Options::canonical(&craft_xlsx::ns::CANONICAL).parse(xml.as_bytes()).unwrap();
+    Table::read(&root).unwrap()
+}
+
+/// `book_with_links(&xti())` whose sheet one lists `tables` (`BrtListPart`, relationship ids
+/// t1, t2, ...) after `data`.
+fn book_with_tables(data: &[u8], tables: &[Vec<u8>]) -> Vec<u8> {
+    let mut list = vec![record(660, &(tables.len() as u32).to_le_bytes())];
+    let mut rels = String::from(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+    let mut types = TYPES.trim_end_matches("</Types>").to_string();
+    for i in 1..=tables.len() {
+        list.push(record(661, &wide(&format!("t{i}"))));
+        rels.push_str(&format!(r#"<Relationship Id="t{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/t{i}.bin"/>"#));
+        types.push_str(&format!(r#"<Override PartName="/tables/t{i}.bin" ContentType="application/vnd.ms-excel.table"/>"#));
+    }
+    list.push(record(662, &[]));
+    rels.push_str("</Relationships>");
+    types.push_str("</Types>");
+    let names: Vec<String> = (1..=tables.len()).map(|i| format!("tables/t{i}.bin")).collect();
+    let (book, one, two, strings) = (book_with_links(&xti()), worksheet(data, &list.concat()), worksheet(&[], &[]), sst());
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &book),
+        ("records/_rels/book.bin.rels", RELS.as_bytes()),
+        ("data/one.bin", &one),
+        ("data/_rels/one.bin.rels", rels.as_bytes()),
+        ("data/two.bin", &two),
+        ("text/strings.bin", &strings),
+    ];
+    entries.extend(names.iter().map(String::as_str).zip(tables.iter().map(Vec::as_slice)));
+    zip(&entries)
+}
+
+/// Sheet one's tables through `Package`, and its warnings.
+fn tables_of(bytes: &[u8]) -> (Vec<Table>, Vec<String>) {
+    let mut p = Package::open(bytes, &Limits::default()).unwrap();
+    let wb = p.workbook().unwrap();
+    let part = p.sheet(&wb.sheets[0], |_| Ok(())).unwrap();
+    let tables = p.tables(&part).unwrap().into_iter().map(|(_, t)| t).collect();
+    (tables, p.warnings().to_vec())
+}
+
+#[test]
+fn a_name_using_a_structured_reference_is_decoded_after_tables_are_indexed() {
+    // `Vals` = `Sales[Val]`. Names are decoded after the workbook's tables are indexed, so
+    // the formula and a cell that uses it are kept, instead of only their saved results.
+    let name = brt_name(0, 0, WORKBOOK, "Vals", &ptg_list(0, 1, 1, 1, 1), None);
+    let list = [record(660, &1u32.to_le_bytes()), record(661, &wide("t1")), record(662, &[])];
+    let mut data = row(0);
+    data.extend(formula_cell(1, &[0x23, 5, 0, 0, 0], &[])); // =Vals, after the four names of `book_with_links`
+    let types = {
+        let t = TYPES.trim_end_matches("</Types>");
+        format!(r#"{t}<Override PartName="/tables/t1.bin" ContentType="application/vnd.ms-excel.table"/></Types>"#)
+    };
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="t1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/t1.bin"/></Relationships>"#;
+    let (one, two, strings, table) = (worksheet(&data, &list.concat()), worksheet(&[], &[]), sst(), sales(&sales_filters()));
+    let book = {
+        let plain = book_with_links(&xti());
+        let end = record(132, &[]);
+        [&plain[..plain.len() - end.len()], name.as_slice(), end.as_slice()].concat()
+    };
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", book.as_slice()),
+        ("records/_rels/book.bin.rels", RELS.as_bytes()),
+        ("data/one.bin", one.as_slice()),
+        ("data/_rels/one.bin.rels", sheet_rels.as_bytes()),
+        ("data/two.bin", two.as_slice()),
+        ("text/strings.bin", strings.as_slice()),
+        ("tables/t1.bin", table.as_slice()),
+    ]);
+    let names = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap().defined_names;
+    assert_eq!(names.iter().find(|n| n.name == "Vals").map(|n| n.formula.as_str()), Some("Sales[Val]"));
+    let wb = read(&bytes).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 1)), Some("Vals"), "{:?}", wb.warnings);
+}
+
+#[test]
+fn simple_table_references_preserve_square_bracket_spacing() {
+    let cases = [
+        (1, "Sales[Val]"),
+        (1 | 0x80, "Sales[ Val ]"),
+        (rows(1), "Sales[#All]"),
+        (rows(1) | 0x80, "Sales[ #All ]"),
+        (1 | 0x100, "Sales[Val]"),
+        (rows(1) | 0x100, "Sales[#All]"),
+    ];
+    let mut data = row(0);
+    for (i, (bits, _)) in cases.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, &ptg_list(0, *bits, 1, 1, 1), &[]));
+    }
+    let bytes = book_with_tables(&data, &[sales(&sales_filters())]);
+    let wb = read(&bytes).unwrap();
+    for (i, (_, want)) in cases.iter().enumerate() {
+        assert_eq!(wb.sheets[0].formula(CellRef::new(0, i as u32 + 1)), Some(*want), "{:?}", wb.warnings);
+    }
+}
+
+#[test]
+fn tables_are_read_as_their_xlsx_spelling() {
+    // Spacing flags: 0x80 inside the outer brackets, 0x100 after commas.
+    let cells: Vec<Vec<u8>> = vec![
+        ptg_list(0, 1, 1, 1, 1),
+        ptg_list(0, 1 | rows(2), 1, 0, 0),
+        ptg_list(0, 2 | rows(4), 1, 1, 3),
+        ptg_list(0, rows(1), 1, 0, 0),
+        ptg_list(0, 0, 1, 0, 0),
+        ptg_list(0, 2 | rows(0x10), 1, 1, 3),
+        ptg_list(0, 1, 1, 2, 2),
+        ptg_list(0, 1 | rows(4) | 0x180, 1, 1, 1),
+        ptg_list(0, rows(0x10), 2, 0, 0),
+        ptg_list(0, 1 | rows(0xC) | 0x100, 1, 0, 0),
+        ptg_list(0, rows(6), 1, 0, 0),
+        // Kept as their saved results: a table that isn't there, a deleted table, a column past
+        // the table's last.
+        ptg_list(0, 0, 9, 0, 0),
+        ptg_list(0, 0x1000, 1, 0, 0),
+        ptg_list(0, 1, 1, 4, 4),
+    ];
+    let mut data = row(0);
+    for (i, rgce) in cells.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, rgce, &[]));
+    }
+    let bytes = book_with_tables(&data, &[sales(&sales_filters()), no_head(), xml_table_part()]);
+    let (tables, _) = tables_of(&bytes);
+    assert_eq!(tables, [xml_table(SALES_XML), xml_table(NO_HEAD_XML), xml_table(XML_TABLE_XML)]);
+    let wb = read(&bytes).unwrap();
+    let got: Vec<_> = (1..=14).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
+    let want = [
+        Some("Sales[Val]"),
+        Some("Sales[[#Headers],[Key]]"),
+        Some("Sales[[#Data],[Val]:[Calc]]"),
+        Some("Sales[#All]"),
+        Some("Sales[]"),
+        Some("Sales[[#This Row],[Val]:[Calc]]"),
+        Some("Sales[It''s '['#1']]"),
+        Some("Sales[ [#Data], [Val] ]"),
+        Some("NoHead[#This Row]"),
+        Some("Sales[[#Data], [#Totals], [Key]]"),
+        Some("Sales[[#Headers],[#Data]]"),
+        None,
+        None,
+        None,
+    ];
+    assert_eq!(got, want);
+    for why in ["tables the reader could not read", "deleted tables", "missing table column"] {
+        assert!(warned(&wb, why), "{why}: {:?}", wb.warnings);
+    }
+}
+
+#[test]
+fn table_filters_and_parts_the_reader_cannot_spell_are_left_out() {
+    // A filter column whose criteria are in a future-record block (where Excel keeps date
+    // groups), and one on a Boolean value: both left out, the table kept.
+    let frt = [record(35, &[3, 0, 2, 0]), record(5094, &[0; 32]), record(36, &[])].concat();
+    let mut filters = sales_filters();
+    filters.push(filter_column(4, 0, &[frt]));
+    filters.push(filter_column(5, 0, &[record(172, &0u32.to_le_bytes()), custom_filter(8, 2, [1, 0, 0, 0, 0, 0, 0, 0], None), record(173, &[])]));
+    // A truncated table part: skipped, and formulas using it keep their saved results.
+    let mut broken = no_head();
+    broken.truncate(20);
+    let data = [row(0), formula_cell(1, &ptg_list(0, 0, 2, 0, 0), &[]), formula_cell(2, &ptg_list(0, 1, 1, 1, 1), &[])].concat();
+    let bytes = book_with_tables(&data, &[sales(&filters), broken]);
+    let (tables, warnings) = tables_of(&bytes);
+    assert_eq!(tables, [xml_table(SALES_XML)]);
+    for why in ["filters kept in extensions", "custom filters on a Boolean value", "skipped tables/t2.bin"] {
+        assert!(warnings.iter().any(|w| w.contains(why)), "{why}: {warnings:?}");
+    }
+    let wb = read(&bytes).unwrap();
+    assert_eq!([1, 2].map(|c| wb.sheets[0].formula(CellRef::new(0, c))), [None, Some("Sales[Val]")]);
+    assert!(warned(&wb, "tables the reader could not read"), "{:?}", wb.warnings);
+}
+
+#[test]
+fn vba_function_names_without_macro_strings_are_read() {
+    // Excel writes a VBA function a cell calls as a BrtName with fFunc, fOB and
+    // fProc, no formula, and none of the four strings fProc names otherwise carry. `.xlsm` lists
+    // no such name; a cell calling the function spells it.
+    let vba = |text: &str| {
+        let data = [
+            &0x0Eu32.to_le_bytes()[..],
+            &[0],
+            &u32::MAX.to_le_bytes(),
+            &wide(text),
+            &0u32.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &u32::MAX.to_le_bytes(),
+        ]
+        .concat();
+        record(39, &data)
+    };
+    let mut list = names();
+    list.push(vba("Twice"));
+    let twice = [&[0x23u8, 14, 0, 0, 0][..], &[0x1E, 4, 0], &[0x42, 2, 0xFF, 0]].concat();
+    let data = [row(0), formula_cell(1, &twice, &[]), formula_cell(2, &[0x23, 9, 0, 0, 0], &[])].concat();
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    assert_eq!(wb.defined_names, xml_names(NAMES_XML));
+    let book = read(&bytes).unwrap();
+    assert_eq!([1, 2].map(|c| book.sheets[0].formula(CellRef::new(0, c))), [Some("Twice(4)"), Some("Rate")]);
+}
+
+#[test]
+fn a_macro_names_description_and_help_topic_are_read_as_excel_writes_them() {
+    // An XLM function in category 3 with the strings Excel writes after its comment: unused, the
+    // description, the help topic, unused. [MS-XLSB] labels the middle two the custom menu and the
+    // description; Excel's `.xlsm` has them as `description` and `help`.
+    let flags: u32 = 0x02 | 0x08 | (3 << 6);
+    let mut data = [&flags.to_le_bytes()[..], &[0], &u32::MAX.to_le_bytes(), &wide("FnA")].concat();
+    let rgce = ref3d_name(0, 0, 0);
+    data.extend([&(rgce.len() as u32).to_le_bytes()[..], &rgce, &0u32.to_le_bytes(), &u32::MAX.to_le_bytes()].concat());
+    data.extend([u32::MAX.to_le_bytes().to_vec(), wide("Function A"), wide("!0"), u32::MAX.to_le_bytes().to_vec()].concat());
+    let bytes = package(&book_with_names(&[record(39, &data)]), &worksheet(&row(0), &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="FnA" description="Function A" help="!0" function="1" xlm="1" functionGroupId="3">Data!$A$1</definedName></definedNames></workbook>"#;
+    assert_eq!(wb.defined_names, xml_names(xml));
+}
+
 #[test]
 fn a_formulas_array_constants_share_one_allowance() {
     // Two arrays of 40,000 Boolean values, each within what one array may hold, added together:
@@ -1064,6 +2010,38 @@ fn a_spent_formula_allowance_skips_decoding() {
 }
 
 #[test]
+fn a_name_using_a_left_out_name_is_left_out_too() {
+    // 14 Early = Later (a later name), 15 Alias = External (left out: another workbook),
+    // 16 Later = Alias, 17 Fine = Rate. Early, Alias and Later are left out whatever their order,
+    // and cells using them keep their saved results; Fine is read.
+    let mut list = names();
+    for (text, index) in [("Early", 16u32), ("Alias", 3), ("Later", 15), ("Fine", 9)] {
+        list.push(brt_name(0, 0, WORKBOOK, text, &[&[0x23u8][..], &index.to_le_bytes()].concat(), None));
+    }
+    let cell = |i: u32| [&[0x23u8][..], &i.to_le_bytes()].concat();
+    let data =
+        [row(0), formula_cell(1, &cell(14), &[]), formula_cell(2, &cell(15), &[]), formula_cell(3, &cell(16), &[]), formula_cell(4, &cell(17), &[])]
+            .concat();
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = NAMES_XML.replace("</definedNames>", r#"<definedName name="Fine">Rate</definedName></definedNames>"#);
+    assert_eq!(wb.defined_names, xml_names(&xml));
+    let book = read(&bytes).unwrap();
+    assert_eq!((1..=4).map(|c| book.sheets[0].formula(CellRef::new(0, c))).collect::<Vec<_>>(), [None, None, None, Some("Fine")]);
+    assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
+}
+
+#[test]
+fn differential_format_strings_are_charged_to_the_text_allowance() {
+    // A DXF's font name and number format are text the styles part keeps, charged like a font's.
+    let dxf = |name: &str| [record(278, &[]), begin(505, 1), brt_dxf(&[prop(0x18, &short(name))]), record(506, &[]), record(279, &[])].concat();
+    let limits = Limits { binary_text: 100, ..Limits::default() };
+    let open = |part: &[u8]| Package::open(&styled_file(part, STYLES_TYPES), &limits).unwrap().styles();
+    assert!(open(&dxf("Arial")).is_ok_and(|s| s.is_some_and(|s| s.dxfs.len() == 1)));
+    assert!(matches!(open(&dxf(&"x".repeat(200))), Err(Error::TooLarge(_))));
+}
+
+#[test]
 fn module_sheets_and_supporting_links_are_bounded() {
     // 1,025 very hidden module sheets (no relationship) before the worksheets: each keeps a place
     // in the sheet links, so together they are past the 1,024-sheet cap.
@@ -1079,4 +2057,76 @@ fn module_sheets_and_supporting_links_are_bounded() {
     let wb = read(&package(&selves, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
     assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
     assert!(wb.warnings.iter().any(|w| w.contains("sheet links or names could not be read")), "{:?}", wb.warnings);
+}
+
+#[test]
+fn empty_ordinary_names_and_their_dependants_keep_cached_values() {
+    // Forward and transitive references to an empty ordinary name must not become dangling
+    // formulas. An empty sheet-scoped Database or another built-in is not the observed
+    // workbook-level Database exception either.
+    let mut list = names();
+    let cell = |i: u32| [&[0x23u8][..], &i.to_le_bytes()].concat();
+    list.push(brt_name(0, 0, WORKBOOK, "Early", &cell(16), None)); // 14
+    list.push(brt_name(0, 0, WORKBOOK, "Empty", &[], None)); // 15
+    list.push(brt_name(0, 0, WORKBOOK, "Alias", &cell(15), None)); // 16
+    list.push(brt_name(0x20, 0, 0, "Database", &[], None)); // 17
+    list.push(brt_name(0x20, 0, WORKBOOK, "Print_Area", &[], None)); // 18
+    list.push(brt_name(0, 0, WORKBOOK, "Fine", &cell(9), None)); // 19
+    let mut data = row(0);
+    for i in 14..=19 {
+        data.extend(formula_cell(i - 13, &cell(i), &[]));
+    }
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = NAMES_XML.replace("</definedNames>", r#"<definedName name="Fine">Rate</definedName></definedNames>"#);
+    assert_eq!(wb.defined_names, xml_names(&xml));
+    let book = read(&bytes).unwrap();
+    for col in 1..=5 {
+        assert_eq!(book.sheets[0].formula(CellRef::new(0, col)), None);
+        assert_eq!(book.sheets[0].value(CellRef::new(0, col)), Value::Number(0.0));
+    }
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 6)), Some("Fine"));
+    assert!(book.warnings.iter().any(|w| w.contains("empty formula")), "{:?}", book.warnings);
+    assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
+}
+
+#[test]
+fn scoped_names_do_not_rebind_shadowed_workbook_names() {
+    let token = |i: u32| [&[0x23u8][..], &i.to_le_bytes()].concat();
+    let list = vec![
+        brt_name(0, 0, WORKBOOK, "Rate", &[0x1E, 1, 0], None),         // 1
+        brt_name(0, 0, 1, "rAtE", &[0x1E, 2, 0], None),                // 2: Hidden shadows Rate case-insensitively.
+        brt_name(0, 0, 1, "Alias", &token(1), None),                   // 3: must not become Hidden!rAtE.
+        brt_name(0, 0, 1, "Forward", &token(5), None),                 // 4
+        brt_name(0, 0, 1, "Dependent", &token(3), None),               // 5
+        brt_name(0, 0, 0, "Fine", &token(1), None),                    // 6: no shadow on Data.
+        brt_name(0, 0, 1, "LocalAlias", &token(2), None),              // 7: intentionally uses Hidden!rAtE.
+        brt_name(0, 0, WORKBOOK, "Other", &[0x1E, 3, 0], None),        // 8
+        brt_name(0, 0, 1, "Other", &[], None),                         // 9: malformed, but still an ordinary source shadow.
+        brt_name(0, 0, 1, "Conservative", &token(8), None),            // 10
+        brt_name(0, 0, WORKBOOK, "Synthetic", &[0x1E, 4, 0], None),    // 11
+        brt_name(0x0002_0000, 0, 1, "Synthetic", &[0x1C, 0x1D], None), // 12: future-function metadata.
+        brt_name(0, 0, 1, "SyntheticControl", &token(11), None),       // 13: synthetic name is not a local definition.
+    ];
+    let mut data = row(0);
+    for (col, index) in [3u32, 4, 5, 6, 10, 13].into_iter().enumerate() {
+        // PtgNameX qualifies these names on their own sheets.
+        let formula = [&[0x39u8, 0, 0][..], &index.to_le_bytes()].concat();
+        data.extend(formula_cell(col as u32 + 1, &formula, &[]));
+    }
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="Rate">1</definedName><definedName name="rAtE" localSheetId="1">2</definedName><definedName name="Fine" localSheetId="0">Rate</definedName><definedName name="LocalAlias" localSheetId="1">rAtE</definedName><definedName name="Other">3</definedName><definedName name="Synthetic">4</definedName><definedName name="SyntheticControl" localSheetId="1">Synthetic</definedName></definedNames></workbook>"#;
+    assert_eq!(wb.defined_names, xml_names(xml));
+    let book = read(&bytes).unwrap();
+    for col in 1..=3 {
+        assert_eq!(book.sheets[0].formula(CellRef::new(0, col)), None);
+        assert_eq!(book.sheets[0].value(CellRef::new(0, col)), Value::Number(0.0));
+    }
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 4)), Some("Data!Fine"));
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 5)), None);
+    assert_eq!(book.sheets[0].value(CellRef::new(0, 5)), Value::Number(0.0));
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 6)), Some("Hidden!SyntheticControl"));
+    assert!(book.warnings.iter().any(|w| w.contains("workbook names shadowed by local names")), "{:?}", book.warnings);
+    assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
 }

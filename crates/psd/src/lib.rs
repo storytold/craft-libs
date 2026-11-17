@@ -60,16 +60,18 @@ pub mod asl;
 pub mod atn;
 pub mod blend;
 pub mod builder;
+pub mod channel_resources;
 mod codepage;
 pub mod compression;
 pub mod csh;
 pub mod descriptor;
 pub mod displace_map;
+pub mod duotone;
 pub mod engine_data;
 pub mod error;
 pub mod file;
 pub mod filter_effects;
-#[cfg(any(test, feature = "testgen"))]
+#[cfg(any(test, feature = "test-support"))]
 pub mod fixtures;
 pub mod flat;
 pub mod float;
@@ -95,13 +97,14 @@ pub mod slices;
 pub mod smart;
 pub mod source;
 pub mod tagged;
-#[cfg(any(test, feature = "testgen"))]
+#[cfg(any(test, feature = "test-support"))]
 // Test-data generator (tests and fuzz seeds only): failing loudly is the point.
 #[allow(clippy::expect_used)]
 pub mod testgen;
 pub mod text;
 pub mod tiff;
 pub mod tree;
+pub mod unicode_names;
 
 pub use blend::BlendMode;
 pub use builder::{GroupSpec, LayerSpec, MaskSpec, PixelData, PsdBuilder};

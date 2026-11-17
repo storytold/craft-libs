@@ -81,6 +81,32 @@ mod tests {
         assert!(kept);
     }
 
+    /// The default look's header row is an option of the table style: a table with no style (or a
+    /// style the document doesn't have) has an ordinary first row, so RTF doesn't bold it or
+    /// repeat it on each page, and HTML doesn't make it `th`. Repeat as header row still does.
+    #[test]
+    fn look_header_row_needs_a_table_style() {
+        use craft_wordmodel::{Block, Document, table::Table};
+        let first_row_header = |style: Option<&str>, repeat: bool| {
+            let mut t = Table::new(2, 2, 200.0);
+            t.props.style = style.map(str::to_string);
+            assert!(t.props.look.header_row, "the default look has a header row");
+            if let Some(r) = t.rows.first_mut() {
+                r.props.header = repeat;
+            }
+            let mut doc = Document::new();
+            doc.body = vec![std::sync::Arc::new(Block::Table(t))];
+            let flow = from_doc(&doc);
+            let Some(FBlock::Table(ft)) = flow.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table in {:?}", flow.blocks) };
+            assert!(ft.rows.get(1).is_some_and(|r| r.iter().all(|c| !c.header)), "the second row is never a header");
+            ft.rows.first().is_some_and(|r| r.iter().all(|c| c.header))
+        };
+        assert!(first_row_header(Some("TableGrid"), false), "a table style applies the look's header row");
+        assert!(!first_row_header(None, false), "no style, no header row");
+        assert!(!first_row_header(Some("NoSuchStyle"), false), "a missing style applies nothing");
+        assert!(first_row_header(None, true), "Repeat as header row");
+    }
+
     #[test]
     fn percent_decode_requires_hex_digits() {
         assert_eq!(percent_decode("%+A"), b"%+A".to_vec());

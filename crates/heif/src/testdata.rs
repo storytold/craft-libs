@@ -1,4 +1,5 @@
-//! Synthetic HEIF files for tests (feature `testdata`): lossless, so every decoded sample is known.
+//! Synthetic HEIF files for tests (feature `test-support`, or its former name `testdata`): lossless,
+//! so every decoded sample is known.
 //!
 //! Each coded picture is one 32 × 32 coding tree unit stored as PCM samples (H.265 7.3.8.7):
 //! the bitstream carries the YCbCr values verbatim, so the decoder's HEVC stage reproduces them

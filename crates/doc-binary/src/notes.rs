@@ -93,6 +93,11 @@ pub(crate) fn parse_bookmarks(table: &[u8], fib: &crate::fib::Fib) -> Vec<(u32, 
 /// (1-byte length and Windows-1252 chars). `cbExtra` bytes after each string are skipped.
 /// Names are kept to 40 characters, but the reader always advances by the stored length.
 fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
+    sttb_strings_max(table, fc, lcb, 40)
+}
+
+/// [`sttb_strings`] keeping up to `max` characters of each string.
+pub(crate) fn sttb_strings_max(table: &[u8], fc: u32, lcb: u32, max: usize) -> Option<Vec<String>> {
     let b = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize))?;
     let extended = b.get(0..2)? == [0xFF, 0xFF];
     let head = if extended { 2 } else { 0 };
@@ -125,9 +130,10 @@ fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
         }
         at += cb_extra;
         let s: String = if extended {
-            chars.as_chunks::<2>().0.iter().take(40).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
+            // UTF-16: a surrogate pair is one character; a lone surrogate becomes U+FFFD.
+            char::decode_utf16(chars.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c))).take(max).map(|c| c.unwrap_or('\u{FFFD}')).collect()
         } else {
-            chars.iter().take(40).map(|&c| craft_codepage::cp1252(c)).collect()
+            chars.iter().take(max).map(|&c| craft_codepage::cp1252(c)).collect()
         };
         out.push(s);
     }
@@ -151,6 +157,20 @@ mod tests {
             b.extend_from_slice(extra);
         }
         b
+    }
+
+    /// A character outside the BMP (a surrogate pair) stays one character; a lone surrogate
+    /// is U+FFFD. The limit counts characters, not UTF-16 units.
+    #[test]
+    fn extended_strings_decode_surrogate_pairs() {
+        let mut b = ext_sttb(&["Ada \u{1F600}"], &[]);
+        let lone = [0x00u8, 0xD8];
+        b[2] = 2;
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&lone);
+        b.extend_from_slice(&u16::from(b'x').to_le_bytes());
+        let got = super::sttb_strings_max(&b, 0, b.len() as u32, 5).unwrap();
+        assert_eq!(got, vec!["Ada \u{1F600}".to_string(), "\u{FFFD}x".to_string()]);
     }
 
     #[test]
