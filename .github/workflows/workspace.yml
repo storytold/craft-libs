@@ -6,17 +6,21 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # A full run on main every 6 hours that is never cancelled, so the caches are saved while pushes
+  # to main cancel each other.
+  schedule:
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (push to main, a release tag, a manual run) gets a group of its own: it is neither
-  # cancelled nor replaced while queued, so a main run always finishes and saves the dependency
-  # cache, and a release run is never cancelled.
-  group: workspace-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A pull request, and main, each have one group, so a newer push cancels the run it supersedes;
+  # the newest push's run still tests everything before it. Every other run (a release tag, a
+  # manual run, the scheduled run) gets a group of its own and is neither cancelled nor replaced
+  # while queued: a release run always finishes, and the scheduled run saves the caches.
+  group: workspace-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   native:
