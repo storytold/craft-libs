@@ -2107,6 +2107,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-godot-pck"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-gridcraft-format"
 version = "0.1.0"
 dependencies = [
@@ -2123,17 +2131,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-hdr"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-har"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-hdr"
+version = "0.1.0"
+dependencies = [
  "thiserror 2.0.21",
 ]
 

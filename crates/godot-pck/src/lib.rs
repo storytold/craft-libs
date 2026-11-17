@@ -31,12 +31,22 @@ pub enum FormatError {
     Malformed(String),
 }
 
-struct Reader<'a> { data: &'a [u8] }
+struct Reader<'a> {
+    data: &'a [u8],
+}
 impl<'a> Reader<'a> {
-    fn new(data: &'a [u8]) -> Self { Self { data } }
-    fn slice(&self, at: usize, len: usize) -> Option<&'a [u8]> { self.data.get(at..at.checked_add(len)?) }
-    fn u32_le(&self, at: usize) -> Option<u32> { Some(u32::from_le_bytes(self.slice(at, 4)?.try_into().ok()?)) }
-    fn u64_le(&self, at: usize) -> Option<u64> { Some(u64::from_le_bytes(self.slice(at, 8)?.try_into().ok()?)) }
+    fn new(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+    fn slice(&self, at: usize, len: usize) -> Option<&'a [u8]> {
+        self.data.get(at..at.checked_add(len)?)
+    }
+    fn u32_le(&self, at: usize) -> Option<u32> {
+        Some(u32::from_le_bytes(self.slice(at, 4)?.try_into().ok()?))
+    }
+    fn u64_le(&self, at: usize) -> Option<u64> {
+        Some(u64::from_le_bytes(self.slice(at, 8)?.try_into().ok()?))
+    }
 }
 
 pub const MAGIC: &[u8; 4] = b"GDPC";
@@ -176,8 +186,16 @@ pub fn parse(data: &[u8]) -> Result<Pack, FormatError> {
     let end = pack_end(data.len(), embedded);
     let bytes = data.get(start..end).unwrap_or_default();
     let header = header(bytes)?;
-    let mut pack =
-        Pack { header, start: start as u64, embedded, declared_files: None, table_read: false, members: Vec::new(), truncated: false, notes: Vec::new() };
+    let mut pack = Pack {
+        header,
+        start: start as u64,
+        embedded,
+        declared_files: None,
+        table_read: false,
+        members: Vec::new(),
+        truncated: false,
+        notes: Vec::new(),
+    };
     let Some(directory) = pack.header.directory_offset else {
         pack.notes.push(format!(
             "This pack uses format {}, whose file table isn't known here, so only its header was read (formats 1 to 3 are).",
@@ -192,7 +210,8 @@ pub fn parse(data: &[u8]) -> Result<Pack, FormatError> {
     };
     let unknown = pack.header.flags & !PACK_KNOWN;
     if unknown != 0 {
-        pack.notes.push(format!("This pack sets flags not known here ({unknown:#x}), so its file table wasn't read; it may not mean what it seems to."));
+        pack.notes
+            .push(format!("This pack sets flags not known here ({unknown:#x}), so its file table wasn't read; it may not mean what it seems to."));
         return Ok(pack);
     }
     if pack.header.flags & PACK_SPARSE != 0 {
@@ -260,4 +279,3 @@ fn table_line(r: &Reader<'_>, at: usize, base: Option<u64>, with_flags: bool) ->
     let md5 = md5.iter().any(|b| *b != 0).then(|| md5.iter().map(|b| format!("{b:02x}")).collect());
     Some((Member { path, offset: base.and_then(|b| b.checked_add(offset)), size, md5, flags }, next))
 }
-
