@@ -3074,9 +3074,21 @@ fn a_footer_spelled_out_in_a_comment_before_the_tail_is_passed_over() {
     let mut edited = Document::open(Arc::new(base)).unwrap();
     edited.update_dict(ObjRef::new(1, 0), |dict| dict.set(b"Lang".to_vec(), Object::String(crate::cos::PdfString::literal("en")))).unwrap();
     let saved = crate::cos::write_incremental(&edited, &crate::cos::SaveOptions::default()).unwrap();
-    for keyword in ["% startxref", "%startxref", "% the old startxref", "nostartxref"] {
+    // `far`: a comment that starts further back than its line is looked at. `glued`: a word
+    // that only starts with the keyword (`startxref+12` is one token to the lexer).
+    let far = format!("%{}startxref {older}", " ".repeat(1100));
+    let footers = [
+        ("comment", format!("% startxref {older}")),
+        ("tight comment", format!("%startxref {older}")),
+        ("comment text", format!("% the old startxref {older}")),
+        ("longer word before", format!("nostartxref {older}")),
+        ("far", far),
+        ("glued", format!("startxref+{older}")),
+        ("longer word after", format!("startxrefs {older}")),
+    ];
+    for (keyword, footer) in footers {
         let mut bytes = saved.clone();
-        bytes.extend_from_slice(format!("\n{keyword} {older}\n%%EOF\n").as_bytes());
+        bytes.extend_from_slice(format!("\n{footer}\n%%EOF\n").as_bytes());
         bytes.extend(std::iter::repeat_n(b' ', 5000));
         let doc = Document::open(Arc::new(bytes)).unwrap();
         assert!(doc.repair_log().is_empty(), "{keyword:?}: {:?}", doc.repair_log());

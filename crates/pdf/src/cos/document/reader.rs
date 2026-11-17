@@ -1020,19 +1020,26 @@ fn footer_offset(data: &[u8], sx: usize) -> Option<(Option<usize>, usize)> {
 }
 
 /// How far back a line is read to see whether a `startxref` stands in a comment. A footer has
-/// the keyword at the start of a line; a longer line than this is taken as no comment.
+/// the keyword at the start of a line. On a longer line than this the comment could start out of
+/// sight, so the keyword is not taken.
 const COMMENT_LOOKBACK: usize = 1024;
 
 /// Whether the `startxref` at `sx` is one the lexer would read as that keyword: a token of its
-/// own (not the end of a longer word) with no `%` before it on its line, which would make it
-/// comment text. Trailing data can spell out a whole footer in a comment, with the offset of a
-/// superseded table.
+/// own (neither the end nor the start of a longer word, so not `startxref+12` either) with no
+/// `%` before it on its line, which would make it comment text. Trailing data can spell out a
+/// whole footer in a comment, with the offset of a superseded table.
 fn footer_keyword_at(data: &[u8], sx: usize) -> bool {
+    let regular = |b: &u8| !is_whitespace(*b) && !crate::cos::parser::is_delimiter(*b);
     let before = data.get(sx.saturating_sub(COMMENT_LOOKBACK)..sx).unwrap_or(&[]);
-    if before.last().is_some_and(|&b| !is_whitespace(b) && !crate::cos::parser::is_delimiter(b)) {
+    if before.last().is_some_and(regular) || data.get(sx.saturating_add(b"startxref".len())).is_some_and(regular) {
         return false;
     }
-    let line = before.iter().rposition(|&b| b == b'\n' || b == b'\r').map_or(before, |end| before.get(end.saturating_add(1)..).unwrap_or(&[]));
+    let line = match before.iter().rposition(|&b| b == b'\n' || b == b'\r') {
+        Some(end) => before.get(end.saturating_add(1)..).unwrap_or(&[]),
+        // The line starts before what was read, unless that was read from the start of the file.
+        None if before.len() < sx => return false,
+        None => before,
+    };
     !line.contains(&b'%')
 }
 
