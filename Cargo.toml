@@ -213,6 +213,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 unsafe_code = "forbid"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
 
+[workspace.lints.cargo]
+unused_workspace_dependencies = "allow"
+
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
 too_many_arguments = "deny"
