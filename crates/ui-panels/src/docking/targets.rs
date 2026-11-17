@@ -163,7 +163,7 @@ impl DockSizes {
         columns
             .iter()
             .zip(current.iter().zip(widths))
-            .filter(|(column, ((width, _), scaled))| !fixed(column) && (scaled - width).abs() >= 0.01)
+            .filter(|(column, ((width, _), scaled))| !fixed(*column) && (scaled - width).abs() >= 0.01)
             .filter_map(|(column, (_, width))| {
                 let panel = column.groups.iter().find_map(|group| group.panels.first())?.clone();
                 Some(if column.iconic { Action::resize_iconic(panel, Some(width)) } else { Action::resize_column(panel, width) })
