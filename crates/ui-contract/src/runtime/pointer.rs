@@ -763,32 +763,11 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
                 ranked.push((rank, winner, root, entry.click));
             }
         }
-        // DIAG FW-277 round O: every resolution, its stack and its answer, with CRAFT_DIAG_PRESS set.
-        let diag = std::env::var_os("CRAFT_DIAG_PRESS").is_some();
-        if diag {
-            eprintln!(
-                "DIAG under at={at:?} layer={layer:?} targets={targets:?} text_of={text_of:?} foreign={foreign} withheld={withheld:?} over={:?}",
-                under.over
-            );
-            for (rank, winner, root, clicks) in &ranked {
-                eprintln!(
-                    "DIAG   press-candidate root={root:?} rank={rank:?} owner={:?} part={:?} sense={:?} root_clicks={clicks}",
-                    winner.owner, winner.part, winner.sense
-                );
-            }
-        }
         if foreign {
             return under;
         }
         if text_of.is_none() {
             under.press = winners_of(ranked);
-        }
-        if diag {
-            eprintln!(
-                "DIAG   press={:?} top={:?}",
-                under.press,
-                top.as_ref().map(|(rank, winner, root)| (rank, winner.owner, winner.part, winner.sense, root))
-            );
         }
         under.hover_top = top.filter(|(_, winner, _)| text_of.is_some() || !winner.sense.takes_press()).map(|(_, winner, root)| (winner, root));
         under
