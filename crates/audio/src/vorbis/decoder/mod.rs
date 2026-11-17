@@ -34,8 +34,8 @@ pub enum Error {
     /// The setup header is damaged or uses something Vorbis I does not allow.
     #[error("invalid Vorbis setup: {0}")]
     Setup(&'static str),
-    /// The stream's setup asks for more memory than the decoder allows.
-    #[error("Vorbis setup above the limits: {0}")]
+    /// The setup or decoded PCM asks for more memory than the decoder allows.
+    #[error("Vorbis decode above the limits: {0}")]
     Limit(&'static str),
     /// The packet is not an audio packet (a header, or a packet with its first bit set).
     #[error("not an audio packet")]
@@ -494,7 +494,8 @@ pub struct Decoded {
 
 /// Decode the first Vorbis stream of an Ogg file. The result is trimmed to the stream's final
 /// granule position, so an encoder's padding at the end is dropped. Damaged packets are skipped
-/// and counted, not fatal.
+/// and counted, not fatal. Collected PCM is limited to 256 MiB; use the packet
+/// decoder for longer streams without retaining the entire output.
 pub fn decode_ogg(data: &[u8]) -> Result<Decoded> {
     let ogg = craft_media::ogg::open(data).map_err(|e| Error::Ogg(e.to_string()))?;
     let index = ogg.stream_of(craft_media::ogg::Codec::Vorbis).ok_or_else(|| Error::Ogg("no Vorbis stream".into()))?;
@@ -508,9 +509,7 @@ pub fn decode_ogg(data: &[u8]) -> Result<Decoded> {
         let packet = ogg.read_packet(data, index, i).map_err(|e| Error::Ogg(e.to_string()))?;
         match decoder.decode_packet(&packet) {
             Ok(pcm) => {
-                for (all, new) in channels.iter_mut().zip(pcm) {
-                    all.extend(new);
-                }
+                append_pcm(&mut channels, pcm, 256 << 20)?;
             }
             Err(_) => damaged += 1,
         }
@@ -521,4 +520,33 @@ pub fn decode_ogg(data: &[u8]) -> Result<Decoded> {
         }
     }
     Ok(Decoded { sample_rate: decoder.id.sample_rate, channels, comments: decoder.comments.clone(), damaged_packets: damaged })
+}
+
+// Admit every channel together before extending any of them. Limit retained PCM,
+// not the compressed input, setup tables or the decoder's bounded packet scratch.
+fn append_pcm(channels: &mut [Vec<f32>], pcm: Vec<Vec<f32>>, budget: usize) -> Result<()> {
+    let samples = channels.iter().chain(&pcm).try_fold(0usize, |n, c| n.checked_add(c.len()));
+    if samples.is_none_or(|n| n > budget / std::mem::size_of::<f32>()) {
+        return Err(Error::Limit("decoded PCM exceeds the whole-file budget"));
+    }
+    for (all, new) in channels.iter_mut().zip(pcm) {
+        all.try_reserve_exact(new.len()).map_err(|_| Error::Limit("cannot allocate decoded PCM"))?;
+        all.extend(new);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn pcm_budget_counts_all_channels_before_extending() {
+        let mut channels = vec![vec![1.0], vec![2.0]];
+        append_pcm(&mut channels, vec![vec![3.0], vec![4.0]], 16).expect("exact budget");
+        let before = channels.clone();
+        assert!(matches!(append_pcm(&mut channels, vec![vec![5.0], vec![6.0]], 23), Err(Error::Limit(_))));
+        assert_eq!(channels, before);
+        append_pcm(&mut channels, vec![Vec::new(), Vec::new()], 16).expect("empty packet");
+    }
 }

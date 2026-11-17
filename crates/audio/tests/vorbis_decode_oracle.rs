@@ -63,6 +63,7 @@ fn assert_same(name: &str, ours: &[Vec<f32>], theirs: &[Vec<f32>]) {
 /// not always trim a stream to its last granule position); the common part must agree.
 fn assert_prefix(name: &str, ours: &[Vec<f32>], theirs: &[Vec<f32>], exact: bool) {
     assert_eq!(ours.len(), theirs.len(), "{name}: channel count");
+    assert!(ours.iter().chain(theirs).flatten().all(|v| v.is_finite()), "{name}: non-finite oracle input or output");
     let mut used = vec![false; theirs.len()];
     for (c, o) in ours.iter().enumerate() {
         let mut best: Option<(usize, f32)> = None;
@@ -200,4 +201,16 @@ fn a_libvorbis_stream_decodes_like_ffmpeg() {
     assert!(ours.channels[0].iter().any(|s| s.abs() > 0.1), "the fixture is a tone");
     let Some(ffmpeg) = craft_media_testkit::ffmpeg() else { return };
     assert_prefix("libvorbis tone.ogg", &ours.channels, &ffmpeg_decode(&ffmpeg, &path, 1), false);
+}
+
+#[test]
+#[should_panic(expected = "non-finite oracle input or output")]
+fn oracle_comparison_rejects_nan_output() {
+    assert_same("NaN output", &[vec![f32::NAN]], &[vec![0.0]]);
+}
+
+#[test]
+#[should_panic(expected = "non-finite oracle input or output")]
+fn oracle_comparison_rejects_nan_reference() {
+    assert_same("NaN reference", &[vec![0.0]], &[vec![f32::NAN]]);
 }

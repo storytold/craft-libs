@@ -278,7 +278,13 @@ fn run(name: &str, l: &Layout, seed: u32, tolerance: f32) {
             t.extend(c);
         }
     }
-    assert!(total[0].iter().all(|v| v.is_finite()), "{name}: non-finite output");
+    let expected = usize::try_from(st.last_granule.expect("generated final granule")).expect("nonnegative granule");
+    for channel in &total {
+        assert_eq!(channel.len(), expected, "{name}: decoded sample count");
+        assert!(channel.iter().all(|v| v.is_finite()), "{name}: non-finite output");
+    }
+    let whole = decode_ogg(&ogg).expect("whole file");
+    assert_eq!(whole.channels, total, "{name}: packet and file decoding differ");
     let Some(ffmpeg) = craft_media_testkit::ffmpeg() else { return };
     let dir = craft_media_testkit::fixture_subdir("vorbis_synthetic");
     let path = dir.join(format!("{name}.ogg"));
@@ -293,7 +299,10 @@ fn run(name: &str, l: &Layout, seed: u32, tolerance: f32) {
     let all: Vec<f32> = out.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
     let ch = usize::from(l.channels);
     let theirs: Vec<Vec<f32>> = (0..ch).map(|c| all.iter().skip(c).step_by(ch).copied().collect()).collect();
-    let _ = decode_ogg(&ogg).expect("whole file");
+    assert!(theirs.iter().flatten().all(|v| v.is_finite()), "{name}: non-finite ffmpeg output");
+    for channel in &theirs {
+        assert!(channel.len() >= expected, "{name}: ffmpeg returned fewer than the expected samples");
+    }
     // ffmpeg puts the channels of surround streams in its own order, so each of ours is matched
     // with the channel of theirs it agrees with best, and every one of theirs is used once.
     let mut used = vec![false; ch];

@@ -62,10 +62,10 @@ impl Residue {
     /// in `skip` is left zero. End of packet ends decoding where it is (a nominal event).
     pub(super) fn decode(&self, r: &mut BitReader<'_>, books: &[Codebook], n: usize, skip: &[bool], out: &mut [Vec<f32>]) {
         let ch = out.len();
+        if skip.iter().all(|&s| s) {
+            return;
+        }
         if self.kind == 2 {
-            if skip.iter().all(|&s| s) {
-                return;
-            }
             let mut flat = vec![vec![0f32; n * ch]];
             let _ = self.decode_vectors(r, books, n * ch, &[false], &mut flat);
             for i in 0..n {
@@ -88,7 +88,9 @@ impl Residue {
         let classbook = &books[self.classbook];
         let cpw = classbook.dimensions;
         let partitions = (end - begin) / self.partition_size;
-        let mut classes = vec![vec![0usize; partitions + cpw]; ch];
+        // Classbook dimensions may greatly exceed the actual partition count.
+        // Retain only digits that this block can use, not padding per channel.
+        let mut classes = vec![vec![0usize; partitions]; ch];
         for pass in 0..8 {
             let mut count = 0usize;
             while count < partitions {
@@ -99,7 +101,9 @@ impl Residue {
                         }
                         let mut temp = classbook.scalar(r)? as usize;
                         for i in (0..cpw).rev() {
-                            classes[j][i + count] = temp % self.classifications;
+                            if i + count < partitions {
+                                classes[j][i + count] = temp % self.classifications;
+                            }
                             temp /= self.classifications;
                         }
                     }
@@ -146,5 +150,47 @@ impl Residue {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn huge_class_dimensions_keep_only_actual_partitions() {
+        let mut data = Vec::<u8>::new();
+        let mut bits = 0usize;
+        let mut put = |value: u32, n: usize| {
+            for i in 0..n {
+                if bits.is_multiple_of(8) {
+                    data.push(0);
+                }
+                let last = data.len() - 1;
+                data[last] |= (((value >> i) & 1) as u8) << (bits % 8);
+                bits += 1;
+            }
+        };
+        put(0x56_4342, 24);
+        put(65535, 16);
+        put(1, 24);
+        put(0, 1); // unordered, not sparse, one length-1 entry
+        put(0, 1);
+        put(0, 5);
+        put(0, 4); // scalar-only classbook
+        let book = Codebook::read(&mut BitReader::new(&data), &mut (1 << 20)).expect("classbook");
+        let books = [book];
+        for kind in [0, 1] {
+            let residue = Residue { kind, begin: 0, end: 32, partition_size: 1, classifications: 1, classbook: 0, books: vec![[None; 8]] };
+            let mut out = vec![vec![0.0; 32]; 255];
+            let packet = [0u8; 32];
+            let mut r = BitReader::new(&packet);
+            residue.decode(&mut r, &books, 32, &[false; 255], &mut out);
+            assert_eq!(r.remaining(), 1); // one classword per channel, not 32
+            assert!(out.iter().flatten().all(|&x| x == 0.0));
+            let mut r = BitReader::new(&packet);
+            residue.decode(&mut r, &books, 32, &[true; 255], &mut out);
+            assert_eq!(r.remaining(), 256); // skipped channels consume nothing
+        }
     }
 }

@@ -167,16 +167,18 @@ impl Codebook {
             let delta = float32_unpack(r.read(32).map_err(eop)?);
             let value_bits = r.read(4).map_err(eop)? + 1;
             let sequence = r.bit().map_err(eop)?;
-            let values = if lookup_type == 1 { lookup1_values(entries, dimensions) as usize } else { entries as usize * dimensions as usize };
+            // Check before multiplying or reading multiplicands: the product can overflow
+            // usize on 32-bit targets, and a type-2 table otherwise allocates before admission.
+            let total = (entries as usize)
+                .checked_mul(dimensions as usize)
+                .filter(|&n| n <= *budget / std::mem::size_of::<f32>())
+                .ok_or(Error::Limit("the codebooks' vector tables are too large"))?;
+            let values = if lookup_type == 1 { lookup1_values(entries, dimensions) as usize } else { total };
             if !minimum.is_finite() || !delta.is_finite() || values > r.remaining() / value_bits as usize {
                 return Err(bad("codebook lookup table is damaged or truncated"));
             }
             let multiplicands: Vec<u32> = (0..values).map(|_| r.read(value_bits).unwrap_or(0)).collect();
-            let total = entries as usize * dimensions as usize;
-            if total.saturating_mul(4) > *budget {
-                return Err(Error::Limit("the codebooks' vector tables are too large"));
-            }
-            *budget -= total * 4;
+            *budget -= total * std::mem::size_of::<f32>();
             vectors = vec![0f32; total];
             for e in 0..entries as usize {
                 let out = &mut vectors[e * dimensions as usize..(e + 1) * dimensions as usize];
@@ -347,6 +349,53 @@ mod tests {
         assert_eq!(lookup1_values(4, 2), 2);
         // Entry e is (m[e % 2], m[(e / 2) % 2]).
         assert_eq!(book.vectors, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn vector_budget_is_checked_before_reading_lookup_values() {
+        // A valid single-entry tree, but two values exceed the remaining budget.
+        // No multiplicands follow: admission must reject it before reading them.
+        for lookup in [1, 2] {
+            let mut w = W(Vec::new(), 0);
+            w.put(0x56_4342, 24);
+            w.put(2, 16);
+            w.put(1, 24);
+            w.put(0, 1);
+            w.put(0, 1);
+            w.put(0, 5);
+            w.put(lookup, 4);
+            w.put(0, 32);
+            w.put(0, 32);
+            w.put(15, 4);
+            w.put(0, 1);
+            let mut budget = std::mem::size_of::<Node>() + 4;
+            assert!(matches!(Codebook::read(&mut BitReader::new(&w.0), &mut budget), Err(Error::Limit(_))));
+        }
+    }
+
+    #[test]
+    fn vector_size_that_overflows_32_bits_is_refused() {
+        for lookup in [1, 2] {
+            let mut w = W(Vec::new(), 0);
+            w.put(0x56_4342, 24);
+            w.put(65535, 16);
+            w.put(65538, 24); // product is above u32::MAX
+            w.put(0, 1); // unordered
+            w.put(1, 1); // sparse: only one entry is used
+            w.put(1, 1);
+            w.put(0, 5); // length 1
+            for _ in 1..65538 {
+                w.put(0, 1);
+            }
+            w.put(lookup, 4);
+            w.put(0, 32);
+            w.put(0, 32);
+            w.put(0, 4);
+            w.put(0, 1);
+            w.put(0, 1); // lookup type 1's single multiplicand
+            let mut budget = 256 << 20;
+            assert!(matches!(Codebook::read(&mut BitReader::new(&w.0), &mut budget), Err(Error::Limit(_))));
+        }
     }
 
     #[test]
