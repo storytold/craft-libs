@@ -804,40 +804,17 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted)
                 && root.is_some_and(|own| pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own));
             if !enabled || !allowed {
-                if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
-                    eprintln!(
-                        "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: refused root {root:?} enabled {enabled} untargeted {untargeted} targets {targets:?} root rect {:?} winner {:?} layer top {:?} own layer {layer:?}",
-                        state.root.map(|own| own.rect),
-                        pointer::press_winner(ctx, at, targets).map(|(winner, root)| (winner.owner, winner.part, root)),
-                        areas::layer_at(ctx, at),
-                    );
-                }
                 return None;
             }
             // egui gives no click target where a drag-only widget is on top (a resize grip over a layer's or a
             // window's edge): a root under a raw egui one keeps its click there, but a drag is that widget's.
             let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| pointer::foreign_target(ctx, id));
             let won = resolve_press_in(state, members, xf, at, target);
-            if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
-                eprintln!(
-                    "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: root {root:?} members {members} targets {targets:?} won {:?}",
-                    won.map(|hit| (hit.owner, hit.part))
-                );
-            }
             won.map(|hit| (hit, if drag_elsewhere { hit.sense.difference(Sense::DRAG) } else { hit.sense }))
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();
         let open = machine.target();
-        if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
-            eprintln!(
-                "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: arena {:?} step {:?} open {:?} button {:?}",
-                arena.0,
-                step.phase,
-                open.as_ref().map(|target| (target.owner, target.part)),
-                machine.button()
-            );
-        }
         let dragging = step.dragging;
         state.machine = machine;
         let under = pass_pointer.hover.filter(|_| hover_layer_ok).and_then(|at| resolve_in(state, members, xf, at, ResolveFor::Hover, target));

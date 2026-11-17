@@ -507,15 +507,6 @@ impl<'m> ToolHost<'m> {
         }
         // A momentary tool takes the next press anywhere on the canvas, over the session members on its body.
         pointer::withhold_members(&ctx, pass.id, momentary_tool.is_some());
-        if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary) || i.pointer.button_released(egui::PointerButton::Secondary)) {
-            eprintln!(
-                "DIAG space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop: host {:?} momentary {:?} gesture {} background {:?}",
-                pass.id,
-                momentary_tool,
-                state.gesture.is_some(),
-                pass.press.phase
-            );
-        }
         // With no gesture and no momentary tool, a held stand-in key makes the stand-in the tool of hover, cursor and
         // paint while the selected tool does not take a primary press.
         let lent = if state.gesture.is_none() && momentary_tool.is_none() && !takes_primary {
