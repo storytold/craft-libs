@@ -465,4 +465,13 @@ mod tests {
         assert!(notes[2].contains("<duration>12</duration>") && notes[2].contains("<tie type=\"stop\"/>"));
         assert_eq!(svg(&parts, &setup()).unwrap().matches("stroke-width=\"0.9\"").count(), 1);
     }
+    #[test]
+    fn byte_budgets_and_hostile_durations_fail() {
+        assert!(musicxml_budgeted(&parts(), &setup(), 32).is_err());
+        assert!(svg_budgeted(&parts(), &setup(), 32).is_err());
+        let mut parts = parts();
+        parts[0].measures[0].items[0].units = u32::MAX;
+        assert!(musicxml(&parts, &setup()).is_err());
+        assert!(svg(&parts, &setup()).is_err());
+    }
 }
