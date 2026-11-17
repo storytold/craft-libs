@@ -35,7 +35,7 @@
 //!
 //! ```
 //! # fn main() -> Result<(), craft_xlsx::Error> {
-//! # let bytes = craft_xlsx::testing::workbook(&[("Prices", r#"<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>2.5</v></c></row>"#)], &["Tea"]);
+//! # let bytes = craft_xlsx::testing::workbook(&[("Prices", r#"<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>2.5</v></c></row>"#)], &["Tea"])?;
 //! let mut package = craft_xlsx::Package::open(&bytes, &craft_xlsx::Limits::default())?;
 //! let workbook = package.workbook()?;
 //! let strings = package.shared_strings()?;
@@ -60,6 +60,7 @@ mod richdata;
 mod sheet;
 mod strings;
 mod styles;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
 mod workbook;

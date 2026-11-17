@@ -24,7 +24,7 @@ pub(super) fn backdrop(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w:
     let stroke = ln.and_then(|l| fill_colour(l, theme));
     let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.75).clamp(0.0, 20.0);
     if fill.is_some() || stroke.is_some() {
-        out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill, stroke, stroke_width });
+        out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill, stroke, stroke_width, alpha: 1.0 });
     }
 }
 
@@ -544,7 +544,7 @@ fn markers(out: &mut Vec<GraphicItem>, pts: impl Iterator<Item = (f32, f32)>, co
     let size = s.marker_size.filter(|v| v.is_finite()).unwrap_or(MARKER).clamp(2.0, 72.0);
     let h = size / 2.0;
     let shape = |out: &mut Vec<GraphicItem>, rect: [f32; 4], kind: ShapeKind| {
-        out.push(GraphicItem::Shape { rect, kind, fill: Some(colour), stroke: None, stroke_width: 0.0 });
+        out.push(GraphicItem::Shape { rect, kind, fill: Some(colour), stroke: None, stroke_width: 0.0, alpha: 1.0 });
     };
     let mut strokes = Vec::new();
     for (x, y) in pts {

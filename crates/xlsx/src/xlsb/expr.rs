@@ -125,6 +125,8 @@ pub(crate) enum Expr {
     /// Spaces and line breaks typed before and after an expression (`PtgAttrSpace`), which
     /// `.xlsx` formula text keeps.
     Spaced(String, Box<Expr>, String),
+    /// A structured reference to a table, as written (`Sales[[#Headers],[Key]]`).
+    Structured(String),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
@@ -327,6 +329,7 @@ fn write_expr(s: &mut String, e: &Expr) {
             }
             None => s.push_str(n),
         },
+        Expr::Structured(t) => s.push_str(t),
         Expr::Unary(UnOp::Neg, x) => {
             s.push('-');
             write_expr(s, x);
