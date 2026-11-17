@@ -550,15 +550,17 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
 }
 
 fn find_press_winner(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {
-    let layer = areas::layer_at(ctx, at)?;
+    let Some(layer) = areas::layer_at(ctx, at) else {
+        if let Some(test) = diag_test() {
+            eprintln!("DIAG {test}: press_winner at {at:?}: no layer");
+        }
+        return None;
+    };
     let to_layer = |layer: Layer| areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
     let body = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last_bodies.get(&layer).copied());
     let beneath = body.map(|(root, parent)| (root, parent, to_layer(parent)));
     let on_layer = to_layer(layer);
-    PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        if targets.click.is_some_and(|widget| !registered_in(&record.last, widget)) {
-            return None;
-        }
+    let found = PerViewport::<Shapes>::with(ctx, viewport, |record| {
         // Bottom to top: the body layer's root on its own layer, then the roots on the layer in paint order.
         let mut stack: Vec<(u8, Id, &RootRecord, Pos2)> = Vec::new();
         if let Some((root, parent, point)) = beneath
@@ -570,6 +572,36 @@ fn find_press_winner(ctx: &Context, viewport: ViewportId, at: Pos2, targets: Pre
             stack.extend(roots.iter().map(|(root, entry)| (1, *root, entry, on_layer)));
         }
         let shown = stack.iter().any(|(_, _, entry, point)| entry.placed.iter().any(|placed| placed.clip.contains(*point)));
+        if let Some(test) = diag_test() {
+            let hits: Vec<String> = stack
+                .iter()
+                .flat_map(|(tier, root, entry, point)| {
+                    entry.shapes.iter().zip(&entry.placed).filter(|(shape, _)| shape.hits(*point)).map(move |(shape, placed)| {
+                        format!(
+                            "[tier {tier} root {} owner {} part {:?} sense {:?} level {:?} pos {} order {} clip_in {}]",
+                            diag_id(*root),
+                            diag_id(shape.owner),
+                            shape.part,
+                            shape.sense,
+                            shape.priority.level,
+                            shape.position,
+                            placed.order,
+                            placed.clip.contains(*point)
+                        )
+                    })
+                })
+                .collect();
+            let foreign = |widget: Option<Id>| widget.map(|widget| (diag_id(widget), !registered_in(&record.last, widget)));
+            eprintln!(
+                "DIAG {test}: press_winner at {at:?} layer {layer:?} body {:?} click {:?} drag {:?} shown {shown} hits {hits:?}",
+                beneath.map(|(root, parent, _)| (diag_id(root), parent)),
+                foreign(targets.click),
+                foreign(targets.drag)
+            );
+        }
+        if targets.click.is_some_and(|widget| !registered_in(&record.last, widget)) {
+            return None;
+        }
         stack
             .into_iter()
             .filter_map(|(tier, root, entry, point)| {
@@ -587,7 +619,35 @@ fn find_press_winner(ctx: &Context, viewport: ViewportId, at: Pos2, targets: Pre
             })
             .max_by_key(|(rank, ..)| *rank)
             .map(|(_, winner, root)| (winner, root))
-    })
+    });
+    if let Some(test) = diag_test() {
+        eprintln!(
+            "DIAG {test}: press_winner at {at:?} -> {:?}",
+            found.map(|(winner, root)| (diag_id(root), diag_id(winner.owner), winner.part, winner.sense))
+        );
+    }
+    found
+}
+
+/// DIAG: the test under study this thread runs, if any.
+pub(crate) fn diag_test() -> Option<&'static str> {
+    const TESTS: [&str; 6] = [
+        "gradient_map_stop_picker_closed_without_a_colour_changes_nothing",
+        "photo_filter_colour_picker_previews_live_cancel_restores_and_ok_is_one_step",
+        "every_paragraph_box_handle_resizes_the_box_with_snapping_on",
+        "click_inside_the_paragraph_box_off_the_glyphs_moves_the_caret",
+        "a_crop_drag_begun_before_the_dialog_still_ends_under_it",
+        "move_pointer_still_reaches_the_liquify_workspace",
+    ];
+    let thread = std::thread::current();
+    let name = thread.name()?;
+    TESTS.into_iter().find(|test| name.ends_with(test))
+}
+
+/// DIAG: the tail of an id's path.
+pub(crate) fn diag_id(id: Id) -> String {
+    let text = format!("{id:?}");
+    text.char_indices().rev().nth(90).map_or(text.clone(), |(at, _)| text[at..].to_owned())
 }
 
 /// Whether some root registered the egui widget `widget` in `layers`.

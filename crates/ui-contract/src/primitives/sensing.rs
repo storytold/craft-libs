@@ -803,6 +803,17 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             };
             let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted)
                 && root.is_some_and(|own| pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own));
+            if let Some(test) = pointer::diag_test()
+                && state.root.is_some_and(|own| own.rect.contains(at))
+            {
+                eprintln!(
+                    "DIAG {test}: start root {:?} enabled {enabled} allowed {allowed} untargeted {untargeted} takes {} layer {layer:?} rect {:?} clip {:?}",
+                    root.map(pointer::diag_id),
+                    crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted),
+                    state.root.map(|own| own.rect),
+                    state.root.map(|own| own.clip),
+                );
+            }
             if !enabled || !allowed {
                 if !state.previous.is_empty() && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
                     eprintln!(
