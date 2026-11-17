@@ -265,6 +265,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
     let mut imported_memories = 0u32;
     let mut imported_globals = 0u32;
     let mut imported_tags = 0u32;
+    let mut declared_functions = 0;
     let mut code_index = 0u32;
     let type_sig = |types: &[Option<FuncType>], t: u32| -> String {
         match types.get(t as usize) {
@@ -381,6 +382,7 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
                     }
                 }
                 Payload::FunctionSection(r) => {
+                    declared_functions = r.count();
                     for t in r {
                         if func_types.len() >= MAX_ITEMS {
                             rep.truncated = true;
@@ -562,8 +564,8 @@ pub fn inspect(data: &[u8]) -> Result<WasmReport, FormatError> {
         f.name = fn_names.get(&f.index).cloned();
         f.exported_as = exported.remove(&f.index).unwrap_or_default();
     }
-    if func_types.len() != code_index as usize && rep.parse_error.is_none() {
-        rep.warnings.push(format!("{} function declarations but {} bodies", func_types.len(), code_index));
+    if declared_functions != code_index && rep.parse_error.is_none() {
+        rep.warnings.push(format!("{declared_functions} function declarations but {code_index} bodies"));
     }
     Ok(rep)
 }
@@ -681,6 +683,36 @@ mod tests {
         let url = format!("data:application/json;base64,{}", "A".repeat(100_000));
         let report = inspect(&fx::wasm_module_with_source_mapping_url(&url)).unwrap();
         assert_eq!(report.source_mapping_url.as_deref(), Some(url.as_str()));
+    }
+
+    #[test]
+    fn large_function_tables_do_not_report_missing_declarations() {
+        fn leb(mut value: usize) -> Vec<u8> {
+            let mut out = Vec::new();
+            while value >= 128 {
+                out.push((value as u8 & 0x7f) | 0x80);
+                value >>= 7;
+            }
+            out.push(value as u8);
+            out
+        }
+        let count = MAX_ITEMS + 1;
+        let mut bytes = b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0".to_vec();
+        let mut declarations = leb(count);
+        declarations.resize(declarations.len() + count, 0);
+        let mut bodies = leb(count);
+        for _ in 0..count {
+            bodies.extend([2, 0, 0x0b]);
+        }
+        for (id, section) in [(3, declarations), (10, bodies)] {
+            bytes.push(id);
+            bytes.extend(leb(section.len()));
+            bytes.extend(section);
+        }
+        let report = inspect(&bytes).unwrap();
+        assert!(report.validation.valid && report.truncated);
+        assert_eq!(report.functions.len(), MAX_ITEMS);
+        assert!(!report.warnings.iter().any(|s| s.contains("function declarations")), "{:?}", report.warnings);
     }
 
     #[test]
