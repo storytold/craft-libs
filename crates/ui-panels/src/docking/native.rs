@@ -115,7 +115,7 @@ pub fn reported<P: Clone>(ctx: &Context, window: &Floating<P>, viewport: Viewpor
 /// corner and inner size), to `rect` where it differs by more than rounding: the place the dock gives a window it
 /// sizes itself (a column with steps). The window's next report is that place, which [`reported`] records.
 #[doc(hidden)]
-pub fn place(ctx: &Context, viewport: ViewportId, recorded: Rect, rect: Rect) {
+pub fn send_to(ctx: &Context, viewport: ViewportId, recorded: Rect, rect: Rect) {
     let differs = |delta: Vec2| delta.x.abs() > SETTLED || delta.y.abs() > SETTLED;
     let host = WindowHost::of(ctx);
     if differs(rect.min - recorded.min) {

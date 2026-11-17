@@ -1227,7 +1227,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 if let Some(viewport) = WindowHost::of(&ctx).viewport_of(output.response.id) {
                     // The OS window takes the rect of its steps at once, so the place recorded below is that rect.
                     if let Some(rect) = resized {
-                        native::place(&ctx, viewport, opening.rect, rect);
+                        native::send_to(&ctx, viewport, opening.rect, rect);
                     }
                     self.report.windows.push((anchor.clone(), viewport));
                     // A move or resize that ends records where the window would sit in the app window, and the edge it
