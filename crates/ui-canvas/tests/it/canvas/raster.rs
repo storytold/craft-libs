@@ -429,17 +429,38 @@ fn a_picture_whose_area_is_off_the_document_has_its_checkerboard_and_edge_there(
 }
 
 /// A picture shown under the canvas controls (in the canvas's picture slot) shows its own colour: the canvas surface,
-/// the page's drop shadow and its fill, which the pasteboard shown before it paints, all lie under it.
+/// the page's drop shadow and its fill, which the pasteboard shown before it paints, all lie under it. Between
+/// artboards the pasteboard covers the picture, except where it is left uncovered (a loose layer); on a board the
+/// picture shows its own colour.
 #[trial]
 fn a_picture_in_the_canvas_slot_shows_its_own_colour_over_the_pasteboard() {
-    const PICTURE: Color32 = Color32::from_rgb(204, 128, 77);
+    let page = Rect64::new(0.0, 0.0, 400.0, 300.0);
+    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), page.center(), 1.0);
+    let at = |x: f64, y: f64| view.to_screen(Point::new(x, y));
+    let plain = slot_canvas(view, vec![PageFrame::new(page).fill(DataColor::new(Color32::WHITE))], Vec::new());
+    assert!(shows_picture(&plain, at(200.0, 150.0)), "the plain page's centre shows {:?}", colour_at(&plain, at(200.0, 150.0)));
+    let boards = vec![
+        PageFrame::new(Rect64::new(20.0, 20.0, 180.0, 280.0)).name("One").active(true),
+        PageFrame::new(Rect64::new(220.0, 20.0, 380.0, 280.0)).name("Two").active(false),
+    ];
+    let loose = vec![Rect64::new(185.0, 20.0, 215.0, 60.0)];
+    let artboards = slot_canvas(view, boards, loose);
+    for (x, y, what) in [(100.0, 150.0, "the first board"), (300.0, 150.0, "the second board"), (200.0, 40.0, "the loose layer")] {
+        assert!(shows_picture(&artboards, at(x, y)), "{what} shows {:?}", colour_at(&artboards, at(x, y)));
+    }
+    assert!(!shows_picture(&artboards, at(200.0, 150.0)), "the pasteboard covers the document between the boards");
+}
+
+/// The picture's own colour.
+const PICTURE: Color32 = Color32::from_rgb(204, 128, 77);
+
+/// The shapes of a frame of a canvas whose body shows a pasteboard with `pages` and `uncovered`, then a picture in
+/// the canvas's slot that fills the canvas with [`PICTURE`].
+fn slot_canvas(view: CanvasView, pages: Vec<PageFrame>, uncovered: Vec<Rect64>) -> Vec<Shape> {
     let size = PixelSize::new(400, 300);
-    let center = Point::new(200.0, 150.0);
-    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 1.0);
-    let pages = [PageFrame::new(Rect64::new(0.0, 0.0, 400.0, 300.0)).fill(DataColor::new(Color32::WHITE))];
     let mut fixture = Fixture::new(move |ui| {
         Canvas::new("Document").view(view).show(ui, |ui, body| {
-            let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
+            let _ = Pasteboard::new("Pasteboard", &pages).uncovered(&uncovered).show_at(ui, body.rect);
             let paint = AppPaint::new(|painter, view: CanvasView| {
                 painter.painter.add(Shape::rect_filled(view.rect, 0.0, PICTURE));
             });
@@ -448,9 +469,13 @@ fn a_picture_in_the_canvas_slot_shows_its_own_colour_over_the_pasteboard() {
     });
     fixture.room(CANVAS);
     fixture.settle();
-    let shown = colour_at(&fixture.frame_shapes(), view.to_screen(center));
+    fixture.frame_shapes()
+}
+
+/// Whether `shapes` leave [`PICTURE`] at `at`, within one level.
+fn shows_picture(shapes: &[Shape], at: Pos2) -> bool {
     let want = [PICTURE.r(), PICTURE.g(), PICTURE.b(), PICTURE.a()].map(f32::from);
-    assert!(shown.iter().zip(want).all(|(got, want)| (got - want).abs() <= 1.0), "the document's centre shows {shown:?}, want {want:?}");
+    colour_at(shapes, at).iter().zip(want).all(|(got, want)| (got - want).abs() <= 1.0)
 }
 
 /// The colour `shapes` leave at `at` (premultiplied, 0..=255 per channel): each filled rect, closed path and untextured
