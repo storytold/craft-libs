@@ -74,8 +74,8 @@ impl Outcome for BarOutput {
     }
 }
 
-/// A bar over a chrome surface whose body holds the members in reading order: a tool bar's at the standard control
-/// size, an options or status bar's at the small one. They are one roving group unless the bar is made of
+/// A bar over a chrome surface whose body holds the members in reading order: a tool or options bar's at the standard
+/// control size, a status bar's at the small one. They are one roving group unless the bar is made of
 /// [`tab_stops`](Bar::tab_stops). The bar is as tall as its tallest member plus the control padding, and takes the
 /// width it is offered. On the line of a row given its height (a top or bottom slot of the shell) it fills that height
 /// and its members sit on the line's middle, with its padding at the start and end only. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the
@@ -111,7 +111,7 @@ impl<'a> Bar<'a> {
             BarKind::Status => Gap::Section,
         };
         let pad = if kind == BarKind::Options { Pad::Regular } else { Pad::Control };
-        let size = if kind == BarKind::Tool { ControlSize::Md } else { ControlSize::Sm };
+        let size = if kind == BarKind::Status { ControlSize::Sm } else { ControlSize::Md };
         let mut props = ContainerProps::new()
             .surface(SurfaceKind::Chrome)
             .pad(pad)

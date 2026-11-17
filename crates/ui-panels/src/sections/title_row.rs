@@ -147,17 +147,18 @@ pub struct TitleRowStyle {
     /// The title's type role and colour.
     #[style(text)]
     text: TextLook,
-    /// The icon before the title.
+    /// The glyphs of the title band (a disclosure lead's slot, the icon before the title, the drag handle): one side,
+    /// `size.icon.sm`, a small glyph beside the title.
     #[style(icon)]
     icon: IconLook,
-    /// The width of a disclosure lead's slot: `size.icon.sm`, a small glyph beside the title.
-    disclosure: f32,
+    /// The kind at the band's end: caption text in the faint text colour.
+    subtitle: TextLook,
     /// The side of an action part: the control height, which is below a tall header's height.
     action: f32,
 }
 
 /// An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional
-/// subtitle at the band's end (muted caption text: the target's kind), a lead (a disclosure bound to the container's
+/// subtitle at the band's end (faint caption text: the target's kind), a lead (a disclosure bound to the container's
 /// open state, or a check box bound to its gate) and action parts. A row too narrow for all its texts drops the
 /// subtitle, then the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
 /// band toggles a disclosure lead, as a click on the lead does.
@@ -179,7 +180,7 @@ pub struct TitleRow<'a> {
     /// A note run on after the title, as "· note" in muted body text: a story's name after its component's.
     #[prop(into)]
     note: Option<Label>,
-    /// Text at the end of the title band, in muted caption text: the kind of what the title names ("Pixel layer").
+    /// Text at the end of the title band, in faint caption text: the kind of what the title names ("Pixel layer").
     #[prop(into)]
     subtitle: Option<Label>,
     /// An icon before the title, painted in the style's icon colour unless the spec names another.
@@ -289,19 +290,19 @@ impl<'a> TitleRow<'a> {
         if matches!(self.lead, Lead::Disclosure(_)) {
             band = band.take_start(cx.gap()).1;
         }
-        let side = band.rect().height();
+        let side = cx.style.icon.side;
         let mut handle = None;
         if self.handle {
             let (slot, rest) = band.take_end(side);
             let (_, rest) = rest.take_end(cx.gap());
-            handle = Some(slot);
+            handle = Some(Rect::from_center_size(slot.center(), Vec2::splat(side)));
             band = rest;
         }
         let mut icon = None;
         if self.icon.is_some() {
             let (slot, rest) = band.take_start(side);
             let (_, rest) = rest.take_start(cx.gap());
-            icon = Some(slot);
+            icon = Some(Rect::from_center_size(slot.center(), Vec2::splat(side)));
             band = rest;
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).galley.size().x;
@@ -309,7 +310,7 @@ impl<'a> TitleRow<'a> {
         let note = self.note.as_ref().map_or(0.0, |note| width(&note_run(note.as_str())) + cx.gap());
         let mut subtitle = None;
         if let Some(text) = &self.subtitle {
-            let side = width(&subtitle_run(text.as_str()));
+            let side = width(&subtitle_run(text.as_str(), cx.style.subtitle.role));
             if title + note + cx.gap() + side <= band.rect().width() {
                 let (slot, rest) = band.take_end(side);
                 subtitle = Some(slot);
@@ -344,8 +345,11 @@ impl Component for TitleRow<'_> {
         TitleRowStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, height)).gap(cx.control().gap),
             text: TextLook::new(role, Stateful::new(shade).off(States::new(shade, shade, shade, disabled))),
-            icon: IconLook::new(cx.control().icon, Stateful::new(ink).off(States::new(ink, ink, ink, disabled))),
-            disclosure: cx.tokens.size.icon.sm,
+            icon: IconLook::new(cx.tokens.size.icon.sm, Stateful::new(ink).off(States::new(ink, ink, ink, disabled))),
+            subtitle: {
+                let faint = cx.color(text.faint);
+                TextLook::new(TypeRole::Caption, Stateful::new(faint).off(States::new(faint, faint, faint, disabled)))
+            },
             action: cx.control().height,
         }
     }
@@ -355,14 +359,14 @@ impl Component for TitleRow<'_> {
         let title = cx.layout(&TextRun::new(cx.resolved.label).role(role)).galley.size();
         let width = |run: &TextRun<'_>| cx.layout(run).galley.size().x + cx.gap();
         let note = self.note.as_ref().map_or(0.0, |note| width(&note_run(note.as_str())));
-        let subtitle = self.subtitle.as_ref().map_or(0.0, |subtitle| width(&subtitle_run(subtitle.as_str())));
-        let parts =
-            usize::from(self.has_lead()) + usize::from(self.icon.is_some()) + usize::from(self.handle) + self.commands.len() + self.actions.len();
+        let subtitle = self.subtitle.as_ref().map_or(0.0, |subtitle| width(&subtitle_run(subtitle.as_str(), cx.style.subtitle.role)));
+        let parts = usize::from(self.has_lead()) + self.commands.len() + self.actions.len();
+        let glyphs = usize::from(self.icon.is_some()) + usize::from(self.handle);
         // The parts are square on the row's height, which the height token can raise above the text's.
         let side = title.y.max(cx.style.metrics.min_size.y);
         let text = title.x + note + subtitle;
-        let lead = if self.has_lead() { self.lead_side(side, cx.style.disclosure) - side } else { 0.0 };
-        let natural = text + side * parts as f32 + cx.gap() * parts as f32 + lead;
+        let lead = if self.has_lead() { self.lead_side(side, cx.style.icon.side) - side } else { 0.0 };
+        let natural = text + (side + cx.gap()) * parts as f32 + (cx.style.icon.side + cx.gap()) * glyphs as f32 + lead;
         // A row takes the room it is offered, a filling row all of it, and never more: the title elides to what is left.
         let width = cx.room.map_or(natural, |room| if self.fill { room } else { natural.min(room) });
         Vec2::new(width, title.y)
@@ -377,7 +381,7 @@ impl Component for TitleRow<'_> {
         let side = rect.height();
         let mut flow = Flow::new(rect, cx.flow.is_rtl());
         if self.has_lead() {
-            let (lead, rest) = flow.take_start(self.lead_side(side, cx.style.disclosure));
+            let (lead, rest) = flow.take_start(self.lead_side(side, cx.style.icon.side));
             cx.part(LEAD, lead).sense(Sense::CLICK | Sense::FOCUS).focusable();
             flow = rest;
         }
@@ -496,7 +500,8 @@ impl Component for TitleRow<'_> {
             ui.draw().text_on_centre_line(rect, &note_run(note.as_str()));
         }
         if let (Some(rect), Some(subtitle)) = (placed.subtitle, &self.subtitle) {
-            ui.draw().text_on_centre_line(rect, &subtitle_run(subtitle.as_str()));
+            let run = subtitle_run(subtitle.as_str(), cx.style.subtitle.role).color(cx.resolve(&cx.style.subtitle.color));
+            ui.draw().text_on_centre_line(rect, &run);
         }
     }
 
@@ -514,7 +519,7 @@ fn note_run(note: &str) -> TextRun<'static> {
     TextRun::spans(vec![Span::new(format!("\u{b7} {note}")).muted()]).role(TypeRole::Body)
 }
 
-/// The subtitle at the band's end, in muted caption text.
-fn subtitle_run(subtitle: &str) -> TextRun<'_> {
-    TextRun::spans(vec![Span::new(subtitle).muted()]).role(TypeRole::Caption)
+/// The subtitle at the band's end in `role`; the paint gives it the style's colour.
+fn subtitle_run(subtitle: &str, role: TypeRole) -> TextRun<'_> {
+    TextRun::new(subtitle).role(role)
 }

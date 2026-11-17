@@ -84,3 +84,23 @@ fn settled_in(mut body: impl FnMut(&mut Ui) + 'static) -> Fixture {
     fixture.settle();
     fixture
 }
+
+/// A check box's label reads in body type, as a select's face does, and shares its baseline: in an options bar,
+/// "Anti-alias" after its box lines up with the select beside it. Guards against the label's text taking the caption
+/// role, which set it smaller and off the face's line.
+#[trial]
+fn a_check_box_label_shares_the_line_of_a_face_beside_it() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::contract::Entry;
+    use craft_ui::pickers::Select;
+    let mut fixture = Fixture::new(|ui| {
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            Checkbox::new(Bind::given(true)).label("Anti-alias").id_salt("smooth").show(ui);
+            let entries = [Entry::new(0u8, "Layer"), Entry::new(1, "Group")];
+            Select::new("Target", Bind::given(0u8), &entries).show(ui);
+        });
+    });
+    fixture.settle();
+    let (label, face) = (baseline_of(&fixture, "Anti-alias"), baseline_of(&fixture, "Layer"));
+    assert!((label - face).abs() <= 0.5, "the check box label lines up with the select's text: label {label}, select {face}");
+}

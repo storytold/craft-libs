@@ -22,6 +22,14 @@ pub(crate) fn set_hint_color(ui: &mut Ui, color: egui::Color32) {
     ui.visuals_mut().weak_text_color = Some(color);
 }
 
+/// Lets the rect `ui` was given set the height of its text edits: egui raises a text edit to the host's
+/// `interact_size` and adds its extra line spacing, which an app's own egui theme sets for its egui widgets.
+pub(crate) fn set_text_edit_unfloored(ui: &mut Ui) {
+    let spacing = ui.spacing_mut();
+    spacing.interact_size.y = 0.0;
+    spacing.extra_text_line_spacing = 0.0;
+}
+
 /// Disables `ui` without fading it: the contract already inks a disabled part in its disabled colour, so egui's own
 /// disabled alpha would dim it a second time.
 pub(crate) fn disable_without_fade(ui: &mut Ui) {

@@ -179,7 +179,7 @@ impl Component for LabelLeaf {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let line = cx.layout(&TextRun::new(cx.resolved.label));
+        let line = cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.name.role));
         let name = line.size();
         if let Some(glyph) = &self.glyph {
             let (shown, baseline) = match glyph {
@@ -207,7 +207,7 @@ impl Component for LabelLeaf {
             craft_behavior::Proposal::Width(width) => Some(width),
             _ => cx.room,
         };
-        let colon = self.colon.as_deref().map_or(0.0, |colon| cx.layout(&TextRun::new(colon)).size().x);
+        let colon = self.colon.as_deref().map_or(0.0, |colon| cx.layout(&TextRun::new(colon).role(cx.style.name.role)).size().x);
         let icon = if self.icon.is_some() { cx.style.icon + cx.style.gap } else { 0.0 };
         let trailing = self.trailing_width(cx.style.gap);
         // A name wider than the room the icon, colon, content and slot leave wraps there.
@@ -217,7 +217,7 @@ impl Component for LabelLeaf {
         {
             let left = (room - self.slot - icon - colon - trailing).max(0.0);
             if name.x > left {
-                name = cx.layout_at(&TextRun::new(cx.resolved.label).wrap(Wrap::Wrap), left).size();
+                name = cx.layout_at(&TextRun::new(cx.resolved.label).role(cx.style.name.role).wrap(Wrap::Wrap), left).size();
             }
         }
         let wrapped = name.y > line.size().y;
@@ -301,9 +301,9 @@ impl Component for LabelLeaf {
         let icon_of = |icon: &IconSpec<'static>| IconSpec { color: ink.or(icon.color), ..icon.clone() };
         // A wrapped name starts on the first line, which the icon and the content share; a one-line label sits at the
         // row's vertical centre.
-        let line = draw.layout(&TextRun::new(cx.core.resolved.label), f32::INFINITY).size();
+        let line = draw.layout(&TextRun::new(cx.core.resolved.label).role(cx.style.name.role), f32::INFINITY).size();
         let wrapped = self.after && self.glyph.is_none() && {
-            let colon = self.colon.as_deref().map_or(0.0, |colon| draw.layout(&TextRun::new(colon), f32::INFINITY).size().x);
+            let colon = self.colon.as_deref().map_or(0.0, |colon| draw.layout(&TextRun::new(colon).role(cx.style.name.role), f32::INFINITY).size().x);
             let icon = if self.icon.is_some() { cx.style.icon + cx.style.gap } else { 0.0 };
             line.x > rest.rect().width() - self.trailing_width(cx.style.gap) - icon - colon
         };
@@ -346,9 +346,9 @@ impl Component for LabelLeaf {
             }
             // A name wider than its room elides, or wraps after its control; the full text stays the accessible name.
             let name_ink = cx.resolve(&cx.style.name.color);
-            let colon = self.colon.as_deref().map(|colon| TextRun::new(colon).color(name_ink));
+            let colon = self.colon.as_deref().map(|colon| TextRun::new(colon).role(cx.style.name.role).color(name_ink));
             let colon_width = colon.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().x);
-            let run = TextRun::new(cx.core.resolved.label).color(name_ink);
+            let run = TextRun::new(cx.core.resolved.label).role(cx.style.name.role).color(name_ink);
             let run = if wrapped { run.wrap(Wrap::Wrap) } else { run.elide() };
             let name = draw.layout(&run, (rest.rect().width() - colon_width).max(0.0)).size();
             let (name_rect, after) = rest.take_start(name.x);

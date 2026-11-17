@@ -12,7 +12,7 @@ use super::words::PickerWords;
 use crate::buttons::IconButton;
 use crate::contract::overlay::{Popup, Trigger};
 use crate::contract::{
-    Access, Bind, BindMut, BodyCx, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, LeadOnOpen, LeadSource,
+    Access, Bind, BindMut, BodyCx, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, InBar, LeadOnOpen, LeadSource,
     MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupHandle, PopupKind, Props as _, Role, Show as _,
     ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _, step_stop, step_stops,
 };
@@ -186,9 +186,13 @@ impl<'a, T: Value + 'static> Select<'a, T> {
     }
 }
 
-/// Whether a select's faces fit their text: only a select sized to its content.
-fn fits(sizing: Option<Sizing>) -> bool {
-    sizing == Some(Sizing::Content)
+/// Whether a select's faces fit their text: a select sized to its content, and one in a bar (`InBar`) that sets no
+/// sizing of its own.
+fn fits(sizing: Option<Sizing>, in_bar: bool) -> bool {
+    match sizing {
+        Some(sizing) => sizing == Sizing::Content,
+        None => in_bar,
+    }
 }
 
 /// The stop a move over the closed field reaches: `stops` are the positions of the stepped entries and `from` the
@@ -231,7 +235,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let mixed = cx.words::<PickerWords>().mixed.clone();
         let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
         let texts = entries.chain(self.placeholder.iter().map(|text| (text, false))).chain(std::iter::once((&mixed, false)));
-        let fit = fits(cx.resolved.sizing());
+        let fit = fits(cx.resolved.sizing(), cx.env.get::<InBar>().0);
         texts.map(|(text, picture)| cx.face(self.sized_face(cx.env.resolve(text), picture, fit))).fold(Vec2::ZERO, Vec2::max)
     }
 
@@ -377,7 +381,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             None if cx.value().is_none() => (cx.env.resolve(&cx.words::<PickerWords>().mixed.clone()), true),
             None => (self.placeholder.as_ref().map_or(Label::Empty, |text| cx.env.resolve(text)), true),
         };
-        let mut face = SelectFace::new(text).fit(fits(cx.resolved.sizing()));
+        let mut face = SelectFace::new(text).fit(fits(cx.resolved.sizing(), cx.env.get::<InBar>().0));
         if let Some(icon) = held.and_then(|at| self.entries[at].icon_spec()) {
             face = face.leading(icon.clone());
         }

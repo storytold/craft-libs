@@ -12,7 +12,7 @@ use super::session::Interpolation;
 use super::session_bar::TransformBarWords;
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::Rect;
-use craft_behavior::{EditEvent, EditEvents, GestureId, IconId, Mixed, RulerUnits};
+use craft_behavior::{ColumnWidth, EditEvent, EditEvents, GestureId, IconId, Mixed, RulerUnits};
 use craft_ui::buttons::ToggleButton;
 use craft_ui::canvas::RulerText;
 use craft_ui::contract::{
@@ -20,7 +20,7 @@ use craft_ui::contract::{
 };
 use craft_ui::display::Divider;
 use craft_ui::form::{Field, FieldGroup};
-use craft_ui::layout_components::Row;
+use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::menu::Menu;
 use craft_ui::pickers::{Anchor9, ReferencePoint, Select};
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
@@ -191,8 +191,9 @@ impl Outcome for TransformFieldsOutput {
 ///   the whole row, the V skew included.
 /// - **W and H unit.** With [`size_units`](Self::size_units), a secondary click, the Menu key or Shift+F10 on W or H
 ///   opens a menu of the units; a pick is [`TransformFieldsOutput::unit_picked`].
-/// - **Panel form** (the default): the compact reference point with X and Y on one row, W, the link and H on the
-///   next, the angle, then the H and V skews on one row. [`groups`](Self::groups) leaves out the rows of hidden groups.
+/// - **Panel form** (the default): two field columns that fill the width, the link's column between them: W, the
+///   link and H on one row, X and Y on the next, the angle, then the H and V skews; the compact reference point, when
+///   shown, leads the first row. [`groups`](Self::groups) leaves out the rows of hidden groups.
 /// - **Bar form** ([`bar`](Self::bar)): the compact reference point, then captioned fields in Photoshop's order with a
 ///   divider between the groups, the Δ toggle between X and Y, the interpolation select last.
 ///   [`groups`](Self::groups) narrows the strip.
@@ -357,6 +358,16 @@ struct Cells<'a> {
     out: Out,
 }
 
+/// The panel form's columns: a field, the link, a field; the fields share the width.
+static FIELD_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
+/// The panel form's columns with the reference point before them.
+static REFERENCE_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
+
+/// A grid cell with nothing in it.
+fn empty(ui: &mut Ui) {
+    Stack::new().show(ui, |_, _| {});
+}
+
 /// The pass's shared facts, read before the cells.
 struct Pass {
     before: TransformRow,
@@ -403,8 +414,8 @@ impl Cells<'_> {
         (side.scrub(true), name.clone())
     }
 
-    /// One captioned field. Returns the field's event lifted to the row.
-    fn field(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, field: TransformField) {
+    /// One captioned field at `sizing`. Returns the field's event lifted to the row.
+    fn field(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, field: TransformField, sizing: Sizing) {
         let (side, name) = self.side_and_name(field);
         let conversion = &pass.conversion;
         let (kind, decimals) = conversion.format(field);
@@ -419,7 +430,7 @@ impl Cells<'_> {
         let menu = self.size_units.filter(|_| matches!(field, TransformField::W | TransformField::H));
         let mut events = EditEvents::new();
         let mut picked = None;
-        Field::new(name.clone()).id_salt(field.key()).enabled(self.enabled).side(side).sizing(Sizing::Content).show(ui, |ui, _| {
+        Field::new(name.clone()).id_salt(field.key()).enabled(self.enabled).side(side).sizing(sizing).show(ui, |ui, _| {
             let mut number = NumberField::new(name.clone(), Bind::given(Some(current)))
                 .range(-bound..=bound)
                 .codec(codec.clone())
@@ -484,15 +495,6 @@ impl Cells<'_> {
         }
     }
 
-    /// W, the link and H in one row.
-    fn size(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass) {
-        Row::new().show(ui, |ui, _| {
-            self.field(ui, cx, pass, TransformField::W);
-            self.link(ui);
-            self.field(ui, cx, pass, TransformField::H);
-        });
-    }
-
     /// The interpolation select.
     fn interpolation(&mut self, ui: &mut Ui) {
         let Some(bind) = self.interpolation.as_mut() else { return };
@@ -514,34 +516,59 @@ impl Cells<'_> {
         }
     }
 
-    /// The panel form: the compact reference point with X and Y, W with the link and H, the angle, the two skews.
+    /// The panel form: one grid whose two field columns fill the width, with the link's column between them. W, the
+    /// link and H, then X and Y, the angle, then the two skews; the reference point, when shown, leads the first row
+    /// in a column of its own. A row with nothing in a column shows an empty cell there.
     fn rows(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let mut pass = self.pass(cx);
         let groups = self.groups;
-        if groups.reference || groups.position {
-            Row::new().id_salt("position").show(ui, |ui, _| {
-                if groups.reference {
-                    self.reference(ui, cx, &pass, true);
-                }
+        let columns: &'static [ColumnWidth] = if groups.reference { &REFERENCE_COLUMNS } else { &FIELD_COLUMNS };
+        let fill = Sizing::FillWidth;
+        Grid::new(columns).id_salt("fields").fill_width().show(ui, |ui, _| {
+            let mut first = true;
+            if groups.size {
+                self.lead(ui, cx, &pass, &mut first);
+                self.field(ui, cx, &mut pass, TransformField::W, fill);
+                self.link(ui);
+                self.field(ui, cx, &mut pass, TransformField::H, fill);
+            }
+            if groups.position || (groups.reference && first) {
+                self.lead(ui, cx, &pass, &mut first);
                 if groups.position {
-                    self.field(ui, cx, &mut pass, TransformField::X);
-                    self.field(ui, cx, &mut pass, TransformField::Y);
+                    self.field(ui, cx, &mut pass, TransformField::X, fill);
+                    empty(ui);
+                    self.field(ui, cx, &mut pass, TransformField::Y, fill);
+                } else {
+                    (0..3).for_each(|_| empty(ui));
                 }
-            });
-        }
-        if groups.size {
-            self.size(ui, cx, &mut pass);
-        }
-        if groups.angle {
-            self.field(ui, cx, &mut pass, TransformField::Angle);
-        }
-        if groups.skew {
-            Row::new().id_salt("skew").show(ui, |ui, _| {
-                self.field(ui, cx, &mut pass, TransformField::SkewH);
-                self.field(ui, cx, &mut pass, TransformField::SkewV);
-            });
-        }
+            }
+            if groups.angle {
+                self.lead(ui, cx, &pass, &mut first);
+                self.field(ui, cx, &mut pass, TransformField::Angle, fill);
+                empty(ui);
+                empty(ui);
+            }
+            if groups.skew {
+                self.lead(ui, cx, &pass, &mut first);
+                self.field(ui, cx, &mut pass, TransformField::SkewH, fill);
+                empty(ui);
+                self.field(ui, cx, &mut pass, TransformField::SkewV, fill);
+            }
+        });
         *cx.memory::<Bases>() = pass.bases;
+    }
+
+    /// The panel form's leading cell of a row, while the reference point shows: the point on the first row, an empty
+    /// cell below it.
+    fn lead(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &Pass, first: &mut bool) {
+        if !self.groups.reference {
+            return;
+        }
+        if std::mem::take(first) {
+            self.reference(ui, cx, pass, true);
+        } else {
+            empty(ui);
+        }
     }
 
     /// The options-bar form: the compact reference point, X and Y, W with the link and H, the angle and the skews, the
@@ -560,23 +587,23 @@ impl Cells<'_> {
             self.reference(ui, cx, &pass, true);
         }
         if groups.position {
-            self.field(ui, cx, &mut pass, TransformField::X);
+            self.field(ui, cx, &mut pass, TransformField::X, Sizing::Content);
             self.relative_toggle(ui);
-            self.field(ui, cx, &mut pass, TransformField::Y);
+            self.field(ui, cx, &mut pass, TransformField::Y, Sizing::Content);
             any.set(true);
         }
         if divide(ui, groups.size) {
-            self.field(ui, cx, &mut pass, TransformField::W);
+            self.field(ui, cx, &mut pass, TransformField::W, Sizing::Content);
             self.link(ui);
-            self.field(ui, cx, &mut pass, TransformField::H);
+            self.field(ui, cx, &mut pass, TransformField::H, Sizing::Content);
         }
         if divide(ui, groups.angle || groups.skew) {
             if groups.angle {
-                self.field(ui, cx, &mut pass, TransformField::Angle);
+                self.field(ui, cx, &mut pass, TransformField::Angle, Sizing::Content);
             }
             if groups.skew {
-                self.field(ui, cx, &mut pass, TransformField::SkewH);
-                self.field(ui, cx, &mut pass, TransformField::SkewV);
+                self.field(ui, cx, &mut pass, TransformField::SkewH, Sizing::Content);
+                self.field(ui, cx, &mut pass, TransformField::SkewV, Sizing::Content);
             }
         }
         if self.interpolation.is_some() && divide(ui, groups.interpolation) {

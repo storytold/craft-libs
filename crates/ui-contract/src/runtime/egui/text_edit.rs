@@ -138,6 +138,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     // parent's cursor stays past the root, not past the text part inside it.
     let output = {
         let ui = &mut super::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
+        super::style::set_text_edit_unfloored(ui);
         // The text shows only inside the text part, however wide the line is.
         if galley.is_none() {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
