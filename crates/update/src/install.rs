@@ -681,12 +681,18 @@ fn prepare_home(home: &Path) {
     }
 }
 
+/// The start of the name of the folder [`staging_dir`] makes. Six random letters and digits
+/// follow it.
+#[cfg(target_os = "linux")]
+const STAGING: &str = ".artcraft-launcher-";
+
 /// A new folder of our own inside `dir`, removed when dropped: a predictable name there may be
 /// the user's.
 #[cfg(target_os = "linux")]
 fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
     tempfile::Builder::new()
-        .prefix(".artcraft-launcher-")
+        .prefix(STAGING)
+        .rand_bytes(6)
         .tempdir_in(dir)
         .map_err(|e| format!("couldn't create a staging folder in {} ({e})", dir.display()))
 }
@@ -1333,6 +1339,7 @@ pub mod linux {
         if std::fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir() || !(replace || ours && m.is_file())) {
             return Err(format!("{} already exists and wasn't installed by ArtCraft Launcher", dest.display()));
         }
+        clear_staging(&dir, std::time::SystemTime::now());
         let staging = super::staging_dir(&dir)?;
         let partial = staging.path().join(name);
         std::fs::copy(file, &partial).map_err(|e| format!("couldn't copy the AppImage ({e})"))?;
@@ -1347,6 +1354,53 @@ pub mod linux {
             removed.push(old.path.clone());
         }
         Ok((dest, removed))
+    }
+
+    /// How long a staging folder stays unchanged before it counts as left by an AppImage install
+    /// that ended partway.
+    const STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// Removes the staging folders in `dir` of AppImage installs that ended partway, with the
+    /// partial copies in them: folders named as [`super::STAGING`] describes that hold nothing or
+    /// only one regular file named `*.AppImage`, and have not changed for [`STAGING_AGE`] before
+    /// `now`. Other folders, backup folders included, are left alone. Failures are logged and the
+    /// install goes on.
+    pub(crate) fn clear_staging(dir: &Path, now: std::time::SystemTime) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let random = |rest: &str| rest.len() == 6 && rest.bytes().all(|b| b.is_ascii_alphanumeric());
+        for folder in entries.flatten() {
+            let path = folder.path();
+            let ours = folder.file_name().to_str().and_then(|n| n.strip_prefix(super::STAGING)).is_some_and(random);
+            if !ours || !folder.file_type().is_ok_and(|t| t.is_dir()) || !left_by_install(&path, now) {
+                continue;
+            }
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => log::info!("removed {}, left by an install that ended partway", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!("couldn't remove {}, left by an install that ended partway ({e})", path.display()),
+            }
+        }
+    }
+
+    /// Whether `folder` holds nothing or only one regular file named `*.AppImage`, and neither the
+    /// folder nor that file has changed for [`STAGING_AGE`] before `now`.
+    fn left_by_install(folder: &Path, now: std::time::SystemTime) -> bool {
+        let unchanged = |path: &Path| {
+            std::fs::symlink_metadata(path).and_then(|m| m.modified()).is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= STAGING_AGE))
+        };
+        let Ok(entries) = std::fs::read_dir(folder) else { return false };
+        let names: Vec<_> = entries.take(2).map(|e| e.map(|e| e.file_name())).collect();
+        let partial = match names.as_slice() {
+            [] => true,
+            [Ok(only)] => {
+                let copy = folder.join(only);
+                Path::new(only).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("AppImage"))
+                    && std::fs::symlink_metadata(&copy).is_ok_and(|m| m.is_file())
+                    && unchanged(&copy)
+            }
+            _ => false,
+        };
+        partial && unchanged(folder)
     }
 
     /// Unpacks a release tarball (`bin/<app>`, `share/…`) into `<data>/apps/<app>`, a folder
@@ -1604,6 +1658,37 @@ pub mod macos {
     /// Held while this process asks diskimages-helper for something (an attach here; the tests'
     /// `hdiutil create` too), since it turns concurrent requests away.
     pub(crate) static DISK_IMAGES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Blocks until no other test process (nor another thread here) holds the lock file that the
+    /// tests take around their disk-image work, and holds it until the file is dropped.
+    #[cfg(test)]
+    pub(crate) fn other_test_processes_wait() -> std::fs::File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(std::env::temp_dir().join("craft-update-tests-disk-images.lock"))
+            .unwrap();
+        file.lock().unwrap();
+        file
+    }
+
+    /// A test's turn at the disk-image helper, taken from other test processes and from the
+    /// other threads of this one, until dropped.
+    #[cfg(test)]
+    pub(crate) struct DiskImageTurn {
+        _in_process: std::sync::MutexGuard<'static, ()>,
+        _other_processes: std::fs::File,
+    }
+
+    /// Waits for [`DiskImageTurn`]. The lock file comes first: a test that holds only the file
+    /// around an install waits for [`DISK_IMAGES`] inside it.
+    #[cfg(test)]
+    pub(crate) fn disk_image_turn() -> DiskImageTurn {
+        let other_processes = other_test_processes_wait();
+        let in_process = DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        DiskImageTurn { _in_process: in_process, _other_processes: other_processes }
+    }
 
     /// Deep signature checks wait their turn here. `codesign --deep` reads every file of the
     /// bundle, so checks that overlap compete for the disk and all slow down. The time limit
@@ -2745,6 +2830,51 @@ mod tests {
         assert_eq!(std::fs::read(&theirs).unwrap(), b"new");
         assert_eq!(std::fs::read(&personal).unwrap(), b"user file");
         assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2, "staging was left behind");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_staging_left_by_an_install_that_ended_partway_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path();
+        let staging = |name: &str, files: &[&str]| {
+            let path = folder.join(name);
+            std::fs::create_dir(&path).unwrap();
+            for file in files {
+                std::fs::write(path.join(file), "partial").unwrap();
+            }
+            path
+        };
+        let left = [
+            staging(".artcraft-launcher-Ab12Cd", &["photocraft-0.6.0-linux-x86_64.AppImage"]),
+            staging(".artcraft-launcher-Ef34Gh", &["pdfcraft.appimage"]),
+            staging(".artcraft-launcher-Ij56Kl", &[]),
+        ];
+        let link = staging(".artcraft-launcher-Fg78Hi", &[]);
+        std::os::unix::fs::symlink(folder.join("elsewhere.AppImage"), link.join("linked.AppImage")).unwrap();
+        let file = folder.join(".artcraft-launcher-Jk90Lm");
+        std::fs::write(&file, "the user's").unwrap();
+        let now = std::time::SystemTime::now();
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        // An install still copying: its folder is old, its partial copy changed later.
+        let copying = staging(".artcraft-launcher-No12Pq", &["vectorcraft.AppImage"]);
+        std::fs::File::options().write(true).open(copying.join("vectorcraft.AppImage")).unwrap().set_modified(now + day).unwrap();
+        let kept = [
+            staging(".artcraft-launcher-Mn78Op", &["a.AppImage", "notes.txt"]),
+            staging(".artcraft-launcher-Qr90St", &["notes.txt"]),
+            staging(".artcraft-launcher-backup-Uv12Wx", &["old"]),
+            staging(".artcraft-launcher-Yz34A", &["a.AppImage"]),
+            staging(".artcraft-launcher-Bc56De7", &["a.AppImage"]),
+            staging("Cd78Ef", &["a.AppImage"]),
+            link,
+            file,
+            copying,
+        ];
+        linux::clear_staging(folder, now);
+        assert!(left.iter().chain(&kept).all(|p| p.exists()), "a folder changed within a day was removed");
+        linux::clear_staging(folder, now + day + std::time::Duration::from_secs(60));
+        assert!(left.iter().all(|p| !p.exists()), "a partial copy was left behind");
+        assert!(kept.iter().all(|p| p.exists()), "a folder that isn't a partial install was removed");
     }
 
     #[test]
@@ -4143,6 +4273,7 @@ exit 0
             expect: &Expect<'_>,
         ) -> Result<PathBuf, String> {
             let stop = Stop::default();
+            let _other_processes = macos::other_test_processes_wait();
             macos::install_dmg(app, dmg, existing, destination, replace, paths, expect, CheckTurn { stop: &stop, phase: &mut |_| {} })
         }
 
@@ -4195,33 +4326,23 @@ exit 0
             app
         }
 
-        /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The
-        /// disk-image helper turns requests away while it is busy (`attach` retries for the same
-        /// reason), so `hdiutil create` is tried a few times, and what it said is kept for the
-        /// failure message.
+        /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The tests,
+        /// in this process and in others, ask the disk-image helper one at a time; when a program
+        /// that is not one of these tests keeps it busy, the test fails with what `hdiutil create`
+        /// said.
         fn dmg(dir: &Path, version: &str) -> PathBuf {
             let src = dir.join(format!("src-{version}"));
             bundle(&src, version);
             let dmg = dir.join(format!("photocraft-{version}-macos-universal.dmg"));
-            let _one_at_a_time = super::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut said = String::new();
-            for attempt in 0..5u64 {
-                if attempt > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
-                    let _ = std::fs::remove_file(&dmg);
-                }
-                let output = std::process::Command::new("hdiutil")
-                    .args(["create", "-quiet", "-format", "UDZO", "-volname", "PhotoCraft", "-srcfolder"])
-                    .arg(&src)
-                    .arg(&dmg)
-                    .output()
-                    .unwrap();
-                if output.status.success() {
-                    return dmg;
-                }
-                said = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            }
-            panic!("hdiutil create failed after 5 tries: {said}");
+            let _one_at_a_time = macos::disk_image_turn();
+            let output = std::process::Command::new("hdiutil")
+                .args(["create", "-quiet", "-format", "UDZO", "-volname", "PhotoCraft", "-srcfolder"])
+                .arg(&src)
+                .arg(&dmg)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "hdiutil create failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+            dmg
         }
 
         #[test]
@@ -4598,31 +4719,18 @@ exit 0
             ended.wait().unwrap();
             let mount = paths.cache.join(format!("mount-photocraft-{pid}-1"));
             std::fs::create_dir_all(&mount).unwrap();
-            // The disk-image helper turns requests away while it is busy, as in `dmg`.
-            let attached = {
-                let _one_at_a_time = super::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut said = String::new();
-                let mut attached = false;
-                for attempt in 0..5u64 {
-                    if attempt > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
-                    }
-                    let output = std::process::Command::new("hdiutil")
-                        .args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-noverify", "-mountpoint"])
-                        .arg(&mount)
-                        .arg(&image)
-                        .output()
-                        .unwrap();
-                    if output.status.success() {
-                        attached = true;
-                        break;
-                    }
-                    said = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                }
-                attached.then_some(()).ok_or(said)
+            // One request at a time, as in `dmg`.
+            let output = {
+                let _one_at_a_time = macos::disk_image_turn();
+                std::process::Command::new("hdiutil")
+                    .args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-noverify", "-mountpoint"])
+                    .arg(&mount)
+                    .arg(&image)
+                    .output()
+                    .unwrap()
             };
             let _attached = Attached(mount.clone());
-            assert_eq!(attached, Ok(()), "hdiutil attach failed after 5 tries");
+            assert!(output.status.success(), "hdiutil attach failed: {}", String::from_utf8_lossy(&output.stderr).trim());
             let staging = apps.join(format!(".artcraft-launcher-staging-{pid}-Ab12Cd"));
             bundle(&staging, "0.6.0");
             std::fs::write(staging.join(".artcraft-launcher-staging"), "").unwrap();
@@ -4690,7 +4798,12 @@ exit 0
                     other
                 },
             ];
-            let now = std::time::SystemTime::now();
+            // The earlier launcher versions' folders last changed at a fixed time, which stands
+            // for now.
+            let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+            for copy in [&old].into_iter().chain(&old_kept) {
+                std::fs::File::open(copy.parent().unwrap()).unwrap().set_modified(now).unwrap();
+            }
 
             super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now);
             assert!(!left.exists(), "the partial copy of an install that ended is still there");
@@ -4700,8 +4813,11 @@ exit 0
             }
             assert_eq!(std::fs::read_to_string(elsewhere.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.4.0");
 
-            // A day later, with every process still in the same state.
+            // A minute short of a day later, and then a day later, with every process still in the
+            // same state.
             let day = std::time::Duration::from_secs(24 * 60 * 60);
+            super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now + day - std::time::Duration::from_secs(60));
+            assert!(old.exists(), "the copy of an earlier launcher version's install was removed before a day had passed");
             super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now + day + std::time::Duration::from_secs(60));
             assert!(!old.exists(), "the partial copy of an earlier launcher version's install is still there");
             for path in kept.iter().chain([&file, &link]).chain(&old_kept) {
