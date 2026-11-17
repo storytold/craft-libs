@@ -15,6 +15,7 @@ on:
       - "crates/silhouette-studio/**"
       - "crates/tiff/**"
       - "crates/heif/**"
+      - "crates/pst/**"
       - "crates/cms/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -32,6 +33,7 @@ on:
       - "crates/silhouette-studio/**"
       - "crates/tiff/**"
       - "crates/heif/**"
+      - "crates/pst/**"
       - "crates/cms/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -66,7 +68,8 @@ jobs:
           - { crate: craft-svg-paths, features: "" }
           - { crate: craft-silhouette-studio, features: "" }
           - { crate: craft-tiff, features: "" }
-          - { crate: craft-heif, features: "testdata" }
+          - { crate: craft-heif, features: "testdata test-support" }
+          - { crate: craft-pst, features: "test-writer test-support" }
           - { crate: craft-cms, features: "" }
     name: ${{ matrix.crate }} lint, tests, WASM
     runs-on: ubuntu-latest
