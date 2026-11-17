@@ -570,6 +570,25 @@ fn a_read_is_capped_where_the_file_has_grown() {
 }
 
 #[test]
+fn shape_plan_cache_reuses_and_evicts_plans() {
+    let data = font(&spec("Test", "Regular", 400));
+    let face = harfrust::FontRef::from_index(&data, 0).unwrap();
+    let shaper_data = harfrust::ShaperData::new(&face);
+    let shaper = shaper_data.shaper(&face).build();
+    let cache = ShapePlanCache::default();
+    let make = |language: &harfrust::Language| cache.get_or_create(&shaper, None, harfrust::Direction::LeftToRight, None, Some(language), &[]);
+    let languages: Vec<harfrust::Language> = ('a'..='z').flat_map(|a| ['a', 'b'].map(move |b| format!("{a}{b}").parse().unwrap())).collect();
+    let first = make(&languages[0]);
+    assert!(Arc::ptr_eq(&first, &make(&languages[0])));
+    for language in languages.iter().skip(1) {
+        make(language);
+    }
+    assert_eq!(cache.len(), ShapePlanCache::CAPACITY);
+    assert!(!Arc::ptr_eq(&first, &make(&languages[0])));
+    assert_eq!(cache.len(), ShapePlanCache::CAPACITY);
+}
+
+#[test]
 fn bounded_sfnt_reader_preserves_face_names_and_collection_indices() {
     let mut bold = spec("Example", "Bold Italic", 700);
     bold.italic = true;
