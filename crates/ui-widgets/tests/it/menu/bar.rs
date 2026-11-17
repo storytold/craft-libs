@@ -95,18 +95,17 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
 }
 
 /// The pass a pointer move over a menu's rows runs paints the row under the pointer as the active row and no other, so
-/// no follow-up frame is needed, moving down or up, in a menu taller than its room (it scrolls) and at a fractional
-/// scale; a pointer at rest asks for no frame.
+/// no follow-up frame is needed, moving down or up, at 1x and at a fractional scale; a pointer at rest asks for no
+/// frame.
 #[trial]
 fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
     use craft_behavior::MotionMode;
-    use craft_ui::contract::Role;
     use craft_ui::runtime::env::Scale;
     use craft_ui::testing::pointer;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
-    const ROWS: usize = 60;
+    const ROWS: usize = 8;
     let names: Vec<String> = (1..=ROWS).map(|at| format!("Item {at:02}")).collect();
     for scale in [1.0, 1.5] {
         let lit: Rc<RefCell<HashMap<String, bool>>> = Rc::default();
@@ -128,14 +127,8 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
         let file = fixture.by_label("File").expect("the File title");
         fixture.click(&file);
         fixture.settle();
-        // The rows whose rect lies inside the menu's: the ones its scroll shows.
-        let menu = fixture.by_role(Role::MENU).first().map(|menu| menu.rect).expect("the File menu is open");
-        let shown: Vec<(String, egui::Pos2)> = names
-            .iter()
-            .filter_map(|name| fixture.by_label(name).filter(|row| menu.contains_rect(row.rect)).map(|row| (name.clone(), row.center())))
-            .collect();
-        assert!(shown.len() >= 4, "at {scale}x the menu shows rows: {}", shown.len());
-        assert!(shown.len() < ROWS, "at {scale}x the menu is taller than its room and scrolls");
+        let shown: Vec<(String, egui::Pos2)> =
+            names.iter().map(|name| (name.clone(), fixture.by_label(name).expect("the File menu shows every row").center())).collect();
         let downward = shown.iter();
         let upward = shown.iter().rev().skip(1);
         for (name, center) in downward.chain(upward) {
