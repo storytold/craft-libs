@@ -371,6 +371,7 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
         let slots = slots();
         let status: RefCell<Option<Pending<PreviewDone, String>>> = RefCell::new(None);
         let events = RefCell::new(Vec::<VanishingPointEvent>::new());
+        let shown_canvas = std::cell::Cell::new(None);
         let this = RefCell::new(&mut *self);
 
         let shown = FullWindowDialog::new(title)
@@ -495,6 +496,7 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                     }
                 }
                 state.canvas = shown.as_ref().map(|canvas| canvas.response.id);
+                shown_canvas.set(state.canvas);
                 work.zoom_percent = state.view.zoom_percent();
                 out.extend(work.editor.take_events());
                 events.borrow_mut().extend(out);
@@ -511,7 +513,7 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
         }
         events.extend(this.editor.take_status().map(VanishingPointEvent::Refused));
         let result = shown.output.result(|| this.command(source.paste().is_some()));
-        WorkspacePass::new(shown.output.response.clone(), events).result(result)
+        WorkspacePass::new(shown.output.response.clone(), events).result(result).canvas(shown_canvas.get())
     }
 
     fn json_fields(&self, _source: &Self::Source) -> Option<Value> {

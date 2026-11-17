@@ -604,7 +604,7 @@ impl LiquifyWorkspace {
         }
         let result = shown.output.result(|| this.done());
         let events = std::mem::take(&mut this.edit.events);
-        WorkspacePass::new(shown.output.response, events).result(result)
+        WorkspacePass::new(shown.output.response, events).result(result).canvas(this.view.canvas_id)
     }
 
     /// What OK applies.
