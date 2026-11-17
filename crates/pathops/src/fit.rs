@@ -531,28 +531,25 @@ fn newton(c: &CubicBez, p: Point, t: f64) -> f64 {
 /// than that; and each point of the chord has a point of the cubic level with it along the chord, no
 /// further off it than the hull.
 pub(crate) fn chord_distance(c: &CubicBez) -> f64 {
-    let to_chord = |p: Point| {
-        let (d, h) = (c.p3 - c.p0, p - c.p0);
-        let len_sq = d.hypot2();
-        let t = if len_sq > 0.0 { (h.dot(d) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
-        (h - d * t).hypot()
-    };
-    to_chord(c.p1).max(to_chord(c.p2))
+    to_chord(c, c.p1).max(to_chord(c, c.p2))
 }
 
-/// Is the cubic (within `tol`) a straight line from p0 to p3 with handles inside the chord?
+/// The distance from `p` to the chord of `c`, the segment from its start to its end.
+fn to_chord(c: &CubicBez, p: Point) -> f64 {
+    let (d, h) = (c.p3 - c.p0, p - c.p0);
+    let len_sq = d.hypot2();
+    let t = if len_sq > 0.0 { (h.dot(d) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
+    (h - d * t).hypot()
+}
+
+/// Is the cubic a straight line from p0 to p3, within `tol`: each handle no further than `tol` from the chord (the segment from p0 to p3, so a
+/// handle beyond an end is measured to the end)? Then so is every point of the cubic, which lies in the hull of its control points. A handle that
+/// is not a number is not.
 pub(crate) fn is_straight(c: &CubicBez, tol: f64) -> bool {
-    let chord = c.p3 - c.p0;
-    let len = chord.hypot();
-    if len < 1e-12 {
+    if c.p3.distance(c.p0) < 1e-12 {
         return c.p1.distance(c.p0) <= tol && c.p2.distance(c.p0) <= tol;
     }
-    let dir = chord / len;
-    [c.p1, c.p2].iter().all(|&h| {
-        let v = h - c.p0;
-        let along = v.dot(dir);
-        v.cross(dir).abs() <= tol && along >= -tol && along <= len + tol
-    })
+    to_chord(c, c.p1) <= tol && to_chord(c, c.p2) <= tol
 }
 
 /// Sample a cubic at `n+1` evenly spaced parameters (including both ends).
@@ -706,6 +703,41 @@ mod tests {
         assert!(is_straight(&c, 1e-6));
         let c = CubicBez::new((0.0, 0.0), (3.0, 1.0), (6.0, 0.0), (9.0, 0.0));
         assert!(!is_straight(&c, 1e-6));
+    }
+
+    /// A cubic taken for straight is within the tolerance of its chord: each handle is, by its distance to the chord's segment (the allowances for how
+    /// far across the chord a handle is, and how far along it beyond the ends, were each the tolerance, which together are 1.4 times it at the
+    /// corner of their box: handles at (-0.1, 0.1) of a chord of 1e-7 at a tolerance of 0.1 gave a curve 0.106 from it).
+    #[test]
+    fn a_cubic_taken_for_straight_is_within_the_tolerance_of_its_chord() {
+        use kurbo::{Line, ParamCurveNearest};
+        let corner = CubicBez::new((0.0, 0.0), (-0.1, 0.1), (-0.1, 0.1), (1e-7, 0.0));
+        let from_chord = |c: &CubicBez| {
+            let chord = Line::new(c.p0, c.p3);
+            (0..=64).map(|k| chord.nearest(c.eval(f64::from(k) / 64.0), 1e-12).distance_sq.sqrt()).fold(0.0, f64::max)
+        };
+        assert!(from_chord(&corner) > 0.1, "{}", from_chord(&corner));
+        assert!(!is_straight(&corner, 0.1));
+        // Whatever is taken for straight is within the tolerance (and a handle that is not a number is not straight).
+        let mut rnd = random(77);
+        let mut straight = 0;
+        for case in 0..4000 {
+            let mut at = |scale: f64| Point::new((rnd() - 0.5) * scale, (rnd() - 0.5) * scale);
+            let len = if case % 5 == 0 { 1e-7 } else { 1.0 };
+            let c = CubicBez::new(Point::new(0.0, 0.0), at(0.4 * len + 0.15), at(0.4 * len + 0.15), Point::new(len, 0.0));
+            let tol = 0.1;
+            if is_straight(&c, tol) {
+                straight += 1;
+                assert!(from_chord(&c) <= tol + 1e-12, "case {case}: {c:?} is {} from its chord", from_chord(&c));
+            }
+        }
+        assert!(straight > 100, "{straight} of 4,000 were taken for straight");
+        let nan = CubicBez::new((0.0, 0.0), (f64::NAN, 0.0), (0.5, 0.0), (1.0, 0.0));
+        assert!(!is_straight(&nan, 0.1) && !is_straight(&CubicBez::new((0.0, 0.0), (0.2, 0.0), (f64::NAN, 0.0), (1.0, 0.0)), 0.1));
+        // Handles on the chord, and a short chord, are as they were.
+        assert!(is_straight(&CubicBez::new((0.0, 0.0), (0.3, 0.0), (0.7, 0.0), (1.0, 0.0)), 1e-9));
+        assert!(is_straight(&CubicBez::new((0.0, 0.0), (1e-10, 0.0), (0.0, 1e-10), (0.0, 0.0)), 1e-9));
+        assert!(!is_straight(&CubicBez::new((0.0, 0.0), (1e-8, 0.0), (0.0, 1e-10), (0.0, 0.0)), 1e-9));
     }
 
     /// A fit held to its path gives the cubic and its error at the points as a plain fit does, and apart
