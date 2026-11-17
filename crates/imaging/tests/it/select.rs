@@ -614,6 +614,22 @@ fn a_lasso_click_deselects_only_in_new_mode() {
     );
 }
 
+// A freehand outline drawn inside the click distance still closes into a selection: the lasso follows the pointer from
+// the press, and only an outline of fewer than three points is a click.
+#[trial]
+fn a_lasso_drawn_inside_the_click_distance_selects() {
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::empty());
+    down(&mut rig, (100.0, 100.0), NONE);
+    for point in [(101.0, 100.0), (100.0, 100.75)] {
+        drag_to(&mut rig, point, NONE);
+    }
+    up(&mut rig, (100.0, 100.75), NONE);
+    assert!(
+        matches!(rig.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::New, .. }]),
+        "a lasso a pixel across selects"
+    );
+}
+
 // The outline keeps the operation its first press latched: Alt at the press over a selection subtracts, and letting go
 // of Alt during the drag changes neither the operation the tool reports nor the commit's. No outline, no operation.
 #[trial]
