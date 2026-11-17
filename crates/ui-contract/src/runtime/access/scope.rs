@@ -451,8 +451,8 @@ pub(crate) struct Merged {
 /// One change a label scope makes to a node, decided here and written by `runtime::egui::access`.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LabelPatch {
-    /// The label's own node: the role `Label` and the label's text, each only where the node has none yet, and
-    /// disabled when every control it labels is.
+    /// The label's own node: made with the role `Label` and the label's text where no component wrote it (a hidden
+    /// label), and disabled when every control it labels is.
     Label { id: Id, text: String, disabled: bool },
     /// `node` keeps its name and is described by `label`.
     DescribedBy { node: Id, label: Id },

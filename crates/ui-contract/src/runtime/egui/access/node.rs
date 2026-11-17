@@ -163,6 +163,15 @@ fn write_numeric(node: &mut accesskit::Node, numeric: &Numeric) {
     }
 }
 
+/// Names `node` `text`, after its role is set. A `Label` also reads its words by value, as AccessKit expects of static
+/// text and egui names its own labels; a value written later (`NodeSpec::value`) replaces it.
+pub(crate) fn write_name(node: &mut accesskit::Node, text: &str) {
+    node.set_label(text.to_owned());
+    if node.role() == accesskit::Role::Label {
+        node.set_value(text.to_owned());
+    }
+}
+
 fn write_identity(node: &mut accesskit::Node, spec: &NodeSpec) {
     node.set_role(spec.role);
     if let Some(rect) = spec.rect {
@@ -172,7 +181,7 @@ fn write_identity(node: &mut accesskit::Node, spec: &NodeSpec) {
         node.set_hidden();
     }
     if let Some(text) = &spec.label {
-        node.set_label(text.clone());
+        write_name(node, text);
     }
     if let Some(text) = &spec.description {
         node.set_description(text.clone());

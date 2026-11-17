@@ -401,10 +401,12 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         outline_access(self.tool.draft.points(), cx)
     }
 
-    /// A selection drag takes every move from the press, so a drag of a pixel or two moves the selection;
-    /// [`MoveGesture::left_press`](craft_behavior::geometry::MoveGesture::left_press) alone decides its click.
+    /// A selection drag and an outline with the button down take every move from the press: a drag of a pixel or two
+    /// moves the selection, and the outline follows the pointer from where it went down, so a lasso drawn inside the
+    /// click distance still selects. [`MoveGesture::left_press`](craft_behavior::geometry::MoveGesture::left_press)
+    /// decides a selection drag's click, and the draft an outline's (fewer than 3 points, [`OutlineDraft::close`]).
     fn takes_every_move(&self) -> bool {
-        self.tool.inside.is_some()
+        self.tool.inside.is_some() || self.tool.draft.is_down()
     }
 
     fn command_form(&self) -> ToolPath {

@@ -5,7 +5,7 @@ use super::{Stage, current};
 use crate::runtime::focus::{self};
 use craft_behavior::focus::{EscapeFacts, EscapeStep, escape_step};
 use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, PartRef};
-use craft_keymap::{Chord, Mods};
+use craft_keymap::{Chord, Key, Mods};
 use egui::{Context, Id, Vec2};
 use std::sync::Arc;
 
@@ -452,6 +452,27 @@ fn take_untaken(ctx: &Context, intent: &Intent) -> bool {
         return false;
     }
     current(ctx, |stage| take_from(stage, focused, intent))
+}
+
+/// Takes every Escape of this pass that no component has taken, wherever the runtime routed it: the untaken `Cancel`
+/// of every stop and of the window, and every Escape chord held for a claim or a capture. For a dialog opened in this
+/// pass, the top layer from then on: the stop the keys were routed to need not hold focus any more, since the press
+/// that opened the dialog may have moved it.
+pub(crate) fn take_every_escape(ctx: &Context) -> bool {
+    if crate::runtime::measure::active(ctx) {
+        return false;
+    }
+    current(ctx, |stage| {
+        let mut taken = false;
+        for routed in stage.routed.values_mut() {
+            let before = routed.items.len();
+            routed.items.retain(|item| !item.intent.same_kind(&Intent::Cancel));
+            taken |= routed.items.len() != before;
+        }
+        let before = stage.claimed.len();
+        stage.claimed.retain(|(_, chord)| chord.key != Key::Escape);
+        taken || stage.claimed.len() != before
+    })
 }
 
 /// What an untaken Escape does in a scope: `None` when no Escape arrived or a component took it. One scope

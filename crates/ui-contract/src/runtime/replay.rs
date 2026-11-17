@@ -148,7 +148,10 @@ pub(crate) fn replay(ctx: &Context, record: &Record) {
 }
 
 fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
-    if OPEN.load(Ordering::Acquire) > 0 {
+    // Records are open only around runs of a pass on its own thread. A job's thread (a finished job's wake, a progress
+    // report) runs no pass of `ctx`: it has no record to note into and must not take the pass state that the pass's
+    // thread holds.
+    if OPEN.load(Ordering::Acquire) > 0 && frame::running(ctx).is_some() {
         pass_state::with::<Recorder, _>(ctx, |recorder| {
             if let Some(open) = recorder.open.last_mut() {
                 f(&mut open.facts);

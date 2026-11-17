@@ -9,7 +9,7 @@ use egui::{CornerRadius, Pos2, Rect as ScreenRect, Vec2};
 use kurbo::Point;
 use serde::{Deserialize, Serialize};
 
-use super::lasso::{DraftKey, draft_command, outline_access, reach};
+use super::lasso::{DraftKey, draft_command, outline_access};
 use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectionProbe, SelectionShape};
 
 /// Where the magnetic lasso cursor's icon touches the document: the icon's own origin.
@@ -521,7 +521,7 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
             });
             return ToolAction::Claimed;
         };
-        if pointer.clicks >= 2 || o.near_start(p, close_radius(cx, &place)) {
+        if pointer.clicks >= 2 || o.near_start(p, close_radius(&place)) {
             tool.close(pointer.mods.alt);
             return ToolAction::Claimed;
         }
@@ -635,7 +635,7 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
             draw.stroke(&square, StrokeWidth::Thin, style.color(overlay.handle_stroke));
         }
         if let Some(pointer) = cx.pointer
-            && o.near_start(place.doc(pointer.pos), close_radius(cx, &place))
+            && o.near_start(place.doc(pointer.pos), close_radius(&place))
         {
             // The closing cursor: a small circle beside the pointer.
             let ring = PaintShape::Circle(pointer.pos + side, tokens.shape.radius.sm);
@@ -656,7 +656,11 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
     }
 }
 
-/// How near the first point a press closes the outline, in document units.
-fn close_radius(cx: &ToolContext<'_>, place: &Place) -> f64 {
-    reach(cx).close / place.zoom().max(0.01)
+/// How near the first point a press closes the outline, in screen points. Wider than the slop: the first point snaps
+/// to the edge, a few points from the press that placed it, and a press back where the outline began closes it.
+const CLOSE_REACH: f64 = 8.0;
+
+/// [`CLOSE_REACH`] in document units.
+fn close_radius(place: &Place) -> f64 {
+    CLOSE_REACH / place.zoom().max(0.01)
 }

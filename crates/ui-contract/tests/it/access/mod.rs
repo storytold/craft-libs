@@ -5,5 +5,6 @@ mod face_record;
 mod face_state;
 mod nodes;
 mod scope;
+mod static_text;
 mod sub_node_keys;
 mod viewports;

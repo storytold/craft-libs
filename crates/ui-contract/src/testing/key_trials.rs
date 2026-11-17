@@ -8,7 +8,7 @@ use crate::runtime::keys::{intents_of, take_shortcuts};
 use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget};
 use crate::testing::input::{key_press, key_repeat};
 use crate::testing::{Frames, trial};
-use craft_behavior::Input;
+use craft_behavior::{Input, Intent};
 use craft_keymap::Overrides;
 use egui::{Id, Key, Modifiers, Ui, ViewportId};
 use std::sync::Arc;
@@ -168,4 +168,33 @@ fn a_recorder_holds_its_presses_from_the_app() {
     assert!(crate::runtime::keys::focus_holds(&frames.ctx, chord), "the recorder names the chord as its own");
     frames.frame(vec![key_press(Key::K, Modifiers::COMMAND | Modifiers::SHIFT)], &mut show);
     assert!(!saw.get(), "the app reads no press the recorder holds");
+}
+
+// A dialog opened in a pass takes that pass's Escape, also when the press that opened it moved focus off the stop the
+// Escape was routed to: the stop it left gets no Cancel.
+#[trial]
+fn a_dialog_opened_in_a_pass_takes_its_escape_after_focus_moved() {
+    let opens = std::rc::Rc::new(std::cell::Cell::new(false));
+    let cancels = std::rc::Rc::new(std::cell::Cell::new(0));
+    let (open, seen) = (std::rc::Rc::clone(&opens), std::rc::Rc::clone(&cancels));
+    let mut show = move |ui: &mut Ui| {
+        stop(ui, "button", KeyUse::of(Input::Pointer));
+        stop(ui, "canvas", KeyUse::CANVAS);
+        if open.get() {
+            // The press on the button that opens the dialog takes focus first.
+            request(ui.ctx(), FocusTarget::Id(id("button")));
+            crate::runtime::overlay::take_keys_for_new_dialog(ui.ctx());
+        }
+        if intents_of(ui.ctx(), Some(id("canvas")), false).untaken(&Intent::Cancel) {
+            seen.set(seen.get() + 1);
+        }
+    };
+    let mut frames = shown(false, &mut show);
+    focus_on(&mut frames, &mut show, "canvas");
+    press(&mut frames, &mut show, Key::Escape, Modifiers::NONE);
+    assert_eq!(cancels.get(), 1, "with no dialog opening, the focused canvas gets the Escape");
+    focus_on(&mut frames, &mut show, "canvas");
+    opens.set(true);
+    press(&mut frames, &mut show, Key::Escape, Modifiers::NONE);
+    assert_eq!(cancels.get(), 1, "the dialog opened in the pass takes it");
 }

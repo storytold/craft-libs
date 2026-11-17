@@ -6,6 +6,7 @@ use crate::contract::InBar;
 use crate::contract::{Component, Props};
 use crate::contract::{Cx, MeasureCx, PaintUi, PartsCx, Styled as _};
 use crate::primitives::{IconSpec, TextRun, Wrap};
+use crate::runtime::access::{Access, Name};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::words::CommonWords;
 use crate::style::{ComponentStyle, ResetMarkLook, Stateful, StyleColor, StyleCx, TextLook, TypeRole};
@@ -92,6 +93,8 @@ pub(super) struct LabelLeaf {
     pub(super) trailing: Vec2,
     /// The name shows; false for a label that shows only its content (`SideLabel::content_only`).
     pub(super) named: bool,
+    /// The words a short label stands for: its accessible name; `None` names it by the text it shows.
+    pub(super) words: Option<String>,
     double_click: bool,
     dot_click: bool,
     activated: bool,
@@ -129,6 +132,7 @@ impl LabelLeaf {
             claimed: false,
             trailing: Vec2::ZERO,
             named: true,
+            words: None,
             double_click: false,
             dot_click: false,
             activated: false,
@@ -250,6 +254,12 @@ impl Component for LabelLeaf {
             self.first_line.set(height);
         }
         Vec2::new(width + self.slot, height)
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if let Some(words) = &self.words {
+            access.name(Name::Text(words.clone()));
+        }
     }
 
     /// A click on the label focuses its control (the scope's `FieldLabel::activated`), so a label takes clicks; a

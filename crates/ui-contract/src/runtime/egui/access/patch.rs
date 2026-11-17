@@ -9,16 +9,11 @@ pub(crate) fn write_label_patch(ctx: &Context, patch: &LabelPatch) {
     match patch {
         LabelPatch::Label { id, text, disabled } => {
             ctx.accesskit_node_builder(*id, |node| {
+                // A shown label's leaf wrote its node, named, in this pass; a hidden label has no component, and its
+                // node is made here, named by the same rule.
                 if node.role() == accesskit::Role::Unknown {
                     node.set_role(accesskit::Role::Label);
-                }
-                // A `Label` is named by its value, as egui names its own labels; other roles by their label.
-                if node.role() == accesskit::Role::Label {
-                    if node.value().is_none() {
-                        node.set_value(text.clone());
-                    }
-                } else if node.label().is_none() {
-                    node.set_label(text.clone());
+                    super::node::write_name(node, text);
                 }
                 if *disabled {
                     node.set_disabled();

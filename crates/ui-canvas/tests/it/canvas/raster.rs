@@ -129,6 +129,24 @@ fn the_checkerboard_paints_the_same_shapes_at_any_area() {
     assert_eq!(small, large, "a checkerboard over the whole canvas paints as many shapes as one over a corner of it");
 }
 
+// The checkerboard's light cell sits at the document's top-left corner on screen, wherever the view puts the document,
+// not at a corner of the canvas.
+#[trial]
+fn the_checkerboard_starts_with_a_light_cell_at_the_document_corner() {
+    for (width, height, zoom) in [(100, 70, 1.0), (64, 64, 0.5), (80, 40, 1.5)] {
+        let document = Document::new(width, height);
+        let center = Point::new(f64::from(width) / 2.0, f64::from(height) / 2.0);
+        let corner = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, zoom).to_screen(Point::ZERO);
+        let mut rig = rig(document, zoom);
+        let shapes = rig.fixture.frame_shapes();
+        let checker = *textured(&shapes).first().expect("the checkerboard");
+        let at_corner = checker.vertices.iter().find(|vertex| vertex.pos.distance(corner) < 0.5).expect("a checkerboard corner at the document's");
+        let whole = |v: f32| (v - v.round()).abs() < 1e-3;
+        // The texture repeats every two cells, light first: a whole texture coordinate is a light cell's top-left.
+        assert!(whole(at_corner.uv.x) && whole(at_corner.uv.y), "{width} x {height} at {zoom}: a light cell starts at the document's corner: {:?}", at_corner.uv);
+    }
+}
+
 /// A canvas at 800 percent whose body shows, as a document canvas does, the pasteboard with the document's page and
 /// its shadow, a display of `document` with the checkerboard and the edge, and the pixel grid over it. While `painted`
 /// is set the display is a painted one: the app's paint adds a GPU paint callback, as an app with its own compositor

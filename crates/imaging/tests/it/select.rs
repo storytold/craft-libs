@@ -614,6 +614,22 @@ fn a_lasso_click_deselects_only_in_new_mode() {
     );
 }
 
+// A freehand outline drawn inside the click distance still closes into a selection: the lasso follows the pointer from
+// the press, and only an outline of fewer than three points is a click.
+#[trial]
+fn a_lasso_drawn_inside_the_click_distance_selects() {
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::empty());
+    down(&mut rig, (100.0, 100.0), NONE);
+    for point in [(101.0, 100.0), (100.0, 100.75)] {
+        drag_to(&mut rig, point, NONE);
+    }
+    up(&mut rig, (100.0, 100.75), NONE);
+    assert!(
+        matches!(rig.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::New, .. }]),
+        "a lasso a pixel across selects"
+    );
+}
+
 // The outline keeps the operation its first press latched: Alt at the press over a selection subtracts, and letting go
 // of Alt during the drag changes neither the operation the tool reports nor the commit's. No outline, no operation.
 #[trial]
@@ -889,6 +905,20 @@ fn magnetic_closes_by_start_click_double_click_or_enter_and_retracts_to_the_firs
     }
     assert_eq!(presses, fastened, "one Backspace per fastening point, the first one last");
     assert!(rig.tool_mut().events().is_empty(), "retracting commits nothing");
+}
+
+// The first point snaps to the edge a few points from the press that placed it, farther than the slop: a click back
+// where the outline began closes it, as a click on the start itself does.
+#[trial]
+fn a_click_where_the_magnetic_outline_began_closes_it() {
+    let (mut rig, _) = magnetic();
+    let began = CENTRE + circle_offset(0.0) * ((RADIUS + 5.0) / RADIUS);
+    click(&mut rig, pt(began), NONE);
+    glide_along(&mut rig, 0.0, std::f64::consts::TAU);
+    rig.fixture().advance(1.0);
+    click(&mut rig, pt(began), NONE);
+    let points = committed_polygon(&rig.tool_mut().events());
+    assert!(points.len() >= 3 && points.iter().all(|&p| on_circle(p)), "a click where the outline began closes: {points:?}");
 }
 
 // `[` and `]` change the width by 1 within 1..=256 while an outline is open.
