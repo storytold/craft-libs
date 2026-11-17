@@ -304,7 +304,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             self.move_lead(at, LeadSource::Pointer);
             let mut request = self.menu_request(layout, Placement { rect, offset, rtl }, at, local(pos));
-            request.part = hover.filter(|hit| hit.owner != cx.core.id).and_then(|hit| hit.part);
+            request.part = hover.find(|hit| hit.owner != cx.core.id).and_then(|hit| hit.part);
             self.ask_menu(request);
         }
         self.slow_click_due(comp, cx);
