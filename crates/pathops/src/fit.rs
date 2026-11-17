@@ -213,6 +213,9 @@ fn fit_rec(
         let held = if places > tol * 1e-9 { (tol - places).max(0.0) } else { tol * (1.0 - 1e-9) };
         let d = (pts[0].distance(pts[1]) / 3.0).min(held);
         let c = CubicBez::new(pts[0], pts[0] + t0 * d, pts[1] - t1 * d, pts[1]);
+        if !keeps_tangents(&c, t0, t1) {
+            return Err(FitStop::Depth);
+        }
         // Through both points: within the tolerance of their chord by where its handles lie (the hull), or no fit.
         let off = chord_distance(&c);
         if off > tol {
@@ -395,7 +398,7 @@ fn try_fit(pts: &[Point], (t0, t1): (Vec2, Vec2), tol: f64, pay: &mut dyn FnMut(
     }
     let (c, err, worst, u) = fit_within(pts, chord_params(pts), t0, t1, give_up, pay).ok_or(Unfit::Work)?;
     let off = err + spread(&c, &u);
-    if off <= tol { Ok((c, off)) } else { Err(Unfit::At(worst)) }
+    if off <= tol && keeps_tangents(&c, t0, t1) { Ok((c, off)) } else { Err(Unfit::At(worst)) }
 }
 
 /// A charge to `work` that says so, in the shape [`fit_within`] takes: it pays what it is asked while `work` holds it, and
@@ -443,6 +446,22 @@ pub(crate) fn polygon_length(c: &CubicBez) -> f64 {
 pub(crate) fn second_difference(c: &CubicBez) -> f64 {
     let second = |a: Point, b: Point, c: Point| ((c - b) - (b - a)).hypot();
     second(c.p0, c.p1, c.p2).max(second(c.p1, c.p2, c.p3))
+}
+
+/// Does the cubic `c` leave along `t0` and arrive along `t1`, as a fit is asked to? A handle is made along its tangent, and where the coordinates
+/// have room for it that is its direction to the rounding (a billionth of a turn or less); where its length is a few units in their last places it
+/// is not (a handle of 3e-8 at 1e9, where a unit is 1.2e-7, is rounded to nothing, and one of 1e-6 at 2^30 loses an x of 0.2 to a unit of 2.4e-7), and
+/// a direction that has gone from the tangent by a thousandth of a turn is no tangent kept. A handle that came out as no handle is not a
+/// direction at all: the cubic's own direction there ([`start_tangent`] and [`end_tangent`]: the line to the next control point that is another) is
+/// to be along the tangent, not across it and not back, to the rounding of the line. A fit that is a chain of such joints is no chain of G1 joints,
+/// however little it is off.
+fn keeps_tangents(c: &CubicBez, t0: Vec2, t1: Vec2) -> bool {
+    // The unit direction of the first of the vectors that is not nothing (`start_tangent` and `end_tangent` take none under 1e-12, which is a
+    // handle of a tolerance of that size, and a direction).
+    let direction = |vs: [Vec2; 3]| vs.into_iter().find(|v| v.hypot() > 0.0 && v.hypot().is_finite()).map_or(Vec2::ZERO, |v| v / v.hypot());
+    let kept = |t: Vec2, dir: Vec2, handle: bool| t.dot(dir) > 0.0 && t.cross(dir).abs() <= if handle { 1e-3 } else { 1e-9 };
+    kept(t0, direction([c.p1 - c.p0, c.p2 - c.p0, c.p3 - c.p0]), c.p1 != c.p0)
+        && kept(t1, direction([c.p3 - c.p2, c.p3 - c.p1, c.p3 - c.p0]), c.p3 != c.p2)
 }
 
 /// The parameter of each of `pts` by the length of the polyline through them, from 0 at the first to 1
@@ -762,6 +781,59 @@ mod tests {
         assert_eq!(err, 0.0);
         // One point is a parameter, 0.
         assert_eq!(chord_params(&[Point::new(3.0, 4.0)]), [0.0]);
+    }
+
+    /// A pair of points whose handles had to be held to nothing (the tolerance is under the last places of the coordinates: 1e-9 at 1e9, where a unit
+    /// in the last place is 1.2e-7) is a line along the chord, which keeps the tangents only where they are along it. A fit that is a chain of such lines
+    /// broke G1 where the declared tangents are not: `[(0, 1e9), (300, 1e9), (300, 1e9 + 300)]` with tangents (1, 0) and (0, 1).
+    #[test]
+    fn a_pair_whose_handles_collapse_is_a_fit_only_where_its_tangents_are_along_its_chord() {
+        let (right, up) = (Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0));
+        let mut work = usize::MAX;
+        let turn = [Point::new(0.0, 1e9), Point::new(300.0, 1e9), Point::new(300.0, 1e9 + 300.0)];
+        assert_eq!(fit_cubics(&turn, right, up, (1e-9, 0.0), &mut work), Err(FitStop::Depth));
+        // Where the tolerance is more than the last places of the coordinates the handles are held, and the fit is made.
+        assert!(fit_cubics(&turn, right, up, (0.1, 0.0), &mut work).is_ok());
+        // A pair along its own tangents is a line, and is as it was.
+        let along = [Point::new(0.0, 1e9), Point::new(300.0, 1e9)];
+        let fits = fit_cubics(&along, right, right, (1e-9, 0.0), &mut work).expect("a line along its tangents");
+        assert_eq!(fits.len(), 1);
+        assert_eq!(fits[0].0.p1, fits[0].0.p0);
+        // A handle of a few units in the last place rounds back to its end: the same, though it is not held to nothing (9e-7 at 1e9 is 1.2e-8).
+        assert_eq!(fit_cubics(&along, up, up, (9e-7, 0.0), &mut work), Err(FitStop::Depth));
+        // And a tangent that points back along the chord is no more kept by a line along it than one across it.
+        let back = Vec2::new(-1.0, 0.0);
+        assert_eq!(fit_cubics(&along, back, back, (1e-9, 0.0), &mut work), Err(FitStop::Depth));
+        assert_eq!(fit_cubics(&along, right, back, (1e-9, 0.0), &mut work), Err(FitStop::Depth));
+        // One tangent along the chord and the other across it is no line either, whichever end it is at.
+        assert_eq!(fit_cubics(&along, right, up, (1e-9, 0.0), &mut work), Err(FitStop::Depth));
+        assert_eq!(fit_cubics(&along, up, right, (1e-9, 0.0), &mut work), Err(FitStop::Depth));
+    }
+
+    /// More than two points, whose handles rounded back to their ends (the offsets are 3e-8 and a unit in the last place of 1e9 is 1.2e-7), are a
+    /// line along the chord, which keeps the tangents only where they are along it: `[(1e9, 0), (1e9, 5e-8), (1e9, 1e-7)]` with horizontal
+    /// tangents at a tolerance of 4e-8 was a vertical chord, and was accepted. Candidates that fail are split, as any that is not within the
+    /// tolerance is, and what the pairs then make is refused for the same reason.
+    #[test]
+    fn a_fit_of_more_points_whose_handles_collapse_keeps_the_tangents_or_is_refused() {
+        let right = Vec2::new(1.0, 0.0);
+        let mut work = usize::MAX;
+        let far = [Point::new(1e9, 0.0), Point::new(1e9, 5e-8), Point::new(1e9, 1e-7)];
+        assert_eq!(fit_cubics(&far, right, right, (4e-8, 0.0), &mut work), Err(FitStop::Depth));
+        // The same points where the coordinates have room for the handles (the offsets are held), are fitted.
+        let near = [Point::new(0.0, 0.0), Point::new(0.0, 5e-8), Point::new(0.0, 1e-7)];
+        let fits = fit_cubics(&near, right, right, (4e-8, 0.0), &mut work).expect("a fit where the handles are held");
+        assert!(fits.iter().all(|(c, _)| c.p1 != c.p0 || c.p2 != c.p3), "{fits:?}");
+        // And a handle that is not collapsed and is rounded to another direction: 2^30, where a unit in the last place is 2.4e-7, and a tolerance of 1.1e-6
+        // (the handles are 3.7e-7 and 5.5e-7, so the x of one rounds to nothing and the y of another to a unit and a half).
+        let x = 1_073_741_824.0;
+        let bent = [Point::new(x - 6.0, -4.0), Point::new(x, 0.0), Point::new(x + 6.0, 12.0)];
+        assert_eq!(fit_cubics(&bent, right, Vec2::new(0.0, 1.0), (1.1e-6, 0.0), &mut work), Err(FitStop::Depth));
+        // Where the tolerance has room for the handles to be made, the same shape is fitted.
+        assert!(fit_cubics(&bent, right, Vec2::new(0.0, 1.0), (0.1, 0.0), &mut work).is_ok());
+        // Tangents along the chord, with collapsed handles, are as they were: a line.
+        let line = [Point::new(1e9, 0.0), Point::new(1e9 + 100.0, 0.0), Point::new(1e9 + 200.0, 0.0)];
+        assert!(fit_cubics(&line, right, right, (1e-9, 0.0), &mut work).is_ok());
     }
 
     /// A fit held to its path gives the cubic and its error at the points as a plain fit does, and apart
