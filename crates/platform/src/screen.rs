@@ -155,6 +155,19 @@ fn picked_color(rgb: [f64; 3]) -> Result<Capture, ScreenError> {
     Ok(Capture::Color(rgb.map(|v| v as f32)))
 }
 
+/// The colour in the portal's `PickColor` answer, a `(ddd)` structure; `None` for a value of another shape.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn portal_color(value: &zbus::zvariant::Value<'_>) -> Option<[f64; 3]> {
+    use zbus::zvariant::Value;
+    match value {
+        Value::Structure(s) => match s.fields() {
+            [Value::F64(r), Value::F64(g), Value::F64(b)] => Some([*r, *g, *b]),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The most pixels one monitor image may hold (64 M); larger captures fail with `Failed`.
 pub const MAX_PIXELS: usize = 64 * 1024 * 1024;
 
@@ -231,7 +244,10 @@ fn unpack_rgba(
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 mod backend {
-    use super::{Arc, AtomicBool, Capture, MAX_MONITORS, Ordering, ScreenError, ScreenImage, add_to_budget, picked_color, pixel_count, usable_scale};
+    use super::{
+        Arc, AtomicBool, Capture, MAX_MONITORS, Ordering, ScreenError, ScreenImage, add_to_budget, picked_color, pixel_count, portal_color,
+        usable_scale,
+    };
 
     const MAX_ICC_PROFILE_BYTES: usize = 1024 * 1024;
     /// Length limit of the property reads, in 32-bit units.
@@ -437,8 +453,7 @@ mod backend {
             _ => return Err(failed("the desktop color picker could not sample this screen")),
         }
         let value = values.get("color").ok_or_else(|| failed("the desktop color picker returned no color"))?;
-        let (r, g, b): (f64, f64, f64) = value.try_clone().map_err(failed)?.try_into().map_err(|e: zbus::zvariant::Error| failed(e))?;
-        picked_color([r, g, b])
+        picked_color(portal_color(value).ok_or_else(|| failed("the desktop color picker returned no color"))?)
     }
 }
 
@@ -723,5 +738,27 @@ mod tests {
         // Truncated buffers and oversized strides fail.
         assert!(unpack_rgba(&[0; 3], 1, 1, 4, [0, 1, 2, 3], false, true).is_err());
         assert!(checked_stride(1, 1, usize::MAX).is_err());
+    }
+
+    /// A `color` of another shape than `(ddd)` (a structure with fewer, other or more fields, a string, an array)
+    /// gives no colour; a `(ddd)` value gives its channels.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    #[test]
+    fn a_color_of_another_shape_is_not_read() {
+        use zbus::zvariant::Value;
+        let malformed = [
+            Value::from((0.5f64,)),
+            Value::from((0.5f64, 0.25f64)),
+            Value::from((0.5f64, 0.25f64, 1u32)),
+            Value::from(("red".to_string(), 0.25f64, 0.75f64)),
+            Value::from((0.5f64, 0.25f64, 0.75f64, 1.0f64)),
+            Value::from("red"),
+            Value::from(vec![0.5f64, 0.25, 0.75]),
+        ];
+        for color in malformed {
+            let shape = color.value_signature().to_string();
+            assert_eq!(portal_color(&color), None, "{shape}");
+        }
+        assert_eq!(portal_color(&Value::from((0.5f64, 0.25f64, 0.75f64))), Some([0.5, 0.25, 0.75]));
     }
 }
