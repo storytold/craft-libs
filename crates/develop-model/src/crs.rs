@@ -520,7 +520,9 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let d = craft_metadata::parse_xmp(xmp).ok()?;
     let props = &d.properties;
-    let settings = to_partial(props, Target::Any);
+    // with the packet's structured properties, so a preset of masks or spots alone is a preset, and one of both
+    // keeps them (presets have no photo to fit to: 3:2, as `crs_masks` assumes)
+    let (settings, _) = to_partial_report(props, Some(&d.values), Target::Any, 1.5);
     if settings.as_object().is_none_or(Map::is_empty) {
         return None;
     }

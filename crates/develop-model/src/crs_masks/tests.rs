@@ -249,3 +249,56 @@ fn legacy_retouch_info_is_read_on_its_own() {
     assert!(unmapped.iter().any(|u| u == "Ignored"), "{unmapped:?}");
     assert!(!unmapped.iter().any(|u| u == "RetouchInfo"), "{unmapped:?}");
 }
+
+/// `"nan"` parses as a number. A dab of it is dropped, and the rest of the packet still applies.
+#[test]
+fn a_dab_that_is_not_a_number_is_dropped() {
+    let packet = PACKET.replace("d 0.15 0.22", "d nan 0.22").replace("d 0.5 0.5", "d 0.5 inf");
+    let d = craft_metadata::parse_xmp(&packet).unwrap();
+    let (partial, _) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+    let s = DevelopSettings::default().merged(&partial).expect("the packet's other adjustments apply");
+    assert_eq!(s.light.exposure, 0.2);
+    let brush = s.masks.iter().flat_map(|m| &m.components).find_map(|c| match &c.shape {
+        MaskShape::Brush { strokes } => Some(strokes),
+        _ => None,
+    });
+    let points: usize = brush.expect("the brush is kept").iter().map(|k| k.points.len()).sum();
+    assert_eq!(points, 1, "one dab of three was a point");
+}
+
+/// Two brush runs of one correction that differ in `crs:MaskInverted` paint different areas: two components.
+#[test]
+fn brush_runs_of_different_sense_stay_apart() {
+    let packet = PACKET.replace(r#"crs:What="Mask/Paint" crs:Radius="0.02""#, r#"crs:What="Mask/Paint" crs:MaskInverted="true" crs:Radius="0.02""#);
+    assert_ne!(packet, PACKET);
+    let d = craft_metadata::parse_xmp(&packet).unwrap();
+    let (partial, _) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+    let s = DevelopSettings::default().merged(&partial).unwrap();
+    let brushes: Vec<bool> =
+        s.masks.iter().flat_map(|m| &m.components).filter(|c| matches!(c.shape, MaskShape::Brush { .. })).map(|c| c.invert).collect();
+    assert_eq!(brushes, [false, true]);
+}
+
+/// The older `crs:RetouchInfo` is not read beside a current `crs:RetouchAreas`, even one with no spot we carry over.
+#[test]
+fn legacy_retouch_info_is_not_read_beside_an_emptied_current_list() {
+    let (head, rest) = SPOTS.split_once("<crs:RetouchAreas>").unwrap();
+    let (_, tail) = rest.split_once("</crs:RetouchAreas>").unwrap();
+    let gradient_only = r#"<crs:RetouchAreas><rdf:Seq><rdf:li><rdf:Description crs:SpotType="heal">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:FullX="0" crs:FullY="0" crs:ZeroX="1" crs:ZeroY="1"/></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li></rdf:Seq></crs:RetouchAreas>"#;
+    let d = craft_metadata::parse_xmp(&format!("{head}{gradient_only}{tail}")).unwrap();
+    let (spots, _) = super::spots(&d.values, 1.5);
+    assert!(spots.is_empty(), "{spots:?}");
+}
+
+/// An XMP preset keeps its masks, and one of masks alone is a preset.
+#[test]
+fn an_xmp_preset_keeps_its_masks() {
+    let with_both = crate::crs::preset_from_xmp(PACKET, "f").expect("a preset");
+    assert_eq!(with_both.settings["masks"].as_array().map(Vec::len), Some(3));
+    assert_eq!(with_both.settings["light"]["exposure"], 0.2);
+    let masks_only = PACKET.replace(r#" crs:Exposure2012="0.2""#, "");
+    assert_ne!(masks_only, PACKET);
+    assert!(crate::crs::preset_from_xmp(&masks_only, "f").is_some_and(|p| p.settings.get("masks").is_some()));
+}

@@ -26,6 +26,21 @@ Reading the `crs:` packet itself (names, structures, Camera Raw's number formats
 [`craft-crs`](../crs/README.md)'s job; this crate decides what those settings mean for the edit
 model. The mapping is a best-effort approximation of the other application's look, not a pixel match.
 
+## Different from LightCraft
+
+Fixes made here that LightCraft `a75497d6` does not have. It gets them when it switches to this crate.
+
+- `to_json_for_merge` states every setting the stored JSON leaves out at its default (HDR, the profile and its camera
+  local tone, the curve, Lens Blur's and Denoise's optional settings), not only Remove Hot Pixels. Copying a group
+  turns them off on the target, and a preset at an amount starts from them.
+- `reset_section` resets the sliders of point colours and red eyes, Upright with its guides, and the lens profile and
+  Remove Chromatic Aberration switches. Settings from outside the app keep those sliders in range.
+- `is_unedited` counts a chosen white balance as an edit. As shot, the numbers stay the photo's own.
+- A preset at no amount adds no mask, and its Lens Blur focus mask follows its mask to the id the photo gives it.
+- `crs:` import: a brush dab that is not a finite number is dropped, brush runs that differ in `crs:MaskInverted` stay
+  two components, `crs:RetouchInfo` is read only without `crs:RetouchAreas`, and an XMP preset keeps its masks.
+- `Homography::from_quads` (`craft-geom`) solves a mapping that sends the origin to infinity.
+
 ## Not here yet
 
 - Writing `crs:` back from `DevelopSettings`. LightCraft writes its own `lc:settings` in a sidecar; PhotoCraft's
