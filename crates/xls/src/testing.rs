@@ -54,13 +54,24 @@ fn number(cell: &str) -> Option<(u16, f64)> {
 /// Number records, a cell `date:<serial>` is a Number with the date format `m/d/yyyy` (built-in
 /// format 14), an empty cell is left out, and everything else, including a `date:` cell whose
 /// serial is not a number, goes through the shared-string table (as UTF-16 when it isn't
-/// Latin-1). A nonempty cell past row 65,535 or column 255 (zero-based) returns
-/// [`craft_cfb::Error::Invalid`] naming its sheet, row and column, and a compound file that cannot
-/// be written returns the writer's error.
+/// Latin-1). No sheets, or more than the 4,096 sheets [`crate::read()`] accepts, returns
+/// [`craft_cfb::Error::Invalid`] naming the count. A nonempty cell past row 65,535 or column 255
+/// (zero-based) returns [`craft_cfb::Error::Invalid`] naming its sheet, row and column, and a
+/// compound file that cannot be written returns the writer's error.
 ///
 /// shortcut: characters outside the Basic Multilingual Plane are dropped, sheet names are cut at
 /// 255 characters and strings at 4,000 (so each fits one record); lift when a fixture needs more.
 pub fn workbook(sheets: &[(&str, Vec<Vec<String>>)]) -> Result<Vec<u8>, craft_cfb::Error> {
+    if sheets.is_empty() {
+        return Err(craft_cfb::Error::Invalid("fixture has no sheets; craft-xls reads a workbook only when it has a worksheet".into()));
+    }
+    if sheets.len() > crate::read::MAX_SHEETS {
+        return Err(craft_cfb::Error::Invalid(format!(
+            "fixture has {} sheets; craft-xls can read at most {}",
+            sheets.len(),
+            crate::read::MAX_SHEETS
+        )));
+    }
     let mut sst: Vec<&str> = Vec::new();
     let mut references = 0usize;
     for (name, rows) in sheets {
