@@ -47,7 +47,7 @@ fn floating_dock_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// A dock window whose column is collapsed to icons, against the float area's end edge.
-#[story(FloatingGroup<'static>, covers = [Mixed], drive = Drive::Never)]
+#[story(FloatingGroup<'static>, covers = [Default], drive = Drive::Never)]
 fn floating_collapsed_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = *data.value("rect", START);
     let column = WindowColumn::collapsed(DockEdge::End, Vec2::new(40.0, 120.0));
