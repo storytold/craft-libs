@@ -96,13 +96,15 @@ enum Size {
 
 /// Element `prop` (`width`, `height`) as its CSS states it, else as its attribute of that name
 /// does (a number is pixels, `%` a percentage). Lengths stay within 22 inches, percentages
-/// within 100; anything else states none.
+/// within 100; anything else states none, a keyword (`medium`, `auto`) too: CSS lengths here
+/// are numbers with a unit.
 fn size(css: &str, attrs: &[(String, String)], prop: &str) -> Option<Size> {
     let pct = |v: &str| {
         v.strip_suffix('%').and_then(|n| n.trim().parse::<f32>().ok()).filter(|p| p.is_finite() && *p > 0.0).map(|p| Size::Pct(p.min(100.0)))
     };
     let pt = |v: f32| (v.is_finite() && v > 0.0 && v <= 1584.0).then_some(Size::Pt(v));
-    let from_css = decls(css).filter(|(k, _)| k == prop).filter_map(|(_, v)| pct(v).or_else(|| css_len_pt(v).and_then(pt))).last();
+    let numeric = |v: &str| v.trim().starts_with(|c: char| c.is_ascii_digit() || c == '.');
+    let from_css = decls(css).filter(|(k, v)| k == prop && numeric(v)).filter_map(|(_, v)| pct(v).or_else(|| css_len_pt(v).and_then(pt))).last();
     from_css.or_else(|| {
         let v = attr(attrs, prop)?.trim();
         pct(v).or_else(|| v.trim_end_matches("px").trim().parse::<f32>().ok().and_then(|px| pt(px * 0.75)))
@@ -572,20 +574,6 @@ fn cell_borders(css: &str) -> Option<craft_wordmodel::props::Borders> {
 /// Most columns given widths in one table.
 const MAX_TABLE_COLS: usize = 63;
 
-/// A cell's width, points: its CSS `width`, else its `width` attribute (pixels); percentages
-/// and widths that don't parse give none.
-fn cell_width(css: &str, attrs: &[(String, String)]) -> Option<f32> {
-    let from_css = decls(css).filter(|(k, v)| k == "width" && !v.ends_with('%')).filter_map(|(_, v)| css_len_pt(v));
-    let from_attr = || {
-        attr(attrs, "width")
-            .map(str::trim)
-            .filter(|v| !v.ends_with('%'))
-            .and_then(|v| v.trim_end_matches("px").trim().parse::<f32>().ok())
-            .map(|px| px * 0.75)
-    };
-    from_css.last().or_else(from_attr).filter(|w| w.is_finite() && *w > 1.0 && *w <= 1584.0)
-}
-
 /// The sizes an HTML table states (storytold/wordcraft#6925), as `ft`'s [`model::TableExtra`]:
 /// its width (points, or its percentage of the text width), each row's height (at least: a CSS
 /// or attribute height is a minimum), and its columns' percentage widths, from the first row that
@@ -595,7 +583,10 @@ fn cell_width(css: &str, attrs: &[(String, String)]) -> Option<f32> {
 fn table_sizes(ft: &mut FTable, width: Option<Size>, heights: Vec<Option<f32>>, pcts: &[Vec<Option<f32>>]) -> Option<model::TableExtra> {
     let cols = ft.cols();
     let mut relative = false;
-    if ft.widths.is_empty()
+    // A cell with a width in points, even in a row that doesn't give every column one, rules the
+    // percentages out.
+    let points = ft.rows.iter().flatten().any(|c| c.width.is_some());
+    if !points
         && (1..=MAX_TABLE_COLS).contains(&cols)
         && let Some(row) = pcts.iter().find(|p| p.len() == cols && p.iter().all(Option::is_some))
     {
@@ -1295,14 +1286,19 @@ impl<'r> Builder<'r> {
                 }
                 let num = |k: &str| attr(attrs, k).and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 63));
                 let colspan = num("colspan").unwrap_or(1);
-                // A cell's height is its row's at least; its percentage width, its column's share.
-                let (cell_height, cell_pct) = (size(&css, attrs, "height"), if colspan == 1 { size(&css, attrs, "width") } else { None });
+                // A cell's height is its row's at least. Its width, in points or as its column's
+                // share, is read once, so its attribute never overrides a CSS percentage.
+                let (cell_height, cell_size) = (size(&css, attrs, "height"), if colspan == 1 { size(&css, attrs, "width") } else { None });
+                let cell_points = match cell_size {
+                    Some(Size::Pt(w)) if w > 1.0 => Some(w),
+                    _ => None,
+                };
                 if let Some(t) = self.tables.last_mut()
                     && let Some(Size::Pt(h)) = cell_height
                 {
                     t.grow(Some(h));
                 }
-                self.cell_pcts.push(match cell_pct {
+                self.cell_pcts.push(match cell_size {
                     Some(Size::Pct(p)) => Some(p),
                     _ => None,
                 });
@@ -1346,7 +1342,7 @@ impl<'r> Builder<'r> {
                     margins: None,
                     direction: Default::default(),
                     picture: None,
-                    width: if colspan == 1 { cell_width(&css, attrs) } else { None },
+                    width: cell_points,
                 });
                 fmt.background = None;
                 self.containers.push(Vec::new());

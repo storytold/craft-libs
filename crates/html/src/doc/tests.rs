@@ -1645,3 +1645,29 @@ fn tables_keep_their_widths_and_row_heights() {
     let [e] = &doc_tables("<table><tr><td style='width:999%'>a</table>")[..] else { panic!() };
     assert_eq!(e.props.width_pct, Some(100.0), "999% is at most 100%");
 }
+
+/// storytold/craft-libs#2038 review: a size keyword is no table size; a cell's width in points in
+/// any row rules its column percentages out; and a cell's CSS percentage isn't overridden by its
+/// `width` attribute.
+#[test]
+fn table_sizes_take_lengths_only_and_points_before_percentages() {
+    let [k] = &doc_tables("<table style='width:medium'><tr style='height:small'><td style='width:large'>a</table>")[..] else { panic!() };
+    assert_eq!((k.props.width, k.props.width_pct, k.rows[0].props.height), (None, None, None), "keywords state no size");
+    // A first row with a point width and an unsized cell, then a row of percentages.
+    let [p] = &doc_tables(
+        "<table style='width:400pt'><tr><td style='width:100pt'>a</td><td>b</td></tr><tr><td style='width:30%'>c</td><td style='width:70%'>d</td></tr></table>",
+    )[..] else {
+        panic!()
+    };
+    let share = p.grid.first().copied().unwrap_or(0.0) / p.grid.iter().sum::<f32>();
+    assert!((share - 0.3).abs() > 0.01, "a point width rules the percentages out: {:?}", p.grid);
+    // Attribute widths in pixels and CSS percentages on the same cells: the CSS wins.
+    let [c] =
+        &doc_tables("<table style='width:400pt'><tr><td width=100 style='width:30%'>a</td><td width=100 style='width:70%'>b</td></tr></table>")[..]
+    else {
+        panic!()
+    };
+    assert_eq!(c.props.width, Some(400.0));
+    let grid: Vec<f32> = c.grid.iter().map(|w| w.round()).collect();
+    assert_eq!(grid, [120.0, 280.0], "30 % and 70 % of 400 pt");
+}
