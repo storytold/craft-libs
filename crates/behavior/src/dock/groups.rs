@@ -18,7 +18,7 @@ pub enum DockEdge {
     End,
 }
 
-/// Tabs that move, minimize and size together in a dock column.
+/// Tabs that move, minimize and size together in a column, docked or floating.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = "P: serde::Deserialize<'de>"))]
 #[non_exhaustive]
@@ -55,7 +55,7 @@ impl<P> Group<P> {
     }
 }
 
-/// One column of a dock: groups from top to bottom.
+/// One column of groups from top to bottom: a column of a dock, or the whole of a floating window.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = "P: serde::Deserialize<'de>"))]
 #[non_exhaustive]
@@ -63,14 +63,20 @@ pub struct Column<P> {
     /// The groups, top to bottom.
     pub groups: Vec<Group<P>>,
     /// Expanded width in points once the user has resized the column; the theme's column width until then.
+    /// A floating window's width is its rect's, so a floating column leaves this `None`.
     #[serde(default)]
     pub width: Option<f32>,
-    /// Collapsed to one icon per panel.
+    /// Collapsed to one icon per panel. The one collapsed state of every column, docked or floating.
     #[serde(default)]
     pub iconic: bool,
     /// Width while iconic; labels show beside the icons when it is wide enough.
     #[serde(default)]
     pub iconic_width: Option<f32>,
+    /// The column's width as a count of its panel's own content columns, for a panel that lays its content in a
+    /// grid (a toolbar). When set, `width` is unused and the column is as tall as its content, docked or floating;
+    /// the renderer computes the shown size from the panel. At least 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u16>,
 }
 
 impl GroupLocation {
@@ -95,16 +101,29 @@ impl GroupLocation {
 }
 
 impl ColumnLocation {
-    /// A column location on `side`, `width` points wide when expanded (the theme's column width for `None`).
-    pub const fn new(side: DockEdge, width: Option<f32>, iconic: bool, iconic_width: Option<f32>) -> Self {
-        Self { side, width, iconic, iconic_width }
+    /// A column location on `side` (`None` for a floating window's column), `width` points wide when expanded (the
+    /// theme's column width for `None`).
+    pub const fn new(side: Option<DockEdge>, width: Option<f32>, iconic: bool, iconic_width: Option<f32>) -> Self {
+        Self { side, width, iconic, iconic_width, steps: None }
+    }
+
+    /// The location with the column `steps` content columns wide ([`Column::steps`]).
+    #[must_use]
+    pub const fn with_steps(mut self, steps: Option<u16>) -> Self {
+        self.steps = steps;
+        self
+    }
+
+    /// The location of `column`, docked on `side` or floating (`None`).
+    pub(super) fn of<P>(column: &Column<P>, side: Option<DockEdge>) -> Self {
+        Self { side, width: column.width, iconic: column.iconic, iconic_width: column.iconic_width, steps: column.steps }
     }
 }
 
 impl<P> Column<P> {
     /// A column of `groups`, expanded at the theme's column width until the user resizes it.
     pub fn new(groups: Vec<Group<P>>) -> Self {
-        Self { groups, width: None, iconic: false, iconic_width: None }
+        Self { groups, width: None, iconic: false, iconic_width: None, steps: None }
     }
 
     /// The column resized to `width` points.
@@ -112,6 +131,30 @@ impl<P> Column<P> {
     pub fn with_width(mut self, width: f32) -> Self {
         self.width = Some(width);
         self
+    }
+
+    /// The column collapsed to icons, or expanded.
+    #[must_use]
+    pub fn with_iconic(mut self, iconic: bool) -> Self {
+        self.iconic = iconic;
+        self
+    }
+
+    /// The column `steps` content columns wide ([`Self::steps`]).
+    #[must_use]
+    pub fn with_steps(mut self, steps: u16) -> Self {
+        self.steps = Some(steps);
+        self
+    }
+
+    /// Every panel of the column, top group first.
+    pub fn panels(&self) -> impl Iterator<Item = &P> {
+        self.groups.iter().flat_map(|g| &g.panels)
+    }
+
+    /// The column's state without its groups: what a new column made from groups taken out of this one keeps.
+    pub(super) fn emptied(&self) -> Self {
+        Self { groups: Vec::new(), width: self.width, iconic: self.iconic, iconic_width: self.iconic_width, steps: self.steps }
     }
 }
 
@@ -149,16 +192,21 @@ impl<P: Clone + Eq + Hash> DockPlacement<P> {
     ///
     /// | Anchor in | `Center` | `Top`, `Bottom` | `Start`, `End` |
     /// |---|---|---|---|
-    /// | the split tree or a floating window | [`DockPlacement::Split`] | `Split` | `Split` |
+    /// | the split tree | [`DockPlacement::Split`] | `Split` | `Split` |
     /// | a dock column | `Split(Center)` (join as tabs) | [`DockPlacement::Group`] above or below | [`DockPlacement::Column`] on that side |
+    /// | a floating window | `Split(Center)` (join as tabs) | `Group` above or below | refused ([`DockError::InvalidPlacement`]) |
     ///
-    /// A dock's `Column { after }` counts from its window edge, which is the dock's [`DockEdge`] in reading order;
-    /// this picks `after` so the new column lands on the side of the anchor's column.
+    /// A floating window is one column, so nothing goes beside it. A dock's `Column { after }` counts from its
+    /// window edge, which is the dock's [`DockEdge`] in reading order; this picks `after` so the new column lands on
+    /// the side of the anchor's column.
     pub fn for_zone(layout: &Layout<P>, anchor: &P, side: DockSide) -> Result<Self, DockError> {
         let place = layout.place(anchor).ok_or(DockError::MissingTarget)?;
         Ok(match (place, side) {
-            (PanelPlace::Node(_) | PanelPlace::Floating { .. }, side) | (_, side @ DockSide::Center) => DockPlacement::Split(side),
-            (PanelPlace::Dock { .. }, DockSide::Top | DockSide::Bottom) => DockPlacement::Group { below: side == DockSide::Bottom, height: None },
+            (PanelPlace::Node(_), side) | (_, side @ DockSide::Center) => DockPlacement::Split(side),
+            (PanelPlace::Dock { .. } | PanelPlace::Floating { .. }, DockSide::Top | DockSide::Bottom) => {
+                DockPlacement::Group { below: side == DockSide::Bottom, height: None }
+            }
+            (PanelPlace::Floating { .. }, _) => return Err(DockError::InvalidPlacement),
             (PanelPlace::Dock { path, .. }, _) => {
                 let edge = match layout.root.as_ref().and_then(|root| node_at(root, &path)) {
                     Some(Node::Dock { side, .. }) => *side,
@@ -172,7 +220,8 @@ impl<P: Clone + Eq + Hash> DockPlacement<P> {
 }
 
 /// What the Window menu shows for a panel. The model does not track the z-order of floating
-/// windows, so `Front` means "showing": the active tab of an expanded group in an expanded column.
+/// windows, so `Front` means "showing": the active tab of an expanded group in an expanded column, docked or
+/// floating.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PanelState {
@@ -185,7 +234,7 @@ pub enum PanelState {
     Front,
 }
 
-/// The group a closed panel was in, when that group was in a dock.
+/// The group a closed panel was in, when that group was in a column, docked or floating.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct GroupLocation {
@@ -199,7 +248,7 @@ pub struct GroupLocation {
     /// The offset in points of the group's flyout top from its icons' top, if the user had moved it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flyout_offset: Option<f32>,
-    /// The column, when the group was docked.
+    /// The column the group was in.
     pub column: Option<ColumnLocation>,
 }
 
@@ -207,17 +256,23 @@ pub struct GroupLocation {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ColumnLocation {
-    /// The dock edge the column was on.
-    pub side: DockEdge,
+    /// The dock edge the column was on; `None` for a floating window's column.
+    #[serde(default)]
+    pub side: Option<DockEdge>,
     /// Expanded width in points, if the user had resized the column.
     pub width: Option<f32>,
     /// Whether the column was collapsed to icons.
     pub iconic: bool,
     /// Width in points while iconic.
     pub iconic_width: Option<f32>,
+    /// The column's width in content columns ([`Column::steps`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u16>,
 }
 
 /// Where a panel is. Paths lead from the root: false is a split's first child, true its second.
+/// A dock column and a floating window are both a column of groups, so `Dock` and `Floating` name a group the
+/// same way.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PanelPlace {
@@ -233,24 +288,30 @@ pub enum PanelPlace {
         /// The group's index in the column.
         group: usize,
     },
-    /// A `Tabs` or `Stack` node of a floating window's tree.
+    /// A group of a floating window's column.
     #[non_exhaustive]
     Floating {
         /// The window's index.
         window: usize,
-        /// The path of the node in the window's tree.
-        path: Vec<bool>,
+        /// The group's index in the window's column.
+        group: usize,
     },
 }
 
 impl PanelPlace {
-    /// The tree (`None` for the docked layout, else a floating window) and the path of a
-    /// `Tabs` or `Stack` node.
-    pub fn tree_path(&self) -> Option<(Option<usize>, &[bool])> {
+    /// The path of a `Tabs` or `Stack` node of the docked tree; `None` for a group of a column.
+    pub fn tree_path(&self) -> Option<&[bool]> {
         match self {
-            PanelPlace::Node(path) => Some((None, path)),
-            PanelPlace::Floating { window, path } => Some((Some(*window), path)),
-            PanelPlace::Dock { .. } => None,
+            PanelPlace::Node(path) => Some(path),
+            PanelPlace::Dock { .. } | PanelPlace::Floating { .. } => None,
+        }
+    }
+
+    /// The group's index in its column; `None` for a `Tabs` or `Stack` node of the docked tree.
+    pub fn group_index(&self) -> Option<usize> {
+        match self {
+            PanelPlace::Dock { group, .. } | PanelPlace::Floating { group, .. } => Some(*group),
+            PanelPlace::Node(_) => None,
         }
     }
 }
@@ -263,27 +324,29 @@ pub(super) enum Unit {
     Window,
 }
 
-/// Groups in transit, with the size and state of the container they came from.
+/// Groups in transit, in a column that carries the state of the column they came from: a new column, docked or
+/// floating, keeps that state (an icon group taken out of a collapsed column stays icons), and a column they
+/// join keeps its own.
 pub(super) struct Moving<P> {
-    pub groups: Vec<Group<P>>,
-    /// A floating window's whole tree, whose leaves are `groups`. A split or a new window
-    /// takes the tree; docks take the groups.
-    pub node: Option<Node<P>>,
-    pub minimized: bool,
-    pub width: Option<f32>,
-    pub iconic: bool,
-    pub iconic_width: Option<f32>,
-    /// The id of a whole floating window in transit, which a new window keeps.
+    pub column: Column<P>,
+    /// The id of a floating window whose last group is in transit, which a new window keeps.
     pub id: Option<u64>,
 }
 
 impl<P> Moving<P> {
+    /// `group` with no column state: a new column made of it is expanded at the theme's width.
     pub(super) fn group(group: Group<P>) -> Self {
-        Self { groups: vec![group], node: None, minimized: false, width: None, iconic: false, iconic_width: None, id: None }
+        Self::taken(group, Column::new(Vec::new()))
     }
 
+    /// `group` taken out of a column whose state is `source` ([`Column::emptied`]).
+    pub(super) fn taken(group: Group<P>, source: Column<P>) -> Self {
+        Self { column: Column { groups: vec![group], ..source }, id: None }
+    }
+
+    /// The column a new dock column gets: the moving column, `width` points wide unless it brings a width.
     pub(super) fn into_column(self, width: Option<f32>) -> Column<P> {
-        Column { groups: self.groups, width: self.width.or(width), iconic: self.iconic, iconic_width: self.iconic_width }
+        Column { width: self.column.width.or(width), ..self.column }
     }
 }
 

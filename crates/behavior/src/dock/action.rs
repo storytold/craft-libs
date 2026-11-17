@@ -22,7 +22,7 @@ pub enum DockPlacement<P> {
         before: Option<P>,
     },
     /// Center inserts after the anchor; sides split the anchor's frame into two halves, and
-    /// every other frame keeps its size. Sides apply to `Tabs` and `Stack` nodes only.
+    /// every other frame keeps its size. Sides apply to `Tabs` and `Stack` nodes of the docked tree only.
     Split(DockSide),
     /// A side [`DockPlacement::Split`] that gives the new frame its own room instead of half the
     /// anchor's frame: the new split takes `size`, and `outer` replaces the size of the nearest
@@ -40,8 +40,7 @@ pub enum DockPlacement<P> {
         /// New size of the enclosing split that gives up the room.
         outer: SplitSize,
     },
-    /// A new group above or below the anchor's group in a dock column. On an anchor in a
-    /// floating window, a split of the anchor's group above or below.
+    /// A new group above or below the anchor's group in its column, docked or floating.
     /// `height` is the inserted group's preferred height (`Group::height`); `None`
     /// keeps a moved group's own height, or shares the free height for a new group.
     #[non_exhaustive]
@@ -52,7 +51,8 @@ pub enum DockPlacement<P> {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         height: Option<f32>,
     },
-    /// A new column before (towards the window edge) or after the anchor's column.
+    /// A new column before (towards the window edge) or after the anchor's column in a dock. A floating window is
+    /// one column, so an anchor there refuses it.
     #[non_exhaustive]
     Column {
         /// Places the new column after the anchor's column; false places it before.
@@ -170,17 +170,6 @@ pub enum Action<P> {
         /// The new size.
         size: SplitSize,
     },
-    /// [`Action::ResizeSplit`] in the floating window holding `panel`, with a path from its
-    /// root.
-    #[non_exhaustive]
-    ResizeWindowSplit {
-        /// The panel the action applies to.
-        panel: P,
-        /// Path from the root: false is the first child, true the second.
-        path: Vec<bool>,
-        /// The new size.
-        size: SplitSize,
-    },
     /// Open or close the panel's entry in its accordion stack.
     #[non_exhaustive]
     SetStackOpen {
@@ -218,7 +207,8 @@ pub enum Action<P> {
         /// Moves towards the start; false moves towards the end.
         up: bool,
     },
-    /// Move the dock column containing `panel`. `Float` makes a window of its groups.
+    /// Move the column containing `panel`, docked or a floating window's, with its state. `Float` makes a window of
+    /// it.
     #[non_exhaustive]
     MoveColumn {
         /// The panel the action applies to.
@@ -252,8 +242,7 @@ pub enum Action<P> {
         /// The panel the action applies to.
         panel: P,
     },
-    /// Minimize a dock group to its tab strip, or the floating window holding the panel to its
-    /// title bar (and the strip of its only group). On an accordion entry, closes it.
+    /// Minimize the panel's group to its tab strip, docked or floating. On an accordion entry, closes it.
     #[non_exhaustive]
     SetMinimized {
         /// The panel the action applies to.
@@ -261,7 +250,9 @@ pub enum Action<P> {
         /// Only the title bar or tab strip shows.
         minimized: bool,
     },
-    /// Collapse the panel's dock column to icons, or expand it.
+    /// Collapse the panel's column to icons, or expand it, docked or floating. Refused
+    /// ([`DockError::NotAllowed`](super::DockError::NotAllowed)) for a column holding a panel that does not
+    /// collapse ([`Permissions::collapses`]).
     #[non_exhaustive]
     SetIconic {
         /// The panel the action applies to.
@@ -269,13 +260,24 @@ pub enum Action<P> {
         /// Collapses the column to an icon strip.
         iconic: bool,
     },
-    /// Set the expanded width in points of the panel's dock column.
+    /// Set the expanded width in points of the panel's column; a floating window's rect takes it. Refused
+    /// ([`DockError::InvalidPlacement`](super::DockError::InvalidPlacement)) for a stepped column
+    /// ([`Column::steps`](super::Column::steps)).
     #[non_exhaustive]
     ResizeColumn {
         /// The panel the action applies to.
         panel: P,
         /// Width in points.
         width: f32,
+    },
+    /// Set the width of the panel's column, docked or floating, to `steps` of its panel's content columns
+    /// ([`Column::steps`](super::Column::steps)). At least 1.
+    #[non_exhaustive]
+    SetColumnSteps {
+        /// The panel the action applies to.
+        panel: P,
+        /// Content columns.
+        steps: u16,
     },
     /// Preferred height of a dock group or of an accordion entry.
     #[non_exhaustive]
@@ -285,7 +287,7 @@ pub enum Action<P> {
         /// Preferred height in points; `None` shares the free height.
         height: Option<f32>,
     },
-    /// Set the width in points of the flyout of the dock group holding the panel; `None` takes the column's width.
+    /// Set the width in points of the flyout of the group holding the panel; `None` takes the column's width.
     #[non_exhaustive]
     ResizeFlyoutWidth {
         /// The panel the action applies to.
@@ -293,7 +295,7 @@ pub enum Action<P> {
         /// Width in points.
         width: Option<f32>,
     },
-    /// Set the offset in points of the flyout's top from its icons' top, for the dock group holding the panel;
+    /// Set the offset in points of the flyout's top from its icons' top, for the group holding the panel;
     /// `None` aligns the flyout with its icons.
     #[non_exhaustive]
     MoveFlyoutTop {
@@ -302,7 +304,7 @@ pub enum Action<P> {
         /// Offset in points; negative is above the icons.
         offset: Option<f32>,
     },
-    /// Set the width in points of the panel's dock column while iconic; `None` clears it.
+    /// Set the width in points of the panel's column while iconic; `None` clears it.
     #[non_exhaustive]
     ResizeIconic {
         /// The panel the action applies to.
@@ -378,11 +380,6 @@ impl<P> Action<P> {
         Self::ResizeSplit { path, size }
     }
 
-    /// Builds [`Action::ResizeWindowSplit`].
-    pub fn resize_window_split(panel: P, path: Vec<bool>, size: SplitSize) -> Self {
-        Self::ResizeWindowSplit { panel, path, size }
-    }
-
     /// Builds [`Action::SetStackOpen`].
     pub fn set_stack_open(panel: P, open: bool) -> Self {
         Self::SetStackOpen { panel, open }
@@ -443,6 +440,11 @@ impl<P> Action<P> {
         Self::ResizeColumn { panel, width }
     }
 
+    /// Builds [`Action::SetColumnSteps`].
+    pub fn set_column_steps(panel: P, steps: u16) -> Self {
+        Self::SetColumnSteps { panel, steps }
+    }
+
     /// Builds [`Action::ResizeGroup`].
     pub fn resize_group(panel: P, height: Option<f32>) -> Self {
         Self::ResizeGroup { panel, height }
@@ -492,15 +494,15 @@ impl<P> DockPlacement<P> {
 }
 
 impl<P> DockPlacement<P> {
-    /// Whether the anchor's permissions take this placement: tabs need `accepts_tabs`, side
-    /// splits `accepts_splits`, and so does a group placed at an anchor in a floating window
-    /// (`floating`), which splits the anchor's frame.
-    pub fn allowed_by(&self, anchor: Permissions, floating: bool) -> bool {
+    /// Whether the anchor's permissions take this placement: tabs need `accepts_tabs` and `shares_column`, a group
+    /// in the anchor's column `shares_column`, and side splits `accepts_splits`. Whether the moving panels share a
+    /// column is the apply's own check.
+    pub fn allowed_by(&self, anchor: Permissions) -> bool {
         match self {
-            Self::Tab { .. } | Self::Split(DockSide::Center) => anchor.accepts_tabs,
+            Self::Tab { .. } | Self::Split(DockSide::Center) => anchor.accepts_tabs && anchor.shares_column,
+            Self::Group { .. } => anchor.shares_column,
             Self::Split(_) | Self::SplitSized { .. } => anchor.accepts_splits,
-            Self::Group { .. } if floating => anchor.accepts_splits,
-            _ => true,
+            Self::Column { .. } | Self::Edge(_) => true,
         }
     }
 }
