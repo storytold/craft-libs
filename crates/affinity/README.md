@@ -115,11 +115,15 @@ text-frame fixture.
   against the limits below: grids of 16 million cells, grids and stories shared by many layers,
   200 000 paragraphs, a document embedded hundreds of times, compounds that fan out or contain
   themselves, lists of a million null slots linked many times.
-* `scripts/fetch-affinity-corpus.sh` fetches 51 public CC0/MIT/Apache-2.0 documents at pinned
-  commits, SHA-256 verified against `tests/support/corpus.tsv` (which names each file's source and
-  licence), with the upstream licence notices. Of these, 33 are current `.af`: four CC0 vector
-  illustrations and 28 original Affinity 3.2.3 feature probes plus one separately identified
-  derived regression input from [SethRobinson/Patchy](https://github.com/SethRobinson/Patchy)
+* `scripts/fetch-affinity-corpus.sh` fetches 113 files at pinned commits, SHA-256 verified
+  against `tests/support/corpus.tsv` (which names each file's source and license): 90 public
+  CC0/MIT/Apache-2.0 documents, the 21 PNG files published with the
+  [satoshoe-dev/affinity-samples](https://github.com/satoshoe-dev/affinity-samples) documents, and
+  two upstream license notices. The manifest holds every name from the PhotoCraft and VectorCraft
+  corpus lists, so 21 files are fetched under two names. Of the documents, 55 are current `.af`:
+  four CC0 vector illustrations (each under two names), 18 CC0 Affinity 3.1.0 samples from
+  satoshoe-dev/affinity-samples, and 28 original Affinity 3.2.3 feature probes plus one separately
+  identified derived regression input from [SethRobinson/Patchy](https://github.com/SethRobinson/Patchy)
   (MIT). Only document data and provenance notices were inspected, never that project's importer
   or authoring scripts. The files are never committed.
 
@@ -129,11 +133,14 @@ text-frame fixture.
   ```
 
   Without `AFFINITY_CORPUS` the corpus tests are skipped. `AFFINITY_SAMPLES` names any other
-  folder of documents to parse.
-* `tests/it/real_files.rs` parses every file and freezes the modelled features of all 33 current
-  `.af` files (`tests/support/affinity3-signatures.txt`: counts, fonts, artboards, warnings and a
-  CRC of the whole model). Native raster tests compare decoded pixels with independent embedded
-  images; text tests assert Unicode run boundaries, fallback fonts and feature retention.
+  folder of documents to parse. A corpus folder fetched for an older manifest fails the tests
+  until the script is run on it again.
+* `tests/it/real_files.rs` checks the shape of every manifest row (four fields, a SHA-256, a
+  relative name listed once, a license and an `https` URL), parses every file and freezes the
+  modeled features of all 55 `.af` files (`tests/support/affinity3-signatures.txt`: counts,
+  fonts, artboards, warnings and a CRC of the whole model). Native raster tests compare decoded
+  pixels with independent embedded images; text tests assert Unicode run boundaries, fallback
+  fonts and feature retention.
 * `fuzz/` has `cargo-fuzz` targets for the whole reader (`container`) and the object stream
   (`stream`):
 
