@@ -3,6 +3,7 @@
 //!
 //! - [`decode_text`] turns a file's bytes into a string: byte order marks, UTF-8, else
 //!   Windows-1256 when the bytes read as Arabic and Windows-1252 otherwise.
+//! - [`decode_utf8`] requires valid UTF-8 and strips a leading UTF-8 byte order mark.
 //! - [`sniff_delimiter`] picks comma, semicolon or tab.
 //! - [`parse_records`] splits text into records of fields (RFC 4180 with the usual leniency),
 //!   handing each record to a callback, with a cap on the fields kept per record. [`records`]
@@ -27,49 +28,161 @@
 mod decode;
 pub mod sylk;
 
-pub use decode::decode_text;
+pub use decode::{decode_text, decode_utf8};
 
-/// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
+/// Picks comma, semicolon or tab by consistent field counts in the first non-blank records.
+/// Quotes start only at a candidate field boundary; candidates with incoherent quoted fields
+/// are discarded when another coherent candidate separates the records. Ties prefer tab,
+/// then comma, then semicolon. Comma is the fallback when no candidate separates the text.
+/// Only the first 64 KiB are read. A record cut off at the end of that sample is left out,
+/// except when no candidate finds coherent complete records with a delimiter in each. Then a candidate
+/// that finds no complete record counts the delimiters read so far in the first record, and that
+/// record is incoherent when it has a quote inside a field that does not start with one. When one
+/// of those candidates ends the sample inside a quoted field, each of them counts only up to that
+/// field's opening quote.
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
-    let mut best = (b',', 0usize, 0usize);
-    for d in [',', ';', '\t'] {
-        let mut counts = vec![];
-        let mut n = 0usize;
-        let mut in_q = false;
-        let mut blank = true;
-        for ch in text.chars().take(64 * 1024) {
-            if !in_q && ch == '\n' {
-                // Blank lines carry no delimiter evidence.
-                if !blank {
-                    counts.push(n);
-                }
-                n = 0;
-                blank = true;
-                if counts.len() >= 20 {
-                    break;
-                }
+    const SAMPLE_BYTES: usize = 64 * 1024;
+    let mut sample_end = text.len().min(SAMPLE_BYTES);
+    while !text.is_char_boundary(sample_end) {
+        sample_end -= 1;
+    }
+    let sample = &text[..sample_end];
+    let truncated = sample_end < text.len();
+    let mut scans = b"\t,;".map(|delimiter| scan_delimiter(sample, delimiter, quote));
+    if truncated {
+        if scans.iter().any(|scan| scan.coherent && scan.counts.iter().min().is_some_and(|&min| min > 0)) {
+            return pick_delimiter(scans);
+        }
+        // Every quote in the scans is at a char boundary, so the cut is one too.
+        let cut = scans.iter().filter(|scan| scan.counts.is_empty()).filter_map(|scan| scan.open_quote).min().unwrap_or(sample_end);
+        for scan in &mut scans {
+            if !scan.counts.is_empty() {
                 continue;
             }
-            if ch != '\r' {
-                blank = false;
+            if cut < sample_end {
+                let before_cut = scan_delimiter(&sample[..cut], scan.delimiter, quote);
+                (scan.count, scan.record_has_content, scan.record_coherent, scan.record_bare_quote) =
+                    (before_cut.count, before_cut.record_has_content, before_cut.record_coherent, before_cut.record_bare_quote);
             }
-            if ch == quote {
-                in_q = !in_q;
-            } else if !in_q && ch == d {
-                n += 1;
+            if scan.record_has_content {
+                scan.coherent &= scan.record_coherent && !scan.record_bare_quote;
+                scan.counts.push(scan.count);
             }
         }
-        if !blank {
-            counts.push(n);
+    } else {
+        for scan in &mut scans {
+            if scan.reached_record_limit {
+                continue;
+            }
+            if scan.open_quote.is_some() {
+                scan.coherent = false;
+            } else if scan.record_has_content {
+                scan.coherent &= scan.record_coherent;
+                scan.counts.push(scan.count);
+            }
         }
-        let min = counts.iter().copied().min().unwrap_or(0);
-        let total: usize = counts.iter().sum();
-        if min > 0 && (min, total) > (best.1, best.2) {
-            best = (d as u8, min, total);
+    }
+    pick_delimiter(scans)
+}
+
+fn pick_delimiter(scans: [DelimiterScan; 3]) -> u8 {
+    let candidates =
+        scans.map(|scan| (scan.delimiter, scan.counts.iter().copied().min().unwrap_or(0), scan.counts.iter().sum::<usize>(), scan.coherent));
+    let prefer_coherent = candidates.iter().any(|(_, min, _, coherent)| *min > 0 && *coherent);
+    let mut best = (b',', 0usize, 0usize);
+    for (delimiter, min, total, coherent) in candidates {
+        if min > 0 && (!prefer_coherent || coherent) && (min, total) > (best.1, best.2) {
+            best = (delimiter, min, total);
         }
     }
     best.0
+}
+
+/// One candidate delimiter's pass over the sample in [`sniff_delimiter`].
+struct DelimiterScan {
+    delimiter: u8,
+    /// Delimiter counts of the complete non-blank records, at most 20.
+    counts: Vec<usize>,
+    /// Whether every counted record had coherent quoted fields.
+    coherent: bool,
+    reached_record_limit: bool,
+    /// The record still open at the end of the sample: its delimiter count so far, whether it
+    /// has content, and whether its quoted fields so far are coherent.
+    count: usize,
+    record_has_content: bool,
+    record_coherent: bool,
+    /// Whether the open record has a quote inside a field that does not start with one.
+    record_bare_quote: bool,
+    /// The byte offset of the quote that opens a field still unterminated at the end.
+    open_quote: Option<usize>,
+}
+
+fn scan_delimiter(sample: &str, delimiter: u8, quote: char) -> DelimiterScan {
+    let mut scan = DelimiterScan {
+        delimiter,
+        counts: Vec::new(),
+        coherent: true,
+        reached_record_limit: false,
+        count: 0,
+        record_has_content: false,
+        record_coherent: true,
+        record_bare_quote: false,
+        open_quote: None,
+    };
+    let mut after_quote = false;
+    let mut field_start = true;
+    let mut chars = sample.char_indices().peekable();
+    while let Some((at, ch)) = chars.next() {
+        if scan.open_quote.is_some() {
+            if ch == quote {
+                if chars.peek().map(|&(_, next)| next) == Some(quote) {
+                    chars.next();
+                    scan.record_has_content = true;
+                } else {
+                    scan.open_quote = None;
+                    after_quote = true;
+                }
+            } else if !ch.is_whitespace() {
+                scan.record_has_content = true;
+            }
+            continue;
+        }
+        if ch == '\r' || ch == '\n' {
+            if ch == '\r' && chars.peek().map(|&(_, next)| next) == Some('\n') {
+                chars.next();
+            }
+            if scan.record_has_content {
+                scan.counts.push(scan.count);
+                scan.coherent &= scan.record_coherent;
+                if scan.counts.len() >= 20 {
+                    scan.reached_record_limit = true;
+                    break;
+                }
+            }
+            scan.count = 0;
+            after_quote = false;
+            field_start = true;
+            scan.record_has_content = false;
+            scan.record_coherent = true;
+            scan.record_bare_quote = false;
+            continue;
+        }
+        if ch == quote && field_start {
+            scan.open_quote = Some(at);
+            field_start = false;
+            scan.record_has_content = true;
+        } else if ch == char::from(delimiter) {
+            scan.count += 1;
+            field_start = true;
+            after_quote = false;
+        } else {
+            scan.record_coherent &= !after_quote || ch.is_whitespace();
+            scan.record_bare_quote |= ch == quote;
+            scan.record_has_content |= !ch.is_whitespace();
+            field_start = false;
+        }
+    }
+    scan
 }
 
 /// Splits delimited text into records of fields and hands each to `on_record`, which returns
@@ -204,11 +317,90 @@ mod tests {
         assert_eq!(sniff_delimiter("a\tb\n1\t2\n", '"'), b'\t');
         assert_eq!(sniff_delimiter("a,b\n\"x;y;z\",2\n", '"'), b',');
         assert_eq!(sniff_delimiter("single", '"'), b',');
+        assert_eq!(sniff_delimiter("a,b\tc\n1,2\td\n", '"'), b'\t');
+        assert_eq!(sniff_delimiter("a,b;c\n1,2;c\n", '"'), b',');
+        assert_eq!(sniff_delimiter("a;b\tc\n1;2\td\n", '"'), b'\t');
         // A delimiter missing from some lines is text, not a separator (single-column export round trip).
         assert_eq!(sniff_delimiter("alpha;beta\r\ngamma\r\n", '"'), b',');
         assert_eq!(sniff_delimiter("alpha\tbeta\r\ngamma\r\n", '"'), b',');
         assert_eq!(sniff_delimiter("a;b\r\n\r\nc;d\r\n", '"'), b';');
         assert_eq!(sniff_delimiter("x;y\n1,5;2", '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_preserves_candidate_quote_boundaries() {
+        for ending in ["\n", "\r\n", "\r"] {
+            for (text, expected) in [
+                (format!("Name,\"preferred\tCity\"{ending}Ada\tLondon{ending}"), b'\t'),
+                (format!("\"Last, First\";City{ending}Ada;London{ending}"), b';'),
+                (format!("\"Name\";\"Last, First\"{ending}\"Ada\";\"Lovelace, Countess\"{ending}\"Grace\";\"Hopper, Admiral\"{ending}"), b';'),
+                (format!("\"Name\"suffix,Title\tCity{ending}\"Ada\"suffix,Analyst\tLondon\tignored{ending}"), b'\t'),
+                (format!("\r\n \r\n\"Name\";City{ending}Ada;London{ending}"), b';'),
+            ] {
+                assert_eq!(sniff_delimiter(&text, '"'), expected, "{text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn delimiter_sniffing_counts_empty_quoted_fields_and_ignores_whitespace_records() {
+        assert_eq!(sniff_delimiter("\"\";name\n\"\";Ada\n", '"'), b';');
+
+        let blank_rows = "\t \t\n".repeat(25);
+        assert_eq!(sniff_delimiter(&format!("{blank_rows}a;b\nc;d\n"), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_does_not_count_the_twentieth_record_twice() {
+        let mut text = "a;b\tc\td\n".repeat(19);
+        text.push('a');
+        text.push_str(&";".repeat(19));
+        text.push_str("\tc\n");
+        assert_eq!(sniff_delimiter(&text, '"'), b'\t');
+    }
+
+    #[test]
+    fn delimiter_sniffing_discards_an_incomplete_record_at_the_sample_boundary() {
+        let complete = "a\tb\tc\n1\t2\t3\n";
+        let remaining = 64 * 1024 - complete.len();
+        let partial = format!("{}x\t\"unfinished", "z".repeat(remaining - 4));
+        assert!(partial.len() >= remaining);
+        let text = format!("{complete}{partial}\"\n");
+        assert_eq!(sniff_delimiter(&text, '"'), b'\t');
+    }
+
+    #[test]
+    fn delimiter_sniffing_counts_a_first_record_longer_than_the_sample() {
+        let wide = |field: &str, delimiter: char| {
+            let mut record = String::new();
+            while record.len() <= 64 * 1024 {
+                record.push_str(field);
+                record.push(delimiter);
+            }
+            record
+        };
+        assert_eq!(sniff_delimiter(&format!("{}end\n1;2\n", wide("cell", ';')), '"'), b';');
+        assert_eq!(sniff_delimiter(&format!("{}end\n1\t2\n", wide("cell", '\t')), '"'), b'\t');
+        // Delimiters inside quoted fields of the long record are text.
+        assert_eq!(sniff_delimiter(&format!("{}end\n", wide("\"a,b\tc\"", ';')), '"'), b';');
+        assert_eq!(sniff_delimiter(&format!("{}end\n", wide("\"a;b\tc\"", ',')), '"'), b',');
+        // A candidate that reads a quoted field as text inside an unquoted one is incoherent.
+        assert_eq!(sniff_delimiter(&format!("a,\"{}\",{}", "x;y".repeat(20_000), "z".repeat(10_000)), '"'), b',');
+        // The sample ends inside a quoted field: the delimiters before that field count.
+        let text = format!("a;b;c;\"{}\"\n1;2;3;4\n", "long text ".repeat(8_000));
+        assert_eq!(sniff_delimiter(&text, '"'), b';');
+        // Candidates without a complete record do not count delimiters after that quote, also
+        // when they read it as text.
+        assert_eq!(sniff_delimiter(&format!("a,\"{}\"\n1,2\n", "x;y".repeat(30_000)), '"'), b',');
+        assert_eq!(sniff_delimiter(&format!("a;b;\"{}\"\n1;2;3\n", "x,y\t".repeat(20_000)), '"'), b';');
+        // A line break inside the open quoted field gives the other candidates a record without
+        // a delimiter, which does not stop the first record from counting.
+        assert_eq!(sniff_delimiter(&format!("a;b;\"hello\n{}\"\n", "x".repeat(70_000)), '"'), b';');
+        assert_eq!(sniff_delimiter(&format!("\"a\";b;\"hello,\n{}\"\n", "x".repeat(70_000)), '"'), b';');
+        // When a candidate finds coherent complete records with a delimiter in each, a record cut
+        // off at the end is left out.
+        assert_eq!(sniff_delimiter(&format!("a;\"hello,\";b\n{}", "x;y;z\n".repeat(12_000)), '"'), b';');
+        assert_eq!(sniff_delimiter(&format!("a,b,c;\"hello,\";d\n{}", "x;y;z\n".repeat(12_000)), '"'), b';');
     }
 
     #[test]

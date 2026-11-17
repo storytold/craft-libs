@@ -11,3 +11,11 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+kurbo = { workspace = true, optional = true }
+vectorcraft-doc = { workspace = true, optional = true }
+vectorcraft-eps = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[features]
+default = []
+paths = ["dep:kurbo", "dep:thiserror", "dep:vectorcraft-doc", "dep:vectorcraft-eps"]

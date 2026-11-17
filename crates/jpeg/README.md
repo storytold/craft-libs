@@ -1,11 +1,14 @@
 # craft-jpeg
 
-A clean-room JPEG decoder for the Craft apps, written from ITU-T T.81 (ISO/IEC 10918-1). It
-covers the processes that common Rust JPEG decoders skip: 12-bit samples and arithmetic coding.
-It also decodes the common sequential 8-bit files a band of rows at a time ([`Bands`](#decoding-in-bands)),
-for images too large to decode into one buffer.
-No `unsafe`, no panics on malformed input, and it builds for `wasm32-unknown-unknown`. The only
-dependency is `thiserror`.
+A clean-room JPEG decoder and 8-bit baseline encoder for the Craft apps, written from ITU-T T.81
+(ISO/IEC 10918-1). The decoder covers processes that common Rust JPEG decoders skip: 12-bit
+samples and arithmetic coding. It also decodes the common sequential 8-bit files a band of rows
+at a time ([`Bands`](#decoding-in-bands)), for images too large to decode into one buffer. The
+baseline encoder writes per-image optimized Huffman tables and supports grayscale and YCbCr 4:4:4,
+4:2:2 and 4:2:0.
+
+No `unsafe`, no panics on malformed input, and it builds for `wasm32-unknown-unknown`. The required
+dependency is `thiserror`; the optional `parallel` feature adds Rayon for multi-core encoding.
 
 ```toml
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
@@ -99,6 +102,24 @@ fn use_craft_jpeg(bytes: &[u8]) -> bool {
 
 SOF11 (lossless) falls in that range and returns `Unsupported`.
 
+## Baseline encoding
+
+`encode_baseline(data, width, height, channels, quality, subsampling, app_segments)` writes an
+interleaved 8-bit baseline JPEG with optimized Huffman tables. `channels` is 1 (gray), 3 (RGB), or
+4 (RGBA; alpha is ignored). Dimensions must be in `1..=65535`, quality is clamped to `1..=100`,
+and a short sample buffer is rejected. APP segments must use markers `0xE0..=0xEF` and payloads
+no larger than 65533 bytes. Invalid input returns `EncodeError::InvalidInput` instead of an empty
+or malformed JPEG.
+
+```rust
+use craft_jpeg::{ChromaSubsampling, encode_baseline};
+
+let jpeg = encode_baseline(&rgb, width, height, 3, 90, ChromaSubsampling::S420, &[])?;
+```
+
+Enable the `parallel` Cargo feature to encode restart-interval bands concurrently. The output is
+byte-stable across sequential and parallel execution.
+
 ## Decoding in bands
 
 `Bands` decodes a sequential Huffman-coded (SOF0, SOF1) 8-bit file whose first scan holds every
@@ -141,10 +162,11 @@ if reader.damaged() { /* warn: part of the image is missing */ }
 
 ## Boundaries
 
-- In scope: decoding the frames above into samples.
-- Out of scope: metadata. The decoder skips every APPn and COM segment. ICC profiles, EXIF,
-  XMP, Photoshop resources, resolution and the APP14 `Adobe` segment are the app's to read.
-  Color management and encoding also stay in the apps.
+- In scope: decoding the frames above into samples and encoding 8-bit baseline JPEG.
+- Out of scope: metadata interpretation. The decoder skips every APPn and COM segment. ICC
+  profiles, EXIF, XMP, Photoshop resources, resolution and the APP14 `Adobe` segment are the
+  caller's to read; the encoder accepts caller-constructed APP segments. Color management stays
+  with each app.
 
 ## Testing
 
@@ -152,6 +174,9 @@ if reader.damaged() { /* warn: part of the image is missing */ }
 
 - unit tests in `src/tests.rs`: arithmetic-coded streams from a test-only encoder must decode to
   the coefficients that went in, and Huffman streams are compared against `zune-jpeg`.
+- unit tests in `src/encode.rs`: optimized table validity and file-size reduction, independent
+  `jpeg-decoder` and `zune-jpeg` decoding, 4:4:4/4:2:2/4:2:0 frame-header sampling, invalid input,
+  and pinned output hashes for grayscale, RGB, RGBA and the existing 4:2:0 path.
 - `tests/conformance.rs`, on libjpeg-turbo's test images in `tests/data` (provenance and how
   the derived files were made: `tests/data/SOURCE.md`):
   - `testimgari.jpg` (SOF9) decodes to exactly the samples of its jpegtran Huffman transcode.

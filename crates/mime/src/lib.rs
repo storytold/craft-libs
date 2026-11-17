@@ -28,6 +28,7 @@
 //! says) is the caller's: this crate has no notion of a mailbox or a document.
 
 pub mod base64;
+pub mod base64_compat;
 pub mod charset;
 #[cfg(feature = "detect")]
 pub mod detect;

@@ -1,0 +1,111 @@
+{
+  "board": {
+    "height_mm": 150.0,
+    "width_mm": 100.0
+  },
+  "kerf": {
+    "apply_to_exports": false,
+    "width_mm": 0.0
+  },
+  "layers": [
+    {
+      "kind": "cut",
+      "name": "cut",
+      "shapes": [
+        {
+          "id": 1,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 10.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 60.0,
+                "y": 10.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 60.0,
+                "y": 60.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 10.0,
+                "y": 60.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "cut"
+        },
+        {
+          "id": 2,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 70.0,
+                "y": 20.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 85.0,
+                "y": 20.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 85.0,
+                "y": 60.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 70.0,
+                "y": 60.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "cut"
+        }
+      ],
+      "visible": true
+    },
+    {
+      "kind": "engrave",
+      "name": "engrave",
+      "shapes": [
+        {
+          "id": 3,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 90.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 90.0,
+                "y": 90.0
+              }
+            }
+          ],
+          "style": "engrave"
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "next-shape-id": 4,
+  "stencilcraft": {
+    "name": "stencilcraft",
+    "version": 1
+  }
+}

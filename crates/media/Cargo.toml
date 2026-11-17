@@ -18,12 +18,14 @@ default = ["isobmff"]
 bitstream = []
 isobmff = ["bitstream", "dep:thiserror"]
 matroska = []
-# AVI (RIFF) and OpenDML demuxer (`craft_media::avi`).
+# AVI (RIFF) and OpenDML demuxer and muxer (`craft_media::avi`).
 avi = []
 # MXF demuxer and writer (`craft_media::mxf`); the writer formats dates with chrono.
 mxf = ["dep:chrono"]
 # MPEG-2 Systems demuxer: transport streams and program streams (`craft_media::mpegts`).
 mpegts = []
+# Sierra VMD (Video and Music Data) demuxer (`craft_media::vmd`).
+vmd = []
 # Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
 ogg = []
 # Serialize and Deserialize for `Container`, `CodecId`, `CodecParams` and `PcmFormat`.
@@ -52,6 +54,10 @@ name = "oracle_avi"
 required-features = ["avi"]
 
 [[test]]
+name = "oracle_avi_mux"
+required-features = ["avi"]
+
+[[test]]
 name = "oracle_demux"
 required-features = ["isobmff"]
 
@@ -74,6 +80,10 @@ required-features = ["mxf"]
 [[test]]
 name = "oracle_ogg"
 required-features = ["ogg"]
+
+[[test]]
+name = "oracle_vmd"
+required-features = ["vmd"]
 
 [[test]]
 name = "roundtrip"
