@@ -105,7 +105,7 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
-    const ROWS: usize = 30;
+    const ROWS: usize = 60;
     let names: Vec<String> = (1..=ROWS).map(|at| format!("Item {at:02}")).collect();
     for scale in [1.0, 1.5] {
         let lit: Rc<RefCell<HashMap<String, bool>>> = Rc::default();
