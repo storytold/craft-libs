@@ -14,6 +14,8 @@ all-features = true
 workspace = true
 
 [features]
+# FLV codec 3 / SWF Screen Video key frames.
+screen-video = ["dep:miniz_oxide"]
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
 dnx = []
@@ -64,6 +66,7 @@ av1-large-encode = ["av1-encode", "dep:rav1e"]
 threads = ["dep:rayon", "rav1e?/threading"]
 
 [dependencies]
+miniz_oxide = { workspace = true, optional = true }
 craft-media = { workspace = true }
 craft-jpeg = { workspace = true, optional = true }
 thiserror = { workspace = true }
