@@ -29,13 +29,15 @@ pub(super) use canvas::text_w;
 use canvas::{Rect, clip_text, legend, text};
 #[cfg(test)]
 use format::{civil, excel_stamp, format_value};
-use model::{Axis, Grouping, Kind, Pos, Series};
+pub(crate) use model::Axis;
+use model::{Grouping, Kind, Pos, Series};
+pub(crate) use parse::chart_axes;
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
 use parse::{read_series, text_size, title_of};
 #[cfg(test)]
 use plot::{Scale, narrow, nice_scale};
-use plot::{backdrop, cartesian};
+use plot::{backdrop, cartesian, label};
 use polar::{pie, radar};
 
 /// Most series read from one chart.
@@ -137,6 +139,51 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
     let msg = format!("{} (not supported yet)", unsupported_name(&ty.name));
     let line = Rect { x: area.x, y: area.y + ((area.h - lh) / 2.0).max(0.0), w: area.w, h: lh };
     text(out, line, &clip_text(&msg, area.w, size), size, TextAlign::Center, false);
+}
+
+/// Items for an Office 2016 chart (`cx:chartSpace`: waterfall, funnel, treemap…), sized `w` x `h`
+/// points: none of these types is drawn yet, so this is the same placeholder an unsupported
+/// classic chart gets (frame, title, the type it is), at the size the chart takes in Word.
+/// `space` is `None` when the part can't be read: the frame and "Chart" are still drawn.
+pub(crate) fn chartex_items(space: Option<&El>, w: f32, h: f32) -> Vec<GraphicItem> {
+    let mut out = Vec::new();
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return out;
+    }
+    out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill: None, stroke: Some(AXIS), stroke_width: 0.75 });
+    let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
+    let chart = space.and_then(|s| s.child("cx:chart"));
+    let title = chart.and_then(|c| c.child("cx:title")).and_then(|t| {
+        // Rich text keeps its runs together ("Sales " + "funnel"); a text-data title is one value.
+        let s = t.find("cx:rich").or_else(|| t.find("cx:v")).map(|e| e.deep_text()).unwrap_or_default();
+        let s = label(s.trim());
+        (!s.is_empty()).then_some(s)
+    });
+    if let Some(t) = title {
+        area = title_block(&mut out, &t, area);
+    }
+    let kind = chart.and_then(|c| c.find("cx:series")).and_then(|s| s.attr("layoutId")).unwrap_or("");
+    let size = FONT;
+    let lh = size * LINE;
+    let msg = format!("{} (not supported yet)", chartex_name(kind));
+    let line = Rect { x: area.x, y: area.y + ((area.h - lh) / 2.0).max(0.0), w: area.w, h: lh };
+    text(&mut out, line, &clip_text(&msg, area.w, size), size, TextAlign::Center, false);
+    out
+}
+
+/// What a placeholder calls an Office 2016 chart type (`cx:series` `layoutId`).
+fn chartex_name(layout: &str) -> &'static str {
+    match layout {
+        "waterfall" => "Waterfall chart",
+        "funnel" => "Funnel chart",
+        "treemap" => "Treemap chart",
+        "sunburst" => "Sunburst chart",
+        "boxWhisker" => "Box and whisker chart",
+        "clusteredColumn" => "Histogram chart",
+        "paretoLine" => "Pareto chart",
+        "regionMap" => "Map chart",
+        _ => "Chart",
+    }
 }
 
 /// What a placeholder calls a chart type element WordCraft doesn't draw.
