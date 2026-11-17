@@ -198,7 +198,9 @@ fn svg_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<Str
     const STAFF_GAP: f64 = 70.0;
     const SYSTEM_GAP: f64 = 40.0;
     let n_measures = parts.iter().map(|p| p.measures.len()).max().unwrap_or(0);
-    let per = setup.bars_per_system.max(1) as usize;
+    // The layout range the setup offers (1 to 16): a caller's own value can't multiply the
+    // barlines drawn per system beyond it.
+    let per = setup.bars_per_system.clamp(1, 16) as usize;
     let systems = n_measures.div_ceil(per).max(1);
     let label_w = if setup.show_track_names { 70.0 } else { 0.0 };
     let staff_x0 = MARGIN + label_w + 34.0;
