@@ -100,6 +100,7 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
 #[trial]
 fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
     use craft_behavior::MotionMode;
+    use craft_ui::contract::Role;
     use craft_ui::runtime::env::Scale;
     use craft_ui::testing::pointer;
     use std::cell::RefCell;
@@ -127,9 +128,11 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
         let file = fixture.by_label("File").expect("the File title");
         fixture.click(&file);
         fixture.settle();
+        // The rows whose rect lies inside the menu's: the ones its scroll shows.
+        let menu = fixture.by_role(Role::MENU).first().map(|menu| menu.rect).expect("the File menu is open");
         let shown: Vec<(String, egui::Pos2)> = names
             .iter()
-            .filter_map(|name| fixture.by_label(name).and_then(|row| fixture.visible(&row)).map(|row| (name.clone(), row.center())))
+            .filter_map(|name| fixture.by_label(name).filter(|row| menu.contains_rect(row.rect)).map(|row| (name.clone(), row.center())))
             .collect();
         assert!(shown.len() >= 4, "at {scale}x the menu shows rows: {}", shown.len());
         assert!(shown.len() < ROWS, "at {scale}x the menu is taller than its room and scrolls");
