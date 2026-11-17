@@ -507,7 +507,7 @@ impl FullWindowWorkspace for WideAngleWorkspace {
         WorkspacePass::new(shown.output.response.clone(), events).result(result)
     }
 
-    fn json_fields(&self) -> Option<Value> {
+    fn json_fields(&self, _source: &Self::Source) -> Option<Value> {
         let mut fields = serde_fields(&self.session)?;
         fields.as_object_mut()?.insert("preview".to_owned(), Value::Bool(self.preview_on));
         Some(fields)

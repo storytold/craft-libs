@@ -436,7 +436,7 @@ impl FullWindowWorkspace for FilterGalleryWorkspace {
         WorkspacePass::new(dialog.output.response, events).result(result)
     }
 
-    fn json_fields(&self) -> Option<Value> {
+    fn json_fields(&self, _source: &Self::Source) -> Option<Value> {
         let zoom = if self.view.is_fit() { json!("fit") } else { json!(self.view.device_zoom()) };
         let effects = serde_json::to_value(&self.session.effects).unwrap_or_default();
         Some(json!({ "effects": effects, "select": self.clamped_selection(), "zoom": zoom }))

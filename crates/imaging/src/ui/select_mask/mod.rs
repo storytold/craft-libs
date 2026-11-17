@@ -915,7 +915,7 @@ impl FullWindowWorkspace for SelectMaskWorkspace {
 
     /// The settings, and the bar's `tool`, `mode` (`"add"`, `"subtract"`), `size` (of the current tool), `hardness`,
     /// `sampleAllLayers`, and `hideView`.
-    fn json_fields(&self) -> Option<serde_json::Value> {
+    fn json_fields(&self, _source: &Self::Source) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.settings)?;
         let bar = fields.as_object_mut()?;
         let mode = if self.options.add { "add" } else { "subtract" };

@@ -12,8 +12,8 @@ use super::source::RawDevelopSource;
 use crate::scopes::ClippingMask;
 use crate::ui::scopes::{ClippingMode, ClippingOverlay, ScopeReadout};
 
-/// The readouts of `samplers` over the picture `before` or after, from `cache` while `revision` and the points are
-/// unchanged. The samplers ask in RGB; with `lab` (Show Lab Color Readouts) each readout also carries its Lab value,
+/// The readouts of `samplers` over the picture `before` or after, from `cache` while `revision`, the picture shown and the
+/// points are unchanged. The samplers ask in RGB; with `lab` (Show Lab Color Readouts) each readout also carries its Lab value,
 /// asked of the source again for the few points.
 pub(super) fn sampler_readouts(
     samplers: &ColorSamplers,
@@ -27,7 +27,7 @@ pub(super) fn sampler_readouts(
         Some(ScopeReadout::Rgb([r, g, b])) => Srgba { r, g, b, a: 1.0 },
         _ => Srgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
     };
-    let readouts = SamplerReadouts::new(samplers, read).revision(revision).get(cache);
+    let readouts = SamplerReadouts::new(samplers, read).revision(revision).document(before).get(cache);
     if !lab {
         return readouts;
     }
@@ -42,6 +42,17 @@ pub(super) fn sampler_readouts(
         };
     }
     Arc::new(with_lab)
+}
+
+/// The readout under `at` as the automation surface lists it: its `position`, `space` (`rgb` in 0..=255, or `lab`
+/// when `lab` asks for the Lab value) and `values`; `null` where the source reads no pixel.
+pub(super) fn readout_json(source: &dyn RawDevelopSource, at: [f64; 2], before: bool, lab: bool) -> serde_json::Value {
+    let (space, values) = match source.sample(at, before, lab) {
+        Some(ScopeReadout::Rgb(rgb)) => ("rgb", rgb.map(|v| v * 255.0)),
+        Some(ScopeReadout::Lab(lab)) => ("lab", lab),
+        _ => return serde_json::Value::Null,
+    };
+    serde_json::json!({ "position": at, "space": space, "values": values })
 }
 
 /// The source's clipping mask and its revision while a warning is on; nothing when `mode` shows none.

@@ -153,7 +153,7 @@ impl FullWindowWorkspace for BrushWorkspace {
         WorkspacePass::new(shown.output.response, events).result(result).held(held)
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
+    fn json_fields(&self, _source: &Self::Source) -> Option<serde_json::Value> {
         Some(serde_json::json!({ "brush": self.brush }))
     }
 
