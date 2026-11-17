@@ -11,7 +11,7 @@
 //! any declarations. The caller must stop using results when its budget callback refuses.
 use std::collections::HashMap;
 
-/// A per-style-element byte bound before copying or allocating declaration strings.
+/// Aggregate stylesheet byte bound before copying or allocating declaration strings.
 pub const MAX_CSS_BYTES: usize = 64 * 1024 * 1024;
 
 /// A stylesheet exceeds its byte, selector or declaration limit.
@@ -52,6 +52,8 @@ struct Rule {
 pub struct StyleSheet {
     /// Distinct selector rules in source order.
     rules: Vec<Rule>,
+    /// Aggregate input bytes across all parsed style elements.
+    bytes: usize,
     /// Declaration blocks; comma-list selectors share one block.
     blocks: Vec<Vec<(String, String)>>,
     /// Declarations over all blocks.
@@ -149,7 +151,8 @@ fn parse_compound(one: &str) -> (Option<String>, Vec<String>, Option<String>) {
 /// Add the rules of one `<style>` sheet. Errs once the sheets exceed [`MAX_CSS_SELECTORS`] or
 /// [`MAX_CSS_DECLARATIONS`] (#2140).
 pub fn parse(css: &str, sheet: &mut StyleSheet) -> Result<(), Error> {
-    if css.len() > MAX_CSS_BYTES {
+    sheet.bytes = sheet.bytes.saturating_add(css.len());
+    if sheet.bytes > MAX_CSS_BYTES {
         return Err(Error("stylesheet exceeds the byte limit".to_owned()));
     }
     let css = strip_comments(css);
@@ -292,5 +295,52 @@ mod tests {
         parse("@media x { @supports y { .c{} } .d{} } .e{fill:red}", &mut sheet).unwrap();
         assert_eq!(sheet.rules.len(), 1);
         assert_eq!(sheet.rules[0].classes, vec!["e".to_string()]);
+    }
+    #[test]
+    fn specificity_order_and_duplicate_classes_match_once() {
+        let mut sheet = StyleSheet::default();
+        parse("*{fill:black} .a{fill:red} rect.a{fill:green} #x{fill:blue} #x{stroke:white}", &mut sheet).unwrap();
+        sheet.index();
+        // Rebuilding buckets is idempotent.
+        sheet.index();
+        let mut result = HashMap::new();
+        let mut work = 0usize;
+        sheet.apply("rect", Some("x"), "a a", &mut result, |n| {
+            work += n;
+            true
+        });
+        assert_eq!(result.get("fill").map(String::as_str), Some("blue"));
+        assert_eq!(result.get("stroke").map(String::as_str), Some("white"));
+        assert_eq!(work, 3 + 5 + 2 + 5);
+    }
+
+    #[test]
+    fn refused_matching_budget_applies_nothing() {
+        let mut sheet = StyleSheet::default();
+        parse(".a{fill:red}", &mut sheet).unwrap();
+        sheet.index();
+        for refuse_at in 0..4 {
+            let mut result = HashMap::new();
+            let mut stage = 0;
+            sheet.apply("rect", None, "a", &mut result, |_| {
+                let allowed = stage != refuse_at;
+                stage += 1;
+                allowed
+            });
+            assert!(result.is_empty());
+        }
+    }
+
+    #[test]
+    fn stylesheet_limits_and_malformed_prefix_are_preserved() {
+        let mut sheet = StyleSheet::default();
+        parse("rect{fill:red} broken{", &mut sheet).unwrap();
+        assert_eq!(sheet.rules.len(), 1);
+        let mut sheet = StyleSheet::default();
+        assert!(parse(&format!("{}{{fill:red}}", vec!["rect"; MAX_CSS_SELECTORS + 1].join(",")), &mut sheet).is_err());
+        let mut sheet = StyleSheet::default();
+        assert!(parse(&format!("rect{{{}}}", "fill:red;".repeat(MAX_CSS_DECLARATIONS + 1)), &mut sheet).is_err());
+        let mut sheet = StyleSheet { bytes: MAX_CSS_BYTES, ..Default::default() };
+        assert!(parse("x", &mut sheet).is_err());
     }
 }
