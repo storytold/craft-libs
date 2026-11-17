@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::mpeg2::{Decoder, probe};
+use picture::{Fallback, qscale};
 
 /// A moving, textured test sequence: a gradient with a sharp pattern drifting by a fraction of a
 /// sample per picture, and a block moving across it.
@@ -38,8 +39,34 @@ pub(crate) fn scene(w: usize, h: usize, cw: usize, ch: usize, t: usize) -> (Vec<
     (y, cb, cr)
 }
 
+/// Uniform noise, different in every picture: as hard to code as content gets.
+fn noise(w: usize, h: usize, cw: usize, ch: usize, t: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut x = 0x9E37_79B9_7F4A_7C15u64 ^ (t as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93);
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x >> 24) as u8
+    };
+    let y = (0..w * h).map(|_| next()).collect();
+    let cb = (0..cw * ch).map(|_| next()).collect();
+    let cr = (0..cw * ch).map(|_| next()).collect();
+    (y, cb, cr)
+}
+
+/// The scene's first picture, every time.
+fn still(w: usize, h: usize, cw: usize, ch: usize, _t: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    scene(w, h, cw, ch, 0)
+}
+
+type Source = fn(usize, usize, usize, usize, usize) -> (Vec<u8>, Vec<u8>, Vec<u8>);
+
 /// Encode `frames` pictures of the scene; returns the stream and the reconstruction.
 fn encode(cfg: EncoderConfig, frames: usize) -> (Vec<u8>, Vec<ReconFrame>, Vec<Packet>) {
+    encode_from(cfg, frames, scene)
+}
+
+fn encode_from(cfg: EncoderConfig, frames: usize, source: Source) -> (Vec<u8>, Vec<ReconFrame>, Vec<Packet>) {
     let (w, h) = (cfg.width as usize, cfg.height as usize);
     let (cw, ch) = (w / 2, if cfg.chroma == ChromaFormat::Yuv422 { h } else { h / 2 });
     let mut enc = Encoder::new(cfg).unwrap();
@@ -47,7 +74,7 @@ fn encode(cfg: EncoderConfig, frames: usize) -> (Vec<u8>, Vec<ReconFrame>, Vec<P
     let mut es = Vec::new();
     let mut packets = Vec::new();
     for t in 0..frames {
-        let (y, cb, cr) = scene(w, h, cw, ch, t);
+        let (y, cb, cr) = source(w, h, cw, ch, t);
         let f = YuvFrame { y: &y, cb: &cb, cr: &cr, y_stride: w, c_stride: cw };
         for p in enc.encode(&f, t as i64).unwrap() {
             es.extend_from_slice(&p.data);
@@ -76,7 +103,11 @@ fn decode(packets: &[Packet]) -> Vec<crate::mpeg2::Picture> {
 }
 
 fn assert_decodes_to_recon(name: &str, cfg: EncoderConfig, frames: usize) -> Vec<Packet> {
-    let (_, recon, packets) = encode(cfg, frames);
+    assert_decodes_to_recon_from(name, cfg, frames, scene)
+}
+
+fn assert_decodes_to_recon_from(name: &str, cfg: EncoderConfig, frames: usize, source: Source) -> Vec<Packet> {
+    let (_, recon, packets) = encode_from(cfg, frames, source);
     assert!(packets.windows(2).all(|w| w[0].dts < w[1].dts) && packets.iter().all(|p| p.dts <= p.pts), "{name}: decoding times");
     let pics = decode(&packets);
     assert_eq!(pics.len(), frames, "{name}: picture count");
@@ -89,6 +120,81 @@ fn assert_decodes_to_recon(name: &str, cfg: EncoderConfig, frames: usize) -> Vec
         }
     }
     packets
+}
+
+/// What [`check_vbv`] found.
+#[derive(Debug)]
+struct VbvRun {
+    cbr: bool,
+    /// Bit rate and buffer size from the sequence header.
+    rate: u64,
+    size: u64,
+    /// Bits of the whole stream.
+    bits: u64,
+}
+
+/// Start codes in `data`: (offset of the 00 00 01, code).
+fn start_codes(data: &[u8]) -> Vec<(usize, u8)> {
+    (0..data.len().saturating_sub(3)).filter(|&i| data[i..i + 3] == [0, 0, 1]).map(|i| (i, data[i + 3])).collect()
+}
+
+/// Check a stream (packets in decoding order) against the VBV buffer of H.262 Annex C, using
+/// nothing but its bytes: the sequence header's bit rate and buffer size, each picture's size
+/// and `vbv_delay`. With a constant bitrate, data arrives at the bit rate from the first byte and
+/// picture n is decoded `vbv_delay` after its start code arrives: those times must be one
+/// picture interval apart, each picture complete by its time, and the buffer never over full.
+/// With a variable bitrate the buffer fills at the bit rate until full and each picture must be
+/// in it at its decoding time.
+fn check_vbv(name: &str, packets: &[Packet], (fps_num, fps_den): (u32, u32)) -> VbvRun {
+    use crate::mpeg2::headers::{Extension, PictureHeader, SequenceHeader};
+    let first = &packets[0].data;
+    let codes = start_codes(first);
+    let at = |code: u8| codes.iter().find(|c| c.1 == code).map(|c| c.0 + 4).unwrap();
+    let seq = SequenceHeader::parse(&first[at(0xB3)..]).unwrap();
+    let Extension::Sequence(ext) = Extension::parse(&first[at(0xB5)..]).unwrap() else { panic!("{name}: no sequence extension") };
+    let rate = (u64::from(seq.bit_rate_value) | u64::from(ext.bit_rate_extension) << 18) * 400;
+    let size = (u64::from(seq.vbv_buffer_size_value) | u64::from(ext.vbv_buffer_size_extension) << 10) * 16384;
+    let (num, den) = (u128::from(fps_num), u128::from(fps_den));
+    let (r, s) = (u128::from(rate), u128::from(size));
+    let pics: Vec<(u64, u64, u16)> = packets
+        .iter()
+        .map(|p| {
+            let pic = start_codes(&p.data).into_iter().find(|c| c.1 == 0).unwrap().0 + 4;
+            (p.data.len() as u64 * 8, pic as u64 * 8, PictureHeader::parse(&p.data[pic..]).unwrap().vbv_delay)
+        })
+        .collect();
+    let cbr = pics[0].2 != 0xFFFF;
+    assert!(pics.iter().all(|p| (p.2 != 0xFFFF) == cbr), "{name}: some vbv_delay are 0xFFFF and some not");
+    if cbr {
+        // in bit·ticks (bits × 90000): picture n decodes at T = (bits up to its start code) ×
+        // 90000 + vbv_delay × rate; one interval is rate × 90000 × den / num of them
+        let mut before = 0u128;
+        let mut last: Option<u128> = None;
+        for (i, &(bits, head, delay)) in pics.iter().enumerate() {
+            let (bits, head) = (u128::from(bits), u128::from(head));
+            let t = (before + head) * 90_000 + u128::from(delay) * r;
+            if let Some(l) = last {
+                // each vbv_delay is rounded down to a tick
+                let step = (t - l) * num;
+                let want = r * 90_000 * den;
+                assert!(step.abs_diff(want) <= 2 * r * num, "{name}: picture {i} decodes {step} after the one before, not {want}");
+            }
+            let arrived = t + r; // within the tick the delay was rounded down by
+            assert!((before + bits) * 90_000 <= arrived, "{name}: picture {i} underflows ({bits} bits)");
+            assert!(t <= (before + s) * 90_000, "{name}: the buffer overflows before picture {i}");
+            before += bits;
+            last = Some(t);
+        }
+    } else {
+        // in 1/num bits: the buffer starts full and gains rate × den a picture, up to full
+        let mut full = s * num;
+        for (i, &(bits, _, _)) in pics.iter().enumerate() {
+            let b = u128::from(bits) * num;
+            assert!(b <= full, "{name}: picture {i} underflows ({bits} bits, {} in the buffer)", full / num);
+            full = (full - b + r * den).min(s * num);
+        }
+    }
+    VbvRun { cbr, rate, size, bits: pics.iter().map(|p| p.0).sum() }
 }
 
 fn psnr(a: &[u8], b: &[u8]) -> f64 {
@@ -331,6 +437,165 @@ fn flushing_short_gops_keeps_the_average_bitrate() {
         let got = flushed_bitrate(cfg, 4, 15);
         assert!((got / 600e3 - 1.0).abs() < 0.15, "b {b}: {got:.0} bit/s for 600000");
     }
+}
+
+#[test]
+fn constant_bitrate_streams_meet_the_vbv_buffer() {
+    let qcif = EncoderConfig { gop_size: 12, ..EncoderConfig::new(176, 144, 25, 1) };
+    let cases: [(&str, EncoderConfig, Source); 9] = [
+        ("scene", EncoderConfig { rate: RateControl::Cbr { kbps: 400 }, ..qcif.clone() }, scene),
+        ("scene ip", EncoderConfig { rate: RateControl::Cbr { kbps: 400 }, b_pictures: 0, ..qcif.clone() }, scene),
+        ("scene open b4", EncoderConfig { rate: RateControl::Cbr { kbps: 400 }, b_pictures: 4, closed_gop: false, ..qcif.clone() }, scene),
+        ("intra", EncoderConfig { rate: RateControl::Cbr { kbps: 1500 }, gop_size: 1, ..qcif.clone() }, scene),
+        ("small buffer", EncoderConfig { rate: RateControl::Cbr { kbps: 300 }, vbv_buffer_bits: Some(16384 * 3), ..qcif.clone() }, scene),
+        ("noise", EncoderConfig { rate: RateControl::Cbr { kbps: 600 }, ..qcif.clone() }, noise),
+        ("noise intra", EncoderConfig { rate: RateControl::Cbr { kbps: 600 }, gop_size: 1, ..qcif.clone() }, noise),
+        ("still", EncoderConfig { rate: RateControl::Cbr { kbps: 1000 }, ..qcif.clone() }, still),
+        (
+            "422 29.97",
+            EncoderConfig { rate: RateControl::Cbr { kbps: 900 }, chroma: ChromaFormat::Yuv422, fps_num: 30000, fps_den: 1001, ..qcif.clone() },
+            scene,
+        ),
+    ];
+    for (name, cfg, source) in cases {
+        let (fps, frames) = ((cfg.fps_num, cfg.fps_den), 40);
+        // every case is a constant bitrate (0 would fail the rate check below)
+        let kbps = if let RateControl::Cbr { kbps } = cfg.rate { kbps } else { 0 };
+        let packets = assert_decodes_to_recon_from(name, cfg, frames, source);
+        let run = check_vbv(name, &packets, fps);
+        assert!(run.cbr && run.rate == u64::from(kbps) * 1000, "{name}: {run:?}");
+        // a constant bitrate: the stream is the bit rate's worth of its duration, give or take
+        // what the buffer held at the start and holds at the end
+        let want = run.rate as f64 * frames as f64 * f64::from(fps.1) / f64::from(fps.0);
+        assert!((run.bits as f64 - want).abs() <= run.size as f64, "{name}: {} bits for {want:.0}", run.bits);
+    }
+}
+
+#[test]
+fn constant_bitrate_pads_pictures_that_would_overflow_the_buffer() {
+    // a still picture costs next to nothing after the first: the rest must be stuffing
+    let cfg = EncoderConfig { rate: RateControl::Cbr { kbps: 2000 }, gop_size: 12, ..EncoderConfig::new(176, 144, 25, 1) };
+    let (_, _, packets) = encode_from(cfg, 24, still);
+    let padded = packets.iter().filter(|p| p.data.ends_with(&[0; 64])).count();
+    assert!(padded >= 12, "{padded} of {} pictures padded", packets.len());
+    let run = check_vbv("still", &packets, (25, 1));
+    assert!((run.bits as f64 / (2e6 * 24.0 / 25.0) - 1.0).abs() < 0.2, "{run:?}");
+}
+
+#[test]
+fn variable_bitrate_streams_meet_the_vbv_buffer() {
+    let qcif = EncoderConfig { gop_size: 12, ..EncoderConfig::new(176, 144, 25, 1) };
+    let small = Some(16384 * 4);
+    let cases: [(&str, EncoderConfig, Source); 7] = [
+        ("vbr", EncoderConfig { rate: RateControl::Vbr { kbps: 300, max_kbps: 600 }, ..qcif.clone() }, scene),
+        ("vbr noise", EncoderConfig { rate: RateControl::Vbr { kbps: 300, max_kbps: 600 }, vbv_buffer_bits: small, ..qcif.clone() }, noise),
+        ("abr small buffer", EncoderConfig { rate: RateControl::Abr { kbps: 2000 }, vbv_buffer_bits: small, ..qcif.clone() }, noise),
+        ("quantiser 1", EncoderConfig { rate: RateControl::Quantiser(1), vbv_buffer_bits: small, ..qcif.clone() }, noise),
+        ("quantiser 1 intra", EncoderConfig { rate: RateControl::Quantiser(1), gop_size: 1, vbv_buffer_bits: small, ..qcif.clone() }, noise),
+        ("quantiser 1 b4", EncoderConfig { rate: RateControl::Quantiser(1), b_pictures: 4, vbv_buffer_bits: small, ..qcif.clone() }, noise),
+        ("default", qcif.clone(), scene),
+    ];
+    for (name, cfg, source) in cases {
+        let packets = assert_decodes_to_recon_from(name, cfg, 30, source);
+        let run = check_vbv(name, &packets, (25, 1));
+        assert!(!run.cbr, "{name}: {run:?}");
+    }
+}
+
+#[test]
+fn pictures_too_large_for_the_buffer_are_coded_coarser() {
+    // noise at quantiser 1 is far beyond a 64 kbit buffer: every picture must give way, down to
+    // the coarsest quantiser or the fallbacks, and still decode to the reconstruction
+    let cfg = EncoderConfig { rate: RateControl::Quantiser(1), vbv_buffer_bits: Some(16384 * 4), ..EncoderConfig::new(176, 144, 25, 1) };
+    let q_max = qscale(cfg.nonlinear_quant, 31) as f32;
+    let packets = assert_decodes_to_recon_from("noise", cfg, 24, noise);
+    assert!(packets.iter().all(|p| p.quantiser_scale > 8.0), "{:?}", packets.iter().map(|p| p.quantiser_scale).collect::<Vec<_>>());
+    // adaptive quantisation spreads the macroblocks of the coarsest pictures just under it
+    assert!(packets.iter().any(|p| p.quantiser_scale > 0.95 * q_max));
+    check_vbv("noise", &packets, (25, 1));
+}
+
+#[test]
+fn the_smallest_pictures_do_not_depend_on_the_source() {
+    let enc = Encoder::new(EncoderConfig { b_pictures: 2, ..EncoderConfig::new(176, 144, 25, 1) }).unwrap();
+    let smallest = enc.smallest_picture();
+    let frame = |t| {
+        let (y, cb, cr) = noise(176, 144, 88, 72, t);
+        enc.load(&YuvFrame { y: &y, cb: &cb, cr: &cr, y_stride: 176, c_stride: 88 }).unwrap()
+    };
+    let (a, b) = (frame(1), frame(2));
+    let h = Held { src: frame(3), pts: 0, n: 0 };
+    let sizes: Vec<u64> =
+        [(PictureType::I, None, None), (PictureType::P, Some(&a), None), (PictureType::B, Some(&a), Some(&b)), (PictureType::B, None, Some(&b))]
+            .into_iter()
+            .map(|(t, fwd, bwd)| {
+                let c = enc.code_picture(&h, t, (fwd, bwd), [&[], &[]], 30.0, Fallback::Minimal);
+                // the minimal picture repeats its reference (grey for an I picture)
+                let want = bwd.or(fwd).map_or(128, |r| r.planes[0][5]);
+                assert_eq!(c.recon.planes[0][5], want, "{t:?}");
+                c.bits()
+            })
+            .collect();
+    assert_eq!(sizes.iter().max().copied(), Some(smallest), "{sizes:?}");
+    // the same sizes for a grey source and references
+    let mut grey = frame(0);
+    for p in &mut grey.planes {
+        p.fill(128);
+    }
+    let g = Held { src: grey.clone(), pts: 0, n: 0 };
+    let i = enc.code_picture(&g, PictureType::I, (None, None), [&[], &[]], 30.0, Fallback::Minimal).bits();
+    assert_eq!(i, sizes[0]);
+}
+
+#[test]
+fn the_sequence_header_carries_the_rate_and_buffer() {
+    let base = EncoderConfig::new(176, 144, 25, 1);
+    for (rate, vbv, want_rate, want_vbv) in [
+        (RateControl::Cbr { kbps: 1000 }, None, 1_000_000, 475_136 / 16384 * 16384),
+        // rounded up to 400 bit/s
+        (RateControl::Cbr { kbps: 1001 }, None, 1_001_200, 475_136 / 16384 * 16384),
+        (RateControl::Vbr { kbps: 500, max_kbps: 1500 }, Some(200_000), 1_500_000, 196_608),
+        // the level's maximum
+        (RateControl::Abr { kbps: 500 }, None, 4_000_000, 475_136 / 16384 * 16384),
+        (RateControl::Quantiser(4), None, 4_000_000, 475_136 / 16384 * 16384),
+    ] {
+        let enc = Encoder::new(EncoderConfig { rate, vbv_buffer_bits: vbv, ..base.clone() }).unwrap();
+        let info = probe(enc.sequence_header()).unwrap();
+        assert_eq!(info.bit_rate, want_rate, "{rate:?}");
+        assert_eq!(enc.vbv_value * 16384, want_vbv, "{rate:?}");
+    }
+    // a larger buffer than the level holds moves to the next level
+    let enc = Encoder::new(EncoderConfig { vbv_buffer_bits: Some(1_000_000), ..base.clone() }).unwrap();
+    assert_eq!(enc.profile_and_level(), 0x48);
+}
+
+#[test]
+fn bitrates_the_buffer_cannot_carry_are_refused() {
+    let base = EncoderConfig::new(352, 288, 25, 1);
+    let bad = [
+        // 2000 bits a picture: less than the smallest CIF picture
+        EncoderConfig { rate: RateControl::Cbr { kbps: 50 }, ..base.clone() },
+        EncoderConfig { rate: RateControl::Vbr { kbps: 40, max_kbps: 50 }, ..base.clone() },
+        // a buffer of less than two pictures
+        EncoderConfig { rate: RateControl::Cbr { kbps: 4000 }, vbv_buffer_bits: Some(16384 * 9), ..base.clone() },
+        // a buffer smaller than the smallest CIF picture
+        EncoderConfig { rate: RateControl::Quantiser(4), vbv_buffer_bits: Some(16384), ..base.clone() },
+        EncoderConfig { vbv_buffer_bits: Some(16000), ..base.clone() },
+        // beyond every level
+        EncoderConfig { vbv_buffer_bits: Some(10_000_000), ..base.clone() },
+        EncoderConfig { rate: RateControl::Cbr { kbps: 0 }, ..base.clone() },
+        EncoderConfig { rate: RateControl::Vbr { kbps: 900, max_kbps: 800 }, ..base.clone() },
+        EncoderConfig { rate: RateControl::Cbr { kbps: 90_000 }, ..base.clone() },
+    ];
+    for cfg in bad {
+        let desc = format!("{cfg:?}");
+        assert!(matches!(Encoder::new(cfg), Err(EncodeError::Config(_))), "{desc}");
+    }
+    // the lowest bitrate that is accepted gives a stream that meets the buffer, noise or not
+    let lowest = (1..4000).find(|&kbps| Encoder::new(EncoderConfig { rate: RateControl::Cbr { kbps }, ..base.clone() }).is_ok()).unwrap();
+    let cfg = EncoderConfig { rate: RateControl::Cbr { kbps: lowest }, ..base.clone() };
+    let packets = assert_decodes_to_recon_from("lowest", cfg, 14, noise);
+    check_vbv("lowest", &packets, (25, 1));
 }
 
 #[cfg(feature = "threads")]

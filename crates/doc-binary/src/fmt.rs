@@ -110,8 +110,8 @@ pub(crate) fn ico(i: u8) -> Option<Rgb> {
 }
 
 /// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType; 0x02, thick, is in
-/// the BRC of Microsoft's Word 97-2007 specification). Types the model doesn't carry (the gap
-/// variants, 3-D, inset/outset) draw as single lines, as the DOCX reader maps them.
+/// the BRC of Microsoft's Word 97-2007 specification); 0x0B-0x13 are the thin/thick compound
+/// lines. Types the model doesn't carry (3-D, inset/outset, art borders) draw as single lines.
 fn brc_style(t: u8) -> BorderStyle {
     match t {
         0x00 => BorderStyle::None,
@@ -121,6 +121,15 @@ fn brc_style(t: u8) -> BorderStyle {
         0x07 | 0x16 => BorderStyle::Dashed,
         0x08 | 0x09 => BorderStyle::DotDash,
         0x0A => BorderStyle::Triple,
+        0x0B => BorderStyle::ThinThickSmallGap,
+        0x0C => BorderStyle::ThickThinSmallGap,
+        0x0D => BorderStyle::ThinThickThinSmallGap,
+        0x0E => BorderStyle::ThinThickMediumGap,
+        0x0F => BorderStyle::ThickThinMediumGap,
+        0x10 => BorderStyle::ThinThickThinMediumGap,
+        0x11 => BorderStyle::ThinThickLargeGap,
+        0x12 => BorderStyle::ThickThinLargeGap,
+        0x13 => BorderStyle::ThinThickThinLargeGap,
         0x14 | 0x15 => BorderStyle::Wave,
         _ => BorderStyle::Single,
     }
