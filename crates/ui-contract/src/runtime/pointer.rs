@@ -579,12 +579,15 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
 }
 
 fn find_press_winners(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> PressWinners {
-    let Some(layer) = areas::layer_at(ctx, at) else {
+    let Some(layer) = areas::layer_at(ctx, at).or_else(|| layer_past_window(ctx, viewport, at)) else {
         if let Some(test) = diag_test() {
             eprintln!("DIAG {test}: press_winner at {at:?}: no layer");
         }
         return PressWinners::default();
     };
+    if let Some(test) = diag_test().filter(|test| ["liquify", "half_plane", "crop_drag"].iter().any(|name| test.contains(name))) {
+        diag_layers(ctx, viewport, at, layer, test);
+    }
     let to_layer = |layer: Layer| areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
     let body = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last_bodies.get(&layer).copied());
     let beneath = body.map(|(root, parent)| (root, parent, to_layer(parent)));
@@ -688,6 +691,59 @@ fn find_press_winners(ctx: &Context, viewport: ViewportId, at: Pos2, targets: Pr
         eprintln!("DIAG {test}: press_winner at {at:?} -> click {:?} drag {:?}", show(found.click), show(found.drag));
     }
     found
+}
+
+/// The layer a press past the window goes to, where egui has none (only automation names such a point: a document
+/// point off the window): the topmost layer of last pass's shape record with a shape there that takes a press and
+/// shows some of itself inside its clip.
+fn layer_past_window(ctx: &Context, viewport: ViewportId, at: Pos2) -> Option<Layer> {
+    let mut layers: Vec<Layer> = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last.keys().copied().collect());
+    layers.sort_by_key(|layer| std::cmp::Reverse(areas::layer_position(ctx, *layer)));
+    layers.into_iter().find(|layer| {
+        let point = areas::layer_map(ctx, *layer).map_or(at, |map| map.to_layer(at));
+        PerViewport::<Shapes>::with(ctx, viewport, |record| {
+            record.last.get(layer).is_some_and(|roots| {
+                roots.values().any(|entry| {
+                    entry.shapes.iter().zip(&entry.placed).any(|(shape, placed)| {
+                        shape.sense.takes_press() && shape.hits(point) && shape.shape.bounds().intersects(placed.clip)
+                    })
+                })
+            })
+        })
+    })
+}
+
+/// DIAG: every layer of last pass's shape record at `at`, top first: its place in egui's order, whether it is the
+/// press's layer, the body it shows, and each root's shapes under the point (sensing or not).
+fn diag_layers(ctx: &Context, viewport: ViewportId, at: Pos2, chosen: Layer, test: &str) {
+    let mut layers: Vec<Layer> = PerViewport::<Shapes>::with(ctx, viewport, |record| record.last.keys().copied().collect());
+    layers.sort_by_key(|layer| std::cmp::Reverse(areas::layer_position(ctx, *layer)));
+    for layer in layers {
+        let point = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
+        let position = areas::layer_position(ctx, layer);
+        let interactable = egui::AreaState::load(ctx, layer.id).map(|state| (state.interactable, state.rect()));
+        let line = PerViewport::<Shapes>::with(ctx, viewport, |record| {
+            let body = record.last_bodies.get(&layer).map(|(root, parent)| (diag_id(*root), *parent));
+            let roots: Vec<String> = record
+                .last
+                .get(&layer)
+                .into_iter()
+                .flat_map(|roots| roots.iter())
+                .map(|(root, entry)| {
+                    let under: Vec<String> = entry
+                        .shapes
+                        .iter()
+                        .zip(&entry.placed)
+                        .filter(|(shape, _)| shape.hits(point))
+                        .map(|(shape, placed)| format!("{} {:?} {:?} clip_in {}", diag_id(shape.owner), shape.part, shape.sense, placed.clip.contains(point)))
+                        .collect();
+                    format!("root {} shapes {} under {under:?}", diag_id(*root), entry.shapes.len())
+                })
+                .collect();
+            format!("layer {layer:?} at {position} area {interactable:?} chosen {} body {body:?} point {point:?} roots {roots:?}", layer == chosen)
+        });
+        eprintln!("DIAG {test}: layers at {at:?}: {line}");
+    }
 }
 
 /// DIAG: the test under study this thread runs, if any.
