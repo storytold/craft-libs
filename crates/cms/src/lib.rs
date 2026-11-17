@@ -45,6 +45,7 @@ pub use curve::Curve;
 pub use gamut::GamutCheck;
 pub use gpu_matrix_shaper::GpuMatrixShaper;
 pub use lut3d::Lut3d;
+pub use math::Mat3;
 pub use named::{NamedColor, NamedColors};
 pub use normalize::normalize_for_embedding;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
