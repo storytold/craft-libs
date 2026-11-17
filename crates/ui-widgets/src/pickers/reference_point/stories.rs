@@ -1,6 +1,6 @@
 //! Stories of `ReferencePoint`.
 
-use super::ReferencePoint;
+use super::{PointPresentation, ReferencePoint};
 use crate::contract::{Bind, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -38,8 +38,31 @@ fn reference_point_growth(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ReferencePoint::new("Reference point", Bind::bound(data.value("grown", Anchor9::TopLeft))).growth((200.0, -100.0)).show(ui).into()
 }
 
-/// The options bar's size: the grid is an icon square and every point is a dot.
+/// The options bar's size: an icon square, every point a dot of the one width, the pick's in the accent colour.
 #[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
 fn reference_point_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ReferencePoint::new("Reference point", Bind::bound(data.value("compact", Anchor9::Centre))).compact().show(ui).into()
+}
+
+/// The nine points as squares joined into the box's grid: the pick's square filled, the others outlined.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Custom(pick_top_left))]
+fn reference_point_connected_squares(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = Bind::bound(data.value("squares", Anchor9::Centre));
+    ReferencePoint::new("Reference point", value).presentation(PointPresentation::ConnectedSquares).show(ui).into()
+}
+
+/// The squares keep the growth arrows: the box grows both ways, so every square beside the pick frames an arrow
+/// pointing away from it.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_connected_squares_growth(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = Bind::bound(data.value("squares_growing", Anchor9::Centre));
+    ReferencePoint::new("Reference point", value).presentation(PointPresentation::ConnectedSquares).growth((1.0, 1.0)).show(ui).into()
+}
+
+/// The squares at the options bar's size: every square the one side, the pick's filled where the rest are outlined, so
+/// the presentation is the mark a point shows and not the size the picker takes.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_connected_squares_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = Bind::bound(data.value("squares_compact", Anchor9::BottomLeft));
+    ReferencePoint::new("Reference point", value).presentation(PointPresentation::ConnectedSquares).compact().show(ui).into()
 }
