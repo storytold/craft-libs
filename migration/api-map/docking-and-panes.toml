@@ -649,7 +649,7 @@ name = "Flyout"
 old = ""
 new = "craft_ui::docking::Flyout"
 status = "replaced"
-note = "The popup beside an iconic column, built on `Overlay::popover` and hung from the icon's part."
+note = "The popup beside an iconic column, built on `Overlay::popover` and hung from the icon's part; `Flyout::new(opens: Side, size, auto_collapse)` opens it on that side of the column."
 
 # Drop resolution (dock-drop-a).
 
@@ -1384,14 +1384,14 @@ name = "WindowMenuRows"
 old = ""
 new = "craft_ui::docking::WindowMenuRows"
 status = "replaced"
-note = "The Window menu's check rows over a layout: `WindowMenuRows::new(&Layout<P>, &dyn DockPanels<P>, &[P]).show(ui) -> WindowMenuRowsOutput<P> { action: Option<Action<P>> }`. Replaces a menu's hand-written panel rows."
+note = "The Window menu's check rows over a layout: `WindowMenuRows::new(&Layout<P>, &dyn DockPanels<P>, &[P]).flyout(open).show(ui) -> WindowMenuRowsOutput<P> { action: Option<Action<P>>, flyout: Option<Option<P>> }`; a panel in a collapsed column opens and closes its flyout through `flyout`. Replaces a menu's hand-written panel rows."
 
 [[type]]
 name = "WindowMenuRowsOutput"
 old = ""
 new = "craft_ui::docking::WindowMenuRowsOutput"
 status = "replaced"
-note = "What `WindowMenuRows::show` reports: the action the picked row asks for."
+note = "What `WindowMenuRows::show` reports: the action the picked row asks for, or the open flyout it asks for when its panel is in a collapsed column."
 
 [[type]]
 name = "StackSections"
