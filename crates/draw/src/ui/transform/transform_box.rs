@@ -80,14 +80,19 @@ struct KeyPicked(Option<BoxPart>);
 const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
 
-/// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a handle reaches 8 from its
-/// point, inside the box as outside, each side's band reaches 11 outside it and none inside, and the band's first
-/// quarter of the side from each corner, at most 11 along it, is that corner's; the reference point and the centre
-/// reach 12, the rotate pointer shows within 36 of a corner, the rotate band runs from 5 to 18 outside it). The handle
-/// reach, the side bands and the corners' share of them are PhotoCraft's: inside the box only a handle's own reach is the box's, so a
-/// press there off the handles reaches what lies under the box (a text editor under a paragraph frame).
+/// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a corner handle reaches 8 from
+/// its point and a side's midpoint handle 11, inside the box as outside; each side's band runs from half a point
+/// outside it (inside it, on a box whose inside is the tool's) to 13 outside, and the band's first quarter of the side from each corner, at most 13 along it, is that
+/// corner's; the reference point and the centre reach 12, the rotate pointer shows within 36 of a corner, the rotate
+/// band runs from 5 to 18 outside it). The midpoint reach and the side band are measured on the reference application
+/// at 100 %: a press 10 points inside at a side's midpoint, or 10 along the side from it, takes the side, one 12 inside
+/// moves the box; away from the midpoint a press on the side's line or inside it moves the box, one a point outside
+/// takes the side, and so does one 12 outside but not one 14 outside. The corner reach and the corners' share of the
+/// bands are PhotoCraft's: inside the box only a handle's own reach is the box's, so a press there off the handles
+/// reaches what lies under the box (a text editor under a paragraph frame).
 const HANDLE_REACH_IN_HANDLES: f32 = 1.0;
-const SIDE_BAND_IN_HANDLES: f32 = 1.375;
+const EDGE_REACH_IN_HANDLES: f32 = 1.375;
+const SIDE_BAND_IN_HANDLES: f32 = 1.625;
 const HIT_IN_HANDLES: f32 = 1.5;
 const ROTATE_REACH_IN_HANDLES: f32 = 4.5;
 const BAND_INNER_IN_HANDLES: f32 = 0.625;
@@ -228,8 +233,10 @@ pub struct TransformBoxStyle {
     handle: HandleLook,
     line: StyleColor,
     halo: StyleColor,
-    /// The hit radius of a corner or side handle.
+    /// The hit radius of a corner handle.
     handle_reach: f32,
+    /// The hit radius of a side's midpoint handle.
+    edge_reach: f32,
     /// How far a side's band reaches outside the box.
     side_band: f32,
     /// The hit radius of the reference point and of the centre.
@@ -855,6 +862,18 @@ fn outward_normals(quad: &[Pos2; 4]) -> [Vec2; 4] {
     })
 }
 
+/// The box `quad` grown by `by` screen points: each side moved out along its outward normal, each corner where its
+/// two moved sides meet (along the corner's bisector on a corner too sharp or a side with no length).
+fn grown(quad: &[Pos2; 4], by: f32) -> [Pos2; 4] {
+    let normals = outward_normals(quad);
+    std::array::from_fn(|corner| {
+        let (before, after) = (normals[(corner + 3) % 4], normals[corner]);
+        let sum = before + after;
+        let cos = before.dot(after);
+        if cos > -0.9 { quad[corner] + sum * (by / (1.0 + cos)) } else { quad[corner] + sum.normalized() * by }
+    })
+}
+
 /// The reference point's glyph centred at `centre`: a circle crossed by two arms, over its halo. The one glyph of the
 /// reference point and of the centre mark.
 fn paint_centre_glyph(draw: &Draw<'_>, centre: Pos2, style: &TransformBoxStyle) {
@@ -906,6 +925,7 @@ impl Component for TransformBox<'_> {
             line: cx.color(overlay.line),
             halo: cx.color(overlay.halo),
             handle_reach: handle.md * HANDLE_REACH_IN_HANDLES,
+            edge_reach: handle.md * EDGE_REACH_IN_HANDLES,
             side_band: handle.md * SIDE_BAND_IN_HANDLES,
             hit: handle.md * HIT_IN_HANDLES,
             rotate_reach: handle.md * ROTATE_REACH_IN_HANDLES,
@@ -960,7 +980,8 @@ impl Component for TransformBox<'_> {
             let (shape, sense, priority, focus) = match part {
                 BoxPart::Inside => {
                     let sense = Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS;
-                    (HitShape::Polygon(quad.to_vec()), sense, HitPriority::new(HitLevel::Body, 0), FocusShape::Rect)
+                    // Out to where the side bands start, so a press on a side's line moves the box.
+                    (HitShape::Polygon(grown(&quad, SIDE_LINE_OUTSIDE).to_vec()), sense, HitPriority::new(HitLevel::Body, 0), FocusShape::Rect)
                 }
                 BoxPart::Pivot => (
                     HitShape::circle(pos(screen.pivot), style.hit),
@@ -971,7 +992,7 @@ impl Component for TransformBox<'_> {
                 handle => {
                     let at = self.part_point(&state, handle).map_or(Pos2::ZERO, |at| space.view.to_screen(at));
                     (
-                        HitShape::circle(at, style.handle_reach),
+                        HitShape::circle(at, if matches!(handle, BoxPart::Edge(_)) { style.edge_reach } else { style.handle_reach }),
                         Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS,
                         HitPriority::new(HitLevel::Handle, HANDLE_SUB),
                         FocusShape::Circle,
@@ -987,9 +1008,12 @@ impl Component for TransformBox<'_> {
             }
             return;
         }
+        // Where the bands start: on a box whose inside moves, half a point outside the line, so a press on the line
+        // moves the box; on one whose inside is the tool's, half a point inside it, so the line takes the side.
+        let line = if self.inside_moves { SIDE_LINE_OUTSIDE } else { -SIDE_LINE_INSIDE };
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
-            cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, style.side_band))
+            cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, line, style.side_band))
                 .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)))
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
@@ -998,7 +1022,7 @@ impl Component for TransformBox<'_> {
             let corner = usize::from(k);
             // The side that starts at the corner, then the one that ends there.
             for (end, side) in [(0u64, corner), (1, (corner + 3) % 4)] {
-                let Some(reach) = corner_reach(&quad, side, corner, style.side_band) else { continue };
+                let Some(reach) = corner_reach(&quad, side, corner, line, style.side_band) else { continue };
                 cx.part(CORNER_REACH.at(2 * u64::from(k) + end), reach)
                     .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Corner(k)))
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
@@ -1229,26 +1253,25 @@ fn outside_regions(quad: &[Pos2; 4], within: Rect) -> [Vec<Pos2>; 4] {
     })
 }
 
-/// The band outside side `side` of the box `quad` (from corner `side` to the next), `width` wide, with the side's
-/// line itself: a press on the line or outside it within `width` takes the side; inside the box it does not. A side
-/// with no length is its line.
-fn side_band(quad: &[Pos2; 4], side: usize, width: f32) -> HitShape {
+/// The band outside side `side` of the box `quad` (from corner `side` to the next), from `line` outside the side's line
+/// (negative: inside it) out to `width`. A side with no length is its line.
+fn side_band(quad: &[Pos2; 4], side: usize, line: f32, width: f32) -> HitShape {
     let (a, b) = (quad[side], quad[(side + 1) % 4]);
     match outward(quad, side) {
-        Some(out) => band_along(a, b, out, width),
+        Some(out) => band_along(a, b, out, line, width),
         None => HitShape::segment(a, b),
     }
 }
 
 /// The stretch of side `side`'s band next to its end `corner`: a quarter of the side, at most `width` along it, as far
 /// out as the band. `None` for a side with no length.
-fn corner_reach(quad: &[Pos2; 4], side: usize, corner: usize, width: f32) -> Option<HitShape> {
+fn corner_reach(quad: &[Pos2; 4], side: usize, corner: usize, line: f32, width: f32) -> Option<HitShape> {
     let out = outward(quad, side)?;
     let other = if corner == side { quad[(side + 1) % 4] } else { quad[side] };
     let from = quad[corner];
     let along = other - from;
     let reach = (along.length() * 0.25).min(width);
-    Some(band_along(from, from + along.normalized() * reach, out, width))
+    Some(band_along(from, from + along.normalized() * reach, out, line, width))
 }
 
 /// The unit normal pointing out of the box `quad` from side `side`, `None` for a side with no length.
@@ -1263,14 +1286,16 @@ fn outward(quad: &[Pos2; 4], side: usize) -> Option<Vec2> {
     Some(Vec2::new(d.y, -d.x) * if area >= 0.0 { 1.0 } else { -1.0 })
 }
 
-/// The band from `a` to `b` reaching `width` out along `out`, with the line itself: half a point inside the line
-/// still counts as on it.
-fn band_along(a: Pos2, b: Pos2, out: Vec2, width: f32) -> HitShape {
-    let (inner, outer) = (out * -SIDE_LINE_INSIDE, out * width);
+/// The band from `a` to `b` from `line` out along `out` (negative: inside) to `width` out.
+fn band_along(a: Pos2, b: Pos2, out: Vec2, line: f32, width: f32) -> HitShape {
+    let (inner, outer) = (out * line, out * width);
     HitShape::Polygon(vec![a + inner, b + inner, b + outer, a + outer])
 }
 
-/// How far inside the box a press still lies on a side's line, in screen points.
+/// How far outside a side's line its band starts on a box whose inside moves, in screen points: a press on the line
+/// moves the box, as in the reference application.
+const SIDE_LINE_OUTSIDE: f32 = 0.5;
+/// How far inside the box a press still lies on a side's line on a box whose inside is the tool's, in screen points.
 const SIDE_LINE_INSIDE: f32 = 0.5;
 
 /// `polygon` clipped to `rect` (Sutherland-Hodgman, one rect side at a time).
