@@ -70,13 +70,19 @@ fn outline_segments(outlines: &[BezPath]) -> impl Iterator<Item = PathSeg> + '_ 
     outlines.iter().flat_map(BezPath::segments)
 }
 
-/// The box of a segment's control points.
+/// The box of a segment's control points; a box that is not a number when any of them has a coordinate that is not finite
+/// (`f64::min` and `f64::max`, which `Rect` builds its boxes with, return the number where the other is NaN, so a box of the points
+/// would be finite where one of them has one such coordinate).
 fn segment_box(s: PathSeg) -> Rect {
-    match s {
-        PathSeg::Line(l) => Rect::from_points(l.p0, l.p1),
-        PathSeg::Quad(q) => Rect::from_points(q.p0, q.p2).union_pt(q.p1),
-        PathSeg::Cubic(c) => Rect::from_points(c.p0, c.p3).union_pt(c.p1).union_pt(c.p2),
-    }
+    let (finite, rect) = match s {
+        PathSeg::Line(l) => (l.p0.is_finite() && l.p1.is_finite(), Rect::from_points(l.p0, l.p1)),
+        PathSeg::Quad(q) => (q.p0.is_finite() && q.p1.is_finite() && q.p2.is_finite(), Rect::from_points(q.p0, q.p2).union_pt(q.p1)),
+        PathSeg::Cubic(c) => (
+            c.p0.is_finite() && c.p1.is_finite() && c.p2.is_finite() && c.p3.is_finite(),
+            Rect::from_points(c.p0, c.p3).union_pt(c.p1).union_pt(c.p2),
+        ),
+    };
+    if finite { rect } else { Rect::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN) }
 }
 
 /// Is the sweep over the `count` `segments`, each with the box [`segment_box`] gives it, clearly cheaper
@@ -455,6 +461,51 @@ mod tests {
         nan.line_to((1.0, 1.0));
         assert!(turned_fills(&[(&nan, NZ)]).is_none());
         assert_eq!(try_unite_all_with(&[(&nan, NZ)], DEFAULT_PRECISION), Err(PathOpsError::NonFinite));
+    }
+
+    /// `f64::min` and `f64::max` return the number when the other is NaN, so a box built from points with them is finite where one point has a
+    /// coordinate that is not a number and the others have one: the box of a segment is one that is not a number when any control point is.
+    #[test]
+    fn a_segment_with_a_point_that_is_not_a_number_has_no_finite_box() {
+        use kurbo::{CubicBez, Line, QuadBez};
+        let nan = f64::NAN;
+        let (a, b, c, d) = (Point::new(0.0, 0.0), Point::new(1.0, 1.0), Point::new(2.0, 0.5), Point::new(3.0, 0.0));
+        let ok = [PathSeg::Line(Line::new(a, b)), PathSeg::Quad(QuadBez::new(a, b, c)), PathSeg::Cubic(CubicBez::new(a, b, c, d))];
+        assert!(ok.iter().all(|s| segment_box(*s).is_finite()), "numbers have a box");
+        for bad in [Point::new(nan, 0.5), Point::new(0.5, nan), Point::new(f64::INFINITY, 0.5)] {
+            let segs = [
+                PathSeg::Line(Line::new(bad, b)),
+                PathSeg::Line(Line::new(a, bad)),
+                PathSeg::Quad(QuadBez::new(bad, b, c)),
+                PathSeg::Quad(QuadBez::new(a, bad, c)),
+                PathSeg::Quad(QuadBez::new(a, b, bad)),
+                PathSeg::Cubic(CubicBez::new(bad, b, c, d)),
+                PathSeg::Cubic(CubicBez::new(a, bad, c, d)),
+                PathSeg::Cubic(CubicBez::new(a, b, bad, d)),
+                PathSeg::Cubic(CubicBez::new(a, b, c, bad)),
+            ];
+            for s in segs {
+                assert!(!segment_box(s).is_finite(), "{s:?} has a box");
+            }
+        }
+    }
+
+    /// A point with one coordinate that is not a number, among the points of a long, low path that is clearly cheaper turned, is not measured:
+    /// the estimate declines, and the upright operation refuses the input.
+    #[test]
+    fn a_vertex_with_one_coordinate_that_is_not_a_number_stops_the_estimate() {
+        let low = low_polygon(2100);
+        assert!(turned_outlines(std::slice::from_ref(&low)).is_some() && turned_fills(&[(&low, NZ)]).is_some(), "the path pays to turn");
+        for bad in [Point::new(f64::NAN, 1.0), Point::new(1.0, f64::NAN)] {
+            let mut path = low.clone();
+            path.move_to((0.0, 10.0));
+            path.line_to(bad);
+            path.line_to((5.0, 5.0));
+            path.close_path();
+            assert!(turned_outlines(&[path.clone()]).is_none(), "outlines with {bad:?}");
+            assert!(turned_fills(&[(&path, NZ)]).is_none(), "fills with {bad:?}");
+            assert_eq!(try_unite_all_with(&[(&path, NZ)], DEFAULT_PRECISION), Err(PathOpsError::NonFinite), "{bad:?}");
+        }
     }
 
     /// One zigzag along the top of a long, low polygon: `cols` straight edges up and down, a closing run along the bottom. Every edge is
