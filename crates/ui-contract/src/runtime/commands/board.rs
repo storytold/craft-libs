@@ -10,7 +10,7 @@ use crate::runtime::egui::{pass, repaint};
 use crate::runtime::focus::EditSet;
 use crate::runtime::pass_state;
 use crate::runtime::reads::{self, BindKey};
-use crate::runtime::{focus, keys, lazy, measure, overlay, replay, sampler};
+use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler};
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
     Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, Scopes,
@@ -242,7 +242,18 @@ impl Board {
     /// The keymap and the scopes a key matches in while `chain` (outermost first) has the keys.
     fn key_scopes(&self, chain: &[Id]) -> Option<KeyScopes> {
         let keymap = self.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap))?;
-        Some(KeyScopes { keymap, scopes: self.scopes_around(chain) })
+        Some(KeyScopes { keymap, scopes: self.scopes_around(chain), held: self.held_scopes() })
+    }
+
+    /// The scopes whose keys work now: those of the momentary commands whose key is held.
+    fn held_scopes(&self) -> Vec<&'static str> {
+        self.held.iter().filter_map(|held| self.registry.held_scope(&held.command.id)).collect()
+    }
+
+    /// Whether the commands of `scope` go to the application: the app scope's, and a held scope's, which no instance
+    /// is ever of.
+    fn to_app(&self, scope: &str) -> bool {
+        is_app(scope) || self.registry.is_held_scope(scope)
     }
 
     fn is_live(&self, ctx: &Context, id: Id) -> bool {
@@ -309,7 +320,7 @@ impl Board {
     /// else the picked instance, which may not exist.
     fn target_of(&self, ctx: &Context, command: &CommandRef, from: &Vantage) -> (bool, Option<Id>) {
         let scope = self.scope_of(command);
-        let app = is_app(scope);
+        let app = self.to_app(scope);
         (app, if app { None } else { self.pick(ctx, scope, from) })
     }
 
@@ -344,7 +355,7 @@ impl Board {
         from: &Vantage,
     ) -> (ResolvedCommand, Option<StateKey>) {
         let def = self.def(&command.id);
-        let app = is_app(self.scope_of(command));
+        let app = self.to_app(self.scope_of(command));
         let instance = if app { None } else { instance };
         let dialog_open = from.modal_open || from.dialog_keys;
         // A command no set registers is never blocked.
@@ -408,14 +419,18 @@ fn is_app(scope: &str) -> bool {
 struct KeyScopes {
     keymap: Arc<Keymap>,
     scopes: Vec<&'static str>,
+    /// The held scopes ([`Board::held_scopes`]): the keymap's contexts, whose keys come before every scope's.
+    held: Vec<&'static str>,
 }
 
 impl KeyScopes {
     /// What a press of `input` runs, read through `layout`, with `typing` when a text field has the keys. With
-    /// `matcher` and the press's time the press counts toward a double press; without, it is matched on its own.
+    /// `matcher` and the press's time the press counts toward a double press; without, it is matched on its own. A
+    /// held scope's keys stay with the text while typing.
     fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
         let (panel, outer) = self.scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
-        let active = Active { panel, contexts: &[], typing };
+        let held: &[&str] = if typing { &[] } else { &self.held };
+        let active = Active { panel, contexts: held, typing };
         match matcher {
             Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }),
             None => Matcher::single(layout, &self.keymap, input, &active, outer),
@@ -475,9 +490,12 @@ pub fn keymap_builds() -> u64 {
 fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
     #[cfg(feature = "testing")]
     KEYMAP_BUILDS.with(|builds| builds.set(builds.get() + 1));
+    // A held scope is a context of the keymap: its keys work while it is active, before any panel's.
     let mut scopes = Scopes::new();
     for def in registry.defs() {
-        if !def.scope.is_app() {
+        if registry.is_held_scope(def.scope.as_str()) {
+            scopes = scopes.with_context(def.scope.as_str());
+        } else if !def.scope.is_app() {
             scopes = scopes.with_panel(def.scope.as_str());
         }
     }
@@ -895,7 +913,7 @@ fn wake_shown(ctx: &Context, viewport: ViewportId) {
 pub(crate) fn resolve_scoped(ctx: &Context, chain: &CommandChain, command: &CommandRef) -> Option<ResolvedCommand> {
     let (found, app) = with(ctx, |board| {
         let scope = board.scope_of(command);
-        (board.innermost(chain, scope).is_some(), is_app(scope))
+        (board.innermost(chain, scope).is_some(), board.to_app(scope))
     });
     if !app && !found {
         return None;
@@ -1145,6 +1163,7 @@ pub(crate) fn begin(ctx: &Context) {
     let held_open = sampler::held_canvas(ctx);
     // A shortcut pressed in a menu or on a menu bar matches where the focus returns to once the menus close.
     let returning = focused.filter(|_| !shortcuts.keys.is_empty()).and_then(|focused| Returning::of(ctx, focused));
+    let shell = frame::shell_root(ctx, viewport);
     let taken = with(ctx, |board| {
         board.held_open = held_open;
         let returned = returning
@@ -1162,6 +1181,9 @@ pub(crate) fn begin(ctx: &Context) {
         if !chain.is_empty() {
             board.last_focused.clone_from(&chain);
         }
+        // Nothing focused outside a modal: the window's shell root takes the commands, so a window command's key comes
+        // before an app command's. Nothing holds focus there, so the chain last focused stays.
+        let chain = if chain.is_empty() && focused.is_none() { shell.into_iter().collect() } else { chain };
         match board.here.focused.iter_mut().find(|(v, _)| *v == viewport) {
             Some(entry) => entry.1.clone_from(&chain),
             None => board.here.focused.push((viewport, chain.clone())),

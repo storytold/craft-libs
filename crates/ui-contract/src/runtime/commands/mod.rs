@@ -101,6 +101,11 @@ pub trait CommandSet: Copy + Send + Sync + 'static {
     #[doc(hidden)]
     fn edits() -> Vec<(&'static str, EditCommand)>;
 
+    /// The momentary commands whose held key makes a scope's keys work, as `(id, scope)`: the `holds` option of the
+    /// command's attribute.
+    #[doc(hidden)]
+    fn holds() -> Vec<(&'static str, CommandScope)>;
+
     /// The defaults of one platform, as `(id, platform, binding)`: on that platform they replace the command's other
     /// defaults.
     #[doc(hidden)]
