@@ -7,8 +7,10 @@
 //!   formula in R1C1 notation; `S;R<row>;C<col>` shares the formula of another cell.
 //! - `P;P<code>` adds a number format to the file's list; `F;P<n>;Y<row>;X<col>` gives a cell the
 //!   n-th format (0-based), and `F;W<first> <last> <width>` sets column widths in characters.
+//! - `O;…;V<n>` is the options record: `V4` puts the file's date serials on the 1904 date system,
+//!   `V0` (or no `V`) on the 1900 one. Its other options are skipped.
 //!
-//! Other records (fonts, options, window settings) are skipped. Formulas are converted to A1 with
+//! Other records (fonts, window settings) are skipped. Formulas are converted to A1 with
 //! the same relative and absolute references, as Excel does when it opens the file.
 
 use std::collections::{BTreeMap, HashMap};
@@ -72,6 +74,9 @@ pub struct Sheet {
     pub column_widths: Vec<ColumnWidth>,
     /// Cell records that could not be read (a position outside the grid) and were skipped.
     pub skipped: usize,
+    /// The options record names the 1904 date system (`V4`): date serials count days from
+    /// 1904-01-01, not 1900-01-01. The serials are as written; the caller sets the calendar.
+    pub date_1904: bool,
 }
 
 /// One-letter field tag and its argument.
@@ -138,6 +143,15 @@ pub fn read(bytes: &[u8]) -> Result<Sheet, Error> {
             "P" => {
                 if let Some(code) = rest.first().and_then(|f| f.strip_prefix('P')) {
                     formats.push(code.to_string());
+                }
+            }
+            // The options record: only its date system is read. A later `V` overrides an earlier
+            // one, and anything but `4` is the 1900 date system.
+            "O" => {
+                for f in rest {
+                    if let ("V", arg) = tagged(f) {
+                        sheet.date_1904 = arg.trim() == "4";
+                    }
                 }
             }
             "E" => break,
