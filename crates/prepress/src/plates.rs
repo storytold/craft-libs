@@ -16,6 +16,7 @@ use std::ops::ControlFlow;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+use craft_cms::Profile;
 use craft_pdf::interpret::InterpreterSettings;
 use craft_pdf::interpret::color::{CmykSimulation, Ink as PdfInk, InkSinkFn, Plate};
 use craft_pdf::raster::{self, MAX_SIDE, RenderCache};
@@ -187,6 +188,26 @@ pub struct Band {
 /// the page again, clipped to its rows. Never panics.
 pub fn plates_in_bands(pdf: &[u8], page: usize, dpi: f32, opts: &Options, mut each: impl FnMut(Band) -> ControlFlow<()>) -> Result<(), Error> {
     separate(pdf, page, dpi, opts, banded_scale, None, &mut each)
+}
+
+/// The printing condition page `page` (from 0) of `pdf` separates through with `opts`: the CMYK
+/// profile of its output intent, else of [`Options::fallback`]. Build an
+/// [`Output`](crate::Output) from it, so a composite converts the plates from the profile they
+/// were made for. `None` for [`Fallback::DeviceFormulas`] when the page has no usable output
+/// intent: those plates are device values of no profile. Never panics.
+pub fn press_profile(pdf: &[u8], page: usize, opts: &Options) -> Result<Option<Profile>, Error> {
+    let doc = open_slice(pdf, None)?;
+    if doc.pages().get(page).is_none() {
+        return Err(Error::NoPage(page));
+    }
+    if let Ok(Some((_, conversion, _))) = catch_unwind(AssertUnwindSafe(|| intent_condition(&doc, page))) {
+        return Ok(Some(conversion.profile().clone()));
+    }
+    Ok(match &opts.fallback {
+        Fallback::DeviceFormulas => None,
+        Fallback::Fogra39 => Some(CmsConversion::fogra39().profile().clone()),
+        Fallback::Profile(icc) => Some(CmsConversion::new(icc)?.profile().clone()),
+    })
 }
 
 /// Separates in bands of `rows` rows, else as many as fit [`MAX_PLATE_PIXELS`], at `scale_of`'s
@@ -369,17 +390,24 @@ pub(crate) fn pdf_text(bytes: &[u8]) -> String {
 /// `/OutputIntents` (PDF 2.0), else the catalog's, the first whose `/DestOutputProfile` is a
 /// CMYK profile craft-cms converts into, a `GTS_PDFX` intent before the others.
 pub(crate) fn output_intent(pdf: &Pdf, page: usize) -> Option<(CmykSimulation, Conversion)> {
-    output_intents(pdf, page).iter().find_map(|intent| {
+    let (intent, conversion, icc) = intent_condition(pdf, page)?;
+    let simulation = conversion.simulation(&icc);
+    let condition = text_entry(&intent, OUTPUT_CONDITION_IDENTIFIER);
+    let profile = simulation
+        .description()
+        .map(str::to_string)
+        .or_else(|| text_entry(&intent, OUTPUT_CONDITION))
+        .or_else(|| condition.clone())
+        .unwrap_or_else(|| "unnamed CMYK profile".to_string());
+    Some((simulation, Conversion::OutputIntent { profile, condition }))
+}
+
+/// The output intent [`output_intent`] picks, its printing condition and its profile's bytes.
+fn intent_condition<'a>(pdf: &'a Pdf, page: usize) -> Option<(Dict<'a>, CmsConversion, Vec<u8>)> {
+    output_intents(pdf, page).into_iter().find_map(|intent| {
         let icc = intent.get::<Stream<'_>>(DEST_OUTPUT_PROFILE)?.decoded_within(MAX_PROFILE_BYTES).ok()?;
-        let simulation = CmsConversion::new(&icc).ok()?.simulation(&icc);
-        let condition = text_entry(intent, OUTPUT_CONDITION_IDENTIFIER);
-        let profile = simulation
-            .description()
-            .map(str::to_string)
-            .or_else(|| text_entry(intent, OUTPUT_CONDITION))
-            .or_else(|| condition.clone())
-            .unwrap_or_else(|| "unnamed CMYK profile".to_string());
-        Some((simulation, Conversion::OutputIntent { profile, condition }))
+        let conversion = CmsConversion::new(&icc).ok()?;
+        Some((intent, conversion, icc.into_owned()))
     })
 }
 

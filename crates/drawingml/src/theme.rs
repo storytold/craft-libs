@@ -11,9 +11,35 @@ pub struct FontSet {
     pub latin: String,
     pub ea: String,
     pub cs: String,
+    /// The `panose`, `pitchFamily` and `charset` the file gives the Latin, East Asian and complex
+    /// script typefaces; `None` = the attribute is absent.
+    #[serde(skip_serializing_if = "TypefaceAttrs::is_empty")]
+    pub latin_attrs: TypefaceAttrs,
+    #[serde(skip_serializing_if = "TypefaceAttrs::is_empty")]
+    pub ea_attrs: TypefaceAttrs,
+    #[serde(skip_serializing_if = "TypefaceAttrs::is_empty")]
+    pub cs_attrs: TypefaceAttrs,
     /// Per-script typefaces (`a:font script="Arab" typeface="…"`), in document order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub scripts: Vec<ScriptFont>,
+}
+
+/// The font-matching attributes of a theme typeface (`a:latin`, `a:ea`, `a:cs`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TypefaceAttrs {
+    /// The typeface name these attributes belong to; the writer drops them once the typeface changed.
+    pub typeface: String,
+    /// Ten hex byte pairs, as written.
+    pub panose: Option<String>,
+    pub pitch_family: Option<String>,
+    pub charset: Option<String>,
+}
+
+impl TypefaceAttrs {
+    pub fn is_empty(&self) -> bool {
+        self.panose.is_none() && self.pitch_family.is_none() && self.charset.is_none()
+    }
 }
 
 /// A theme font for one script (ISO 15924 tag, e.g. `Arab`).
@@ -53,6 +79,17 @@ pub struct FormatScheme {
     pub bg_fills: Vec<Fill>,
 }
 
+/// A colour slot written as a system colour (`<a:dk1><a:sysClr val="windowText" lastClr="000000"/>`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SysColor {
+    pub slot: SchemeSlot,
+    /// The `val` (`windowText`, `window`…).
+    pub name: String,
+    /// The `lastClr`.
+    pub last: Rgba,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Theme {
@@ -60,7 +97,14 @@ pub struct Theme {
     pub colors: ColorScheme,
     pub fonts: FontScheme,
     pub format: FormatScheme,
-    /// Raw theme XML extras kept for round-trip (object defaults, extra colour lists).
+    /// The colour slots the file wrote as `a:sysClr` (`dk1` `windowText`, `lt1` `window`), in
+    /// document order. The writer keeps a slot as `a:sysClr` while its colour still equals
+    /// `last`; a slot whose colour was changed is written as `a:srgbClr`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sys_colors: Vec<SysColor>,
+    /// Raw theme XML extras kept for round-trip, in document order: object defaults, extra
+    /// colour lists, custom colours (`a:custClrLst`) and the extension list (`a:extLst`, which
+    /// holds the theme family id).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_extra: Option<String>,
 }
@@ -76,6 +120,7 @@ impl Default for Theme {
             colors: ColorScheme::new("Default", colors.map(hex)),
             fonts: FontScheme::default(),
             format: default_format(),
+            sys_colors: Vec::new(),
             raw_extra: None,
         }
     }

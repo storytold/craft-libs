@@ -1,0 +1,15 @@
+[package]
+name = "craft-render-parity"
+description = "Compare two renders of the same photo (per-channel error and CIEDE2000) against a stated tolerance: the parity check for the shared develop pipeline. Test support only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cms = { workspace = true }
