@@ -11,6 +11,13 @@
     cl doctor                                     check the manifests for drift from the one feature resolution
     cl cargo <args...>                            cargo through the job pool, nothing added
 
+In a PhotoCraft workspace (one with photocraft-ui-egui) the commands are different; see "PhotoCraft" below:
+
+    cl test <crate|all> [--unit] [--no-run] [cargo args] [-- test args]
+    cl check <crate>                              the same selection, cargo check
+    cl build snapshot                             the snapshot example, on the same selection
+    cl doctor                                     the 11 packages exist; the target holds one build of each pinned crate
+
 Every cargo command runs through the command in CL_LAUNCHER when it is set (for example a wrapper that gives several
 builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. The binaries cl runs
 after a build (test binaries, the story renderer) run through the command in CL_RUNNER when it is set (for example a
@@ -30,8 +37,20 @@ Records: every build cl composes passes cargo's --timings (a report per build in
 200 kept), and every cl command appends one line to <target>/cl.log: when it started, the command, the build's and
 the test runs' wall time, the exit code and the build's report.
 
+PhotoCraft: cl finds its workspace with `git rev-parse --show-toplevel` from the current directory, so
+`/path/to/craft-libs/tools/cl` run inside a PhotoCraft tree works on that tree. There every command selects the same 11
+packages (PC_SELECTION), in test mode and without `--features` (the test features come from dev-dependencies), because
+each package brings features the others lack and a selection that drops one builds a second copy of egui, photocraft-io
+or craft-affinity and everything above it. The environment is fixed too: TMPDIR=/tmp (PhotoCraft's tests keep a scratch
+reserve that a larger default TMPDIR can trip), RUST_MIN_STACK, CARGO_INCREMENTAL and CRAFT_FONTS_DIR unset (the text
+crate's build script tracks the last: any change rebuilds it and everything above). In a PhotoCraft workspace the
+launcher is CL_PC_LAUNCHER and the runner CL_PC_RUNNER (the roles CL_LAUNCHER and CL_RUNNER have in craft-libs, which
+do not apply there); each defaults to running directly. Test binaries run three at a time, longest first.
+
 Guards: `--all-features`, `--bins` and workspace-wide builds are refused with the reason; after every command, a new
-build of a framework crate in the target directory is named, with its feature set; `cl doctor` (also run before every
+build of a framework crate (in PhotoCraft also egui, eframe, photocraft-ui-egui, photocraft-io, craft-affinity) in the
+target directory is named, with its feature set; CL_DRY_RUN=1 prints the composed cargo command (and the PhotoCraft
+environment) and runs nothing; `cl doctor` (also run before every
 command, it reads a few manifests) reports manifest lines that would bring a second build back.
 """
 
@@ -42,6 +61,7 @@ import shlex
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 FRAMEWORK = ["craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-canvas", "craft-ui-patterns", "craft-ui-shell", "craft-ui"]
 # Selected beside every command's package; its dependencies decide every shared crate's features (its manifest).
@@ -59,6 +79,34 @@ REFUSED = {
     "--all-targets": "it builds every binary and benchmark too; use `cl check` or `cl test` (--tests)",
 }
 TIMING_REPORTS_KEPT = 200
+# PhotoCraft workspace (marked by its UI package): the one selection every command builds with.
+PC_MARKER = "photocraft-ui-egui"
+PC_SELECTION = [
+    "photocraft-ui-egui", "photocraft-engine", "photocraft", "photocraft-algo", "photocraft-automation", "photocraft-text",
+    "photocraft-tablet", "photocraft-cli", "photocraft-paint", "photocraft-io", "photocraft-gpu",
+]
+# Crates whose new builds are named after a PhotoCraft command, besides the framework's.
+PC_TRACKED = ["egui", "eframe", "photocraft-ui-egui", "photocraft-io", "craft-affinity"]
+# The feature sets of round D's one build of each pinned crate (`cl doctor` compares the target's builds with them).
+PC_FEATURES = {
+    "egui": {"bytemuck", "default_fonts", "monochrome_emoji_fonts", "persistence", "ron", "serde"},
+    "photocraft-io": {"pdf-editable", "testgen"},
+    "craft-affinity": {"synth"},
+    "craft-ui-contract": {"default", "snapshot", "testing"},
+    "craft-imaging": {"default", "screen-testing", "ui"},
+}
+# Environment removed from every PhotoCraft command: each changes a build input, so a command that differs from the others rebuilds.
+PC_UNSET = ["RUST_MIN_STACK", "CARGO_INCREMENTAL", "CRAFT_FONTS_DIR"]
+PC_RUN_SLOTS = 3
+PC_TEST_THREADS = "4"
+PC_SHARDS = 3
+# Seconds per binary when no earlier run recorded times (round D): orders the first run, longest first.
+PC_DEFAULT_SECONDS = {"photocraft-ui-egui/photocraft_ui_egui": 389.0, "photocraft-ui-egui/it": 221.0, "photocraft-engine/photocraft_engine": 97.0}
+PC_BUILDING = {"test", "check", "build", "run", "bench", "clippy", "doc", "rustc"}
+PC_FEATURE_FLAGS = ("--features", "-F", "--no-default-features")
+# Set by main() when the workspace is a PhotoCraft one.
+PHOTOCRAFT = False
+DRY_RUN = bool(os.environ.get("CL_DRY_RUN"))
 # What cl.log records about this command; filled in as it runs.
 RECORD = {"start": time.time(), "target": None, "build": None, "run": 0.0, "report": ""}
 # The manifest lines the one feature set rests on: (file, regex that must match, what its absence brings back).
@@ -126,6 +174,8 @@ def own_targets(p):
 
 def doctor(top, packages, quiet=False):
     """Manifest lines that would bring the variant churn back. Returns the number of problems."""
+    if PHOTOCRAFT:
+        return pc_doctor(top, packages, quiet)
     problems = []
     for path, pattern, why in PINS:
         text = open(os.path.join(top, path)).read()
@@ -178,16 +228,21 @@ def target_dir(top, env):
     return env.get("CARGO_TARGET_DIR", os.path.join(top, "target"))
 
 
+def tracked():
+    return FRAMEWORK + (PC_TRACKED if PHOTOCRAFT else [])
+
+
 def variants(target):
-    """The framework crates' lib builds in the target dir's debug profile: {(crate, hash): (features, mode)}, mode
+    """The tracked crates' lib builds in the target dir's debug profile: {(crate, hash): (features, mode)}, mode
     "check" for a metadata-only build (`cargo check`, no rlib) and "build" otherwise."""
     found = {}
     fp = os.path.join(target, "debug", ".fingerprint")
     if not os.path.isdir(fp):
         return found
+    names = tracked()
     for d in os.listdir(fp):
-        m = re.match(r"(craft-ui(?:-[a-z]+)?)-([0-9a-f]{16})$", d)
-        if not m or m.group(1) not in FRAMEWORK:
+        m = re.match(r"(.+)-([0-9a-f]{16})$", d)
+        if not m or m.group(1) not in names:
             continue
         for f in os.listdir(os.path.join(fp, d)):
             if f.startswith("lib-") and f.endswith(".json"):
@@ -201,10 +256,10 @@ def variants(target):
 
 
 def report_new_variants(before, after):
-    """Names each new build of a framework crate. A check and a build of a crate are separate by design; within each,
+    """Names each new build of a tracked crate. A check and a build of a crate are separate by design; within each,
     a target dir should hold one."""
     new = {k: v for k, v in after.items() if k not in before}
-    for crate in FRAMEWORK:
+    for crate in tracked():
         for mode in ("build", "check"):
             mine = sorted({f for (c, _), (f, m) in new.items() if c == crate and m == mode})
             if not mine:
@@ -257,13 +312,23 @@ def cargo(top, cargo_args, json_out=False, timings=True):
         if arg in REFUSED:
             fail(f"{arg} refused: {REFUSED[arg]}")
     env = dict(os.environ)
+    if PHOTOCRAFT:
+        pc_guard(cargo_args)
+        pc_env(env)
     target = target_dir(top, env)
-    RECORD["target"] = target
+    if not DRY_RUN:
+        RECORD["target"] = target
     if timings:
         cargo_args = cargo_args[:1] + ["--timings"] + cargo_args[1:]
-    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args
+    launcher = env.get("CL_PC_LAUNCHER" if PHOTOCRAFT else "CL_LAUNCHER", "")
+    cmd = shlex.split(launcher) + ["cargo"] + cargo_args
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()
+    if DRY_RUN:
+        if PHOTOCRAFT:
+            print(f"cl: env TMPDIR={env['TMPDIR']}; unset " + " ".join(PC_UNSET), file=sys.stderr)
+        print("cl: CL_DRY_RUN set, nothing run", file=sys.stderr)
+        return 0, target, []
     before = variants(target)
     started = time.time()
     messages = []
@@ -343,6 +408,281 @@ def test(top, packages, cargo_args, test_args):
     sys.exit(0)
 
 
+def is_photocraft(packages):
+    return PC_MARKER in packages
+
+
+def pc_env(env):
+    """The one environment every PhotoCraft command runs in. /tmp for the scratch files: a TMPDIR on a nearly full disk
+    trips PhotoCraft's 5% scratch reserve."""
+    env["TMPDIR"] = "/tmp"
+    for name in PC_UNSET:
+        env.pop(name, None)
+    return env
+
+
+def pc_selected():
+    return [x for p in PC_SELECTION for x in ("-p", p)]
+
+
+def pc_package(name):
+    for candidate in (name, "photocraft-" + name):
+        if candidate in PC_SELECTION:
+            return candidate
+    fail(f"{name} is not one of the selected packages: all, " + ", ".join(p.removeprefix("photocraft-") or p for p in PC_SELECTION))
+
+
+def pc_guard(args):
+    """Refuses the PhotoCraft commands that bring a second copy of egui, photocraft-io, craft-affinity or the framework."""
+    sub = args[0] if args else ""
+    if sub not in PC_BUILDING:
+        return
+    own = args[:args.index("--")] if "--" in args else args
+    named = []
+    for i, a in enumerate(own):
+        if a in ("-p", "--package") and i + 1 < len(own):
+            named.append(own[i + 1])
+        elif a.startswith("--package="):
+            named.append(a.split("=", 1)[1])
+        elif a.startswith("-p") and len(a) > 2:
+            named.append(a[2:])
+    if set(named) != set(PC_SELECTION):
+        fail("a PhotoCraft cargo command names all 11 packages or none of cl's: one package alone (or the default members) resolves "
+             "egui, eframe, photocraft-io and craft-affinity with other features and builds a second copy of each and of everything "
+             "above them; use `cl test <crate>`, `cl check <crate>`, `cl build snapshot`")
+    for a in own:
+        if a in PC_FEATURE_FLAGS or a.startswith("--features=") or a.startswith("-F"):
+            fail(f"{a} refused: the test features come from the dev-dependencies; a feature on the command line changes the resolution of every crate above it")
+    if sub == "test" and not any(a in ("--lib", "--tests", "--example") for a in own):
+        fail("a plain `cargo test` also builds doc tests, bins and examples in a different mode; pass `--lib --tests` (`cl test <crate>`)")
+
+
+def pc_builds(target):
+    """Feature sets of the pinned crates' builds in the target dir: {crate: {frozenset(features): builds}}."""
+    found = {}
+    fp = os.path.join(target, "debug", ".fingerprint")
+    if not os.path.isdir(fp):
+        return found
+    for d in os.listdir(fp):
+        m = re.match(r"(.+)-([0-9a-f]{16})$", d)
+        if not m or m.group(1) not in PC_FEATURES:
+            continue
+        for f in os.listdir(os.path.join(fp, d)):
+            if not (f.startswith("lib-") and f.endswith(".json")):
+                continue
+            try:
+                j = json.load(open(os.path.join(fp, d, f)))
+                features = j.get("features", "[]")
+                features = json.loads(features) if isinstance(features, str) else features
+            except (OSError, ValueError):
+                continue
+            sets = found.setdefault(m.group(1), {})
+            sets[frozenset(features)] = sets.get(frozenset(features), 0) + 1
+    return found
+
+
+def pc_doctor(top, packages, quiet=False):
+    """The 11 packages exist; unless `quiet`, the target holds one build of each pinned crate with the expected features."""
+    problems = [f"{p}: not a package of this workspace; the selection of every cl command names it" for p in PC_SELECTION if p not in packages]
+    if not quiet:
+        target = target_dir(top, dict(os.environ))
+        for crate, sets in sorted(pc_builds(target).items()):
+            expected = PC_FEATURES[crate]
+            if len(sets) > 1:
+                problems.append(f"{target}: {len(sets)} builds of {crate} with different features: " +
+                                " | ".join(",".join(sorted(f)) or "-" for f in sets) + "; a second copy of everything above it came with them")
+            for f in sets:
+                if f != frozenset(expected) and len(sets) == 1:
+                    problems.append(f"{target}: {crate} was built with {sorted(f)}, expected {sorted(expected)}")
+    for problem in problems:
+        print(f"cl doctor: {problem}", file=sys.stderr)
+    if not problems and not quiet:
+        print("cl doctor: the 11 packages exist and the target holds one build of each pinned crate", file=sys.stderr)
+    return len(problems)
+
+
+def pc_shards(names, n=PC_SHARDS):
+    """Splits a test binary's tests into `n` shards of about the same size by module. Returns [(filters, skips)]: shard i
+    runs the tests matching its filters and none of its skips (libtest filters are substrings); the last shard has no
+    filter and skips every other shard's, so each test runs exactly once. None when no exact split is found."""
+    total = len(names)
+    groups = {}
+    for name in names:
+        parts = name.split("::")
+        groups.setdefault(parts[0] + "::" if len(parts) > 1 else None, []).append(parts)
+    keyed = {}
+    rest = 0
+    for key, tests in groups.items():
+        if key is None or len(tests) <= total / n:
+            if key is None:
+                rest += len(tests)
+            else:
+                keyed[key] = len(tests)
+            continue
+        for parts in tests:
+            if len(parts) > 2:
+                k = parts[0] + "::" + parts[1] + "::"
+                keyed[k] = keyed.get(k, 0) + 1
+            else:
+                rest += 1
+    bins = [{"keys": [], "load": 0} for _ in range(n)]
+    for key, count in sorted(keyed.items(), key=lambda kv: -kv[1]):
+        b = min(bins, key=lambda x: x["load"])
+        b["keys"].append(key)
+        b["load"] += count
+    # The catch-all shard is the lightest one: it also takes the tests directly in a split module and the unmodulated ones.
+    last = min(bins, key=lambda x: x["load"])
+    ordered = [b for b in bins if b is not last and b["keys"]] + [last]
+    plan, earlier = [], []
+    for b in ordered[:-1]:
+        plan.append((list(b["keys"]), list(earlier)))
+        earlier += b["keys"]
+    plan.append(([], list(earlier)))
+    for name in names:
+        hits = sum(1 for filters, skips in plan
+                   if (not filters or any(f in name for f in filters)) and not any(k in name for k in skips))
+        if hits != 1:
+            return None
+    return plan if len(plan) > 1 else None
+
+
+def pc_times_path(target):
+    return os.path.join(target, "cl-test-times.json")
+
+
+def pc_run_one(job, env, runner, target_args):
+    """Runs one binary (or shard) and returns (job, return code, seconds, output)."""
+    cmd = shlex.split(runner) + [job["exe"]] + target_args + job["args"]
+    started = time.time()
+    proc = subprocess.run(cmd, cwd=job["cwd"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    return job, proc.returncode, time.time() - started, proc.stdout
+
+
+def pc_parse(output):
+    """(passed, failed, failed test names, overflowed stacks) from a libtest output."""
+    passed = failed = 0
+    for m in re.finditer(r"^test result: [A-Za-z]+\. (\d+) passed; (\d+) failed", output, re.M):
+        passed += int(m.group(1))
+        failed += int(m.group(2))
+    names = []
+    for block in re.findall(r"^failures:\n((?:    \S.*\n)+)", output, re.M):
+        names += [line.strip() for line in block.splitlines()]
+    return passed, failed, names, output.count("overflowed its stack")
+
+
+def pc_test(top, packages, rest):
+    if not rest:
+        fail("cl test <crate|all> [--unit] [--no-run] [cargo args] [-- test args]")
+    name, args = rest[0], rest[1:]
+    mine, theirs = (args[:args.index("--")], args[args.index("--") + 1:]) if "--" in args else (args, [])
+    unit, no_run = "--unit" in mine, "--no-run" in mine
+    mine = [a for a in mine if a not in ("--unit", "--no-run")]
+    only = None if name == "all" else pc_package(name)
+    build = ["test", "--no-run", "--message-format=json-render-diagnostics", "--lib"] + ([] if unit else ["--tests"]) + ["--no-fail-fast"] + pc_selected() + mine
+    rc, target, messages = cargo(top, build, json_out=True)
+    if rc != 0:
+        sys.exit(rc)
+    env = pc_env(dict(os.environ))
+    runner = env.get("CL_PC_RUNNER", "")
+    if DRY_RUN:
+        print(f"cl: would run {only or 'every binary'}{' through `' + runner + '`' if runner else ''} ({PC_RUN_SLOTS} at a time, longest first), "
+              f"arguments: {' '.join(theirs)} --test-threads {PC_TEST_THREADS}"
+              + ("" if any(not a.startswith("-") for a in theirs) else "; the photocraft-ui-egui lib binary in 3 shards"), file=sys.stderr)
+        sys.exit(0)
+    by_manifest = {p["manifest_path"]: p["name"] for p in packages.values()}
+    binaries = []
+    for m in messages:
+        if m.get("reason") != "compiler-artifact" or not m.get("executable") or not m["profile"]["test"]:
+            continue
+        package = by_manifest.get(m["manifest_path"], "")
+        if package not in PC_SELECTION or (only and package != only):
+            continue
+        lib = any(k in ("lib", "rlib", "proc-macro") for k in m["target"]["kind"])
+        binaries.append((package, m["target"]["name"], lib, m["executable"], os.path.dirname(m["manifest_path"])))
+    if not binaries:
+        fail(f"no test binary built for {name}")
+    for package, tname, lib, exe, cwd in sorted(binaries, key=lambda b: (not b[2], b[1])):
+        print(f"{'Executable':>12} {package} {'lib' if lib else tname} ({shown(exe, top)})", file=sys.stderr)
+    if no_run:
+        sys.exit(0)
+    run_env = dict(env)
+    run_env.setdefault("RUST_BACKTRACE", "1")
+    filtered = any(not a.startswith("-") for a in theirs)
+    thread_args = [] if any(a.startswith("--test-threads") for a in theirs) else ["--test-threads", PC_TEST_THREADS]
+    try:
+        times = json.load(open(pc_times_path(target)))
+    except (OSError, ValueError):
+        times = {}
+    jobs = []
+    for package, tname, lib, exe, cwd in binaries:
+        job_env = dict(run_env, CARGO_MANIFEST_DIR=cwd, CARGO_PKG_NAME=package)
+        key = f"{package}/{tname}"
+        base = {"exe": exe, "cwd": cwd, "env": job_env, "label": f"{package.removeprefix('photocraft-') if package != 'photocraft' else package} {'lib' if lib else tname}", "key": key, "args": list(theirs)}
+        plan = None
+        if package == PC_MARKER and lib and not filtered:
+            listing = subprocess.run([exe, "--list", "--format", "terse"], cwd=cwd, env=job_env, capture_output=True, text=True, errors="replace")
+            tests = [l[:-len(": test")] for l in listing.stdout.splitlines() if l.endswith(": test")]
+            plan = pc_shards(tests) if listing.returncode == 0 and tests else None
+        if plan:
+            for i, (filters, skips) in enumerate(plan):
+                extra = filters + [x for k in skips for x in ("--skip", k)]
+                jobs.append(dict(base, key=f"{key}#{i}", label=f"{base['label']} shard {i + 1}/{len(plan)}", args=extra + list(theirs)))
+        else:
+            jobs.append(base)
+    jobs.sort(key=lambda j: -times.get(j["key"], PC_DEFAULT_SECONDS.get(j["key"].split("#")[0], 0.0) / (PC_SHARDS if "#" in j["key"] else 1)))
+    started = time.time()
+    tests_passed = tests_failed = overflows = 0
+    failures = []
+    new_times = dict(times)
+
+    def work(job):
+        return pc_run_one(job, job["env"], runner, thread_args)
+
+    with ThreadPoolExecutor(max_workers=PC_RUN_SLOTS) as pool:
+        for job, code, seconds, output in pool.map(work, jobs):
+            passed, failed, names, overflowed = pc_parse(output)
+            tests_passed, tests_failed, overflows = tests_passed + passed, tests_failed + failed, overflows + overflowed
+            new_times[job["key"]] = seconds
+            bad = code != 0
+            if bad:
+                failures += [f"{job['label']} {n}" for n in names] or [f"{job['label']} (exit {code}, no test result)"]
+            print(f"{'FAILED' if bad else 'ok':>8} {job['label']}: {passed} passed, {failed} failed, {seconds:.0f} s", file=sys.stderr)
+            if bad or only:
+                sys.stderr.write(output)
+    wall = time.time() - started
+    RECORD["run"] = wall
+    try:
+        json.dump(new_times, open(pc_times_path(target), "w"))
+    except OSError:
+        pass
+    print(f"cl: {tests_passed} passed, {tests_failed} failed, {len(jobs)} binaries, {overflows} overflowed stacks, {wall:.0f} s", file=sys.stderr)
+    for f in failures:
+        print(f"  {f}", file=sys.stderr)
+    sys.exit(1 if failures else 0)
+
+
+def pc_main(top, packages, command, rest):
+    if command == "cargo":
+        run(top, rest, timings=False)
+    if command in ("features", "render"):
+        fail(f"cl {command} belongs to the craft-libs workspace")
+    if not rest:
+        fail(f"cl {command} <crate> [args]")
+    name, args = rest[0], rest[1:]
+    if command == "test":
+        pc_test(top, packages, rest)
+    if command == "check":
+        pc_package(name)
+        run(top, ["check", "--lib", "--tests"] + pc_selected() + args)
+    if command == "build" and name == "snapshot":
+        # An example builds in the dev profile with the dev-dependencies' features, the units the test build resolved.
+        rc, target, _ = cargo(top, ["test", "--no-run", "--example", "snapshot"] + pc_selected() + args)
+        if rc == 0:
+            print(f"cl: {os.path.join(target, 'debug', 'examples', 'snapshot')}", file=sys.stderr)
+        sys.exit(rc)
+    fail("cl build snapshot is the only PhotoCraft build; `cl test <crate>` builds the tests")
+
+
 def run(top, cargo_args, then=None, timings=True):
     """Runs cargo; `then` (a binary in the target's debug dir and its arguments) runs after a successful cargo. Exits
     with the last return code."""
@@ -367,9 +707,14 @@ def main():
     command, rest = sys.argv[1], sys.argv[2:]
     top = worktree()
     packages = metadata(top)
+    global PHOTOCRAFT
+    PHOTOCRAFT = is_photocraft(packages)
     if command == "doctor":
         sys.exit(1 if doctor(top, packages) else 0)
-    doctor(top, packages, quiet=True)
+    if doctor(top, packages, quiet=True) and PHOTOCRAFT:
+        sys.exit(1)
+    if PHOTOCRAFT:
+        pc_main(top, packages, command, rest)
     if command == "cargo":
         run(top, rest, timings=False)
     if command == "features":

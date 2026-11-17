@@ -32,6 +32,27 @@ cargo compiles a crate once per distinct feature set, and every crate above it o
 
 Four manifest facts keep this true, and `cl doctor` checks them: `feature-root` lists every optional domain crate of the gallery with the gallery's features, and depends on the gallery without its default features (so the gallery lib's own features stay each command's: `apps` for the gallery, one crate for a render); the story renderer asks its shared dependencies for no feature the gallery's lines lack; dev-dependency lines ask egui for no features (a feature there differs between a crate's tests and everything else); the proc-macro crate pins syn's and proc-macro2's features to everything other derive crates may add, so the one syn every proc macro shares is the same with or without design-lint in the graph. `cl` names any new build of a framework crate in the target directory after each command; after a manifest change one is expected, otherwise run `cl doctor`.
 
+## PhotoCraft
+
+`tools/cl` finds its workspace with `git rev-parse --show-toplevel` from the current directory, so `/path/to/worktree/tools/cl` run inside a PhotoCraft tree builds and tests that tree. A workspace that has `photocraft-ui-egui` gets one fixed selection: `-p photocraft-ui-egui -p photocraft-engine -p photocraft -p photocraft-algo -p photocraft-automation -p photocraft-text -p photocraft-tablet -p photocraft-cli -p photocraft-paint -p photocraft-io -p photocraft-gpu`, in test mode, without `--features` (the test features come from the dev-dependencies). Each package brings features the others lack, so a command that drops one builds a second copy of egui, photocraft-io or craft-affinity and everything above them. The craft-libs workspace is unchanged.
+
+| to | run | what it does |
+| --- | --- | --- |
+| test one crate | `cl test <crate> [-- <filters>]` | builds `--lib --tests` over the 11 packages, then runs only that crate's test binaries |
+| test a ui-egui change fast | `cl test ui-egui --unit [-- <filters>]` | builds and runs the lib binaries only |
+| the integration round | `cl test all [-- <filters>]` | builds all, runs every binary of the 11 packages three at a time, longest first |
+| check | `cl check <crate>` | `cargo check --lib --tests` over the same 11 packages (the selection is fixed, so every package is checked) |
+| the snapshot example | `cl build snapshot` | `cargo test --no-run --example snapshot` over the same selection |
+| the packages and builds | `cl doctor` | the 11 packages exist; the target holds one build of each pinned crate with the expected features |
+
+`<crate>` is the package name with or without `photocraft-` (`ui-egui`, `engine`, `photocraft` for the app). `--no-run` builds only.
+
+The environment is the same for every command: `TMPDIR=/tmp` (PhotoCraft's tests keep a scratch reserve that a larger default TMPDIR can trip); `RUST_MIN_STACK`, `CARGO_INCREMENTAL` and `CRAFT_FONTS_DIR` unset (the text crate's build script tracks the fonts directory, so any change rebuilds it and everything above). In a PhotoCraft workspace every cargo command runs through the command in `CL_PC_LAUNCHER` when it is set, and each test binary through the command in `CL_PC_RUNNER` when it is set, with `--test-threads 4`; they play the roles `CL_LAUNCHER` and `CL_RUNNER` play in craft-libs, which do not apply there. Without them cargo and the binaries run directly.
+
+`cl test all` orders the binaries by the times of the previous run (`<target>/cl-test-times.json`), else ui-egui's lib, ui-egui's `it`, then engine first. Without filters, the photocraft-ui-egui lib binary runs as three shards chosen by top-level module from the binary's `--list` (a module over a third of the tests is split by its submodules); each test runs in exactly one shard. The last line is `N passed, M failed, B binaries, K overflowed stacks, T s`; failures follow as `binary test_name`.
+
+Refused in a PhotoCraft workspace, with the reason: one `-p <crate>` (or none) through `cl cargo`, `--features`/`-F`/`--no-default-features`, `--all-features`, `--workspace`, and a `cargo test` without `--lib`, `--tests` or `--example`. After every command, a new build of egui, eframe, photocraft-ui-egui, photocraft-io, craft-affinity or a framework crate is named with its feature set. `CL_DRY_RUN=1` prints the composed cargo command and the environment and runs nothing.
+
 ## What not to run locally
 
 - `--all-features`: enables `snapshot`, `system_fonts`, `color_fonts`, text's `all-languages` and more, a set no loop uses; it rebuilt 206 dependency crates and every framework crate once. CI runs it.
