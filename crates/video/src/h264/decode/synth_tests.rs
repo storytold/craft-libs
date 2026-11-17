@@ -105,6 +105,10 @@ struct Pic {
     wt: Option<[[(i32, i32); 3]; 2]>,
     /// first_mb_in_slice (`mbs` then lists the slice's macroblocks from there).
     first_mb: u32,
+    /// The SPS allows field coding (frame_mbs_only_flag 0): the header carries field_pic_flag.
+    interlaced: bool,
+    /// A field picture: Some(bottom_field_flag).
+    field: Option<bool>,
 }
 
 impl Pic {
@@ -127,6 +131,12 @@ fn slice_header(w: &mut BitWriter, p: &Pic, cabac: bool) {
     });
     w.write_ue(0); // pps id
     w.write_bits(p.frame_num, 4);
+    if p.interlaced {
+        w.write_bit(p.field.is_some());
+        if let Some(bottom) = p.field {
+            w.write_bit(bottom);
+        }
+    }
     if p.idr {
         w.write_ue(0);
     }
@@ -334,7 +344,7 @@ fn slice_nal(p: &Pic, cabac: bool) -> Vec<u8> {
                 write_pcm(&mut w, s);
                 e.init();
             }
-            e.terminate(&mut w, i + 1 == NMB); // end_of_slice_flag
+            e.terminate(&mut w, i + 1 == p.mbs.len()); // end_of_slice_flag
         }
         w.align_zero();
     }
@@ -646,6 +656,8 @@ fn avcc_rejects_a_valid_picture_slice_without_starting_a_picture() {
             poc_delta: None,
             wt: None,
             first_mb: 0,
+            interlaced: false,
+            field: None,
         },
         false,
     );
@@ -816,5 +828,179 @@ fn slice_qp_addition_does_not_overflow() {
         stream.extend(nal(3, 5, &w.finish()));
         let r = Decoder::with_threads(1).decode(&stream, 0).map(|pics| pics.len());
         assert!(matches!(&r, Err(crate::h264::decode::Error::Invalid(m)) if m.contains("slice QP")), "slice_qp_delta {qp_delta}: {r:?}");
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Field pictures (PAFF)
+// ------------------------------------------------------------------------------------------------
+
+/// Frame height in macroblocks of the interlaced streams; each field is half of it.
+const FRAME_MB_H: usize = 4;
+const FIELD_NMB: usize = MB_W * FRAME_MB_H / 2;
+
+/// An SPS with frame_mbs_only_flag 0 (field pictures allowed, no MBAFF), POC type 0 with a 4-bit
+/// lsb, 4 reference frames.
+fn interlaced_sps(profile: u8) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(profile as u32, 8);
+    w.write_bits(0, 8);
+    w.write_bits(30, 8);
+    w.write_ue(0); // sps id
+    w.write_ue(0); // log2_max_frame_num - 4
+    w.write_ue(0); // pic_order_cnt_type
+    w.write_ue(0); // log2_max_pic_order_cnt_lsb - 4
+    w.write_ue(4); // max_num_ref_frames
+    w.write_bit(false); // gaps
+    w.write_ue(MB_W as u32 - 1);
+    w.write_ue(FRAME_MB_H as u32 / 2 - 1); // pic_height_in_map_units_minus1 (field rows)
+    w.write_bit(false); // frame_mbs_only_flag
+    w.write_bit(false); // mb_adaptive_frame_field_flag
+    w.write_bit(true); // direct_8x8_inference
+    w.write_bit(false); // cropping
+    w.write_bit(false); // vui
+    w.rbsp_trailing();
+    nal(3, 7, &w.finish())
+}
+
+/// Planes of a picture `mb_w` x `mb_h` macroblocks made of PCM blocks.
+fn render_pcm(mbs: &[Option<Vec<u8>>], mb_w: usize, mb_h: usize) -> Planes3 {
+    let (w, h) = (mb_w * 16, mb_h * 16);
+    let (mut y, mut u, mut v) = (vec![0; w * h], vec![0; w * h / 4], vec![0; w * h / 4]);
+    for (i, mb) in mbs.iter().enumerate() {
+        let Some(s) = mb else { continue };
+        let (x0, y0) = ((i % mb_w) * 16, (i / mb_w) * 16);
+        for r in 0..16 {
+            y[(y0 + r) * w + x0..(y0 + r) * w + x0 + 16].copy_from_slice(&s[r * 16..r * 16 + 16]);
+        }
+        for r in 0..8 {
+            let o = (y0 / 2 + r) * (w / 2) + x0 / 2;
+            u[o..o + 8].copy_from_slice(&s[256 + r * 8..256 + r * 8 + 8]);
+            v[o..o + 8].copy_from_slice(&s[320 + r * 8..320 + r * 8 + 8]);
+        }
+    }
+    (y, u, v)
+}
+
+/// A field predicted with a zero motion vector from a field of the other parity: luma is copied,
+/// chroma moves by `dy` eighth chroma samples (Table 8-10) and is interpolated (8.4.2.2.2).
+fn chroma_moved(field: &Planes3, dy: i32) -> Planes3 {
+    let (cw, ch) = (MB_W * 8, FRAME_MB_H * 4);
+    let (step, frac) = (dy.div_euclid(8), dy.rem_euclid(8));
+    let shift = |c: &[u8]| -> Vec<u8> {
+        let at = |x: usize, r: i32| i32::from(c[r.clamp(0, ch as i32 - 1) as usize * cw + x]);
+        (0..ch as i32)
+            .flat_map(|r| (0..cw).map(move |x| ((8 - frac) * at(x, r + step) + frac * at(x, r + step + 1) + 4) >> 3))
+            .map(|v| v as u8)
+            .collect()
+    };
+    (field.0.clone(), shift(&field.1), shift(&field.2))
+}
+
+/// The frame whose even lines are `top` and odd lines `bottom`.
+fn weave(top: &Planes3, bottom: &Planes3) -> Planes3 {
+    let lines = |t: &[u8], b: &[u8], w: usize| -> Vec<u8> { t.chunks(w).zip(b.chunks(w)).flat_map(|(a, b)| a.iter().chain(b).copied()).collect() };
+    (lines(&top.0, &bottom.0, MB_W * 16), lines(&top.1, &bottom.1, MB_W * 8), lines(&top.2, &bottom.2, MB_W * 8))
+}
+
+/// Decode `pics` as one interlaced stream at 1 and 3 threads and compare with `expected`; with a
+/// name, also check that ffmpeg agrees.
+fn check_interlaced(cabac: bool, pics: &[Pic], expected: &[Planes3], ffmpeg_name: Option<&str>) {
+    let mut stream = interlaced_sps(77);
+    stream.extend(pps(cabac, false));
+    for p in pics {
+        stream.extend(slice_nal(&Pic { interlaced: true, ..p.clone() }, cabac));
+    }
+    if let Some(name) = ffmpeg_name {
+        cross_check_ffmpeg(&stream, expected, &format!("{name}_{}", if cabac { "cabac" } else { "cavlc" }));
+    }
+    for threads in [1, 3] {
+        let mut dec = Decoder::with_threads(threads);
+        let mut out = dec.decode(&stream, 0).unwrap();
+        out.extend(dec.flush());
+        assert!(dec.take_error().is_none(), "cabac={cabac} threads={threads}");
+        assert_eq!(out.len(), expected.len(), "cabac={cabac} threads={threads}");
+        for (i, (p, e)) in out.iter().zip(expected).enumerate() {
+            assert_eq!((p.width as usize, p.height as usize), (MB_W * 16, FRAME_MB_H * 16));
+            assert!(p.y == e.0 && p.u == e.1 && p.v == e.2, "picture {i} differs (cabac={cabac}, threads={threads})");
+        }
+    }
+}
+
+fn pcm_field(seed: &mut u32) -> Vec<Option<Vec<u8>>> {
+    (0..FIELD_NMB).map(|_| Some(random_mb(seed))).collect()
+}
+
+/// A field pair whose second field is predicted from the first (chroma moved by a quarter chroma
+/// sample, Table 8-10), a frame predicted from the pair (the pair woven) and a field pair
+/// predicted from that frame (every other line of it, 8.2.4.2.5).
+fn field_pair_then_frame_then_fields(cabac: bool, bottom_first: bool) {
+    let mut seed = if bottom_first { 7 } else { 5 };
+    let first = pcm_field(&mut seed);
+    let skip_field = vec![None; FIELD_NMB];
+    let field = |frame_num, bottom, poc_lsb, mbs: &Vec<Option<Vec<u8>>>| Pic {
+        idr: frame_num == 0 && bottom == bottom_first,
+        frame_num,
+        ref_idc: 2,
+        field: Some(bottom),
+        poc_lsb: Some(poc_lsb),
+        mbs: mbs.clone(),
+        ..Default::default()
+    };
+    let (b, t) = (bottom_first, !bottom_first);
+    let pics = [
+        field(0, b, 0, &first),
+        field(0, t, 1, &skip_field),
+        Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), mbs: vec![None; MB_W * FRAME_MB_H], ..Default::default() },
+        field(2, b, 8, &skip_field),
+        field(2, t, 9, &skip_field),
+    ];
+    let p0 = render_pcm(&first, MB_W, FRAME_MB_H / 2);
+    // a bottom field referencing a top field moves chroma down (+2), a top field up (-2)
+    let p1 = chroma_moved(&p0, if bottom_first { -2 } else { 2 });
+    let frame = if bottom_first { weave(&p1, &p0) } else { weave(&p0, &p1) };
+    let name = if bottom_first { "synth_fields_bottom_first" } else { "synth_fields_top_first" };
+    check_interlaced(cabac, &pics, &[frame.clone(), frame.clone(), frame], Some(name));
+}
+
+#[test]
+fn field_pictures_reference_fields_frames_and_pairs() {
+    for cabac in [false, true] {
+        for bottom_first in [false, true] {
+            field_pair_then_frame_then_fields(cabac, bottom_first);
+        }
+    }
+}
+
+/// A reference field followed by a non-reference field of the same frame_num does not form a
+/// complementary field pair (3.30, 3.37): each is a non-paired field in a frame buffer of its own
+/// and is output on its own, its lines repeated.
+#[test]
+fn reference_and_non_reference_fields_are_output_separately() {
+    for cabac in [false, true] {
+        let mut seed = 3;
+        let (top, bottom) = (pcm_field(&mut seed), pcm_field(&mut seed));
+        let pics = [
+            Pic { idr: true, ref_idc: 2, field: Some(false), poc_lsb: Some(0), mbs: top.clone(), ..Default::default() },
+            Pic { ref_idc: 0, field: Some(true), poc_lsb: Some(1), mbs: bottom.clone(), ..Default::default() },
+        ];
+        let (t, b) = (render_pcm(&top, MB_W, FRAME_MB_H / 2), render_pcm(&bottom, MB_W, FRAME_MB_H / 2));
+        check_interlaced(cabac, &pics, &[weave(&t, &t), weave(&b, &b)], None);
+    }
+}
+
+/// A field without a second field is output once the next picture shows none follows.
+#[test]
+fn a_lone_field_is_output_with_its_lines_repeated() {
+    for cabac in [false, true] {
+        let mut seed = 11;
+        let top = pcm_field(&mut seed);
+        let frame: Vec<Option<Vec<u8>>> = (0..MB_W * FRAME_MB_H).map(|_| Some(random_mb(&mut seed))).collect();
+        let pics = [
+            Pic { idr: true, ref_idc: 2, field: Some(false), poc_lsb: Some(0), mbs: top.clone(), ..Default::default() },
+            Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(2), mbs: frame.clone(), ..Default::default() },
+        ];
+        let t = render_pcm(&top, MB_W, FRAME_MB_H / 2);
+        check_interlaced(cabac, &pics, &[weave(&t, &t), render_pcm(&frame, MB_W, FRAME_MB_H)], None);
     }
 }

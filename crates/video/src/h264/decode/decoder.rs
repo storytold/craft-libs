@@ -9,7 +9,7 @@
 use crate::h264::decode::dpb::{Dpb, Output, OutputMeta, RefMark};
 use crate::h264::decode::error::{Error, Result, ensure, invalid, unsupported};
 use crate::h264::decode::params::{Pps, Sps};
-use crate::h264::decode::picture::{Frame, FrameRef, MbKind, MbState, Planes, RefPic};
+use crate::h264::decode::picture::{Frame, FrameRef, MbKind, MbState, Planes, RefPic, RefSrc, Stored};
 use crate::h264::decode::slice::{NalHeader, Poc, PocState, SliceHeader, SliceType, is_new_picture, nal_type};
 use crate::h264::decode::slicedec::{PicState, SliceDecoder};
 use crate::h264::decode::transform::LevelScale;
@@ -92,7 +92,7 @@ pub struct Decoder {
     spss: Vec<Option<Arc<Sps>>>,
     ppss: Vec<Option<Arc<Pps>>>,
     nal_length_size: Option<usize>,
-    dpb: Dpb<FrameRef>,
+    dpb: Dpb<Stored>,
     poc_state: PocState,
     prev_ref_frame_num: u32,
     /// Pictures started by the current `decode` call (see [`MAX_PICTURES_PER_CALL`]).
@@ -102,7 +102,7 @@ pub struct Decoder {
     active_sps: Option<Arc<Sps>>,
     ls_cache: Vec<(Arc<Pps>, Arc<LevelScale>)>,
     /// Pictures leaving the DPB, converted once their decoding job has finished.
-    out_queue: VecDeque<Output<FrameRef>>,
+    out_queue: VecDeque<Output<Stored>>,
     /// Queued entries per frame id and their summed bytes, kept in step with `out_queue` so the
     /// budget check does not rescan it.
     queued_ids: HashMap<u32, u64>,
@@ -305,7 +305,7 @@ impl Decoder {
         let max_queue = self.max_in_flight * 2;
         let mut pics = Vec::new();
         while let Some(o) = self.out_queue.front() {
-            if !o.frame.is_published(o.frame.mb_h() - 1) && self.out_queue.len() <= max_queue {
+            if !o.frame.is_complete() && self.out_queue.len() <= max_queue {
                 break;
             }
             let Some(o) = self.pop_out() else { break };
@@ -404,13 +404,11 @@ impl Decoder {
         if pps.num_slice_groups > 1 {
             return unsupported("slice groups (FMO)");
         }
-        // An interlaced SPS (frame_mbs_only_flag 0) is accepted; its frame pictures without
+        // An interlaced SPS (frame_mbs_only_flag 0) is accepted. Its frame pictures without
         // macroblock-adaptive frame/field coding decode like progressive ones (7.4.3: MbaffFrameFlag
-        // is 0, every macroblock is a frame macroblock).
-        if sh.field_pic {
-            return unsupported("interlaced field pictures (PAFF)");
-        }
-        if sps.mb_adaptive_frame_field {
+        // is 0, every macroblock is a frame macroblock), and its field pictures as half-height
+        // pictures of their own.
+        if sps.mb_adaptive_frame_field && !sh.field_pic {
             return unsupported("interlaced MBAFF frames (mb_adaptive_frame_field_flag)");
         }
         if matches!(sh.slice_type, SliceType::Sp | SliceType::Si) {
@@ -434,9 +432,9 @@ impl Decoder {
         let Some(pending) = self.pending.as_mut() else {
             return invalid("slice without a started picture");
         };
-        let refs = self.dpb.build_ref_lists(&sh, pending.poc.frame(), sps.max_frame_num(), |e| RefPic {
-            frame: e.frame.clone(),
-            long_term: e.mark == RefMark::Long,
+        let refs = self.dpb.build_field_ref_lists(&sh, pending.poc.frame(), sps.max_frame_num(), |e, parity| match parity {
+            None => frame_ref(&e.frame, e.mark == RefMark::Long, e.poc, e.field_poc),
+            Some(p) => field_ref(&e.frame, p, sh.bottom_field as usize, e.field_mark[p] == RefMark::Long, e.field_poc[p]),
         })?;
         if !sh.slice_type.is_intra() {
             ensure!(!refs[0].is_empty(), "no reference pictures available for inter slice");
@@ -502,7 +500,7 @@ impl Decoder {
         // entry is counted once.
         let pic = shape.bytes().unwrap_or(u64::MAX);
         // Queued bytes minus the queue entries that share a DPB frame (each distinct DPB frame once).
-        let mut ids: Vec<(u32, u64)> = self.dpb.entries.iter().map(|e| (e.frame.id, e.frame.bytes())).collect();
+        let mut ids: Vec<(u32, u64)> = self.dpb.entries.iter().map(|e| (e.frame.id(), e.frame.bytes())).collect();
         ids.sort_unstable();
         ids.dedup();
         let shared = ids.iter().fold(0u64, |n, (id, b)| n.saturating_add(self.queued_ids.get(id).copied().unwrap_or(0).saturating_mul(*b)));
@@ -555,12 +553,12 @@ impl Decoder {
                 let meta = Arc::new(output_meta(sps, pts, false));
                 let next_id = &mut self.next_id;
                 let poc_state = &mut self.poc_state;
-                let last = self.dpb.entries.iter().filter(|e| !e.non_existing).max_by_key(|e| e.frame.id).map(|e| e.frame.clone());
+                let last = self.dpb.entries.iter().filter(|e| !e.non_existing).max_by_key(|e| e.frame.id()).map(|e| e.frame.clone());
                 let mut make = |_fnum: u32| {
                     let id = *next_id;
                     *next_id += 1;
                     let planes = match &last {
-                        Some(f) if f.mb_w == mb_w && f.mb_h() == mb_h => {
+                        Some(f) if f.mb_size() == (mb_w, mb_h) => {
                             let mut p = Planes::new(mb_w * 16, mb_h * 16);
                             let (y, u, v) = f.copy_cropped((0, 0, mb_w * 16, mb_h * 16));
                             p.y = y;
@@ -570,7 +568,7 @@ impl Decoder {
                         }
                         _ => Planes::gray(mb_w * 16, mb_h * 16),
                     };
-                    (Arc::new(Frame::from_planes(id, 0, &planes)), 0, meta.clone())
+                    (Stored::Frame(Arc::new(Frame::from_planes(id, 0, &planes))), 0, meta.clone())
                 };
                 let mut upd = |fnum: u32| poc_state.update_gap_frame(fnum, sps);
                 self.shared.stats.lock().map(|mut s| s.frame_num_gaps += 1).ok();
@@ -583,7 +581,10 @@ impl Decoder {
         let frame_poc = if sh.has_mmco5() { 0 } else { poc.frame() };
         let id = self.next_id;
         self.next_id += 1;
-        let frame = Arc::new(Frame::new(id, frame_poc, mb_w, mb_h));
+        // A field is a picture of its own with every other line of the frame (frame_height_in_mbs
+        // is even when frame_mbs_only_flag is 0).
+        let pic_mb_h = if sh.field_pic { mb_h / 2 } else { mb_h };
+        let frame = Arc::new(Frame::new(id, frame_poc, mb_w, pic_mb_h));
         self.pending = Some(PendingPic { frame, sps: sps.clone(), first: sh.clone(), poc, pts, key: sh.idr, slices: Vec::new() });
         Ok(())
     }
@@ -600,8 +601,25 @@ impl Decoder {
         }
         let meta = Arc::new(OutputMeta { draft, ..output_meta(&sps, pts, key) });
         let mut outs = Vec::new();
-        let fpoc = frame.poc;
-        self.dpb.store_picture(&first, frame, fpoc, (sps.max_frame_num(), sps.max_num_ref_frames as usize), meta, &mut outs)?;
+        let limits = (sps.max_frame_num(), sps.max_num_ref_frames as usize);
+        if first.field_pic {
+            let parity = first.bottom_field as usize;
+            let fpoc = frame.poc;
+            let mut fields = [None, None];
+            fields[parity] = Some(frame.clone());
+            let size = (frame.mb_w, frame.mb_h());
+            let fits = |stored: &Stored| stored.pictures().all(|f| (f.mb_w, f.mb_h()) == size);
+            self.dpb.store_field(&first, Stored::Fields(fields), parity, fpoc, limits, meta, &mut outs, fits, |stored, _| {
+                if let Stored::Fields(f) = stored {
+                    f[parity] = Some(frame);
+                }
+            })?;
+        } else {
+            // MMCO5 makes both field order counts relative to the frame's (8.2.1).
+            let base = if first.has_mmco5() { poc.frame() } else { 0 };
+            let field_poc = [poc.top.saturating_sub(base), poc.bottom.saturating_sub(base)];
+            self.dpb.store_frame(&first, Stored::Frame(frame), field_poc, limits, meta, &mut outs)?;
+        }
         self.emit(outs);
         Ok(())
     }
@@ -623,20 +641,20 @@ impl Decoder {
         run_job(frame, slices, &shared, draft);
     }
 
-    fn emit(&mut self, outs: Vec<Output<FrameRef>>) {
+    fn emit(&mut self, outs: Vec<Output<Stored>>) {
         for o in &outs {
-            *self.queued_ids.entry(o.frame.id).or_insert(0) += 1;
+            *self.queued_ids.entry(o.frame.id()).or_insert(0) += 1;
             self.queued_bytes = self.queued_bytes.saturating_add(o.frame.bytes());
         }
         self.out_queue.extend(outs);
     }
 
-    fn pop_out(&mut self) -> Option<Output<FrameRef>> {
+    fn pop_out(&mut self) -> Option<Output<Stored>> {
         let o = self.out_queue.pop_front()?;
-        if let Some(n) = self.queued_ids.get_mut(&o.frame.id) {
+        if let Some(n) = self.queued_ids.get_mut(&o.frame.id()) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                self.queued_ids.remove(&o.frame.id);
+                self.queued_ids.remove(&o.frame.id());
             }
         }
         self.queued_bytes = self.queued_bytes.saturating_sub(o.frame.bytes());
@@ -729,6 +747,41 @@ fn decode_slice(s: &SliceJob, pic: &mut PicState) -> Result<()> {
     }
 }
 
+/// A stored picture as a reference of a frame: the frame itself, or a field pair woven. A
+/// non-paired field (only reachable through the fallback for missing list entries of
+/// non-conforming streams) is used as it is.
+fn frame_ref(stored: &Stored, long_term: bool, poc: i32, field_poc: [i32; 2]) -> RefPic {
+    let src = match stored {
+        Stored::Frame(f) => RefSrc::Whole(f.clone()),
+        Stored::Fields([Some(t), Some(b)]) => RefSrc::Pair(t.clone(), b.clone()),
+        Stored::Fields([Some(f), None] | [None, Some(f)]) => RefSrc::Whole(f.clone()),
+        Stored::Fields([None, None]) => RefSrc::Whole(Arc::new(Frame::from_planes(0, poc, &Planes::gray(16, 16)))),
+    };
+    RefPic::new(src, long_term, poc, field_poc, stored.view_key(None))
+}
+
+/// Field `parity` of a stored picture as a reference of a field of parity `cur`: a field of a
+/// frame, or a decoded field. A missing field (only reachable through the fallback for missing
+/// list entries of non-conforming streams) is replaced by the other one.
+fn field_ref(stored: &Stored, parity: usize, cur: usize, long_term: bool, poc: i32) -> RefPic {
+    let src = match stored {
+        Stored::Frame(f) => RefSrc::FieldOf(f.clone(), parity),
+        Stored::Fields(fields) => match fields[parity].as_ref().or(fields[parity ^ 1].as_ref()) {
+            Some(f) => RefSrc::Whole(f.clone()),
+            None => RefSrc::Whole(Arc::new(Frame::from_planes(0, poc, &Planes::gray(16, 16)))),
+        },
+    };
+    let mut r = RefPic::new(src, long_term, poc, [poc; 2], stored.view_key(Some(parity)));
+    // Table 8-10: a top field referencing a bottom field moves chroma up by a quarter chroma
+    // sample (-2 in 1/8 units), a bottom field referencing a top field down.
+    r.chroma_dy = match (parity, cur) {
+        (1, 0) => -2,
+        (0, 1) => 2,
+        _ => 0,
+    };
+    r
+}
+
 fn output_meta(sps: &Sps, pts: i64, key: bool) -> OutputMeta {
     let vui = sps.vui.clone().unwrap_or_default();
     OutputMeta {
@@ -744,7 +797,7 @@ fn output_meta(sps: &Sps, pts: i64, key: bool) -> OutputMeta {
     }
 }
 
-fn make_picture(o: &Output<FrameRef>) -> Picture {
+fn make_picture(o: &Output<Stored>) -> Picture {
     let (cx, cy, cw, ch) = o.meta.crop;
     let (cx, cy, cw, ch) = (cx as usize, cy as usize, cw as usize, ch as usize);
     let (y, u, v) = o.frame.copy_cropped((cx, cy, cw, ch));
