@@ -19,6 +19,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, Corners, StyleColor, StyleCx, SurfaceKind};
 use craft_behavior::dock::{Column, DockEdge, Group};
+use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
@@ -171,9 +172,14 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     dock: Id,
     column: &'a Column<P>,
     spec: &'a dyn Fn(&P) -> PanelSpec,
-    /// The window edge the column sits on, which the flyout opens away from.
+    /// The edge the column keeps to: a dock's window edge, or the edge of the float area a floating window keeps to.
+    /// The bar's double arrow sits at that end and the inner edge, which sets the column's width, faces away from it.
     #[prop]
     edge: DockEdge,
+    /// The side of the column, in reading order, its flyouts open on (`Side::Start` or `Side::End`): away from a
+    /// dock's window edge, towards the room of the float area for a floating column.
+    #[prop]
+    opens: Side,
     /// Where the column's bar is: its own (a dock column) or its floating window's title row.
     #[prop]
     bar: ColumnBar,
@@ -235,6 +241,7 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
             column,
             spec,
             edge: DockEdge::Start,
+            opens: Side::End,
             bar: ColumnBar::Own,
             auto_collapse: false,
             within: Rect::NOTHING,
@@ -559,14 +566,14 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
         }
     }
 
-    /// The flyout of every cell whose popup is open, beside the column on the canvas side. A resize the user makes
+    /// The flyout of every cell whose popup is open, beside the column on the side it opens on. A resize the user makes
     /// comes back as the open group's new size and, when its top moved, its top's offset from the group's icons.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("flyout");
         let sizes = cx.style.sizes.column;
-        let (edge, auto_collapse, column) = (self.edge, self.auto_collapse, cx.rect);
-        // The screen side the canvas is on: away from the window edge, mirrored in a right-to-left layout.
-        let right = (edge == DockEdge::End) == cx.flow.is_rtl();
+        let (opens, auto_collapse, column) = (self.opens, self.auto_collapse, cx.rect);
+        // The screen side the flyouts open on, mirrored in a right-to-left layout.
+        let right = (opens == Side::End) != cx.flow.is_rtl();
         let within = if self.within.is_positive() { self.within } else { cx.core.ctx.content_rect() };
         // The column side of the bounds stops at the column, so a saved width wider than the room keeps that side.
         let bounds = if right { within.with_min_x(within.min.x.max(column.right())) } else { within.with_max_x(within.max.x.min(column.left())) };
@@ -582,7 +589,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
         let mut resized = None;
         for (at, plan) in plans.into_iter().enumerate() {
             let Some(FlyoutPlan { group, top_left, size, fixed, icons_top }) = plan else { continue };
-            let shown = Flyout::new(edge, size, auto_collapse).within(bounds).least(least).show_popup(
+            let shown = Flyout::new(opens, size, auto_collapse).within(bounds).least(least).show_popup(
                 ui,
                 popup.at(at),
                 Anchor::Point(top_left),

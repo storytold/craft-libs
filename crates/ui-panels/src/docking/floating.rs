@@ -72,6 +72,24 @@ impl WindowColumn {
         let at_left = !bounds.is_positive() || rect.center().x - bounds.left() <= bounds.right() - rect.center().x;
         if at_left != rtl { DockEdge::Start } else { DockEdge::End }
     }
+
+    /// The rect a collapsed window keeps when a move that showed it against `edge` ends at `rect`, so its strip
+    /// stays where it was dropped once the window keeps to the edge nearer it again: `rect` while that edge is still
+    /// `edge`; else `rect` shifted so the strip, against the other edge, is where it was, when the other edge is the
+    /// nearer one of the shifted rect. A strip dropped near the middle of `bounds`, where neither holds, keeps
+    /// `rect`. An expanded window keeps `rect`.
+    pub fn anchored(self, rect: Rect, bounds: Rect, rtl: bool) -> Rect {
+        let Some(size) = self.collapsed else { return rect };
+        if Self::nearer_edge(rect, bounds, rtl) == self.edge {
+            return rect;
+        }
+        let at_left = |edge: DockEdge| (edge == DockEdge::Start) != rtl;
+        let strip = if at_left(self.edge) { rect.left() } else { rect.right() - size.x };
+        let other = if self.edge == DockEdge::Start { DockEdge::End } else { DockEdge::Start };
+        let left = if at_left(other) { strip } else { strip + size.x - rect.width() };
+        let shifted = Rect::from_min_size(Pos2::new(left, rect.top()), rect.size());
+        if Self::nearer_edge(shifted, bounds, rtl) == other { shifted } else { rect }
+    }
 }
 
 /// What a floating group reports in a pass.

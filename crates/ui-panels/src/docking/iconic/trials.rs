@@ -10,6 +10,7 @@ use crate::testing::memory::global;
 use crate::testing::{Fixture, trial};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
+use craft_behavior::overlay::Side;
 use egui::{Pos2, Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -146,6 +147,7 @@ impl Flyouts {
             let groups = RefCell::new(Vec::new());
             let output = IconicColumn::new("Panels", global("iconic column", "flyouts"), &column, Bind::bound(&mut now), &named)
                 .edge(edge)
+                .opens(if right { Side::Start } else { Side::End })
                 .within(within)
                 .show_flyouts_at(ui, place, |group, at, ui, _| {
                     let GroupAt::Show(rect) = at else { return None };

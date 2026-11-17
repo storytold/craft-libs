@@ -11,6 +11,7 @@ use crate::testing::memory::global;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
 use craft_behavior::Mixed;
 use craft_behavior::dock::{Column, DockEdge, Group};
+use craft_behavior::overlay::Side;
 use egui::{Rect, Ui};
 
 /// Panels without icons, so each cell shows the first letter of its panel's name.
@@ -33,7 +34,7 @@ fn at_stage<'a>(
     } else {
         Rect::from_min_max(egui::pos2(room.right() - width, room.top()), room.max)
     };
-    column.edge(DockEdge::End).within(room).show_flyouts_at(ui, cell, view)
+    column.edge(DockEdge::End).opens(Side::Start).within(room).show_flyouts_at(ui, cell, view)
 }
 
 #[story(IconicColumn<'static, u8>, covers = [Default], drive = Drive::Never)]

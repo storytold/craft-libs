@@ -25,6 +25,7 @@ use crate::sections::HeaderAction;
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, Group, Layout, Location, Node, PanelPlace, Permissions, SplitSize, Workspace, node_at,
 };
+use craft_behavior::overlay::Side;
 use craft_behavior::{CancelReason, DockSide, EditEvent, EditEvents, Flow, GestureId, GesturePhase, Mixed, Proposal};
 use craft_host::target::WindowKind;
 use egui::{Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2, ViewportId};
@@ -287,6 +288,8 @@ struct DockPlan<'p, P> {
 
 /// Where and how a column shows: its rect; the edge it keeps to, a dock's window edge or the float area's edge a
 /// floating window keeps to; where its bar is; the rect its inner edge and flyouts stay within; and the open flyout.
+/// Its flyouts open away from its edge: towards the canvas for a dock column, towards the float area's room for a
+/// floating one.
 struct ColumnAt<P> {
     cell: Rect,
     edge: DockEdge,
@@ -571,7 +574,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         _ => Vec::new(),
     };
     register_bands(&scene, ctx, body.rect, &leaves);
-    let moved = if floating { pass.windows(ui, body, &open) } else { None };
+    let started = memory.moving.as_ref().map(|moving| &moving.before.layout);
+    let moved = if floating { pass.windows(ui, body, &open, started) } else { None };
     let mut report = pass.report;
     let label: Arc<str> = Arc::from(body.words::<DockWords>().move_window.as_str());
     if let Some((anchor, change)) = moved
@@ -926,9 +930,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let dock = self.dock;
         let ColumnAt { cell, edge, bar, within, open } = at;
         let in_window = bar == ColumnBar::Window;
+        let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
         let work = if column.iconic {
             let output = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
                 .edge(edge)
+                .opens(opens)
                 .bar(bar)
                 .within(within)
                 .auto_collapse(scene.auto_collapse)
@@ -985,9 +991,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// The floating windows of the pruned layout, each a `FloatingGroup` holding its one column, drawn as a dock
     /// column is with the window's title row as the column's bar, in an OS window where the config, the platform and
     /// its panels allow one. A window takes the drops over it on its own layer, from the spots its column registers in
-    /// its own registry. `open` is the open flyout, which a collapsed window's icons share with the docks'. Returns the
-    /// move or resize of a window in the app window this pass, which the area reports as a workspace edit.
-    fn windows(&mut self, ui: &mut Ui, body: &BodyCx<'_>, open: &Option<P>) -> Option<(P, PlacementChange)> {
+    /// its own registry. `open` is the open flyout, which a collapsed window's icons share with the docks'. `started`
+    /// is the layout a running move or resize of a window began on. Returns the move or resize of a window in the app
+    /// window this pass, which the area reports as a workspace edit.
+    ///
+    /// A window keeps to the edge of the float area nearer it: its title row's double arrow sits at that end, and its
+    /// collapsed column shows against that edge of its rect. A move or resize keeps the edge the window had when it
+    /// began, so nothing jumps while the window crosses the middle; a collapsed window's move ends with the rect
+    /// that keeps its strip where it was dropped ([`WindowColumn::anchored`]).
+    fn windows(&mut self, ui: &mut Ui, body: &BodyCx<'_>, open: &Option<P>, started: Option<&Layout<P>>) -> Option<(P, PlacementChange)> {
         let scene = self.scene;
         let ctx = ui.ctx().clone();
         let policy = |panel: &P| scene.permissions(panel);
@@ -1022,7 +1034,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated), &active);
             let mut commands = Vec::new();
             let spec = scene.spec(&active);
-            let edge = WindowColumn::nearer_edge(opening.rect, scene.bounds, scene.rtl);
+            let began =
+                started.and_then(|layout| layout.floating.iter().find(|began| began.id == window.id)).map_or(opening.rect, |began| began.rect);
+            let edge = WindowColumn::nearer_edge(began, scene.bounds, scene.rtl);
             let shape = if window.column.iconic {
                 let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
                 WindowColumn::collapsed(edge, size)
@@ -1073,8 +1087,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     self.report.windows.push((anchor.clone(), viewport));
                     self.report.actions.extend(native::reported(&ctx, window, viewport));
                 }
-            } else if let Some(change) = output.placed {
+            } else if let Some(mut change) = output.placed {
                 if change.phase == GesturePhase::Commit {
+                    change.rect = shape.anchored(change.rect, scene.bounds, scene.rtl);
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });
                 }
                 moved = Some((anchor.clone(), change));

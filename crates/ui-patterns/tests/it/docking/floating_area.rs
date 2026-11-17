@@ -308,3 +308,112 @@ fn a_floating_windows_double_arrow_collapses_its_column_to_icons_and_expands_it(
     assert!(!window.column.iconic && window.rect == WINDOW_AT, "the column expanded at its rect: {window:?}");
     assert_eq!(in_window(&bed), 1, "the expanded window shows its group again");
 }
+
+/// The window of `with_window` at `rect` with its column collapsed to icons, and no docked tree under it.
+fn collapsed_at(rect: Rect) -> Layout<usize> {
+    let mut window = Floating::single(vec![WINDOW], 0, rect);
+    window.column.iconic = true;
+    Layout::new(None, vec![window])
+}
+
+/// The rect of the button named `name`.
+fn button_rect(bed: &Bed, name: &str) -> Option<Rect> {
+    let tree = bed.fixture.tree();
+    bed.fixture
+        .by_role(Role::BUTTON)
+        .into_iter()
+        .find(|button| craft_ui::testing::access::name(tree, button.node) == Some(name))
+        .map(|button| button.rect)
+}
+
+/// A collapsed window keeps to the edge it kept when its move began: dragged across the middle of the float area,
+/// its strip stays under the pointer, and it stays where it is dropped.
+#[trial]
+fn a_collapsed_window_dragged_across_the_middle_keeps_its_strip_under_the_pointer() {
+    let mut bed = bed(collapsed_at(WINDOW_AT), |_| Permissions::ALL);
+    let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
+    // The title row's band, clear of the double arrow at the end the window keeps to.
+    let band = Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0);
+    let by = Vec2::new(-250.0, 0.0);
+    bed.fixture.drag_hold_at(band, by);
+    let held = button_rect(&bed, &title(WINDOW)).expect("the icon shows while the window moves");
+    assert!((held.left() - (icon.left() + by.x)).abs() <= SLACK, "the strip follows the pointer across the middle: {icon:?}, then {held:?}");
+    bed.fixture.release_at(band + by).settle();
+    let dropped = button_rect(&bed, &title(WINDOW)).expect("the icon shows after the move");
+    assert!((dropped.left() - held.left()).abs() <= SLACK, "the strip stays where it was dropped: {held:?}, then {dropped:?}");
+    assert!(bed.workspace.borrow().layout.floating[0].column.iconic, "the window stays collapsed");
+}
+
+/// A floating collapsed column opens its flyouts towards the room of the float area, away from the edge it keeps to.
+#[trial]
+fn a_floating_collapsed_columns_flyout_opens_towards_the_room() {
+    // In the end half of the area, then in the start half.
+    for (rect, opens_right) in [(WINDOW_AT, false), (WINDOW_AT.translate(Vec2::new(-110.0, 0.0)), true)] {
+        let mut bed = bed(collapsed_at(rect), |_| Permissions::ALL);
+        let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
+        bed.fixture.click_at(icon.center()).settle();
+        let flyout = bed.fixture.by_role(Role::TAB_PANEL).first().map(|group| group.rect).expect("the flyout shows the panel's group");
+        let towards = if opens_right { flyout.left() >= icon.right() - SLACK } else { flyout.right() <= icon.left() + SLACK };
+        assert!(towards, "window at {rect:?}: the flyout {flyout:?} opens on the side with room of the icon {icon:?}");
+    }
+}
+
+/// A double click on a floating window's title band collapses its column, as one on a dock column's bar does, and a
+/// double click on the collapsed window's band expands it again; the groups keep their state.
+#[trial]
+fn a_double_click_on_a_floating_windows_band_collapses_and_expands_its_column() {
+    let mut bed = bed(with_window(None), |_| Permissions::ALL);
+    let band = Pos2::new(WINDOW_AT.left() + 40.0, WINDOW_AT.top() + 6.0);
+    bed.fixture.click_at(band).click_at(band).settle();
+    let window = bed.workspace.borrow().layout.floating[0].clone();
+    assert!(window.column.iconic, "the band's double click collapsed the column: {:?}", bed.actions.borrow());
+    assert!(window.groups().iter().all(|group| !group.minimized), "no group minimized");
+    let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
+    let band = Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0);
+    bed.fixture.click_at(band).click_at(band).settle();
+    assert!(!bed.workspace.borrow().layout.floating[0].column.iconic, "a second double click expanded it: {:?}", bed.actions.borrow());
+}
+
+/// Nothing goes beside a floating window: a tab dragged over the start side of its group marks the join of the
+/// group, not a split; and a tab dropped on a collapsed window's icon joins its group, which stays collapsed.
+#[trial]
+fn a_drag_over_a_floating_window_joins_or_stacks_and_never_splits() {
+    let docked_tab = |bed: &Bed| {
+        let tabs = bed.fixture.by_role(Role::TAB);
+        let mut docked: Vec<_> = tabs.iter().filter(|tab| !WINDOW_AT.contains(tab.center())).map(|tab| tab.rect).collect();
+        docked.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+        docked.last().copied().expect("the second docked tab shows")
+    };
+    let mut expanded = bed(with_window(Some(Node::tabs(vec![DOCKED, SECOND], 0))), |_| Permissions::ALL);
+    let tab = docked_tab(&expanded);
+    let side = Pos2::new(WINDOW_AT.left() + 6.0, WINDOW_AT.center().y + 20.0);
+    press_and_move(&mut expanded.fixture, tab.center(), side - tab.center());
+    expanded.fixture.frame(Vec::new());
+    let mark = drag::mark(expanded.fixture.ctx()).expect("the window takes the drop");
+    assert!(matches!(mark, DropMark::Into(_)), "the start side of a floating group joins it: {mark:?}");
+    expanded.fixture.frame(vec![release(side)]).settle();
+
+    let mut window = Floating::single(vec![WINDOW], 0, WINDOW_AT);
+    window.column.iconic = true;
+    let mut collapsed = bed(Layout::new(Some(Node::tabs(vec![DOCKED, SECOND], 0)), vec![window]), |_| Permissions::ALL);
+    let tab = docked_tab(&collapsed);
+    let icon = button_rect(&collapsed, &title(WINDOW)).expect("the collapsed window shows its icon");
+    press_and_move(&mut collapsed.fixture, tab.center(), icon.center() - tab.center());
+    collapsed.fixture.frame(Vec::new());
+    collapsed.fixture.frame(vec![release(icon.center())]).settle();
+    let window = collapsed.workspace.borrow().layout.floating[0].clone();
+    assert!(window.groups().len() == 1 && window.contains(&SECOND), "the tab joined the icon's group: {:?}", collapsed.actions.borrow());
+    assert!(window.column.iconic, "the window stays collapsed");
+}
+
+/// A settled collapsed window runs no more passes than a settled expanded one.
+#[trial]
+fn a_settled_collapsed_window_runs_no_more_passes_than_an_expanded_one() {
+    let passes = |layout: Layout<usize>| {
+        let mut bed = bed(layout, |_| Permissions::ALL);
+        bed.fixture.idle(3);
+        bed.fixture.passes()
+    };
+    let (collapsed, expanded) = (passes(collapsed_at(WINDOW_AT)), passes(with_window(None)));
+    assert!(collapsed <= expanded, "a still frame runs {collapsed} passes collapsed, {expanded} expanded");
+}
