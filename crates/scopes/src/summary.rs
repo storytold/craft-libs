@@ -137,11 +137,17 @@ pub struct Peak {
     pub share: f64,
 }
 
-/// The `n` densest cells holding at least `min_share` of the samples, densest first.
+/// The `n` densest cells holding at least `min_share` of the samples, densest first. A vectorscope
+/// larger than [`MAX_VECTOR_SIZE`] gives no peaks.
 pub fn peaks(v: &Vectorscope, n: usize, min_share: f32) -> Vec<Peak> {
+    if v.size > MAX_VECTOR_SIZE {
+        return Vec::new();
+    }
     let total = v.samples.max(1) as f32;
     let size = v.size.max(1);
-    let mut cells: Vec<(u32, usize)> = v.data.iter().enumerate().filter(|(_, c)| **c > 0).map(|(i, c)| (*c, i)).collect();
+    // entries past the size² plane are not cells
+    let plane = v.size * v.size;
+    let mut cells: Vec<(u32, usize)> = v.data.iter().take(plane).enumerate().filter(|(_, c)| **c > 0).map(|(i, c)| (*c, i)).collect();
     cells.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     cells
         .into_iter()

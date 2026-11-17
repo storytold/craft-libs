@@ -559,6 +559,15 @@ fn hand_built_values_past_the_caps_paint_nothing() {
     assert_eq!(paint::vectorscope_into(&v, [1.0; 3], 1.0, true, &mut scratch, &mut out), (0, 0));
     assert!(out.is_empty());
     assert!(summary::coarse(&v, usize::MAX).is_empty());
+    let big = Vectorscope { size: MAX_VECTOR_SIZE + 1, data: vec![1; 4], samples: 4, ..Vectorscope::default() };
+    assert!(summary::peaks(&big, 5, 0.0).is_empty());
+    assert!(summary::coarse(&big, 4).is_empty());
+    // entries past the size² plane are not cells
+    let mut data = vec![0; 10];
+    data[9] = 5;
+    let trailing = Vectorscope { size: 3, extent: VECTOR_EXTENT, data, samples: 5, ..Vectorscope::default() };
+    assert!(summary::peaks(&trailing, 5, 0.0).is_empty());
+    assert!(summary::coarse(&trailing, 3).is_empty());
     let g = Grid { name: "Y", cols: usize::MAX, rows: usize::MAX, data: Vec::new() };
     out.push(1);
     assert_eq!(paint::grids_into(&[(&g, [1.0; 3])], 1.0, 1.0, &mut scratch, &mut out), (0, 0));
