@@ -249,7 +249,11 @@ impl TryFrom<crate::rawvideo::Frame> for VideoFrame {
             Kind::Rgb => (ColorFamily::Rgb, Subsampling::S444),
         };
         let (cw, ch) = sub.chroma_size(w, h);
-        let planes = vec![Plane::packed(w, h, bits, Samples::U16(a))?, Plane::packed(cw, ch, bits, Samples::U16(b))?, Plane::packed(cw, ch, bits, Samples::U16(c))?];
+        let planes = vec![
+            Plane::packed(w, h, bits, Samples::U16(a))?,
+            Plane::packed(cw, ch, bits, Samples::U16(b))?,
+            Plane::packed(cw, ch, bits, Samples::U16(c))?,
+        ];
         let mut f = VideoFrame::new(w, h, family, sub, planes, None)?;
         if family == ColorFamily::Rgb {
             f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };

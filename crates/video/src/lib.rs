@@ -52,10 +52,10 @@ pub mod mpeg4;
 #[cfg(feature = "ffv1")]
 pub mod ffv1;
 
-#[cfg(feature = "rawvideo")]
-pub mod rawvideo;
 #[cfg(feature = "hap")]
 pub mod hap;
+#[cfg(feature = "rawvideo")]
+pub mod rawvideo;
 
 #[cfg(feature = "mjpeg")]
 pub mod mjpeg;
