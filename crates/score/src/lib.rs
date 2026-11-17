@@ -53,13 +53,10 @@ fn spell(pitch: u8) -> (char, i32, i32) {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.chars()
-        .filter(|c| matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'))
-        .collect::<String>()
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    // Keep the score export's existing literal whitespace and quote spelling. The
+    // shared attribute writer owns XML legality/escaping; only its generated
+    // whitespace references are restored (input ampersands were escaped first).
+    craft_xml::esc_attr(s).replace("&#9;", "\t").replace("&#10;", "\n").replace("&#13;", "\r")
 }
 
 fn note_type(units: u32) -> (&'static str, bool) {
