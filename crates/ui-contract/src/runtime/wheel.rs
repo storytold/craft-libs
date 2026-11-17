@@ -49,7 +49,7 @@ pub(crate) fn nearest_scroll_owner(ctx: &Context, rect: Rect) -> Option<Id> {
 pub(crate) fn begin(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     // Takes the pass's snapshot of the canvas a modal keeps open, which the input hook and the layer test read.
-    sampler::hole_of_pass(ctx);
+    let hole = sampler::hole_of_pass(ctx);
     let pass_pointer = pointer::pass_pointer(ctx);
     let frame = pass_pointer.frame.clone();
     let wheel_in = input::wheel_read(ctx, 1.0, 1.0);
@@ -58,8 +58,10 @@ pub(crate) fn begin(ctx: &Context) {
     // A text field the app drew itself holds key focus: it reads its own wheel.
     let app_field = wheel_in.is_some() && focus::record(ctx, viewport).host_text;
     let hover = pass_pointer.hover.or(frame.as_ref().and_then(|frame| frame.pos));
-    // A popup the pointer is over, opened above the focused field's layer, takes the wheel by position.
-    let over_popup = wheel_in.is_some() && hover.is_some_and(|at| focus::popup_above_focus(ctx, at));
+    // A popup the pointer is over, opened above the focused field's layer, and the canvas a modal keeps open below it
+    // take the wheel by position.
+    let by_position =
+        wheel_in.is_some() && hover.is_some_and(|at| focus::popup_above_focus(ctx, at) || hole.as_ref().is_some_and(|hole| hole.answers(at)));
     let pressed_on = pass_pointer
         .events
         .iter()
@@ -116,7 +118,7 @@ pub(crate) fn begin(ctx: &Context) {
                     .rotation(frame.rotation)
                     .touch_rotation(touch_rotation)
                     .at(at);
-                let focus = WheelFocus::new(focused).app_field(app_field).over_popup(over_popup);
+                let focus = WheelFocus::new(focused).app_field(app_field).by_position(by_position);
                 // The device's lines and pages become points of each taker: the notch is the scroll owner's to choose.
                 for (owner, mut share) in split(&state.last, at, share, focus, state.armed, &mut state.gesture, now) {
                     if let Some(taker) = state.last.iter().find(|taker| taker.owner == owner) {

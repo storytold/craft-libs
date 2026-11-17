@@ -5,8 +5,8 @@ use super::kit::{Leaf, Opened, PlainStyle, Seen};
 use craft_behavior::{PointerButton, Sense};
 use craft_keymap::Mods;
 use craft_ui::contract::{
-    CanvasGesture, Common, Component, Cx, MeasureCx, Overlay, OverlayUi, Overlays as _, Pointer as _, Props as _, Role, Sampler as _, Show as _,
-    Trigger,
+    Bind, CanvasGesture, Common, Component, Cx, MeasureCx, Overlay, OverlayUi, Overlays as _, Pointer as _, Props as _, Role, Sampler as _,
+    Show as _, Trigger,
 };
 use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::sampler;
@@ -15,6 +15,7 @@ use craft_ui::testing::focus::is_focused;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{middle, moved, wheel, zoom_wheel};
 use craft_ui::testing::{Frames, trial};
+use craft_ui::text::NumberField;
 use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
@@ -142,6 +143,9 @@ impl Component for Dialog<'_> {
                 Arm::View => body.keep_view_open(canvas),
                 Arm::Gesture(gesture) => body.pass_canvas_gesture(canvas, gesture),
             }
+            if let Some(value) = scene.field.borrow_mut().as_mut() {
+                NumberField::new("Amount", Bind::bound(value)).show(ui);
+            }
             let leaf = Leaf::new(&scene.leaf, Vec2::new(80.0, 30.0)).id_salt("armer").show(ui);
             scene.armer_id.set(leaf.id);
         });
@@ -166,6 +170,8 @@ struct Scene {
     outside: Cell<Option<CanvasGesture>>,
     /// The gesture the canvas's host passes for its running tool.
     tool: Cell<Option<CanvasGesture>>,
+    /// The value of a number field the dialog shows first, so it takes the dialog's first focus.
+    field: RefCell<Option<Option<f64>>>,
     dialog: Opened,
 }
 
@@ -179,6 +185,7 @@ impl Scene {
             arm: Cell::new(arm),
             outside: Cell::new(None),
             tool: Cell::new(None),
+            field: RefCell::new(None),
             dialog: Opened::default(),
         }
     }
@@ -299,6 +306,29 @@ fn a_kept_view_passes_the_wheel_and_the_middle_pan_and_blocks_the_primary_press(
     scene.frame(&mut frames, vec![middle(CANVAS.center(), false)]);
     scene.settle(&mut frames, 2);
     assert!(scene.canvas.borrow().wheels == 0 && !scene.took(PointerButton::Middle), "the canvas is blocked");
+}
+
+/// A focused field in the dialog takes the wheel wherever the pointer is in the dialog, but over the canvas the dialog
+/// keeps open the wheel goes by position: the canvas scrolls and the field keeps its value.
+#[trial]
+fn the_wheel_over_a_kept_canvas_scrolls_it_while_a_field_in_the_dialog_has_focus() {
+    let mut frames = Frames::new();
+    let scene = Scene::new(Arm::View);
+    *scene.field.borrow_mut() = Some(Some(5.0));
+    scene.open_dialog(&mut frames);
+    let in_dialog = frames.ctx.read_response(scene.armer_id.get()).expect("the armer shows").rect.center();
+    scene.frame(&mut frames, vec![moved(in_dialog)]);
+    scene.frame(&mut frames, vec![wheel(-40.0)]);
+    scene.settle(&mut frames, 2);
+    let stepped = *scene.field.borrow();
+    assert_ne!(stepped, Some(Some(5.0)), "the focused field takes the wheel away from it");
+    frames.advance(2.0);
+    scene.settle(&mut frames, 2);
+    scene.frame(&mut frames, vec![moved(CANVAS.center())]);
+    scene.frame(&mut frames, vec![wheel(-40.0)]);
+    scene.settle(&mut frames, 2);
+    assert!(scene.canvas.borrow().wheels > 0, "the wheel over the canvas scrolls it");
+    assert_eq!(*scene.field.borrow(), stepped, "and leaves the field");
 }
 
 /// A gesture that needs a modifier passes only with it held at the press: Curves' ⌘-click reaches the canvas, a plain
