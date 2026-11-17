@@ -24,7 +24,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetState, ThumbInfo};
 use craft_ui::primitives::textures::CachedTexture;
 use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth};
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx};
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
@@ -47,6 +47,9 @@ const MAX_TILES: f32 = 4096.0;
 const DIAGONAL_INSET_IN_HEIGHTS: f32 = 0.15;
 /// The chip's face: a mixed paint shows the colour well's mixed look.
 const WELL: PartKey = PartKey::new("well");
+/// The swatch list takes its content height up to this many small control heights, then scrolls, as the gradient
+/// palette in the Gradient tab does.
+const SWATCH_ROWS: f32 = 5.0;
 
 craft_ui::words! {
     /// The words of [`PaintChip`] and [`PaintList`], English by default.
@@ -511,6 +514,7 @@ impl Component for PaintChip<'_> {
                             .toolbar(false)
                             .row_menu(false)
                             .default_open(DefaultOpen::None)
+                            .room_height(Env::of(ui).tokens.size.control.sm * SWATCH_ROWS)
                             .thumb(|painter: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
                                 if let SwatchKey::Swatch(name) = info.key
                                     && let Some(color) = colors.get(name.as_str())
