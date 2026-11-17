@@ -736,6 +736,24 @@ fn damaged_packets_are_concealed() {
     assert!(d.errors() >= 1);
 }
 
+/// A video packet lost whole leaves no damaged bits behind: the next packet header names a later
+/// macroblock. The skipped macroblocks are concealed and the VOP counts as one error.
+#[test]
+fn a_missing_video_packet_counts_as_damage() {
+    let Some(ff) = ffmpeg() else { return };
+    let stream = encode(&ff, "lost-packet", "176x144", 1, &["-qscale:v", "4", "-bf", "0", "-ps", "200"]);
+    let vop = stream.windows(4).position(|w| w == [0, 0, 1, 0xB6]).expect("a VOP");
+    // An I-VOP's resync marker is 16 zero bits and a one, at a byte boundary.
+    let markers: Vec<usize> = (vop + 4..stream.len() - 2).filter(|&i| stream[i] == 0 && stream[i + 1] == 0 && stream[i + 2] & 0x80 != 0).collect();
+    assert!(markers.len() >= 2, "need two video packets after the first, got {}", markers.len());
+    let damaged = [&stream[..markers[0]], &stream[markers[1]..]].concat();
+    let mut d = Decoder::new();
+    let mut pics = d.decode(&damaged, 0).expect("the VOP still decodes");
+    pics.extend(d.flush());
+    assert_eq!(pics.len(), 1);
+    assert_eq!(d.errors(), 1, "{:?}", d.last_error());
+}
+
 #[test]
 fn hostile_headers_are_errors() {
     let mut d = Decoder::new();

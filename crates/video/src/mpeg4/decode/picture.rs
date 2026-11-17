@@ -385,7 +385,15 @@ impl Dec<'_> {
                 && let Some(pos) = at_resync(&r, marker_len)
             {
                 r.seek_bits(pos);
-                self.packet(&mut r, idx, out)
+                let next = self.packet(&mut r, idx, out);
+                // A packet that starts past a macroblock with coded data follows lost data: the
+                // macroblocks before it were concealed, so the VOP counts as damaged while
+                // decoding goes on from the packet. B macroblocks over a skipped co-located
+                // macroblock have no data, and encoders start a packet after them.
+                if matches!(next, Ok(n) if (idx..n).any(|i| !self.b_not_coded(i))) {
+                    first_err.get_or_insert(DecodeError::Invalid("macroblocks missing before a video packet"));
+                }
+                next
             } else {
                 self.macroblock(&mut r, idx, out).map(|()| idx + 1)
             };
@@ -447,6 +455,12 @@ impl Dec<'_> {
         self.conceal(idx, h.mb_index, out);
         self.start_packet(h);
         Ok(h.mb_index)
+    }
+
+    /// Whether macroblock `idx` is a B macroblock over a skipped co-located macroblock, which
+    /// the stream does not code.
+    fn b_not_coded(&self, idx: usize) -> bool {
+        self.vop.kind == VopKind::B && self.refs.colocated.get(idx).is_some_and(|c| c.kind == MbKind::Skipped)
     }
 
     /// Copy macroblocks `from..to` from the concealment picture, or make them grey without one.
