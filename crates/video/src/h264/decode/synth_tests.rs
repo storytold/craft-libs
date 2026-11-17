@@ -1358,3 +1358,40 @@ fn field_pictures_use_the_field_scan_and_contexts_cabac() {
 fn field_pictures_use_the_8x8_field_scan_and_contexts() {
     check_field_scan(true, true, "synth_field_scan8_cabac");
 }
+
+/// Draft mode switched on between the two fields of a non-reference pair: the output pair says
+/// draft, since its second field skipped deblocking.
+#[test]
+fn draft_mode_switched_between_two_fields_marks_the_pair_draft() {
+    for (d0, d1) in [(false, true), (true, false)] {
+        let mut seed = 3u32;
+        let first = pcm_field(&mut seed);
+        let skip = vec![None; FIELD_NMB];
+        let field = |frame_num: u32, ref_idc: u8, bottom: bool, poc_lsb: u32, mbs: &Vec<Option<Vec<u8>>>| Pic {
+            idr: frame_num == 0 && !bottom,
+            frame_num,
+            ref_idc,
+            field: Some(bottom),
+            poc_lsb: Some(poc_lsb),
+            mbs: mbs.clone(),
+            interlaced: true,
+            ..Default::default()
+        };
+        let mut head = interlaced_sps(77);
+        head.extend(pps(false, false));
+        head.extend(slice_nal(&field(0, 2, false, 0, &first), false));
+        head.extend(slice_nal(&field(0, 2, true, 1, &skip), false));
+        let top = slice_nal(&field(1, 0, false, 4, &skip), false);
+        let bottom = slice_nal(&field(1, 0, true, 5, &skip), false);
+        let mut dec = Decoder::with_threads(1);
+        let mut out = dec.decode(&head, 0).unwrap();
+        dec.set_draft(d0);
+        out.extend(dec.decode(&top, 1).unwrap());
+        dec.set_draft(d1);
+        out.extend(dec.decode(&bottom, 2).unwrap());
+        out.extend(dec.flush());
+        assert!(dec.take_error().is_none());
+        let drafts: Vec<bool> = out.iter().map(|p| p.draft).collect();
+        assert_eq!(drafts, [false, true], "draft {d0} then {d1}");
+    }
+}

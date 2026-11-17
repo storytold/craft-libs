@@ -16,6 +16,12 @@ pub enum RefMark {
     Long,
 }
 
+/// The metadata of a field pair: the first field's, marked draft when either field was decoded in
+/// draft mode (the mode can change between the two fields).
+fn paired_meta(first: Arc<OutputMeta>, second: &OutputMeta) -> Arc<OutputMeta> {
+    if second.draft && !first.draft { Arc::new(OutputMeta { draft: true, ..(*first).clone() }) } else { first }
+}
+
 /// Output-related metadata attached to a decoded frame.
 #[derive(Clone, Debug)]
 pub struct OutputMeta {
@@ -725,7 +731,7 @@ impl<F: Clone> Dpb<F> {
         if pairs_held && let Some(mut h) = self.held.take() {
             // the second field of a held non-reference pair: the pair is output directly
             pair(&mut h.frame, field);
-            out.push(Output { frame: h.frame, poc: h.poc.min(poc), meta: h.meta });
+            out.push(Output { frame: h.frame, poc: h.poc.min(poc), meta: paired_meta(h.meta, &meta) });
             return Ok(());
         }
         let second = self.entries.iter().position(|e| {
@@ -764,6 +770,7 @@ impl<F: Clone> Dpb<F> {
             e.fields = 3;
             e.open = false;
             e.sync_mark();
+            e.meta = paired_meta(e.meta.clone(), &meta);
             pair(&mut e.frame, field);
             self.bump_reorder(out);
             return Ok(());
@@ -1131,6 +1138,39 @@ mod tests {
             dpb.flush(&mut out);
             let want: &[u32] = if lone { &[1, 3, 2, 5] } else { &[1, 304, 2] };
             assert_eq!(out.iter().map(|o| o.frame).collect::<Vec<_>>(), want, "lone={lone}");
+        }
+    }
+
+    /// A field pair is draft when either field is, whichever way the draft mode switched between
+    /// them: for a pair waiting in the DPB and for a held pair (C.4.5.2).
+    #[test]
+    fn a_field_pair_is_draft_when_either_field_is() {
+        let with_draft = |d: bool| Arc::new(OutputMeta { draft: d, ..(*meta()).clone() });
+        for held in [false, true] {
+            for (d0, d1) in [(false, true), (true, false), (false, false)] {
+                let mut dpb: Dpb<u32> = Dpb::new();
+                // a full DPB holds the non-reference pair at POC 4 and 5 for direct output; with a
+                // free frame buffer it waits in the DPB
+                dpb.capacity = if held { 2 } else { 3 };
+                let mut out = Vec::new();
+                let mut sh = reference_slice();
+                sh.idr = true;
+                dpb.store_frame(&sh, 1, [0, 0], (16, 2), meta(), &mut out).unwrap();
+                let mut sh = reference_slice();
+                sh.frame_num = 1;
+                let base = 4;
+                dpb.store_frame(&sh, 2, [8, 8], (16, 2), meta(), &mut out).unwrap();
+                let fields = [field_slice(2, false, false, SliceType::B), field_slice(2, true, false, SliceType::B)];
+                let store = |dpb: &mut Dpb<u32>, out: &mut Vec<_>, sh: &SliceHeader, id, poc, d| {
+                    dpb.store_field(sh, id, sh.bottom_field as usize, poc, (16, 2), with_draft(d), out, |_| true, |f, g| *f = *f * 100 + g).unwrap()
+                };
+                store(&mut dpb, &mut out, &fields[0], 3, base, d0);
+                assert_eq!(dpb.held().is_some(), held);
+                store(&mut dpb, &mut out, &fields[1], 4, base + 1, d1);
+                dpb.flush(&mut out);
+                let pair = out.iter().find(|o| o.frame == 304).unwrap();
+                assert_eq!(pair.meta.draft, d0 || d1, "held={held} draft {d0} then {d1}");
+            }
         }
     }
 
