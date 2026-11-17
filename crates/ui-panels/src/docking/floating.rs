@@ -164,7 +164,8 @@ impl Outcome for FloatingGroupOutput {
 ///   `new` keeps the height the group has when restored.
 /// - Column: a dock window holds one column ([`column`](FloatingGroup::column)); its title row is the column's bar,
 ///   with the double arrow at the end the window keeps to. While the column is collapsed the group shows at the
-///   collapsed size against that edge of the rect, the edges do not resize, and a move keeps the rect's size. A
+///   collapsed size against that edge of the rect, its title row shows no actions (the band and the double arrow;
+///   a context request on the band opens the menu), the edges do not resize, and a move keeps the rect's size. A
 ///   column its content sizes ([`WindowColumn::fitted`]) shows at that size at the rect's place; its resizes are
 ///   reported as the user makes them.
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
@@ -465,8 +466,11 @@ impl Container for FloatingGroup<'_> {
     }
 
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        // A drag bar with no title: the tabs below name the panels.
-        let shown = TitleRow::new("").strength(HeaderStrength::Strong).actions(self.actions.iter().copied()).show(ui);
+        // A drag bar with no title: the tabs below name the panels. A collapsed column's title row is its bar alone,
+        // the band and the double arrow; the menu, which a context request on the band opens, keeps its rows.
+        let collapsed = self.column.is_some_and(|column| column.collapsed.is_some());
+        let actions = if collapsed { &[][..] } else { &self.actions[..] };
+        let shown = TitleRow::new("").strength(HeaderStrength::Strong).actions(actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);
         if let Some(rows) = self.menu.as_mut() {
             self.menu_opener = rows.hang(ui, &shown, cx.words::<DockWords>().panel_menu.clone());
