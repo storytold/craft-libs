@@ -4,7 +4,9 @@
 //! knows about DDS headers, so other containers of the same blocks can use it.
 //!
 //! BC4 is one block of 16 single-channel values, the same block BC3 stores its alpha in; BC5 is
-//! two of them, red then green. [`value_block`] and [`decode_values`] serve all three.
+//! two of them, red then green. [`value_block`] and [`decode_values`] serve all three;
+//! [`value_block16`] and [`decode_values16`] are the same blocks for 16-bit values (BC4 and BC5
+//! from 16-bit sources).
 //!
 //! The encoder fits a block's colours with two RGB565 endpoints along their principal axis,
 //! refines them by least squares, and scores every candidate against the exact palette the
@@ -69,6 +71,26 @@ pub(crate) fn decode_colour(block: &[u8], one_bit_alpha: bool) -> Block {
     std::array::from_fn(|t| palette[(indices >> (2 * t)) as usize & 3])
 }
 
+/// [`alpha_palette`] at 16 bits: the same eight values before they are rounded to 8 bits, as a
+/// decoder that interpolates at a higher precision shows them (endpoints scaled by 257, so 255
+/// is 65535).
+pub(crate) fn alpha_palette16(a0: u8, a1: u8) -> [u16; 8] {
+    let (a0, a1) = (u32::from(a0) * 257, u32::from(a1) * 257);
+    let mut palette = [a0, a1, 0, 0, 0, 0, 0, 65535];
+    if a0 > a1 {
+        for (k, v) in palette.iter_mut().enumerate().skip(2) {
+            let k = k as u32;
+            *v = ((8 - k) * a0 + (k - 1) * a1 + 3) / 7;
+        }
+    } else {
+        for (k, v) in palette.iter_mut().enumerate().take(6).skip(2) {
+            let k = k as u32;
+            *v = ((6 - k) * a0 + (k - 1) * a1 + 2) / 5;
+        }
+    }
+    palette.map(|v| v as u16)
+}
+
 /// BC2's alpha: four explicit bits per texel.
 pub(crate) fn decode_bc2_alpha(block: &[u8]) -> [u8; 16] {
     let bits = u64::from_le_bytes(std::array::from_fn(|i| block.get(i).copied().unwrap_or(0)));
@@ -80,6 +102,14 @@ pub(crate) fn decode_bc2_alpha(block: &[u8]) -> [u8; 16] {
 pub(crate) fn decode_values(block: &[u8]) -> [u8; 16] {
     let byte = |i: usize| block.get(i).copied().unwrap_or(0);
     let palette = alpha_palette(byte(0), byte(1));
+    let bits = u64::from_le_bytes([byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), 0, 0]);
+    std::array::from_fn(|t| palette[((bits >> (3 * t)) & 7) as usize])
+}
+
+/// [`decode_values`] at 16 bits, from [`alpha_palette16`].
+pub(crate) fn decode_values16(block: &[u8]) -> [u16; 16] {
+    let byte = |i: usize| block.get(i).copied().unwrap_or(0);
+    let palette = alpha_palette16(byte(0), byte(1));
     let bits = u64::from_le_bytes([byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), 0, 0]);
     std::array::from_fn(|t| palette[((bits >> (3 * t)) & 7) as usize])
 }
@@ -369,6 +399,64 @@ fn value_fit(values: &[u8; 16], inside: Mask, a0: u8, a1: u8) -> ([u8; 8], u32) 
     ([a0, a1, b[0], b[1], b[2], b[3], b[4], b[5]], error)
 }
 
+/// [`value_block`] for 16-bit values: the endpoints are still 8 bits, but each end of each mode
+/// tries the 8-bit levels just below and above the 16-bit extreme, and every candidate is scored
+/// against the 16-bit palette ([`alpha_palette16`]). A block that spans less than one 8-bit level
+/// is flat from 8-bit values but gets the interpolated steps between two adjacent levels here.
+pub(crate) fn value_block16(values: &[u16; 16], inside: Mask) -> [u8; 8] {
+    let mut all: Option<(u16, u16)> = None;
+    let mut mid = all;
+    let widen = |r: Option<(u16, u16)>, v: u16| Some(r.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
+    for (t, &v) in values.iter().enumerate() {
+        if inside >> t & 1 != 0 {
+            all = widen(all, v);
+            if !matches!(v, 0 | 65535) {
+                mid = widen(mid, v);
+            }
+        }
+    }
+    let (lo, hi) = all.unwrap_or((0, 0));
+    let (mid_lo, mid_hi) = mid.unwrap_or((0, 0));
+    let (down, up) = (|v: u16| (v / 257) as u8, |v: u16| v.div_ceil(257) as u8);
+    // The eight-value mode's pairs first (a0 the high end), then the six-value mode's: on a tie
+    // the eight-value mode wins, as in `value_block`. Each pair's palette follows its order, so a
+    // pair that lands in the other mode is still scored as the decoder reads it.
+    let candidates = [
+        (up(hi), down(lo)),
+        (up(hi), up(lo)),
+        (down(hi), down(lo)),
+        (down(hi), up(lo)),
+        (down(mid_lo), down(mid_hi)),
+        (down(mid_lo), up(mid_hi)),
+        (up(mid_lo), down(mid_hi)),
+        (up(mid_lo), up(mid_hi)),
+    ];
+    let mut best: Option<([u8; 8], u64)> = None;
+    for (a0, a1) in candidates {
+        let fit = value_fit16(values, inside, a0, a1);
+        if best.is_none_or(|(_, e)| fit.1 < e) {
+            best = Some(fit);
+        }
+    }
+    best.map_or([0; 8], |(bytes, _)| bytes)
+}
+
+fn value_fit16(values: &[u16; 16], inside: Mask, a0: u8, a1: u8) -> ([u8; 8], u64) {
+    let palette = alpha_palette16(a0, a1);
+    let mut bits = 0u64;
+    let mut error = 0u64;
+    for (t, &v) in values.iter().enumerate() {
+        if inside >> t & 1 == 0 {
+            continue;
+        }
+        let (i, d) = nearest(&palette, |&p| u32::from(p.abs_diff(v)).pow(2));
+        error += u64::from(d);
+        bits |= (i as u64) << (3 * t);
+    }
+    let b = bits.to_le_bytes();
+    ([a0, a1, b[0], b[1], b[2], b[3], b[4], b[5]], error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,6 +570,36 @@ mod tests {
             assert_eq!(nearest(&palette, d), want, "{palette:?} {v}");
         }
         assert_eq!(nearest::<u8>(&[], |_| 7), (0, 0));
+    }
+
+    #[test]
+    fn value_blocks_decode_the_frozen_vectors_at_16_bits() {
+        // Eight-value mode (200 > 50): index 2 is (6 * 200 + 50) / 7 of 255 at 16 bits, which
+        // the 8-bit palette rounds to 179.
+        let bits: u64 = (0..16).fold(0, |b, t| b | 2 << (3 * t));
+        let b = bits.to_le_bytes();
+        let block = [200, 50, b[0], b[1], b[2], b[3], b[4], b[5]];
+        assert_eq!(decode_values16(&block), [(((6 * 200 + 50) * 257 + 3) / 7_u32) as u16; 16]);
+        assert_eq!(decode_values(&block), [179; 16]);
+        // Six-value mode's indices 6 and 7 are 0 and 65535.
+        let bits: u64 = (0..16).fold(0, |b, t| b | (6 + (t % 2)) << (3 * t));
+        let b = bits.to_le_bytes();
+        let got = decode_values16(&[10, 250, b[0], b[1], b[2], b[3], b[4], b[5]]);
+        assert_eq!(got, std::array::from_fn(|t| if t % 2 == 0 { 0 } else { 65535 }));
+    }
+
+    #[test]
+    fn value_blocks_from_16_bits_step_between_two_8_bit_levels() {
+        // A ramp across 0.8 of one 8-bit level: from 8 bits it is one or two flat values; from 16
+        // bits the endpoints straddle it and the steps between them follow the ramp.
+        let values: [u16; 16] = std::array::from_fn(|t| 25_700 + (t as u16) * 13);
+        let error = |got: [u16; 16]| values.iter().zip(got).map(|(a, b)| u64::from(a.abs_diff(b)).pow(2)).sum::<u64>();
+        let ours = error(decode_values16(&value_block16(&values, u16::MAX)));
+        let from_8_bits = error(decode_values16(&value_block(&values.map(|v| ((u32::from(v) + 128) / 257) as u8), u16::MAX)));
+        assert!(ours * 4 < from_8_bits, "{ours} vs {from_8_bits} from 8 bits");
+        // Values outside the image don't count.
+        let solid = value_block16(&std::array::from_fn(|t| if t == 0 { 1000 } else { 60_000 }), 1);
+        assert!(decode_values16(&solid)[0].abs_diff(1000) < 129);
     }
 
     #[test]
