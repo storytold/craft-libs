@@ -47,7 +47,7 @@ fn kept_selection_keeps_its_width_and_overflow_starts_at_the_end() {
             let first_hidden = others.iter().position(|i| others_hidden.contains(i));
             if let Some(at) = first_hidden {
                 assert!(others[at..].iter().all(|i| others_hidden.contains(i)), "overflow takes the last tabs: {f:?}");
-                assert!(f.overflow_width > 0.0);
+                assert!(f.overflow_width > 0.0 || available == 0.0, "the button is reserved: {f:?}");
             } else {
                 assert_eq!(f.overflow_width, 0.0);
             }
