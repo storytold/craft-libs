@@ -349,6 +349,20 @@ fn write(root: &Path, entry: &Entry, bytes: &[u8]) -> Result<Entry, Fault> {
 /// just retried under a new counter value rather than silently overwritten.
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// A hidden temporary name beside `rel`, from [`TEMP_SEQUENCE`]. The name
+/// does not include `rel`'s file name, so a file name near the filesystem's
+/// length limit still gets a temporary name that fits.
+fn temp_sibling(rel: &Path) -> Result<PathBuf, Fault> {
+    if rel.file_name().is_none() {
+        return Err(Fault::Refused("that path names no file".to_owned()));
+    }
+    let temp_name = format!(".craft-save-{}-{}.tmp", std::process::id(), TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed));
+    Ok(match rel.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(&temp_name),
+        _ => PathBuf::from(&temp_name),
+    })
+}
+
 /// Writes `bytes` to a new sibling of `rel` inside `dir`, then renames that
 /// sibling over `rel`. See the module docs for why: a direct write would
 /// truncate whatever `rel` currently names in place, and if that happens to
@@ -356,14 +370,7 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// corrupted along with it. A rename only ever replaces `rel`'s own
 /// directory entry.
 fn write_replacing(dir: &Dir, rel: &Path, bytes: &[u8]) -> Result<(), Fault> {
-    let name = rel.file_name().ok_or_else(|| Fault::Refused("that path names no file".to_owned()))?;
-    let mut temp_name = OsStr::new(".").to_os_string();
-    temp_name.push(name);
-    temp_name.push(format!(".tmp-{}-{}", std::process::id(), TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
-    let temp_rel = match rel.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.join(&temp_name),
-        _ => PathBuf::from(&temp_name),
-    };
+    let temp_rel = temp_sibling(rel)?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     let written = (|| -> Result<(), Fault> {
@@ -397,24 +404,51 @@ fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, 
     let rel_folder = relative(folder)?;
     dir.create_dir_all(&rel_folder).map_err(|error| io_fault(&error))?;
     let rel = rel_folder.join(name);
-    // Exclusive creation, not an `exists` check ahead of a separate write: two
-    // creates of the same name racing both see "not there yet" otherwise, and
-    // the second write silently replaces the first with neither ever refused.
-    // `create_new` asks the filesystem to open and create in one step, so the
-    // loser gets an error instead of a chance to overwrite the winner. It also
-    // refuses outright when `name` already exists as a symlink, dangling or
-    // not: `O_EXCL` never follows one to decide whether it is "in the way".
-    let mut create_options = OpenOptions::new();
-    create_options.write(true).create_new(true);
-    let mut handle = match dir.open_with(&rel, &create_options) {
-        Ok(handle) => handle,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(Fault::Refused(format!("{name} already exists")));
-        }
+    // The bytes go to a sibling temporary file first. A write that fails part
+    // way (a full disk, a lost share) leaves only that file, which is removed,
+    // so the name stays free for the next Save As instead of holding a partial
+    // file that makes it fail with "already exists".
+    // A taken name is refused before any bytes are written. The hard link
+    // below is still the check that settles a race.
+    match dir.symlink_metadata(&rel) {
+        Ok(_) => return Err(Fault::Refused(format!("{name} already exists"))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(io_fault(&error)),
-    };
-    handle.write_all(bytes).map_err(|error| io_fault(&error))?;
+    }
+    let temp_rel = temp_sibling(&rel)?;
+    let mut temp_options = OpenOptions::new();
+    temp_options.write(true).create_new(true);
+    // Removed only after this call opened it: a name `create_new` refused is
+    // somebody else's file.
+    let mut handle = dir.open_with(&temp_rel, &temp_options).map_err(|error| io_fault(&error))?;
+    let written = write_new(&mut handle, bytes).and_then(|()| handle.sync_all().map_err(|error| io_fault(&error)));
     drop(handle);
+    if let Err(fault) = written {
+        let _ = dir.remove_file(&temp_rel);
+        return Err(fault);
+    }
+    // The finished file takes `name` with a hard link, not an `exists` check
+    // ahead of a rename: two creates of the same name racing both see "not
+    // there yet" otherwise, and the second silently replaces the first. A link
+    // fails when the name is taken, so the loser gets an error instead of a
+    // chance to overwrite the winner. It also fails when `name` already exists
+    // as a symlink, dangling or not.
+    #[cfg(not(test))]
+    let linked = dir.hard_link(&temp_rel, &dir, &rel);
+    #[cfg(test)]
+    let linked = if tests::NO_HARD_LINKS.with(std::cell::Cell::get) {
+        Err(std::io::Error::other("no hard links"))
+    } else {
+        dir.hard_link(&temp_rel, &dir, &rel)
+    };
+    let _ = dir.remove_file(&temp_rel);
+    match linked {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(Fault::Refused(format!("{name} already exists"))),
+        // A filesystem without hard links (FAT, some network shares): the
+        // temporary copy is gone by now, and the file is created in place.
+        Err(_) => create_in_place(&dir, &rel, name, bytes)?,
+    }
     let meta = dir.metadata(&rel).map_err(|error| io_fault(&error))?;
     let id = child_path(folder, name);
     Ok(Entry {
@@ -432,9 +466,87 @@ fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, 
     })
 }
 
+/// Creates `rel` with `create_new` and writes `bytes` into it, for a
+/// filesystem where [`create`] cannot publish with a hard link. `create_new`
+/// opens and creates in one step, so a name that is taken, or that exists as
+/// a symlink, is refused instead of overwritten. When the write fails, the
+/// file this call created is removed while its handle is still open.
+fn create_in_place(dir: &Dir, rel: &Path, name: &str, bytes: &[u8]) -> Result<(), Fault> {
+    let mut create_options = OpenOptions::new();
+    create_options.write(true).create_new(true);
+    let mut handle = match dir.open_with(rel, &create_options) {
+        Ok(handle) => handle,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(Fault::Refused(format!("{name} already exists"))),
+        Err(error) => return Err(io_fault(&error)),
+    };
+    let written = write_new(&mut handle, bytes);
+    if written.is_err() {
+        let _ = dir.remove_file(rel);
+    }
+    written
+}
+
+/// Writes the bytes of a file [`create`] is making.
+fn write_new(handle: &mut cap_std::fs::File, bytes: &[u8]) -> Result<(), Fault> {
+    #[cfg(test)]
+    if tests::FAIL_CREATE_WRITE.with(|countdown| {
+        let left = countdown.get();
+        countdown.set(left.saturating_sub(1));
+        left == 1
+    }) {
+        let half = bytes.get(..bytes.len() / 2).unwrap_or_default();
+        handle.write_all(half).map_err(|error| io_fault(&error))?;
+        return Err(Fault::Unreachable("no space left on device".to_owned()));
+    }
+    handle.write_all(bytes).map_err(|error| io_fault(&error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// When set to n, the nth [`write_new`] call on this thread from now
+        /// writes half its bytes and fails. 0 turns it off.
+        pub(super) static FAIL_CREATE_WRITE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+        /// Makes [`create`] on this thread take the path for a filesystem
+        /// without hard links.
+        pub(super) static NO_HARD_LINKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[test]
+    fn without_hard_links_a_create_still_refuses_a_taken_name_and_cleans_up() {
+        let root = tempfile::tempdir().unwrap();
+        NO_HARD_LINKS.with(|off| off.set(true));
+        let made = create(root.path(), "", "Minutes.txt", b"first");
+        let taken = create(root.path(), "", "Minutes.txt", b"second");
+        // The temporary copy is written, then the in-place write fails.
+        FAIL_CREATE_WRITE.with(|fail| fail.set(2));
+        let failed = create(root.path(), "", "Agenda.txt", b"the whole agenda");
+        FAIL_CREATE_WRITE.with(|fail| fail.set(0));
+        NO_HARD_LINKS.with(|off| off.set(false));
+
+        assert_eq!(made.unwrap().size, Some(5));
+        assert!(matches!(taken, Err(Fault::Refused(_))));
+        assert!(matches!(failed, Err(Fault::Unreachable(_))));
+        let left: Vec<_> = std::fs::read_dir(root.path()).unwrap().map(|item| item.unwrap().file_name()).collect();
+        assert_eq!(left, ["Minutes.txt"], "only the finished file is left");
+        assert_eq!(std::fs::read(root.path().join("Minutes.txt")).unwrap(), b"first");
+    }
+
+    #[test]
+    fn a_create_whose_write_fails_leaves_no_file_behind() {
+        let root = tempfile::tempdir().unwrap();
+        FAIL_CREATE_WRITE.with(|fail| fail.set(1));
+        let failed = create(root.path(), "", "Minutes.txt", b"the whole document");
+        FAIL_CREATE_WRITE.with(|fail| fail.set(0));
+        assert!(matches!(failed, Err(Fault::Unreachable(_))));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0, "no partial or temporary file is left");
+
+        let retried = create(root.path(), "", "Minutes.txt", b"the whole document").unwrap();
+        assert_eq!(retried.size, Some(18));
+        assert_eq!(std::fs::read(root.path().join("Minutes.txt")).unwrap(), b"the whole document");
+    }
 
     #[test]
     fn a_parent_segment_cannot_walk_out_of_root() {
