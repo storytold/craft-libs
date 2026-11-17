@@ -283,7 +283,6 @@ fn take_shown(ctx: &Context, reg: &mut Registry, ended: impl Fn(Id) -> bool) -> 
 static QUEUED: AtomicUsize = AtomicUsize::new(0);
 
 /// Removes the session slots under `id` (all types). The only way a session slot goes.
-#[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "used by the pipeline (F3)"))]
 pub(crate) fn forget(ctx: &Context, id: Id) {
     forget_tier(ctx, id, SESSION);
 }

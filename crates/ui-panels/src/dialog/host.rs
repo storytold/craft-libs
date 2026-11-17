@@ -346,7 +346,8 @@ impl DialogHost {
     }
 
     /// Opens `dialog` on top. Its id goes on the stack now; the dialog shows from the next
-    /// [`run`](DialogHost::run). Returns the id.
+    /// [`run`](DialogHost::run), open: a dialog of the same id that closed itself before starts open again, since the
+    /// host forgets a removed dialog's open state (`overlay::end_stack_dialog`). Returns the id.
     pub fn open<D: StackDialog>(&mut self, dialog: D) -> DialogId {
         self.open_with_parent(Box::new(dialog), None)
     }

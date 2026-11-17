@@ -25,7 +25,7 @@ mod size;
 pub(crate) use size::EnvFacts;
 mod window;
 
-pub(crate) use open::unshown;
+pub(crate) use open::{forget_open, unshown};
 pub(crate) use placement::shown_placement;
 #[doc(hidden)]
 pub(crate) use regions::HeaderSlots;
