@@ -85,6 +85,52 @@ pub fn plain_text(s: &str) -> String {
     out
 }
 
+use crate::TICKS_PER_MS;
+use crate::time::{TICKS_PER_SECOND, Tick};
+
+/// How long the last cue of a format that gives only start times lasts: such a file says when a
+/// caption appears, and the next one ends it.
+pub(crate) const LAST_CUE: Tick = Tick(4 * TICKS_PER_SECOND);
+
+/// `start + LAST_CUE`, not overflowing.
+pub(crate) fn last_cue_end(start: Tick) -> Tick {
+    Tick(start.0.saturating_add(LAST_CUE.0))
+}
+
+/// Milliseconds as a time.
+pub(crate) fn ms_to_tick(ms: i64) -> Tick {
+    Tick(ms.saturating_mul(TICKS_PER_MS))
+}
+
+/// A time in whole milliseconds, rounded to the nearest; negative times read as zero.
+pub(crate) fn tick_to_ms(t: Tick) -> i64 {
+    let per = i128::from(TICKS_PER_MS);
+    ((i128::from(t.0.max(0)) + per / 2) / per) as i64
+}
+
+/// A decimal number of at most nine digits (so that times built from it cannot overflow).
+pub(crate) fn number(s: &str) -> Option<i64> {
+    if s.is_empty() || s.len() > 9 || !s.bytes().all(|b| b.is_ascii_digit()) { None } else { s.parse().ok() }
+}
+
+/// Plain text as cue text: a literal `&` or `<` becomes an entity so that it is not read as markup.
+pub(crate) fn escape_markup(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The cue's text as plain lines (tags gone, entities decoded, empty lines dropped).
+pub(crate) fn plain_lines(text: &str) -> Vec<String> {
+    text.lines().map(plain_text).map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

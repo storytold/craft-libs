@@ -86,6 +86,23 @@ fn latex_labels_in_a_row_are_read_in_linear_time() {
     assert_eq!(d.plain_text(craft_wordmodel::StoryRef::Body).replace('\u{FFFC}', ""), "First second third.");
 }
 
+/// Empty optional arguments in a row after a definition are skipped in linear time: the text after
+/// each `]` is read where it lies in the token, not copied, and a run of no-break spaces at the
+/// token's end is not read again for each argument.
+#[test]
+fn latex_optional_arguments_in_a_row_are_read_in_linear_time() {
+    let cases: [fn(usize) -> String; 3] = [
+        |n| "\\newcommand{\\foo}".to_string() + &"[]".repeat(n) + "x",
+        |n| "\\usepackage".to_string() + &"[] ".repeat(n) + "x",
+        |n| "\\newcommand{\\foo}".to_string() + &"[]".repeat(n) + &"\u{a0}".repeat(n) + "\n\nx",
+    ];
+    for make in cases {
+        assert_eq!(text(&make(3)), "x");
+        let (small, large) = (fastest(&make(50_000)), fastest(&make(200_000)));
+        assert!(large < small * 8 + Duration::from_millis(50), "{small:?} for 50,000, {large:?} for 200,000");
+    }
+}
+
 proptest::proptest! {
     #[test]
     fn fuzz_latex(s in "(\\\\(begin|end)\\{(itemize|tabular|verbatim|quote|center|x)\\}|\\\\[a-zA-Z]{1,8}\\*?|\\\\[^a-zA-Z]|[{}\\[\\]$&%~^_#]|\n\n|[a-z ]){0,150}") {
