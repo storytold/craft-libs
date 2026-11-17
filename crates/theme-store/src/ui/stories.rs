@@ -16,14 +16,14 @@ fn favorites() -> Vec<ThemeId> {
 
 #[story(AppearancePage<'static>, covers = [Default], drive = Drive::Never)]
 fn appearance_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let client = SuiteClient::memory();
+    let client = SuiteClient::memory().view();
     let favorites = favorites();
     AppearancePage::new(&client, Bind::bound(data.value("draft", SelectionChange::default()))).favorites(&favorites).show(ui).into()
 }
 
 #[story(AppearancePage<'static>, covers = [], drive = Drive::Never)]
 fn appearance_page_without_text_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let client = SuiteClient::memory();
+    let client = SuiteClient::memory().view();
     AppearancePage::new(&client, Bind::bound(data.value("plain", SelectionChange::default()))).text_size(false).system_dark(true).show(ui).into()
 }
 

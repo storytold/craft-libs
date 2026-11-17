@@ -225,6 +225,16 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         self.texts = OnceLock::new();
     }
 
+    /// The draft the window edits.
+    pub fn draft(&self) -> &SettingsDraft {
+        &self.draft
+    }
+
+    /// The draft the window edits, for the app to set whole (automation).
+    pub fn draft_mut(&mut self) -> &mut SettingsDraft {
+        &mut self.draft
+    }
+
     /// The saved value the window started from (or last applied).
     pub fn saved(&self) -> &T {
         &self.saved

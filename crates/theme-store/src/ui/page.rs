@@ -1,7 +1,9 @@
 //! `AppearancePage`: the Appearance group of Preferences over the suite's shared selection.
 
 use super::chip::ThemeChip;
-use crate::{SelectionChange, SuiteClient};
+use crate::{SelectionChange, SuiteView};
+#[cfg(doc)]
+use crate::SuiteClient;
 use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Size, TextSize, ThemeDef, ThemeId, TypeRole, Variants, variant::Tone};
 use craft_ui::choice::RadioGroup;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
@@ -74,14 +76,14 @@ impl Outcome for AppearancePageOutput {
 /// (the [`TextSize`] steps), Contrast and Motion (Sync with system, Standard or Full, High or Reduced).
 ///
 /// The page edits the bound draft, a [`SelectionChange`] the Preferences model keeps; the chips and lists show
-/// [`SuiteClient::shown`] with the draft applied. Nothing reaches the suite until the window applies: the model's
+/// [`SuiteClient::shown`] (through the [`SuiteView`]) with the draft applied. Nothing reaches the suite until the window applies: the model's
 /// `apply` calls `client.change(draft)`, its `cancel` clears the draft. Each chip row is one radio group: one Tab
 /// stop, arrows move, Space, Enter or a click picks; a chip's context menu (the Menu key and Shift+F10 open it) has Add to
 /// Favorites / Remove from Favorites, the keyboard path to the star.
 #[must_use = "show the page with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct AppearancePage<'a> {
-    client: &'a SuiteClient,
+    suite: &'a SuiteView,
     draft: Bind<'a, SelectionChange>,
     /// The themes marked with a filled star.
     #[prop]
@@ -95,23 +97,23 @@ pub struct AppearancePage<'a> {
 }
 
 impl<'a> AppearancePage<'a> {
-    /// The page over the suite `client`, editing `draft`.
-    pub fn new(client: &'a SuiteClient, draft: Bind<'a, SelectionChange>) -> Self {
-        AppearancePage { client, draft, favorites: &[], text_size: true, system_dark: false }
+    /// The page over the suite `suite` (from [`SuiteClient::view`]), editing `draft`.
+    pub fn new(suite: &'a SuiteView, draft: Bind<'a, SelectionChange>) -> Self {
+        AppearancePage { suite, draft, favorites: &[], text_size: true, system_dark: false }
     }
 
     /// Shows the page.
     pub fn show(self, ui: &mut Ui) -> AppearancePageOutput {
-        let AppearancePage { client, draft, favorites, text_size, system_dark } = self;
+        let AppearancePage { suite, draft, favorites, text_size, system_dark } = self;
         let words = Env::of(ui).words::<AppearanceWords>();
-        let themes = themes(client);
+        let themes = themes(suite);
         let mut held = Held::new(draft);
         let mut toggled = None;
         let mut changed = false;
         let mut shown = FieldGroup::new(words.appearance.clone()).show(ui, |ui, cx| {
             let before = held.read(cx).unwrap_or_default();
             let mut now = before.clone();
-            let shown = now.applied_to(&client.shown());
+            let shown = now.applied_to(&suite.shown);
             let mode = shown.mode.unwrap_or(ModeChoice::System);
             let dark_active = match mode {
                 ModeChoice::Light => false,
@@ -180,8 +182,8 @@ impl<'a> AppearancePage<'a> {
 }
 
 /// The built-in themes, then the library's.
-fn themes(client: &SuiteClient) -> Vec<ThemeDef> {
-    let library = client.snapshot().index.iter().map(|entry| &entry.theme);
+fn themes(suite: &SuiteView) -> Vec<ThemeDef> {
+    let library = suite.snapshot.index.iter().map(|entry| &entry.theme);
     craft_theme::builtins().iter().chain(library).cloned().collect()
 }
 

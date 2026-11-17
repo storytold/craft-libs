@@ -50,7 +50,7 @@ pub mod ui;
 mod watch;
 
 pub use backend::{FileStamp, LibraryFile};
-pub use client::SuiteClient;
+pub use client::{SuiteClient, SuiteView};
 /// Theme files: [`format::parse`], [`format::write`] and their errors, which
 /// [`StoreError::Format`] carries.
 pub use craft_theme::format;
