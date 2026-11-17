@@ -544,7 +544,7 @@ impl LiquifyWorkspace {
                         .fill()
                         .show(ui, |ui, _| {
                             let rail =
-                                ToolRail::new(words.tools.clone(), &slots, &work.edit.settings.tool, &state.last_used).show_rail(ui, |_, _| {});
+                                ToolRail::new(words.tools.clone(), &slots, &work.edit.settings.tool, &state.last_used).show_column(ui, |_, _| {});
                             if let Some(next) = rail.last_used {
                                 state.last_used = next;
                             }

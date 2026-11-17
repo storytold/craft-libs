@@ -590,7 +590,7 @@ impl SelectMaskWorkspace {
                     let preview = falloff.as_ref().and_then(|falloff| work.canvas.resize().preview(falloff));
 
                     let shown = Row::new().fill().show(ui, |ui, _| {
-                        let rail = ToolRail::new(words.tools.clone(), &slots, &work.tool, &work.last_used).show_rail(ui, |_, _| {});
+                        let rail = ToolRail::new(words.tools.clone(), &slots, &work.tool, &work.last_used).show_column(ui, |_, _| {});
                         if let Some(next) = rail.last_used {
                             work.last_used = next;
                         }

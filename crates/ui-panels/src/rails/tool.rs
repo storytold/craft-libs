@@ -273,9 +273,21 @@ impl<T: Value + 'static> Draw<'_, T> {
 impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// Shows the rail in the width `ui` has left. `footer` draws under the last slot (colour chips, Quick Mask,
     /// Screen Mode); it stays in view when the room is short.
-    pub fn show_rail(mut self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
+    pub fn show_rail(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
         let room = ui.available_width();
-        let draw = self.prepare(ui.ctx(), room, footer);
+        self.show_within(ui, room, footer)
+    }
+
+    /// Shows the rail one column wide, for a host that lays it at the start of a row (the full-window workspaces'
+    /// tool strips): the width `ui` has left belongs to what follows it in the row.
+    pub fn show_column(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
+        let one = Self::dock_grid(ui.ctx(), 1).first;
+        self.show_within(ui, one, footer)
+    }
+
+    /// Shows the rail laid out `width` wide.
+    fn show_within(mut self, ui: &mut Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
+        let draw = self.prepare(ui.ctx(), width, footer);
         let last = remembered(draw.slots, draw.current, draw.last_used);
         let mut collected = Collected::default();
         let shown = self.show(ui, |ui, cx| draw.run(ui, cx, &mut collected));

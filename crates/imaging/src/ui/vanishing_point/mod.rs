@@ -464,7 +464,7 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                 let shown = Row::new()
                     .fill()
                     .show(ui, |ui, _| {
-                        let rail = ToolRail::new(words.tools.clone(), &slots, &current, &state.last_used).show_rail(ui, |_, _| {});
+                        let rail = ToolRail::new(words.tools.clone(), &slots, &current, &state.last_used).show_column(ui, |_, _| {});
                         if let Some(next) = rail.last_used {
                             state.last_used = next;
                         }

@@ -369,7 +369,7 @@ impl FullWindowWorkspace for WideAngleWorkspace {
                 }
 
                 Row::new().fill().show(ui, |ui, _| {
-                    let rail = ToolRail::new(words.tools.clone(), &slots, &body.tool, &body.last_used).show_rail(ui, |_, _| {});
+                    let rail = ToolRail::new(words.tools.clone(), &slots, &body.tool, &body.last_used).show_column(ui, |_, _| {});
                     next = rail.select.or(next);
                     if let Some(last_used) = rail.last_used {
                         body.last_used = last_used;
