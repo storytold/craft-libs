@@ -118,3 +118,9 @@ pub fn part_rect_of_node(
 pub fn press_captured(ctx: &egui::Context) -> bool {
     crate::runtime::pointer::press_captured(ctx)
 }
+
+/// How many times the running viewport's latest pass resolved what lies under a point: once for the hover, and again
+/// only for a press at another point or with other egui targets. For count trials.
+pub fn resolutions(ctx: &egui::Context) -> u32 {
+    crate::runtime::pointer::resolutions(ctx)
+}

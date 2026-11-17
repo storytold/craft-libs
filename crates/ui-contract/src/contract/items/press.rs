@@ -222,7 +222,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && start.button == craft_behavior::PointerButton::Primary
                     && crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id))
                         .hover
-                        .is_none_or(|hit| hit.part.is_none() || !hit.sense.takes_press())
+                        .find(|hit| hit.part.is_some() && hit.sense.takes_press())
+                        .is_none()
                     && let Some(row) = layout.hit(local(pos), offset).filter(|&row| self.source.enabled(row) && layout.shown(row))
                 {
                     let request = self.menu_request(layout, Placement { rect, offset, rtl }, row, local(pos));
@@ -280,7 +281,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
         let menu_at = if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()
-            && hover.is_none_or(|hit| hit.part.is_none() || !hit.sense.takes_press() || hit.sense.contains(Sense::PICKS_ITEM))
+            && hover.find(|hit| hit.part.is_some() && hit.sense.takes_press() && !hit.sense.contains(Sense::PICKS_ITEM)).is_none()
         {
             released.pos.filter(|pos| rect.contains(xf.map_or(*pos, |map| map.to_layer(*pos))))
         } else {
@@ -303,7 +304,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             self.move_lead(at, LeadSource::Pointer);
             let mut request = self.menu_request(layout, Placement { rect, offset, rtl }, at, local(pos));
-            request.part = hover.filter(|hit| hit.owner != cx.core.id).and_then(|hit| hit.part);
+            request.part = hover.find(|hit| hit.owner != cx.core.id).and_then(|hit| hit.part);
             self.ask_menu(request);
         }
         self.slow_click_due(comp, cx);
@@ -364,7 +365,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let on_part =
                     |hit: Option<crate::primitives::sensing::Hit>| hit.is_some_and(|hit| hit.owner == opener.item && hit.part == Some(opener.part));
                 let view = response::MemberView {
-                    hovered: on_part(outcome.hover),
+                    hovered: outcome.hover.find(|hit| on_part(Some(*hit))).is_some(),
                     press: response::PressView {
                         pressed: on_part(outcome.target) && outcome.phase.is_some_and(|phase| phase.button_down()),
                         clicked: on_part(outcome.activated),

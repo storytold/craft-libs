@@ -75,7 +75,7 @@ pub use navigate::{
     Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan,
 };
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
-pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewTarget, ZoomTool};
+pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewRequest, ViewTarget, ZoomTool};
 pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 
 mod rulers;
@@ -177,6 +177,13 @@ pub struct Canvas<'a> {
     /// disabled for this canvas.
     #[prop]
     layer_bounds: Option<LayerBounds<'a>>,
+    /// View commands the app asks of this canvas's view (a menu row or an action step it runs, a new document's fit):
+    /// the canvas runs them in this pass, in order and before the ones fired to it, as it runs those. A
+    /// [`ViewRequest::Command`] eases as a fired command does; a [`ViewRequest::Place`] that moves the view makes the
+    /// pass's view jump. A measuring run runs none. The app asks for them until a pass that is not a measuring run
+    /// showed the canvas, then drops them.
+    #[prop]
+    queued: &'a [ViewRequest],
     /// The user's navigation options: how the wheel and a pinch move the view ([`WheelNavigation`]), whether a zoom
     /// eases (Animated Zoom) and whether the view may leave the document (Overscroll).
     #[prop]
@@ -227,6 +234,17 @@ pub struct Canvas<'a> {
     picture: Option<crate::primitives::PaintSlot>,
 }
 
+/// How a pass's view commands move the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommandMotion {
+    /// No command zoomed or placed it (a turn).
+    Keep,
+    /// A command zoomed it: the zoom eases under Animated Zoom.
+    Ease,
+    /// The app placed it: the view jumps.
+    Jump,
+}
+
 /// A canvas's view in one pass.
 #[derive(Clone, Copy, Debug)]
 struct Settled {
@@ -252,6 +270,7 @@ impl<'a> Canvas<'a> {
             given: None,
             document: None,
             layer_bounds: None,
+            queued: &[],
             navigation: NavigationOptions::default(),
             show_rulers: false,
             keys_to_body: false,
@@ -321,9 +340,9 @@ impl<'a> Canvas<'a> {
         self
     }
 
-    /// Publishes the view commands' state for this canvas and applies the ones routed to it, in order, to `view`:
-    /// the view they ask for, and whether they zoom.
-    fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, bool)> {
+    /// Publishes the view commands' state for this canvas and applies the ones the app queued, then the ones routed to
+    /// it, in order, to `view`: the view they ask for, and how the pass moves to it.
+    fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, CommandMotion)> {
         self.props.command_scope?;
         let pixels_per_point = cx.env.scale().0;
         let target = view.zip(self.document);
@@ -332,11 +351,27 @@ impl<'a> Canvas<'a> {
             cx.publish(command, CommandState::new().enabled(enabled));
         }
         let (view, document) = target?;
-        let (mut next, mut zoomed) = (view, false);
+        let (mut next, mut zoomed, mut placed) = (view, false, false);
+        let queued = if measure::active(&cx.core.ctx) { &[][..] } else { self.queued };
+        for request in queued {
+            let command = request.command();
+            let changed = command.apply(&mut next, &document, self.layer_bounds, pixels_per_point);
+            match request {
+                ViewRequest::Command(_) => zoomed |= changed && command.zooms(),
+                ViewRequest::Place(_) => placed |= changed,
+            }
+        }
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
             zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point) && command.zooms();
         }
-        (next != view).then_some((next, zoomed))
+        let motion = if placed {
+            CommandMotion::Jump
+        } else if zoomed {
+            CommandMotion::Ease
+        } else {
+            CommandMotion::Keep
+        };
+        (next != view).then_some((next, motion))
     }
 
     /// The document's size, from the target the app gave.
@@ -419,12 +454,17 @@ impl<'a> Canvas<'a> {
             steer = Some(Steer::Stop);
         }
         let before = view;
-        if let Some((next, zoomed)) = self.view_commands(cx, Some(view)) {
+        if let Some((next, motion)) = self.view_commands(cx, Some(view)) {
             view = next;
-            if zoomed && self.navigation.animated_zoom {
-                // A zoom that keeps the centre eases about it; one that moves the centre (Fit on Screen) eases freely.
-                let anchor = (next.center == before.center).then_some((before.center, before.rect.center()));
-                steer = Some(Steer::Ease { from: before, anchor });
+            match motion {
+                CommandMotion::Ease if self.navigation.animated_zoom => {
+                    // A zoom that keeps the centre eases about it; one that moves the centre (Fit on Screen) eases
+                    // freely.
+                    let anchor = (next.center == before.center).then_some((before.center, before.rect.center()));
+                    steer = Some(Steer::Ease { from: before, anchor });
+                }
+                CommandMotion::Jump => steer = Some(Steer::Stop),
+                _ => {}
             }
         }
         let target = clamped(view, self.document_size(), &self.navigation);

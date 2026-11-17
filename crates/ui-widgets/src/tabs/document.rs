@@ -242,7 +242,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         let hovered = std::cell::RefCell::new(None);
         let show_strip = |ui: &mut Ui, strip: TabStrip<'_, D>| {
             strip.show_items(ui, &source, &mut |key, cx| {
-                if cx.row.hovered {
+                if cx.row.pointer_over {
                     *hovered.borrow_mut() = Some(key.clone());
                 }
                 let Some(document) = tabs.iter().find(|tab| &tab.id == key) else {

@@ -431,6 +431,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let secondary = crate::runtime::pointer::frame(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
     let shown = text_edit::show(input.ui, edit);
+    crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
     if let Some((caret, anchor)) = kept
         && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
     {
@@ -541,6 +542,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             baseline: None,
         },
     );
+    crate::runtime::pointer::record_text_widget(&ctx, widget, owner);
     if crate::runtime::egui::access::enabled(&ctx, widget) {
         crate::runtime::egui::access::fold_widget(&ctx, widget, owner);
     }

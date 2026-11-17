@@ -616,8 +616,11 @@ pub struct RowState {
     pub striped: bool,
     /// A tree row whose children show.
     pub open: bool,
-    /// The pointer is over the row.
+    /// The pointer is over the row and a press there would reach it.
     pub hovered: bool,
+    /// The pointer is over the row, whether or not a press there would reach it: a drop target reads it while another
+    /// component holds the press.
+    pub pointer_over: bool,
     /// The collection holds a press on the row, which the item shows on the part it acts on.
     pub pressed: Option<RowPressed>,
     /// The collection asked for this row's menu and a menu hung from the collection is open: the row keeps its menu

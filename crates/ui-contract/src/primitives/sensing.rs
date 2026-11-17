@@ -1,8 +1,9 @@
 //! The sensing core (1.9, 8.2, 8.3): the arena's registrations, the press lifecycle over last pass's shapes, and
 //! the part results and member responses built from them.
 //!
-//! A component's root senses through one egui widget; its parts and its members have none. The root resolves
-//! hover and presses itself against the shapes registered last pass, so the winner never depends on show order.
+//! A component's root senses through one egui widget; its parts and its members have none. What lies under the
+//! pointer is resolved once per point for the whole viewport, over the shapes registered last pass (`pointer::Under`),
+//! and every root reads its hover and its press from that answer, so the winner never depends on show order.
 //! Every root runs the lifecycle, arena root or not: a leaf is an arena of its own id with no members.
 
 use crate::runtime::edit::{RemovalWatch, gesture_key};
@@ -15,8 +16,7 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::pointer;
 use crate::runtime::pointer::PassPointer;
 use craft_behavior::{
-    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerSample, PressMachine, PressPhase, PressState, ResolveFor, Sense,
-    Shape, resolve_mapped,
+    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerSample, PressMachine, PressPhase, PressState, Sense, Shape, Winner,
 };
 use craft_keymap::Mods;
 use craft_theme::Flags;
@@ -173,16 +173,11 @@ impl MemberDecl {
     }
 }
 
-/// What a root registers at step 8: its rect and its own sense.
+/// What a root registers at step 8: its id and rect.
 #[derive(Clone, Copy, Debug)]
 struct RootInfo {
     id: Id,
     rect: Rect,
-    /// The part of `rect` inside the root's clip: where its own background lies.
-    shown: Rect,
-    /// The root's clip: where its parts and members can be seen.
-    clip: Rect,
-    own_sense: Sense,
 }
 
 /// A shape's owner and, for a part, its key.
@@ -200,11 +195,43 @@ impl Hit {
     }
 }
 
+impl From<Winner<Id>> for Hit {
+    fn from(winner: Winner<Id>) -> Self {
+        Hit { owner: winner.owner, part: winner.part, sense: winner.sense, local: winner.local }
+    }
+}
+
+/// The arena's shapes that show hover this pass, from what lies under the pointer (`pointer::Under`): the shape a
+/// press at the pointer goes to, and the arena's shape that hovers beside it (`Under::hover_top`).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Hovered {
+    press: Option<Hit>,
+    only: Option<Hit>,
+}
+
+impl Hovered {
+    /// The hovered shape `pick` takes, the press's first.
+    pub(crate) fn find(&self, pick: impl Fn(&Hit) -> bool) -> Option<Hit> {
+        self.press.into_iter().chain(self.only).find(|hit| pick(hit))
+    }
+
+    /// Whether any shape of the arena shows hover.
+    pub(crate) fn any(&self) -> bool {
+        self.press.is_some() || self.only.is_some()
+    }
+
+    fn filter(self, keep: impl Fn(&Hit) -> bool) -> Self {
+        Hovered { press: self.press.filter(&keep), only: self.only.filter(&keep) }
+    }
+}
+
 /// What the arena resolved this pass; the root computes it once, members and the root read it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Outcome {
     pass: u64,
-    pub hover: Option<Hit>,
+    pub hover: Hovered,
+    /// A shape of the arena lies under the pointer, on top or not.
+    pub contains: bool,
     /// The press winner while a press is open, or the one released or cancelled this pass.
     pub target: Option<Hit>,
     pub phase: Option<PressPhase>,
@@ -225,7 +252,6 @@ struct ArenaState {
     /// The stack position of the root's own `over` parts: above the members its body showed and below the ones
     /// `paint_over` shows (`place_over_widgets`). Above everything until the owner has placed them.
     own_over_at: u32,
-    previous_own_over_at: u32,
     /// The senses and bounds of the members that joined this pass and last pass.
     union_sense: Sense,
     previous_union_sense: Sense,
@@ -278,7 +304,6 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
         state.members.clear();
         std::mem::swap(&mut state.previous_own, &mut state.own);
         state.own.clear();
-        state.previous_own_over_at = state.own_over_at;
         state.own_over_at = u32::MAX;
         state.previous_union_sense = std::mem::take(&mut state.union_sense);
         state.pass = pass_nr;
@@ -332,23 +357,6 @@ fn background_shape(root: Id, rect: Rect, sense: Sense) -> Shape<Id> {
     Shape::new(rect.into(), sense, root, None, HitPriority::new(HitLevel::Background, 0), 0)
 }
 
-/// The shapes of last pass in resolution order: the root's own background over its shown rect, which hovers and takes
-/// a press when the root senses one itself, own parts, then members in show order, each member's `over` parts above
-/// the members its body showed, and the own `over` parts at their position among them. `members` is false while the
-/// root's host withholds its members (`pointer::withhold_members`).
-fn candidates(state: &ArenaState, members: bool, target: f32) -> Vec<Shape<Id>> {
-    let root = state.root.map_or(Id::NULL, |root| root.id);
-    let background = state.root.map(|info| background_shape(info.id, info.shown, info.own_sense | Sense::HOVER));
-    let mut shapes: Vec<Shape<Id>> = background.into_iter().chain(own_shapes(&state.previous_own, root, target)).collect();
-    let shown = if members { state.previous.as_slice() } else { &[] };
-    for (at, member) in shown.iter().enumerate() {
-        shapes.extend(member_shapes(member, member_position(at), target));
-        shapes.extend(member_over_shapes(member, target));
-    }
-    shapes.extend(own_over_shapes(&state.previous_own, root, state.previous_own_over_at, target));
-    shapes
-}
-
 /// The members of `arena` in `viewport` as of its latest run: while the root's run of this pass is under way, the
 /// members of last pass and those registered so far; empty for an arena that has not run. A read creates no arena.
 pub(crate) fn members(ctx: &Context, viewport: ViewportId, arena: ArenaId) -> SmallVec<[Id; 8]> {
@@ -360,18 +368,6 @@ pub(crate) fn members(ctx: &Context, viewport: ViewportId, arena: ArenaId) -> Sm
             ids.extend(state.previous.iter().map(|member| member.id).filter(|id| !state.members.iter().any(|member| member.id == *id)));
         }
         ids
-    })
-}
-
-/// The clip of the arena `component` is in (its own, or the one of the root it is a member of), as that root
-/// registered it in its latest run in the current viewport: where its parts and members can be seen. `None` for a
-/// component in no arena that has run.
-#[cfg(feature = "testing")]
-pub(crate) fn arena_clip(ctx: &Context, component: Id) -> Option<Rect> {
-    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| {
-        let joined = |state: &ArenaState| state.members.iter().chain(&state.previous).any(|member| member.id == component);
-        let state = arenas.by_root.get(&component).or_else(|| arenas.by_root.values().find(|state| joined(state)))?;
-        state.root.map(|info| info.clip)
     })
 }
 
@@ -429,7 +425,7 @@ fn journal_root(ctx: &Context, arena: ArenaId, info: RootInfo, own: &[PartDecl],
     });
 }
 
-/// A replayed root's step-8 registration: its own parts, rect, clip, widgets, layer and sense, with no press run.
+/// A replayed root's step-8 registration: its own parts, rect, widgets, layer and sense, with no press run.
 fn register_root_again(ctx: &Context, arena: ArenaId, registration: RootRegistration) {
     journal_root(ctx, arena, registration.info, &registration.own, &registration.widgets, (registration.layer, registration.sense));
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
@@ -604,9 +600,11 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         widgets.push(id);
     }
     widgets.extend(over_parts(spec.own).map(|part| over_widget(spec.id, part)));
-    let background = (!spec.own_sense.is_empty()).then(|| background_shape(spec.id, spec.rect, spec.own_sense));
+    // The root's background lies below its parts and members and hovers wherever nothing of the root above it takes
+    // the pointer; it takes a press when the root senses one itself.
+    let background = background_shape(spec.id, spec.rect, spec.own_sense | Sense::HOVER);
     pointer::record_widgets_in(ctx, read.viewport, layer, spec.id, &widgets, sense.contains(Sense::CLICK));
-    let info = RootInfo { id: spec.id, rect: spec.rect, shown, clip, own_sense: spec.own_sense };
+    let info = RootInfo { id: spec.id, rect: spec.rect };
     journal_root(ctx, arena, info, spec.own, &widgets, (layer, sense));
     // The parts last pass registered, which this pass's results read.
     let known = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
@@ -623,12 +621,19 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         }
         known_in(state, spec.id)
     });
-    pointer::record_shapes_in(ctx, read.viewport, layer, spec.id, clip, own_shapes(spec.own, spec.id, read.target()).chain(background));
+    pointer::record_shapes_in(
+        ctx,
+        read.viewport,
+        layer,
+        spec.id,
+        clip,
+        std::iter::once(background).chain(own_shapes(spec.own, spec.id, read.target())),
+    );
     let mut response = response;
     let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled, sense);
-    // The root is hovered while the arena's hover resolve finds anything under the pointer: its background, its parts
-    // or its members, whichever egui widget lies on top there.
-    response::hover_flags(&mut response, outcome.hover.is_some());
+    // The root is hovered while a shape of its arena shows hover (`pointer::Under`): its background, a part or a member;
+    // it contains the pointer while any shape of the arena lies under it.
+    response::hover_flags(&mut response, outcome.hover.any(), outcome.contains);
     // The root's response reports the presses on the root and on every part of its own, whichever egui widget took
     // them; the part results say which part. A member reports in its own response.
     let on_root = |hit: &Hit| hit.owner == spec.id;
@@ -791,7 +796,7 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
 
 fn member_view(outcome: &Outcome, id: Id, local: bool, pointer_pos: Option<Pos2>) -> MemberView {
     MemberView {
-        hovered: outcome.hover.is_some_and(|hit| hit.owner == id),
+        hovered: outcome.hover.find(|hit| hit.owner == id).is_some(),
         press: press_view(outcome, |hit| hit.owner == id, |hit| hit.owner == id && hit.part.is_none()),
         pointer: pointer_pos.map(|at| if local { outcome.xf.map_or(at, |map| map.to_layer(at)) } else { at }),
     }
@@ -809,34 +814,6 @@ fn press_view(outcome: &Outcome, holds: impl Fn(&Hit) -> bool, clicks: impl Fn(&
     }
 }
 
-/// The resolve rule over last pass's shapes at `point`.
-fn resolve_in(state: &ArenaState, members: bool, xf: Option<LayerMap>, point: Pos2, kind: ResolveFor, target: f32) -> Option<Hit> {
-    let shapes = candidates(state, members, target);
-    let won = resolve_mapped(&shapes, point, kind, |p| xf.map_or(p, |map| map.to_layer(p)));
-    won.map(|winner| Hit { owner: winner.owner, part: winner.part, sense: winner.sense, local: winner.local })
-}
-
-/// The press's winner at `point`. Past the root's clip, where only automation presses (a document point an agent
-/// names off the window), the winner takes the press only when some of it shows inside the clip: a part the clip hides
-/// wholly (a handle past the window's edge) is not pressed, and nothing under it is either.
-fn resolve_press_in(state: &ArenaState, members: bool, xf: Option<LayerMap>, point: Pos2, target: f32) -> Option<Hit> {
-    let shapes = candidates(state, members, target);
-    let won = resolve_mapped(&shapes, point, ResolveFor::Press, |p| xf.map_or(p, |map| map.to_layer(p)))?;
-    let clip = state.root.map_or(Rect::NOTHING, |root| root.clip);
-    if !clip.contains(point) {
-        let shape = &shapes[won.index];
-        let bounds = shape.shape.bounds();
-        let bounds = match xf.filter(|_| shape.local) {
-            Some(map) => Rect::from_two_pos(map.to_screen(bounds.min), map.to_screen(bounds.max)),
-            None => bounds,
-        };
-        if !bounds.intersects(clip) {
-            return None;
-        }
-    }
-    Some(Hit { owner: won.owner, part: won.part, sense: won.sense, local: won.local })
-}
-
 /// Runs the press lifecycle for this pass, once: later calls in the pass return the same outcome. A repeated
 /// pass has no events, so phases hold and a release, click or activation does not repeat. `union_sense` is
 /// what the root's egui widgets sense.
@@ -847,10 +824,10 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         return outcome;
     }
     let pass_pointer = &*read.pointer;
-    let (slop, delta, pos, buttons, target) =
-        pass_pointer.frame.as_ref().map_or((0.0, egui::Vec2::ZERO, None, craft_behavior::Buttons::empty(), 0.0), |frame| {
-            (frame.slop, frame.delta, frame.pos, frame.buttons, frame.target)
-        });
+    let (slop, delta, pos, buttons) = pass_pointer
+        .frame
+        .as_ref()
+        .map_or((0.0, egui::Vec2::ZERO, None, craft_behavior::Buttons::empty()), |frame| (frame.slop, frame.delta, frame.pos, frame.buttons));
     let (body_layer, host_cancel) = with_arena(ctx, arena, pass_nr, |state| (state.layer, std::mem::take(&mut state.host_cancel)));
     let cancel = if enabled {
         pointer::cancel_of_pass(ctx).or(host_cancel.then_some(craft_behavior::PressCancel::Host))
@@ -858,12 +835,19 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         Some(craft_behavior::PressCancel::Disabled)
     };
     let xf = body_layer.and_then(|layer| areas::layer_map(ctx, layer));
-    // Hover needs the root's layer on top under the pointer, or egui's layer cover (a popup) would be ignored.
-    let top = pass_pointer.hover.and_then(|at| areas::layer_at(ctx, at));
-    let hover_layer_ok = top.is_some_and(|top| top == layer || Some(top) == body_layer);
-    let members = !pointer::members_withheld(ctx, read.viewport, pass_nr, arena.0);
+    // What the viewport's one resolution of the pointer puts on this arena (`pointer::Under`): hover shows where a press
+    // would go.
+    let (under, contains, captured) = pointer::with_hover(ctx, read.viewport, |under, captured| {
+        let hovered = under.map_or(Hovered::default(), |under| Hovered {
+            press: under.press.hit_of(arena.0).map(Hit::from),
+            only: under.hover_top_of(arena.0).map(Hit::from),
+        });
+        (hovered, under.is_some_and(|under| under.contains(arena.0)), captured)
+    });
     let (mut cancelled, mut release_held) = (false, false);
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
+        // A press open when the pass began, on another arena, takes the hover from this one.
+        let others_press = captured && state.machine.target().is_none();
         let pos = pos.unwrap_or(Pos2::ZERO);
         let input = PassInput::new(
             &pass_pointer.events,
@@ -889,7 +873,8 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             } else {
                 true
             };
-            let won_kinds = root.map_or(Sense::empty(), |own| pointer::press_winners(ctx, at, targets).senses_of(own));
+            let winners = pointer::press_winners(ctx, at, targets);
+            let won_kinds = root.map_or(Sense::empty(), |own| winners.senses_of(own));
             let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted) && !won_kinds.is_empty();
             if !enabled || !allowed {
                 return None;
@@ -897,7 +882,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             // egui gives no click target where a drag-only widget is on top (a resize grip over a layer's or a
             // window's edge): a root under a raw egui one keeps its click there, but a drag is that widget's.
             let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| pointer::foreign_target(ctx, id));
-            let won = resolve_press_in(state, members, xf, at, target);
+            let won = root.and_then(|own| winners.hit_of(own)).map(Hit::from);
             // The kinds of press another root won are not this one's.
             let lost = (Sense::CLICK | Sense::DRAG).difference(won_kinds);
             won.map(|hit| {
@@ -910,14 +895,14 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         let open = machine.target();
         let dragging = step.dragging;
         state.machine = machine;
-        let under = pass_pointer.hover.filter(|_| hover_layer_ok).and_then(|at| resolve_in(state, members, xf, at, ResolveFor::Hover, target));
         // While a press is open only its target hovers, and only while the pointer is over it or dragging.
         let hover = match open {
-            Some(target) if dragging => Some(target),
-            Some(target) => under.filter(|under| under.same(&target)),
+            Some(target) if dragging => Hovered { press: Some(target), only: None },
+            Some(target) => under.filter(|hit| hit.same(&target)),
+            None if others_press => Hovered::default(),
             None => under,
         };
-        let outcome = Outcome { pass: pass_nr, hover, target: step.target, phase: step.phase, dragging, activated: step.activated, xf };
+        let outcome = Outcome { pass: pass_nr, hover, contains, target: step.target, phase: step.phase, dragging, activated: step.activated, xf };
         state.outcome = Some(outcome);
         outcome
     });
@@ -1028,7 +1013,7 @@ fn part_press_in(
     let is_known = known.contains(&(part.key, part.index));
     let mine = |hit: &Hit| hit.owner == owner && hit.part == Some(part);
     let won = outcome.target.filter(|target| is_known && mine(target));
-    let hover = outcome.hover.filter(|hit| is_known && mine(hit));
+    let hover = outcome.hover.find(|hit| is_known && mine(hit));
     let hovered = hover.is_some();
     let hover_pos = hover.zip(at).map(|(hit, at)| if hit.local { outcome.xf.map_or(at, |map| map.to_layer(at)) } else { at });
     let phase = match (won, outcome.phase) {
@@ -1046,7 +1031,7 @@ fn shape_press_in(outcome: &Outcome, mods: Mods, sample: Option<PointerSample>, 
     let won = outcome.target.filter(|target| target.owner == owner && target.part.is_none());
     let phase = match (won, outcome.phase) {
         (Some(target), Some(phase)) => in_owner_space(phase, &target, outcome.xf),
-        _ if outcome.hover.is_some_and(|hit| hit.owner == owner && hit.part.is_none()) => PressPhase::Hover,
+        _ if outcome.hover.find(|hit| hit.owner == owner && hit.part.is_none()).is_some() => PressPhase::Hover,
         _ => PressPhase::Idle,
     };
     let captured = won.is_some() && phase.is_drag();

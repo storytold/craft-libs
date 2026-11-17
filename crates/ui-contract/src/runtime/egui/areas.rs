@@ -229,6 +229,9 @@ pub(crate) fn show_layer(ctx: &Context, spec: &LayerSpec, body: impl FnOnce(&mut
         .constrain(false)
         .interactable(spec.interactable)
         .show(ctx, body);
+    // The `Area`'s own widget senses a click over the whole layer, beneath the layer's widgets: it stands for none of
+    // the layer's components.
+    crate::runtime::pointer::record_layer_widget(ctx, shown.response.id);
     LayerShown { rect: shown.response.rect, layer: shown.response.layer_id }
 }
 
