@@ -321,3 +321,46 @@ fn the_strip_reports_the_tab_under_the_pointer_while_another_root_holds_the_pres
     fixture.frame(vec![]);
     assert_eq!(*seen.borrow(), None, "the empty room has no tab");
 }
+
+const PANELS: [&str; 6] = ["Layers", "Channels", "Properties", "Adjustments", "History", "Navigator"];
+
+/// The widths of the panel tabs a strip shows in a room `room` wide, by title, with the second panel shown.
+fn panel_widths(room: f32) -> Vec<(&'static str, f32)> {
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        ui.set_max_width(room);
+        let keys = [0_usize, 1, 2, 3, 4, 5];
+        let source = keyed(&keys, |key: &usize| *key);
+        TabStrip::new("Panels").kind(TabKind::Panel).shown(1).show_items(ui, &source, &mut |key, _| Tab::new(PANELS[*key]));
+    };
+    frames.idle(3, &mut show);
+    let tree = frames.tree();
+    PANELS.iter().filter_map(|name| tab_rects(&tree, name).first().map(|rect| (*name, rect.width()))).collect()
+}
+
+/// Panel tabs shrink around the shown tab: it keeps its whole title while the others keep their first letters, and
+/// tabs overflow from the end only when even those do not fit.
+#[trial]
+fn panel_tabs_keep_the_shown_tab_whole_and_overflow_from_the_end() {
+    let wide = panel_widths(2000.0);
+    assert_eq!(wide.len(), PANELS.len(), "every tab fits in a wide room");
+    let natural_shown = wide[1].1;
+    let mut fewer = wide.len();
+    for room in [700.0, 500.0, 400.0, 300.0, 220.0] {
+        let shown = panel_widths(room);
+        assert!(!shown.is_empty() && shown.len() <= fewer, "rooms below shrink tabs, never add them: {room} {shown:?}");
+        fewer = shown.len();
+        let active = shown.iter().find(|(name, _)| *name == PANELS[1]).expect("the shown tab stays");
+        assert!((active.1 - natural_shown).abs() < 1.0, "the shown tab keeps its width in {room}: {shown:?}");
+        let others: Vec<f32> = shown.iter().filter(|(name, _)| *name != PANELS[1]).map(|&(_, w)| w).collect();
+        let least = others.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(least > 0.0, "every shown tab keeps room for letters in {room}: {shown:?}");
+        let hidden: Vec<&str> = PANELS.iter().copied().filter(|name| shown.iter().all(|(shown, _)| shown != name)).collect();
+        let first = PANELS.iter().position(|name| hidden.contains(name));
+        if let Some(first) = first {
+            let after = PANELS[first..].iter().filter(|name| **name != PANELS[1]);
+            assert!(after.into_iter().all(|name| hidden.contains(name)), "overflow takes the last tabs: {hidden:?}");
+        }
+    }
+    assert!(fewer < PANELS.len(), "the narrowest room overflows");
+}

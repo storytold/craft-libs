@@ -23,8 +23,12 @@ pub enum TabKind {
 pub enum FitMode {
     /// Whole widths; only an active tab wider than the strip is cut.
     Whole,
-    /// The widest tabs shrink to the minimum width, then the rest overflow.
-    Shrink,
+    /// The widest tabs shrink to the minimum width, then the rest overflow. With `keep_selected` the selected tab is
+    /// not among the tabs that shrink, and the overflow takes the last tabs first.
+    Shrink {
+        /// Whether the selected tab keeps its natural width.
+        keep_selected: bool,
+    },
 }
 
 impl FitMode {
@@ -33,7 +37,7 @@ impl FitMode {
     pub fn fit(self, natural: &[f32], selected: usize, available: f32, minimum: f32, overflow: f32) -> TabFit {
         match self {
             FitMode::Whole => fit_whole(natural, selected, available, overflow),
-            FitMode::Shrink => fit(natural, selected, available, minimum, overflow),
+            FitMode::Shrink { keep_selected } => fit(natural, selected, available, minimum, overflow, keep_selected),
         }
     }
 }
@@ -63,8 +67,19 @@ impl TabKind {
     pub fn fit_mode(self) -> FitMode {
         match self {
             Self::Document | Self::Text => FitMode::Whole,
-            Self::Panel => FitMode::Shrink,
+            Self::Panel => FitMode::Shrink { keep_selected: self.keeps_active_width() },
         }
+    }
+
+    /// Whether the shown tab keeps its whole title while the other tabs shrink: panel tabs.
+    pub fn keeps_active_width(self) -> bool {
+        self == Self::Panel
+    }
+
+    /// Whether a label too long for its tab is clipped at the tab's edge (panel tabs, which shrink to their first
+    /// letters) instead of ending in an ellipsis.
+    pub fn clips_label(self) -> bool {
+        self == Self::Panel
     }
 
     /// Where the overflow button sits: at the strip's end for document and text tabs, after the last tab for panel
