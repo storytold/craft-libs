@@ -533,6 +533,10 @@ pub enum ScrollIndicator {
     /// A strip with an arrow above the view and one below it while the content overflows along y, as a menu shows:
     /// resting the pointer on a strip scrolls toward it. The strips take their height from the view, never width.
     Strips,
+    /// A bar that takes no room from the content, as a tool rail or an options bar shows its overflow: it lies in the
+    /// container's end padding (its bottom padding for x), over the content where the container has none, and shows
+    /// only while the pointer is over the container or presses the bar.
+    Overlay,
 }
 
 /// A scrolling body.
@@ -563,6 +567,18 @@ impl Scroll {
     /// Whether the overflow along y shows as scroll strips.
     pub const fn has_strips(&self) -> bool {
         matches!(self.indicator, ScrollIndicator::Strips) && self.vertical_on()
+    }
+
+    /// Shows the overflow as a bar in the container's padding that takes no room from the content and shows only
+    /// under the pointer ([`ScrollIndicator::Overlay`]).
+    pub const fn overlay(mut self) -> Scroll {
+        self.indicator = ScrollIndicator::Overlay;
+        self
+    }
+
+    /// Whether the overflow shows as an overlay bar.
+    pub const fn has_overlay(&self) -> bool {
+        matches!(self.indicator, ScrollIndicator::Overlay)
     }
 
     /// Scrolls along y.
