@@ -5,6 +5,8 @@ use craft_behavior::{EditEvent, EditHistory, Mixed, SelectionChange};
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerColumn, LayerDrop, LayerPosition, LayerToggle, LayersEvent, LayersPanel};
 use craft_layers::ui::tree::{LayerKind, LayerPart, LayerSelection};
+use craft_ui::testing::access::focused_key;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Ui, Vec2};
 use std::cell::RefCell;
@@ -241,4 +243,15 @@ fn shift_right_and_left_open_and_close_the_active_layers_effects() {
     assert_eq!(fx(take(&app)), [(7, true)], "Shift+Right opens the effects");
     fixture.key(Key::ArrowLeft, Modifiers::SHIFT).idle(2);
     assert_eq!(fx(take(&app)), [(7, false)], "Shift+Left closes them");
+}
+
+/// A row's access focus action, as a screen reader or a test driver gives it, puts key focus in the rows with the
+/// lead on that row: the access focus lands on the row's node.
+#[trial]
+fn a_rows_access_focus_action_leads_the_focused_rows_to_it() {
+    let (mut fixture, _app) = rig(FakeLayers::sample());
+    let styled = row(&fixture, "Styled");
+    fixture.access(AccessActionKind::Focus, &styled).idle(2);
+    assert!(fixture.focused_stop().is_some(), "the rows hold key focus");
+    assert_eq!(focused_key(fixture.tree()), styled.node, "the access focus is on the row");
 }
