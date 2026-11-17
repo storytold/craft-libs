@@ -16,7 +16,7 @@ pub struct Color {
 /// A palette's title and colours, in file order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Palette {
-    /// Last Name header before the colour limit, with surrounding whitespace removed.
+    /// Last Name header before the colour limit; leading value whitespace is retained.
     pub name: String,
     /// Valid colour rows in file order.
     pub colors: Vec<Color>,
@@ -41,7 +41,7 @@ pub fn parse_gpl(text: &str) -> Result<Palette, String> {
             continue;
         }
         if let Some(n) = l.strip_prefix("Name:") {
-            name = n.trim().to_string();
+            name = n.to_string();
             continue;
         }
         if l.starts_with("Columns:") || l.starts_with("Channels:") {
@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn metadata_rgb_names_and_legacy_rows() {
         let p = parse_gpl("\u{feff}GIMP Palette\r\nName: First\r\nName: Last\nColumns: 4\nChannels: RGB\n# comment\n255 0 128  Pink   ink\n256 0 0 invalid\n-1 2 3 invalid\n1 2 3 Untitled\n4 5 6\n").unwrap();
-        assert_eq!(p.name, "Last");
+        assert_eq!(p.name, " Last");
         assert_eq!(
             p.colors,
             vec![
