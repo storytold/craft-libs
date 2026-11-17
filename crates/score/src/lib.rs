@@ -3,6 +3,14 @@
 
 use std::fmt::Write as _;
 
+const MAX_OUTPUT_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+fn over_budget(buf: &str) -> Result<(), String> {
+    if buf.len() > MAX_OUTPUT_BYTES {
+        return Err(format!("score too large: over {} MiB", MAX_OUTPUT_BYTES / (1024 * 1024)));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoreSetup {
     pub title: String,
@@ -45,13 +53,7 @@ fn spell(pitch: u8) -> (char, i32, i32) {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.chars()
-        .filter(|c| matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'))
-        .collect::<String>()
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 fn note_type(units: u32) -> (&'static str, bool) {
@@ -68,7 +70,7 @@ fn note_type(units: u32) -> (&'static str, bool) {
 }
 
 /// MusicXML 4.0 (partwise) for `parts`.
-pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
+pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
     let mut x = String::new();
     x.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n");
     x.push_str("<!DOCTYPE score-partwise PUBLIC \"-//Recordare//DTD MusicXML 4.0 Partwise//EN\" \"http://www.musicxml.org/dtds/partwise.dtd\">\n");
@@ -149,11 +151,12 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                 }
             }
             x.push_str("    </measure>\n");
+            over_budget(&x)?;
         }
         x.push_str("  </part>\n");
     }
     x.push_str("</score-partwise>\n");
-    x
+    Ok(x)
 }
 
 /// Staff position of `pitch` in half-spaces above the bottom line (treble E4 / bass G2).
@@ -165,7 +168,7 @@ fn staff_step(pitch: u8, bass: bool) -> i32 {
 }
 
 /// An engraved score as a printable SVG page (A4 portrait width, as tall as needed).
-pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
+pub fn svg(parts: &[Part], setup: &ScoreSetup) -> Result<String, String> {
     const W: f64 = 794.0;
     const MARGIN: f64 = 48.0;
     const SP: f64 = 7.0; // staff space
@@ -299,6 +302,7 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
                         let _ = writeln!(o, "<path d=\"M{:.1} {y:.1} q 8 5 16 0\" fill=\"none\" stroke=\"black\" stroke-width=\"0.9\"/>", x + 3.0);
                     }
                 }
+                over_budget(&o)?;
             }
         }
         // System bracket.
@@ -311,7 +315,7 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
         );
     }
     o.push_str("</svg>\n");
-    o
+    Ok(o)
 }
 
 fn rest(o: &mut String, x: f64, y0: f64, sp: f64, units: u32) {
