@@ -25,6 +25,28 @@ impl Default for Limits {
     }
 }
 
+/// Limits on retained source names after applying each map's root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InventoryLimits {
+    pub max_sources: usize,
+    /// Total UTF-8 bytes in the expanded source paths, across all sections.
+    pub max_bytes: usize,
+}
+
+impl Default for InventoryLimits {
+    fn default() -> Self {
+        Self { max_sources: 1_000_000, max_bytes: 64 * 1024 * 1024 }
+    }
+}
+
+/// An ordered prefix of the map's source names, with their complete identities.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceInventory {
+    pub sources: Vec<String>,
+    /// More names existed than the limits or available allocations could retain.
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SourceMapError {
     #[error("source map is {0} bytes; the limit is {1}")]
@@ -145,13 +167,45 @@ impl SourceMap {
             .collect()
     }
 
-    /// All sources, flattened across sections.
+    /// Sources flattened across sections, within the default inventory limits.
+    /// Use `source_inventory` to choose limits and observe truncation.
     pub fn all_sources(&self) -> Vec<String> {
-        let mut out: Vec<String> = (0..self.sources.len() as u32).filter_map(|i| self.source_path(i)).collect();
-        for (_, _, m) in &self.sections {
-            out.extend(m.all_sources());
+        self.source_inventory(InventoryLimits::default()).sources
+    }
+
+    /// Retain a bounded prefix, checking expanded lengths before constructing paths.
+    pub fn source_inventory(&self, limits: InventoryLimits) -> SourceInventory {
+        let mut sources = Vec::new();
+        let mut bytes_left = limits.max_bytes;
+        let truncated = !self.collect_sources(limits.max_sources, &mut bytes_left, &mut sources);
+        SourceInventory { sources, truncated }
+    }
+
+    /// Append this map and its sections using one shared entry and byte budget.
+    fn collect_sources(&self, max_sources: usize, bytes_left: &mut usize, out: &mut Vec<String>) -> bool {
+        let root = self.source_root.as_deref().unwrap_or_default();
+        let join = if root.is_empty() || root.ends_with('/') { "" } else { "/" };
+        for source in self.sources.iter().flatten() {
+            let Some(bytes) = root.len().checked_add(join.len()).and_then(|n| n.checked_add(source.len())) else { return false };
+            if out.len() >= max_sources || bytes > *bytes_left {
+                return false;
+            }
+            let mut path = String::new();
+            if out.try_reserve(1).is_err() || path.try_reserve_exact(bytes).is_err() {
+                return false;
+            }
+            path.push_str(root);
+            path.push_str(join);
+            path.push_str(source);
+            out.push(path);
+            *bytes_left = bytes_left.saturating_sub(bytes);
         }
-        out
+        for (_, _, map) in &self.sections {
+            if !map.collect_sources(max_sources, bytes_left, out) {
+                return false;
+            }
+        }
+        true
     }
 }
 
