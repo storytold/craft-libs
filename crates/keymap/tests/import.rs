@@ -284,9 +284,9 @@ fn tool_keys_match_by_name_or_id_and_take_one_letter() {
     assert_eq!(unmatched, [("Copy", UnmatchedReason::NoMatch), ("Imaginary Tool", UnmatchedReason::NoMatch)]);
 }
 
-/// A key the command has by default stays its main key, whichever order the set lists its keys in.
+/// A command's main default key stays its main key, whichever order the set lists its keys in.
 #[test]
-fn a_default_key_among_the_sets_keys_stays_first() {
+fn the_main_default_key_among_the_sets_keys_stays_first() {
     let km = keymap(Platform::Mac);
     let set = ForeignSet::new(vec![win("File", &["Save"], &[("Default", "Ctrl+Alt+S"), ("Default", "Ctrl+S")])]);
     let planned = plan(&set, &km, &windows_options());

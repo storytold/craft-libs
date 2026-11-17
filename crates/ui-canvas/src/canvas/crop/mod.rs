@@ -385,8 +385,11 @@ impl CropOverlay<'_> {
         if cx.intents().take(Intent::Submit) {
             self.report.apply = true;
         }
-        // Escape discards a started crop; the untouched default frame has nothing to discard and leaves it to the window.
-        if self.started(None) && cx.intents().take(Intent::Cancel) {
+        // Escape drops an armed Straighten first; else it discards a started crop. The untouched default frame has
+        // nothing to discard and leaves Escape to the window.
+        if self.straighten && cx.intents().take(Intent::Cancel) {
+            self.report.straighten_ended = true;
+        } else if self.started(None) && cx.intents().take(Intent::Cancel) {
             self.report.discard = true;
         }
         // A hidden frame is not shown to move.
