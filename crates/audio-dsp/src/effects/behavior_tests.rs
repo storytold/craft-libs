@@ -608,6 +608,10 @@ fn delays_and_reverbs_report_their_tails() {
         ("reverb", &[("mix", 100.0)][..]),
         ("convolution_reverb", &[("mix", 100.0)][..]),
         ("surround_reverb", &[][..]),
+        ("mastering", &[("reverb", 100.0)][..]),
+        ("chorus_flanger", &[("mode", 1.0), ("width", 100.0), ("intensity", 100.0), ("mix", 100.0)][..]),
+        ("chorus_flanger", &[("width", 100.0), ("intensity", 100.0), ("mix", 100.0)][..]),
+        ("flanger", &[("final_delay", 20.0), ("feedback", 100.0), ("mix", 100.0)][..]),
     ] {
         let mut e = fx(id, params);
         let tail = e.tail_samples();

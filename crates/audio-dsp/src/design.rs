@@ -159,7 +159,7 @@ pub enum Band {
     BandStop,
 }
 
-/// A cascade of second-order sections.
+/// A cascade of second-order sections: the first `n` of `c` (at most [`MAX_SECTIONS`]).
 #[derive(Clone, Copy, Debug)]
 pub struct Sections {
     pub c: [Coeffs; MAX_SECTIONS],
@@ -167,8 +167,9 @@ pub struct Sections {
 }
 
 impl Sections {
+    /// The sections in use. A count above [`MAX_SECTIONS`] reads as all of them.
     pub fn as_slice(&self) -> &[Coeffs] {
-        &self.c[..self.n]
+        &self.c[..self.n.min(MAX_SECTIONS)]
     }
     /// Magnitude of the cascade in dB.
     pub fn magnitude_db(&self, freq: f64, sample_rate: f64) -> f64 {
@@ -769,5 +770,15 @@ mod tests {
                 assert!(db.is_finite(), "{family:?} at {sr}: {db}");
             }
         }
+    }
+
+    #[test]
+    fn an_oversized_section_count_reads_as_every_section() {
+        let mut s = design(&spec(Family::Butterworth, Band::LowPass, 4, 1000.0, 0.0), 48_000.0);
+        s.n = MAX_SECTIONS + 5;
+        assert_eq!(s.as_slice().len(), MAX_SECTIONS);
+        assert!(s.magnitude_db(100.0, 48_000.0).is_finite());
+        s.n = usize::MAX;
+        assert_eq!(s.as_slice().len(), MAX_SECTIONS);
     }
 }

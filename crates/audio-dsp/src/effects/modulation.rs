@@ -70,6 +70,12 @@ impl ChorusFlanger {
 
 impl AudioEffect for ChorusFlanger {
     param_plumbing!("chorus_flanger");
+    /// Echoes of the longest voice delay at the current width, falling by the feedback each pass.
+    fn tail_samples(&self) -> usize {
+        let (w, inten) = (self.pv.v("width") / 100.0, self.pv.v("intensity") / 100.0);
+        let (delay, g) = if self.pv.idx("mode") == 1 { (0.3 + 4.7 * w, 0.95 * inten) } else { (15.0 + 20.0 * w, 0.6 * inten) };
+        super::util::echo_tail(delay, g, self.sr)
+    }
     fn reset(&mut self) {
         self.lines.iter_mut().for_each(DelayLine::reset);
         self.lfo.reset();
@@ -190,6 +196,11 @@ impl Flanger {
 
 impl AudioEffect for Flanger {
     param_plumbing!("flanger");
+    /// Echoes of the longer of the two sweep delays, falling by the feedback each pass.
+    fn tail_samples(&self) -> usize {
+        let delay = self.pv.v("initial_delay").max(self.pv.v("final_delay"));
+        super::util::echo_tail(delay, 0.95 * self.pv.v("feedback").abs() / 100.0, self.sr)
+    }
     fn reset(&mut self) {
         self.lines.iter_mut().for_each(DelayLine::reset);
         self.lfo.reset();

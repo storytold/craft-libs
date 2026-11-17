@@ -1,5 +1,5 @@
-//! Test signals: band-limited (PolyBLEP) sine, square, saw and triangle oscillators, and white
-//! and pink noise.
+//! Test signals: band-limited sine, square and saw (PolyBLEP) and triangle (PolyBLAMP)
+//! oscillators, and white and pink noise.
 //!
 //! [`Oscillator`] produces one sample per call and never allocates, for real-time use (the
 //! `signal_generator` effect). [`signal`] renders a whole buffer offline.
@@ -42,6 +42,22 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
     } else if t > 1.0 - dt {
         let t = (t - 1.0) / dt;
         t * t + 2.0 * t + 1.0
+    } else {
+        0.0
+    }
+}
+
+/// PolyBLAMP residual of a unit change of slope per sample at phase 0: `t` is the phase since the
+/// corner (0..1), `dt` the phase step per sample.
+#[inline]
+fn poly_blamp(t: f32, dt: f32) -> f32 {
+    let cube = |x: f32| x * x * x / 6.0;
+    if dt <= 0.0 {
+        0.0
+    } else if t < dt {
+        cube(1.0 - t / dt)
+    } else if t > 1.0 - dt {
+        cube(1.0 - (1.0 - t) / dt)
     } else {
         0.0
     }
@@ -135,7 +151,10 @@ impl Oscillator {
                 // Starts at 0 and rises, like the sine.
                 let u = t + 0.25;
                 let u = if u >= 1.0 { u - 1.0 } else { u };
-                1.0 - 4.0 * (u - 0.5).abs()
+                // The slope changes by -8·dt per sample at the peak (u = 0.5) and by +8·dt at
+                // the trough (u = 0); PolyBLAMP rounds both corners.
+                let since_peak = if u >= 0.5 { u - 0.5 } else { u + 0.5 };
+                1.0 - 4.0 * (u - 0.5).abs() + 8.0 * dt * (poly_blamp(u, dt) - poly_blamp(since_peak, dt))
             }
             Waveform::WhiteNoise => self.noise.bipolar(),
             Waveform::PinkNoise => {
@@ -210,6 +229,26 @@ mod tests {
             .collect();
         let alias = |x: &[f32]| tone_amplitude(x, 3_000.0, 48_000.0) / tone_amplitude(x, 5_000.0, 48_000.0);
         assert!(alias(&blep) < alias(&naive) / 4.0, "alias {} dB, naive {} dB", db(alias(&blep)), db(alias(&naive)));
+    }
+
+    #[test]
+    fn the_triangle_is_band_limited() {
+        // A 10 kHz triangle's 3rd harmonic (30 kHz) folds to 18 kHz. PolyBLAMP keeps that alias
+        // well below the one a naive triangle has.
+        let blamp = signal(Waveform::Triangle, 10_000.0, 0.0, 48_000.0, 48_000, 1).remove(0);
+        let mut phase = 0.25f32;
+        let naive: Vec<f32> = (0..48_000)
+            .map(|_| {
+                let v = 1.0 - 4.0 * (phase - 0.5).abs();
+                phase += 10_000.0 / 48_000.0;
+                if phase >= 1.0 {
+                    phase -= 1.0;
+                }
+                v
+            })
+            .collect();
+        let alias = |x: &[f32]| tone_amplitude(x, 18_000.0, 48_000.0) / tone_amplitude(x, 10_000.0, 48_000.0);
+        assert!(alias(&blamp) < alias(&naive) / 4.0, "alias {} dB, naive {} dB", db(alias(&blamp)), db(alias(&naive)));
     }
 
     #[test]

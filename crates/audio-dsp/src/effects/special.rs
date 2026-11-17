@@ -428,6 +428,10 @@ impl Mastering {
 
 impl AudioEffect for Mastering {
     param_plumbing!("mastering");
+    /// The reverb's tail while the reverb is on.
+    fn tail_samples(&self) -> usize {
+        if self.pv.v("reverb") > 0.0 { self.rev.tail_samples() } else { 0 }
+    }
     fn response_db(&self, freq: f64) -> Option<f64> {
         Some(self.eq.iter().map(|c| c.magnitude_db(freq, self.sr as f64)).sum::<f64>() + self.pv.v("output") as f64)
     }
