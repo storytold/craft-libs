@@ -7,7 +7,7 @@
 
 use crate::color::Rgba;
 use crate::format::FormatErrors;
-use crate::id::AppId;
+use crate::id::{AppId, IconPackId};
 use crate::ramp::Mode;
 use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, ModePins, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants};
 use crate::tokens::{ColorToken, KnobShape, RadiusSet, WellShape};
@@ -197,7 +197,7 @@ impl ShapeValue {
 
 const NO_SHAPE: ShapeSeed = ShapeSeed { radius: None, radius_offset: None, button_radius: None, edge: None, knob: None, wells: None };
 
-/// A theme's name, variants or contrast intent.
+/// A theme's name, variants, contrast intent or icon pack.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Meta {
     /// [`ThemeDef::name`].
@@ -206,6 +206,8 @@ pub enum Meta {
     Variants(Variants),
     /// [`ThemeDef::contrast_intent`].
     ContrastIntent(ContrastIntent),
+    /// [`ThemeDef::icon_pack`]; `None` takes the suite's pack.
+    IconPack(Option<IconPackId>),
 }
 
 /// What a pin map holds for one token: a colour, a reference to another token, or both (a
@@ -227,6 +229,8 @@ pub enum Key {
     Variants,
     /// [`ThemeDef::contrast_intent`].
     ContrastIntent,
+    /// [`ThemeDef::icon_pack`].
+    IconPack,
     /// A seed of [`ThemeDef::seeds`].
     Seed(Seed),
     /// A seed one mode replaces.
@@ -246,6 +250,8 @@ pub enum Value {
     Variants(Variants),
     /// The contrast intent.
     ContrastIntent(ContrastIntent),
+    /// The icon pack.
+    IconPack(IconPackId),
     /// A seed colour, for [`Key::Seed`] and [`Key::ModeSeed`].
     Color(Rgba),
     /// A pin.
@@ -306,7 +312,7 @@ pub enum Edit {
     },
     /// Sets one shape field.
     SetShape(ShapeValue),
-    /// Sets the name, variants or contrast intent.
+    /// Sets the name, variants, contrast intent or icon pack.
     SetMeta(Meta),
 }
 
@@ -326,6 +332,7 @@ impl Edit {
             Edit::SetMeta(Meta::Name(n)) => (Key::Name, Some(Value::Name(n.clone()))),
             Edit::SetMeta(Meta::Variants(v)) => (Key::Variants, Some(Value::Variants(*v))),
             Edit::SetMeta(Meta::ContrastIntent(v)) => (Key::ContrastIntent, Some(Value::ContrastIntent(*v))),
+            Edit::SetMeta(Meta::IconPack(v)) => (Key::IconPack, v.clone().map(Value::IconPack)),
         }
     }
 }
@@ -367,6 +374,7 @@ pub fn read(theme: &ThemeDef, key: &Key) -> Option<Value> {
         Key::Name => Some(Value::Name(theme.name.clone())),
         Key::Variants => Some(Value::Variants(theme.variants)),
         Key::ContrastIntent => Some(Value::ContrastIntent(theme.contrast_intent)),
+        Key::IconPack => theme.icon_pack.clone().map(Value::IconPack),
         Key::Seed(seed) => Some(Value::Color(seed.get(&theme.seeds))),
         Key::ModeSeed(mode, seed) => {
             let mut o = *theme.mode_seeds.get(*mode);
@@ -387,6 +395,8 @@ fn write(theme: &mut ThemeDef, key: &Key, value: Option<Value>) {
         (Key::Name, Some(Value::Name(n))) => theme.name = n,
         (Key::Variants, Some(Value::Variants(v))) => theme.variants = v,
         (Key::ContrastIntent, Some(Value::ContrastIntent(v))) => theme.contrast_intent = v,
+        (Key::IconPack, Some(Value::IconPack(v))) => theme.icon_pack = Some(v),
+        (Key::IconPack, None) => theme.icon_pack = None,
         (Key::Seed(seed), Some(Value::Color(c))) => seed.set(&mut theme.seeds, c),
         (Key::ModeSeed(mode, seed), value) => {
             let o = match mode {
@@ -477,6 +487,7 @@ fn keys(theme: &ThemeDef, into: &mut Vec<Key>) {
     push(Key::Name);
     push(Key::Variants);
     push(Key::ContrastIntent);
+    push(Key::IconPack);
     for seed in Seed::ALL {
         push(Key::Seed(seed));
     }
