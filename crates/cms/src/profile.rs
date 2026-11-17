@@ -190,7 +190,7 @@ pub struct Lut {
 pub const SAME_COLORS_MAX_DELTA_E: f64 = 0.5;
 
 /// A parsed ICC profile.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Profile {
     /// Major version and minor.bugfix byte (e.g. `(4, 0x30)` for 4.3, `(2, 0x10)` for 2.1).
     pub version: (u8, u8),
@@ -224,7 +224,31 @@ pub struct Profile {
     pub b2a: [Option<Lut>; 3],
     /// The bytes this profile was parsed from (or encoded to), kept for byte-exact embedding.
     pub(crate) bytes: Option<Arc<Vec<u8>>>,
+    /// Lazily computed content hash: a cache, not part of the profile's identity.
     pub(crate) hash: std::sync::OnceLock<u64>,
+}
+
+/// Field-wise equality without the hash cache, whose state depends on whether anything has asked
+/// for the hash yet (a shared built-in profile is hashed by whichever test or caller runs first).
+impl PartialEq for Profile {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.class == other.class
+            && self.color_space == other.color_space
+            && self.pcs == other.pcs
+            && self.rendering_intent == other.rendering_intent
+            && self.description == other.description
+            && self.copyright == other.copyright
+            && self.white_point == other.white_point
+            && self.black_point == other.black_point
+            && self.chad == other.chad
+            && self.matrix == other.matrix
+            && self.trc == other.trc
+            && self.gray_trc == other.gray_trc
+            && self.a2b == other.a2b
+            && self.b2a == other.b2a
+            && self.bytes == other.bytes
+    }
 }
 
 impl Profile {
