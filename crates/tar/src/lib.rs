@@ -175,16 +175,17 @@ fn tar_with_name_copy_limit(data: &[u8], max_members: usize, mut name_bytes_left
             break;
         }
         let typeflag = h.get(156).copied().unwrap_or(0);
-        let Some(mut size) = h.get(124..136).and_then(octal) else {
+        // Metadata records keep their own framing. For a member, PAX replaces the
+        // legacy size field entirely, so a valid override does not depend on its contents.
+        let override_size = match typeflag {
+            b'x' | b'g' | b'L' | b'K' => None,
+            _ => pax.size.take().or(pax.global_size),
+        };
+        let Some(size) = override_size.or_else(|| h.get(124..136).and_then(octal)) else {
             out.warnings.push(format!("unreadable size at {pos:#x}"));
             out.length = pos as u64;
             break;
         };
-        if !matches!(typeflag, b'x' | b'g' | b'L' | b'K')
-            && let Some(s) = pax.size.take().or(pax.global_size)
-        {
-            size = s;
-        }
         let mut data_off = pos + BLOCK;
         let old_gnu_sparse = typeflag == b'S' && h.get(257..265) == Some(b"ustar  \0");
         if old_gnu_sparse {
