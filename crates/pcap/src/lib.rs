@@ -712,7 +712,10 @@ fn ipv6(p: &[u8], d: &mut Decoded) {
         d.note = Some("IPv6 fragment (transport header is in the first fragment)".into());
         return;
     }
-    transport(next, p.get(off..end).unwrap_or(&[]), d);
+    // RFC 8200: No Next Header ends the chain even if the packet has trailing bytes.
+    if next != 59 {
+        transport(next, p.get(off..end).unwrap_or(&[]), d);
+    }
 }
 
 fn tcp_flags(f: u8) -> String {
