@@ -195,10 +195,17 @@ enum Obj {
     },
     Path(Vec<Op>),
     Image(Arc<ImageData>),
+    /// An image object that could not be read or kept (past a limit, or in a form the reader does
+    /// not decode): drawing it counts a dropped image. The size of a bitmap, when its header gives one.
+    LostImage(Option<(usize, usize)>),
+    /// A texture brush whose image was not read or kept. It is counted as a dropped image when it is
+    /// stored, and the slot is left empty.
+    LostBrush,
     Font(FontObj),
     Format(Format),
-    /// A region's bounding rectangle `[l, t, r, b]` in world units; None is infinite.
-    Region(Area),
+    /// A region's bounding rectangle `[l, t, r, b]` in world units; None is infinite. The flag is set
+    /// when the area differs from the region the file describes (see [`region_node`]).
+    Region(Area, bool),
 }
 
 /// An object arriving in several records: its id, type, total size and the bytes so far.
@@ -227,6 +234,10 @@ pub(crate) struct Plus {
     /// Convex device clip polygon; None is unclipped.
     clip: Area,
     objects: Vec<Option<Obj>>,
+    /// Whether the metafile image in each object slot has added its counts to the canvas.
+    reported: Vec<bool>,
+    /// Texture brushes not kept since the canvas last took the count.
+    lost_brushes: u32,
     object_bytes: usize,
     stack: Vec<Saved>,
     partial: Option<Partial>,
@@ -244,6 +255,8 @@ impl Plus {
             page: 1.0,
             clip: None,
             objects: vec![None; MAX_OBJECTS],
+            reported: vec![false; MAX_OBJECTS],
+            lost_brushes: 0,
             object_bytes: 0,
             stack: Vec::new(),
             partial: None,
@@ -302,7 +315,13 @@ impl Plus {
             return Some(());
         }
         let done = match typ {
-            0x4008 => self.object(flags, r, cv.used().saturating_add(self.clip_bytes())),
+            0x4008 => {
+                let done = self.object(flags, r, cv.used().saturating_add(self.clip_bytes()));
+                for _ in 0..std::mem::take(&mut self.lost_brushes) {
+                    cv.drop_image();
+                }
+                done
+            }
             0x4009 | 0x4013 | 0x401A..=0x401C | 0x4036 => self.record_image_text_region(cv, typ, flags, r),
             0x4025..=0x4035 => self.record_state(cv, typ, flags, r),
             0x4010..=0x4012 | 0x4016..=0x4019 => self.record_curve(cv, typ, flags, r),
@@ -463,7 +482,7 @@ impl Plus {
             // FillRegion: the region's area (as the clip reads it).
             0x4013 => {
                 let fill = self.brush_of(flags, r.u32(0)?)?;
-                let Some(Some(Obj::Region(Some(area)))) = self.objects.get(id).cloned() else { return None };
+                let Some(Some(Obj::Region(Some(area), _))) = self.objects.get(id).cloned() else { return None };
                 if area.len() < 3 {
                     return None;
                 }
@@ -471,14 +490,14 @@ impl Plus {
                 Some(())
             }
             0x401A => {
-                let img = self.image(id)?;
                 let dst = *rects(r, 24, 1, compressed)?.first()?;
+                let img = self.image(cv, id, r)?;
                 self.draw_image(cv, &img, r, [dst[0], dst[1], dst[2] - dst[0], dst[3] - dst[1]])
             }
             0x401B => {
-                let img = self.image(id)?;
                 let pts = points(r, 28, 3, compressed)?;
                 let (p0, p1, p2) = (*pts.first()?, *pts.get(1)?, *pts.get(2)?);
+                let img = self.image(cv, id, r)?;
                 // The destination parallelogram's top-left, top-right and bottom-left corners; a
                 // sheared or rotated one is drawn into its bounding rectangle's axes.
                 let dst = [p0.0, p0.1, p1.0 - p0.0 + (p2.0 - p0.0), p2.1 - p0.1 + (p1.1 - p0.1)];
@@ -523,16 +542,17 @@ impl Plus {
             0x4032 => {
                 let [x, y, w, h] = floats::<4>(r, 0)?;
                 let area = map_area(Some(rect_poly([x, y, x + w, y + h])), mul(self.xf(), cv.device_affine()));
-                self.combine(flags, area)
+                self.combine(cv, flags, area, false)
             }
             0x4033 => {
-                let area = map_area(Some(area_of_ops(&self.path(id)?)), mul(self.xf(), cv.device_affine()));
-                self.combine(flags, area)
+                let (area, inexact) = area_of_ops(&self.path(id)?);
+                let area = map_area(Some(area), mul(self.xf(), cv.device_affine()));
+                self.combine(cv, flags, area, inexact)
             }
             0x4034 => {
-                let Some(Some(Obj::Region(reg))) = self.objects.get(id).cloned() else { return None };
+                let Some(Some(Obj::Region(reg, inexact))) = self.objects.get(id).cloned() else { return None };
                 let area = map_area(reg, mul(self.xf(), cv.device_affine()));
-                self.combine(flags, area)
+                self.combine(cv, flags, area, inexact)
             }
             0x4035 => {
                 let [dx, dy] = floats::<2>(r, 0)?;
@@ -571,14 +591,42 @@ impl Plus {
 
     /// Combines a new clip area with the current one under the record's combine mode: replace,
     /// intersect and union (as the rectangle around both). XOR, exclude and complement leave the
-    /// clip as it was.
-    fn combine(&mut self, flags: u16, new: Area) -> Option<()> {
-        self.clip = match (flags >> 8) & 0xF {
-            0 => new,
-            1 => area_intersect(self.clip.take(), new),
-            2 => area_union(self.clip.take(), new),
-            _ => self.clip.take(),
+    /// clip as it was. `inexact` says the new area already differs from what the file asks (see
+    /// [`region_node`]). The change is counted in the canvas's `ignored_clips` when the clip it
+    /// leaves can differ from what the file asks: an inexact area that replaces, cuts or widens the
+    /// clip, an intersection that ran out of work, a union whose rectangle is larger than the
+    /// union, an XOR, exclude or complement with an area that encloses some, and a complement of a
+    /// clip that encloses some.
+    fn combine(&mut self, cv: &mut Canvas, flags: u16, new: Area, inexact: bool) -> Option<()> {
+        let (clip, ignored) = match (flags >> 8) & 0xF {
+            0 => (new, inexact),
+            1 => {
+                let stand_in = intersect_inexact(&self.clip, false, &new, inexact);
+                let (out, cut_short) = area_intersect(self.clip.take(), new);
+                (out, stand_in || cut_short)
+            }
+            2 => {
+                let ignored = union_inexact(&self.clip, false, &new, inexact) || union_grows(&self.clip, &new);
+                (area_union(self.clip.take(), new), ignored)
+            }
+            // XOR changes the clip unless the new area is empty, exclude unless either is empty;
+            // complement replaces the clip with the part of the new area outside it, which differs
+            // from the clip unless both are empty.
+            mode @ 3..=5 => {
+                let new_area = inexact || encloses(&new);
+                let changes = match mode {
+                    3 => new_area,
+                    4 => new_area && encloses(&self.clip),
+                    _ => new_area || encloses(&self.clip),
+                };
+                (self.clip.take(), changes)
+            }
+            _ => (self.clip.take(), false),
         };
+        if ignored {
+            cv.ignore_clip();
+        }
+        self.clip = clip;
         Some(())
     }
 
@@ -626,11 +674,25 @@ impl Plus {
         if let Some(old) = slot.take() {
             self.object_bytes = self.object_bytes.saturating_sub(Self::obj_cost(&old));
         }
+        if let Some(r) = self.reported.get_mut(id) {
+            *r = false;
+        }
         if let Some(new_obj) = obj {
             let cost = Self::obj_cost(&new_obj);
-            if self.object_bytes.saturating_add(cost).saturating_add(canvas_used) <= crate::MAX_BYTES {
+            if matches!(new_obj, Obj::LostBrush) {
+                self.lost_brushes = self.lost_brushes.saturating_add(1);
+            } else if self.object_bytes.saturating_add(cost).saturating_add(canvas_used) <= crate::MAX_BYTES {
                 self.object_bytes += cost;
                 *slot = Some(new_obj);
+            } else if let Obj::Image(img) = &new_obj {
+                // A metafile image refused here has its own counts dropped with it.
+                let size = match img.as_ref() {
+                    ImageData::Bitmap(b) => Some((b.w, b.h)),
+                    ImageData::Meta(_) => None,
+                };
+                *slot = Some(Obj::LostImage(size));
+            } else if let Obj::Brush(Fill::Texture { .. }) = new_obj {
+                self.lost_brushes = self.lost_brushes.saturating_add(1);
             }
         }
     }
@@ -661,9 +723,27 @@ impl Plus {
         }
     }
 
-    fn image(&self, id: usize) -> Option<Arc<ImageData>> {
+    /// The image object `id` for the draw record `r`. A lost one gives None and is counted as a
+    /// dropped image, unless the record's source rectangle selects none of its pixels. A metafile
+    /// image adds what it left out to the canvas's counts the first time it is drawn.
+    fn image(&mut self, cv: &mut Canvas, id: usize, r: Bytes) -> Option<Arc<ImageData>> {
         match self.objects.get(id)? {
-            Some(Obj::Image(img)) => Some(img.clone()),
+            Some(Obj::Image(img)) => {
+                if let (ImageData::Meta(pic), Some(reported)) = (img.as_ref(), self.reported.get_mut(id))
+                    && !*reported
+                {
+                    cv.add_losses(pic);
+                    *reported = true;
+                }
+                Some(img.clone())
+            }
+            Some(Obj::LostImage(size)) => {
+                let misses = size.zip(source_px(r)).is_some_and(|((w, h), src)| crate::dib::src_misses(w, h, src));
+                if !misses {
+                    cv.drop_image();
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -685,13 +765,15 @@ impl Plus {
         let img = match img {
             ImageData::Bitmap(b) => b,
             ImageData::Meta(pic) => {
-                self.painter().picture(cv, dst, pic);
+                // A nested picture without a size draws nothing; [`Self::image`] still reports what
+                // it left out.
+                if pic.width > 0.0 && pic.height > 0.0 {
+                    self.painter().picture(cv, dst, pic);
+                }
                 return Some(());
             }
         };
-        let [sx, sy, sw, sh] = floats::<4>(r, 8)?;
-        let src = if r.u32(4)? == 2 { [sx, sy, sw, sh].map(|v| v.round().clamp(-1.0e9, 1.0e9) as i64) } else { [0; 4] };
-        let (part, dst) = crate::dib::clip_blit(img, src, dst)?;
+        let (part, dst) = crate::dib::clip_blit(img, source_px(r)?, dst)?;
         self.painter().image(cv, dst, part);
         Some(())
     }
@@ -994,11 +1076,11 @@ fn matrix(r: Bytes, off: usize) -> Option<Xform> {
 
 fn parse_object(kind: u16, r: Bytes) -> Option<Obj> {
     match kind {
-        1 => brush(r, 0).map(Obj::Brush),
+        1 => brush(r, 0).map(Obj::Brush).or_else(|| lost_texture(r).then_some(Obj::LostBrush)),
         2 => pen(r),
         3 => path(r).map(Obj::Path),
         4 => region(r),
-        5 => image(r).map(|i| Obj::Image(Arc::new(i))),
+        5 => Some(image(r).map_or_else(|| Obj::LostImage(bitmap_size(r)), |i| Obj::Image(Arc::new(i)))),
         6 => font(r),
         7 => Some(Obj::Format(Format { flags: r.u32(4)?, align: r.u32(12)?, line_align: r.u32(16)? })),
         _ => None,
@@ -1099,7 +1181,11 @@ fn pen(r: Bytes) -> Option<Obj> {
             off += 4 + (r.u32(off)? as usize).min(1 << 20);
         }
     }
-    let color = brush(r, off)?.color();
+    // A pen whose texture brush was not read is counted like a lost brush object.
+    let Some(fill) = brush(r, off) else {
+        return lost_texture(r.tail(off)?).then_some(Obj::LostBrush);
+    };
+    let color = fill.color();
     Some(Obj::Pen { color, width: if width.is_finite() { width.clamp(0.0, 1.0e5) } else { 0.0 } })
 }
 
@@ -1143,11 +1229,13 @@ fn path(r: Bytes) -> Option<Vec<Op>> {
 /// rectangle).
 fn region(r: Bytes) -> Option<Obj> {
     let mut work = 0;
-    region_node(r, 8, 0, &mut work).map(|(a, _)| Obj::Region(a))
+    region_node(r, 8, 0, &mut work).map(|(a, _, inexact)| Obj::Region(a, inexact))
 }
 
-/// One region node at `off`: its area and its length in bytes.
-fn region_node(r: Bytes, off: usize, depth: usize, work: &mut usize) -> Option<(Area, usize)> {
+/// One region node at `off`: its area, its length in bytes, and whether the area differs from the
+/// node's (a path that is not one convex figure, an intersection that ran out of work, a union
+/// drawn larger, or an XOR, exclude or complement node).
+fn region_node(r: Bytes, off: usize, depth: usize, work: &mut usize) -> Option<(Area, usize, bool)> {
     *work = work.checked_add(1)?;
     if depth > MAX_REGION_DEPTH || *work > MAX_REGION_WORK {
         return None;
@@ -1155,7 +1243,7 @@ fn region_node(r: Bytes, off: usize, depth: usize, work: &mut usize) -> Option<(
     match r.u32(off)? {
         0x1000_0000 => {
             let [x, y, w, h] = floats::<4>(r, off + 4)?;
-            Some((Some(rect_poly([x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)])), 20))
+            Some((Some(rect_poly([x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)])), 20, false))
         }
         0x1000_0001 => {
             let size = r.u32(off + 4)? as usize;
@@ -1168,51 +1256,116 @@ fn region_node(r: Bytes, off: usize, depth: usize, work: &mut usize) -> Option<(
             if *work > MAX_REGION_WORK {
                 return None;
             }
-            let area = area_of_ops(&path(data)?);
-            Some((Some(area), 8usize.checked_add(size)?))
+            let (area, inexact) = area_of_ops(&path(data)?);
+            Some((Some(area), 8usize.checked_add(size)?, inexact))
         }
-        0x1000_0002 => Some((Some(Vec::new()), 4)),
-        0x1000_0003 => Some((None, 4)),
+        0x1000_0002 => Some((Some(Vec::new()), 4, false)),
+        0x1000_0003 => Some((None, 4, false)),
         mode @ 0..=5 => {
-            let (a, la) = region_node(r, off + 4, depth + 1, work)?;
-            let (b, lb) = region_node(r, off.checked_add(4 + la)?, depth + 1, work)?;
-            let out = match mode {
-                0 => b,
-                1 => area_intersect(a, b),
-                2 => area_union(a, b),
-                // XOR, exclude, complement: the left area bounds the result closely enough.
-                _ => a,
+            let (a, la, ia) = region_node(r, off + 4, depth + 1, work)?;
+            let (b, lb, ib) = region_node(r, off.checked_add(4 + la)?, depth + 1, work)?;
+            let (out, inexact) = match mode {
+                0 => (b, ib),
+                1 => {
+                    let stand_in = intersect_inexact(&a, ia, &b, ib);
+                    let (out, cut_short) = area_intersect(a, b);
+                    (out, stand_in || cut_short)
+                }
+                2 => {
+                    let inexact = union_inexact(&a, ia, &b, ib) || union_grows(&a, &b);
+                    (area_union(a, b), inexact)
+                }
+                // XOR, exclude, complement: the left area bounds the result closely enough. It is the
+                // result when the right area is empty under XOR, when either is empty under exclude,
+                // and when both are empty under complement (the right area outside the left).
+                _ => {
+                    let (ea, eb) = (!ia && !encloses(&a), !ib && !encloses(&b));
+                    let exact = match mode {
+                        3 => !ia && eb,
+                        4 => (!ia && eb) || ea,
+                        _ => ea && eb,
+                    };
+                    (a, !exact)
+                }
             };
-            Some((out, (4 + la).checked_add(lb)?))
+            Some((out, (4 + la).checked_add(lb)?, inexact))
         }
         _ => None,
     }
 }
 
-/// The area a path encloses: its outline when that is one convex figure, else the rectangle
-/// around it.
-fn area_of_ops(ops: &[Op]) -> Vec<P> {
+/// The area a path encloses: its outline when that is one convex figure, none when its figures all
+/// lie on a line, else the rectangle around it. The flag is set when the rectangle stands in for
+/// the path.
+fn area_of_ops(ops: &[Op]) -> (Vec<P>, bool) {
+    if !crate::geom::encloses_area(ops) {
+        return (Vec::new(), false);
+    }
     let subs = flatten(ops);
     if let [(pts, _)] = subs.as_slice()
         && let Some(c) = convex(pts)
     {
-        return c;
+        return (c, false);
     }
-    ops_bbox(ops).map(rect_poly).unwrap_or_default()
+    (ops_bbox(ops).map(rect_poly).unwrap_or_default(), true)
 }
 
-fn area_intersect(a: Area, b: Area) -> Area {
+/// Two areas' intersection, and whether it ran out of work and kept the first area instead.
+fn area_intersect(a: Area, b: Area) -> (Area, bool) {
     match (a, b) {
-        (None, x) | (x, None) => x,
+        (None, x) | (x, None) => (x, false),
         (Some(a), Some(b)) if a.len() >= 3 && b.len() >= 3 => {
             // Out of work: keep the area so far rather than call the region empty.
             match clip_polygon_within(&a, &b, &mut { MAX_AREA_CLIP_WORK }) {
-                Some(p) => Some(convex(&p).unwrap_or_default()),
-                None => Some(a),
+                Some(p) => (Some(convex(&p).unwrap_or_default()), false),
+                None => (Some(a), true),
             }
         }
-        _ => Some(Vec::new()),
+        _ => (Some(Vec::new()), false),
     }
+}
+
+/// Whether an area encloses nothing.
+fn is_empty(pts: &[P]) -> bool {
+    pts.len() < 3 || poly_area(pts) <= 0.0
+}
+
+/// Whether an area (None: unlimited) encloses some.
+fn encloses(a: &Area) -> bool {
+    a.as_ref().is_none_or(|pts| !is_empty(pts))
+}
+
+/// Whether the intersection of two areas, each flagged when it stands in for the file's, can differ
+/// from the file's: a stand-in does not matter when the other area is exact and empty.
+fn intersect_inexact(a: &Area, ia: bool, b: &Area, ib: bool) -> bool {
+    (ia && (ib || encloses(b))) || (ib && (ia || encloses(a)))
+}
+
+/// Whether the union of two areas, each flagged when it stands in for the file's, can differ from
+/// the file's: a stand-in does not matter when the other area is exact and unlimited.
+fn union_inexact(a: &Area, ia: bool, b: &Area, ib: bool) -> bool {
+    (ia && (ib || b.is_some())) || (ib && (ia || a.is_some()))
+}
+
+/// Whether the rectangle [`area_union`] draws for two areas is larger than their union.
+fn union_grows(a: &Area, b: &Area) -> bool {
+    let (Some(a), Some(b)) = (a, b) else { return false };
+    if a.len() < 3 || b.len() < 3 {
+        return false;
+    }
+    let all: Vec<P> = a.iter().chain(b).copied().collect();
+    let Some([l, t, r, bottom]) = pts_bbox(&all) else { return false };
+    // Out of work: the overlap is unknown, so the rectangle may be larger.
+    let Some(overlap) = clip_polygon_within(a, b, &mut { MAX_AREA_CLIP_WORK }) else { return true };
+    let union = poly_area(a) + poly_area(b) - poly_area(&overlap);
+    let rect = (r - l) * (bottom - t);
+    rect > union + 1e-9 * rect
+}
+
+/// The area a polygon encloses, whatever its orientation.
+fn poly_area(pts: &[P]) -> f64 {
+    let twice: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
+    (twice / 2.0).abs()
 }
 
 fn area_union(a: Area, b: Area) -> Area {
@@ -1313,7 +1466,41 @@ fn metafile(r: Bytes) -> Option<Picture> {
     NESTING.with(|n| n.set(depth + 1));
     let pic = crate::parse_nested(data).ok();
     NESTING.with(|n| n.set(depth));
-    pic.filter(|p| p.width > 0.0 && p.height > 0.0)
+    pic
+}
+
+/// The size in pixels of a bitmap image object, read from its header (a compressed one's from the
+/// image file's header) even when its pixels are not, so a draw whose source rectangle selects none
+/// of them, or of a bitmap without pixels, is not counted as lost.
+fn bitmap_size(r: Bytes) -> Option<(usize, usize)> {
+    if r.u32(4)? != 1 {
+        return None;
+    }
+    if r.u32(24)? == 1 {
+        crate::dib::compressed_size(r.tail(28)?.0)
+    } else {
+        Some((usize::try_from(r.i32(8)?).ok()?, usize::try_from(r.i32(12)?).ok()?))
+    }
+}
+
+/// Whether a brush object that did not parse is a texture brush (type 2) with an image to draw: its
+/// image is a metafile, is not readable, or is a bitmap whose header gives it pixels.
+fn lost_texture(r: Bytes) -> bool {
+    if r.u32(4) != Some(2) {
+        return false;
+    }
+    let image = r.tail(8).and_then(|d| {
+        let off = if d.u32(0)? & 0x2 != 0 { 32 } else { 8 };
+        d.tail(off)
+    });
+    !image.and_then(bitmap_size).is_some_and(|(w, h)| w == 0 || h == 0)
+}
+
+/// The source rectangle of DrawImage or DrawImagePoints in pixels; all zeros (the whole image) when
+/// it is given in another unit.
+fn source_px(r: Bytes) -> Option<[i64; 4]> {
+    let [sx, sy, sw, sh] = floats::<4>(r, 8)?;
+    Some(if r.u32(4)? == 2 { [sx, sy, sw, sh].map(|v| v.round().clamp(-1.0e9, 1.0e9) as i64) } else { [0; 4] })
 }
 
 /// Bytes the items of a nested picture own: path segments, dashes, clip rectangles, pixels and
@@ -1639,6 +1826,30 @@ mod cost_tests {
         assert!(plus.objects[0].is_none() && plus.object_bytes == 0);
         plus.store(0, path(), 0);
         assert!(plus.objects[0].is_some());
+    }
+
+    #[test]
+    fn an_image_or_texture_past_the_byte_budget_is_counted() {
+        let (mut plus, mut cv) = (Plus::new(), Canvas::new());
+        let img = || Rgba { w: 4, h: 4, px: vec![0; 64] };
+        plus.store(0, Some(Obj::Image(Arc::new(ImageData::Bitmap(img())))), crate::MAX_BYTES);
+        assert!(matches!(plus.objects[0], Some(Obj::LostImage(Some((4, 4))))));
+        // DrawImage data: image attributes, source unit (pixels), source rectangle, destination.
+        let draw = |sx: f32| {
+            let floats = [sx, 0.0, 1.0, 1.0, 0.0, 0.0, 9.0, 9.0].map(f32::to_le_bytes).concat();
+            [0u32.to_le_bytes().to_vec(), 2u32.to_le_bytes().to_vec(), floats].concat()
+        };
+        assert!(plus.image(&mut cv, 0, Bytes(&draw(10.0))).is_none());
+        assert_eq!(cv.dropped_images, 0, "a source rectangle beside the pixels draws nothing");
+        assert!(plus.image(&mut cv, 0, Bytes(&draw(0.0))).is_none());
+        assert_eq!(cv.dropped_images, 1);
+        let texture = Fill::Texture { img: Arc::new(img()), wrap: 0, xf: IDENTITY };
+        plus.store(1, Some(Obj::Brush(texture.clone())), crate::MAX_BYTES);
+        assert!(plus.objects[1].is_none());
+        assert_eq!(plus.lost_brushes, 1);
+        plus.store(1, Some(Obj::Brush(texture)), 0);
+        assert!(plus.objects[1].is_some());
+        assert_eq!(plus.lost_brushes, 1);
     }
 
     #[test]

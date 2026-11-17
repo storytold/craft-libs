@@ -1,6 +1,6 @@
 [package]
 name = "craft-prc"
-description = "PRC 3D model reader (ISO 14739-1): container, bit-level primitives, schema"
+description = "PRC 3D model reader and triangle-mesh writer (ISO 14739-1)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
