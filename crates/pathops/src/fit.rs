@@ -136,7 +136,10 @@ fn fit_cubics_to_depth(
 ) -> Result<Vec<(CubicBez, f64)>, FitStop> {
     let (pts, dropped) = dedup(pts);
     if pts.len() < 2 {
-        return Ok(Vec::new());
+        // One point, or none: nothing to fit. The points left out for being one with it are no further from it than `dropped`, and a
+        // tolerance with less room than that is not held by no cubic at all.
+        let spare = tol - between.max(0.0) - dropped;
+        return if dropped > 0.0 && (spare.is_nan() || spare < 0.0) { Err(FitStop::Depth) } else { Ok(Vec::new()) };
     }
     // What is left of the tolerance for the cubic's own distance from the polyline, after what lies between the points and what the points
     // that were left out are from the ones kept (they are as near to the cubic as those, and that much further); none, and no cubic is close
@@ -153,16 +156,18 @@ fn fit_cubics_to_depth(
 }
 
 /// `pts` without the points that lie within 1e-12 of the one kept before them, and the furthest any of them is from the one it was
-/// left out for (0 where none was, or each was the same point).
+/// left out for (0 where none was, or each was the same point). A point that is not finite is left out, and is no reference for the ones after it.
 fn dedup(pts: &[Point]) -> (Vec<Point>, f64) {
     let mut v: Vec<Point> = Vec::with_capacity(pts.len());
     let mut dropped = 0.0f64;
     for &p in pts {
+        if !p.is_finite() {
+            continue;
+        }
         let Some(q) = v.last() else {
             v.push(p);
             continue;
         };
-        // (A distance that is not a number is left out as it always was, and is no distance to hold: `f64::max` leaves it out.)
         let d = q.distance(p);
         if d > 1e-12 {
             v.push(p);
@@ -1114,10 +1119,40 @@ mod tests {
         let same = [Point::new(0.0, 0.0), Point::new(0.0, 0.0), Point::new(1.0, 0.0)];
         let fits = fit_cubics(&same, up, up, (1e-12, 0.0), &mut work).expect("a fit");
         assert!(fits[0].1 <= 1e-12 && fits[0].1 > 5e-13, "{:e}: the handles are the whole room", fits[0].1);
-        // A point that is not a number is left out as it was.
-        let nan = [Point::new(0.0, 0.0), Point::new(f64::NAN, 0.0), Point::new(1.0, 0.0)];
-        let fits = fit_cubics(&nan, up, up, (1e-3, 0.0), &mut work).expect("a fit of the others");
-        assert!(fits.iter().all(|(c, _)| c.p0.is_finite() && c.p1.is_finite() && c.p2.is_finite() && c.p3.is_finite()));
+        // A point that is not a number is left out as it was, wherever it is among the points (a first one is no point the others are
+        // compared with, which left the rest out: nothing was fitted).
+        for nan in [
+            [Point::new(0.0, 0.0), Point::new(f64::NAN, 0.0), Point::new(1.0, 0.0)],
+            [Point::new(f64::NAN, 0.0), Point::new(0.0, 0.0), Point::new(1.0, 0.0)],
+            [Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(0.0, f64::NAN)],
+            [Point::new(f64::INFINITY, 0.0), Point::new(0.0, 0.0), Point::new(1.0, 0.0)],
+        ] {
+            let fits = fit_cubics(&nan, up, up, (1e-3, 0.0), &mut work).expect("a fit of the others");
+            assert_eq!(fits.len(), 1, "{nan:?}");
+            let c = fits[0].0;
+            assert!([c.p0, c.p1, c.p2, c.p3].iter().all(|p| p.is_finite()), "{nan:?}");
+            assert!(c.p0.distance(Point::new(0.0, 0.0)) < 1e-12 && c.p3.distance(Point::new(1.0, 0.0)) < 1e-12, "{nan:?}: {c:?}");
+        }
+    }
+
+    /// Points that are one point to within 1e-12 need no cubic, where the tolerance holds what they are from the one kept; a tolerance under
+    /// that is not held by no cubic at all: `[(0, 0), (5e-13, 0)]` at a tolerance of 1e-14 gave `Ok` and no cubic.
+    #[test]
+    fn points_that_are_one_need_no_cubic_only_within_the_tolerance() {
+        let up = Vec2::new(0.0, 1.0);
+        let mut work = usize::MAX;
+        let near = [Point::new(0.0, 0.0), Point::new(5e-13, 0.0)];
+        assert_eq!(fit_cubics(&near, up, up, (1e-14, 0.0), &mut work), Err(FitStop::Depth));
+        assert_eq!(fit_cubics(&near, up, up, (4e-13, 0.0), &mut work), Err(FitStop::Depth));
+        assert_eq!(fit_cubics(&near, up, up, (1e-12, 4e-13), &mut work), Ok(Vec::new()), "what is left of the tolerance holds the distance");
+        assert_eq!(fit_cubics(&near, up, up, (1e-12, 6e-13), &mut work), Err(FitStop::Depth));
+        assert_eq!(fit_cubics(&near, up, up, (1e-6, 0.0), &mut work), Ok(Vec::new()));
+        // Points that are the same point have nothing left out, whatever the tolerance.
+        let same = [Point::new(2.0, 3.0), Point::new(2.0, 3.0)];
+        for tol in [1e-14, 1e-3, 0.0, f64::NAN] {
+            assert_eq!(fit_cubics(&same, up, up, (tol, 0.0), &mut work), Ok(Vec::new()), "{tol}");
+        }
+        assert_eq!(fit_cubics(&[Point::new(1.0, 1.0)], up, up, (1e-14, 0.0), &mut work), Ok(Vec::new()));
     }
 
     /// The pieces `fit_rec` makes (before any are joined) follow each other from the first point to the last, each ending at the point the
