@@ -144,4 +144,4 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 
 ## GPU device selection
 
-`crates/gpu-device` comes from StudioCraft `crates/craft-gpu-device` at `17e2120f7d79bb677e2871a4192ba1ced1dab57a` (MIT OR Apache-2.0). Its adapter rule and driver corrections come from FilmCraft `crates/gpu/src/adapter.rs` at `93a88a839aae370740b09434fdec410abb8c24ca`, and its device health from PhotoCraft `crates/gpu/src/health.rs` at `01a5b5a389acc93f081e5ce6a8d0580d6438774a`, both MIT OR Apache-2.0; `crates/gpu-device/NOTICE` names both.
+`crates/gpu-device`'s adapter rule and driver corrections come from FilmCraft `crates/gpu/src/adapter.rs` at `93a88a839aae370740b09434fdec410abb8c24ca`, and its device health from PhotoCraft `crates/gpu/src/health.rs` at `01a5b5a389acc93f081e5ce6a8d0580d6438774a`, both MIT OR Apache-2.0; `crates/gpu-device/NOTICE` names both.
