@@ -5,7 +5,7 @@
 
 use crate::primitives::pointer_art::{self as pointers, Art};
 
-use crate::primitives::{Draw, DrawEnv, IconSet, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
+use crate::primitives::{Draw, DrawEnv, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
@@ -89,7 +89,7 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
         PaintedCursor::Zoom { out, .. } => pointers::zoom(&pen, *out),
         PaintedCursor::Tool { icon, hotspot, badge, .. } => {
             let side = env.tokens.size.icon.md;
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
+            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
             pointers::tool(&pen, icon, *hotspot, *badge, side);
         }
         PaintedCursor::Badged { badge, .. } => pointers::badge_beside(&pen, *badge),
@@ -103,7 +103,7 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
         PaintedCursor::PointerTool { pointer, icon, .. } => {
             // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
             let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
+            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
             pointers::pointer_tool(&pen, *pointer, icon, side, edge, ink);
         }
         // `Hidden` has no marks.
