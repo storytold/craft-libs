@@ -86,7 +86,10 @@ label/comment skipping and encoded polyline values. It does not interpret drawin
 commands or replace the existing cutter encoder. The caller supplies numeric
 storage and controls document/geometry budgets; scanning time is proportional to
 input consumed, not capped by this API. PJL language detection copies at most 256
-bytes of a line. Malformed-input recovery retains the original VectorCraft behavior.
+bytes of a line. Malformed-input recovery retains the original VectorCraft behavior,
+except that only `@PJL ENTER LANGUAGE` selects a language: COMMENT/ECHO/SET text
+mentioning LANGUAGE no longer hides subsequent HP-GL commands. This is not a full
+PJL validator; the remaining permissive language-value handling is unchanged.
 
 This module comes from dotCooCoo's VectorCraft `crates/cad/src/hpgl/lex.rs`,
 commit `74ea25cd6c4dffa4cd41f6ee9a76f7afd4225622` (MIT OR Apache-2.0),
