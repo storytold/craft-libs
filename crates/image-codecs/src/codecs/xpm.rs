@@ -96,7 +96,7 @@ fn channel(hex: &str) -> Option<u8> {
     Some(((v * 255 + max / 2) / max) as u8)
 }
 
-fn named(name: &str) -> Option<[u8; 3]> {
+pub(crate) fn named(name: &str) -> Option<[u8; 3]> {
     let s = name.to_ascii_lowercase().replace([' ', '-', '_'], "");
     // XPM imports X11 names, whose RGB values differ from CSS for names
     // such as gray, maroon and purple. Keep these exact rather than guessing.
@@ -112,6 +112,16 @@ fn named(name: &str) -> Option<[u8; 3]> {
         "navyblue" => [0, 0, 128],
         _ => return None,
     })
+}
+
+/// Exact, normalized X11 lookup for consumers that need table membership rather
+/// than XPM's additional aliases and normalization rules.
+pub(crate) fn exact_x11_name(name: &str) -> Option<[u8; 3]> {
+    if name.is_empty() || name.len() > 64 || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()) {
+        return None;
+    }
+    let index = x11_colors::X11_COLORS.binary_search_by_key(&name, |(entry, _)| *entry).ok()?;
+    Some(x11_colors::X11_COLORS.get(index)?.1)
 }
 
 fn color(name: &str) -> Option<[u8; 4]> {
