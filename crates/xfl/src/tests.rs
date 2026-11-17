@@ -109,6 +109,23 @@ fn damaged_archives_are_errors() {
 }
 
 #[test]
+fn reads_a_directory_with_an_overstated_size() {
+    let mut z = zip(&[("DOMDocument.xml", b"<DOMDocument/>", true), ("LIBRARY/ball.xml", b"<DOMSymbolItem/>", false)]);
+    let end = z.len() - 22;
+    let size = u32_at(&z, end + 12).unwrap();
+    z[end + 12..end + 16].copy_from_slice(&(size + 13).to_le_bytes());
+
+    let archive = Archive::open(&z).unwrap();
+    assert_eq!(archive.counts().0, 2);
+    assert_eq!(archive.read("DOMDocument.xml").unwrap().unwrap(), b"<DOMDocument/>");
+    assert_eq!(archive.read("LIBRARY/ball.xml").unwrap().unwrap(), b"<DOMSymbolItem/>");
+
+    // Keep the overstated end record but remove the last byte of the final entry's name.
+    z.remove(end - 1);
+    assert_eq!(Archive::open(&z).err(), Some(ZipError::Damaged("the central directory is outside the archive")));
+}
+
+#[test]
 fn a_truncated_central_directory_is_damaged() {
     let z = zip(&[("DOMDocument.xml", b"<DOMDocument/>", true), ("b.xml", b"<b/>", true), ("c.xml", b"<c/>", false)]);
     let dir_at = u32_at(&z, z.len() - 6).unwrap() as usize;

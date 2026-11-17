@@ -318,6 +318,19 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
             let Some((_, shift)) = locate_directory(data, count.into(), size.into(), offset.into(), candidate)
                 .filter(|&(dir, _)| directory_is_exact(data, dir, size.into(), count.into(), &mut directory_jumps))
             else {
+                // An overstated size is safe to ignore only when the recorded entries fill
+                // the byte range from the declared offset to this single-disk end record.
+                // The classic entry count is below MAX_ENTRIES, so the walk checks every entry.
+                if count != 0
+                    && u32_at(data, candidate + 4) == Some(0)
+                    && u16_at(data, candidate + 8) == Some(count)
+                    && let Ok(start) = usize::try_from(offset)
+                    && let Some(measured) = candidate.checked_sub(start).and_then(|n| u32::try_from(n).ok())
+                    && measured < size
+                    && directory_is_exact(data, start, measured.into(), count.into(), &mut directory_jumps)
+                {
+                    return Ok((count.into(), measured.into(), offset.into(), candidate));
+                }
                 continue;
             };
             if count == 0 && shift > 0 {
