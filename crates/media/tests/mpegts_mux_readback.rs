@@ -345,3 +345,12 @@ fn a_single_frame_and_a_huge_one() {
     ];
     round_trip(Config::default(), &streams, &mut items, &[Demuxed::H264]);
 }
+
+#[test]
+#[should_panic(expected = "PCR flag in an adaptation field of 1 byte")]
+fn the_packet_checker_refuses_a_pcr_flag_in_a_short_adaptation_field() {
+    // adaptation_field_length 1 holds only the flags byte, so the six bytes after it are payload
+    let mut p = vec![0x7E; 188];
+    p[..6].copy_from_slice(&[0x47, 0x01, 0x00, 0x30, 0x01, 0x10]);
+    check_packets(&p, 0x100, 3600 * 300);
+}

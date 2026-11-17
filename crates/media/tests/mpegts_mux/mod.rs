@@ -237,6 +237,7 @@ pub fn check_packets(ts: &[u8], pcr_pid: u16, limit: i64) -> Vec<i64> {
             let len = p[4] as usize;
             assert!(if payload { len <= 182 } else { len == 183 });
             if len > 0 && p[5] & 0x10 != 0 {
+                assert!(len >= 7, "PCR flag in an adaptation field of {len} byte{}", if len == 1 { "" } else { "s" });
                 assert_eq!(pid, pcr_pid, "a PCR off the PCR PID");
                 let b = &p[6..12];
                 assert_eq!(b[4] & 0x7E, 0x7E, "reserved bits");
