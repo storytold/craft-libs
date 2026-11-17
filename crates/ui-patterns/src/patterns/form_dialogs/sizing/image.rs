@@ -163,7 +163,8 @@ pub struct ImageSize<'a> {
     /// document's depth, no alpha (1/8 for Bitmap, 1 for Indexed).
     #[prop(quantity = "bytes per pixel")]
     bytes_per_pixel: f64,
-    /// The held OK of a hosted dialog.
+    /// The held OK of a hosted dialog ([`Hold`]).
+    #[prop(name = "hold_ok", vis = "pub(crate)")]
     hold: Hold<ImageSizeValues>,
 }
 
@@ -171,12 +172,6 @@ impl<'a> ImageSize<'a> {
     /// The dialog over `values`.
     pub fn new(values: Bind<'a, ImageSizeValues>) -> Self {
         ImageSize { values, open: None, methods: Vec::new(), bytes_per_pixel: 4.0, hold: Hold::default() }
-    }
-
-    /// Holds the OK of a hosted dialog ([`Hold`]).
-    fn hold_ok(mut self, hold: Hold<ImageSizeValues>) -> Self {
-        self.hold = hold;
-        self
     }
 
     /// Shows the dialog.

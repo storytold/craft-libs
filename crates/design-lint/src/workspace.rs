@@ -64,6 +64,7 @@ const CLOSED: &[&str] = &[
     "SurfaceStyle",    // built or matched in craft-ui-widgets
     "Target",          // built or matched in craft-ui-canvas
     "TextOptions",     // built or matched in craft-ui-widgets
+    "TransformReach",  // `MoveOnly { points }` is built in PhotoCraft's type tool
     "ToastEnd",        // built or matched in craft-ui-widgets
     "TrackLook",       // built or matched in craft-ui-widgets
     "VariantParts",    // built or matched in craft-ui-widgets

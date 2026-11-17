@@ -161,11 +161,12 @@ fn position_text_that_does_not_parse_keeps_ok_from_making_a_guide() {
     let position = fixture.by_label("Position").expect("the Position field");
     fixture.click(&position).settle();
     fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
-    fixture.type_text("40").settle();
+    let typed = 40.0;
+    fixture.type_text(&typed.to_string()).settle();
     assert!(enabled.get(), "a number enables OK again");
     let ok = fixture.by_label("OK").expect("the footer has OK");
     fixture.click(&ok).settle();
     assert!(!open.get(), "OK closes the dialog");
     let confirmed: Vec<_> = made.borrow().iter().map(|guide| guide.position).collect();
-    assert_eq!(confirmed, [40.0]);
+    assert_eq!(confirmed, [typed], "OK makes the guide at the typed position");
 }

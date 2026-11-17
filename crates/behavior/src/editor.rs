@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 /// What an input method counts the text around the caret in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SurroundingUnit {
     /// Characters.
     Chars,

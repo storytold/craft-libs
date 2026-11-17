@@ -165,7 +165,7 @@ impl State {
     /// is recorded under that root.
     pub(super) fn focus_stop(&mut self, rec: StopRec) -> Vec<Act> {
         let key = rec.stop.key();
-        let acts = self.move_focus(rec, FocusOrigin::Request);
+        let acts = self.enter_stop(rec, FocusOrigin::Request);
         self.revealed = Some(key);
         acts
     }
@@ -173,10 +173,10 @@ impl State {
     /// Moves focus to `rec` without a reveal: a press focuses a stop under the pointer, which is on screen already,
     /// and scrolling it in would move the content under the held press.
     pub(super) fn focus_stop_in_place(&mut self, rec: StopRec) -> Vec<Act> {
-        self.move_focus(rec, FocusOrigin::Press)
+        self.enter_stop(rec, FocusOrigin::Press)
     }
 
-    fn move_focus(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
+    fn enter_stop(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         self.note_entry(&rec);
         let stop = &rec.stop;
         let roving = stop.group.is_some();
