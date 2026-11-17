@@ -633,7 +633,7 @@ impl<'m> ToolHost<'m> {
             let (rows, paints) = if requests.hud.is_some() { (requests.hud, true) } else { (requests.readout, gate) };
             if let Some(rows) = rows {
                 if paints {
-                    paint_readout(&ctx, at, &rows);
+                    paint_readout(&ctx, &env, at, &rows);
                 }
                 response.readout = Some(ToolReadout { at, rows });
             }

@@ -10,20 +10,20 @@ use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::{cursor, pointer};
-use crate::style::{Corners, Ink, RuleWidth, SurfaceKind, rule_look};
+use crate::style::{Corners, Ink, RuleWidth, SurfaceKind, UiTokens, rule_look};
 use craft_behavior::Flow;
 use egui::{Context, CornerRadius, Pos2, Rect, Vec2};
 use std::cell::RefCell;
 
-/// The end hook's painter of the ghost layer: pass it to `InstallSpec::frame_layers`.
+/// The end hook's painter of the ghost layer: pass it to `InstallSpec::frame_layers`. The drag preview paints in the
+/// env of the region the drag started in and the drop mark in the tokens of the target's region; the pointer, which
+/// belongs to no region, in the root env's.
 pub fn paint(ctx: &Context) {
-    let env = Env::of_root(ctx);
+    let root = Env::of_root(ctx);
     let painter = painter(ctx);
-    let record = RefCell::new(PaintRecord::default());
-    let draw = Draw::new(&painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: Ink::OnPanel });
-    paint_pointer(ctx, &env, &painter);
+    paint_pointer(ctx, &root, &painter);
     if let Some(session) = drag::ghost(ctx) {
-        paint_drag(ctx, &env, &painter, &draw, &session);
+        paint_drag(ctx, session.env.as_ref().unwrap_or(&root), &painter, &session);
     }
 }
 
@@ -112,11 +112,13 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
     pen.art.into_inner()
 }
 
-/// The drag preview and the drop mark of the running drag.
-fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, draw: &Draw<'_>, session: &drag::Ghost) {
-    if let Some(mark) = session.mark {
-        paint_mark(painter, env, mark);
+/// The drag preview, in `env`, the source's, and the drop mark of the running drag.
+fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, session: &drag::Ghost) {
+    if let Some((mark, tokens)) = &session.mark {
+        paint_mark(painter, tokens, *mark);
     }
+    let record = RefCell::new(PaintRecord::default());
+    let draw = &Draw::new(painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: Ink::OnPanel });
     let Some(at) = pointer::frame(ctx).pos else { return };
     match &session.preview {
         DragPreview::Badge(label) => {
@@ -152,11 +154,11 @@ fn paint_drag_badge(draw: &Draw<'_>, env: &Env, at: Pos2, text: &str) {
 /// The drop mark: bands of the drop rule on a halo of the panel surface one thin stroke wide, so the mark reads over
 /// any content. An area mark is the same band along the inside of its rect; a region is also washed with the rule's
 /// colour, so the area the payload takes reads as one piece, and carries its line band.
-fn paint_mark(painter: &egui::Painter, env: &Env, mark: DropMark) {
-    let look = rule_look(&env.tokens, RuleKind::DropMark);
+fn paint_mark(painter: &egui::Painter, tokens: &UiTokens, mark: DropMark) {
+    let look = rule_look(tokens, RuleKind::DropMark);
     let ppp = painter.ctx().pixels_per_point();
     let width = look.width.points(ppp);
-    let halo = RuleWidth::Points(env.tokens.stroke.thin).points(ppp);
+    let halo = RuleWidth::Points(tokens.stroke.thin).points(ppp);
     let outline = |rect: Rect| {
         let inside = rect.shrink(width / 2.0 + halo);
         let corners = [inside.left_top(), inside.right_top(), inside.right_bottom(), inside.left_bottom()];
@@ -172,7 +174,7 @@ fn paint_mark(painter: &egui::Painter, env: &Env, mark: DropMark) {
     };
     let band = |(from, to): (Pos2, Pos2), half: f32| Rect::from_two_pos(from, to).expand(half);
     // Every halo before any band, so the halo of one side never covers the band of the side before it.
-    let panel = crate::style::rgba_color(env.tokens.color.surface.panel);
+    let panel = crate::style::rgba_color(tokens.color.surface.panel);
     for &segment in &segments {
         painter.rect_filled(band(segment, width / 2.0 + halo), CornerRadius::ZERO, panel);
     }

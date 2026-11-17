@@ -120,11 +120,11 @@ impl Pointer for CxCore<'_> {
     }
 
     fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview) {
-        drag::start(&self.ctx, self.id, Arc::new(payload), None, preview);
+        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), None, preview);
     }
 
     fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn std::any::Any + Send + Sync>, preview: DragPreview) {
-        drag::start(&self.ctx, self.id, Arc::new(payload), Some(also), preview);
+        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), Some(also), preview);
     }
 
     fn dragging<P: Send + Sync + 'static>(&self) -> Option<(Arc<P>, Pos2)> {
@@ -141,7 +141,7 @@ impl Pointer for CxCore<'_> {
         let op = drag::current_operation(&self.ctx);
         let drop = target.accept(&payload, op)?;
         let ordinal = drag::next_ordinal(&self.ctx, self.id);
-        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), true);
+        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), self.env.shared_tokens(), true);
         drag::take_drop(&self.ctx, self.id, ordinal, op, TypeId::of::<P>()).then_some(drop)
     }
 
@@ -165,7 +165,7 @@ impl CxCore<'_> {
     /// `Pointer::drop_target` for the payload whose type is `payload_type`, chosen at run time: a collection takes the
     /// payload types its drop kinds name. The target lies over this component's visible shapes on its own layer.
     pub(crate) fn drop_target_of<T: DropTarget<dyn Any + Send + Sync>>(&mut self, payload_type: TypeId, target: &T) -> Option<T::Drop> {
-        drag::target_of(&self.ctx, self.id, DropZone::new(self.response.layer_id, self.visible), payload_type, target)
+        drag::target_of(&self.ctx, self.id, DropZone::new(self.response.layer_id, self.visible), self.env.shared_tokens(), payload_type, target)
     }
 }
 

@@ -1,9 +1,8 @@
 //! The readout: values beside the pointer during a canvas gesture ("W 120 px", "Angle 15 deg").
 
-use crate::contract::ghost;
+use crate::contract::{CxCore, ghost};
 use crate::primitives::{Draw, DrawEnv, PaintRecord, Span, TextRun};
 use crate::runtime::env::{Env, EnvValue, Label};
-use crate::runtime::memory::StageAccess;
 use crate::style::{Corners, Ink, SurfaceKind};
 use craft_i18n::Direction;
 use egui::{Context, Pos2, Rect, Vec2, vec2};
@@ -25,13 +24,12 @@ impl EnvValue for ShowReadouts {
 /// of the pointer (the lower right, mirrored under right-to-left), flips to the other side where the window has no
 /// room and stays inside the window. Labels start at the reading start and values end at the reading end, the widest
 /// label and the widest value a section gap apart. Labels are in the muted ink and values in the normal one. No rows
-/// paint nothing.
-pub fn readout(cx: &impl StageAccess, at: Pos2, rows: &[(Label, String)]) {
-    let ctx = cx.stage().ctx();
-    if !shown(ctx) {
+/// paint nothing. The readout paints in the env of `cx`'s region: its tokens, words and direction.
+pub fn readout(cx: &CxCore<'_>, at: Pos2, rows: &[(Label, String)]) {
+    if !shown(&cx.ctx) {
         return;
     }
-    paint_readout(ctx, at, rows);
+    paint_readout(&cx.ctx, &cx.env.to_env(), at, rows);
 }
 
 /// Whether the root env's [`ShowReadouts`] lets value readouts paint: the one reading of the gate, shared by [`readout`]
@@ -41,16 +39,15 @@ pub(super) fn shown(ctx: &Context) -> bool {
 }
 
 /// [`readout`] that the Show Transformation Values gate ([`ShowReadouts`]) never silences: brush size readouts.
-pub fn hud(cx: &impl StageAccess, at: Pos2, rows: &[(Label, String)]) {
-    paint_readout(cx.stage().ctx(), at, rows);
+pub fn hud(cx: &CxCore<'_>, at: Pos2, rows: &[(Label, String)]) {
+    paint_readout(&cx.ctx, &cx.env.to_env(), at, rows);
 }
 
-/// [`readout`] for a caller that has the context, such as the tool host.
-pub(super) fn paint_readout(ctx: &Context, at: Pos2, rows: &[(Label, String)]) {
+/// [`readout`] in `env`, the env of the region that asks for it, for a caller that has one, such as the tool host.
+pub(super) fn paint_readout(ctx: &Context, env: &Env, at: Pos2, rows: &[(Label, String)]) {
     if rows.is_empty() {
         return;
     }
-    let env = Env::of_root(ctx);
     let painter = ghost::painter(ctx);
     let record = RefCell::new(PaintRecord::default());
     let draw = Draw::new(&painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: Ink::OnPanel });

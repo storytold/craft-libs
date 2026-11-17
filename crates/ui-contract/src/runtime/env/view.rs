@@ -166,4 +166,16 @@ impl<'a> EnvView<'a> {
     pub fn resolve(&self, label: &Label) -> Label {
         label.resolved(&self.scoped.words)
     }
+
+    /// The env this view shows, owned: for the framework's painters that run after the region that asked for them (a
+    /// drag preview, a canvas readout on the ghost layer), so they paint in that region's tokens, words and direction.
+    #[doc(hidden)]
+    pub fn to_env(&self) -> super::Env {
+        super::Env { scoped: Arc::new(self.scoped.clone()) }
+    }
+
+    /// The scope's resolved tokens, shared: what a drop target's mark paints with.
+    pub(crate) fn shared_tokens(&self) -> Arc<crate::style::UiTokens> {
+        self.scoped.tokens.clone()
+    }
 }

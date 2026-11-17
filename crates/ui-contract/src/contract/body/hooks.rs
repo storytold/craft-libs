@@ -25,7 +25,7 @@ use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
 use crate::runtime::egui::{alloc, areas, child, repaint, response, style};
-use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, RowLine};
+use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, RowLine, ThemeScope};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::{Driver, Presence, spec};
@@ -76,6 +76,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// container (a canvas) is the instance its chords and the commands it takes reach.
     fn instance_scope(&self, comp: &C) -> Option<commands::CommandScope> {
         comp.props(Internal::new()).command_scope
+    }
+
+    fn theme_scope(&self, comp: &C) -> Option<ThemeScope> {
+        comp.props(Internal::new()).theme.clone()
     }
 
     fn memory_owner(&self, comp: &C) -> Option<Id> {
