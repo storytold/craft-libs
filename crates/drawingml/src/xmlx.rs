@@ -156,7 +156,20 @@ fn used_prefixes(el: &El) -> HashSet<&str> {
     used
 }
 
-/// Serialize `el`, declaring every prefix it uses that the source root declared.
+/// Does `el` or a descendant have an unprefixed name that no `xmlns` inside `el` binds? Such a
+/// name is in the default namespace of the part it was read from. Attributes never are.
+fn uses_outer_default(el: &El) -> bool {
+    fn rec(e: &El, depth: usize) -> bool {
+        if depth > MAX_DEPTH || e.attrs.iter().any(|(k, _)| k == "xmlns") {
+            return false;
+        }
+        !e.name.contains(':') || e.elements().any(|c| rec(c, depth + 1))
+    }
+    rec(el, 0)
+}
+
+/// Serialize `el`, declaring every prefix it uses that the source root declared, and the
+/// root's default namespace when an unprefixed name in `el` depends on it.
 pub fn keep_xml(el: &El, ns: &[(String, String)]) -> String {
     keep_with(el, &[ns], None)
 }
@@ -166,11 +179,15 @@ pub fn keep_xml(el: &El, ns: &[(String, String)]) -> String {
 /// [`MAX_COPIED_NS_BYTES`]).
 pub fn keep_with(el: &El, decls: &[&[(String, String)]], budget: Option<&Cell<usize>>) -> String {
     let used = used_prefixes(el);
+    let default = uses_outer_default(el);
     let mut have: HashSet<&str> = el.attrs.iter().map(|(a, _)| a.as_str()).collect();
     let mut extra = Vec::new();
     for (k, v) in decls.iter().flat_map(|d| d.iter()) {
-        let p = k.strip_prefix("xmlns:").unwrap_or("");
-        if !p.is_empty() && used.contains(p) && v.len() <= MAX_NS_VALUE && !have.contains(k.as_str()) {
+        let wanted = match k.strip_prefix("xmlns:") {
+            Some(p) => !p.is_empty() && used.contains(p),
+            None => k == "xmlns" && default,
+        };
+        if wanted && v.len() <= MAX_NS_VALUE && !have.contains(k.as_str()) {
             let cost = k.len() + v.len();
             if let Some(b) = budget {
                 if b.get() < cost {
@@ -322,6 +339,33 @@ mod tests {
         assert_eq!(keep_xml(root.child(Local("z")).unwrap(), &ns), r#"<p:z xmlns:p="P"/>"#);
         assert_eq!(rel_refs(x), ["rId1"]);
         assert!(!has_rel_refs(root.child(Local("z")).unwrap()));
+    }
+
+    /// A part written with a default namespace (`<theme xmlns="…/main">`): an unprefixed
+    /// fragment, or one with an unprefixed descendant, carries that namespace; a prefixed one
+    /// and one that declares its own default are written as before.
+    #[test]
+    fn a_kept_fragment_carries_the_default_namespace_its_names_depend_on() {
+        let root = parse(
+            br#"<theme xmlns="D" xmlns:r="R"><custClrLst><custClr name="x"><srgbClr val="FF0000"/></custClr></custClrLst><r:y/><r:z><w/></r:z><own xmlns="O"><v/></own><r:u><t xmlns=""/></r:u></theme>"#,
+        )
+        .unwrap();
+        let ns = ns_decls(&root);
+        let kid = |n: &str| root.child(Local(n)).unwrap();
+        assert_eq!(keep_xml(kid("custClrLst"), &ns), r#"<custClrLst xmlns="D"><custClr name="x"><srgbClr val="FF0000"/></custClr></custClrLst>"#);
+        assert_eq!(keep_xml(kid("y"), &ns), r#"<r:y xmlns:r="R"/>"#, "prefixed: as before");
+        assert_eq!(keep_xml(kid("z"), &ns), r#"<r:z xmlns="D" xmlns:r="R"><w/></r:z>"#, "an unprefixed descendant");
+        assert_eq!(keep_xml(kid("own"), &ns), r#"<own xmlns="O"><v/></own>"#, "its own default wins");
+        assert_eq!(keep_xml(kid("u"), &ns), r#"<r:u xmlns:r="R"><t xmlns=""/></r:u>"#, "an undeclared default stays");
+        // A part with no default namespace: unprefixed names stay in no namespace.
+        let plain = parse(br#"<p:sld xmlns:p="P"><x/></p:sld>"#).unwrap();
+        assert_eq!(keep_xml(plain.child(Local("x")).unwrap(), &ns_decls(&plain)), "<x/>");
+        // The default declaration spends the budget like the others.
+        let budget = Cell::new(3);
+        assert_eq!(
+            keep_with(kid("custClrLst"), &[&ns], Some(&budget)),
+            r#"<custClrLst><custClr name="x"><srgbClr val="FF0000"/></custClr></custClrLst>"#
+        );
     }
 
     #[test]

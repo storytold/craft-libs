@@ -26,6 +26,47 @@ pub fn srgb_trc() -> Curve {
 }
 
 impl Curve {
+    /// Creates a gamma curve `y = x^g`. Returns `Identity` if `g == 1.0` (within 1e-6).
+    pub fn gamma(g: f64) -> Result<Self, crate::CmsError> {
+        if !crate::math::fits_s15f16(g) || crate::math::s15f16_round(g) <= 0.0 {
+            return Err(crate::CmsError::InvalidArgument("gamma must remain positive and representable in ICC fixed point".into()));
+        }
+        if (g - 1.0).abs() < 1e-6 { Ok(Curve::Identity) } else { Ok(Curve::Gamma(g)) }
+    }
+
+    /// Creates an ICC parametric curve (types 0 to 4).
+    pub fn parametric(kind: u16, p: [f64; 7]) -> Result<Self, crate::CmsError> {
+        if kind > 4 {
+            return Err(crate::CmsError::InvalidArgument(format!("parametric curve kind {kind} must be <= 4")));
+        }
+        let count = Self::param_count(kind);
+        if !p.iter().take(count).all(|&v| crate::math::fits_s15f16(v)) {
+            return Err(crate::CmsError::InvalidArgument("parametric curve parameters must be representable in ICC fixed point".into()));
+        }
+        Ok(Curve::Parametric { kind, p })
+    }
+
+    /// Creates a sampled lookup table curve over evenly spaced inputs in `[0, 1]`.
+    pub fn from_table(samples: Vec<f32>) -> Result<Self, crate::CmsError> {
+        if samples.len() < 2 {
+            return Err(crate::CmsError::InvalidArgument("sampled curve must contain at least 2 entries".into()));
+        }
+        if !samples.iter().all(|s| s.is_finite() && (0.0..=1.0).contains(s)) {
+            return Err(crate::CmsError::InvalidArgument("sampled curve values must be finite and within [0, 1]".into()));
+        }
+        Ok(Curve::Table(samples))
+    }
+
+    /// Validate public enum variants before a profile stores them in ICC tags.
+    pub(crate) fn validate_icc(&self) -> Result<(), crate::CmsError> {
+        match self {
+            Self::Identity => Ok(()),
+            Self::Gamma(g) => Self::gamma(*g).map(|_| ()),
+            Self::Parametric { kind, p } => Self::parametric(*kind, *p).map(|_| ()),
+            Self::Table(t) if t.len() >= 2 && u32::try_from(t.len()).is_ok() && t.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) => Ok(()),
+            Self::Table(_) => Err(crate::CmsError::InvalidArgument("sampled curve must contain representable finite normalized samples".into())),
+        }
+    }
     /// Number of parameters stored for a parametric function type.
     pub fn param_count(kind: u16) -> usize {
         match kind {

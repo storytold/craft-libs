@@ -158,6 +158,7 @@ fn heavy(size: f64, gradients: usize) -> DisplayList {
                 isolated: false,
                 knockout: false,
                 clip: None,
+                clip_rule: FillRule::NonZero,
                 mask: None,
                 actual_text: None,
                 children: vec![fill],

@@ -16,8 +16,8 @@ use std::ops::Range;
 
 use egui::{
     Align, Align2, AsIdSalt, Atom, AtomExt as _, Atoms, Context, Direction, Frame, Id, IdSalt, InnerResponse, IntoAtoms, LayerId, NumExt as _, Order,
-    Painter, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, Shape, TextStyle, TextWrapMode, Ui, Vec2, WidgetAtom,
-    WidgetInfo,
+    Painter, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, Shape, SizedAtomKind, SizedContainerAtom, TextStyle,
+    TextWrapMode, Ui, Vec2, WidgetAtom, WidgetInfo,
     class::{ClassName, Classes, HasClasses},
     style::{StyleModifier, WidgetVisuals},
     vec2,
@@ -28,10 +28,12 @@ pub use egui::IconPainter;
 
 /// egui's [`egui::ComboBox`] with a menu that grows when its contents do.
 ///
-/// The builder, the button and what the methods return are egui 0.37's. The one difference is
-/// the menu: its scroll area is offered the full [`Self::height`] on every pass instead of the
+/// The builder, the button's look and what the methods return are egui 0.37's. It differs in two
+/// ways. The menu's scroll area is offered the full [`Self::height`] on every pass instead of the
 /// menu's height on the previous pass, so a menu whose contents shrink and grow again while it
-/// is open (a filtered list) grows back. It adds [`Self::show_ui_with_header`] and
+/// is open (a filtered list) grows back. When the button cuts the selected text short, hovering
+/// it shows the full text in a tooltip, as a truncated [`egui::Label`] does (see
+/// [`Self::show_tooltip_when_elided`]). It adds [`Self::show_ui_with_header`] and
 /// [`Self::show_rows_with_header`] for menus with a search field.
 ///
 /// ```
@@ -49,6 +51,7 @@ pub struct ComboBox<'a> {
     height: Option<f32>,
     icon: Option<IconPainter>,
     wrap_mode: Option<TextWrapMode>,
+    show_tooltip_when_elided: bool,
     close_behavior: Option<PopupCloseBehavior>,
     popup_style: StyleModifier,
     classes: Classes,
@@ -72,6 +75,7 @@ impl<'a> ComboBox<'a> {
             height: None,
             icon: None,
             wrap_mode: None,
+            show_tooltip_when_elided: true,
             close_behavior: None,
             popup_style: StyleModifier::default(),
             classes: Classes::default(),
@@ -143,6 +147,15 @@ impl<'a> ComboBox<'a> {
     #[inline]
     pub fn truncate(mut self) -> Self {
         self.wrap_mode = Some(TextWrapMode::Truncate);
+        self
+    }
+
+    /// Whether hovering the button shows the full selected text in a tooltip when the button cuts
+    /// it short, as [`egui::Label::show_tooltip_when_elided`] does. Default: `true`. A caller that
+    /// puts its own tooltip on the button can turn this off so the two do not stack.
+    #[inline]
+    pub fn show_tooltip_when_elided(mut self, show: bool) -> Self {
+        self.show_tooltip_when_elided = show;
         self
     }
 
@@ -268,7 +281,7 @@ fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnc
     let wrap_mode = combo.wrap_mode.unwrap_or_else(|| ui.wrap_mode());
     let close_behavior = combo.close_behavior.unwrap_or(PopupCloseBehavior::CloseOnClick);
     combo.set_class(ComboBox::CLASS_OPEN, is_popup_open);
-    let ComboBox { label, selected_text, width, height, icon, popup_style, classes, .. } = combo;
+    let ComboBox { label, selected_text, width, height, icon, show_tooltip_when_elided, popup_style, classes, .. } = combo;
 
     // Built from the same atoms and style as a `Button`, so the two line up when put side by side.
     let ButtonStyle { atom_layout: atom_layout_style } = ui.widget_style(button_id, &classes);
@@ -311,16 +324,33 @@ fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnc
         )
         .min_size(min_size);
 
-    let (button_response, label_response) = match label {
+    let (button_response, label_response, elided) = match label {
         Some(label) => {
             let label_text = label.text().map(String::from).unwrap_or_default();
-            let outer_response =
-                WidgetAtom::new((Atom::widget(button), label)).gap(ui.spacing().item_spacing.x).direction(direction).show(ui).response;
+            let outer =
+                WidgetAtom::new((Atom::widget(button), label)).gap(ui.spacing().item_spacing.x).direction(direction).measure(ui, ui.available_size());
+            let elided = outer.container.iter_kinds().any(|kind| matches!(kind, SizedAtomKind::Widget(button) if cut_short(&button.container)));
+            let outer_response = outer.allocate(ui).paint(ui).response;
             outer_response.widget_info(|| WidgetInfo::labeled(Role::Label, ui.is_enabled(), &label_text));
             let button_response = ui.ctx().read_response(button_id).unwrap_or_else(|| outer_response.clone());
-            (button_response, Some((outer_response, !label_text.is_empty())))
+            (button_response, Some((outer_response, !label_text.is_empty())), elided)
         }
-        None => (button.show(ui).response, None),
+        None => {
+            let button = button.measure(ui, ui.available_size());
+            let elided = cut_short(&button.container);
+            (button.allocate(ui).paint(ui).response, None, elided)
+        }
+    };
+    // A selected text cut short shows in full on hover, as a truncated `Label`'s does: all of
+    // its text atoms, as screen readers receive them. `on_hover_ui` rather than `on_hover_text`,
+    // which would also make the text the button's accessible name and description.
+    let button_response = if show_tooltip_when_elided && elided {
+        button_response.on_hover_ui(|ui| {
+            ui.set_max_width(ui.spacing().tooltip_width);
+            ui.add(egui::Label::new(accessible_text.as_str()).wrap());
+        })
+    } else {
+        button_response
     };
 
     button_response.widget_info(|| {
@@ -346,6 +376,11 @@ fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnc
             None => button_response,
         },
     }
+}
+
+/// Whether the button cut any of its selected text short.
+fn cut_short(button: &SizedContainerAtom<'_>) -> bool {
+    button.iter_texts().any(|galley| galley.elided)
 }
 
 fn paint_default_icon(painter: &Painter, rect: Rect, visuals: &WidgetVisuals) {
