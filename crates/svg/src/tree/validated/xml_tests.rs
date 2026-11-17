@@ -197,3 +197,24 @@ fn plain_root_callback_leaf_does_not_spend_the_child_boundary_twice() {
         assert_eq!(sample.alpha(), if admitted { 255 } else { 0 }, "exact-boundary child must actually draw");
     }
 }
+
+#[test]
+fn nested_callback_leaves_do_not_spend_the_descendant_boundary_twice() {
+    let leaf = drawing("<rect width='4' height='4' fill='black'/>"); // height2
+    let middle = drawing(&image(&url(leaf.as_bytes()))); // height2
+    let root = drawing(&image(&url(middle.as_bytes()))); // height2
+    // Root and middle each contribute one ancestor, then the leaf's full
+    // height2: the visible rectangle fits exactly at depth4, but not depth3.
+    for (depth, admitted) in [(3, false), (4, true)] {
+        let limits = Limits { tree_depth: depth, ..Default::default() };
+        let context = ValidatedImageResolver::new(limits);
+        let tree = context.parse_preflight(preflight(&root, &limits).unwrap(), usvg::Options::default()).unwrap();
+        let usage = context.usage();
+        assert_eq!(usage.embedded_svg_count, if admitted { 2 } else { 1 });
+        assert_eq!(usage.svg_limit_images, usize::from(!admitted));
+        assert_eq!(usage.invalid_svg_images, 0);
+        let pixels = super::super::draw::render(&tree, usvg::Transform::identity(), 4, 4, 0, 1 << 20).unwrap();
+        let sample = pixels.pixel(1, 1).unwrap();
+        assert_eq!(sample.alpha(), if admitted { 255 } else { 0 }, "exact-boundary grandchild must actually draw");
+    }
+}

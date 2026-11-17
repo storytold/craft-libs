@@ -338,7 +338,9 @@ impl ValidatedImageResolver {
                 return None;
             };
             let previous = state.xml_depth;
-            state.xml_depth = total;
+            // Admission includes the child's complete height, but recursive
+            // conversion reserves ancestors only, not its image callback leaf.
+            state.xml_depth = total.saturating_sub(1);
             state.depth = state.depth.saturating_add(1);
             state.svg_depth = state.svg_depth.max(state.depth);
             Scope { state: Arc::clone(&self.state), previous, child: true }
