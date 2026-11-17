@@ -64,7 +64,7 @@ mod tests {
         for (index, prefix) in cases.iter().take(64).enumerate() {
             assert_eq!(prefix, &sample[..index * 2]);
         }
-        for (index, pair) in cases[64..].chunks_exact(2).enumerate() {
+        for (index, pair) in cases[64..].as_chunks::<2>().0.iter().enumerate() {
             assert_eq!(pair[0].len(), sample.len());
             let mut expected = sample.clone();
             expected[index * 2] = 255;
