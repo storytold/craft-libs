@@ -5,7 +5,7 @@ use crate::format::ErrorKind;
 use crate::{ColorToken, ContrastIntent, Mode, ModePins, Rgba, ThemeDef, Variants, builtins};
 
 fn builtin(id: &str) -> ThemeDef {
-    builtins().iter().find(|t| t.id.as_str() == id).unwrap().clone()
+    builtins().iter().find(|t| t.id.as_str() == format!("craft.{id}")).unwrap().clone()
 }
 
 /// A theme with both modes and no pins of its own.
