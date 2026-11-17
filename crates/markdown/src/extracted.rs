@@ -39,7 +39,7 @@ fn block_start(line: String) -> String {
 }
 
 /// `text` (already escaped) in bold and/or italic, its outer spaces kept outside. `open` and
-/// `close` say whether `*` markers would be read as emphasis on that side (see [`marks`]);
+/// `close` say whether `*` markers would be read as emphasis on that side;
 /// where they would not, as in `foo` + bold `.` + `bar`, the run is wrapped in HTML tags, which
 /// CommonMark takes inline. The text's own outer spaces count as a side that marks.
 pub fn emphasis(text: &str, bold: bool, italic: bool, open: bool, close: bool) -> String {

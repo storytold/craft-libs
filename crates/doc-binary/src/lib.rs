@@ -1,6 +1,6 @@
 //! Reader and writer for the Word 97-2003 binary file format (`.doc`, [MS-DOC]), WordCraft's.
 //!
-//! [`read`] turns the bytes of a `.doc` file into a [`craft_wordmodel::Document`], and [`write`]
+//! [`read`] turns the bytes of a `.doc` file into a [`craft_wordmodel::Document`], and [`write()`]
 //! turns a document into a Word 97-2003 `.doc` file (the `write` module lists what it keeps).
 //! Both follow the public specification ([MS-DOC], Word (.doc) Binary File Format, Microsoft Open
 //! Specifications). The reader, like the other Craft parsers, is lenient by design (unknown
