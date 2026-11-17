@@ -815,13 +815,13 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, Error> {
 }
 
 /// Runs `cmd` with stdout piped and stderr inherited, reads at most `max_bytes` of its output and
-/// parses it as JSON.
+/// parses it as JSON. A stderr setting on `cmd` is replaced.
 ///
 /// Returns [`Error::Process`] when the command cannot be started, writes more than `max_bytes`
 /// (the child is then ended), or exits with a failure status, and [`Error::Metadata`] when its
 /// output is not JSON. `label` names the command in each message.
 pub fn read_json(mut cmd: Command, label: &str, max_bytes: usize) -> Result<Value, Error> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped());
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
     let mut child = cmd.spawn().map_err(|e| Error::Process(format!("{label}: failed to spawn: {e}")))?;
     let mut buf = Vec::new();
     let read = match child.stdout.take() {
@@ -1305,8 +1305,8 @@ mod tests {
         let _guard = crate::spawn_guard();
         let exe = std::env::current_exe().expect("test executable");
         let mut cmd = Command::new(exe);
-        cmd.arg("--list").stderr(Stdio::null());
-        assert!(matches!(read_json(cmd, "child", 8), Err(Error::Process(m)) if m == "child: wrote more than 8 bytes"));
+        cmd.arg("--list");
+        assert!(matches!(read_json(cmd, "child", 8),Err(Error::Process(m)) if m == "child: wrote more than 8 bytes"));
     }
 
     #[test]
@@ -1314,7 +1314,7 @@ mod tests {
         let _guard = crate::spawn_guard();
         let exe = std::env::current_exe().expect("test executable");
         let mut cmd = Command::new(exe);
-        cmd.arg("--list").stderr(Stdio::null());
+        cmd.arg("--list");
         assert!(matches!(read_json(cmd, "child", DEFAULT_METADATA_LIMIT), Err(Error::Metadata(m)) if m.starts_with("child: the output is not JSON")));
     }
 
@@ -1323,10 +1323,58 @@ mod tests {
         let _guard = crate::spawn_guard();
         let exe = std::env::current_exe().expect("test executable");
         let mut cmd = Command::new(exe);
-        cmd.arg("--craft-xtask-unknown-flag").stderr(Stdio::null());
+        cmd.arg("--craft-xtask-unknown-flag");
         assert!(matches!(read_json(cmd, "child", DEFAULT_METADATA_LIMIT), Err(Error::Process(m)) if m.starts_with("child: exited with ")));
         let missing = std::env::temp_dir().join("craft-xtask-no-such-program");
         assert!(matches!(read_json(Command::new(missing), "missing", 1), Err(Error::Process(m)) if m.starts_with("missing: failed to spawn: ")));
+    }
+
+    const PIPED_STDERR_READER: &str = "CRAFT_XTASK_PIPED_STDERR_READER";
+    const STDERR_FLOOD_CHILD: &str = "CRAFT_XTASK_STDERR_FLOOD_CHILD";
+
+    /// This test binary, run as a child that runs only the ignored test `name`.
+    fn test_child(name: &str, env: &str) -> Command {
+        let exe = std::env::current_exe().expect("test executable");
+        let mut c = Command::new(exe);
+        c.args(["--ignored", "--exact", name, "--nocapture"]).env(env, "1").stdin(Stdio::null());
+        c
+    }
+
+    #[test]
+    fn read_json_inherits_stderr_when_the_caller_pipes_it() {
+        let _guard = crate::spawn_guard();
+        // The reader runs in a child whose stderr is null, so the flood it inherits is discarded.
+        let mut reader = test_child("layers::tests::piped_stderr_reader", PIPED_STDERR_READER);
+        reader.stdout(Stdio::null()).stderr(Stdio::null());
+        assert!(reader.status().expect("reader child").success(), "read_json did not return for a child that floods a piped stderr");
+    }
+
+    /// Runs `read_json` on a child that floods its stderr, with stderr set to a pipe that nobody
+    /// reads; run by `read_json_inherits_stderr_when_the_caller_pipes_it`.
+    #[test]
+    #[ignore = "child process of read_json_inherits_stderr_when_the_caller_pipes_it"]
+    fn piped_stderr_reader() {
+        if std::env::var_os(PIPED_STDERR_READER).is_some() {
+            let mut cmd = test_child("layers::tests::stderr_flood_child", STDERR_FLOOD_CHILD);
+            cmd.stderr(Stdio::piped());
+            // The child's stdout is the test harness's report, which is not JSON.
+            assert!(
+                matches!(read_json(cmd, "flood", DEFAULT_METADATA_LIMIT), Err(Error::Metadata(m)) if m.starts_with("flood: the output is not JSON"))
+            );
+        }
+    }
+
+    /// Writes 4 MiB to stderr, more than a pipe holds; run by `piped_stderr_reader`.
+    #[test]
+    #[ignore = "child process of piped_stderr_reader"]
+    fn stderr_flood_child() {
+        if std::env::var_os(STDERR_FLOOD_CHILD).is_some() {
+            let chunk = [b'.'; 64 * 1024];
+            let mut err = std::io::stderr().lock();
+            for _ in 0..64 {
+                std::io::Write::write_all(&mut err, &chunk).expect("stderr");
+            }
+        }
     }
 
     /// Generic moves of PdfCraft's tests: numbered standalone crates, listed sideways pairs, UI

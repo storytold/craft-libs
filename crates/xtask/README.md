@@ -135,7 +135,8 @@ fn layers(root: &std::path::Path) -> Result<(), String> {
   repeated package are errors.
 - `cargo_metadata` and `read_json` read at most the given number of bytes (`DEFAULT_METADATA_LIMIT`
   is 64 MiB) from the child's stdout, end the child when it writes more, and return an error for a
-  spawn failure, a failure exit status or output that is not JSON. Stderr is inherited.
+  spawn failure, a failure exit status or output that is not JSON. Stderr is inherited, also when the
+  caller set it to a pipe.
 - `check` returns the violations sorted by kind and fields, without duplicates; their `Display` text
   names the packages, layers and dependency kind. `wasm_set` returns the layered and standalone
   packages at or below `wasm_max_layer` and the `wasm_extra` packages the workspace has, sorted, with
