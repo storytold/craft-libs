@@ -33,8 +33,10 @@ pub struct Item {
     pub pitches: Vec<u8>,
     /// Duration in sixteenths; always one of the supported duration values.
     pub units: u32,
-    pub tie_start: bool,
-    pub tie_stop: bool,
+    /// Pitches continuing into the next item.
+    pub tie_start: Vec<u8>,
+    /// Pitches continuing from the previous item.
+    pub tie_stop: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,10 +55,13 @@ fn spell(pitch: u8) -> (char, i32, i32) {
 }
 
 fn xml_escape(s: &str) -> String {
-    // Keep the score export's existing literal whitespace and quote spelling. The
-    // shared attribute writer owns XML legality/escaping; only its generated
-    // whitespace references are restored (input ampersands were escaped first).
-    craft_xml::esc_attr(s).replace("&#9;", "\t").replace("&#10;", "\n").replace("&#13;", "\r")
+    s.chars()
+        .filter(|c| matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'))
+        .collect::<String>()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn note_type(units: u32) -> (&'static str, bool) {
@@ -137,10 +142,10 @@ fn musicxml_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Resul
                         let _ = write!(x, "<alter>{alter}</alter>");
                     }
                     let _ = write!(x, "<octave>{octave}</octave></pitch><duration>{}</duration>", it.units);
-                    if it.tie_stop {
+                    if it.tie_stop.contains(pitch) {
                         x.push_str("<tie type=\"stop\"/>");
                     }
-                    if it.tie_start {
+                    if it.tie_start.contains(pitch) {
                         x.push_str("<tie type=\"start\"/>");
                     }
                     let _ = write!(x, "<voice>1</voice><type>{ty}</type>");
@@ -150,12 +155,12 @@ fn musicxml_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Resul
                     if alter != 0 {
                         x.push_str("<accidental>sharp</accidental>");
                     }
-                    if it.tie_stop || it.tie_start {
+                    if it.tie_stop.contains(pitch) || it.tie_start.contains(pitch) {
                         x.push_str("<notations>");
-                        if it.tie_stop {
+                        if it.tie_stop.contains(pitch) {
                             x.push_str("<tied type=\"stop\"/>");
                         }
-                        if it.tie_start {
+                        if it.tie_start.contains(pitch) {
                             x.push_str("<tied type=\"start\"/>");
                         }
                         x.push_str("</notations>");
@@ -321,9 +326,16 @@ fn svg_budgeted(parts: &[Part], setup: &ScoreSetup, budget: usize) -> Result<Str
                             );
                         }
                     }
-                    if it.tie_start {
-                        let y = bottom - f64::from(steps[0]) * SP / 2.0 + 6.0;
-                        let _ = writeln!(o, "<path d=\"M{:.1} {y:.1} q 8 5 16 0\" fill=\"none\" stroke=\"black\" stroke-width=\"0.9\"/>", x + 3.0);
+                    for pitch in &it.tie_start {
+                        let above = it.pitches.first().is_some_and(|low| pitch > low);
+                        let direction = if above { -1.0 } else { 1.0 };
+                        let y = bottom - f64::from(staff_step(*pitch, p.bass)) * SP / 2.0 + direction * 6.0;
+                        let _ = writeln!(
+                            o,
+                            "<path d=\"M{:.1} {y:.1} q 8 {} 16 0\" fill=\"none\" stroke=\"black\" stroke-width=\"0.9\"/>",
+                            x + 3.0,
+                            direction * 5.0
+                        );
                     }
                 }
                 // Check each measure, so a run of rest-only or missing measures that only draws
