@@ -50,6 +50,32 @@ fn h273(code: u8) -> u8 {
     if code == 0 { 2 } else { code }
 }
 
+#[cfg(feature = "cinepak")]
+impl TryFrom<crate::cinepak::Frame> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit RGB frame, full range, identity matrix. Cinepak's own output is RGB (its 4:2:0
+    /// vectors are turned into RGB by the decoder, and 8-bit frames go through the grayscale ramp
+    /// or the palette), so the packed `rgb` samples are used and the planar `y`, `u` and `v` the
+    /// decoder also keeps are not. The packed samples are split into planes, which copies them.
+    fn try_from(p: crate::cinepak::Frame) -> Result<Self, FrameError> {
+        let (w, h) = (p.width, p.height);
+        let pixels = usize::try_from(w)
+            .ok()
+            .zip(usize::try_from(h).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .ok_or(FrameError::Plane("plane size overflows"))?;
+        if pixels.checked_mul(3) != Some(p.rgb.len()) {
+            return Err(FrameError::Shape("sample count does not fit the frame"));
+        }
+        let plane = |c: usize| Plane::packed(w, h, 8, Samples::U8(p.rgb.iter().skip(c).step_by(3).copied().collect()));
+        let planes = vec![plane(0)?, plane(1)?, plane(2)?];
+        let mut f = VideoFrame::new(w, h, ColorFamily::Rgb, Subsampling::S444, planes, None)?;
+        f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "h264-decode")]
 impl TryFrom<crate::h264::decode::Picture> for VideoFrame {
     type Error = FrameError;

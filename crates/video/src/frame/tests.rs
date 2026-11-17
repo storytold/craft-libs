@@ -88,6 +88,28 @@ fn h264_picture(y_len: usize) -> crate::h264::decode::Picture {
     }
 }
 
+#[cfg(feature = "cinepak")]
+#[test]
+fn cinepak_frames_split_into_rgb_planes() {
+    let mut c = crate::cinepak::Frame::new(2, 2, true).unwrap();
+    c.rgb = (1..=12).collect();
+    let f = VideoFrame::try_from(c).unwrap();
+    assert_eq!((f.family(), f.subsampling(), f.bit_depth()), (ColorFamily::Rgb, Subsampling::S444, 8));
+    assert_eq!(f.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
+    assert_eq!(f.plane(0).unwrap().samples(), &Samples::U8(vec![1, 4, 7, 10]));
+    assert_eq!(f.plane(1).unwrap().samples(), &Samples::U8(vec![2, 5, 8, 11]));
+    assert_eq!(f.plane(2).unwrap().samples(), &Samples::U8(vec![3, 6, 9, 12]));
+    assert!(f.alpha().is_none() && f.pts.is_none());
+}
+
+#[cfg(feature = "cinepak")]
+#[test]
+fn a_cinepak_frame_with_the_wrong_size_is_an_error() {
+    let mut c = crate::cinepak::Frame::new(2, 2, false).unwrap();
+    c.rgb.pop();
+    assert!(VideoFrame::try_from(c).is_err());
+}
+
 #[cfg(feature = "h264-decode")]
 #[test]
 fn h264_picture_converts() {

@@ -45,6 +45,22 @@ fn build_synthetic_v1_keyframe(y: [u8; 4], u: i8, v: i8) -> Vec<u8> {
     data
 }
 
+/// A decoded frame converts to the shared `VideoFrame`: the same RGB, as three planes.
+#[test]
+fn test_decoded_frame_converts_to_a_video_frame() {
+    use craft_video::frame::{ColorFamily, Samples, VideoFrame};
+    // Y=100, U=10, V=-20: not gray, so the three planes differ.
+    let frame = decode_frame(&build_synthetic_v1_keyframe([100, 100, 100, 100], 10, -20)).expect("decode");
+    let want = frame.pixel_rgb(3, 2).expect("pixel");
+    let video = VideoFrame::try_from(frame).expect("converts");
+    assert_eq!((video.width(), video.height(), video.family()), (4, 4, ColorFamily::Rgb));
+    assert_ne!(want[0], want[2]);
+    for (c, plane) in video.planes().iter().enumerate() {
+        let Samples::U8(v) = plane.samples() else { panic!("8-bit planes") };
+        assert_eq!(v[2 * 4 + 3], want[c], "plane {c}");
+    }
+}
+
 #[test]
 fn test_synthetic_v1_keyframe() {
     // Pure gray: Y=180, U=0, V=0
