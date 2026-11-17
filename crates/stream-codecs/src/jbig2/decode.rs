@@ -78,6 +78,15 @@ mod tests {
     use super::*;
     use crate::{encode_jbig2, encode_jbig2_generic};
 
+    /// A registry fallback lacks the budget APIs and breaks consumers outside this workspace.
+    #[test]
+    fn bounded_decoder_dependency_is_explicit_for_external_consumers() {
+        let manifest = include_str!("../../Cargo.toml");
+        let dependency = manifest.lines().find(|line| line.starts_with("hayro-jbig2 =")).unwrap();
+        assert!(dependency.contains(r#"path = "../../vendor/hayro-jbig2""#));
+        assert!(dependency.contains(r#"version = "=0.3.0""#));
+    }
+
     /// [`decode_jbig2_within`] with no limit on the work.
     fn decode_jbig2(data: &[u8], globals: Option<&[u8]>, columns: u32, rows: u32, max: usize) -> Result<Vec<u8>, CodecError> {
         let mut unbounded = u64::MAX;

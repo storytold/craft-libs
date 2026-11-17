@@ -7,13 +7,17 @@
 //!   20 ms, mono or stereo). From EffectCraft's `effectcraft-opusenc` (storytold/effectcraft@c618429).
 //!
 //! Public items keep their names, so FilmCraft and EffectCraft can re-export this module. The two
-//! halves come from separate crates and do not share code yet (each has its own range coder, MDCT
-//! and band tables). [`Bandwidth`] is one type for both (`encoder::Bandwidth` is the same type);
+//! halves share the FFT, resampling dot product and CELT allocation preparation; range coders and
+//! mode-specific MDCT processing remain separate. [`Bandwidth`] is one type for both (`encoder::Bandwidth` is the same type);
 //! the two `Mode` enums keep their apps' variant names and convert into each other.
 
 // Index loops and long argument lists follow the specification's pseudo-code (FilmCraft and
 // EffectCraft allow these lints workspace-wide).
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
+mod dot;
+mod fft;
+mod rate_common;
 
 #[cfg(feature = "opus-decode")]
 mod decode;
