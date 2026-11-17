@@ -32,7 +32,7 @@ use bar::panel_names;
 
 pub(super) use bar::{BarRecord, CHEVRON, bar_band, bar_name, bar_slots, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
-pub use sizing::{GroupSize, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
+pub use sizing::{GroupSize, column_cells, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
 
 const DIVIDER: PartKey = PartKey::new("divider");
 const EDGE: PartKey = PartKey::new("edge");
@@ -293,10 +293,16 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
     }
 }
 
+/// Where the groups of `column` sit in `rect`, the column's rect with its bar `bar`, as the column lays them out while
+/// no divider between them is dragged.
+pub fn group_rects<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, rect: Rect, bar: ColumnBar, sizes: &DockSizes) -> Vec<Rect> {
+    column_plan(column, spec, rect, bar, sizes, |_, _| None).groups
+}
+
 /// The bar and body of the column in `rect`, and the groups stacked in the body, with the drags `drags` makes of
 /// the dividers between open groups (the divider's part index and the divider as laid out before the drag). A
 /// column in a floating window has an empty bar on top.
-fn column_plan<P: Value + Hash>(
+fn column_plan<P>(
     column: &Column<P>,
     spec: &dyn Fn(&P) -> PanelSpec,
     rect: Rect,
@@ -310,7 +316,7 @@ fn column_plan<P: Value + Hash>(
 }
 
 /// [`column_plan`] for a column whose `bar` and `body` rects are known.
-fn body_plan<P: Value + Hash>(
+fn body_plan<P>(
     column: &Column<P>,
     spec: &dyn Fn(&P) -> PanelSpec,
     bar: Rect,

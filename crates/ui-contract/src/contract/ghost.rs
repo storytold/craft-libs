@@ -150,18 +150,24 @@ fn paint_drag_badge(draw: &Draw<'_>, env: &Env, at: Pos2, text: &str) {
 }
 
 /// The drop mark: bands of the drop rule on a halo of the panel surface one thin stroke wide, so the mark reads over
-/// any content. An area mark is the same band along the inside of its rect.
+/// any content. An area mark is the same band along the inside of its rect; a region is also washed with the rule's
+/// colour, so the area the payload takes reads as one piece, and carries its line band.
 fn paint_mark(painter: &egui::Painter, env: &Env, mark: DropMark) {
     let look = rule_look(&env.tokens, RuleKind::DropMark);
     let ppp = painter.ctx().pixels_per_point();
     let width = look.width.points(ppp);
     let halo = RuleWidth::Points(env.tokens.stroke.thin).points(ppp);
+    let outline = |rect: Rect| {
+        let inside = rect.shrink(width / 2.0 + halo);
+        let corners = [inside.left_top(), inside.right_top(), inside.right_bottom(), inside.left_bottom()];
+        (0..corners.len()).map(move |at| (corners[at], corners[(at + 1) % corners.len()]))
+    };
     let segments: Vec<(Pos2, Pos2)> = match mark {
         DropMark::Line { from, to } => vec![(from, to)],
-        DropMark::Into(rect) | DropMark::Split(rect) => {
-            let inside = rect.shrink(width / 2.0 + halo);
-            let corners = [inside.left_top(), inside.right_top(), inside.right_bottom(), inside.left_bottom()];
-            (0..corners.len()).map(|at| (corners[at], corners[(at + 1) % corners.len()])).collect()
+        DropMark::Into(rect) => outline(rect).collect(),
+        DropMark::Region { area, line } => {
+            painter.rect_filled(area, CornerRadius::ZERO, look.color.gamma_multiply(craft_theme::Opacity::WASH));
+            outline(area).chain(line.map(|[from, to]| (from, to))).collect()
         }
     };
     let band = |(from, to): (Pos2, Pos2), half: f32| Rect::from_two_pos(from, to).expand(half);

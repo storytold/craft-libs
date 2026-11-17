@@ -60,8 +60,14 @@ pub enum DropMark {
     },
     /// The payload goes into this rect.
     Into(Rect),
-    /// This rect is split, the payload taking one side.
-    Split(Rect),
+    /// The payload will occupy this area once dropped, such as the rect a docked panel takes beside a group.
+    #[non_exhaustive]
+    Region {
+        /// The rect the payload takes.
+        area: Rect,
+        /// Where in it the payload goes in, such as the tab position of a panel joining a group.
+        line: Option<[Pos2; 2]>,
+    },
 }
 
 impl DropMark {
@@ -70,13 +76,23 @@ impl DropMark {
         DropMark::Line { from, to }
     }
 
+    /// The payload will occupy `area`.
+    pub const fn region(area: Rect) -> Self {
+        DropMark::Region { area, line: None }
+    }
+
+    /// The payload will occupy `area` and goes in at the line from `from` to `to`.
+    pub const fn region_at(area: Rect, from: Pos2, to: Pos2) -> Self {
+        DropMark::Region { area, line: Some([from, to]) }
+    }
+
     /// The mark with every point passed through `map`.
     pub(crate) fn mapped(self, map: impl Fn(Pos2) -> Pos2) -> Self {
         let rect = |rect: Rect| Rect::from_two_pos(map(rect.min), map(rect.max));
         match self {
             DropMark::Line { from, to } => DropMark::Line { from: map(from), to: map(to) },
             DropMark::Into(target) => DropMark::Into(rect(target)),
-            DropMark::Split(target) => DropMark::Split(rect(target)),
+            DropMark::Region { area, line } => DropMark::Region { area: rect(area), line: line.map(|line| line.map(&map)) },
         }
     }
 }
