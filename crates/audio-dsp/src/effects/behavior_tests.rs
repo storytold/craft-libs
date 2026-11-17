@@ -246,6 +246,23 @@ fn dynamics_rack_sections() {
 }
 
 #[test]
+fn dynamics_rack_applies_makeup_before_the_limiter() {
+    let params = [("comp_ratio", 1.0), ("comp_makeup", 6.0), ("lim_on", 1.0), ("lim_threshold", -1.0), ("output", 0.0)];
+    let mut e = fx("dynamics_rack", &params);
+    assert!((e.transfer_db(0, 0.0).unwrap() + 1.0).abs() < 1e-4);
+    let n = SR as usize / 10;
+    let x = vec![1.0f32; n];
+    let (y, _) = run(e.as_mut(), &x, &x);
+    assert!(y.iter().all(|v| v.abs() <= db_to_gain(-1.0) + 1e-6), "peak {}", gain_db(y.iter().fold(0.0f32, |a, v| a.max(v.abs()))));
+    assert!((gain_db(y[n - 1]) + 1.0).abs() < 0.01, "{}", gain_db(y[n - 1]));
+    // The output gain still follows the limiter.
+    let mut o = fx("dynamics_rack", &[("comp_ratio", 1.0), ("comp_makeup", 6.0), ("lim_on", 1.0), ("lim_threshold", -1.0), ("output", -6.0)]);
+    assert!((o.transfer_db(0, 0.0).unwrap() + 7.0).abs() < 1e-4);
+    let (yo, _) = run(o.as_mut(), &x, &x);
+    assert!((gain_db(yo[n - 1]) + 7.0).abs() < 0.01, "{}", gain_db(yo[n - 1]));
+}
+
+#[test]
 fn multiband_crossovers_sum_flat_and_bands_compress_independently() {
     let mut e = fx("multiband_compressor", &[("b1_ratio", 1.0), ("b2_ratio", 1.0), ("b3_ratio", 1.0), ("b4_ratio", 1.0)]);
     for f in [40.0, 120.0, 700.0, 2000.0, 6000.0, 10000.0, 15000.0] {
@@ -482,6 +499,31 @@ fn mastering_and_vocal_enhancer() {
     let mut music = fx("vocal_enhancer", &[("mode", 2.0)]);
     assert!(music.response_db(1500.0).unwrap() < -3.0);
     assert!((tone_db(music.as_mut(), 1500.0, 0.3) - music.response_db(1500.0).unwrap()).abs() < 0.1);
+}
+
+#[test]
+fn mastering_output_and_maximizer_reach_every_channel() {
+    let six = |params: &[(&str, f32)]| {
+        let mut e = create_effect("mastering", SR, 6).unwrap_or_else(|| panic!("no effect mastering"));
+        for (p, v) in params {
+            assert!(e.set_param(p, *v), "mastering.{p}");
+        }
+        e.reset();
+        let n = SR as usize / 10;
+        let mut bufs = vec![vec![0.25f32; n]; 6];
+        let mut refs: Vec<&mut [f32]> = bufs.iter_mut().map(|b| b.as_mut_slice()).collect();
+        e.process(&mut refs);
+        bufs.iter().map(|b| b[n - 1]).collect::<Vec<f32>>()
+    };
+    let out = six(&[("output", -6.0)]);
+    for (ch, v) in out.iter().enumerate() {
+        assert!((gain_db(*v) - (gain_db(0.25) - 6.0)).abs() < 0.01, "channel {ch}: {} dB", gain_db(*v));
+    }
+    let loud = six(&[("loudness", 100.0)]);
+    for (ch, v) in loud.iter().enumerate() {
+        assert!(v.abs() <= db_to_gain(-0.3) + 1e-6, "channel {ch}: {v}");
+        assert!((v - loud[0]).abs() < 1e-6, "channel {ch}: {v}, channel 0: {}", loud[0]);
+    }
 }
 
 #[test]

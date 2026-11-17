@@ -345,7 +345,9 @@ impl AudioEffect for GuitarSuite {
 pub const EXCITER_MODES: &[&str] = &["Retro", "Tape", "Tube"];
 
 /// Mastering chain: three-band EQ → reverb → exciter → widener → loudness maximiser → output.
-/// At its defaults it is transparent.
+/// At its defaults it is transparent. Reverb and the widener work on the first two channels;
+/// the other stages work on every channel, and the loudness maximizer takes its peak across all
+/// of them.
 pub struct Mastering {
     pv: ParamValues,
     sr: f32,
@@ -473,10 +475,10 @@ impl AudioEffect for Mastering {
             }
             for i in 0..len {
                 let (ra, ex, w, boost, out) = (self.rev_amt.tick(), self.exc.tick(), self.width.tick(), self.boost.tick(), self.out.tick());
-                let mut y = [0.0f32; 2];
-                for ch in 0..nch.min(2) {
-                    let mut v = channels[ch][start + i];
-                    if use_rev {
+                let j = start + i;
+                for ch in 0..nch {
+                    let mut v = channels[ch][j];
+                    if use_rev && ch < 2 {
                         v += ra * self.scratch[ch][i];
                     }
                     if ex > 0.0 {
@@ -488,17 +490,19 @@ impl AudioEffect for Mastering {
                         };
                         v += ex * (s - h * 0.5) * 2.0;
                     }
-                    y[ch] = v;
+                    channels[ch][j] = v;
                 }
                 if nch >= 2 {
-                    let (m, s) = (0.5 * (y[0] + y[1]), 0.5 * (y[0] - y[1]) * w);
-                    y = [m + s, m - s];
+                    let (l, r) = (channels[0][j], channels[1][j]);
+                    let (m, s) = (0.5 * (l + r), 0.5 * (l - r) * w);
+                    channels[0][j] = m + s;
+                    channels[1][j] = m - s;
                 }
                 if loud {
-                    for v in y.iter_mut().take(nch.min(2)) {
-                        *v *= boost;
+                    for c in channels[..nch].iter_mut() {
+                        c[j] *= boost;
                     }
-                    let peak = y[..nch.min(2)].iter().fold(0.0f32, |a, v| a.max(v.abs()));
+                    let peak = channels[..nch].iter().fold(0.0f32, |a, c| a.max(c[j].abs()));
                     let target = (lin_db(ceiling) - lin_db(peak)).min(0.0);
                     if target < self.lim_env {
                         // An inf input sample gives -inf, which the release would never leave.
@@ -507,12 +511,12 @@ impl AudioEffect for Mastering {
                         self.lim_env = rel * self.lim_env + (1.0 - rel) * target;
                     }
                     let g = db_to_gain(self.lim_env);
-                    for v in y.iter_mut().take(nch.min(2)) {
-                        *v = soft_clip(*v * g, ceiling);
+                    for c in channels[..nch].iter_mut() {
+                        c[j] = soft_clip(c[j] * g, ceiling);
                     }
                 }
-                for ch in 0..nch.min(2) {
-                    channels[ch][start + i] = y[ch] * out;
+                for c in channels[..nch].iter_mut() {
+                    c[j] *= out;
                 }
             }
             start += len;

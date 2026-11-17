@@ -40,7 +40,8 @@ pub fn soft_clip(x: f32, t: f32) -> f32 {
 // --------------------------------------------------------------------------------- dynamics
 
 /// Dynamics rack: Auto Gate, Compressor, Expander and Limiter sections in series
-/// (stereo-linked peak detection), plus output gain.
+/// (stereo-linked peak detection), plus output gain. The compressor's make-up gain is applied
+/// before the limiter, and the output gain after it.
 pub struct DynamicsRack {
     pv: ParamValues,
     sr: f32,
@@ -49,6 +50,8 @@ pub struct DynamicsRack {
     exp_env: f32,
     comp_env: f32,
     lim_env: f32,
+    /// Compressor make-up gain (dB).
+    makeup: Smoothed,
     out: Smoothed,
     /// Cached coefficients.
     c: [f32; 8],
@@ -89,6 +92,7 @@ impl DynamicsRack {
             exp_env: 0.0,
             comp_env: 0.0,
             lim_env: 0.0,
+            makeup: Smoothed::with_ms(0.0, sample_rate, 20.0),
             out: Smoothed::with_ms(1.0, sample_rate, 20.0),
             c: [0.0; 8],
             hold: 0,
@@ -111,8 +115,10 @@ impl DynamicsRack {
             coef(p.v("lim_release"), sr),
         ];
         self.hold = (p.v("gate_hold") * 0.001 * sr) as u32;
-        self.out.set(db_to_gain(p.v("output") + self.makeup_db()));
+        self.makeup.set(self.makeup_db());
+        self.out.set(db_to_gain(p.v("output")));
         if snap {
+            self.makeup.snap();
             self.out.snap();
         }
     }
@@ -131,7 +137,8 @@ impl DynamicsRack {
         p.v("comp_makeup") + auto
     }
 
-    /// Static gain (dB) of the enabled sections for a detector level, before make-up/output.
+    /// Static gain (dB) of the enabled sections for a detector level, including the compressor's
+    /// make-up gain and before the output gain.
     fn static_gain(&self, level: f32) -> f32 {
         let p = &self.pv;
         let mut l = level;
@@ -142,7 +149,7 @@ impl DynamicsRack {
             l = expander_curve(l, p.v("exp_threshold"), p.v("exp_ratio"), EXP_RANGE);
         }
         if p.on("comp_on") {
-            l = compressor_curve(l, p.v("comp_threshold"), p.v("comp_ratio"), 0.0);
+            l = compressor_curve(l, p.v("comp_threshold"), p.v("comp_ratio"), 0.0) + self.makeup_db();
         }
         if p.on("lim_on") {
             l = l.min(p.v("lim_threshold"));
@@ -154,7 +161,7 @@ impl DynamicsRack {
 impl AudioEffect for DynamicsRack {
     param_plumbing!("dynamics_rack");
     fn transfer_db(&self, band: usize, input_db: f32) -> Option<f32> {
-        (band == 0).then(|| input_db + self.static_gain(input_db) + self.pv.v("output") + self.makeup_db())
+        (band == 0).then(|| input_db + self.static_gain(input_db) + self.pv.v("output"))
     }
     fn reset(&mut self) {
         self.gate_env = 0.0;
@@ -162,6 +169,7 @@ impl AudioEffect for DynamicsRack {
         self.exp_env = 0.0;
         self.comp_env = 0.0;
         self.lim_env = 0.0;
+        self.makeup.snap();
         self.out.snap();
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
@@ -203,6 +211,10 @@ impl AudioEffect for DynamicsRack {
                 g += self.comp_env;
                 l += self.comp_env;
             }
+            // Make-up gain (0 dB with the compressor off) comes before the limiter.
+            let makeup = self.makeup.tick();
+            g += makeup;
+            l += makeup;
             if lim_on {
                 let target = (lt - l).min(0.0);
                 if target < self.lim_env {
