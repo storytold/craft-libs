@@ -846,7 +846,7 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
             let pitch = n.pitch.min(127);
             let start = clamp_tick(n.start);
             let end = ends.get(i).copied().unwrap_or(start.saturating_add(1));
-            ev.push(WEvent { tick: start, order: 3, bytes: vec![0x90 | ch, pitch, n.velocity.clamp(1, 127)] });
+            ev.push(WEvent { tick: start, order: 4, bytes: vec![0x90 | ch, pitch, n.velocity.clamp(1, 127)] });
             ev.push(WEvent { tick: end, order: 1, bytes: vec![0x80 | ch, pitch, n.release_velocity.min(127)] });
         }
         for c in &track.sequence.ctrls {
@@ -862,14 +862,14 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
                     vec![0xE0 | ch, (v & 0x7F) as u8, ((v >> 7) & 0x7F) as u8]
                 }
             };
-            ev.push(WEvent { tick: clamp_tick(c.tick), order: 2, bytes });
+            ev.push(WEvent { tick: clamp_tick(c.tick), order: 3, bytes });
         }
         for event in &track.sequence.sysex {
             let mut bytes = vec![event.status];
             push_vlq(&mut bytes, event.data.len() as u64)?;
             bytes.extend_from_slice(&event.data);
             // Reset/setup packets precede same-tick controllers and note-ons, after note-offs.
-            ev.push(WEvent { tick: clamp_tick(event.tick), order: 1, bytes });
+            ev.push(WEvent { tick: clamp_tick(event.tick), order: 2, bytes });
         }
         if single {
             merged.extend(ev);
