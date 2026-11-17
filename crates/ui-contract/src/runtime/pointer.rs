@@ -163,8 +163,9 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     // Every pass reads its own input and the frame's latches, so a second pass of a frame builds the same
     // modifiers from its own (event-free) input and counts no press twice.
     let mods = with_latched(read.mods, latched);
-    // A drag that started in another window reaches this one through the desktop pointer (8.4).
-    if read.pos.is_none() {
+    // A drag that started in another window reaches this one through the desktop pointer (8.4), never at the place
+    // this window saw the pointer last: the source window holds the pointer, and the window may have had no exit.
+    if drag::runs_elsewhere(ctx, viewport) {
         read.pos = drag::cross_window_pointer(ctx, viewport);
     }
     let wheel = input::wheel_read(ctx, WHEEL_LINE_POINTS, WHEEL_PAGE_POINTS);

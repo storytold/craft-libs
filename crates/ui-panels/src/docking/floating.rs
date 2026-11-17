@@ -167,7 +167,8 @@ impl Outcome for FloatingGroupOutput {
 ///   collapsed size against that edge of the rect, its title row shows no actions (the band and the double arrow;
 ///   a context request on the band opens the menu), the edges do not resize, and a move keeps the rect's size. A
 ///   column its content sizes ([`WindowColumn::fitted`]) shows at that size at the rect's place; its resizes are
-///   reported as the user makes them.
+///   reported as the user makes them, and in an OS window the app runs them, so the window takes only the size the
+///   host gives it.
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
 ///   (`GroupDrag`) for the dock's `DockDropTarget`, which shows the drop mark and docks the window on release.
 /// - Window: with `native` set the group opens in an OS window of that kind, with the layer as the fallback where
@@ -332,7 +333,8 @@ impl<'a> FloatingGroup<'a> {
         overlay = if let Some(shown) = collapsed {
             overlay.placed(shown).size_limits(SizeLimits::new(shown.size(), shown.size()))
         } else if let Some(size) = self.column.and_then(|column| column.fitted) {
-            overlay.placed(Rect::from_min_size(self.rect.min, size + Vec2::new(0.0, header)))
+            // The host turns a resize into the column's steps, and the window takes the size they make.
+            overlay.placed(Rect::from_min_size(self.rect.min, size + Vec2::new(0.0, header))).sized_by_caller()
         } else if self.minimized {
             let width = self.rect.width();
             overlay.placed_at(self.rect.min).size_limits(SizeLimits::new(Vec2::new(width, 0.0), Vec2::new(width, f32::INFINITY)))

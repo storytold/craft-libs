@@ -235,7 +235,8 @@ pub(crate) fn set_input(ctx: &Context) {
 /// or resize [`act`] handed the OS, when the input brings no release of its own (where the OS sends one, a second
 /// would turn into a click), once the system tells the button is up, or where it does not tell, on the first input
 /// after the hand-off; and, where the OS resizes undecorated windows from their edges
-/// ([`Caps::OS_RESIZES_UNDECORATED`]), a size change under a held primary press. While the OS runs a tracked move
+/// ([`Caps::OS_RESIZES_UNDECORATED`]), a size change of a window the OS may resize under a held primary press (the
+/// size of a window that is not resizable is the app's own). While the OS runs a tracked move
 /// ([`Caps::OS_MOVES_TRACKED`]) it sends no key events, so every window's modifiers are the system's command modifier
 /// alone. Reads only the raw input, the system's button and modifier state and the viewport's record. Returns whether
 /// it added an event.
@@ -257,7 +258,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         input.events.push(egui::Event::ModifiersChanged(modifiers));
     }
     let (released, handed_off) = PerViewport::<Record>::with(ctx, viewport, |record| {
-        let resized = matches!((record.last_inner_size, size), (Some(before), Some(now)) if before != now);
+        let resized = record.resizable != Some(false) && matches!((record.last_inner_size, size), (Some(before), Some(now)) if before != now);
         record.last_inner_size = size.or(record.last_inner_size);
         let handed_off = record.handoff.is_some_and(|handoff| handoff.released.is_none() && handoff.pass < pass) && held != Some(true);
         if handed_off {
