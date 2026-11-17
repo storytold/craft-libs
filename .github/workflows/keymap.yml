@@ -21,7 +21,9 @@ concurrency:
 jobs:
   linux:
     timeout-minutes: 15
-    name: Keymap (Linux)
+    # fmt, and clippy and the tests with default and with all features, run in the Workspace gate
+    # on every OS; this runs the feature subsets.
+    name: Keymap feature sets
     runs-on: ubuntu-latest
     env:
       CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
@@ -43,12 +45,7 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-keymap-linux
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt -p craft-keymap --check
+          components: clippy
       - run: cargo clippy -p craft-keymap --all-targets --no-default-features --locked -- -D warnings
       # `snapshot` covers `ui` and `egui` and compiles the dialog screenshots, which need a GPU
       # to run, so the test steps leave them out.
@@ -58,40 +55,6 @@ jobs:
         run: cargo test -p craft-keymap --no-default-features --lib --tests --locked
       - name: Test egui dispatch and the shortcuts dialog
         run: cargo test -p craft-keymap --features ui --locked
-  native:
-    timeout-minutes: 15
-    name: Keymap (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS runners are kept for releases: macOS runs only when started by hand.
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["macos-latest","windows-latest"]') || fromJSON('["windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
-    env:
-      CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@v2.22.4
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - name: Checkout test fonts
-        uses: actions/checkout@v7.0.1
-        with:
-          repository: storytold/craft-fonts
-          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-          path: .test-inputs/craft-fonts
-          persist-credentials: false
-      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
-        with:
-          toolchain: stable
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-keymap-${{ matrix.os }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test -p craft-keymap --features ui --locked
   wasm:
     timeout-minutes: 10
     name: Keymap WASM
@@ -108,8 +71,4 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-keymap-wasm
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p craft-keymap --features ui --locked --target wasm32-unknown-unknown

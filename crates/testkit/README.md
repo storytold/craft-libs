@@ -192,6 +192,16 @@ A product of the iterations and the multiplier that does not fit in a `usize`, a
 more than `MAX_CASES` (10,000,000) cases in all, and a limit variable that `deadline` would reject
 also fail the test before `parse` is called.
 
+### Quick runs
+
+`CRAFT_HOSTILE_DIVISOR=N` runs a fraction of every sweep: the unmodified seed, every N-th truncation
+(lengths 0, N, 2N, ...) and the rounds divided by N, rounded up. It takes the same values as the
+multiplier. The Workspace gate sets it on every run and the nightly run leaves it unset, so every
+case still runs once a day. A sweep written without `hammer` reads it with `hostile::divisor()` and
+runs the cases whose index plus an offset is a multiple of it, with a different offset for each input
+so that the inputs together still reach every index. A failing case is found again with the same
+value.
+
 Changes from `craft-media-testkit`'s `hammer`:
 
 - A case that does not finish fails the test after its limit with the case's label. Before, a case

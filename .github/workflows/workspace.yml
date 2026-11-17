@@ -25,46 +25,46 @@ jobs:
     with:
       os: '["ubuntu-latest","windows-latest","macos-latest"]'
       timeout-minutes: 120
-      # The Windows leg runs its tests with nextest (.config/nextest.toml).
+      # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
       tools: cargo-nextest@0.9.150
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
-      windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
-      env: CRAFT_PRINT_REQUIRE_QUEUE=0
-      setup-command: |
-        set -euo pipefail
-        corpus_fetcher=.test-inputs/photocraft
-        mkdir -p "$corpus_fetcher"
-        git -C "$corpus_fetcher" init
-        git -C "$corpus_fetcher" remote add origin https://github.com/storytold/PhotoCraft.git
-        git -C "$corpus_fetcher" fetch --quiet --depth=1 origin 74330157cb601573ae4523a95bb9132822fc3918
-        git -C "$corpus_fetcher" checkout --quiet --detach FETCH_HEAD
-        (cd "$corpus_fetcher" && cargo xtask corpus --psd --psd-tools --atn --exr --heif --pngsuite)
-        mkdir -p corpus
-        cp -a "$corpus_fetcher/corpus/." corpus/
-        python scripts/test-fetch-pdf-test-fonts.py
-        python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
-        printf 'CRAFT_PSD_CORPUS=%s\n' "$GITHUB_WORKSPACE/$corpus_fetcher/corpus" >> "$GITHUB_ENV"
-        printf 'CRAFT_PDF_TEST_FONT_DIR=%s\n' "$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
+      # No debuginfo on Windows: writing PDBs for every test binary is a large part of its link
+      # time. A panic still names its file and line; only backtrace frames lose theirs, and the
+      # Linux and macOS legs keep line tables.
+      windows-env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+        CARGO_PROFILE_DEV_DEBUG=0
+      # The fuzz-style tests run a fraction of their cases here: every hostile-input hammer and
+      # sweep 1/8 (craft-testkit's CRAFT_HOSTILE_DIVISOR), every proptest without its own case
+      # count 64 cases instead of 256. nightly.yml runs them all in full.
+      env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=0
+        CRAFT_HOSTILE_DIVISOR=8
+        PROPTEST_CASES=64
+      setup-command: bash scripts/ci-test-inputs.sh
       command: |
         python3 scripts/test-workspace-concurrency.py
+        python3 scripts/test-workspace-tests.py
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        cargo test --workspace --locked
-        cargo test --workspace --all-features --locked
+        # The tests run once, with every feature, in parallel across test binaries; nextest skips
+        # doctests, so `cargo test --doc` runs them. The default-feature compile is the first
+        # clippy run's; the second command runs the crates whose tests check behaviour with a
+        # feature off, which an all-features build cannot reach.
+        cargo nextest run --workspace --all-features --locked --profile ci
+        cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
       windows-command: |
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        # The same tests as `cargo test`, run in parallel across test binaries instead of one
-        # binary at a time; nextest skips doctests, so `cargo test --doc` runs them.
-        cargo nextest run --workspace --locked --profile ci
-        cargo test --workspace --doc --locked
         cargo nextest run --workspace --all-features --locked --profile ci
         cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
 
   msrv:
     name: Rust 1.95

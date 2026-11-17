@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# A fraction of the fuzz-style cases, as in the Workspace gate; nightly.yml runs them in full.
+env:
+  CRAFT_HOSTILE_DIVISOR: "8"
+  PROPTEST_CASES: "64"
+
 concurrency:
   # Pull requests share one group per branch, so a newer push cancels the older run. Every other
   # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
@@ -21,7 +26,8 @@ concurrency:
 jobs:
   lint:
     timeout-minutes: 15
-    name: Audio lint, feature sets, docs, WASM
+    # fmt, clippy with all features and the minimum Rust version run in the Workspace gate.
+    name: Audio feature sets, docs, WASM
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
@@ -34,13 +40,8 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: clippy
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-audio-lint
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt -p craft-audio --check
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
@@ -49,7 +50,6 @@ jobs:
             cargo clippy -p craft-audio --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
           done
-      - run: cargo clippy -p craft-audio --all-targets --locked --all-features -- -D warnings
       # missing_docs is a warning in the crate; -D warnings makes it (and broken links) fail here.
       - run: cargo doc -p craft-audio --all-features --no-deps --locked
         env:
@@ -63,25 +63,6 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
       - run: cargo check -p craft-audio --all-features --locked --target wasm32-unknown-unknown
       - run: cargo check -p craft-audio --no-default-features --features lossless-encode --locked --target wasm32-unknown-unknown
-  msrv:
-    timeout-minutes: 10
-    name: Audio on the minimum Rust version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@v2.22.4
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      # The workspace's rust-version.
-      - run: rustup toolchain install 1.95.0 --profile minimal
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-audio-msrv
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo +1.95.0 check -p craft-audio -p craft-media --all-features --locked
   features:
     timeout-minutes: 10
     name: Audio tests without symphonia and lossless-encode only
@@ -97,10 +78,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-audio-features
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p craft-audio --no-default-features --features lossless-encode --locked
       - run: cargo test -p craft-audio --no-default-features --features pcm-encode --locked --lib
       - run: cargo test -p craft-audio --no-default-features --features flac-encode --locked --lib
@@ -122,10 +99,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-audio-test
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/cache@v6.1.0
         with:
           path: ${{ runner.temp }}/media-fixtures/opus/vectors

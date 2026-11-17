@@ -21,7 +21,8 @@ concurrency:
 jobs:
   check:
     timeout-minutes: 20
-    name: Proofing lint, tests with and without Language data, WASM
+    # fmt, and clippy and the tests without Language data, run in the Workspace gate on every OS.
+    name: Proofing with Language data, WASM
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
@@ -43,18 +44,10 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: clippy
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-proof
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt -p craft-proof --check
-      - name: Without Language data (a fork, docs.rs, offline)
-        run: |
-          cargo clippy -p craft-proof --all-targets --locked -- -D warnings
-          cargo test -p craft-proof --locked
-          cargo check -p craft-proof --locked --target wasm32-unknown-unknown
+      - name: The web build without Language data (a fork, docs.rs, offline)
+        run: cargo check -p craft-proof --locked --target wasm32-unknown-unknown
       - name: A release without Language data fails
         run: |
           if CRAFT_I18N_REQUIRED=1 cargo check -p craft-proof --locked 2>build.log; then
