@@ -5,8 +5,8 @@
 //!   UTF-16 and ISO 8859-1 decoded; and SVGZ compression.
 //! - [`guard`]: checks on the text before any XML reader or SVG converter sees it: how deep the
 //!   elements nest, and what the document type's entities expand to.
-//! - [`paths`]: the geometry of a document as Bézier paths in millimetres, for cutters, plotters
-//!   and CAD import.
+//! - `paths` (feature `paths`, on by default): the geometry of a document as Bézier paths in
+//!   millimetres, for cutters, plotters and CAD import.
 //! - [`color`]: CSS colours.
 //! - [`write`]: a writer for SVG documents, their path data and numbers.
 //! - `tree` (feature `tree`): the full parser. usvg at the one version the Craft apps share,
@@ -22,6 +22,7 @@ pub mod drawing_write;
 pub mod guard;
 pub mod neutral_document;
 pub mod path_data;
+#[cfg(feature = "paths")]
 pub mod paths;
 pub mod preflight;
 pub mod sniff;
