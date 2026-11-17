@@ -319,13 +319,11 @@ impl<'a> Body<'a> {
                 ChannelUnit::Degrees => field.unit_kind(craft_ui::runtime::env::UnitKind::Degrees),
                 ChannelUnit::Text(text) => field.unit(Label::from(text)),
             };
-            if let Some(edit) = field.show(ui).edit {
-                got.adopt(edit, pass.shown, |v, mine| {
-                    if let Some(v) = v {
-                        *mine = mine.with_channel(model, i, *v, &pass.rules);
-                    }
-                });
-            }
+            got.adopt(field.show(ui).edit, pass.shown, |v, mine| {
+                if let Some(v) = v {
+                    *mine = mine.with_channel(model, i, *v, &pass.rules);
+                }
+            });
         }
     }
 }
