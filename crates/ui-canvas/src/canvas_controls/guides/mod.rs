@@ -125,7 +125,7 @@ struct PendingKey(Option<GuideKey>);
 ///   modifiers (Ctrl turns snapping off).
 /// - The guides are one Tab stop. Page Up and Page Down select the previous or next guide (vertical guides left to
 ///   right, then horizontal ones top to bottom), the arrow keys nudge the selected one across its axis (Shift moves
-///   it by the large step) and Delete or Backspace removes it. With the canvas focused, Delete or Backspace removes
+///   it by the large step) and Delete or Backspace removes it and clears the selection. With the canvas focused, Delete or Backspace removes
 ///   the selected guide unless it is locked, before the canvas's tool and the app's shortcuts.
 /// - A press on a guide selects it, so [`GuidesOutput::select`] reports the key. A press on the canvas background
 ///   (one that reaches the canvas's tool) clears the selection, reported as `Some(None)`.
@@ -386,12 +386,8 @@ impl<'a> Guides<'a> {
         let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
         let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
         if forward || backward {
-            let next = place::after_removal(guides, &place::keyboard_order(guides), guide.key);
             cx.set(place::removed(guides, guide.key));
-            self.report.select = Some(next);
-            if let Some(next) = next {
-                cx.focus_part(next.part(GUIDE));
-            }
+            self.report.select = Some(None);
         }
     }
 }
