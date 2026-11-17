@@ -161,3 +161,9 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## GPU device selection
 
 `crates/gpu-device`'s adapter rule and driver corrections come from FilmCraft `crates/gpu/src/adapter.rs` at `93a88a839aae370740b09434fdec410abb8c24ca`, and its device health from PhotoCraft `crates/gpu/src/health.rs` at `01a5b5a389acc93f081e5ce6a8d0580d6438774a`, both MIT OR Apache-2.0; `crates/gpu-device/NOTICE` names both.
+
+## XFDF field reader
+
+`crates/xfdf` extracts PDFCraft field reading from #5937 refresh `cb564fd827f572818e9ddb0ea5989a432b1f39fd` (MIT OR Apache-2.0). App-side annotation and form policy remains local; source history is retained in the original repository.
+
+Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
