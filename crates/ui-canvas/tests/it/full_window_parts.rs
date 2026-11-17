@@ -114,6 +114,9 @@ mod canvas_navigation {
         let mut navigation = NavigationOptions::default();
         navigation.zoom_with_wheel = true;
         navigation.animated_zoom = false;
+        // Overscroll on: the fit leaves room around the image, and with Overscroll off an image still smaller than the
+        // canvas after one notch is centred again, whatever the pointer.
+        navigation.overscroll = true;
         let mut zooming = rig(navigation);
         let fitted = zooming.zoom();
         zooming.fixture.frame(vec![pointer::moved(OVER)]);

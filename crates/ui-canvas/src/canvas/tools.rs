@@ -240,6 +240,24 @@ impl ViewCommands {
     }
 }
 
+/// A view command an app asks of its canvas ([`Canvas::queued`](super::Canvas::queued)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewRequest {
+    /// A command the user gave (a menu row, an action step): it eases under Animated Zoom, as its chord does.
+    Command(ViewCommands),
+    /// The app placing the view (a new or cropped document's fit, a new arrangement's fits): the view jumps there.
+    Place(ViewCommands),
+}
+
+impl ViewRequest {
+    /// The view command asked for.
+    pub fn command(self) -> ViewCommands {
+        match self {
+            ViewRequest::Command(command) | ViewRequest::Place(command) => command,
+        }
+    }
+}
+
 /// The Hand tool: a drag pans the view with the document under the pointer; a release while still moving glides on
 /// with [`FlickPan`] when Flick Panning is on; Escape during the drag puts the view back. It does not autoscroll.
 #[derive(Clone, Debug)]
