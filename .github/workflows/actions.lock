@@ -104,6 +104,10 @@ workflows:
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
         - 'step-security/taiki-e-install-action@v2.87.32'
+    '.github/workflows/web-runtime.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'actions/setup-node@v4'
+        - 'dtolnay/rust-toolchain@stable'
     '.github/workflows/window.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -125,6 +129,11 @@ dependencies:
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
+    'actions/setup-node@v4':
+        ref: 'v4'
+        commit: 'sha1-49933ea5288caeca8642d1e84afbd3f7d6820020'
+        owner_id: 44036562
+        repo_id: 189476904
     'actions/setup-python@v7.1.0':
         ref: 'v7.1.0'
         commit: 'sha1-6d4fd22b20465ccc0f7354476588e8df7c9ca0e0'

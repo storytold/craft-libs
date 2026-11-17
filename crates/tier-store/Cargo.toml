@@ -1,0 +1,17 @@
+[package]
+name = "craft-tier-store"
+description = "Browser tiered blob store: hot mirror, warm OPFS, cold folder handles, cloud ref types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
