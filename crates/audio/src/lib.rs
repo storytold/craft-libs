@@ -775,3 +775,7 @@ mod tests {
 
 /// DVD and Blu-ray LPCM packet decoding.
 pub mod lpcm;
+
+/// Non-seeking canonical WAV streaming primitives.
+#[cfg(feature = "pcm-encode")]
+pub mod wav_stream;
