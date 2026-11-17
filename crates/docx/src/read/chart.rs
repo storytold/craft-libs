@@ -129,7 +129,14 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
     }
     let Some(ty) = plot.els().find(|e| e.name.ends_with("Chart")) else { return };
     backdrop(out, space, theme, w, h);
-    out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill: None, stroke: Some(AXIS), stroke_width: 0.75 });
+    out.push(GraphicItem::Shape {
+        rect: [0.0, 0.0, w, h],
+        kind: ShapeKind::Rectangle,
+        fill: None,
+        stroke: Some(AXIS),
+        stroke_width: 0.75,
+        alpha: 1.0,
+    });
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     if let Some(t) = title_of(chart, &read_series(ty, false, theme)) {
         area = title_block(out, &t, area);
@@ -150,7 +157,14 @@ pub(crate) fn chartex_items(space: Option<&El>, w: f32, h: f32) -> Vec<GraphicIt
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return out;
     }
-    out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill: None, stroke: Some(AXIS), stroke_width: 0.75 });
+    out.push(GraphicItem::Shape {
+        rect: [0.0, 0.0, w, h],
+        kind: ShapeKind::Rectangle,
+        fill: None,
+        stroke: Some(AXIS),
+        stroke_width: 0.75,
+        alpha: 1.0,
+    });
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     let chart = space.and_then(|s| s.child("cx:chart"));
     let title = chart.and_then(|c| c.child("cx:title")).and_then(|t| {
