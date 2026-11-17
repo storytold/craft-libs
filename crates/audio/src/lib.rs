@@ -49,6 +49,8 @@ pub mod alac;
 mod buffer;
 #[cfg(feature = "g722")]
 pub mod g722;
+#[cfg(feature = "g726")]
+pub mod g726;
 #[cfg(any(feature = "gsm-decode", feature = "gsm-encode"))]
 pub mod gsm;
 mod layout;
