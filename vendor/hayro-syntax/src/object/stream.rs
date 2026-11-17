@@ -249,8 +249,10 @@ impl<'a> Stream<'a> {
             .enumerate()
         {
             // PdfCraft patch: see `filter::decode_limit`.
-            let limit = crate::filter::decode_limit(image_params, i + 1 == count, self.dict.ctx().decode_limits()).min(max);
-            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit, self.dict.ctx().control())?;
+            let limits = self.dict.ctx().decode_limits();
+            let limit = crate::filter::decode_limit(image_params, i + 1 == count, limits).min(max);
+            let input = current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data);
+            let new = filter.apply(input, params, image_params, limit, limits.max_image_pixels(), self.dict.ctx().control())?;
             current = Some(new);
         }
 

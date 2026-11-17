@@ -16,15 +16,13 @@ impl ImageColorSpace {
     }
 }
 
-/// PdfCraft patch: the most pixels a JPEG 2000 image may decode to, as for JBIG2.
-const MAX_PIXELS: u64 = 1 << 28;
-
 /// PdfCraft patch: the least output `limit` a JPEG 2000 image is held to: the limit comes from the
 /// image dictionary's size, which a decoder may round differently from the codestream's.
 const MIN_LIMIT: usize = 64 << 20;
 
-/// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`).
-pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams, limit: usize) -> Option<FilterResult<'static>> {
+/// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
+/// `max_pixels` the most pixels the codestream may decode to.
+pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams, limit: usize, max_pixels: u64) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
     let settings = DecodeSettings {
@@ -82,9 +80,9 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams, limit: usize) -> O
     };
     let has_alpha = image.has_alpha();
     // PdfCraft patch: the decoder sizes its output from the codestream's own dimensions, not the
-    // image dictionary's, and allocates it infallibly. Refuse more than `MAX_PIXELS` pixels or
+    // image dictionary's, and allocates it infallibly. Refuse more than `max_pixels` pixels or
     // more than `limit` bytes before decoding, and reserve the buffer fallibly.
-    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+    if u64::from(width) * u64::from(height) > max_pixels {
         return None;
     }
     let channels = usize::from(cs.num_components()) + usize::from(has_alpha);
@@ -454,7 +452,7 @@ mod tests {
             height: 2,
             ..ImageDecodeParams::default()
         };
-        let result = decode(PALETTE_JP2, &params, usize::MAX).unwrap();
+        let result = decode(PALETTE_JP2, &params, usize::MAX, 1 << 28).unwrap();
         let image = result.image_data.unwrap();
         assert!(matches!(image.color_space, Some(ImageColorSpace::Rgb)));
         let red = [255, 0, 0];
@@ -474,8 +472,16 @@ mod tests {
             height: 2,
             ..ImageDecodeParams::default()
         };
-        let result = decode(PALETTE_JP2, &params, usize::MAX).unwrap();
+        let result = decode(PALETTE_JP2, &params, usize::MAX, 1 << 28).unwrap();
         assert_eq!(&*result.data, &[0, 1, 0, 1, 1, 0, 1, 0][..]);
+    }
+
+    /// The codestream's 8 pixels are decoded with a pixel limit of 8 and refused with one of 7.
+    #[test]
+    fn the_pixel_limit_given_is_the_one_applied() {
+        let params = ImageDecodeParams { is_indexed: true, num_components: Some(1), width: 4, height: 2, ..ImageDecodeParams::default() };
+        assert_eq!(decode(PALETTE_JP2, &params, usize::MAX, 8).map(|r| r.data.len()), Some(8));
+        assert!(decode(PALETTE_JP2, &params, usize::MAX, 7).is_none());
     }
 
     /// A 1x1, 1-bit codestream (one empty packet, so its sample is the midpoint 1) as a JP2 file
@@ -516,7 +522,7 @@ mod tests {
             ..ImageDecodeParams::default()
         };
         let bpc = |data: &[u8]| {
-            decode(data, &params, usize::MAX)
+            decode(data, &params, usize::MAX, 1 << 28)
                 .and_then(|r| r.image_data)
                 .map(|d| d.bits_per_component)
         };
@@ -538,7 +544,7 @@ mod tests {
             bpc: Some(1),
             ..params.clone()
         };
-        let palette_bpc = decode(&one_bit_jp2(&palette), &one_bit, usize::MAX)
+        let palette_bpc = decode(&one_bit_jp2(&palette), &one_bit, usize::MAX, 1 << 28)
             .and_then(|r| r.image_data)
             .map(|d| d.bits_per_component);
         assert_eq!(palette_bpc, Some(8), "/BitsPerComponent 1 with a palette");
