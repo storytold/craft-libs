@@ -516,6 +516,31 @@ fn a_knockout_group_separates_with_only_the_top_object_in_the_overlap() {
     assert_eq!(blended.at(20, 20), [25, 50, 0, 0], "both squares without /K");
 }
 
+/// #870: in a non-isolated knockout group each element composites with the group's backdrop in
+/// its own blend mode (ISO 32000-2 §11.4.6, §11.4.8). Magenta, then cyan over it, both Multiply,
+/// over a yellow page keep the yellow under them, and the cyan replaces the magenta where they
+/// overlap. Drawn into a layer starting transparent, the yellow was knocked out.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_non_isolated_knockout_group_multiplies_each_element_with_its_backdrop() {
+    let form = "/M gs 0 1 0 0 k 5 5 20 20 re f 1 0 0 0 k 15 15 20 20 re f";
+    let pdf = page_pdf(
+        "0 0 1 0 k 0 0 40 40 re f /Fm Do",
+        "/XObject << /Fm 5 0 R >>",
+        &[stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Group << /S /Transparency /CS /DeviceCMYK /K true >> /Resources << /ExtGState << /M << /BM /Multiply >> >> >>",
+            form.as_bytes(),
+        )],
+    );
+    // Device rows run top down: magenta alone at (8, 32), the overlap at (20, 20), cyan alone at
+    // (32, 8), the page alone at (37, 37).
+    let s = plates(&pdf, &inks(&[]), true, None);
+    assert_eq!(s.at(8, 32), [0, 100, 100, 0], "magenta multiplied with the yellow");
+    assert_eq!(s.at(20, 20), [100, 0, 100, 0], "cyan replaces the magenta, multiplied with the yellow");
+    assert_eq!(s.at(32, 8), [100, 0, 100, 0], "cyan multiplied with the yellow");
+    assert_eq!(s.at(37, 37), [0, 0, 100, 0], "the page");
+}
+
 /// PdfCraft #3018: `/DefaultCMYK` and `/DefaultGray` change how device color looks, not the
 /// inks it prints with. Under them DeviceCMYK still separates as its components (and keeps the
 /// nonzero overprint mode), a DeviceCMYK image sample by sample, and DeviceGray on black alone,

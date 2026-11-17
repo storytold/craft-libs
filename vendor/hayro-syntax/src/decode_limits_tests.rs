@@ -180,6 +180,33 @@ fn final_known_size_images_keep_their_distinct_pixel_budget() {
 }
 
 #[test]
+fn image_limits_default_and_caller_figures() {
+    let limits = DecodeLimits::default();
+    assert_eq!((limits.max_decoded_image(), limits.max_image_pixels()), (1 << 30, 1 << 28));
+    // An image of 31404 × 31403 RGB pixels: 2.96 GB, past the default.
+    let params = ImageDecodeParams { width: 31_404, height: 31_403, bpc: Some(8), num_components: Some(3), ..Default::default() };
+    assert_eq!(crate::filter::decode_limit(&params, true, limits) as u64, 1 << 30);
+    let raised = limits.with_max_decoded_image(4 << 30).with_max_image_pixels(1 << 30);
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!((raised.max_decoded_image(), raised.max_image_pixels()), (4 << 30, 1 << 30));
+        assert_eq!(crate::filter::decode_limit(&params, true, raised) as u64, 4 << 30);
+        assert_eq!(raised.with_max_decoded_stream(32).max_decoded_image(), 4 << 30, "lowering the stream limit keeps the image limits");
+        assert_eq!(limits.with_max_image_pixels(u64::MAX).max_image_pixels(), 1 << 32);
+    }
+    #[cfg(not(target_pointer_width = "64"))]
+    assert_eq!(raised, limits, "a raise is clamped to the defaults");
+    assert_eq!(raised.max_decoded_stream(), MAX_DECODED_STREAM, "the stream limit is kept");
+    assert_eq!(raised.with_max_decoded_image(64).max_decoded_stream(), MAX_DECODED_STREAM);
+    // A context made without a document keeps every limit it is given.
+    for given in [limits, limits.with_max_decoded_stream(32), raised, limits.with_max_image_pixels(5)] {
+        assert_eq!(crate::reader::ReaderContext::dummy_with_limits(given).decode_limits(), given);
+    }
+    let small = ImageDecodeParams { width: 64, height: 1, bpc: Some(8), num_components: Some(1), ..Default::default() };
+    assert_eq!(crate::filter::decode_limit(&small, true, limits.with_max_decoded_image(100)), 100);
+}
+
+#[test]
 fn object_stream_limit_applies_after_successful_root_xref() {
     let (bytes, _, _) = object_stream_pdf(false);
     // 512 permits the full 294-byte xref stream but cuts the 1052-byte object stream.

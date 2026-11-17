@@ -16,6 +16,8 @@ No feature is enabled by default.
 | `filters` | The `/Filter` chain for editing and writing PDF files: decode and encode, with limits and accounting. No reader or writer dependency |
 | `crypt` | The standard security handler: decrypt, encrypt and create encryption. No reader or writer dependency |
 | `cos` | `crypt` and `filters` plus the object layer: open, edit and save PDF files (incremental and full saves). No reader or writer dependency |
+| `test-support` | `cos` plus `testing::Pdf`, a builder of small synthetic PDF files for tests |
+| `content` | `cos` plus `cos::content`: parse content streams into operators with source spans, write them back, and the matrix arithmetic. Uses hayro-syntax's tokenizer for inline images |
 
 ## Reading and rendering
 
@@ -133,6 +135,15 @@ let bytes = write_incremental(&doc, &SaveOptions::default())?; // append a revis
 let bytes = write_full(&doc, &SaveOptions::default())?;        // rewrite what the trailer reaches
 ```
 
+With `content`, `cos::content` reads and writes page content streams. `parse` keeps each
+operator's byte span and skips (and counts) what it cannot read instead of failing; inline images
+stay whole, so `parse` → `serialize_ops` round-trips them. Between operands, a token of one or two
+signs with a minus among them (`-`, `--`, `-+`, `+-`), followed by whitespace, a delimiter or the
+end, is read as the number 0, as hayro-syntax reads it. Inside an array or dictionary, or among an
+inline image's parameters, such a token still makes the whole operand unreadable (such an image is
+left out of `ops` and counted in `ambiguous_images`). `Matrix` holds the arithmetic content
+interpretation needs.
+
 - Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
   file whose cross-reference data is wrong or missing is rebuilt by scanning for object headers,
   and each repair is recorded (`repair_log`). Malformed input gives `CosError`, never a panic.
@@ -154,8 +165,9 @@ The code comes from PdfCraft's `pdfcraft-cos` crate (revision
 comments. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
 `pdfcraft-testkit`) and `tests/cos/oracle.rs` (qpdf runs, from `pdfcraft-oracle`; a missing
 `qpdf` skips those tests, or fails them when `CRAFT_PDF_ORACLES_REQUIRED` is set). Tests:
-`cargo test -p craft-pdf --no-default-features --features cos`. Examples: `cos_info` and
-`cos_protect` (`--features cos`).
+`cargo test -p craft-pdf --no-default-features --features cos`. Other crates' tests use the
+builder as `craft_pdf::testing::Pdf` by enabling `test-support` in their dev-dependency on
+`craft-pdf`. Examples: `cos_info` and `cos_protect` (`--features cos`).
 
 ## Stream filters
 
@@ -202,9 +214,12 @@ PDF files. The reader decrypts on its own and does not use it. It covers revisio
   block is ignored and bad padding is left in.
 - `permissions()` gives the `/P` flags; for R5/R6 a permission counts only when `/Perms` grants
   it too. Owners have every permission.
-- `create(&NewEncryption, id0)` builds the `/Encrypt` values for RC4-40, RC4-128, AES-128 or
-  AES-256. The caller supplies 32 bytes of entropy (`seed`), so the module needs no OS access
-  and builds for the web. `file_id` derives a file identifier from the same seed.
+- `create(&NewEncryption, id0)` builds the `/Encrypt` values for AES-128 or AES-256. It refuses
+  the legacy RC4-40 and RC4-128 schemes, because RC4 is broken (RFC 7465); `create_legacy`
+  writes those, for a file that must stay readable by an old reader. `Document::set_encryption`
+  refuses them too, with `set_encryption_legacy` as the explicit way in. The caller supplies 32
+  bytes of entropy (`seed`), so the module needs no OS access and builds for the web. `file_id`
+  derives a file identifier from the same seed.
 - `EncryptDict` holds the dictionary's values. The caller reads them from, and writes them to,
   its own object model; the module does not parse PDF syntax. Keys and prepared passwords are
   zeroized when dropped.

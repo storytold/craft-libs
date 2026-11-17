@@ -36,9 +36,9 @@ mod pst;
 pub mod recur;
 mod source;
 /// The test writer: synthetic .pst files from invented folders and messages, for this crate's
-/// tests and, through the `test-writer` feature (a dev-dependency only, never in a build that
-/// ships), for the tests of the import that reads them.
-#[cfg(any(test, feature = "test-writer"))]
+/// tests and, through the `test-support` feature (a dev-dependency only, never in a build that
+/// ships; `test-writer` is an alias of it), for the tests of the import that reads them.
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 #[path = "tests/writer.rs"]
 #[allow(
