@@ -7,3 +7,5 @@ Preserves local-name matching, duplicate field order, dotted names, empty leaf c
 Current strict craft-xml also rejects duplicate raw/expanded attributes and more than1024 active inherited namespace declarations; older app XML accepted those. These deliberate tighter admissions must be disclosed by consumers. No complete XFDF or corpus parity claim.
 
 Source history remains in PDFCraft. Shared move and preallocation budget reconciliation by Dylan M. Taylor, MIT OR Apache-2.0. No assets are imported.
+
+Retained source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
