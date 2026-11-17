@@ -3,10 +3,14 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/ci-full-validation.sh"
+# Actions uses Git Bash on Windows; Python's PATH search can instead select the WSL launcher.
+BASH = (str(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git/bin/bash.exe")
+        if sys.platform == "win32" else "bash")
 COMMANDS = [
     "fmt --check",
     "clippy --workspace --all-targets --locked -- -D warnings",
@@ -27,7 +31,7 @@ cargo() {
 }
 powershell.exe() { printf 'print-queue\n'; }
 """
-    return subprocess.run(["bash", "-c", mock + SCRIPT.read_text()], env=env,
+    return subprocess.run([BASH, "-c", mock + SCRIPT.read_text()], env=env,
                           capture_output=True, text=True, check=False)
 
 
@@ -36,7 +40,7 @@ class FullValidation(unittest.TestCase):
         for name in ["Linux", "macOS", "Windows"]:
             with self.subTest(os=name):
                 p = run(name)
-                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertEqual(p.stdout.splitlines(),
                                  (["print-queue"] if name == "Windows" else []) + COMMANDS)
 
@@ -44,7 +48,7 @@ class FullValidation(unittest.TestCase):
         for i, command in enumerate(COMMANDS):
             with self.subTest(command=command):
                 p = run("Linux", command)
-                self.assertEqual(p.returncode, 17)
+                self.assertEqual(p.returncode, 17, p.stdout + p.stderr)
                 self.assertEqual(p.stdout.splitlines(), COMMANDS[:i + 1])
 
     def test_workflow_preserves_fork_and_platform_boundaries(self):
