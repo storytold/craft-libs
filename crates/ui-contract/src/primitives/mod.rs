@@ -25,7 +25,7 @@ mod surround;
 mod svg_set;
 #[doc(hidden)]
 pub mod svg_tree;
-mod text;
+pub(crate) mod text;
 pub(crate) mod text_adapter;
 mod text_input;
 pub mod textures;

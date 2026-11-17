@@ -231,16 +231,16 @@ impl Component for SelectFace<'_> {
         }
         let leading = self.leading_glyphs();
         let placed = place(flow.rect(), &cx.style.field, &leading, std::slice::from_ref(&chevron), rtl);
+        let look = if self.placeholder { &cx.style.placeholder } else { &cx.style.text };
         if let (Some(rect), Some(icon)) = (placed.leading.first(), leading.first()) {
-            icon.paint(ui, *rect, cx.resolve(&cx.style.chevron.color));
+            icon.paint(ui, *rect, cx.resolve(&cx.style.chevron.color), look.role);
         }
         if self.name {
-            let look = if self.placeholder { &cx.style.placeholder } else { &cx.style.text };
             let run = TextRun::new(cx.resolved.label).role(look.role).elide().color(cx.resolve(&look.color));
             ui.draw().text(placed.text, &run);
         }
         if let Some(rect) = placed.trailing.first() {
-            chevron.paint(ui, *rect, cx.resolve(&cx.style.chevron.color));
+            chevron.paint(ui, *rect, cx.resolve(&cx.style.chevron.color), look.role);
         }
     }
 

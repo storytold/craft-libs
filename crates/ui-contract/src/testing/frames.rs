@@ -47,12 +47,23 @@ pub struct Frames {
     /// The window's pixels per point; egui's default when `None`.
     pixels_per_point: Option<f32>,
     /// What the frames painted since the last `take_paint`, when they are recorded.
-    paint: Option<fixture::FullOutput>,
+    paint: Option<Recorded>,
 }
 
 impl Default for Frames {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// What recorded frames painted since the last `take_paint`. What nobody took when the frames drop goes unrendered,
+/// its texture changes with it.
+#[derive(Default)]
+struct Recorded(fixture::FullOutput);
+
+impl Drop for Recorded {
+    fn drop(&mut self) {
+        self.0.textures_delta.clear();
     }
 }
 
@@ -80,13 +91,13 @@ impl Frames {
 
     /// Keeps what every following frame paints, for [`Frames::take_paint`].
     pub fn record_paint(&mut self) {
-        self.paint.get_or_insert_with(fixture::FullOutput::default);
+        self.paint.get_or_insert_with(Recorded::default);
     }
 
     /// What the frames painted since the last call, as a renderer takes it: the last frame's shapes and every
     /// texture change since. `None` unless [`Frames::record_paint`] was called.
     pub fn take_paint(&mut self) -> Option<fixture::FullOutput> {
-        self.paint.as_mut().map(std::mem::take)
+        self.paint.as_mut().map(|paint| std::mem::take(&mut paint.0))
     }
 
     /// Frames on `ctx`, a context the caller made (an app's own, which its code reads outside the frames), with the
@@ -272,7 +283,7 @@ impl Frames {
         let files = fixture::OsFiles { hovered: self.files.hovered.clone(), dropped: std::mem::take(&mut self.files.dropped) };
         let mut result = fixture::run_frame(&self.ctx, self.time, self.screen, self.pixels_per_point, viewport, events, files, ui);
         match &mut self.paint {
-            Some(paint) => {
+            Some(Recorded(paint)) => {
                 paint.textures_delta.append(std::mem::take(&mut result.textures));
                 paint.shapes = std::mem::take(&mut result.shapes);
                 paint.pixels_per_point = result.pixels_per_point;

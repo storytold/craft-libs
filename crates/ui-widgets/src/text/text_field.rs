@@ -347,7 +347,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         let placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.env.direction().is_rtl());
         let color = cx.resolve(&cx.style.glyph.color);
         for (adornment, rect) in self.leading.iter().chain(&trailing).zip(placed.leading.iter().chain(&placed.trailing)) {
-            adornment.paint(ui, *rect, color);
+            adornment.paint(ui, *rect, color, self.options.role);
         }
     }
 

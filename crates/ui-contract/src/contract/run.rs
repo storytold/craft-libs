@@ -1282,12 +1282,25 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
     (steps::measure(style, input, content, extent, resolved), inputs)
 }
 
-/// The pipeline: steps 1 to 17 for one component, whatever its type and shape.
+/// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
+/// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
+pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
+    match cell {
+        Some((grid, column, sized)) => {
+            let ctx = ui.ctx().clone();
+            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip));
+        }
+        None => run_steps(t, ui, at, tip),
+    }
+}
+
+/// Steps 1 to 17 of `run`.
 #[expect(
     clippy::cognitive_complexity,
     reason = "steps 1 to 17 in their fixed order; each step is already its own function and the rest is the order"
 )]
-pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<'_>>) {
+fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<'_>>) {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);

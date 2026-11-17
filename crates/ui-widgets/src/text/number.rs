@@ -604,10 +604,10 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             && cx.value().is_some_and(|value| !non_finite(Some(value)))
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {
-            unit.paint(ui, *at, cx.resolve(&cx.style.unit.color));
+            unit.paint(ui, *at, cx.resolve(&cx.style.unit.color), self.options.role);
         }
         if let (Some(glyph), Some(at)) = (self.leading.first(), placed.leading.first()) {
-            glyph.paint(ui, *at, cx.resolve(&cx.style.handle));
+            glyph.paint(ui, *at, cx.resolve(&cx.style.handle), self.options.role);
         }
         for (key, name) in chevrons {
             ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
