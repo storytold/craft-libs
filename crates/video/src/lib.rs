@@ -24,10 +24,14 @@
 //!
 //! The decoders bound the pictures they hold with a memory budget ([`budget`]).
 //!
+//! Each decoder returns its own picture type. [`frame::VideoFrame`] is the codec-agnostic form
+//! they all convert into (`VideoFrame::try_from`).
+//!
 //! Containers and bit-level I/O are in `craft-media`; the codecs here share its `bitstream`
 //! module and describe their streams with `craft_media::CodecParams`.
 
 pub mod budget;
+pub mod frame;
 
 #[cfg(any(feature = "apv-decode", feature = "apv-encode"))]
 pub mod apv;
