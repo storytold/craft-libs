@@ -136,7 +136,7 @@ pub fn pcap(frames: &[Vec<u8>]) -> Vec<u8> {
 
 pub fn block(t: u32, body: &[u8]) -> Vec<u8> {
     let mut body = body.to_vec();
-    while body.len() % 4 != 0 {
+    while !body.len().is_multiple_of(4) {
         body.push(0);
     }
     let len = (body.len() + 12) as u32;
