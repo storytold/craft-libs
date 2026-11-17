@@ -523,6 +523,9 @@ impl<'a> Dex<'a> {
                     }
                 }
             }
+            if count > MAX_MEMBERS as u32 {
+                return cd;
+            }
         }
         cd.complete = true;
         cd
@@ -563,6 +566,7 @@ impl<'a> Dex<'a> {
                     handlers.push(Handler { exception: Some(self.type_desc(t as u32)), address: addr as u32 });
                 }
                 if size <= 0
+                    && handlers.len() as u64 == size.unsigned_abs()
                     && let Some((addr, _)) = r.uleb128(p)
                 {
                     handlers.push(Handler { exception: None, address: addr as u32 });
