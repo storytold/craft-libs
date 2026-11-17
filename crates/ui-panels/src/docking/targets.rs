@@ -8,8 +8,8 @@ use super::{DragUnit, PanelKey, PanelSpec, scale_widths, stepped, width_bounds};
 use crate::contract::DropMark;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::StyleCx;
+use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Layout, Node, ZoneSize, node_at, zones};
-use craft_behavior::{DockSide, Flow};
 use egui::{Context, Id, Pos2, Rect, Vec2};
 
 pub use craft_behavior::dock::{SIDE_ZONE_DEPTH_SHARE, SIDE_ZONE_FRACTION};
@@ -268,30 +268,39 @@ impl<P> DockSpot<P> {
         }
     }
 
-    /// What the drag ghost paints for a drop on this spot; `None` for [`DockSpot::Blocked`], which takes no drop.
+    /// What the drag ghost paints for a drop on this spot when the dock cannot say where the moved panels land
+    /// (`DockDropTarget::placing`); `None` for [`DockSpot::Blocked`], which takes no drop.
     ///
-    /// `rect` is the rect the spot applies to: the group's rect for [`DockSpot::Group`], whose side marks the half
-    /// of it a docked panel would take (mirrored under `rtl`); the rect it registered with (`DockTargets::register_in`, else its hit rect) for the others. A tab
-    /// insertion marks a line across the hit rect's start edge. A band (edge, seam, column, new dock) marks a line
-    /// along its middle.
+    /// `rect` is the rect the spot applies to: the group's rect for [`DockSpot::Group`]; the rect it registered with
+    /// (`DockTargets::register_in`, else its hit rect) for the others. A group's middle marks the group as the region
+    /// the panels join; a side of it marks a line along that edge of the group (mirrored under `rtl`). A tab insertion
+    /// marks a line across the hit rect's start edge. A band (edge, seam, column, new dock) marks a line along its
+    /// middle.
     pub fn mark(&self, rect: Rect, rtl: bool) -> Option<DropMark> {
+        let (start, end) = if rtl { (rect.right(), rect.left()) } else { (rect.left(), rect.right()) };
+        let across = |x: f32| DropMark::line(Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom()));
+        let along = |y: f32| DropMark::line(Pos2::new(rect.left(), y), Pos2::new(rect.right(), y));
         match self {
             DockSpot::Blocked => None,
-            DockSpot::Group { side: DockSide::Center, .. } => Some(DropMark::Into(rect)),
-            DockSpot::Group { side, .. } => Some(DropMark::Split(Flow::new(rect, rtl).to_physical(side.area(rect)))),
-            DockSpot::Tab { .. } => {
-                let x = if rtl { rect.right() } else { rect.left() };
-                Some(DropMark::line(Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())))
-            }
+            DockSpot::Group { side, .. } => Some(match side {
+                DockSide::Start => across(start),
+                DockSide::End => across(end),
+                DockSide::Top => along(rect.top()),
+                DockSide::Bottom => along(rect.bottom()),
+                _ => DropMark::region(rect),
+            }),
+            DockSpot::Tab { .. } => self.tab_line(rect, rtl).map(|[from, to]| DropMark::line(from, to)),
             DockSpot::Edge(_) | DockSpot::Seam { .. } | DockSpot::Column { .. } | DockSpot::NewDock(_) => {
                 let centre = rect.center();
-                Some(if rect.width() <= rect.height() {
-                    DropMark::line(Pos2::new(centre.x, rect.top()), Pos2::new(centre.x, rect.bottom()))
-                } else {
-                    DropMark::line(Pos2::new(rect.left(), centre.y), Pos2::new(rect.right(), centre.y))
-                })
+                Some(if rect.width() <= rect.height() { across(centre.x) } else { along(centre.y) })
             }
         }
+    }
+
+    /// The tab line of a [`DockSpot::Tab`] at `rect`, the rect it registered with: across its start edge.
+    pub(crate) fn tab_line(&self, rect: Rect, rtl: bool) -> Option<[Pos2; 2]> {
+        let x = if rtl { rect.right() } else { rect.left() };
+        matches!(self, DockSpot::Tab { .. }).then(|| [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())])
     }
 }
 
@@ -326,15 +335,17 @@ struct Target<P> {
     applies: Rect,
 }
 
-/// The spots of one dock in one pass with their hit rects. Spots are added back to front.
+/// The spots of one dock in one pass with their hit rects, and the room the dock laid its panels out in. Spots are
+/// added back to front.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockTargets<P> {
     targets: Vec<Target<P>>,
+    room: Option<Rect>,
 }
 
 impl<P> Default for DockTargets<P> {
     fn default() -> Self {
-        DockTargets { targets: Vec::new() }
+        DockTargets { targets: Vec::new(), room: None }
     }
 }
 
@@ -414,6 +425,21 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_target") {
             return;
         }
+        Self::with_dock(ctx, dock, |targets| targets.add(spot, hit, applies));
+    }
+
+    /// Registers `room`, the rect the dock `dock` lays its panels out in this pass: the docked tree's rect for a dock
+    /// area, the column's rect for a floating window. A drop's mark lays the panels out in it as they land
+    /// ([`placed_rect`](super::placed_rect)).
+    pub fn register_room(ctx: &Context, dock: Id, room: Rect) {
+        if !crate::runtime::measure::effect(ctx, "dock::register_room") {
+            return;
+        }
+        Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
+    }
+
+    /// Runs `f` on the registry of `dock` in the running pass, made empty the first time.
+    fn with_dock(ctx: &Context, dock: Id, f: impl FnOnce(&mut DockTargets<P>)) {
         Self::with_pass(ctx, |pass| {
             let at = match pass.now.iter().position(|(id, _)| *id == dock) {
                 Some(at) => at,
@@ -422,8 +448,14 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
                     pass.now.len() - 1
                 }
             };
-            pass.now[at].1.add(spot, hit, applies);
+            f(&mut pass.now[at].1);
         });
+    }
+
+    /// The room the dock `dock` laid its panels out in the previous pass ([`Self::register_room`]); `None` outside a
+    /// pass and where the dock registered none.
+    pub fn room(ctx: &Context, dock: Id) -> Option<Rect> {
+        Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.room)).flatten()
     }
 
     /// The spot a drop at `at` lands on in the dock `dock`, by the spots of the previous pass, with the rect its

@@ -92,3 +92,14 @@ fn tab_strip_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn tab_strip_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     strip(ui, data, TabStrip::new("Panels").shown(1), &TITLES, 4, TabKind::Panel)
 }
+
+/// The width the narrow panel story's room is held to: the shown tab whole, the others at their first letters.
+const NARROW_ROOM: f32 = 260.0;
+
+#[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
+fn tab_strip_panel_narrow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(NARROW_ROOM);
+        strip(ui, data, TabStrip::new("Panels").shown(1), &TITLES, TITLES.len(), TabKind::Panel)
+    })
+}

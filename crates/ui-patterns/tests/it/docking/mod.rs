@@ -12,6 +12,7 @@ mod runs;
 mod split;
 
 mod drop;
+mod drop_preview;
 mod drop_session;
 
 mod floating;

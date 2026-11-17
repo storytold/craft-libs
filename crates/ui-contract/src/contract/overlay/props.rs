@@ -319,6 +319,12 @@ impl Overlay {
         self
     }
 
+    /// The caller sizes the layer or OS window from the resizes its grips report ([`Resize::by_caller`]).
+    pub fn sized_by_caller(mut self) -> Overlay {
+        self.resize.by_caller = true;
+        self
+    }
+
     /// Rank `Window` and no backdrop.
     pub fn modeless(mut self) -> Overlay {
         self.rank = Rank::Window;

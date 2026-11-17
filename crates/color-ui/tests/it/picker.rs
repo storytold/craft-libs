@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::Mixed;
-use craft_color_ui::ui::{ColorPickerDialog, ColorReadout, PickedColor};
+use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorReadout, PickedColor};
 use craft_host::{AppInfo, Host};
-use craft_theme::{ModelValues, Rgba, Srgba};
-use craft_ui::contract::Bind;
+use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Rgba, Srgba};
+use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, vec2};
@@ -116,4 +116,39 @@ fn a_dialog_reopened_keeps_only_web_colors_and_recalls_the_values_kept_on_ok() {
     fixture.click(&reset).idle(4);
     fixture.hold(Modifiers::NONE).idle(2);
     assert_eq!(edited(&dialogs), Some(values), "Reset returns the typed values");
+}
+
+/// The Full picker's channel rows show a letter after each radio and no channel words; the radios keep their names, and
+/// the number fields of a column, the hex field included, start at one x whether or not their row has a radio.
+#[trial]
+fn the_full_pickers_channel_rows_show_letters_and_align_their_fields() {
+    let mut fixture = Fixture::new(|ui| {
+        let models: [&dyn ColorModel; 3] = [&HsbModel, &RgbModel, &LabModel];
+        let mut color = PickedColor::rgb(Srgba::rgb(0.2, 0.4, 0.6));
+        let _ = ColorPicker::new("Color", Bind::bound(&mut color)).layout(ColorPickerLayout::Full).models(models).show(ui);
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let texts = fixture.texts();
+    for word in ["Hue", "Saturation", "Brightness", "Red", "Lightness"] {
+        assert!(texts.iter().all(|run| run.text != word), "{word} is not shown beside its radio");
+    }
+    for letter in ["H:", "S:", "R:", "L:"] {
+        assert!(texts.iter().any(|run| run.text == letter), "{letter} is shown");
+    }
+    assert_eq!(fixture.by_role(Role::RADIO_BUTTON).len(), 9, "every channel keeps its radio");
+    let fields = fixture.by_role(Role::SPIN_BUTTON);
+    assert_eq!(fields.len(), 9);
+    // The columns are found by x, not by tree order: HSB and RGB fields share the first, Lab's the second.
+    let mut starts: Vec<f32> = Vec::new();
+    for field in &fields {
+        if !starts.iter().any(|start| (start - field.rect.min.x).abs() < 0.5) {
+            starts.push(field.rect.min.x);
+        }
+    }
+    starts.sort_by(f32::total_cmp);
+    let rects: Vec<_> = fields.iter().map(|field| field.rect).collect();
+    assert_eq!(starts.len(), 2, "the fields start in two columns, one per model column: {rects:?}");
+    let hex = fixture.by_label("Hex color").expect("the hex field");
+    assert!((hex.rect.min.x - starts[0]).abs() < 0.5, "the hex field, which has no radio, starts in the first column: {:?}", hex.rect);
 }

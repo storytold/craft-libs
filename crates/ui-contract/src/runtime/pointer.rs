@@ -163,8 +163,9 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     // Every pass reads its own input and the frame's latches, so a second pass of a frame builds the same
     // modifiers from its own (event-free) input and counts no press twice.
     let mods = with_latched(read.mods, latched);
-    // A drag that started in another window reaches this one through the desktop pointer (8.4).
-    if read.pos.is_none() {
+    // A drag that started in another window reaches this one through the desktop pointer (8.4), never at the place
+    // this window saw the pointer last: the source window holds the pointer, and the window may have had no exit.
+    if drag::runs_elsewhere(ctx, viewport) {
         read.pos = drag::cross_window_pointer(ctx, viewport);
     }
     let wheel = input::wheel_read(ctx, WHEEL_LINE_POINTS, WHEEL_PAGE_POINTS);
@@ -683,6 +684,19 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
 /// record's borrow.
 pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(Option<&Under>, bool) -> R) -> R {
     PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
+}
+
+/// Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
+/// what lies under the pointer ([`Under`]): it takes the press there, or it is the topmost shape and takes none. A
+/// container reads it for the components in its body before they run. While a press is open it holds for none: only
+/// the press's target hovers, and that target reads it from its press.
+pub fn hovers(ctx: &Context, id: Id) -> bool {
+    with_hover(ctx, pass::current_viewport(ctx), |under, captured| {
+        !captured
+            && under.is_some_and(|under| {
+                [under.press.click, under.press.drag, under.hover_top].into_iter().flatten().any(|(winner, _)| winner.owner == id)
+            })
+    })
 }
 
 /// The resolutions of what lies under a point the running viewport's latest pass made.

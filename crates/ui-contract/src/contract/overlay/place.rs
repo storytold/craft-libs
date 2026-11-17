@@ -112,17 +112,21 @@ pub struct Resize {
     /// The edges whose grips resize the layer; a corner grip needs both its edges. A placement that holds an edge
     /// still keeps its grip away.
     pub edges: ResizeEdges,
+    /// The caller turns each resize into a size of its own (a window as large as its content in whole steps). In an
+    /// OS window the app runs the grips' drag, reports each step, and the OS offers no resize of its own; the window
+    /// takes the size the caller places. A layer resizes as any other and reports the same steps.
+    pub by_caller: bool,
 }
 
 impl Resize {
     /// The layer keeps its size.
-    pub const NONE: Resize = Resize { edges: ResizeEdges::NONE };
+    pub const NONE: Resize = Resize { edges: ResizeEdges::NONE, by_caller: false };
     /// Grips on every free edge and corner.
-    pub const GRIPS: Resize = Resize { edges: ResizeEdges::ALL };
+    pub const GRIPS: Resize = Resize { edges: ResizeEdges::ALL, by_caller: false };
 
     /// Grips on the given edges only.
     pub fn edges(edges: ResizeEdges) -> Resize {
-        Resize { edges }
+        Resize { edges, by_caller: false }
     }
 }
 
@@ -190,6 +194,11 @@ impl SizeLimits {
     /// The limits of a frame that holds a size with these limits and `extra` around it: both ends grow by `extra`.
     pub fn around(self, extra: Vec2) -> Self {
         SizeLimits { min: self.min + extra, max: self.max.map(|max| max + extra) }
+    }
+
+    /// `size` within these limits; the minimum wins over a smaller maximum.
+    pub fn clamp(self, size: Vec2) -> Vec2 {
+        size.min(self.max.unwrap_or(Vec2::INFINITY)).max(self.min)
     }
 
     /// Whether every value is finite and non-negative, the maximum is no less than the minimum and no value is

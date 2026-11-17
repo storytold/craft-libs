@@ -27,10 +27,16 @@ pub(super) fn shown<'a, P: Clone + Eq + Hash>(
     shell: Option<&ShellCx>,
     protected: &dyn Fn(&P) -> bool,
 ) -> Shown<'a, P> {
-    let (hide, floating) = match shell {
+    let (hide, floating) = resolved(hide, shell);
+    Shown { view: maximize(layout, maximized, hide, protected), floating }
+}
+
+/// The panels the area hides, the host's `hide` with the shell's panel visibility applied, and whether floating windows
+/// show (see [`shown`]).
+pub(super) fn resolved<'h, P>(hide: HidePanels<'h, P>, shell: Option<&ShellCx>) -> (HidePanels<'h, P>, bool) {
+    match shell {
         None => (hide, true),
         Some(shell) if shell.panels_hidden() => (if let HidePanels::Except(keep) = hide { HidePanels::Except(keep) } else { HidePanels::All }, true),
         Some(shell) => (if shell.dock_visible() { hide } else { HidePanels::All }, shell.floating_visible()),
-    };
-    Shown { view: maximize(layout, maximized, hide, protected), floating }
+    }
 }

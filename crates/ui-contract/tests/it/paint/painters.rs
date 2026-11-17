@@ -185,6 +185,50 @@ fn ant_edges_are_whole_device_pixels_at_a_fractional_scale() {
     }
 }
 
+/// A docked scroll bar (the canvas's) has the same thumb across the track at rest and under the pointer, on a
+/// `surface.chrome` track.
+#[trial]
+fn a_docked_scroll_bar_keeps_its_width_at_rest_and_under_the_pointer() {
+    use craft_behavior::{Axis, ScrollSpan};
+    use craft_theme::{Contrast, ControlSize, Mode, Variant};
+    use craft_ui::primitives::ScrollBar;
+    use craft_ui::style::{Flags, ScrollBarKind, State, StateMix, StateSet};
+    use egui::{Rect, Shape};
+
+    let tokens = craft_ui::testing::style::tokens(Mode::Dark, Contrast::Standard);
+    let look = craft_ui::testing::style::with_cx(&egui::Context::default(), &tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+        cx.scroll_bar_of(ScrollBarKind::Docked)
+    });
+    let span = ScrollSpan::new(0.0..400.0, 100.0..300.0);
+    for (axis, rtl) in [(Axis::Y, false), (Axis::Y, true), (Axis::X, false)] {
+        let track = match axis {
+            Axis::X => Rect::from_min_max(pos2(0.0, 100.0), pos2(200.0, 100.0 + look.thickness)),
+            _ => Rect::from_min_max(pos2(100.0, 0.0), pos2(100.0 + look.thickness, 200.0)),
+        };
+        let thumb = |state: State, mix: StateMix| {
+            let shapes = ScrollBar::shapes(&look, track, axis, rtl, &span, &StateSet::new(state, Flags::empty(), mix));
+            match shapes.last() {
+                Some(Shape::Rect(shape)) => shape.rect,
+                other => panic!("the thumb is a rect: {other:?}"),
+            }
+        };
+        let (rest, hover) = (thumb(State::Rest, StateMix::REST), thumb(State::Hover, StateMix::new(1.0, 0.0, 0.0)));
+        assert_eq!(rest, hover, "{axis:?} rtl {rtl}: the thumb is the same at rest and under the pointer");
+        let across = |rect: Rect| if axis == Axis::X { rect.height() } else { rect.width() };
+        assert!((across(rest) - across(track)).abs() < EPS, "{axis:?}: the thumb fills the track");
+        let fill = |state: State, mix: StateMix| match ScrollBar::shapes(&look, track, axis, rtl, &span, &StateSet::new(state, Flags::empty(), mix))
+            .as_slice()
+        {
+            [Shape::Rect(track), Shape::Rect(thumb)] => (track.fill, thumb.fill),
+            other => panic!("a track and a thumb: {other:?}"),
+        };
+        let (track_fill, thumb_fill) = fill(State::Rest, StateMix::REST);
+        let (_, hover_fill) = fill(State::Hover, StateMix::new(1.0, 0.0, 0.0));
+        assert_ne!(thumb_fill, track_fill, "{axis:?}: the resting thumb shows on its track");
+        assert_ne!(thumb_fill, hover_fill, "{axis:?}: the thumb takes a stronger colour under the pointer");
+    }
+}
+
 /// Every scroll bar rests as a thin line along its track's outer edge and shows its thumb across the whole track under
 /// the pointer, at the same place along the bar.
 #[trial]

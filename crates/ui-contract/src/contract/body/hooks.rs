@@ -672,7 +672,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if (band || matches!(props.mount, Mount::Viewport { .. } | Mount::Window { .. }))
             && let Some(viewport) = os_window(props, cx.core.memory.ctx(), cx.core.id, &cx.core.env)
         {
-            self.window_os(viewport, cx);
+            self.window_os(viewport, props, cx);
             self.window_movable(viewport, cx);
         }
         self.pane_drag(props, cx);

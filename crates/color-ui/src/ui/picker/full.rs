@@ -4,11 +4,10 @@ use craft_behavior::{ColumnWidth, IconId, Metrics, Mixed, NavShape, Sense};
 use craft_theme::{ColorModel, HsbModel, OklchModel, RgbModel, Srgba};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, GlyphLabel, LabelKind, LabelScheme, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _,
+    Bind, BodyCx, Common, Component, Cx, FieldLayout, LabelKind, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _,
     SideLabel, Sizing,
 };
 use craft_ui::display::{Icon, Shade, Text};
-use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label};
@@ -36,6 +35,7 @@ pub struct ColorWarning {
 struct ModelChoice<'m> {
     visible: &'m [&'m dyn ColorModel],
     offered: &'m [AreaMode],
+    words: &'m ColorPickerWords,
 }
 
 impl ColorWarning {
@@ -256,14 +256,16 @@ impl<'a> Body<'a> {
                 };
                 Grid::new(widths).show(ui, |ui, _| {
                     for (column, models) in columns.iter().enumerate() {
-                        FieldGroup::new(words.channels.as_str().to_owned()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
+                        // Each model column is its own grid of radio, letter and field cells, so the fields of a
+                        // column share one x whether or not their row has a radio.
+                        Grid::new(THREE_COLUMNS).show(ui, |ui, cx| {
                             for model in models {
-                                self.model_fields(ui, pass, *model, ModelChoice { visible, offered: &offered }, words, got);
+                                self.model_fields(ui, cx, pass, *model, ModelChoice { visible, offered: &offered, words }, got);
                             }
                             if column == 0 {
-                                Field::new(words.hex.as_str().to_owned())
-                                    .side(HexField::hash_label())
-                                    .show(ui, |ui, _| self.hex_field(ui, pass, words, got));
+                                Text::new(Label::from("")).show(ui);
+                                Text::new(Label::from(HexField::HASH)).shade(Shade::Muted).show(ui);
+                                self.hex_field(ui, pass, words, got);
                             }
                         });
                     }
@@ -275,59 +277,53 @@ impl<'a> Body<'a> {
         }
     }
 
-    /// The rows of one model's channels.
+    /// The rows of one model's channels, three cells each: the radio that chooses the area mode (an empty cell where the
+    /// channel offers none), the channel's letter and its number field. The radio's name stays its accessible name.
     fn model_fields(
         &self,
         ui: &mut Ui,
+        cx: &mut BodyCx<'_>,
         pass: &Pass<'a>,
         model: &'a dyn ColorModel,
         choice: ModelChoice<'_>,
-        words: &ColorPickerWords,
         got: &mut Collected,
     ) {
-        let ModelChoice { visible, offered } = choice;
+        let ModelChoice { visible, offered, words } = choice;
         let values = pass.shown.values_in(model);
         for (i, channel) in model.channels().iter().enumerate() {
             let name = channel_name(model, i, visible);
-            let short = words.grid_label.fill(&[("label", channel.label)]);
-            let short: &str = &short;
-            let label = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Label::from(short.to_owned()))));
+            let letter = words.grid_label.fill(&[("label", channel.label)]);
+            let letter: &str = &letter;
             let mode = offered.iter().find(|mode| mode.model().id() == model.id() && mode.strip() == i).copied();
+            match mode {
+                Some(mode) => {
+                    let side = SideLabel::new().layout(FieldLayout::After).kind(LabelKind::Hidden);
+                    cx.labelled(ui, (model.id(), i), name.clone(), side, Radio::new(mode));
+                }
+                None => {
+                    Text::new(Label::from("")).show(ui);
+                }
+            }
+            Text::new(Label::from(letter.to_owned())).shade(Shade::Muted).show(ui);
             let rule = ChannelRule::of(channel);
             let unit = ChannelUnit::of(channel.unit);
             let value = f64::from(values.values[i]);
-            let edit = Field::new(name.clone())
-                .side(label)
-                .show(ui, |ui, _| {
-                    Row::new()
-                        .show(ui, |ui, _| {
-                            if let Some(mode) = mode {
-                                Radio::new(mode).label(name.clone()).show(ui);
-                            }
-                            let field = NumberField::new(name.clone(), Bind::given(pass.shows(Some(value))))
-                                .range(rule.range.clone())
-                                .step(rule.step)
-                                .snap_typed(true)
-                                .commit_decimals(usize::from(rule.decimals));
-                            let field = match unit {
-                                ChannelUnit::None => field,
-                                ChannelUnit::Percent => field.unit_kind(craft_ui::runtime::env::UnitKind::Percent),
-                                ChannelUnit::Degrees => field.unit_kind(craft_ui::runtime::env::UnitKind::Degrees),
-                                ChannelUnit::Text(text) => field.unit(Label::from(text)),
-                            };
-                            field.show(ui).edit
-                        })
-                        .inner
-                })
-                .inner
-                .flatten();
-            if let Some(edit) = edit {
-                got.adopt(edit, pass.shown, |v, mine| {
-                    if let Some(v) = v {
-                        *mine = mine.with_channel(model, i, *v, &pass.rules);
-                    }
-                });
-            }
+            let field = NumberField::new(name, Bind::given(pass.shows(Some(value))))
+                .range(rule.range.clone())
+                .step(rule.step)
+                .snap_typed(true)
+                .commit_decimals(usize::from(rule.decimals));
+            let field = match unit {
+                ChannelUnit::None => field,
+                ChannelUnit::Percent => field.unit_kind(craft_ui::runtime::env::UnitKind::Percent),
+                ChannelUnit::Degrees => field.unit_kind(craft_ui::runtime::env::UnitKind::Degrees),
+                ChannelUnit::Text(text) => field.unit(Label::from(text)),
+            };
+            got.adopt(field.show(ui).edit, pass.shown, |v, mine| {
+                if let Some(v) = v {
+                    *mine = mine.with_channel(model, i, *v, &pass.rules);
+                }
+            });
         }
     }
 }

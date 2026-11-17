@@ -133,7 +133,7 @@ fn a_tab_dragged_over_a_floating_window_marks_and_joins_the_window() {
     let mark = drag::mark(bed.fixture.ctx()).expect("the window takes the drop");
     let points = match mark {
         DropMark::Line { from, to, .. } => vec![from, to],
-        DropMark::Into(rect) | DropMark::Split(rect) => vec![rect.center()],
+        DropMark::Into(rect) | DropMark::Region { area: rect, .. } => vec![rect.center()],
         _ => Vec::new(),
     };
     assert!(!points.is_empty() && points.iter().all(|point| WINDOW_AT.expand(SLACK).contains(*point)), "the mark is the window's: {mark:?}");
@@ -437,26 +437,32 @@ fn a_double_click_on_a_floating_windows_band_collapses_and_expands_its_column() 
     assert!(!bed.workspace.borrow().layout.floating[0].column.iconic, "a second double click expanded it: {:?}", bed.actions.borrow());
 }
 
-/// A collapsed floating window's title row is its column's bar alone: a context request on its band opens the
-/// window's menu, whose Close entry closes the window.
+/// A floating window's title row is its column's bar, with the double arrow and Close and no menu button: a context
+/// request on its band opens the window's menu, collapsed or expanded, and the menu's Close entry closes the window.
 #[trial]
-fn a_context_request_on_a_collapsed_windows_band_opens_its_menu_and_close_closes_it() {
-    let mut bed = bed(collapsed_at(WINDOW_AT), |_| Permissions::ALL);
-    let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
-    let band = Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0);
-    bed.fixture.frame(vec![moved(band)]);
-    bed.fixture.frame(vec![secondary(band, true)]);
-    bed.fixture.frame(vec![secondary(band, false)]);
-    bed.fixture.settle();
-    let tree = bed.fixture.tree();
-    let items: Vec<_> =
-        bed.fixture.by_role(Role::MENU_ITEM).into_iter().map(|item| (craft_ui::testing::access::name(tree, item.node), item)).collect();
-    let names: Vec<_> = items.iter().map(|(name, _)| *name).collect();
-    let close = items.iter().find(|(name, _)| name.is_some_and(|name| name.starts_with("Close"))).map(|(_, item)| *item);
-    let close = close.unwrap_or_else(|| panic!("the band's context request opens the window's menu with a Close entry: {names:?}"));
-    bed.fixture.click(&close);
-    bed.fixture.settle();
-    assert!(bed.workspace.borrow().layout.floating.is_empty(), "Close closed the window: {:?}", bed.actions.borrow());
+fn a_context_request_on_a_windows_band_opens_its_menu_and_close_closes_it() {
+    for collapsed in [true, false] {
+        let mut bed = if collapsed { bed(collapsed_at(WINDOW_AT), |_| Permissions::ALL) } else { bed(with_window(None), |_| Permissions::ALL) };
+        let band = if collapsed {
+            let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
+            Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0)
+        } else {
+            window_title()
+        };
+        bed.fixture.frame(vec![moved(band)]);
+        bed.fixture.frame(vec![secondary(band, true)]);
+        bed.fixture.frame(vec![secondary(band, false)]);
+        bed.fixture.settle();
+        let tree = bed.fixture.tree();
+        let items: Vec<_> =
+            bed.fixture.by_role(Role::MENU_ITEM).into_iter().map(|item| (craft_ui::testing::access::name(tree, item.node), item)).collect();
+        let names: Vec<_> = items.iter().map(|(name, _)| *name).collect();
+        let close = items.iter().find(|(name, _)| name.is_some_and(|name| name.starts_with("Close"))).map(|(_, item)| *item);
+        let close = close.unwrap_or_else(|| panic!("collapsed {collapsed}: the band's context request opens the window's menu: {names:?}"));
+        bed.fixture.click(&close);
+        bed.fixture.settle();
+        assert!(bed.workspace.borrow().layout.floating.is_empty(), "collapsed {collapsed}: Close closed the window: {:?}", bed.actions.borrow());
+    }
 }
 
 /// Nothing goes beside a floating window: a tab dragged over the start side of its group marks the join of the
@@ -475,7 +481,7 @@ fn a_drag_over_a_floating_window_joins_or_stacks_and_never_splits() {
     press_and_move(&mut expanded.fixture, tab.center(), side - tab.center());
     expanded.fixture.frame(Vec::new());
     let mark = drag::mark(expanded.fixture.ctx()).expect("the window takes the drop");
-    assert!(matches!(mark, DropMark::Into(_)), "the start side of a floating group joins it: {mark:?}");
+    assert!(matches!(mark, DropMark::Region { .. }), "the start side of a floating group joins it: {mark:?}");
     expanded.fixture.frame(vec![release(side)]).settle();
 
     let mut window = Floating::single(vec![WINDOW], 0, WINDOW_AT);

@@ -4,7 +4,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
 use craft_ui::canvas::navigator_panel::NavigatorPanel;
-use craft_ui::canvas::{Canvas, CanvasSpace, NavigationOptions, Navigator};
+use craft_ui::canvas::{AppPaint, Canvas, CanvasSpace, NavigationOptions, Navigator, NavigatorPreview};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
@@ -103,4 +103,35 @@ fn a_typed_zoom_lands_exactly_after_its_ease() {
             assert_eq!(fixture.tree().value_of(field.node), Some(text.as_str()), "the field's text; animated: {animated}");
         }
     }
+}
+
+/// The fitted rect the panel's preview paints the document into, in a room of `room`.
+fn fitted_in(room: egui::Vec2) -> Rect {
+    let fitted = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&fitted);
+    let view = Rc::new(Cell::new(CanvasView::new(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)), Point::new(1000.0, 750.0), 1.0)));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = view.get();
+        let seen = Rc::clone(&seen);
+        let paint = AppPaint::new(move |_, rect: Rect| seen.set(rect));
+        let _ = NavigatorPanel::new("Navigator", Bind::bound(&mut given), DOCUMENT).preview(NavigatorPreview::Paint(paint)).show(ui);
+        view.set(given);
+    });
+    fixture.room(room);
+    fixture.settle();
+    fitted.get()
+}
+
+#[trial]
+fn panel_preview_grows_with_the_room_and_keeps_the_document_aspect() {
+    let aspect = DOCUMENT.width as f32 / DOCUMENT.height as f32;
+    let small = fitted_in(vec2(200.0, 260.0));
+    let large = fitted_in(vec2(400.0, 700.0));
+    assert!(large.width() > small.width() && large.height() > small.height(), "the preview grows with the panel: {small:?} -> {large:?}");
+    for fitted in [small, large] {
+        assert!((fitted.width() / fitted.height() - aspect).abs() < 0.02, "the document keeps its aspect: {fitted:?}");
+    }
+    let tall = fitted_in(vec2(200.0, 700.0));
+    assert!(tall.height() > small.height() || tall.width() <= small.width() + 0.5, "extra height alone never widens the fit: {small:?} {tall:?}");
+    assert!(fitted_in(vec2(200.0, 260.0)).width() <= small.width() + 0.5, "the preview shrinks back with the panel");
 }

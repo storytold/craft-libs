@@ -149,6 +149,7 @@ pub(crate) fn show_body_layer<R>(ctx: &Context, body_layer: BodyLayer, body: imp
     ctx.set_transform_layer(layer, transform);
     ctx.set_sublayer(parent, layer);
     egui::Area::new(layer.id)
+        .fade_in(false)
         .order(layer.order)
         .pivot(egui::Align2::LEFT_TOP)
         .fixed_pos(at)
@@ -220,9 +221,11 @@ pub(crate) struct LayerShown {
     pub layer: LayerId,
 }
 
-/// Shows an overlay layer: an `Area` with its left-top pivot at `spec.at`, never egui's default pivot.
+/// Shows an overlay layer: an `Area` with its left-top pivot at `spec.at`, never egui's default pivot. The motion
+/// service fades a layer in (`motion::layer_presence`), so egui's own fade-in of a new `Area` is off.
 pub(crate) fn show_layer(ctx: &Context, spec: &LayerSpec, body: impl FnOnce(&mut egui::Ui)) -> LayerShown {
     let shown = egui::Area::new(spec.id)
+        .fade_in(false)
         .order(spec.tier.order())
         .pivot(egui::Align2::LEFT_TOP)
         .fixed_pos(spec.at)
@@ -256,6 +259,7 @@ pub(crate) fn show_cover_layer(ctx: &Context, cover: CoverLayer) {
         None => vec![screen],
     };
     egui::Area::new(id)
+        .fade_in(false)
         .order(tier.order())
         .pivot(egui::Align2::LEFT_TOP)
         .fixed_pos(screen.min)

@@ -60,8 +60,14 @@ pub enum DropMark {
     },
     /// The payload goes into this rect.
     Into(Rect),
-    /// This rect is split, the payload taking one side.
-    Split(Rect),
+    /// The payload will occupy this area once dropped, such as the rect a docked panel takes beside a group.
+    #[non_exhaustive]
+    Region {
+        /// The rect the payload takes.
+        area: Rect,
+        /// Where in it the payload goes in, such as the tab position of a panel joining a group.
+        line: Option<[Pos2; 2]>,
+    },
 }
 
 impl DropMark {
@@ -70,13 +76,23 @@ impl DropMark {
         DropMark::Line { from, to }
     }
 
+    /// The payload will occupy `area`.
+    pub const fn region(area: Rect) -> Self {
+        DropMark::Region { area, line: None }
+    }
+
+    /// The payload will occupy `area` and goes in at the line from `from` to `to`.
+    pub const fn region_at(area: Rect, from: Pos2, to: Pos2) -> Self {
+        DropMark::Region { area, line: Some([from, to]) }
+    }
+
     /// The mark with every point passed through `map`.
     pub(crate) fn mapped(self, map: impl Fn(Pos2) -> Pos2) -> Self {
         let rect = |rect: Rect| Rect::from_two_pos(map(rect.min), map(rect.max));
         match self {
             DropMark::Line { from, to } => DropMark::Line { from: map(from), to: map(to) },
             DropMark::Into(target) => DropMark::Into(rect(target)),
-            DropMark::Split(target) => DropMark::Split(rect(target)),
+            DropMark::Region { area, line } => DropMark::Region { area: rect(area), line: line.map(|line| line.map(&map)) },
         }
     }
 }
@@ -399,12 +415,17 @@ fn source_viewport(ctx: &Context) -> Option<ViewportId> {
     board(ctx, |board| board.session.as_ref().map(|session| session.viewport))
 }
 
+/// Whether the running session started in a window other than `viewport`. That window holds the pointer while its
+/// button is down, so `viewport` gets no pointer events of its own and still holds the place it saw the pointer last.
+pub(crate) fn runs_elsewhere(ctx: &Context, viewport: ViewportId) -> bool {
+    source_viewport(ctx).is_some_and(|source| source != viewport)
+}
+
 /// The pointer in `viewport` for a drag that started in another window: the desktop pointer mapped into this
 /// window, when it lies inside. `None` without a session, in the source window, or outside this window.
 #[doc(hidden)]
 pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2> {
-    let source = source_viewport(ctx)?;
-    (source != viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
+    runs_elsewhere(ctx, viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
 }
 
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the

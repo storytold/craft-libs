@@ -356,11 +356,12 @@ impl Host for ViewportHost {
         let open = ViewportOpen {
             id,
             title: title.as_str(),
-            // A placed rect is the caller's size for the window, then a resizable fallback's default size, as the layer
-            // takes it; the measured size is for a window sized by content: what its body took in the window, recorded
-            // once the window reported its place (`steps::record_body_size`).
+            // A placed rect is the caller's size for the window, within the window's limits, which the OS would clamp it
+            // to; then a resizable fallback's default size, as the layer takes it; the measured size is for a window
+            // sized by content: what its body took in the window, recorded once the window reported its place
+            // (`steps::record_body_size`).
             size: placed
-                .map(|rect| rect.size())
+                .map(|rect| self.overlay.size_limits.clamp(rect.size()))
                 .or(self.overlay.size.filter(|_| self.overlay.fit == overlay::OverlayFit::Resizable))
                 .or_else(measured),
             // A resizable window takes its default or content size to open; from then on its size is the user's.
@@ -369,8 +370,9 @@ impl Host for ViewportHost {
             spec: &spec,
             limits: (Some(self.overlay.size_limits.min), self.overlay.size_limits.max),
             position: placed.map(|rect| rect.min),
-            // The full-window overlay has no grips (it covers the window), but its OS window is one the user sizes.
-            resizable: full_window || self.overlay.resize.edges != ResizeEdges::NONE,
+            // The full-window overlay has no grips (it covers the window), but its OS window is one the user sizes. A
+            // window its caller sizes takes no resize from the OS: the app runs its grips.
+            resizable: full_window || (self.overlay.resize.edges != ResizeEdges::NONE && !self.overlay.resize.by_caller),
         };
         let dismissed = &mut self.dismissed;
         windows::show_viewport(&ctx, &open, |ui| {
