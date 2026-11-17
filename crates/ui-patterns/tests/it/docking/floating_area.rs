@@ -276,3 +276,34 @@ fn a_floated_panel_fits_its_content_up_to_the_float_height() {
     assert!((short.width() - group.width()).abs() <= SLACK, "floated {short:?}, docked group {group:?}");
     assert!(short.height() < cap - SLACK, "short content floats at its height: {short:?}, cap {cap}");
 }
+
+/// A floating window's title row is its column's bar: its double arrow collapses the column to icons, which show in
+/// the window in place of the groups, and expands it again; the window keeps its expanded rect throughout.
+#[trial]
+fn a_floating_windows_double_arrow_collapses_its_column_to_icons_and_expands_it() {
+    let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let button = |bed: &Bed, name: &str| {
+        let tree = bed.fixture.tree();
+        bed.fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .find(|button| WINDOW_AT.expand(SLACK).contains_rect(button.rect) && craft_ui::testing::access::name(tree, button.node) == Some(name))
+    };
+    let in_window = |bed: &Bed| bed.fixture.by_role(Role::TAB_PANEL).into_iter().filter(|panel| WINDOW_AT.expand(SLACK).contains_rect(panel.rect)).count();
+    assert_eq!(in_window(&bed), 1, "the expanded window shows its group");
+    let collapse = button(&bed, "Collapse column to icons").expect("the title row shows the column's double arrow");
+    bed.fixture.click(&collapse);
+    bed.fixture.settle();
+    let window = bed.workspace.borrow().layout.floating[0].clone();
+    assert!(window.column.iconic, "the window's column collapsed: {:?}", bed.actions.borrow());
+    assert_eq!(window.rect, WINDOW_AT, "the window keeps its expanded rect");
+    assert_eq!(in_window(&bed), 0, "the collapsed window shows no group");
+    let icon = button(&bed, &title(WINDOW)).expect("the collapsed window shows the panel's icon");
+    assert!(icon.rect.width() < WINDOW_AT.width() / 2.0, "the window shows as a strip of icons: {:?}", icon.rect);
+    let expand = button(&bed, "Expand column").expect("the collapsed window's title row shows the double arrow");
+    bed.fixture.click(&expand);
+    bed.fixture.settle();
+    let window = bed.workspace.borrow().layout.floating[0].clone();
+    assert!(!window.column.iconic && window.rect == WINDOW_AT, "the column expanded at its rect: {window:?}");
+    assert_eq!(in_window(&bed), 1, "the expanded window shows its group again");
+}

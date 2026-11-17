@@ -11,9 +11,9 @@ use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
-    DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene, DockSizes, DockSpot,
-    DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels, IconicColumn, PanelDrag,
-    PanelKey, PanelSpec, PanelTitle, SplitArea, actions, dock_states, fit_widths, frame, move_actions,
+    ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene, DockSizes,
+    DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels, IconicColumn,
+    IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
@@ -94,8 +94,8 @@ impl<P> Outcome for DockAreaOutput<P> {
 /// The docking pattern over a workspace.
 ///
 /// - Shape: the docked tree is a `SplitArea`; a dock's columns are `DockColumn`s, or `IconicColumn`s with their
-///   flyouts; a group is a `DockGroup`; a floating window is a `FloatingGroup`. The host's `DockPanels` supplies the
-///   panels.
+///   flyouts; a group is a `DockGroup`; a floating window is a `FloatingGroup` holding one column, shown as a dock's
+///   column is, whose bar is the window's title row. The host's `DockPanels` supplies the panels.
 /// - Edits: a divider drag and every [`Action`] of the pass (menu rows, drags, drops) are written to the workspace
 ///   through its binding, with the panels' [`DockPanels::permissions`] (narrowed when `locked`). The output lists the
 ///   actions the workspace took, divider sizes and window moves included. A given workspace is not written.
@@ -280,6 +280,16 @@ struct DockPlan<'p, P> {
     columns: &'p [Column<P>],
     rect: Rect,
     flow: Flow,
+    open: Option<P>,
+}
+
+/// Where and how a column shows: its rect; the edge it keeps to, a dock's window edge or the float area's edge a
+/// floating window keeps to; where its bar is; the rect its inner edge and flyouts stay within; and the open flyout.
+struct ColumnAt<P> {
+    cell: Rect,
+    edge: DockEdge,
+    bar: ColumnBar,
+    within: Rect,
     open: Option<P>,
 }
 
@@ -559,7 +569,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         _ => Vec::new(),
     };
     register_bands(&scene, ctx, body.rect, &leaves);
-    let moved = if floating { pass.windows(ui, body) } else { None };
+    let moved = if floating { pass.windows(ui, body, &open) } else { None };
     let mut report = pass.report;
     let label: Arc<str> = Arc::from(body.words::<DockWords>().move_window.as_str());
     if let Some((anchor, change)) = moved
@@ -890,36 +900,46 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let reading = plan.flow.to_physical(plan.rect);
         let start = plan.edge == DockEdge::Start;
         let mut cursor = if start { reading.left() } else { reading.right() };
-        let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
         for (column, width) in plan.columns.iter().zip(widths) {
             let span = if start { (cursor, cursor + width) } else { (cursor - width, cursor) };
             cursor = if start { span.1 } else { span.0 };
             let cell = plan.flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()));
             let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { continue };
             self.report.placed.push((first.clone(), cell));
-            if column.iconic {
-                let open = plan.open.clone();
-                let output = IconicColumn::new(name.clone(), scene.dock, column, Bind::given(open.clone()), &spec)
-                    .edge(plan.edge)
-                    .within(body.rect)
-                    .auto_collapse(scene.auto_collapse)
-                    .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at));
-                self.report.flyout.extend(output.edit.events);
-                let work =
-                    ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout };
-                self.column_work(column, work);
-            } else {
-                let output = DockColumn::new(name.clone(), scene.dock, column, &spec)
-                    .edge(plan.edge)
-                    .within(body.rect)
-                    .auto_collapse(scene.auto_collapse)
-                    .show_groups_at(ui, cell, |group, rect, ui, body| {
-                        self.group_of(ui, body, group, GroupAt::Show(rect));
-                    });
-                let work = ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None };
-                self.column_work(column, work);
-            }
+            let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone() };
+            self.column(ui, body, column, at);
         }
+    }
+
+    /// One column, docked or floating: its icons and their flyouts while it is collapsed, else its stacked groups,
+    /// each group shown by `group_of`. What the user did on it becomes actions.
+    fn column(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, at: ColumnAt<P>) {
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
+        let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
+        let dock = self.dock;
+        let ColumnAt { cell, edge, bar, within, open } = at;
+        let work = if column.iconic {
+            let output = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
+                .edge(edge)
+                .bar(bar)
+                .within(within)
+                .auto_collapse(scene.auto_collapse)
+                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at));
+            self.report.flyout.extend(output.edit.events);
+            ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
+        } else {
+            let output = DockColumn::new(name, dock, column, &spec)
+                .edge(edge)
+                .bar(bar)
+                .within(within)
+                .auto_collapse(scene.auto_collapse)
+                .show_groups_at(ui, cell, |group, rect, ui, body| {
+                    self.group_of(ui, body, group, GroupAt::Show(rect));
+                });
+            ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None }
+        };
+        self.column_work(column, work);
     }
 
     /// Turns what a column reported into actions and drags.
@@ -955,21 +975,21 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
-    /// The floating windows of the pruned layout, each a `FloatingGroup` holding its tree's groups, in an OS window
-    /// where the config, the platform and its panels allow one. A window takes the drops over it on its own layer,
-    /// from the spots its groups register in its own registry. Returns the move or resize of a window in the app window
-    /// this pass, which the area reports as a workspace edit.
-    fn windows(&mut self, ui: &mut Ui, body: &BodyCx<'_>) -> Option<(P, PlacementChange)> {
+    /// The floating windows of the pruned layout, each a `FloatingGroup` holding its one column, drawn as a dock
+    /// column is with the window's title row as the column's bar, in an OS window where the config, the platform and
+    /// its panels allow one. A window takes the drops over it on its own layer, from the spots its column registers in
+    /// its own registry. `open` is the open flyout, which a collapsed window's icons share with the docks'. Returns the
+    /// move or resize of a window in the app window this pass, which the area reports as a workspace edit.
+    fn windows(&mut self, ui: &mut Ui, body: &BodyCx<'_>, open: &Option<P>) -> Option<(P, PlacementChange)> {
         let scene = self.scene;
         let ctx = ui.ctx().clone();
         let policy = |panel: &P| scene.permissions(panel);
+        let spec_of = |panel: &P| scene.spec(panel);
         let mut moved = None;
         for window in &scene.layout.floating {
             let Some(anchor) = window.panels().next().cloned() else { continue };
-            let active = match &window.root {
-                Node::Tabs { panels, active, .. } => panels.get(*active).cloned().unwrap_or_else(|| anchor.clone()),
-                _ => anchor.clone(),
-            };
+            // The window's menu acts on the shown panel of its top group.
+            let active = window.groups().first().and_then(Group::active_panel).cloned().unwrap_or_else(|| anchor.clone());
             let specs: Vec<PanelSpec> = window.panels().map(|panel| scene.spec(panel)).collect();
             let rights: Vec<Permissions> = window.panels().map(|panel| scene.permissions(panel)).collect();
             let dock = scene.dock.with(("floating", window.id));
@@ -995,10 +1015,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated), &active);
             let mut commands = Vec::new();
             let spec = scene.spec(&active);
+            let edge = WindowColumn::nearer_edge(opening.rect, scene.bounds, scene.rtl);
+            let shape = if window.column.iconic {
+                let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
+                WindowColumn::collapsed(edge, size)
+            } else {
+                WindowColumn::expanded(edge)
+            };
             let mut group = FloatingGroup::new(spec.label, opening.rect)
                 .limits(scene.spec(&anchor).limits)
                 .sized(Sizing::Fill)
-                .minimized(window.minimized)
+                .column(shape)
                 .actions(actions)
                 .window_of(anchor.clone())
                 .takes_drops(target, &dropped)
@@ -1024,23 +1051,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 while let Some((command, _)) = body.take_command::<DockCommands>() {
                     commands.push(command);
                 }
-                let limits = |panel: &P| scene.spec(panel).limits;
-                let rules = FrameRules::new(&limits);
-                let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
-                let tree = Layout::new(Some(window.root.clone()), Vec::new());
-                let area = SplitArea::new(name, Bind::given(tree), rules).show_at(ui, body.rect, |ui, split| {
-                    for (leaf, rect) in split.group_frames::<P>() {
-                        let Some(place) = scene.layout.place(&leaf) else { continue };
-                        let Some(node) = scene.layout.node_of(&place) else { continue };
-                        self.leaf(ui, split, node, rect);
-                    }
-                });
-                area.output.edit.events
+                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within: scene.bounds, open: open.clone() };
+                self.column(ui, body, &window.column, at);
             });
             self.dock = area_dock;
-            if let Some(edited) = shown.inner.as_ref().and_then(EditEvents::value).and_then(|tree| tree.root.as_ref()) {
-                self.report.actions.extend(split_resizes(&anchor, &window.root, edited));
-            }
             let output = shown.output;
             self.report.files.extend(output.files);
             if let Some(dropped) = dropped.into_inner() {
@@ -1079,18 +1093,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             for command in commands {
                 self.run(&active, command, Some(body));
             }
-            if output.minimized_toggled {
-                self.report.actions.push(Action::set_minimized(anchor.clone(), !window.minimized));
+            // The title row is the column's bar: its double arrow collapses or expands the column.
+            if let Some(iconic) = output.iconic {
+                self.report.actions.push(Action::set_iconic(anchor.clone(), iconic));
             }
         }
         moved
     }
-}
-
-/// The `ResizeWindowSplit` actions that take the splits of the floating window holding `anchor`, whose tree is
-/// `from`, to the sizes `to` has.
-fn split_resizes<P: Clone>(anchor: &P, from: &Node<P>, to: &Node<P>) -> Vec<Action<P>> {
-    split_changes(from, to).into_iter().map(|(path, size)| Action::resize_window_split(anchor.clone(), path, size)).collect()
 }
 
 /// The splits whose size `to` changes from `from`, each with its path from the root, where both trees split alike.

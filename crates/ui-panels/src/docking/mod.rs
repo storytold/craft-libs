@@ -36,7 +36,7 @@ pub use drop::{DockDrag, DockDropTarget, DockDropped, DragUnit, float_drop, reso
 pub use event::{DockEvent, FloatSpace, HidePanels};
 pub use group::{DockGroup, DockGroupOutput, DockGroupStyle, GroupGrip, GroupGripOutput, GroupGripStyle, HeaderHook};
 
-pub use floating::{FloatingGroup, FloatingGroupOutput, FloatingGroupStyle};
+pub use floating::{FloatingGroup, FloatingGroupOutput, FloatingGroupStyle, WindowColumn};
 pub use panels::{DockPanels, request_actions};
 #[doc(hidden)]
 pub use panels::{close_requests, open_requests};
