@@ -587,6 +587,31 @@ fn a_border_change_keeps_what_later_pages_say_of_the_rest() {
     has(&later, "fo:padding-left", "20pt");
 }
 
+/// A page layout written as read with a page setup change in another (the later pages' background
+/// picture) keeps the package file it names.
+#[test]
+fn a_patched_page_setup_keeps_the_files_its_page_layouts_name() {
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
+    let page =
+        r#"fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm""#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T} xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:page-layout style:name="pmfirst"><style:page-layout-properties {page}/></style:page-layout><style:page-layout style:name="pmnext"><style:page-layout-properties {page}><style:background-image xlink:href="Pictures/later.png" xlink:type="simple"/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pmnext"/><style:master-page style:name="First_20_Page" style:page-layout-name="pmfirst" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="First_20_Page"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/later.png", &png)]);
+    let mut d = import(&pkg).unwrap();
+    d.last_section.margin_left += 20.0;
+    let saved = export(&d).unwrap();
+    let s = crate::text::tests::entry(&saved, "styles.xml");
+    assert!(s.contains(r#"xlink:href="Pictures/later.png""#), "{s}");
+    let mut z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    assert_eq!(z.read("Pictures/later.png").unwrap(), Some(png));
+    let m = crate::text::tests::entry(&saved, "META-INF/manifest.xml");
+    assert!(m.contains(r#"manifest:full-path="Pictures/later.png""#), "{m}");
+}
+
 /// A first page with no header before later pages with one, both stating one margin: a change to
 /// the top margin moves the later pages' text by as much, and a page number format both state goes
 /// on to the later pages.
