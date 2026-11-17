@@ -1201,7 +1201,6 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, (columns, fit): (&[ColumnWidth], 
         let last = GridMeasure::default().with_least(widths.clone());
         let (inner, measured, ..) =
             child::block(ui, Some(at), layout, |ui| sweep(ui, &own, settled, columns, &|flow| GridCursor::new(flow, columns, gap, &last))).0;
-        eprintln!("DIAG picker fixed grid {id:?} natural {widths:?} columns {:?} rows {:?} room {at:?}", measured.columns, measured.rows);
         let room = ui.available_rect_before_wrap().size();
         for (i, width) in measured.columns.iter().enumerate() {
             found(&ctx, true, column_id(id, i), room, Vec2::new(*width, 0.0));

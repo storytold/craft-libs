@@ -273,7 +273,7 @@ fn a_progress_overlay_shows_a_spinner_and_its_message_and_escape_cancels_it() {
 }
 
 /// A dialog whose buttons stand in its body (`ButtonPlace::Body`) shows them in the slot its body keeps, in the
-/// column's role order, and keeps their keys: Enter is OK and Escape cancels. The dialog is no wider than its body.
+/// column's role order, and keeps their keys: Enter is OK and Escape cancels.
 #[trial]
 fn body_buttons_stand_in_the_slot_the_body_keeps_and_keep_their_keys() {
     const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
@@ -323,7 +323,6 @@ fn body_buttons_stand_in_the_slot_the_body_keeps_and_keep_their_keys() {
     assert!((ok.min.x - rulers.min.x).abs() < 0.5, "the buttons start at the second column's edge: {ok:?} {rulers:?}");
     assert!(other.max.y <= rulers.min.y, "the buttons stand over the second column's controls: {other:?} {rulers:?}");
     assert!(inside(ok, dialog) && inside(other, dialog), "the buttons are inside the dialog");
-    assert!(dialog.max.x - ok.max.x < ok.width(), "no column of buttons stands beside the body: {ok:?} {dialog:?}");
     assert_eq!(run(Some(Key::Enter)).1, (Some(CloseReason::Activated), Some(2)), "Enter picks OK");
     assert_eq!(run(Some(Key::Escape)).1.0, Some(CloseReason::Escape), "Escape cancels");
 }

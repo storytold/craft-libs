@@ -819,7 +819,6 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             Env::restore(&ctx, installed);
             close = close.or(bcx.close_requested());
             self.footer_size = Some(self.region_size(&footer_ui));
-            eprintln!("DIAG picker footer slot {id:?} measured {:?}", self.footer_size);
         }
         let footer_slot =
             in_body.then(|| FooterSlotOf { owner: id, size: if real { self.measured_footer } else { self.footer_size.unwrap_or(Vec2::ZERO) } });
@@ -1151,9 +1150,6 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 footer_ui.set_clip_rect(view.intersect(footer_ui.clip_rect()));
             }
             let installed = Env::install_for(&footer_ui, slot.and(slot_env).unwrap_or(footer_env));
-            if let Some(slot) = slot {
-                eprintln!("DIAG picker footer slot {id:?} drawn at {slot:?}");
-            }
             comp.footer(&mut footer_ui, &mut bcx);
             Env::restore(&ctx, installed);
             close = close.or(bcx.close_requested());

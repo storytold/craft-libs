@@ -136,6 +136,14 @@ fn overlap(a: Rect, b: Rect) -> bool {
     both.width() > SLACK && both.height() > SLACK
 }
 
+/// The rect of every node named `name` together: a warning chip and its swatch share the warning's tip, so this is the
+/// whole chip, icon over swatch.
+fn named(fixture: &Fixture, name: &str) -> Rect {
+    let tree = fixture.tree();
+    let rects = tree.keys().into_iter().filter(|key| tree.name_of(*key) == Some(name)).filter_map(|key| tree.bounds_of(key));
+    rects.reduce(Rect::union).unwrap_or_else(|| panic!("the picker shows {name}"))
+}
+
 /// The Full picker's parts, as AccessKit and the painted text show them.
 #[derive(Debug, PartialEq)]
 struct FullParts {
@@ -178,7 +186,7 @@ impl FullParts {
             hash: *text("#").first().expect("the # before the hex field"),
             web: rect("Only Web Colors"),
             sample: rect("Sample color from the screen"),
-            warnings: tips[..warnings].iter().map(|tip| rect(tip)).collect(),
+            warnings: tips[..warnings].iter().map(|tip| named(fixture, tip)).collect(),
             units: [text("\u{b0}"), text("%")].concat(),
         }
     }
