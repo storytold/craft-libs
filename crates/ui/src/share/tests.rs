@@ -114,6 +114,24 @@ fn nothing_is_offered_until_the_service_says_sharing_exists() {
 }
 
 #[test]
+fn a_capabilities_answer_asked_before_a_refresh_is_ignored() {
+    let ctx = Context::default();
+    let backend = Silent::default();
+    let mut dialog = ShareDialog::new();
+    dialog.connect(backend.clone());
+    dialog.collect(&ctx);
+    dialog.refresh();
+    dialog.collect(&ctx);
+    assert_eq!(backend.seen(), vec![Request::Capabilities, Request::Capabilities], "the refresh asks again");
+
+    // The first question was about the account before the refresh.
+    dialog.receive(&ctx, 1, Ok(everything()));
+    assert!(!dialog.available(), "the old account's answer must not offer Share");
+    dialog.receive(&ctx, 2, Ok(everything()));
+    assert!(dialog.available());
+}
+
+#[test]
 fn an_unlinked_account_cannot_share_even_where_the_provider_can() {
     let ctx = Context::default();
     let mut dialog = ShareDialog::new();

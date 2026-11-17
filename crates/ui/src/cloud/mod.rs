@@ -400,7 +400,12 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     // that never heard back does not refuse every one after it forever.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
+    cloud.sharing_save = false;
     cloud.save_as_target = None;
+    // Sharing went with the account: Share is not offered on the old
+    // account's answer, and a sheet open on one of its documents closes. The
+    // next sign-in asks the provider again.
+    app.sharing().signed_out();
     submit(app, Job::SignOut);
 }
 
