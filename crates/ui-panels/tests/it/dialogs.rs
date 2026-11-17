@@ -3,13 +3,14 @@
 use craft_behavior::{Metrics, PartKey, Sense};
 use craft_host::target::{Os, WindowChrome};
 use craft_quit::{CloseAnswer, CloseScope};
-use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _};
+use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
+    Alert, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
     dialog_id,
 };
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
+use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, trial};
 use egui::{Modifiers, Rect, Response, Ui, Vec2, ViewportId, vec2};
@@ -124,6 +125,40 @@ fn a_hosted_alert_answers_ok_however_it_closes_and_opens_again() {
         fixture.key(key, egui::Modifiers::NONE).idle(4);
         assert!(host.borrow().is_empty(), "{key:?} closes the alert");
         assert_eq!(host.borrow_mut().take::<HostedAlert>(), Some(DialogResult::Ok(())), "{key:?} answers OK");
+    }
+}
+
+/// A hosted dialog that leaves its open state to the dialog shell (no `opened` binding); its OK closes it.
+struct SelfClosing;
+
+impl StackDialog for SelfClosing {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id("self-closing")
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let shown = Dialog::new("Reopen probe").buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |_, _| {});
+        shown.output.closed.map(|_| DialogResult::Ok(()))
+    }
+}
+
+/// A dialog whose shell closed itself (its OK wrote its own open state closed) shows again when the host opens it
+/// again under the same id: the host forgets the open state of a dialog it removes.
+#[trial]
+fn a_dialog_that_closed_itself_shows_when_opened_again() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    for round in 0..2 {
+        host.borrow_mut().open(SelfClosing);
+        fixture.idle(6);
+        assert!(fixture.by_label("Reopen probe").is_some(), "open {round}: the dialog shows");
+        let ok = fixture.by_label("OK").expect("the OK button is shown");
+        fixture.click(&ok).idle(4);
+        assert!(host.borrow().is_empty(), "open {round}: OK closes the dialog");
+        assert_eq!(host.borrow_mut().take::<SelfClosing>(), Some(DialogResult::Ok(())), "open {round}: OK answers");
+        assert!(fixture.by_label("Reopen probe").is_none(), "open {round}: the closed dialog is gone");
     }
 }
 

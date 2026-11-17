@@ -113,10 +113,11 @@ pub(crate) fn scroll_moves(ctx: &Context, owner: Id, quiet: bool) -> Vec<(NavMov
 
 /// The smallest move of `view` that shows `rect`, per axis in screen points (positive: toward larger coordinates), and
 /// the part of `rect` the moved view shows: what a scroll owner moves for a reveal and passes on to the scroll owner
-/// around it. Along an axis the view has no extent on it moves nothing.
+/// around it. Along an axis the view has no extent on it moves nothing, and along an axis `rect` spans the view on
+/// it already shows all it can: a canvas control laid over the whole canvas, rulers included, moves no view inside them.
 pub(crate) fn reveal_move(rect: Rect, view: Rect) -> (Vec2, Rect) {
     let into = |low: f32, high: f32, view_low: f32, view_high: f32| {
-        if view_high <= view_low {
+        if view_high <= view_low || (low <= view_low && high >= view_high) {
             0.0
         } else if low < view_low {
             low - view_low

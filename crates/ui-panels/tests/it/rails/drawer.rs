@@ -133,24 +133,24 @@ fn a_slot_that_ends_a_group_leaves_a_wider_gap_than_slots_within_a_group() {
     assert!(between > within, "the gap after the group ({between}) is wider than the gap inside it ({within})");
 }
 
-/// The drawer opens on the canvas side of the rail, away from the window edge the rail sits at, for either edge.
+/// The drawer opens on the side of the rail it is told to, for either side.
 #[trial]
-fn the_drawer_opens_away_from_the_rails_edge() {
-    use craft_ui::contract::PaneEdge;
+fn the_drawer_opens_on_the_side_it_is_given() {
+    use craft_behavior::overlay::Side;
     use craft_ui::rails::{DrawerGroup, ToolbarDrawer};
     use egui::{Pos2, Rect};
     const ROOM: Vec2 = Vec2::new(480.0, 320.0);
-    for edge in [PaneEdge::Start, PaneEdge::End] {
-        let x = if edge == PaneEdge::End { ROOM.x - 48.0 } else { 0.0 };
+    for opens in [Side::End, Side::Start] {
+        let x = if opens == Side::Start { ROOM.x - 48.0 } else { 0.0 };
         let rail = Rect::from_min_size(Pos2::new(x, 0.0), Vec2::new(48.0, ROOM.y));
         let mut fixture = Fixture::new(move |ui| {
             let toolbar = [slot(0, &[UNDO])];
             let groups = [DrawerGroup::new("Edit", vec![tool(UNDO), tool(REDO), tool(CUT)])];
-            ToolbarDrawer::new(rail, &groups, &toolbar, None).edge(edge).show(ui);
+            ToolbarDrawer::new(rail, &groups, &toolbar, None).opens(opens).show(ui);
         });
         fixture.room(ROOM).settle();
         let row = fixture.by_label("Cut").expect("the drawer lists Cut").rect;
-        let away = if edge == PaneEdge::End { row.right() <= rail.left() } else { row.left() >= rail.right() };
-        assert!(away, "{edge:?}: the drawer row {row:?} lies on the canvas side of the rail {rail:?}");
+        let away = if opens == Side::Start { row.right() <= rail.left() } else { row.left() >= rail.right() };
+        assert!(away, "{opens:?}: the drawer row {row:?} lies on that side of the rail {rail:?}");
     }
 }

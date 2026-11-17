@@ -104,8 +104,8 @@ fn a_content_sized_popover_is_narrower_than_the_room() {
     assert!(fill.rect.width() + 0.5 >= row.rect.width(), "the filling leaf fills the width the popover settled on");
 }
 
-/// A page switch moves and resizes nothing: the tabs stay where they were, and a click on the new page's row in the
-/// frame after the switch lands on it.
+/// A page switch moves and resizes nothing: the tabs stay where they were, and a click on the new page's row right
+/// after the switch lands on it.
 #[trial]
 fn a_page_switch_keeps_the_popover_and_the_next_click_lands_on_the_new_page() {
     let paged = Rc::new(Paged::default());
@@ -113,12 +113,11 @@ fn a_page_switch_keeps_the_popover_and_the_next_click_lands_on_the_new_page() {
     let tab_b = fixture.by_label("Tab B").expect("the tabs show");
     let row_a = fixture.by_label("A row").expect("page 0 shows");
     fixture.click(&tab_b);
-    fixture.frame(Vec::new());
     assert_eq!(paged.page.get(), 1, "the tab switched the page");
     let tab_after = fixture.by_label("Tab B").expect("the tabs still show");
     assert!((tab_after.rect.min - tab_b.rect.min).length() < 0.5, "the switch did not move the tabs");
     let row_b = fixture.by_label("B row").expect("page 1 shows");
     assert!((row_b.rect.min - row_a.rect.min).length() < 0.5, "the new page starts where the old one did");
     fixture.click(&row_b);
-    assert_eq!(paged.row_b.borrow().presses, 1, "the click right after the switch landed on the new page's row");
+    assert_eq!(paged.row_b.borrow().activations, 1, "the click right after the switch landed on the new page's row");
 }

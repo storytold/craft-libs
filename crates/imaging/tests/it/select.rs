@@ -175,6 +175,10 @@ where
         SelectToolPass::new(&mut *self.tool.borrow_mut(), &self.probe).claims()
     }
 
+    fn takes_every_move(&self) -> bool {
+        SelectToolPass::new(&mut *self.tool.borrow_mut(), &self.probe).takes_every_move()
+    }
+
     fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
         SelectToolPass::new(&mut *self.tool.borrow_mut(), &self.probe).access(cx)
     }

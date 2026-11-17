@@ -388,6 +388,10 @@ impl<'a> Canvas<'a> {
         // As its body's scroll owner the canvas shows a control focus arrives at, and applies the page keys a focused
         // control leaves as its own.
         if let Some(by) = cx.take_reveal(area) {
+            eprintln!(
+                "DIAG command_drag_over_a_guide_moves_the_guide_with_any_tool: canvas {id:?} reveal by {by:?} in {area:?} egui focus {:?}",
+                ctx.memory(|memory| memory.focused())
+            );
             pan(&mut view, -by);
             jumped = true;
         }

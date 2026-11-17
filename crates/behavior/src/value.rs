@@ -119,7 +119,7 @@ pub enum Applied {
     Changed,
     /// The value was already the event's.
     Unchanged,
-    /// A cancel put the value from before the gesture back.
+    /// A cancel put the value from before the gesture back: the value differed from it.
     Restored,
 }
 
@@ -332,7 +332,7 @@ impl<T: Value> EditEvent<T> {
                     Applied::Changed
                 }
             }
-            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => {
+            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } if *v != *before => {
                 *v = before.clone();
                 Applied::Restored
             }
@@ -343,10 +343,11 @@ impl<T: Value> EditEvent<T> {
     /// Applies the event to a value that may be mixed: the written value is a concrete one.
     pub fn apply_mixed(&self, v: &mut Mixed<T>) -> Applied {
         match (self, self.value()) {
-            (EditEvent::Cancel { before: Some(before), .. }, _) => {
+            (EditEvent::Cancel { before: Some(before), .. }, _) if *v != *before => {
                 *v = before.clone();
                 Applied::Restored
             }
+            (EditEvent::Cancel { .. }, _) => Applied::Unchanged,
             (_, Some(new)) if !matches!(v, Mixed::Same(held) if held == new) => {
                 *v = Mixed::Same(new.clone());
                 Applied::Changed

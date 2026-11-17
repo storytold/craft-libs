@@ -21,6 +21,7 @@ use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
 use craft_ui::list::{ListRow, ToggleCell};
 use craft_ui::patterns::canvas::NavigatorPanel;
 use craft_ui::primitives::textures::Revision;
+use craft_ui::rails::{LastUsed, ToolRail};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::shell::CanvasPanel;
 use craft_ui::table::Table;
@@ -42,9 +43,36 @@ pub(super) struct Panels<'a> {
     pub(super) document: &'a mut Document,
     pub(super) tool: Tool,
     pub(super) tools: &'a mut Tools,
+    /// The tool each toolbar slot showed last; the toolbar writes it.
+    pub(super) last_used: &'a mut LastUsed<Tool>,
+    /// The tool the toolbar picked in this pass.
+    pub(super) picked: Option<Tool>,
+    /// The context the toolbar's grid is measured in.
+    pub(super) ctx: &'a egui::Context,
 }
 
 impl Panels<'_> {
+    /// The toolbar's rail in the rect the dock gives it, or its height at a width: as many tool columns as the width
+    /// holds. The rail's own padding surrounds the buttons, so no group padding applies.
+    fn toolbar(&mut self, ui: &mut Ui, at: GroupAt) -> f32 {
+        let slots = Tool::slots();
+        let (current, last_used) = (self.tool, self.last_used.clone());
+        let rail = ToolRail::new("Tools", &slots, &current, &last_used);
+        match at {
+            GroupAt::Measure(width) => rail.measure_rail(ui, width, |_, _| {}).y,
+            GroupAt::Show(rect) => {
+                let output = rail.show_rail(ui, |_, _| {});
+                if output.select.is_some() {
+                    self.picked = output.select;
+                }
+                if let Some(next) = output.last_used {
+                    *self.last_used = next;
+                }
+                rect.height()
+            }
+        }
+    }
+
     /// The document tab's title: the name, the zoom of the device and the current layer.
     fn tab_title(&self, ui: &Ui, cx: &BodyCx<'_>) -> String {
         let document = &self.document;
@@ -56,6 +84,7 @@ impl Panels<'_> {
 
 fn name(panel: Panel) -> &'static str {
     match panel {
+        Panel::Tools => "Tools",
         Panel::Canvas => "Canvas",
         Panel::Navigator => "Navigator",
         Panel::Layers => "Layers",
@@ -65,11 +94,21 @@ fn name(panel: Panel) -> &'static str {
 impl DockPanels<Panel> for Panels<'_> {
     fn spec(&self, panel: &Panel) -> PanelSpec {
         let spec = PanelSpec::new(name(*panel)).limits(SizeLimits::default());
-        if *panel == Panel::Canvas { spec.canvas() } else { spec }
+        match panel {
+            Panel::Canvas => spec.canvas(),
+            // The toolbar's column is whole tool columns wide.
+            Panel::Tools => spec.grid(ToolRail::<Tool>::dock_grid(self.ctx, Tool::slots().len())),
+            _ => spec,
+        }
     }
 
     fn permissions(&self, panel: &Panel) -> Permissions {
-        if panel.protected() { Permissions::PROTECTED } else { Permissions::ALL }
+        match panel {
+            // The toolbar never collapses to icons and never shares its column.
+            Panel::Tools => Permissions::ALL.collapses(false).shares_column(false),
+            _ if panel.protected() => Permissions::PROTECTED,
+            _ => Permissions::ALL,
+        }
     }
 
     fn body(&mut self, panel: &Panel, ui: &mut Ui, cx: &mut BodyCx<'_>) {
@@ -79,11 +118,14 @@ impl DockPanels<Panel> for Panels<'_> {
                 let _ = NavigatorPanel::new("Navigator", Bind::bound(&mut self.document.view), size).show(ui);
             }
             Panel::Layers => layers(ui, cx, self.document),
-            Panel::Canvas => {}
+            Panel::Canvas | Panel::Tools => {}
         }
     }
 
     fn group_view(&mut self, panels: &[Panel], _: usize, ui: &mut Ui, at: GroupAt, cx: &mut BodyCx<'_>) -> Option<f32> {
+        if panels.contains(&Panel::Tools) {
+            return Some(self.toolbar(ui, at));
+        }
         // The canvas fills the rect it is shown in; protected, it never sits in a flyout, which is what measures.
         let GroupAt::Show(rect) = at else { return None };
         if !panels.contains(&Panel::Canvas) {

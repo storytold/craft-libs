@@ -191,7 +191,7 @@ impl<S> Placed<'_, S> {
         }
     }
 
-    /// The slot's extent along its edge: its size, or the default of its edge, with a rail's columns side by side.
+    /// The slot's extent along its edge: its size, or the default of its edge.
     fn extent(&self, tokens: &UiTokens) -> f32 {
         let size = self.slot.slot_size().unwrap_or(match self.edge {
             PaneEdge::Top if self.title => SlotSize::TitleBar,
@@ -199,8 +199,7 @@ impl<S> Placed<'_, S> {
             PaneEdge::Bottom => SlotSize::StatusBar,
             _ => SlotSize::RailWidth,
         });
-        let columns = if matches!(self.edge, PaneEdge::Start | PaneEdge::End) { self.slot.column_count() } else { 1 };
-        size.resolve(tokens) * columns as f32
+        size.resolve(tokens)
     }
 }
 
@@ -263,8 +262,8 @@ impl Outcome for AppShellOutput {
 ///   a reveal. The shell takes its own window's Tab toggles from the frame state in the pass that records them: in
 ///   normal mode Tab hides every slot and panel and shows them again.
 /// - **Canvas preset.** [`title_bar_if`](Self::title_bar_if), [`options_bar`](Self::options_bar),
-///   [`tools`](Self::tools) and [`status`](Self::status) add the slots of a document editor under the keys of
-///   [`slots`](super::slots), named by `ShellWords`; each takes the host's `visible` flag, passed every frame.
+///   and [`status`](Self::status) add the slots of a document editor under the keys of [`slots`](super::slots),
+///   named by `ShellWords`; the toolbar is a panel of the dock, not a slot; each takes the host's `visible` flag, passed every frame.
 /// - **Shell data.** Slots and the body read the skeleton with `BodyCx::shell()`.
 /// - **App state.** `S` is the state the slots and the body edit; [`show`](Self::show) hands each of them `&mut S` in
 ///   turn, so a title bar, a rail and a body that edit one document share it without interior mutability. An app with
@@ -370,15 +369,6 @@ impl<'a, S> AppShell<'a, S> {
         self
     }
 
-    /// The tool rail, a slot keyed `"tools"` at `edge` (the reading start or end) that reveals in body-only mode, as
-    /// wide as the rail's `columns` (1 or 2, the count the host gives its `ToolRail`). It is the Tools region on either
-    /// edge.
-    pub fn tools(mut self, edge: PaneEdge, columns: usize, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        let slot = Slot::new(keys::TOOLS).columns(columns).visible(visible).reveal();
-        self.slots.push(Placed { slot, edge, title: false, named: Some(|words| words.tools.clone()), add: Box::new(add) });
-        self
-    }
-
     /// The status bar, a bottom slot keyed `"status"` that never reveals.
     pub fn status(mut self, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
         let slot = Slot::new(keys::STATUS).visible(visible);
@@ -412,7 +402,7 @@ impl<'a, S> AppShell<'a, S> {
     }
 
     /// Gives the slot keyed `key`, added before, the version of the app data it shows ([`Slot::content`]), for the
-    /// slots the `options_bar`, `tools` and `status` builders make.
+    /// slots the `options_bar` and `status` builders make.
     pub fn content(mut self, key: SlotKey, version: u64) -> Self {
         for placed in self.title.iter_mut().chain(self.slots.iter_mut()).filter(|placed| placed.slot.key() == key) {
             placed.slot = placed.slot.clone().content(version);

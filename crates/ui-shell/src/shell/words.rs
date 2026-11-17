@@ -9,7 +9,6 @@ craft_ui::words! {
         document: "appShell.document" = "Document";
         document_tabs: "appShell.documentTabs" = "Document Tabs";
         options: "appShell.options" = "Options";
-        tools: "appShell.tools" = "Tools";
         status: "appShell.status" = "Status";
         screen_mode: "appShell.screenMode" = "Screen Mode";
 

@@ -2,7 +2,7 @@
 //! the parts of `docking`, takes the drops of tab and group drags, and applies their actions to the workspace.
 
 use super::hide::{self, Shown};
-use crate::contract::overlay::PlacementChange;
+use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
     Bind, BindMut, BodyCx, Cx, Entry, Lazy, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
@@ -11,20 +11,22 @@ use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
-    DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene, DockSizes, DockSpot,
-    DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels, IconicColumn, PanelDrag,
-    PanelKey, PanelSpec, PanelTitle, SplitArea, actions, dock_states, fit_widths, frame, move_actions,
+    ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
+    DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels,
+    IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths, frame,
+    move_actions, stepped,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
 use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry};
 use crate::runtime::memory::Remember as _;
-use crate::runtime::windows::WindowHost;
+use crate::runtime::windows::{ResizeEdge, WindowHost};
 use crate::sections::HeaderAction;
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, Group, Layout, Location, Node, PanelPlace, Permissions, SplitSize, Workspace, node_at,
 };
+use craft_behavior::overlay::Side;
 use craft_behavior::{CancelReason, DockSide, EditEvent, EditEvents, Flow, GestureId, GesturePhase, Mixed, Proposal};
 use craft_host::target::WindowKind;
 use egui::{Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2, ViewportId};
@@ -94,8 +96,8 @@ impl<P> Outcome for DockAreaOutput<P> {
 /// The docking pattern over a workspace.
 ///
 /// - Shape: the docked tree is a `SplitArea`; a dock's columns are `DockColumn`s, or `IconicColumn`s with their
-///   flyouts; a group is a `DockGroup`; a floating window is a `FloatingGroup`. The host's `DockPanels` supplies the
-///   panels.
+///   flyouts; a group is a `DockGroup`; a floating window is a `FloatingGroup` holding one column, shown as a dock's
+///   column is, whose bar is the window's title row. The host's `DockPanels` supplies the panels.
 /// - Edits: a divider drag and every [`Action`] of the pass (menu rows, drags, drops) are written to the workspace
 ///   through its binding, with the panels' [`DockPanels::permissions`] (narrowed when `locked`). The output lists the
 ///   actions the workspace took, divider sizes and window moves included. A given workspace is not written.
@@ -128,7 +130,10 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// The workspace is locked: nothing moves, floats or closes.
     #[prop(flag)]
     locked: bool,
-    /// The panel open in an iconic column's flyout, owned by the host. Without it the area keeps the value.
+    /// The panel open in an iconic column's flyout, owned by the host. Without it the area keeps the value. A host
+    /// that opens a panel whose column is collapsed to icons ([`Layout::opens_in_flyout`]), from its Window menu
+    /// ([`WindowMenuRowsOutput::flyout`](crate::docking::WindowMenuRowsOutput::flyout)) or a command, writes this
+    /// binding: the panel shows in its flyout, and the layout does not change.
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
 }
@@ -267,11 +272,13 @@ struct Passed<P> {
     files: Vec<drag::OsFile>,
 }
 
-/// How a group is shown: minimized, and whether it is an accordion section (with its open state).
+/// How a group is shown: minimized, whether it is an accordion section (with its open state), and whether it is in
+/// a floating window, where nothing goes beside it.
 #[derive(Clone, Copy)]
 struct Look {
     minimized: bool,
     section: Option<bool>,
+    in_window: bool,
 }
 
 /// A dock to show: its window edge, its columns and its rect.
@@ -280,6 +287,18 @@ struct DockPlan<'p, P> {
     columns: &'p [Column<P>],
     rect: Rect,
     flow: Flow,
+    open: Option<P>,
+}
+
+/// Where and how a column shows: its rect; the edge it keeps to, a dock's window edge or the float area's edge a
+/// floating window keeps to; where its bar is; the rect its inner edge and flyouts stay within; and the open flyout.
+/// Its flyouts open away from its edge: towards the canvas for a dock column, towards the float area's room for a
+/// floating one.
+struct ColumnAt<P> {
+    cell: Rect,
+    edge: DockEdge,
+    bar: ColumnBar,
+    within: Rect,
     open: Option<P>,
 }
 
@@ -559,15 +578,26 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         _ => Vec::new(),
     };
     register_bands(&scene, ctx, body.rect, &leaves);
-    let moved = if floating { pass.windows(ui, body) } else { None };
+    let started = memory.moving.as_ref().map(|moving| &moving.before.layout);
+    let moved = if floating { pass.windows(ui, body, &open, started) } else { None };
     let mut report = pass.report;
     let label: Arc<str> = Arc::from(body.words::<DockWords>().move_window.as_str());
-    if let Some((anchor, change)) = moved
-        && let Some(event) = window_edit(ctx, current, rights, &mut memory.moving, &anchor, &change, label)
+    if let Some((anchor, change, edge)) = moved
+        && let Some(event) = window_edit(
+            ctx,
+            current,
+            rights,
+            &mut memory.moving,
+            change.phase,
+            Action::move_floating_with_edge(anchor.clone(), change.rect, edge),
+            label,
+        )
     {
-        let rect_in = |layout: &Layout<P>| layout.floating.iter().find(|window| window.contains(&anchor)).map(|window| window.rect);
-        if let Some(rect) = event.landed().and_then(|landed| rect_in(&landed.layout)).filter(|rect| Some(*rect) != rect_in(&current.layout)) {
-            geometry.push(Action::move_floating(anchor.clone(), rect));
+        let place_in = |layout: &Layout<P>| layout.floating.iter().find(|window| window.contains(&anchor)).map(|window| (window.rect, window.edge));
+        if let Some((rect, edge)) =
+            event.landed().and_then(|landed| place_in(&landed.layout)).filter(|place| Some(*place) != place_in(&current.layout))
+        {
+            geometry.push(Action::move_floating_with_edge(anchor.clone(), rect, edge));
         }
         edit.push(event);
     }
@@ -652,7 +682,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         match node {
             Node::Tabs { panels: members, active, .. } => {
-                self.group(ui, body, members, *active, Look { minimized: false, section: None }, GroupAt::Show(rect));
+                self.group(ui, body, members, *active, Look { minimized: false, section: None, in_window: false }, GroupAt::Show(rect));
             }
             Node::Stack { entries, .. } => {
                 let sections: Vec<StackSection> = entries
@@ -668,7 +698,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     for (entry, height) in entries.iter().zip(&heights) {
                         let section = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(rect.width(), *height));
                         top += height;
-                        let look = Look { minimized: !entry.open, section: Some(entry.open) };
+                        let look = Look { minimized: !entry.open, section: Some(entry.open), in_window: false };
                         self.group(ui, inner, std::slice::from_ref(&entry.panel), 0, look, GroupAt::Show(section));
                     }
                 });
@@ -803,6 +833,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .menu(menu.clone())
                 .panel_menu_shown(hosted)
                 .command_states(states.clone());
+            if look.in_window {
+                group = group.in_window();
+            }
             if minimized {
                 group = group.minimized();
             } else if !document(&scene.spec(&members[at])) {
@@ -850,7 +883,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     && scene.permissions(panel).floatable
                     && (scene.config.float_on_empty_drop || !ui.ctx().content_rect().contains(*pointer))
             });
-        let torn = torn.map(|(panel, pointer)| float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel))).action);
+        let torn = torn.map(|(panel, pointer)| {
+            float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel)), None, scene.rtl).action
+        });
         if let Some(panel) = output.picked.and_then(|key| scene.panel(key)) {
             self.report.actions.push(Action::activate(panel.clone()));
             self.report.picked = Some(panel.clone());
@@ -877,8 +912,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         None
     }
 
-    fn group_of(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, group: &Group<P>, at: GroupAt) -> Option<f32> {
-        let look = Look { minimized: group.minimized, section: None };
+    /// A group of a column, docked or in a floating window (`in_window`).
+    fn group_of(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, group: &Group<P>, at: GroupAt, in_window: bool) -> Option<f32> {
+        let look = Look { minimized: group.minimized, section: None, in_window };
         self.group(ui, body, &group.panels, group.active, look, at)
     }
 
@@ -890,43 +926,99 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let reading = plan.flow.to_physical(plan.rect);
         let start = plan.edge == DockEdge::Start;
         let mut cursor = if start { reading.left() } else { reading.right() };
-        let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
         for (column, width) in plan.columns.iter().zip(widths) {
             let span = if start { (cursor, cursor + width) } else { (cursor - width, cursor) };
             cursor = if start { span.1 } else { span.0 };
-            let cell = plan.flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()));
+            let mut cell = plan.flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()));
             let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { continue };
-            self.report.placed.push((first.clone(), cell));
-            if column.iconic {
-                let open = plan.open.clone();
-                let output = IconicColumn::new(name.clone(), scene.dock, column, Bind::given(open.clone()), &spec)
-                    .edge(plan.edge)
-                    .within(body.rect)
-                    .auto_collapse(scene.auto_collapse)
-                    .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at));
-                self.report.flyout.extend(output.edit.events);
-                let work =
-                    ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout };
-                self.column_work(column, work);
-            } else {
-                let output = DockColumn::new(name.clone(), scene.dock, column, &spec)
-                    .edge(plan.edge)
-                    .within(body.rect)
-                    .auto_collapse(scene.auto_collapse)
-                    .show_groups_at(ui, cell, |group, rect, ui, body| {
-                        self.group_of(ui, body, group, GroupAt::Show(rect));
-                    });
-                let work = ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None };
-                self.column_work(column, work);
+            // A stepped column is as tall as its bar and content, from the top of the dock; content taller than the
+            // dock gets the dock's height and scrolls inside. The rest of its slot is the dock's empty room.
+            if let Some(content) = self.stepped_height(ui, body, column, cell.width(), false) {
+                cell.max.y = (cell.top() + scene.sizes.bar + content).min(cell.bottom());
             }
+            self.report.placed.push((first.clone(), cell));
+            let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone() };
+            self.column(ui, body, column, at);
         }
+    }
+
+    /// The height of the groups of an expanded stepped column ([`stepped`]) measured at `width`, the width of its
+    /// steps: what the column shows under its bar. `None` for any other column.
+    fn stepped_height(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, width: f32, in_window: bool) -> Option<f32> {
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
+        if column.iconic || stepped(column, &spec).is_none() {
+            return None;
+        }
+        let mut height = 0.0;
+        for group in &column.groups {
+            height += self.group_of(ui, body, group, GroupAt::Measure(width), in_window).unwrap_or(0.0);
+        }
+        Some(height)
+    }
+
+    /// What the double arrow of `column` does ([`ColumnArrow::of`]): it names the arrow and decides what a click asks
+    /// for.
+    fn arrow_of(&self, column: &Column<P>) -> ColumnArrow {
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
+        ColumnArrow::of(column, &spec, column.panels().all(|panel| scene.permissions(panel).collapses))
+    }
+
+    /// What a click on the double arrow of `column`, whose first panel is `first`, asks for when it reports
+    /// `iconic`: the steps it switches to, or the collapse or expansion of the column; nothing for a column with no
+    /// double arrow, whose bar's double click reports the same.
+    fn arrow(&self, column: &Column<P>, first: &P, iconic: bool) -> Option<Action<P>> {
+        match self.arrow_of(column) {
+            ColumnArrow::Fixed => None,
+            arrow => Some(match arrow.switched_steps() {
+                Some(steps) => Action::set_column_steps(first.clone(), steps),
+                None => Action::set_iconic(first.clone(), iconic),
+            }),
+        }
+    }
+
+    /// One column, docked or floating: its icons and their flyouts while it is collapsed, else its stacked groups,
+    /// each group shown by `group_of`. What the user did on it becomes actions.
+    fn column(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, at: ColumnAt<P>) {
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
+        let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
+        let dock = self.dock;
+        let ColumnAt { cell, edge, bar, within, open } = at;
+        let in_window = bar == ColumnBar::Window;
+        let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
+        let work = if column.iconic {
+            let output = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
+                .edge(edge)
+                .opens(opens)
+                .bar(bar)
+                .within(within)
+                .auto_collapse(scene.auto_collapse)
+                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
+            self.report.flyout.extend(output.edit.events);
+            ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
+        } else {
+            let output = DockColumn::new(name, dock, column, &spec)
+                .edge(edge)
+                .bar(bar)
+                .arrow(self.arrow_of(column))
+                .within(within)
+                .auto_collapse(scene.auto_collapse)
+                .show_groups_at(ui, cell, |group, rect, ui, body| {
+                    self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
+                });
+            ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None }
+        };
+        self.column_work(column, work);
     }
 
     /// Turns what a column reported into actions and drags.
     fn column_work(&mut self, column: &Column<P>, work: ColumnWork<P>) {
         let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { return };
         if let Some(iconic) = work.iconic {
-            self.report.actions.push(Action::set_iconic(first.clone(), iconic));
+            let action = self.arrow(column, first, iconic);
+            self.report.actions.extend(action);
         }
         if let Some(item) = work.picked {
             self.pick(first, item);
@@ -934,12 +1026,23 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         for (anchor, height) in work.resized {
             self.report.actions.push(Action::resize_group(anchor, Some(height)));
         }
+        let scene = self.scene;
+        let spec = |panel: &P| scene.spec(panel);
         if let Some(width) = work.width {
-            self.report.actions.push(if column.iconic {
-                Action::resize_iconic(first.clone(), Some(width))
-            } else {
-                Action::resize_column(first.clone(), width)
-            });
+            match stepped(column, &spec) {
+                // The edge of a stepped column moves in whole steps: the most that fit where it is dragged.
+                Some((grid, steps)) if !column.iconic => {
+                    let to = grid.steps_within(width);
+                    if to != steps {
+                        self.report.actions.push(Action::set_column_steps(first.clone(), to));
+                    }
+                }
+                _ => self.report.actions.push(if column.iconic {
+                    Action::resize_iconic(first.clone(), Some(width))
+                } else {
+                    Action::resize_column(first.clone(), width)
+                }),
+            }
         }
         if let Some(resize) = work.flyout {
             let panel = resize.panel;
@@ -955,21 +1058,39 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
-    /// The floating windows of the pruned layout, each a `FloatingGroup` holding its tree's groups, in an OS window
-    /// where the config, the platform and its panels allow one. A window takes the drops over it on its own layer,
-    /// from the spots its groups register in its own registry. Returns the move or resize of a window in the app window
-    /// this pass, which the area reports as a workspace edit.
-    fn windows(&mut self, ui: &mut Ui, body: &BodyCx<'_>) -> Option<(P, PlacementChange)> {
+    /// The floating windows of the pruned layout, each a `FloatingGroup` holding its one column, drawn as a dock
+    /// column is with the window's title row as the column's bar, in an OS window where the config, the platform and
+    /// its panels allow one. A window takes the drops over it on its own layer, from the spots its column registers in
+    /// its own registry. `open` is the open flyout, which a collapsed window's icons share with the docks'. `started`
+    /// is the layout a running move or resize of a window began on. Returns the move or resize of a window in the app
+    /// window this pass, with the edge the window keeps to after it, which the area reports as a workspace edit.
+    ///
+    /// A window keeps to its edge of the float area (`Floating::edge`, else the one nearer it): its title row's
+    /// double arrow sits at that end, and its collapsed column shows against that edge of its rect. A move or resize
+    /// keeps the edge the window had when it began, so nothing jumps while the window crosses the middle. A collapsed
+    /// window's move ends at the edge nearer the strip where it was dropped, with the rect that shows the strip there
+    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect.
+    ///
+    /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
+    /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
+    /// bottom the fewest whose content fits the height, and the window keeps its place; a drag of its left side keeps
+    /// its right edge.
+    fn windows(
+        &mut self,
+        ui: &mut Ui,
+        body: &mut BodyCx<'_>,
+        open: &Option<P>,
+        started: Option<&Layout<P>>,
+    ) -> Option<(P, PlacementChange, Option<DockEdge>)> {
         let scene = self.scene;
         let ctx = ui.ctx().clone();
         let policy = |panel: &P| scene.permissions(panel);
+        let spec_of = |panel: &P| scene.spec(panel);
         let mut moved = None;
         for window in &scene.layout.floating {
             let Some(anchor) = window.panels().next().cloned() else { continue };
-            let active = match &window.root {
-                Node::Tabs { panels, active, .. } => panels.get(*active).cloned().unwrap_or_else(|| anchor.clone()),
-                _ => anchor.clone(),
-            };
+            // The window's menu acts on the shown panel of its top group.
+            let active = window.groups().first().and_then(Group::active_panel).cloned().unwrap_or_else(|| anchor.clone());
             let specs: Vec<PanelSpec> = window.panels().map(|panel| scene.spec(panel)).collect();
             let rights: Vec<Permissions> = window.panels().map(|panel| scene.permissions(panel)).collect();
             let dock = scene.dock.with(("floating", window.id));
@@ -995,10 +1116,23 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated), &active);
             let mut commands = Vec::new();
             let spec = scene.spec(&active);
+            let began = started.and_then(|layout| layout.floating.iter().find(|began| began.id == window.id));
+            let (began_rect, began_edge) = began.map_or((opening.rect, window.edge), |began| (began.rect, began.edge));
+            let edge = began_edge.unwrap_or_else(|| WindowColumn::nearer_edge(began_rect, scene.bounds, scene.rtl));
+            let width = scene.sizes.expanded_width(&window.column, &spec_of);
+            let shape = if window.column.iconic {
+                let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
+                WindowColumn::collapsed(edge, size)
+            } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
+                WindowColumn::fitted(edge, Vec2::new(width, content))
+            } else {
+                WindowColumn::expanded(edge)
+            }
+            .arrow(self.arrow_of(&window.column));
             let mut group = FloatingGroup::new(spec.label, opening.rect)
                 .limits(scene.spec(&anchor).limits)
                 .sized(Sizing::Fill)
-                .minimized(window.minimized)
+                .column(shape)
                 .actions(actions)
                 .window_of(anchor.clone())
                 .takes_drops(target, &dropped)
@@ -1024,23 +1158,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 while let Some((command, _)) = body.take_command::<DockCommands>() {
                     commands.push(command);
                 }
-                let limits = |panel: &P| scene.spec(panel).limits;
-                let rules = FrameRules::new(&limits);
-                let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
-                let tree = Layout::new(Some(window.root.clone()), Vec::new());
-                let area = SplitArea::new(name, Bind::given(tree), rules).show_at(ui, body.rect, |ui, split| {
-                    for (leaf, rect) in split.group_frames::<P>() {
-                        let Some(place) = scene.layout.place(&leaf) else { continue };
-                        let Some(node) = scene.layout.node_of(&place) else { continue };
-                        self.leaf(ui, split, node, rect);
-                    }
-                });
-                area.output.edit.events
+                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within: scene.bounds, open: open.clone() };
+                self.column(ui, body, &window.column, at);
             });
             self.dock = area_dock;
-            if let Some(edited) = shown.inner.as_ref().and_then(EditEvents::value).and_then(|tree| tree.root.as_ref()) {
-                self.report.actions.extend(split_resizes(&anchor, &window.root, edited));
-            }
             let output = shown.output;
             self.report.files.extend(output.files);
             if let Some(dropped) = dropped.into_inner() {
@@ -1052,11 +1173,51 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     self.report.windows.push((anchor.clone(), viewport));
                     self.report.actions.extend(native::reported(&ctx, window, viewport));
                 }
-            } else if let Some(change) = output.placed {
+            } else if let Some(mut change) = output.placed {
+                // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
+                let mut keeps = shape.collapsed.map(|_| edge);
+                if change.phase == GesturePhase::Commit {
+                    (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
+                }
+                if !matches!(change.kind, PlacementKind::Move)
+                    && let Some(fitted) = shape.fitted
+                    && let Some((grid, steps)) = stepped(&window.column, &spec_of)
+                {
+                    let column = &window.column;
+                    // A grip on the top or bottom edge sets the steps by height, any other grip by width; keyboard Size
+                    // mode, which names no grip, by the side it changed.
+                    let by_height = match change.kind {
+                        PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
+                        _ => (change.rect.width() - fitted.x).abs() <= 0.5,
+                    };
+                    let to = if by_height {
+                        let room = change.rect.height() - scene.sizes.title_row;
+                        grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
+                    } else {
+                        grid.steps_within(change.rect.width())
+                    };
+                    if to != steps {
+                        self.report.actions.push(Action::set_column_steps(anchor.clone(), to));
+                    }
+                    // The window keeps its place and its steps set its size. A grip on the left keeps the right edge
+                    // where it is, and one on the top the bottom edge, so the window grows or shrinks that way.
+                    let left = match change.kind {
+                        PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - grid.width(to),
+                        _ => change.rect.left(),
+                    };
+                    let top = match change.kind {
+                        PlacementKind::Size(ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight) => {
+                            let content = self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0);
+                            change.rect.bottom() - scene.sizes.title_row - content
+                        }
+                        _ => change.rect.top(),
+                    };
+                    change.rect = Rect::from_min_size(Pos2::new(left, top), opening.rect.size());
+                }
                 if change.phase == GesturePhase::Commit {
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });
                 }
-                moved = Some((anchor.clone(), change));
+                moved = Some((anchor.clone(), change, keeps));
             }
             match output.action {
                 // The OS close of a native window arrives here as well, also where the title row offers no Close.
@@ -1075,22 +1236,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 self.pick(&active, item);
             }
             // The window's commands run from its body, below the title row.
-            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.bar);
+            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.title_row);
             for command in commands {
                 self.run(&active, command, Some(body));
             }
-            if output.minimized_toggled {
-                self.report.actions.push(Action::set_minimized(anchor.clone(), !window.minimized));
+            // The title row is the column's bar: its double arrow collapses or expands the column.
+            if let Some(iconic) = output.iconic {
+                let action = self.arrow(&window.column, &anchor, iconic);
+                self.report.actions.extend(action);
             }
         }
         moved
     }
-}
-
-/// The `ResizeWindowSplit` actions that take the splits of the floating window holding `anchor`, whose tree is
-/// `from`, to the sizes `to` has.
-fn split_resizes<P: Clone>(anchor: &P, from: &Node<P>, to: &Node<P>) -> Vec<Action<P>> {
-    split_changes(from, to).into_iter().map(|(path, size)| Action::resize_window_split(anchor.clone(), path, size)).collect()
 }
 
 /// The splits whose size `to` changes from `from`, each with its path from the root, where both trees split alike.
@@ -1113,29 +1270,30 @@ fn split_changes<P>(from: &Node<P>, to: &Node<P>) -> Vec<(Vec<bool>, SplitSize)>
     out
 }
 
-/// The workspace edit of a floating window's move or resize: the gesture runs from the window's `Begin` to its
-/// `Commit`, so one drag is one undo step. `moving` holds the gesture and the workspace it began on; `rights` are the
-/// panels' permissions with the lock applied, which refuse the move of a locked workspace.
+/// The workspace edit of a floating window's move or resize, the step `phase` of a gesture that `action`
+/// (`Action::MoveFloating`) places the window by: the gesture runs from the window's `Begin` to its `Commit`, so one
+/// drag is one undo step. `moving` holds the gesture and the workspace it began on; `rights` are the panels'
+/// permissions with the lock applied, which refuse the move of a locked workspace.
 fn window_edit<P: Clone + Eq + Hash>(
     ctx: &Context,
     current: &Workspace<P>,
     rights: &HashMap<P, Permissions>,
     moving: &mut Option<Moving<P>>,
-    anchor: &P,
-    change: &PlacementChange,
+    phase: GesturePhase,
+    action: Action<P>,
     label: Arc<str>,
 ) -> Option<EditEvent<Workspace<P>>> {
     let moved = || {
         let mut next = current.clone();
         let policy = |panel: &P| rights.get(panel).copied().unwrap_or(Permissions::ALL);
-        next.apply(Action::move_floating(anchor.clone(), change.rect), false, policy).ok().map(|_| next)
+        next.apply(action.clone(), false, policy).ok().map(|_| next)
     };
     let begin = |moving: &mut Option<Moving<P>>| {
         let id = crate::runtime::edit::next_gesture_id(ctx);
         *moving = Some(Moving { id, before: current.clone() });
         EditEvent::begin(id, Mixed::Same(current.clone()), Arc::clone(&label), None)
     };
-    match change.phase {
+    match phase {
         GesturePhase::Begin => Some(begin(moving)),
         GesturePhase::Update => match moving.as_ref() {
             Some(held) => Some(EditEvent::update(held.id, moved()?)),

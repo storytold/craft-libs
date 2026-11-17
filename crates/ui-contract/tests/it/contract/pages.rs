@@ -101,8 +101,8 @@ fn a_settled_hidden_page_runs_no_body() {
     }
 }
 
-/// An edit of a value the hidden page read measures that page again in the frame of the edit, and the pages take its
-/// new size there.
+/// An edit of a value the hidden page read measures that page again in the frame of the edit, once, and the pages take
+/// its new size there. The edit is a `set`, as a click on a control makes it.
 #[trial]
 fn an_edit_of_a_value_a_hidden_page_read_measures_it_again() {
     let scene = Scene::new();
@@ -110,7 +110,7 @@ fn an_edit_of_a_value_a_hidden_page_read_measures_it_again() {
     frames.idle(30, |ui| scene.show(ui));
     let before = scene.width.get();
     scene.set_to.set(Some(before * 3.0));
-    assert!(scene.frame(&mut frames) > 0, "the edit ran the hidden page");
+    assert_eq!(scene.frame(&mut frames), 1, "the edit measured the hidden page again, once");
     assert!(scene.width.get() > before, "the pages took the hidden page's new width in the frame of the edit");
     frames.idle(30, |ui| scene.show(ui));
     assert_eq!(scene.frame(&mut frames), 0, "the hidden page settles again");

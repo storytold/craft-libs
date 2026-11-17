@@ -3,10 +3,10 @@
 
 use craft_behavior::Axis;
 use craft_behavior::PartKey;
-use craft_behavior::dock::{Layout, Node, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx, Role};
-use craft_ui::docking::{DockConfig, DockPanels, PanelSpec};
-use craft_ui::menu::PanelRow;
+use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node, SplitSize, Workspace};
+use craft_ui::contract::{Bind, BodyCx, Role, Show as _, ShowContainer as _};
+use craft_ui::docking::{DockConfig, DockPanels, PanelSpec, WindowMenuRows};
+use craft_ui::menu::{Menu, PanelRow};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Ui, Vec2};
@@ -70,4 +70,39 @@ fn tab_reaches_the_tabs_then_the_drag_band_then_the_panel_menu_button() {
         parts.push(fixture.focused_stop().and_then(|(_, part)| part).map(|part| part.key));
     }
     assert_eq!(parts, vec![Some(PartKey::new("grip")), Some(PartKey::new("panel_menu"))], "Tab order after the tabs");
+}
+
+/// A panel in a column collapsed to icons shows in its flyout: its Window menu row opens the flyout, is checked while
+/// the flyout is open, and closes it on a second pick; the row of a panel elsewhere asks for an action instead.
+#[trial]
+fn the_window_menu_opens_and_closes_the_flyout_of_a_panel_in_a_collapsed_column() {
+    let mut iconic = Column::new(vec![Group::new(vec![2], 0)]);
+    iconic.iconic = true;
+    let dock = Node::dock(DockEdge::Start, vec![iconic]);
+    let layout = Layout::new(Some(Node::split(Axis::X, SplitSize::FixedFirst(40.0), dock, Node::tabs(vec![1], 0))), Vec::new());
+    let flyout: Rc<RefCell<Option<usize>>> = Rc::default();
+    let actions: Rc<RefCell<Vec<Action<usize>>>> = Rc::default();
+    let (open, taken) = (Rc::clone(&flyout), Rc::clone(&actions));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = *open.borrow();
+        let mut menu_open = true;
+        Menu::new("Window").open(Bind::bound(&mut menu_open)).show(ui, |ui, _| {
+            let out = WindowMenuRows::new(&layout, &Panels, &[1, 2]).flyout(shown.as_ref()).show(ui);
+            if let Some(next) = out.flyout {
+                *open.borrow_mut() = next;
+            }
+            taken.borrow_mut().extend(out.action);
+        });
+    });
+    fixture.settle();
+    for expected in [Some(2), None] {
+        let row = fixture.by_label("Panel 2").expect("the collapsed panel's row shows");
+        fixture.click(&row).settle();
+        assert_eq!(*flyout.borrow(), expected, "the row opens, then closes, the panel's flyout");
+    }
+    assert!(actions.borrow().is_empty(), "the collapsed panel's row changes no layout: {:?}", actions.borrow());
+    let row = fixture.by_label("Panel 1").expect("the docked panel's row shows");
+    fixture.click(&row).settle();
+    assert_eq!(*actions.borrow(), vec![Action::close(1)], "the row of a showing panel closes it");
+    assert_eq!(*flyout.borrow(), None, "and leaves the flyout alone");
 }

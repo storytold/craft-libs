@@ -609,6 +609,18 @@ fn nudge_of(key: Key, mods: Mods) -> Option<(Vec2, Mods)> {
 
 /// Routes an AccessKit action request to the owner of its target node, whatever the focus (9.2 rule 2).
 fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
+    if matches!(request.kind(), ActionKind::Focus) {
+        let found = nodes.get(&request.node());
+        eprintln!(
+            "DIAG every_displayed_shortcut_dispatches_from_where_focus_usually_is: access focus node {} found {} owner {:?} part {:?} focusable {:?} nodes {}",
+            request.node(),
+            found.is_some(),
+            found.map(|node| node.owner),
+            found.and_then(|node| node.part),
+            found.map(|node| node.focusable),
+            nodes.len()
+        );
+    }
     let Some(node) = nodes.get(&request.node()).copied() else { return };
     let owner = Some(node.owner);
     // A request that only scrolls (a screen reader's Scroll Into View) shows the node and leaves focus where it is.

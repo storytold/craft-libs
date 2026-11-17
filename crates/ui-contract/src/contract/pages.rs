@@ -66,7 +66,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
                     // not show it, so nothing there checks it.
                     layout_memory::boundary(&ctx, true, || {
                         let room = Rect::from_min_size(region.min, Vec2::new(region.width(), f32::INFINITY));
-                        let mut child = alloc::child(ui, UiBuilder::new().max_rect(room).layout(layout).id_salt(id).sizing_pass().invisible());
+                        let mut child = alloc::child(ui, UiBuilder::new().max_rect(room).layout(layout).scope_id(id).sizing_pass().invisible());
                         page(&mut child, key);
                         child.min_rect().size()
                     })
@@ -78,7 +78,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
             largest.max(size)
         });
         let id = sub(base, hash(self.current));
-        let mut child = alloc::child(ui, UiBuilder::new().max_rect(region).layout(layout).id_salt(id));
+        let mut child = alloc::child(ui, UiBuilder::new().max_rect(region).layout(layout).scope_id(id));
         child.set_min_size(hidden.min(region.size()));
         let out = page(&mut child, self.current);
         let rect = child.min_rect();

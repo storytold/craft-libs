@@ -147,13 +147,12 @@ Grouped by gallery level, then shape, then name.
 | `ModalDragStrip` | Body | `craft_ui_panels::dialog::modal` | The chrome a modal dialog puts over a drag area of the window it covers, so that the window still moves by it |
 | `PaneFrame` | Body | `craft_ui_patterns::patterns::dock::panes` | A docked pane: a shell pane on one edge of the area, with a title row and a scrolling body |
 | `Panel` | Body | `craft_ui_panels::sections::panel` | A panel of a workspace: scrolling body, optional footer, optional title row |
-| `PanelRail` | Body | `craft_ui_panels::rails::panel_rail` | The rail of icons that open panels, as a side panel at one edge of the window; the pane it sits in draws the rule along the edge that faces the canvas |
 | `Popover` | Body | `craft_ui_widgets::popover::anchored` | A non-modal popup that hangs from the control that opened it and holds the app's body (a colour picker, a stroke editor, a settings form) |
 | `PopupList` | Body | `craft_ui_widgets::popover::popup_list` | A list popup under a field the app owns (a combo, a history picker) |
 | `SplitArea` | Body | `craft_ui_panels::docking` | The docked tree of a layout, with a handle between neighbouring groups |
 | `StackSections` | Body | `craft_ui_panels::docking::stack` | An accordion laid out in the rect it is shown at (`section_heights` with the strip height of the docking sizes), with a divider between its open sections |
 | `TitleBar` | Body | `craft_ui_shell::shell::title_bar::bar` | The bar of a window whose frame the app draws |
-| `ToolRail` | Body | `craft_ui_panels::rails::tool` | The rail of tool slots, as a side panel at one edge of the window: one `FlyoutButton` per visible slot showing the slot's shown tool, the slot with the current tool toggled on |
+| `ToolRail` | Body | `craft_ui_panels::rails::tool` | The rail of tool slots in a grid of as many columns as its width holds: one `FlyoutButton` per visible slot showing the slot's shown tool, the slot with the current tool toggled on; its dock column is whole tool columns wide and as tall as its rows and footer |
 | `AboutDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::about` | Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button |
 | `Alert` | Pattern | `craft_ui_panels::dialog::alert` | A modal notice with one OK button: a prompt whose only answer is OK, which OK, Enter, Escape and the close action all give |
 | `AlignBar` | Pattern | `craft_ui_widgets::bars::align` | The two sections of four align and distribute buttons, then the menu button, shown as children of a `Bar` |
@@ -235,7 +234,7 @@ Grouped by gallery level, then shape, then name.
 | `DocumentWindow` | Body | `craft_ui_shell::shell::document_window` | A document's window: the container of one entry of the app's window list, in its own OS window |
 | `ShellRegion` | Body | `craft_ui_shell::shell::app_shell` | A region of the window skeleton: the root window's content, the scope that carries the shell to its slots, or one pane (a bar, a rail or the body) |
 | `AppShell` | Pattern | `craft_ui_shell::shell::app_shell` | The window skeleton |
-| `CanvasPanel` | Pattern | `craft_ui_shell::shell::canvas_shell` | The canvas panel of a dock: the panel rail at the end edge, spanning the tabs and the document; then, in what is left, the document tab strip flush against the document; then the document area, over the canvas surround |
+| `CanvasPanel` | Pattern | `craft_ui_shell::shell::canvas_shell` | The canvas panel of a dock: the document tab strip flush against the document; then the document area, over the canvas surround |
 | `OpeningCard` | Pattern | `craft_ui_shell::shell::opening` | A centred card: "Opening {name}…" elided on one line with the full text on hover, the muted message, a progress bar (indeterminate without a fraction), the percentage at the start and Cancel at the end of the last row |
 | `ScreenModeButton` | Pattern | `craft_ui_shell::shell::screen_mode_button` | A flyout button over the three screen modes, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away or a right click lists the three modes without cycling |
 | `StartScreen` | Pattern | `craft_ui_shell::shell::start` | The start screen, shown in a shell's body when no document is open |
