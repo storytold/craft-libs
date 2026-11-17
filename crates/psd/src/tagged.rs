@@ -533,17 +533,39 @@ pub(crate) fn read_blocks(r: &mut Reader<'_>, version: Version) -> Result<(Vec<T
     read_blocks_with(r, version, 2, |_, _, _, _, _| false)
 }
 
+/// [`read_blocks`] for a layer record's extra data, where a block whose length runs past the
+/// record is damage: it and what follows are kept as trailing bytes (written back verbatim), so
+/// the record keeps the blocks before it instead of failing, and with it every layer.
+pub(crate) fn read_record_blocks(r: &mut Reader<'_>, version: Version) -> Result<(Vec<TaggedBlock>, Vec<u8>)> {
+    read_blocks_impl(r, version, 2, true, |_, _, _, _, _| false)
+}
+
 /// The callback consumes selected payloads before they are copied into owned blocks.
 pub(crate) fn read_blocks_with(
     r: &mut Reader<'_>,
     version: Version,
     alignment: usize,
+    consume: impl FnMut(usize, [u8; 4], [u8; 4], &[u8], &Option<Vec<u8>>) -> bool,
+) -> Result<(Vec<TaggedBlock>, Vec<u8>)> {
+    read_blocks_impl(r, version, alignment, false, consume)
+}
+
+fn read_blocks_impl(
+    r: &mut Reader<'_>,
+    version: Version,
+    alignment: usize,
+    overlong_is_trailing: bool,
     mut consume: impl FnMut(usize, [u8; 4], [u8; 4], &[u8], &Option<Vec<u8>>) -> bool,
 ) -> Result<(Vec<TaggedBlock>, Vec<u8>)> {
     let mut blocks = Vec::new();
     loop {
         let rest = r.peek_rest();
         if rest.len() < 12 || !is_sig(rest) {
+            let trailing = rest.to_vec();
+            r.skip(rest.len())?;
+            return Ok((blocks, trailing));
+        }
+        if overlong_is_trailing && !block_fits(r, version) {
             let trailing = rest.to_vec();
             r.skip(rest.len())?;
             return Ok((blocks, trailing));
@@ -575,6 +597,13 @@ pub(crate) fn read_blocks_with(
             blocks.push(TaggedBlock { signature, key, data: data.to_vec(), padding, stored: None });
         }
     }
+}
+
+/// Whether the block at `r` (signature and key already checked present) fits in what remains.
+fn block_fits(r: &Reader<'_>, version: Version) -> bool {
+    let mut probe = r.clone();
+    let Ok(key) = probe.skip(4).and_then(|()| probe.array::<4>()) else { return false };
+    probe.len_field(uses_long_length(version, &key)).is_ok_and(|len| len <= probe.remaining() as u64)
 }
 
 pub(crate) fn write_blocks(out: &mut Vec<u8>, blocks: &[TaggedBlock], version: Version, alignment: usize) -> Result<()> {
@@ -765,5 +794,19 @@ mod tests {
         out.put_u32(100);
         out.put(&[0; 4]);
         assert!(read_blocks(&mut Reader::new(&out), Version::Psd).is_err());
+    }
+
+    #[test]
+    fn overlong_length_ends_a_records_blocks() {
+        let mut out = Vec::new();
+        write_blocks(&mut out, &[TaggedBlock::layer_id(1)], Version::Psd, 2).unwrap();
+        let damaged = out.len();
+        out.put(b"8BIMabcd");
+        out.put_u32(100);
+        out.put(&[0; 4]);
+        // The blocks before the damage survive; the damaged one and what follows stay as bytes.
+        let (blocks, trailing) = read_record_blocks(&mut Reader::new(&out), Version::Psd).unwrap();
+        assert_eq!(blocks, vec![TaggedBlock::layer_id(1)]);
+        assert_eq!(trailing, out[damaged..]);
     }
 }
