@@ -168,8 +168,8 @@ fn a_stroke_that_the_sweeps_debug_check_may_fail_is_refused_or_made_and_never_a_
 }
 
 /// What a stroke that the sweep's debug check may fail is held to, given what the run beside it and the run that may fail it gave, and whether the
-/// check is made (a build with debug assertions): `Ok` or, only where the check is made, `Err(Degenerate)` for each; and where both are `Ok`, the same
-/// area and bounds.
+/// check is made (a build with debug assertions): `Ok` or, only where the check is made, `Err(Degenerate)` for each; each that is `Ok` a stroke of a
+/// substantial area (an empty one beside a refusal is no pass); and where both are `Ok`, the same area and bounds.
 fn check_the_contract(checked: bool, beside: &Result<BezPath, PathOpsError>, other: &Result<BezPath, PathOpsError>) {
     for (what, got) in [("the run beside", beside), ("the other run", other)] {
         if let Err(e) = got {
@@ -180,9 +180,16 @@ fn check_the_contract(checked: bool, beside: &Result<BezPath, PathOpsError>, oth
             );
         }
     }
+    // A stroke that is made is the stroke asked for (a run 600 across at a width of 2e7), whatever the other result is: a refusal beside
+    // an empty stroke does not excuse it.
+    for (what, got) in [("the run beside", beside), ("the other run", other)] {
+        if let Ok(made) = got {
+            assert!(area(made, NZ) > 1.0e10, "{what}: a stroke of an area of {}", area(made, NZ));
+        }
+    }
     if let (Ok(beside), Ok(made)) = (beside, other) {
         let (a, b) = (area(made, NZ), area(beside, NZ));
-        assert!(a > 1.0e10 && (a - b).abs() <= 1e-8 * b, "{a} against {b}");
+        assert!((a - b).abs() <= 1e-8 * b, "{a} against {b}");
         let (m, n) = (made.bounding_box(), beside.bounding_box());
         assert!((m.width() - n.width()).abs() < 1.0 && (m.height() - n.height()).abs() < 1.0, "{m:?} against {n:?}");
     }
@@ -205,6 +212,14 @@ fn the_contract_of_a_stroke_the_check_may_fail_holds_for_what_each_platform_give
     assert!(!holds(false, square(1e6), refused()), "a build that makes no check makes the stroke");
     assert!(!holds(true, square(1e6), Err(PathOpsError::TooComplex)), "another reason to refuse");
     assert!(!holds(true, square(1e6), square(1.1e6)), "not the stroke beside it");
+    // A stroke that is made is a stroke, whatever the other result is: an empty one is not, and the refusal beside it does not excuse it.
+    let empty = || Ok::<_, PathOpsError>(BezPath::new());
+    assert!(!holds(true, empty(), refused()) && !holds(true, refused(), empty()), "an empty stroke beside a refusal");
+    assert!(!holds(true, empty(), empty()) && !holds(false, empty(), square(1e6)), "an empty stroke beside a stroke or an empty one");
+    assert!(
+        !holds(true, square(1e3), refused()) && !holds(true, refused(), square(1e3)),
+        "a stroke too small to be the one asked for, beside a refusal"
+    );
 }
 
 /// An Outline cuts two paths that cross where they cross, far from the origin as near it: two lines across a square 100 across, rising by
