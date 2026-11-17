@@ -48,8 +48,9 @@ enum Inner {
 /// store them. Otherwise they are Annex B, as MPEG-TS and AVI store them, and the parameter sets
 /// may come in the packets themselves. The configuration must not hold picture data: an `avcC`
 /// or `hvcC` record holds parameter sets (and SEI for `hvcC`), Annex B `extradata` holds
-/// parameter sets, SEI and access unit delimiters, and `av1C` config OBUs are sequence headers and
-/// metadata.
+/// parameter sets, SEI and access unit delimiters, `av1C` config OBUs are sequence headers and
+/// metadata, and MPEG-2 `extradata` holds sequence headers, their extensions, user data and GOP
+/// headers.
 ///
 /// Other codecs are [`VideoError::Unsupported`], as is a codec whose decoder feature is off.
 ///
@@ -104,7 +105,13 @@ impl TrackDecoder {
     /// order; a decoder that reorders or decodes on worker threads returns a packet's frame from a
     /// later call or from [`TrackDecoder::flush`].
     ///
-    /// When a call fails, the frames it finished are kept: the next call returns them first.
+    /// When a call fails because a picture does not convert, the frames finished with it are
+    /// kept: the next call returns them first. When the codec itself fails, the pictures it had
+    /// finished are up to the codec. H.264 keeps them for later calls. HEVC does too, but only
+    /// its newest 32 while calls keep failing, which bounds its memory. VP9 keeps those of earlier
+    /// packets. MPEG-2 returns them with the call, unless the packet made too many pictures. AV1
+    /// drops those the failing call had finished.
+    ///
     /// Decoding can go on with the next packet; a decoder that lost its references waits for the
     /// next random access point or conceals, as the codec does.
     pub fn decode(&mut self, packet: &[u8], pts: i64) -> Result<Vec<VideoFrame>, VideoError> {
@@ -275,9 +282,8 @@ impl Inner {
             CodecId::Mpeg2Video => {
                 let mut dec = Box::new(mpeg2::Decoder::new());
                 if !extradata.is_empty() {
+                    check_mpeg2_config(extradata)?;
                     dec.decode(extradata, 0)?;
-                    // Only the sequence stays: a picture in the configuration starts nothing.
-                    dec.reset();
                 }
                 Ok(Inner::Mpeg2(dec))
             }
@@ -341,6 +347,23 @@ fn configure_hevc(dec: &mut hevc::decode::Decoder, extradata: &[u8]) -> Result<(
     } else {
         Ok(dec.configure_hvcc(extradata)?)
     }
+}
+
+/// MPEG-2 start codes `extradata` may hold: user data, sequence header, extension and GOP header.
+#[cfg(feature = "mpeg2-decode")]
+const MPEG2_CONFIG_CODES: [u8; 4] = [0xb2, 0xb3, 0xb5, 0xb8];
+
+/// MPEG-2 `extradata` holds no picture: every start code in it is one of [`MPEG2_CONFIG_CODES`].
+#[cfg(feature = "mpeg2-decode")]
+fn check_mpeg2_config(extradata: &[u8]) -> Result<(), VideoError> {
+    for w in extradata.windows(4) {
+        if let [0, 0, 1, code] = *w
+            && !MPEG2_CONFIG_CODES.contains(&code)
+        {
+            return Err(VideoError::Malformed(format!("MPEG-2: configuration holds start code {code:#04x}, not a sequence header")));
+        }
+    }
+    Ok(())
 }
 
 /// The config OBUs of an `av1C` record (empty for empty `extradata`), once they are checked to

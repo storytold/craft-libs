@@ -71,6 +71,14 @@ is built with any of the decoder features below and decodes the codecs whose fea
 | AV1 | `av1-decode` | an `av1C` record, or empty |
 | MPEG-2 and MPEG-1 video | `mpeg2-decode` | a sequence header and its extensions, or empty |
 
-Configuration that holds picture data (a slice, a frame OBU) is refused. Errors are
-`VideoError`: `Unsupported`, `Malformed`, or a picture that did not convert. A call that fails
-keeps the frames it finished, and the next call returns them first.
+Configuration that holds picture data (a slice, a frame OBU, an MPEG-2 picture) is refused.
+Errors are `VideoError`: `Unsupported`, `Malformed`, or a picture that did not convert.
+
+When a picture does not convert, the frames finished with it are kept and the next call returns
+them first. When the codec itself fails, the pictures it had finished are up to the codec:
+
+- H.264 keeps them for later calls, also when the error comes at `flush`.
+- HEVC does too, but only its newest 32 while calls keep failing, which bounds its memory.
+- VP9 keeps those of earlier packets.
+- MPEG-2 returns them with the call, unless the packet made too many pictures.
+- AV1 drops those the failing `decode` or `flush` had finished.

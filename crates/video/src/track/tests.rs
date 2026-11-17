@@ -86,6 +86,20 @@ fn hevc_annex_b_configuration_with_a_slice_is_refused() {
     assert!(err.to_string().contains("NAL unit type 19"), "{err}");
 }
 
+/// A picture after a valid sequence header is refused, not decoded and then dropped.
+#[cfg(feature = "mpeg2-decode")]
+#[test]
+fn mpeg2_configuration_with_a_picture_is_refused() {
+    // 32x32, 4:3, 25 fps
+    let header = [0, 0, 1, 0xb3, 0x02, 0x00, 0x20, 0x23, 0xff, 0xff, 0xe0, 0x18];
+    assert!(TrackDecoder::new(&params(CodecId::Mpeg2Video, &header)).is_ok());
+    // a picture header (I picture) and the start of its first slice
+    let picture = [0, 0, 1, 0x00, 0x00, 0x0f, 0xff, 0xf8, 0, 0, 1, 0x01, 0x12, 0x34];
+    let err = new_err(CodecId::Mpeg2Video, &[&header[..], &picture].concat());
+    assert!(matches!(err, VideoError::Malformed(_)), "{err}");
+    assert!(err.to_string().contains("start code 0x00"), "{err}");
+}
+
 /// A record that is neither Annex B nor version 1 is the codec's own error.
 #[cfg(feature = "h264-decode")]
 #[test]
