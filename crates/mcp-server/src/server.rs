@@ -237,7 +237,11 @@ impl<T: Tools> Server<T> {
             if o.contains_key("result") || o.contains_key("error") {
                 return None;
             }
-            return Some(error(id.unwrap_or(Value::Null), INVALID_REQUEST, "missing `method`"));
+            let echoed = match id {
+                Some(id) if !self.options.strict_request_ids || id.is_string() || id.is_number() => id,
+                _ => Value::Null,
+            };
+            return Some(error(echoed, INVALID_REQUEST, "missing `method`"));
         };
         let params = o.get("params").cloned().unwrap_or(Value::Null);
         let Some(id) = id else {

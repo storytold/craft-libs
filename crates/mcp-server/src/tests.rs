@@ -447,6 +447,24 @@ fn strict_request_ids_refuse_other_id_types() {
     assert!(reply(&mut on, &notification()).is_none());
 }
 
+/// The missing-`method` error follows the same id rule: strict mode echoes only string and number
+/// ids and answers with a null id for the rest; off, ids are echoed as before.
+#[test]
+fn strict_request_ids_apply_to_the_missing_method_error() {
+    let mut on = with(Options { strict_request_ids: true, ..Options::default() });
+    let mut off = with(Options::default());
+    for id in [json!(true), json!({"a": 1}), json!([1])] {
+        let msg = json!({"jsonrpc": "2.0", "id": id});
+        let r = reply(&mut on, &msg).unwrap();
+        assert_eq!((r["error"]["code"].clone(), r["id"].clone()), (json!(-32600), Value::Null), "{id}");
+        assert_eq!(reply(&mut off, &msg).unwrap()["id"], id);
+    }
+    for id in [json!("a"), json!(7)] {
+        assert_eq!(reply(&mut on, &json!({"jsonrpc": "2.0", "id": id})).unwrap()["id"], id);
+    }
+    assert_eq!(reply(&mut on, &json!({"jsonrpc": "2.0"})).unwrap()["id"], Value::Null);
+}
+
 /// Hostile input with every option on: oversized and non-UTF-8 lines, odd ids and wrongly typed
 /// arguments are answered and serving goes on, and nothing panics.
 #[test]
