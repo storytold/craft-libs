@@ -131,7 +131,7 @@ fn color_label(s: &str) -> Label {
 // ---------------------------------------------------------------------------------------------
 
 /// `fields` with the keys of `ext` (a JSON object) added after them; a key of ours wins.
-fn with_ext(mut fields: Map<String, Value>, ext: &Ext, report: &mut Report) -> Value {
+fn with_ext(mut fields: Map<String, Value>, ext: &Ext, report: &mut Report, limit: Option<usize>) -> Value {
     if let Some(text) = ext {
         match serde_json::from_str::<Value>(text) {
             Ok(Value::Object(extra)) => {
@@ -139,7 +139,7 @@ fn with_ext(mut fields: Map<String, Value>, ext: &Ext, report: &mut Report) -> V
                     fields.entry(k).or_insert(v);
                 }
             }
-            _ => report.warn("extension data that is not a JSON object was not written to OTIO"),
+            _ => report.warn_limited(limit, "extension data that is not a JSON object was not written to OTIO"),
         }
     }
     Value::Object(fields)
@@ -355,7 +355,7 @@ fn value_of(v: &Value) -> ParamValue {
 
 const EFFECT_KEYS: [&str; 3] = ["effect", "enabled", "params"];
 
-fn effects_json(effects: &[EffectInstance], report: &mut Report) -> Value {
+fn effects_json(effects: &[EffectInstance], report: &mut Report, limit: Option<usize>) -> Value {
     Value::Array(
         effects
             .iter()
@@ -375,7 +375,7 @@ fn effects_json(effects: &[EffectInstance], report: &mut Report) -> Value {
                         (k.clone(), json!({"value": value_json(&p.value), "keyframes": keys}))
                     })
                     .collect();
-                with_ext(obj(json!({"effect": e.effect, "enabled": e.enabled, "params": params})), &e.ext, report)
+                with_ext(obj(json!({"effect": e.effect, "enabled": e.enabled, "params": params})), &e.ext, report, limit)
             })
             .collect(),
     )
@@ -475,6 +475,7 @@ struct Exp<'a, 'r> {
     p: &'a Project,
     opts: &'a ExportOptions<'a>,
     report: &'r mut Report,
+    report_limit: Option<usize>,
     stack: Vec<ItemId>,
     /// Clips written inside nested sequences so far, and the limit for it (see [`MAX_NESTED_ITEMS`]).
     nested_items: usize,
@@ -483,9 +484,19 @@ struct Exp<'a, 'r> {
 
 /// Write `sequence` (and the media and nested sequences it uses) as an OTIO `Timeline`.
 pub fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: &mut Report) -> Result<String> {
+    export_with_report_limit(p, seq_id, opts, report, None)
+}
+/// Write OTIO with an optional limit on distinct warnings.
+pub fn export_with_report_limit(
+    p: &Project,
+    seq_id: ItemId,
+    opts: &ExportOptions,
+    report: &mut Report,
+    report_limit: Option<usize>,
+) -> Result<String> {
     let seq = p.sequence(seq_id).ok_or(Error::NoSequence(seq_id))?;
     let rate = seq.settings.frame_rate;
-    let mut x = Exp { p, opts, report, stack: vec![seq_id], nested_items: 0, nested_limit: MAX_NESTED_ITEMS };
+    let mut x = Exp { p, opts, report, report_limit, stack: vec![seq_id], nested_items: 0, nested_limit: MAX_NESTED_ITEMS };
     let name = opts.name.map(str::to_string).unwrap_or_else(|| p.item(seq_id).map(|i| i.name.clone()).unwrap_or_default());
     let stack = x.stack_json(seq_id, &name, None);
     let mut meta = Map::new();
@@ -512,13 +523,13 @@ impl Exp<'_, '_> {
     fn seq_meta(&mut self, id: ItemId) -> Value {
         let Some((it, s)) = self.p.item(id).and_then(|it| Some((it, it.as_sequence()?))) else { return json!({}) };
         let m = obj(json!({"item": id.0, "label": it.label.name(), "settings": settings_json(&s.settings), "start_timecode": s.start_timecode}));
-        with_ext(m, &it.ext, self.report)
+        with_ext(m, &it.ext, self.report, self.report_limit)
     }
 
     /// The `Stack` for a sequence; `range` = (source in, duration) when nested in a track.
     fn stack_json(&mut self, id: ItemId, name: &str, range: Option<(Tick, Tick, FrameRate)>) -> Value {
         let Some(seq) = self.p.sequence(id) else {
-            self.report.warn("missing nested sequence skipped");
+            self.report.warn_limited(self.report_limit, "missing nested sequence skipped");
             return json!({"OTIO_SCHEMA": "Stack.1", "name": name, "children": [], "effects": [], "markers": [], "enabled": true, "metadata": {}});
         };
         let rate = seq.settings.frame_rate;
@@ -564,7 +575,7 @@ impl Exp<'_, '_> {
             }
             pos = it.end();
         }
-        let meta = with_ext(obj(json!({"locked": t.locked, "channels": channels_name(t.channels)})), &t.ext, self.report);
+        let meta = with_ext(obj(json!({"locked": t.locked, "channels": channels_name(t.channels)})), &t.ext, self.report, self.report_limit);
         json!({
             "OTIO_SCHEMA": "Track.1",
             "name": t.name,
@@ -580,8 +591,12 @@ impl Exp<'_, '_> {
 
     fn transition_json(&mut self, x: &Transition, cut: Tick, rate: FrameRate) -> Value {
         let dissolve = matches!(x.effect.effect.as_str(), "cross_dissolve" | "constant_power" | "constant_gain" | "film_dissolve");
-        let effect = effects_json(std::slice::from_ref(&x.effect), self.report).as_array().and_then(|a| a.first().cloned()).unwrap_or(Value::Null);
-        let meta = with_ext(obj(json!({"effect": effect, "align": align_name(x.align), "reverse": x.reverse})), &x.ext, self.report);
+        let effect = effects_json(std::slice::from_ref(&x.effect), self.report, self.report_limit)
+            .as_array()
+            .and_then(|a| a.first().cloned())
+            .unwrap_or(Value::Null);
+        let meta =
+            with_ext(obj(json!({"effect": effect, "align": align_name(x.align), "reverse": x.reverse})), &x.ext, self.report, self.report_limit);
         json!({
             "OTIO_SCHEMA": "Transition.1",
             "name": transition_name(self.opts.catalog, &x.effect),
@@ -604,7 +619,7 @@ impl Exp<'_, '_> {
             fields.insert("generator".into(), generator_json(g));
         }
         let ext = it.and_then(|i| i.ext.clone());
-        let meta = with_ext(fields, &ext, self.report);
+        let meta = with_ext(fields, &ext, self.report, self.report_limit);
         match &m.media {
             MediaRef::Generator(g) => json!({
                 "OTIO_SCHEMA": "GeneratorReference.1",
@@ -626,11 +641,11 @@ impl Exp<'_, '_> {
 
     fn clip_meta(&mut self, it: &TrackItem) -> Value {
         let fields = obj(json!({
-            "label": it.label.name(), "link": it.link, "group": it.group, "effects": effects_json(&it.effects, self.report),
+            "label": it.label.name(), "link": it.link, "group": it.group, "effects": effects_json(&it.effects, self.report, self.report_limit),
             "gain_db": it.gain_db, "scale_to_frame": it.scale_to_frame, "source_in_ticks": it.source_in.0,
             "duration_ticks": it.duration.0,
         }));
-        with_ext(fields, &it.ext, self.report)
+        with_ext(fields, &it.ext, self.report, self.report_limit)
     }
 
     fn item_json(&mut self, it: &TrackItem, kind: TrackKind, rate: FrameRate) -> Value {
@@ -650,17 +665,20 @@ impl Exp<'_, '_> {
         let _ = kind;
         if matches!(self.p.item(base).map(|i| &i.kind), Some(ItemKind::Sequence(_))) {
             if self.stack.contains(&base) {
-                self.report.warn("recursive nested sequence skipped");
+                self.report.warn_limited(self.report_limit, "recursive nested sequence skipped");
                 return json!({"OTIO_SCHEMA": "Gap.1", "name": "", "source_range": tr(Tick::ZERO, it.duration, rate), "effects": [], "markers": [], "enabled": true, "metadata": {}});
             }
             if self.nested_items >= self.nested_limit {
                 // once: later nested sequences hit this too, and the message would repeat
                 if self.nested_items < usize::MAX {
                     self.nested_items = usize::MAX;
-                    self.report.warn(format!(
-                        "more than {} clips written inside nested sequences: the rest are gaps (OTIO repeats a nested sequence for every use)",
-                        self.nested_limit
-                    ));
+                    self.report.warn_limited(
+                        self.report_limit,
+                        format!(
+                            "more than {} clips written inside nested sequences: the rest are gaps (OTIO repeats a nested sequence for every use)",
+                            self.nested_limit
+                        ),
+                    );
                 }
                 return json!({"OTIO_SCHEMA": "Gap.1", "name": "", "source_range": tr(Tick::ZERO, it.duration, rate), "effects": [], "markers": [], "enabled": true, "metadata": {}});
             }
@@ -678,9 +696,10 @@ impl Exp<'_, '_> {
         }
         let _ = generator_of(self.p, base);
         if let Some(clip) = crate::build::uncarried_clip(self.p, it, rate) {
-            self.report.warn(format!(
-                "{clip} has no OTIO equivalent: it is written as a clip with a missing media reference and is read back as offline media"
-            ));
+            self.report.warn_limited(
+                self.report_limit,
+                format!("{clip} has no OTIO equivalent: it is written as a clip with a missing media reference and is read back as offline media"),
+            );
         }
         let mref = self.media_ref(base, rate);
         // OTIO source times are in the reference's time (which starts at its available_range start).
@@ -703,7 +722,7 @@ impl Exp<'_, '_> {
         let fields = obj(
             json!({"kind": marker_kind_name(m.kind), "url": m.url, "label": m.color.name(), "author": m.author, "start_ticks": m.start.0, "duration_ticks": m.duration.0}),
         );
-        let meta = with_ext(fields, &m.ext, self.report);
+        let meta = with_ext(fields, &m.ext, self.report, self.report_limit);
         json!({
             "OTIO_SCHEMA": "Marker.2",
             "name": m.name,
@@ -734,12 +753,17 @@ struct Imp<'a, 'c, 'r> {
     b: Builder<'c>,
     opts: &'a ImportOptions<'a>,
     report: &'r mut Report,
+    report_limit: Option<usize>,
     links: HashMap<u64, u64>,
     groups: HashMap<u64, u64>,
 }
 
 /// Read an OTIO document: a `Timeline`, a `SerializableCollection` of them, a `Stack` or a bare `Track`.
 pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<Imported> {
+    import_with_report_limit(text, opts, report, None)
+}
+/// Read OTIO with an optional limit on distinct warnings.
+pub fn import_with_report_limit(text: &str, opts: &ImportOptions, report: &mut Report, report_limit: Option<usize>) -> Result<Imported> {
     let v: Value = serde_json::from_str(text).map_err(|e| Error::parse(Format::Otio, e.to_string()))?;
     let mut timelines = Vec::new();
     collect_timelines(&v, &mut timelines);
@@ -747,11 +771,11 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
         return Err(Error::parse(Format::Otio, format!("no Timeline in a {} document", schema(&v))));
     }
     if has_absurd_rate(&v) {
-        report.warn(format!(
+        report.warn_limited(report_limit, format!(
             "an OTIO rate above {MAX_RATE} per second is not a frame rate; the default 24 fps was used (this includes audio sample rates above it, such as DSD)"
         ));
     }
-    let mut imp = Imp { b: Builder::new(&name_of(&v), opts.catalog), opts, report, links: HashMap::new(), groups: HashMap::new() };
+    let mut imp = Imp { b: Builder::new(&name_of(&v), opts.catalog), opts, report, report_limit, links: HashMap::new(), groups: HashMap::new() };
     if imp.b.p.name.is_empty() {
         imp.b.p.name = "Imported OTIO".into();
     }
@@ -760,7 +784,7 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
         imp.b.top.push(id);
     }
     let mut imported = imp.b.finish();
-    imported.bound(report);
+    imported.bound_with_report_limit(report, report_limit);
     Ok(imported)
 }
 
@@ -843,7 +867,7 @@ impl Imp<'_, '_, '_> {
                     let kind = if t.get("kind").and_then(Value::as_str) == Some("Audio") { TrackKind::Audio } else { TrackKind::Video };
                     self.track(&mut seq, t, kind);
                 }
-                other => self.report.warn(format!("OTIO {other} directly in a stack is not supported")),
+                other => self.report.warn_limited(self.report_limit, format!("OTIO {other} directly in a stack is not supported")),
             }
         }
         self.b.ensure_tracks(&mut seq, TrackKind::Video, 1);
@@ -905,7 +929,7 @@ impl Imp<'_, '_, '_> {
                     }
                 }
                 other => {
-                    self.report.warn(format!("OTIO {other} items are not supported and were skipped"));
+                    self.report.warn_limited(self.report_limit, format!("OTIO {other} items are not supported and were skipped"));
                 }
             }
         }
@@ -925,7 +949,17 @@ impl Imp<'_, '_, '_> {
                     None => {
                         let n = name_of(c);
                         let ty = c.get("transition_type").and_then(Value::as_str).unwrap_or("SMPTE_Dissolve");
-                        transition_effect(self.b.catalog, if n.is_empty() { ty } else { &n }, kind == TrackKind::Audio, self.report)
+                        {
+                            let mut temporary = Report::default();
+                            let effect =
+                                transition_effect(self.b.catalog, if n.is_empty() { ty } else { &n }, kind == TrackKind::Audio, &mut temporary);
+                            for e in temporary.entries {
+                                for _ in 0..e.count {
+                                    self.report.warn_limited(self.report_limit, &e.message);
+                                }
+                            }
+                            effect
+                        }
                     }
                 };
             let align = align_of(meta.and_then(|m| m.get("align"))).unwrap_or(if inn == Tick::ZERO {
@@ -972,7 +1006,7 @@ impl Imp<'_, '_, '_> {
                 _ => {
                     if meta.and_then(|m| m.get("effects")).is_none() {
                         let n = e.get("effect_name").and_then(Value::as_str).unwrap_or("effect");
-                        self.report.warn(format!("OTIO effect \"{n}\" is not supported"));
+                        self.report.warn_limited(self.report_limit, format!("OTIO effect \"{n}\" is not supported"));
                     }
                 }
             }
@@ -1107,7 +1141,8 @@ impl Imp<'_, '_, '_> {
                         other => match self.b.catalog.generator_by_name(other) {
                             Some(g) => g,
                             None => {
-                                self.report.warn(format!("OTIO generator \"{other}\" is not supported; imported as Black Video"));
+                                self.report
+                                    .warn_limited(self.report_limit, format!("OTIO generator \"{other}\" is not supported; imported as Black Video"));
                                 Generator::BlackVideo
                             }
                         },
@@ -1127,7 +1162,7 @@ impl Imp<'_, '_, '_> {
             }
             _ => {
                 if schema_name(r) != "MissingReference" && !r.is_null() {
-                    self.report.warn(format!("OTIO media reference {} is not supported; imported offline", schema(r)));
+                    self.report.warn_limited(self.report_limit, format!("OTIO media reference {} is not supported; imported offline", schema(r)));
                 }
                 let key = format!("missing:{name}");
                 let existed = self.b.find_media(&key);
@@ -1279,7 +1314,15 @@ mod tests {
         let opts = xopts();
         let write = |limit: usize| {
             let mut report = Report::default();
-            let mut x = Exp { p: &imported.project, opts: &opts, report: &mut report, stack: vec![seq], nested_items: 0, nested_limit: limit };
+            let mut x = Exp {
+                p: &imported.project,
+                opts: &opts,
+                report: &mut report,
+                report_limit: None,
+                stack: vec![seq],
+                nested_items: 0,
+                nested_limit: limit,
+            };
             let stacks = x.stack_json(seq, "t", None).to_string().matches("\"Stack.1\"").count();
             (stacks, report)
         };
