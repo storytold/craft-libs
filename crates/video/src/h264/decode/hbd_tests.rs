@@ -238,7 +238,7 @@ fn deep_pcm_macroblocks_decode_exactly() {
         seed ^= seed << 5;
         (seed >> (32 - bits)) as u16
     };
-    for (bd, c422) in [((10, 10), false), ((10, 10), true), ((9, 10), true), ((10, 8), false)] {
+    for (bd, c422) in [((10, 10), false), ((10, 10), true), ((9, 10), true), ((10, 8), false), ((8, 10), true), ((8, 10), false)] {
         let hc = if c422 { 16 } else { 8 };
         let mbs: Vec<Vec<u16>> = (0..4).map(|_| (0..256 + 2 * 8 * hc).map(|i| next(if i < 256 { bd.0 } else { bd.1 })).collect()).collect();
         let (mut y, mut u, mut v) = (vec![0u16; 32 * 32], vec![0u16; 16 * 2 * hc], vec![0u16; 16 * 2 * hc]);
@@ -260,23 +260,63 @@ fn deep_pcm_macroblocks_decode_exactly() {
             assert_eq!(pics.len(), 1, "{bd:?} 4:2:{}", if c422 { 2 } else { 0 });
             let p = &pics[0];
             assert_eq!((p.bit_depth, p.bit_depth_chroma, p.chroma422), (bd.0 as u8, bd.1 as u8, c422));
-            assert!(p.y.is_empty() && p.u.is_empty(), "deep pictures fill the 16-bit planes only");
+            // one component deeper than 8 bits puts all three planes in 16 bits, (8, 10) too
+            assert!(p.is_deep() && p.y.is_empty() && p.u.is_empty() && p.v.is_empty(), "deep pictures fill the 16-bit planes only");
             assert_eq!((&p.y16, &p.u16, &p.v16), (&y, &u, &v), "{bd:?} 4:2:{} ({threads} threads)", if c422 { 2 } else { 0 });
         }
     }
 }
 
-/// A truncated deep I_PCM macroblock is an error, not a panic or a partial read past the slice.
+/// A deep I_PCM macroblock cut short is reported as an error (from `decode`, or from
+/// `take_error` once the picture's job has run), never a panic or a read past the slice; a cut
+/// anywhere else in the stream does not panic either.
 #[test]
 fn truncated_deep_pcm_is_an_error() {
     let mbs = vec![vec![512u16; 256 + 2 * 8 * 16]; 4];
     let stream = pcm_stream((10, 10), true, &mbs);
-    for cut in [40, 200, stream.len() - 300, stream.len() - 1] {
+    // the slice NAL is the third one; its I_PCM payload is 4 x 5 120 bits after a few header bytes
+    let starts: Vec<usize> = stream.windows(4).enumerate().filter(|(_, w)| *w == [0, 0, 0, 1]).map(|(i, _)| i).collect();
+    let slice = starts[2];
+    let payload_end = stream.len() - 1; // the last byte holds the rbsp stop bit
+    let inside = [slice + 20, slice + 700, slice + 1500, payload_end - 200, payload_end - 10];
+    for cut in inside {
+        assert!(cut > slice + 8 && cut < payload_end, "cut {cut} is inside the PCM payload");
+        for threads in [1, 2] {
+            let mut dec = Decoder::with_threads(threads);
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let decoded = dec.decode(&stream[..cut], 0);
+                let flushed = dec.flush();
+                (decoded.is_err(), dec.take_error().is_some(), flushed.len())
+            }));
+            let Ok((decode_err, job_err, _)) = r else { panic!("cut at {cut} panicked") };
+            assert!(decode_err || job_err, "cut at {cut} ({threads} threads): no error reported");
+        }
+    }
+    for cut in [10, 30, stream.len() - 1] {
         let mut dec = Decoder::with_threads(1);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = dec.decode(&stream[..cut], 0);
             let _ = dec.flush();
+            let _ = dec.take_error();
         }));
         assert!(r.is_ok(), "cut at {cut} panicked");
     }
+}
+
+/// `reset` (a seek) keeps the recycled buffers of deep pictures as it does for 8-bit ones.
+#[test]
+fn reset_keeps_the_deep_picture_pool() {
+    let mbs = vec![vec![300u16; 256 + 2 * 8 * 8]; 4];
+    let stream = pcm_stream((10, 10), false, &mbs);
+    let mut dec = Decoder::with_threads(1);
+    let _ = dec.decode(&stream, 0).unwrap();
+    let _ = dec.flush();
+    let (_, before) = dec.pooled_pictures();
+    assert!(before >= 1, "a decoded deep picture returns its buffers to the 16-bit pool");
+    dec.reset();
+    assert_eq!(dec.pooled_pictures().1, before, "reset keeps the 16-bit pool");
+    let mut pics = dec.decode(&stream, 0).unwrap();
+    pics.extend(dec.flush());
+    assert_eq!(pics.len(), 1);
+    assert!(pics[0].y16.iter().all(|&s| s == 300), "a reused buffer decodes the same picture");
 }

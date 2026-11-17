@@ -58,7 +58,7 @@ pub struct ColorInfo {
 }
 
 /// A decoded, cropped planar picture: 4:2:0 or 4:2:2, 8 bits ([`Picture::y`] …) or deeper
-/// ([`Picture::y16`] …).
+/// ([`Picture::y16`] …). All three planes share one storage: [`Picture::is_deep`] tells which.
 #[derive(Clone, Debug)]
 pub struct Picture {
     /// Cropped luma width.
@@ -67,12 +67,13 @@ pub struct Picture {
     pub height: u32,
     pub chroma_width: u32,
     pub chroma_height: u32,
-    /// 8-bit samples (empty when [`Self::bit_depth`] is above 8).
+    /// 8-bit samples (empty when [`Self::is_deep`]: either component is deeper than 8 bits).
     pub y: Vec<u8>,
     pub u: Vec<u8>,
     pub v: Vec<u8>,
-    /// Samples of a picture deeper than 8 bits (High 10, High 4:2:2), values below
-    /// `1 << bit_depth`; empty for 8-bit pictures.
+    /// All three planes of a picture with a component deeper than 8 bits ([`Self::is_deep`]; High
+    /// 10, High 4:2:2), also when the other component has 8 bits: luma values below
+    /// `1 << bit_depth`, chroma values below `1 << bit_depth_chroma`. Empty for 8-bit pictures.
     pub y16: Vec<u16>,
     pub u16: Vec<u16>,
     pub v16: Vec<u16>,
@@ -98,4 +99,12 @@ pub struct Picture {
     /// filter was skipped. Its samples are approximate (not the conforming output); no other
     /// picture is affected.
     pub draft: bool,
+}
+
+impl Picture {
+    /// The samples are in [`Self::y16`] / [`Self::u16`] / [`Self::v16`] (either component is deeper
+    /// than 8 bits); otherwise in [`Self::y`] / [`Self::u`] / [`Self::v`].
+    pub fn is_deep(&self) -> bool {
+        self.bit_depth > 8 || self.bit_depth_chroma > 8
+    }
 }

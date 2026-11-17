@@ -251,8 +251,10 @@ impl Decoder {
     /// being decoded stop at their next macroblock row instead of running to the end.
     pub fn reset(&mut self) {
         self.shared.cancel.store(true, Ordering::Relaxed);
+        // keep both typed pools (8-bit and deeper pictures): a seek reuses their buffers
         let pool = self.shared.pool.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
-        self.shared = Arc::new(Shared { pool: Mutex::new(pool), ..Shared::default() });
+        let pool16 = self.shared.pool16.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
+        self.shared = Arc::new(Shared { pool: Mutex::new(pool), pool16: Mutex::new(pool16), ..Shared::default() });
         self.spss.fill(None);
         self.ppss.fill(None);
         self.nal_length_size = None;
@@ -265,6 +267,14 @@ impl Decoder {
         self.out_queue.clear();
         self.queued_ids.clear();
         self.queued_bytes = 0;
+    }
+
+    /// Recycled picture buffers held for 8-bit and for deeper pictures.
+    #[cfg(test)]
+    pub(super) fn pooled_pictures(&self) -> (usize, usize) {
+        let n8 = self.shared.pool.lock().map(|p| p.len()).unwrap_or(0);
+        let n16 = self.shared.pool16.lock().map(|p| p.len()).unwrap_or(0);
+        (n8, n16)
     }
 
     /// Configure from an `avcC` (AVCDecoderConfigurationRecord) box payload.

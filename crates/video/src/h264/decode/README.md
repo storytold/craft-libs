@@ -39,7 +39,8 @@ oracles and fixture generators.
   edges of 4:2:2 (they use the bS of luma edges 0-3, also with the 8x8 transform).
 - Output: cropped planar pictures in output order with the caller's `pts`, POC, key flag, VUI
   colour description (range, primaries, transfer, matrix) and sample aspect ratio. 8-bit
-  pictures fill `Picture::y/u/v`; deeper ones fill `Picture::y16/u16/v16` (`bit_depth`,
+  pictures fill `Picture::y/u/v`; a picture with either component deeper than 8 bits
+  (`Picture::is_deep`) fills `Picture::y16/u16/v16` for all three planes (`bit_depth`,
   `bit_depth_chroma`); 4:2:2 pictures set `chroma422` and have full-height chroma planes.
 - Frame-level multithreading (see below).
 - Draft mode for reduced-resolution playback (off by default): non-reference pictures skip the
@@ -55,7 +56,8 @@ let mut dec = Decoder::new(); // or Decoder::with_threads(n), Decoder::from_avcc
 for (pts, access_unit) in access_units {
     for pic in dec.decode(access_unit, pts)? {
         // pic.width / pic.height (cropped), pic.y / pic.u / pic.v (8-bit) or pic.y16 / pic.u16 /
-        // pic.v16 (pic.bit_depth > 8), pic.chroma422, pic.y_stride / pic.uv_stride,
+        // pic.v16 (pic.is_deep(): luma or chroma deeper than 8 bits), pic.chroma422,
+        // pic.y_stride / pic.uv_stride,
         // pic.pts, pic.poc, pic.key, pic.color, pic.sar
     }
 }
