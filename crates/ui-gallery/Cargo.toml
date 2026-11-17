@@ -65,6 +65,7 @@ workspace = true
 craft-ui = { workspace = true, features = ["app", "testing"] }
 craft-i18n = { workspace = true }
 craft-theme = { workspace = true }
+craft-theme-editor = { workspace = true, features = ["screen-testing"] }
 craft-window = { workspace = true }
 egui = { workspace = true }
 eframe = { version = "0.37", default-features = false }

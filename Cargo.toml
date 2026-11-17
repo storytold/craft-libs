@@ -198,6 +198,7 @@ craft-tiff = { path = "crates/tiff" }
 craft-metadata = { path = "crates/metadata" }
 craft-table = { path = "crates/table" }
 craft-theme = { path = "crates/theme" }
+craft-theme-editor = { path = "crates/theme-editor" }
 craft-theme-store = { path = "crates/theme-store" }
 craft-ui = { path = "crates/ui" }
 craft-ui-canvas = { path = "crates/ui-canvas" }

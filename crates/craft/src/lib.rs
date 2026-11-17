@@ -314,6 +314,8 @@ pub use craft_texture as texture;
 #[cfg(feature = "tga")]
 pub use craft_tga as tga;
 pub use craft_theme as theme;
+#[cfg(feature = "theme-editor")]
+pub use craft_theme_editor as theme_editor;
 #[cfg(feature = "theme-store")]
 pub use craft_theme_store as theme_store;
 #[cfg(feature = "tiff")]
