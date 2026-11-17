@@ -197,13 +197,15 @@ fn s16_of(p: &Prl) -> Option<i16> {
     u16_of(p).map(|v| v as i16)
 }
 
-fn set(props: &mut Option<bool>, t: Toggle, base: bool) {
-    *props = Some(match t {
-        Toggle::On => true,
-        Toggle::Off => false,
-        Toggle::Invert => !base,
-        Toggle::Keep => return,
-    });
+/// Apply a toggle sprm. `base` is the style's value: operand 0x80 restores it, whatever an
+/// earlier sprm (a CHPX under a piece's Prm) set, and 0x81 sets its opposite.
+fn set(props: &mut Option<bool>, t: Toggle, base: Option<bool>) {
+    *props = match t {
+        Toggle::On => Some(true),
+        Toggle::Off => Some(false),
+        Toggle::Invert => Some(!base.unwrap_or(false)),
+        Toggle::Style => base,
+    };
 }
 
 /// Apply a character-property sprm. `base` carries the style-inherited values so toggle
@@ -211,15 +213,15 @@ fn set(props: &mut Option<bool>, t: Toggle, base: bool) {
 pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: &[String]) {
     let op = prl.op;
     match op {
-        C_BOLD => set(&mut p.bold, sprm::toggle(prl), base.bold.unwrap_or(false)),
-        C_ITALIC => set(&mut p.italic, sprm::toggle(prl), base.italic.unwrap_or(false)),
-        C_STRIKE => set(&mut p.strike, sprm::toggle(prl), base.strike.unwrap_or(false)),
-        C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
-        C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
-        C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
-        C_IMPRINT => set(&mut p.engrave, sprm::toggle(prl), base.engrave.unwrap_or(false)),
-        C_EMBOSS => set(&mut p.emboss, sprm::toggle(prl), base.emboss.unwrap_or(false)),
-        C_DSTRIKE => set(&mut p.double_strike, sprm::toggle(prl), base.double_strike.unwrap_or(false)),
+        C_BOLD => set(&mut p.bold, sprm::toggle(prl), base.bold),
+        C_ITALIC => set(&mut p.italic, sprm::toggle(prl), base.italic),
+        C_STRIKE => set(&mut p.strike, sprm::toggle(prl), base.strike),
+        C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps),
+        C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps),
+        C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden),
+        C_IMPRINT => set(&mut p.engrave, sprm::toggle(prl), base.engrave),
+        C_EMBOSS => set(&mut p.emboss, sprm::toggle(prl), base.emboss),
+        C_DSTRIKE => set(&mut p.double_strike, sprm::toggle(prl), base.double_strike),
         C_KUL => {
             p.underline = match prl.operand.first().copied().unwrap_or(0) {
                 0x00 => Some(Underline::None),

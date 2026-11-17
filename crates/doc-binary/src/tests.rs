@@ -2159,6 +2159,39 @@ fn piece_prm_character_formatting_applied() {
     assert_eq!(run(0x0000, bold).0, Some(true), "CHPX bold alone");
 }
 
+/// craft-libs#2027 review: a toggle operand of 0x80 means the style's value ([MS-DOC]
+/// ToggleOperand), so a piece's Prm with emboss 0x80 restores the style's emboss over a CHPX
+/// that turned it off: in Normal (whose formatting is the document default) and in a style
+/// based on it.
+#[test]
+fn toggle_0x80_in_a_piece_prm_restores_the_style_value() {
+    let off = grpprl(&[(0x0858, &[0x00]), (0x0835, &[0x00])]);
+    let normal = grpprl(&[(0x0858, &[0x01]), (0x0835, &[0x01])]);
+    let prcs = vec![grpprl(&[(0x0858, &[0x80]), (0x0835, &[0x80]), (0x0836, &[0x80])])];
+    let run = |istd: u16, prm: u16, chpx: Vec<u8>| {
+        let spec = RichSpec {
+            text: "Emboss\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), normal.clone()), (1, 0, "Derived", Vec::new(), Vec::new())],
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, chpx)],
+            papx_entries: vec![(0, istd, Vec::new())],
+        };
+        let doc = read(&rich_doc_with(&spec, &RichExtra { prcs: prcs.clone(), prm, ..Default::default() })).expect("opens");
+        let p = para0(&doc);
+        assert_eq!(p.text, "Emboss");
+        let r = doc.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        (r.emboss, r.bold, r.italic)
+    };
+    for istd in [0, 1] {
+        assert_eq!(run(istd, 0x0000, Vec::new()), (true, true, false), "style {istd}: the style's own");
+        assert_eq!(run(istd, 0x0000, off.clone()), (false, false, false), "style {istd}: the CHPX turns both off");
+        // Prm1 → Prc 0: emboss, bold and italic all 0x80; the style has no italic.
+        assert_eq!(run(istd, 0x0001, off.clone()), (true, true, false), "style {istd}: 0x80 restores the style");
+        // Prm0 isprm 0x55 (sprmCFBold) with operand 0x80.
+        assert!(run(istd, 0x80AA, off.clone()).1, "style {istd}: Prm0 bold 0x80 restores the style");
+    }
+}
+
 #[test]
 fn section_break_kinds_imported() {
     // #459. SBkcOperand: 0 continuous, 1 new column, 2 new page, 3 even page, 4 odd page.
@@ -3168,6 +3201,11 @@ fn effects_and_underline_styles_are_read() {
     let styled = CharProps { emboss: Some(true), engrave: Some(true), ..CharProps::default() };
     assert_eq!(char_of(0x0858, &[0x81], &styled).emboss, Some(false));
     assert_eq!(char_of(0x0854, &[0x81], &plain).engrave, Some(true));
+    // 0x80 is the style's value, whatever an earlier sprm set.
+    let mut p = CharProps { emboss: Some(false), double_strike: Some(true), ..CharProps::default() };
+    crate::fmt::apply_char(&mut p, &crate::sprm::Prl { op: 0x0858, operand: &[0x80] }, &styled, &[]);
+    crate::fmt::apply_char(&mut p, &crate::sprm::Prl { op: 0x2A53, operand: &[0x80] }, &styled, &[]);
+    assert_eq!((p.emboss, p.double_strike), (Some(true), None));
     for (kul, want) in [
         (0x0B, Underline::Wave),
         (0x2B, Underline::DoubleWave),
