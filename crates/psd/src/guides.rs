@@ -5,6 +5,29 @@
 //! Unknown direction values retain PhotoCraft's vertical interpretation. Grid cycles, reserved
 //! bytes and trailing data are not interpreted. Resource 1097 remains opaque except its count.
 
+/// One legacy Grid and Guides record (resource 1032).
+/// Position is signed 1/32 pixel; direction 1 is horizontal, all others vertical.
+/// Adapted from PhotoCraft's reader by Brandon Thomas and writer by aiongg.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuideV1 {
+    /// Signed position in units of 1/32 pixel.
+    pub location: i32,
+    /// Raw direction byte, retained without normalization.
+    pub direction: u8,
+}
+
+/// Read complete legacy records, preserving the valid prefix on truncation.
+/// Matches PhotoCraft recovery: version/grid fields are ignored. Declared counts
+/// cannot drive allocation or scanning beyond complete records in the input.
+pub fn parse_v1_prefix(data: &[u8]) -> impl Iterator<Item = GuideV1> + '_ {
+    let count = be_u32(data, 12).unwrap_or(0);
+    data.get(16..)
+        .unwrap_or_default()
+        .chunks_exact(5)
+        .zip(0..count)
+        .map(|(g, _)| GuideV1 { location: i32::from_be_bytes([g[0], g[1], g[2], g[3]]), direction: g[4] })
+}
+
 /// Grid and Guides version 2 resource ID.
 pub const GUIDES_V2: u16 = 1092;
 /// Associated guide identifiers resource ID.
