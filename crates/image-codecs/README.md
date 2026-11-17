@@ -353,8 +353,16 @@ Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the r
 * Adam7 PNG against progressive PNG and against the `image` crate as an oracle;
 * limit enforcement.
 
-If `corpus/pngsuite/*.png` exists at the repo root, every file in it is compared against the
-`image` crate's decoder. Without it, that test is skipped.
+With the `corpus` feature, the PngSuite tests read `corpus/pngsuite/` at the repo root. They
+take the PNGs that `tests/it/common/pngsuite.tsv` lists (one `sha256<TAB>name` row per file),
+check each file's SHA-256 before decoding it, and compare it against the `image` crate's
+decoder. A listed PNG that is missing or changed fails the tests; a file the list does not name is
+not read. To fill the folder, download
+[PngSuite-2017jul19.tgz](http://www.schaik.com/pngsuite/PngSuite-2017jul19.tgz) from the
+[PngSuite page](http://www.schaik.com/pngsuite/), check that its SHA-256 is
+`0294b244c95a8342c01b00010cf34abdcabc7c6a34fd0fe1bd963917537bfdc8`, and extract it into
+`corpus/pngsuite/`. No PngSuite file is committed here; the list links the suite's
+[terms](http://www.schaik.com/pngsuite/PngSuite.LICENSE).
 
 With the `corpus` feature, the deep EXR test reads `11.deep.exr`, `42.deep.exr`, `64.deep.exr`,
 `multivariate.deep.exr` and `objectid.deep.exr` from `corpus/exr/` at the repo root. These are the
