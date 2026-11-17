@@ -833,15 +833,11 @@ fn goes_along(raw: &CubicBez, part: &CubicBez, c: &CubicBez, slack: f64) -> bool
     [0.25, 0.5, 0.75].into_iter().all(|t| raw.nearest(part.eval(t), 1e-12).distance_sq.sqrt() <= 2.0 * strays + slack)
 }
 
-/// The part of `c` from the parameter `from` to `to`, running from `c`'s point at `from` (so reversed where `to` is the smaller).
+/// The part of `c` from the parameter `from` to `to`, running from `c`'s point at `from` (kurbo's `subsegment` of a range that runs backwards is
+/// the curve run backwards, which is what a part from the greater parameter to the lesser is).
 fn part_of(c: &CubicBez, from: f64, to: f64) -> CubicBez {
     use kurbo::ParamCurve;
-    if from < to {
-        c.subsegment(from..to)
-    } else {
-        let r = c.subsegment(to..from);
-        CubicBez::new(r.p3, r.p2, r.p1, r.p0)
-    }
+    c.subsegment(from..to)
 }
 
 impl Tidy {
@@ -1885,6 +1881,21 @@ mod tests {
         assert_eq!(tidy.repair(&outline), outline);
     }
 
+    /// A run that goes out along a curve and back to where it began is no part of it, however short: the places nearest its ends are one, and the part
+    /// between them is a point (a cubic that is nothing, where the run is a loop of a hundred-thousandth of a unit).
+    #[test]
+    fn a_run_that_comes_back_to_where_it_began_is_no_part_of_a_curve() {
+        let curve = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 100.0), (500.0, 0.0));
+        let input = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(curve.p0), kurbo::PathEl::CurveTo(curve.p1, curve.p2, curve.p3)]);
+        let tidy = Tidy::keeping(DEFAULT_PRECISION, [&input]);
+        let out = curve.subsegment(0.4..0.400_000_1);
+        let back = CubicBez::new(out.p3, out.p2, out.p1, out.p0);
+        assert!(exact_merge(&[Seg { c: out, line: false }, Seg { c: back, line: false }], &tidy).is_none());
+        // The same two pieces, the second going on instead of back, are a part of it.
+        let on = curve.subsegment(0.400_000_1..0.400_000_2);
+        assert!(exact_merge(&[Seg { c: out, line: false }, Seg { c: on, line: false }], &tidy).is_some());
+    }
+
     /// A piece that goes out past the ends of the curve it is taken for a part of, between the points tried (the middle, the end and the quarters),
     /// is not: `((0, 0), (-100, 1e-4), (700, 1e-4), (600, 0))` goes 8.5 behind its start at 0.05 of its length, and a curve that is nearly a line
     /// along its chord is within 1e-4 of it at each of those points. The points where a piece is furthest out in x and in y are tried as well.
@@ -1940,6 +1951,28 @@ mod tests {
         }
         // Pieces whose ends are not at the crossing are repaired as they were.
         assert!(repaired_count >= 2, "{repaired_count} repaired");
+        // The same curve a tenth the size, with its loop under a unit across and its stray pieces 0.01 off it: the part of the curve with the loop
+        // is 0.3 and more from the piece that does not go round it, which is a great deal more than the piece is from the curve, and is refused.
+        let small = CubicBez::new((0.0, -0.45), (-1.6, 0.65), (-1.6, -0.65), (0.0, 0.45));
+        let input = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(small.p0), kurbo::PathEl::CurveTo(small.p1, small.p2, small.p3)]);
+        let tidy = Tidy::keeping(DEFAULT_PRECISION, [&input]);
+        let repaired = |piece: &CubicBez| {
+            let path = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(piece.p0), kurbo::PathEl::CurveTo(piece.p1, piece.p2, piece.p3)]);
+            match tidy.repair(&path).elements() {
+                [kurbo::PathEl::MoveTo(a), kurbo::PathEl::CurveTo(c1, c2, b)] => CubicBez::new(*a, *c1, *c2, *b),
+                other => panic!("{other:?}"),
+            }
+        };
+        for (from, to) in [(0.25, 1.0), (0.75, 1.0)] {
+            let truth = small.subsegment(from..to);
+            let stray = CubicBez::new(truth.p0, truth.p1 + kurbo::Vec2::new(0.01, 0.01), truth.p2 + kurbo::Vec2::new(-0.01, 0.01), truth.p3);
+            let got = repaired(&stray);
+            assert!(
+                got == stray || off(&got, &truth) < 1e-9,
+                "{from} to {to}: repaired into a curve {} from the part it goes along",
+                off(&got, &truth)
+            );
+        }
     }
 
     /// The part of a curve between two parameters runs from the first to the second, and is a point where they are one.
