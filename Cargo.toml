@@ -119,6 +119,7 @@ craft-macho = { path = "crates/macho" }
 craft-math = { path = "crates/math" }
 # No default features: craft-audio turns on the craft-media modules each of its features needs.
 craft-media = { path = "crates/media", default-features = false }
+craft-media-source = { path = "crates/media-source" }
 craft-materialx = { path = "crates/materialx" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
