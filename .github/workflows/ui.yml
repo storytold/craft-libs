@@ -20,7 +20,9 @@ concurrency:
 
 jobs:
   native:
-    timeout-minutes: 30
+    # Pull requests into next build Windows uncached: next's own runs are Linux only and save no
+    # Windows cache. The uncached Windows build and tests take 25 to 35 minutes.
+    timeout-minutes: 45
     name: UI (${{ matrix.os }})
     strategy:
       fail-fast: false

@@ -19,7 +19,9 @@ concurrency:
 
 jobs:
   update:
-    timeout-minutes: 15
+    # Pull requests into next build Windows uncached: next's own runs are Linux only and save no
+    # Windows cache. The uncached Windows build and tests take 14 to 17 minutes.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
