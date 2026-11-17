@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 craft-audio-dsp = { path = "crates/audio-dsp" }
+craft-sourcemap = { path = "crates/sourcemap" }
 craft-pcap = { path = "crates/pcap" }
 craft-har = { path = "crates/har" }
 craft-jsonc = { path = "crates/jsonc" }
@@ -29,6 +30,7 @@ acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-plist = { path = "crates/plist" }
+craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
