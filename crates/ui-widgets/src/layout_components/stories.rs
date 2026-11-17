@@ -2,7 +2,7 @@
 
 use super::{Grid, Row, Stack};
 use crate::contract::{Gap, Pad, ShowContainer as _};
-use crate::layout::{GridFit, empty_cell};
+use crate::layout::{CellAlign, GridFit, empty_cell};
 use crate::story_kit::sample::{outlined, words};
 use crate::testing::{StoryData, StoryOutput, story};
 use craft_behavior::ColumnWidth;
@@ -53,6 +53,23 @@ fn grid_fixed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
                 words(ui, 0..3);
                 empty_cell(ui);
                 words(ui, 2..4);
+            })
+            .into()
+    })
+}
+
+static TOP: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::Content];
+
+/// A grid whose cells stand at the top of their row: a short column of words beside a taller one starts level with it.
+#[story(Grid, covers = [])]
+fn grid_cells_top(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    outlined(ui, |ui| {
+        Grid::new(&TOP)
+            .cells(CellAlign::Top)
+            .pad(Pad::Regular)
+            .show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| words(ui, 0..1));
+                Stack::new().show(ui, |ui, _| words(ui, 0..4));
             })
             .into()
     })

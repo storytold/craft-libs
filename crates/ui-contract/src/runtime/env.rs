@@ -116,6 +116,8 @@ pub struct Scoped {
     pub transform: Option<CanvasTransform>,
     /// The `Grid` or spread `Row` body whose cursor places the children in flow.
     pub(crate) grid: Option<Id>,
+    /// The `Grid` body of `grid` sets its cells at the top of their row (`CellAlign::Top`), not in its middle.
+    pub(crate) grid_top: bool,
     /// The body that encloses the scope is a content-sized column: it takes its width from its widest child that is
     /// not fill-width, so a fill-width child takes the width the others settle on and never sets it. Such a column
     /// exists only where the width comes from content: under a content-sized mount, a row or a grid.
@@ -370,6 +372,7 @@ impl Scoped {
     /// Ends the layout room of the enclosing body: its flow grid and content column.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
+        self.grid_top = false;
         self.content_column = false;
         self.given_column = false;
         self.content = (false, false);
@@ -493,6 +496,7 @@ impl Env {
                 roving: None,
                 transform: None,
                 grid: None,
+                grid_top: false,
                 content_column: false,
                 given_column: false,
                 content: (false, false),

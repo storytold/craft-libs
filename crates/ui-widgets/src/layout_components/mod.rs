@@ -5,7 +5,7 @@ use crate::contract::{
     Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, Pad,
     Role, Scroll, Sizing, ThemeScope,
 };
-use crate::layout::{BodyLayout, GridFit, RowAlign};
+use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnWidth, Insets, Metrics, Sense};
 use egui::{Response, Ui};
@@ -326,6 +326,13 @@ impl Grid {
     /// `layout::empty_cell`.
     pub fn fit(mut self, fit: GridFit) -> Self {
         self.props.layout = std::mem::replace(&mut self.props.layout, BodyLayout::Stack).fit(fit);
+        self
+    }
+
+    /// Where a cell shorter than its row stands in it: [`CellAlign::Center`] (the default) in the row's middle,
+    /// [`CellAlign::Top`] at its top.
+    pub fn cells(mut self, cells: CellAlign) -> Self {
+        self.props.layout = std::mem::replace(&mut self.props.layout, BodyLayout::Stack).cells(cells);
         self
     }
 }

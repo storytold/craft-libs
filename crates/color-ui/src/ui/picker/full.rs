@@ -6,7 +6,7 @@ use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{Bind, FieldLayout, FooterSlot, Gap, GlyphLabel, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
-use craft_ui::layout::{GridFit, RowAlign, empty_cell};
+use craft_ui::layout::{CellAlign, GridFit, RowAlign, empty_cell};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::{HexField, NumberField, UnitPlacement};
@@ -17,8 +17,8 @@ use super::compact::Body;
 use super::{Collected, ColorPicker, ColorPickerWords, Pass, PickedColor};
 use crate::ui::{AreaMode, AreaShape, CompareSwatch};
 
-/// Two columns that never stack: the right half (compare block and actions over the two field groups), and each field
-/// group (the radio cell, then the channel's letter, field and unit).
+/// Two columns that never stack: the two halves of the picker, the right half (compare block and actions over the two
+/// field groups), and each field group (the radio cell, then the channel's letter, field and unit).
 const TWO_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
 
 /// The models the picker shows and the area modes it offers.
@@ -41,7 +41,9 @@ impl<'a> Body<'a> {
     pub(super) fn full(&self, ui: &mut Ui, pass: &Pass<'a>, got: &mut Collected) {
         let words = Env::of(ui).words::<ColorPickerWords>();
         let visible: Vec<&dyn ColorModel> = self.models.iter().copied().chain([pass.mode.model()]).collect();
-        Row::new().gap(Gap::Section).show(ui, |ui, _| {
+        // The two halves in a grid that never stacks or squeezes, so each keeps its width in any room: the Only Web Colors
+        // row spans the area and the strip, its button under the strip's end.
+        Grid::new(TWO_COLUMNS).fit(GridFit::Fixed).cells(CellAlign::Top).gap(Gap::Section).show(ui, |ui, _| {
             Stack::new().gap(Gap::Item).show(ui, |ui, _| {
                 self.area_and_strip(ui, pass, &visible, AreaShape::Square, got);
                 // The check box at the row's start; the rest of the row puts the screen-pick button at its end, under the
@@ -68,7 +70,7 @@ impl<'a> Body<'a> {
         let group = RadioGroup::new(words.field_shows.as_str().to_owned(), Bind::given(pass.mode)).nav(NavShape::Spatial);
         let picked = group
             .show(ui, |ui, _| {
-                Grid::new(TWO_COLUMNS).fit(GridFit::Fixed).gap(Gap::Section).show(ui, |ui, _| {
+                Grid::new(TWO_COLUMNS).fit(GridFit::Fixed).cells(CellAlign::Top).gap(Gap::Section).show(ui, |ui, _| {
                     self.compare_block(ui, pass, words, got);
                     let _ = FooterSlot::new().show(ui);
                     self.field_group(ui, pass, &first, choice, true, got);
