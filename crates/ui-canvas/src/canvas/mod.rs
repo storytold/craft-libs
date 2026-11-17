@@ -177,7 +177,12 @@ pub struct Canvas<'a> {
     /// disabled for this canvas.
     #[prop]
     layer_bounds: Option<LayerBounds<'a>>,
-    /// The view commands the app asks of this canvas ([`queued`](Self::queued)).
+    /// View commands the app asks of this canvas's view (a menu row or an action step it runs, a new document's fit):
+    /// the canvas runs them in this pass, in order and before the ones fired to it, as it runs those. A
+    /// [`ViewRequest::Command`] eases as a fired command does; a [`ViewRequest::Place`] that moves the view makes the
+    /// pass's view jump. A measuring run runs none. The app asks for them until a pass that is not a measuring run
+    /// showed the canvas, then drops them.
+    #[prop]
     queued: &'a [ViewRequest],
     /// The user's navigation options: how the wheel and a pinch move the view ([`WheelNavigation`]), whether a zoom
     /// eases (Animated Zoom) and whether the view may leave the document (Overscroll).
@@ -324,17 +329,6 @@ impl<'a> Canvas<'a> {
     #[must_use]
     pub fn jumped(mut self) -> Self {
         self.ease = Some(Steer::Stop);
-        self
-    }
-
-    /// View commands the app asks of this canvas's view (a menu row or an action step it runs, a new document's fit):
-    /// the canvas runs them in this pass, in order and before the ones fired to it, as it runs those. A
-    /// [`ViewRequest::Command`] eases as a fired command does; a [`ViewRequest::Place`] that moves the view makes the
-    /// pass's view jump. A measuring run runs none. The app asks for them until a pass that is not a measuring run
-    /// showed the canvas, then drops them.
-    #[must_use]
-    pub fn queued(mut self, commands: &'a [ViewRequest]) -> Self {
-        self.queued = commands;
         self
     }
 

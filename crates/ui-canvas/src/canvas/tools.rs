@@ -242,6 +242,7 @@ impl ViewCommands {
 
 /// A view command an app asks of its canvas ([`Canvas::queued`](super::Canvas::queued)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ViewRequest {
     /// A command the user gave (a menu row, an action step): it eases under Animated Zoom, as its chord does.
     Command(ViewCommands),
