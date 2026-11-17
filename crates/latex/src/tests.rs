@@ -360,6 +360,13 @@ fn an_optional_argument_after_a_space_is_not_text() {
 }
 
 #[test]
+fn a_no_break_space_before_a_bracket_keeps_the_text() {
+    // A no-break space was skipped like a space, so the `[…]` after it was read as an optional argument and lost.
+    assert_eq!(texts("a\\linebreak\u{a0}[x]b"), ["a\n\u{a0}[x]b"]);
+    assert_eq!(texts("\\begin{document}a\\makebox[3cm]\u{a0}[l]{x}b\\end{document}"), vec!["a\u{a0}[l]xb".to_string()]);
+}
+
+#[test]
 fn a_definition_with_a_default_argument_shows_nothing() {
     // `[2][x]`: the default was left over as text, and the definition's body with it.
     assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2][x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);

@@ -245,7 +245,7 @@ impl<'a> Parser<'a> {
         if let Some(p) = self.pending.take() {
             // Text left after the previous argument's `]` comes first: in `\makebox[3cm][l]` the
             // second argument is in the first one's token and waits there.
-            let Some(body) = p.trim_start().strip_prefix('[') else {
+            let Some(body) = p.trim_ascii_start().strip_prefix('[') else {
                 self.pending = Some(p);
                 return None;
             };
@@ -260,8 +260,9 @@ impl<'a> Parser<'a> {
                 return None;
             };
             // LaTeX skips spaces before an optional argument, and in `\\begin{figure} [h]` the
-            // space and the `[` share one text token.
-            let Some(body) = s.trim_start().strip_prefix('[') else {
+            // space and the `[` share one text token. A no-break space is not skipped, so a `[` after
+            // it is text.
+            let Some(body) = s.trim_ascii_start().strip_prefix('[') else {
                 self.pos = save;
                 return None;
             };
