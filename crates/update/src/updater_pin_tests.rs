@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::tests::{newer, settle};
+use super::tests::{newer, offer_now, settle, settle_offer};
 use super::*;
 use crate::suite::PHOTOCRAFT;
 
@@ -33,7 +33,7 @@ fn a_pinned_app_is_not_prompted_and_the_network_is_not_asked() {
         assert_eq!(u.status(), &Status::Managed, "{track:?}");
         assert_eq!(u.managed(), Some(&Choice::Managed(track.clone())));
         u.offer(newer());
-        assert!(!u.prompt_open(), "an offer is held too: {track:?}");
+        assert!(u.offered.is_none() && !u.prompt_open(), "an offer is held too: {track:?}");
     }
 }
 
@@ -86,7 +86,7 @@ fn a_prompt_opened_before_the_pin_cannot_install_the_stable_release() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("versions.json");
     let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(&path);
-    u.offer(newer());
+    offer_now(&mut u);
     assert!(u.prompt_open());
     let mut pins = Pins::default();
     pins.set(PHOTOCRAFT.id, &crate::pins::VersionTrack::Pinned("v0.13.0".into()));
@@ -97,12 +97,26 @@ fn a_prompt_opened_before_the_pin_cannot_install_the_stable_release() {
 }
 
 #[test]
+fn a_pin_made_while_an_offer_is_inspected_holds_the_offer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("versions.json");
+    let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(&path);
+    u.offer(newer());
+    let mut pins = Pins::default();
+    pins.set(PHOTOCRAFT.id, &crate::pins::VersionTrack::Pinned("v0.13.0".into()));
+    pins.save(&path).unwrap();
+    settle_offer(&mut u);
+    assert!(!u.prompt_open(), "no prompt for the stable release once the launcher pinned the app");
+    assert!(u.managed().is_some());
+}
+
+#[test]
 fn a_check_after_the_pin_closes_a_prompt_opened_before_it() {
     let ctx = egui::Context::default();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("versions.json");
     let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(&path);
-    u.offer(newer());
+    offer_now(&mut u);
     let mut pins = Pins::default();
     pins.set(PHOTOCRAFT.id, &crate::pins::VersionTrack::Nightly);
     pins.save(&path).unwrap();

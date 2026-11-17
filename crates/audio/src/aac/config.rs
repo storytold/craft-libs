@@ -343,6 +343,51 @@ impl AudioSpecificConfig {
     }
 }
 
+/// Why an AudioSpecificConfig prefix cannot be written as an ADTS header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdtsConfigError {
+    /// Fewer than two bytes were supplied.
+    Short,
+    /// The prefix names a profile, indexed rate or channel configuration ADTS cannot carry.
+    Unsupported {
+        /// Audio object type from the prefix.
+        object_type: u8,
+        /// Sampling frequency index from the prefix.
+        sf_index: u8,
+        /// Channel configuration from the prefix.
+        channel_config: u8,
+    },
+}
+
+/// ADTS fixed fields taken from the prefix of an AudioSpecificConfig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdtsConfig {
+    /// Audio object type, 1 through 4.
+    pub object_type: u8,
+    /// Indexed sample rate, 0 through 12.
+    pub sf_index: u8,
+    /// Channel configuration, 1 through 7.
+    pub channel_config: u8,
+}
+impl AdtsConfig {
+    /// Parse only the first two ASC bytes. Unlike a decoder's full ASC parser, this accepts all
+    /// four object types representable by ADTS and rejects configurations needing a PCE.
+    pub fn from_asc_prefix(asc: &[u8]) -> std::result::Result<Self, AdtsConfigError> {
+        let (Some(&a), Some(&b)) = (asc.first(), asc.get(1)) else { return Err(AdtsConfigError::Short) };
+        let object_type = a >> 3;
+        let sf_index = ((a & 7) << 1) | (b >> 7);
+        let channel_config = (b >> 3) & 15;
+        if !(1..=4).contains(&object_type) || sf_index > 12 || !(1..=7).contains(&channel_config) {
+            return Err(AdtsConfigError::Unsupported { object_type, sf_index, channel_config });
+        }
+        Ok(Self { object_type, sf_index, channel_config })
+    }
+    /// Write a no-CRC ADTS header with variable-rate buffer fullness for one payload.
+    pub fn header(self, payload_len: usize) -> Result<[u8; 7]> {
+        AdtsHeader::write(self.object_type, self.sf_index, self.channel_config, payload_len, 0x7ff)
+    }
+}
+
 /// A parsed ADTS header.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -517,6 +562,15 @@ mod tests {
         let pce = ProgramConfig { front: vec![(true, 0)], ..Default::default() };
         let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
         assert_eq!(AudioSpecificConfig::parse(&asc.to_bytes().unwrap()).unwrap(), asc);
+    }
+
+    #[test]
+    fn adts_config_preserves_prefix_and_frame_limits() {
+        let config = AdtsConfig::from_asc_prefix(&[0x12, 0x10]).unwrap();
+        assert_eq!(config.header(100).unwrap(), AdtsHeader::write(2, 4, 2, 100, 0x7ff).unwrap());
+        assert!(config.header(8185).is_err());
+        assert_eq!(AdtsConfig::from_asc_prefix(&[]), Err(AdtsConfigError::Short));
+        assert!(matches!(AdtsConfig::from_asc_prefix(&[0x2a, 0x10]), Err(AdtsConfigError::Unsupported { object_type: 5, .. })));
     }
 
     #[test]

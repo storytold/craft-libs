@@ -1,6 +1,6 @@
 //! Writes multi-gigabyte PSB files (and the 2 GB PSD) for large-file tests (photocraft#375, photocraft#216), straight
 //! from the Adobe PSD spec and independent of this crate's writer, so the fixtures don't inherit
-//! its limits. The generator is `craft_psd::fixtures` (feature `testgen`).
+//! its limits. The generator is `craft_psd::fixtures` (feature `test-support`).
 //!
 //! `cargo run --release -p craft-psd --example big_psb -- <out dir> [case...]`
 //!
