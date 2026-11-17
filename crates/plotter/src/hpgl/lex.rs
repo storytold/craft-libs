@@ -426,3 +426,33 @@ impl<'a> Lexer<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framing_labels_and_bounded_numbers() {
+        let mut lex = Lexer::new(b"\x1b%-12345X@PJL ENTER LANGUAGE=HPGL2\nIN;LBPU999;\x03PA1,2,3,4;SP2;");
+        assert_eq!(lex.op(true), Some(*b"IN"));
+        lex.params();
+        assert_eq!(lex.op(true), Some(*b"LB"));
+        lex.label(ETX);
+        assert_eq!(lex.op(true), Some(*b"PA"));
+        let mut values = [0.0; 2];
+        assert_eq!(lex.numbers(&mut values), 2);
+        assert_eq!(values, [1.0, 2.0]);
+        assert_eq!(lex.op(true), Some(*b"SP"));
+        assert_eq!(lex.number(), Some(2.0));
+    }
+
+    #[test]
+    fn encoded_flags_and_truncated_pair_recover_at_semicolon() {
+        let mut lex = Lexer::new(b"PE<=\xc1\xc3\xc5;PU;");
+        assert_eq!(lex.op(true), Some(*b"PE"));
+        let mut state = Pe::default();
+        assert_eq!(lex.pe(&mut state), Some(PeItem::Point { x: 1.0, y: 2.0, up: true, absolute: true }));
+        assert_eq!(lex.pe(&mut state), None);
+        assert_eq!(lex.op(true), Some(*b"PU"));
+    }
+}
