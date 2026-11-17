@@ -289,7 +289,8 @@ fn a_floating_windows_double_arrow_collapses_its_column_to_icons_and_expands_it(
             .into_iter()
             .find(|button| WINDOW_AT.expand(SLACK).contains_rect(button.rect) && craft_ui::testing::access::name(tree, button.node) == Some(name))
     };
-    let in_window = |bed: &Bed| bed.fixture.by_role(Role::TAB_PANEL).into_iter().filter(|panel| WINDOW_AT.expand(SLACK).contains_rect(panel.rect)).count();
+    let in_window =
+        |bed: &Bed| bed.fixture.by_role(Role::TAB_PANEL).into_iter().filter(|panel| WINDOW_AT.expand(SLACK).contains_rect(panel.rect)).count();
     assert_eq!(in_window(&bed), 1, "the expanded window shows its group");
     let collapse = button(&bed, "Collapse column to icons").expect("the title row shows the column's double arrow");
     bed.fixture.click(&collapse);
