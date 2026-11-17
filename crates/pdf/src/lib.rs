@@ -30,3 +30,6 @@ pub mod write;
 #[cfg(feature = "write-raster")]
 #[path = "write/raster.rs"]
 pub mod write_raster;
+
+/// Low-level, direct-to-output framing of new classic-xref PDF files.
+pub mod classic;
