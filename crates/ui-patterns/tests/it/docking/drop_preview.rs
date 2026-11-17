@@ -45,9 +45,11 @@ struct Bed {
     shown: Shown,
 }
 
-/// `[1, 2]` beside `[3]`.
+/// `[1, 2]` beside `[3]`, under `[4]`, so their strips lie clear of the band along the layout's top edge, where a drop
+/// adds a full-width row.
 fn bed() -> Bed {
-    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![1, 2], 0), Node::tabs(vec![3], 0));
+    let row = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![1, 2], 0), Node::tabs(vec![3], 0));
+    let root = Node::split(Axis::Y, SplitSize::Ratio(0.3), Node::tabs(vec![4], 0), row);
     let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
     let shown: Shown = Rc::default();
     let (held, seen) = (Rc::clone(&workspace), Rc::clone(&shown));
