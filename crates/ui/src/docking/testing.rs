@@ -471,6 +471,10 @@ pub struct HostWindow {
     pub position: Option<Pos2>,
     /// Its builder's `taskbar` setting on its last frame.
     pub taskbar: Option<bool>,
+    /// This field records the viewport builder's Windows tool-window setting.
+    pub tool_window: Option<bool>,
+    /// This field records the viewport builder's resizing setting.
+    pub resizable: Option<bool>,
     /// Its builder's X11 window type on its last frame.
     pub window_type: Option<egui::X11WindowType>,
     /// Frames it drew.
@@ -574,12 +578,15 @@ impl NativeHost {
             let rect = Rect::from_min_size(builder.position.unwrap_or_default() + host.frame, builder.inner_size.unwrap_or(vec2(300.0, 200.0)));
             let visible = builder.visible.unwrap_or(true);
             let (level, position, taskbar, window_type) = (builder.window_level, builder.position, builder.taskbar, builder.window_type);
+            let (tool_window, resizable) = (builder.tool_window, builder.resizable);
             host.windows.entry(id).or_insert_with(|| HostWindow {
                 rect,
                 visible,
                 level,
                 position,
                 taskbar,
+                tool_window,
+                resizable,
                 window_type,
                 frames: 0,
                 events: Vec::new(),
@@ -597,6 +604,7 @@ impl NativeHost {
             window.frames += 1;
             window.level = level;
             (window.position, window.taskbar, window.window_type) = (position, taskbar, window_type);
+            (window.tool_window, window.resizable) = (tool_window, resizable);
             if std::mem::take(&mut window.close)
                 && let Some(info) = viewports.get_mut(&id)
             {

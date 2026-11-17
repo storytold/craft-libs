@@ -1166,7 +1166,10 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// reports no window positions, so a native window could not dock again by drag or open
     /// where it was.
     ///
-    /// A native window has no taskbar entry on Windows. Under X11 on Linux, a palette window has
+    /// A native window has no taskbar entry on Windows. Windows palettes also use the
+    /// [tool-window style](https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles)
+    /// and do not appear in Alt-Tab. A window with a [`super::WindowKind::Normal`] panel keeps
+    /// the normal window style. Under X11 on Linux, a palette window has
     /// the utility window type, which GNOME and KDE Plasma leave off the taskbar; taskbars that
     /// list utility windows unless they are transient for another window (Xfce, MATE) still list
     /// it. A native Wayland window and a window under X11 on the BSDs get neither setting.

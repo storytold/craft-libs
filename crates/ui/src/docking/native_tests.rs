@@ -590,7 +590,7 @@ fn viewer_windows_stay_shown_at_normal_level() {
 }
 
 #[test]
-fn palettes_are_x11_utility_windows_and_viewers_normal_ones() {
+fn native_palette_and_viewer_windows_keep_their_platform_types_and_geometry() {
     // Both kinds set `taskbar` to false, which egui applies on Windows. Under X11 on Linux a
     // palette is a utility window and a viewer a normal one.
     use egui::X11WindowType::{Normal, Utility};
@@ -607,6 +607,14 @@ fn palettes_are_x11_utility_windows_and_viewers_normal_ones() {
         })
     };
     assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(palette))]);
+    let [viewer, palette_viewport] = [5, 6].map(|panel| d.viewport(window(&d, panel).id));
+    {
+        let host = d.host();
+        assert_ne!(host.windows[&viewer].tool_window, Some(true));
+        assert_eq!(host.windows[&palette_viewport].tool_window, Some(true));
+        assert_ne!(host.windows[&palette_viewport].resizable, Some(false));
+        assert_eq!(host.windows[&palette_viewport].rect.size(), vec2(240.0, 300.0));
+    }
     // The palette becomes a viewer. A new type recreates the window, which opens where it is.
     let moved = [700.0, 120.0, 240.0, 300.0];
     d.layout.floating[1].native = Some(moved);
@@ -614,7 +622,8 @@ fn palettes_are_x11_utility_windows_and_viewers_normal_ones() {
     d.content.normal = vec![5, 6];
     d.step(vec![]);
     assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(Normal))]);
-    if cfg!(target_os = "linux") {
+    assert_ne!(d.host().windows[&palette_viewport].tool_window, Some(true));
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
         let position = d.host().windows[&d.viewport(window(&d, 6).id)].position;
         assert_eq!(position, Some(pos2(moved[0], moved[1])));
     }
@@ -627,7 +636,8 @@ fn palettes_are_x11_utility_windows_and_viewers_normal_ones() {
     d.content.normal = vec![5];
     d.step(vec![]);
     assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(palette))]);
-    if cfg!(target_os = "linux") {
+    assert_eq!(d.host().windows[&palette_viewport].tool_window, Some(true));
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
         let position = d.host().windows[&d.viewport(window(&d, 6).id)].position;
         assert_eq!(position, Some(os_moved.min));
     }
