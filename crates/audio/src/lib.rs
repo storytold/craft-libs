@@ -30,8 +30,10 @@
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`; `mpa-encode`: the Layer II encoder), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
-//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files),
-//!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech).
+//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files), [`adpcm`]
+//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM),
+//!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`vmd`] (`vmd-decode`:
+//!   Sierra VMD sound).
 //!
 //! The shared types below build with no features.
 
@@ -39,6 +41,8 @@
 pub mod aac;
 #[cfg(any(feature = "ac3-decode", feature = "ac3-encode", feature = "eac3-encode"))]
 pub mod ac3;
+#[cfg(feature = "adpcm")]
+pub mod adpcm;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
 mod buffer;
@@ -65,6 +69,8 @@ mod read;
 pub mod sbc;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
+#[cfg(feature = "vmd-decode")]
+pub mod vmd;
 #[cfg(feature = "vorbis-encode")]
 pub mod vorbis;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
@@ -264,6 +270,16 @@ impl From<alac::Error> for AudioError {
         match e {
             alac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             alac::Error::InvalidInput(_) => AudioError::Encode(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "vmd-decode")]
+impl From<vmd::Error> for AudioError {
+    fn from(e: vmd::Error) -> Self {
+        match e {
+            vmd::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
     }

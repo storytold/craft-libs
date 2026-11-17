@@ -41,6 +41,8 @@ aac-decode = ["craft-media/bitstream"]
 # The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
 aac-encode = ["craft-media/bitstream", "craft-media/isobmff"]
 opus-decode = []
+# ADPCM (`adpcm`): IMA WAV, Microsoft, Yamaha and Flash (SWF) decoders and encoders.
+adpcm = ["craft-media/bitstream"]
 # QOA (Quite OK Audio) files: decoder and encoder in the `qoa` module, each on its own.
 qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
@@ -69,6 +71,8 @@ mp3-encode = ["craft-media/bitstream"]
 mpa-encode = ["mpa-decode", "mp3-encode"]
 # Bluetooth Low Complexity Subband Coding (SBC) audio codec (`sbc`).
 sbc = []
+# Sierra VMD sound decoder (`vmd::Decoder`): 8-bit PCM and 16-bit DPCM.
+vmd-decode = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).
@@ -88,6 +92,8 @@ symphonia = { version = "0.6.1", optional = true, default-features = false, feat
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
+# The VMD demuxer, for the VMD sound decoder's tests.
+craft-media = { workspace = true, features = ["vmd"] }
 proptest = { workspace = true }
 serde_json = { workspace = true }
 
@@ -96,12 +102,20 @@ name = "audio"
 required-features = ["decode", "lossless-encode", "peaks"]
 
 [[test]]
+name = "vmd"
+required-features = ["vmd-decode"]
+
+[[test]]
 name = "codecs"
 required-features = ["decode", "encode"]
 
 [[test]]
 name = "mp2_encoder_oracle"
 required-features = ["mpa-encode"]
+
+[[test]]
+name = "adpcm_oracle"
+required-features = ["adpcm"]
 
 [[test]]
 name = "flac_decode"

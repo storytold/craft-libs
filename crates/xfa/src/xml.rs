@@ -412,6 +412,51 @@ mod tests {
     }
 
     #[test]
+    fn traversal_identity_and_accessors_preserve_element_and_text_semantics() {
+        let source = "<?before value?><r xmlns='urn:r' xmlns:p='urn:p' a='plain' p:a='qualified' xml:lang='en'>first<!--gap--><?inside value?>second<empty/><p:child>last</p:child></r>";
+        let doc = Document::parse(source).unwrap();
+        let other = Document::parse(source).unwrap();
+        let root = doc.root_element();
+        assert!(root != other.root_element());
+        assert!(std::ptr::eq(root.document(), &doc));
+        assert!(root.is_element());
+        assert!(!root.is_text());
+        assert_eq!(root.tag_name().name(), "r");
+        assert_eq!(root.lookup_prefix("urn:p"), Some("p"));
+        assert_eq!(root.lookup_prefix(XML_NS), Some("xml"));
+        assert_eq!(root.lookup_prefix("absent"), None);
+        assert_eq!(root.lookup_namespace_uri(Some("xml")), Some(XML_NS));
+        assert_eq!(root.lookup_namespace_uri(Some("xmlns")), Some(XMLNS_NS));
+        assert_eq!(root.lookup_namespace_uri(Some("absent")), None);
+        let attrs: Vec<_> = root.attributes().map(|a| (a.namespace(), a.name(), a.value())).collect();
+        assert_eq!(attrs, vec![(None, "a", "plain"), (Some("urn:p"), "a", "qualified"), (Some(XML_NS), "lang", "en")]);
+        let namespaces: Vec<_> = root.namespaces().map(|n| (n.name(), n.uri())).collect();
+        assert!(namespaces.contains(&(None, "urn:r")));
+        assert!(namespaces.contains(&(Some("p"), "urn:p")));
+        let all: Vec<_> = doc.descendants().collect();
+        assert_eq!(all.len(), 5);
+        assert!(all.iter().zip(root.descendants()).all(|(a, b)| *a == b));
+        assert_eq!(all.iter().filter(|n| n.is_element()).map(|n| n.tag_name().name()).collect::<Vec<_>>(), vec!["r", "empty", "child"]);
+        let text = root.children().next().unwrap();
+        assert!(text.is_text());
+        assert!(!text.is_element());
+        assert_eq!(text.text(), Some("firstsecond"));
+        assert_eq!(text.tag_name().name(), "");
+        assert_eq!(text.tag_name().namespace(), None);
+        assert_eq!(text.attribute("a"), None);
+        assert_eq!(text.attributes().len(), 0);
+        assert_eq!(text.namespaces().len(), 0);
+        assert_eq!(text.lookup_prefix("urn:p"), None);
+        assert_eq!(text.lookup_namespace_uri(Some("p")), None);
+        assert_eq!(text.range(), 0..0);
+        assert_eq!(text.children().count(), 0);
+        assert_eq!(text.descendants().count(), 1);
+        assert!(doc.get_node(NodeId(usize::MAX)).is_none());
+        assert_eq!(root.children().nth(1).unwrap().text(), None);
+        assert_eq!(Document::parse("<r><child/>tail</r>").unwrap().root_element().text(), None);
+    }
+
+    #[test]
     fn inherited_namespace_declarations_have_an_aggregate_budget() {
         use std::fmt::Write;
         let mut xml = String::from("<r");
