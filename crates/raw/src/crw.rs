@@ -59,12 +59,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, caller: &Limits) -> Result<RawIma
         color: ColorData::default(),
         wb_multipliers: h.wb_multipliers,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera,
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: crate::RawNotices::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

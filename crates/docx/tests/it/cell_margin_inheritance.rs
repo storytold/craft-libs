@@ -98,3 +98,18 @@ fn no_default_table_style_means_no_cell_margins() {
     let reopened = craft_docx::read(&bytes).unwrap();
     assert_eq!(reopened.body[0].as_table().unwrap().props.cell_margins, Some([0.0; 4]));
 }
+
+#[test]
+fn tracked_partial_table_margins_keep_the_old_styles_other_sides() {
+    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="Current"/><w:tblCellMar><w:left w:w="100" w:type="dxa"/></w:tblCellMar><w:tblPrChange w:id="1" w:author="A"><w:tblPr><w:tblStyle w:val="Old"/><w:tblCellMar><w:left w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid><w:gridCol w:w="4320"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#;
+    let styles = r#"<w:style w:type="table" w:styleId="Current"><w:name w:val="Current"/><w:tblPr><w:tblCellMar><w:top w:w="60"/><w:right w:w="180"/></w:tblCellMar></w:tblPr></w:style><w:style w:type="table" w:styleId="Old"><w:name w:val="Old"/><w:tblPr><w:tblCellMar><w:top w:w="20"/><w:left w:w="108"/><w:bottom w:w="40"/><w:right w:w="160"/></w:tblCellMar></w:tblPr></w:style>"#;
+    let doc = craft_docx::read(&package(body, Some(styles))).unwrap();
+    let table = doc.body[0].as_table().unwrap();
+    assert_eq!(table.props.cell_margins, Some([3.0, 5.0, 0.0, 9.0]));
+    let old = &table.props.fmt_change.as_ref().unwrap().old;
+    assert_eq!(
+        old.cell_margins,
+        Some([1.0, 0.0, 2.0, 8.0]),
+        "explicit zero overrides left, omitted sides come from the old style, not the current one"
+    );
+}

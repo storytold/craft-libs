@@ -16,7 +16,7 @@ use crate::hevc::decode::spec_tables::{
     INTRA_CHROMA, LAST_X_PREFIX, LAST_Y_PREFIX, MERGE_FLAG, MERGE_IDX, MVP_FLAG, PART_MODE, PRED_MODE, PREV_INTRA_LUMA, REF_IDX, RQT_ROOT_CBF,
     SAO_MERGE, SAO_TYPE, SIG_COEFF, SPLIT_CU, SPLIT_TRANSFORM, TRANSFORM_SKIP,
 };
-use crate::hevc::decode::tables::{CTX_IDX_MAP, INTRA_CHROMA_MODE_422, LEVEL_SCALE, SCAN_4, qpc, scan_order};
+use crate::hevc::decode::tables::{INTRA_CHROMA_MODE_422, LEVEL_SCALE, SCAN_4, SIG_CTX, qpc, scan_order, scan_pos};
 use crate::hevc::decode::transform;
 use std::sync::Arc;
 
@@ -340,6 +340,8 @@ pub struct SliceDecoder<'a, S> {
     pub cu_part: PartMode,
     // scratch
     pub coeffs: Vec<i32>,
+    /// Scaled non-zero coefficients of the current transform block: (index in `coeffs`, value).
+    pub nz: Vec<(u16, i32)>,
     pub pred0: Vec<i16>,
     pub pred1: Vec<i16>,
     pub mc: crate::hevc::decode::inter::McScratch,
@@ -461,6 +463,7 @@ impl<'a, S: Sample> SliceDecoder<'a, S> {
             intra_split: false,
             cu_part: PartMode::P2Nx2N,
             coeffs: vec![0; 32 * 32],
+            nz: vec![(0, 0); 32 * 32],
             pred0: vec![0; 64 * 64],
             pred1: vec![0; 64 * 64],
             mc: Default::default(),
@@ -630,5 +633,32 @@ impl<'a, S: Sample> SliceDecoder<'a, S> {
         }
         self.pic.sao[rs as usize] = p;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::hevc::decode::transform;
+
+    /// `reconstruct` clears only the coefficient bounding box, so the inverse transform must not
+    /// read the stale values left outside it by the previous block.
+    #[test]
+    fn inverse_transform_reads_only_the_coefficient_box() {
+        for &(n, dst) in &[(4usize, true), (4, false), (8, false), (16, false), (32, false)] {
+            for (max_x, max_y) in [(0, 1), (1, 0), (2, 3), (n / 2, 1), (n - 1, 0), (n - 1, n - 1)] {
+                let (mut clean, mut stale) = (vec![0i32; n * n], vec![0i32; n * n]);
+                for (i, (c, s)) in clean.iter_mut().zip(stale.iter_mut()).enumerate() {
+                    let (x, y) = (i % n, i / n);
+                    *s = 12345 - i as i32;
+                    if x <= max_x && y <= max_y {
+                        *c = (i as i32 * 37) % 201 - 100;
+                        *s = *c;
+                    }
+                }
+                transform::inverse_transform(&mut clean, n, dst, max_x, max_y, 12);
+                transform::inverse_transform(&mut stale, n, dst, max_x, max_y, 12);
+                assert_eq!(clean, stale, "n {n} dst {dst} box ({max_x}, {max_y})");
+            }
+        }
     }
 }
