@@ -3148,3 +3148,42 @@ fn formatting_runs_break_where_the_chpx_changes() {
     // (the run from the field to CP 20), "d(ee" italic.
     assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
 }
+
+/// craft-libs#1969: double strikethrough, emboss, engrave and contextual spacing are read, and
+/// each underline style reads as its own kind, the double wave (Kul 0x2B) included.
+#[test]
+fn effects_and_underline_styles_are_read() {
+    use craft_wordmodel::props::{CharProps, ParaProps, Underline};
+    let char_of = |op: u16, operand: &[u8], base: &CharProps| {
+        let mut p = base.clone();
+        crate::fmt::apply_char(&mut p, &crate::sprm::Prl { op, operand }, base, &[]);
+        p
+    };
+    let plain = CharProps::default();
+    assert_eq!(char_of(0x2A53, &[1], &plain).double_strike, Some(true), "sprmCFDStrike");
+    assert_eq!(char_of(0x2A53, &[0], &plain).double_strike, Some(false));
+    assert_eq!(char_of(0x0858, &[1], &plain).emboss, Some(true), "sprmCFEmboss");
+    assert_eq!(char_of(0x0854, &[1], &plain).engrave, Some(true), "sprmCFImprint");
+    // A toggle operand of 0x81 inverts what the style gives.
+    let styled = CharProps { emboss: Some(true), engrave: Some(true), ..CharProps::default() };
+    assert_eq!(char_of(0x0858, &[0x81], &styled).emboss, Some(false));
+    assert_eq!(char_of(0x0854, &[0x81], &plain).engrave, Some(true));
+    for (kul, want) in [
+        (0x0B, Underline::Wave),
+        (0x2B, Underline::DoubleWave),
+        (0x1B, Underline::Wave),
+        (0x27, Underline::Dash),
+        (0x37, Underline::Dash),
+        (0x03, Underline::Double),
+        (0x05, Underline::Single),
+    ] {
+        assert_eq!(char_of(0x2A3E, &[kul], &plain).underline, Some(want), "Kul {kul:#04x}");
+    }
+    let para_of = |operand: &[u8]| {
+        let mut p = ParaProps::default();
+        crate::fmt::apply_para(&mut p, &crate::sprm::Prl { op: 0x246D, operand });
+        p.contextual_spacing
+    };
+    assert_eq!(para_of(&[1]), Some(true), "sprmPFContextualSpacing");
+    assert_eq!(para_of(&[0]), Some(false));
+}
