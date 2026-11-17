@@ -1137,7 +1137,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 
     /// The connected monitors (feature `native-windows`). A native floating window stores the
     /// one it is on, and a restored layout puts each window back on its monitor, or on the
-    /// main window's when that monitor is gone. egui 0.36 reports no monitors; without a list
+    /// main window's when that monitor is gone, with its bar in the monitor's
+    /// [`Monitor::work_area`] where one is given. egui 0.36 reports no monitors; without a list
     /// windows store the monitor size egui reports and restore onto the main window's monitor.
     /// eframe 0.36 keeps winit's event loop, and with it `available_monitors`, to itself, so an
     /// eframe application builds the list from the platform's own display API.
@@ -1164,6 +1165,11 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// kept for a later run with it on. By default it is on, except on Wayland: the compositor
     /// reports no window positions, so a native window could not dock again by drag or open
     /// where it was.
+    ///
+    /// A native window has no taskbar entry on Windows. Under X11 on Linux, a palette window has
+    /// the utility window type, which GNOME and KDE Plasma leave off the taskbar; taskbars that
+    /// list utility windows unless they are transient for another window (Xfce, MATE) still list
+    /// it. A native Wayland window and a window under X11 on the BSDs get neither setting.
     pub fn native_windows(mut self, on: bool) -> Self {
         self.native_windows = Some(on);
         self

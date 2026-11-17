@@ -342,3 +342,125 @@ mod rectangles {
         assert_eq!(shapes.clips, 1);
     }
 }
+
+#[cfg(feature = "interpret")]
+mod image_limits {
+    use craft_pdf::interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, ImageData, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, font::Glyph,
+    };
+    use craft_pdf::syntax::DecodeLimits;
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// The RGB samples and alpha of a raster image.
+    type Pixels = (Vec<u8>, Option<Vec<u8>>);
+
+    /// The pixels of each raster image drawn (`None`: it did not decode).
+    #[derive(Default)]
+    struct Images(Vec<Option<Pixels>>);
+
+    impl Images {
+        /// The RGB samples of each image, without alpha.
+        fn rgb(&self) -> Vec<Option<Vec<u8>>> {
+            self.0.iter().map(|i| i.as_ref().map(|(rgb, _)| rgb.clone())).collect()
+        }
+    }
+
+    impl Device<'_> for Images {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'_, '_>, _: Affine) {
+            let mut rgb = None;
+            if let Image::Raster(r) = image {
+                r.with_rgba(
+                    |img, alpha| {
+                        if let ImageData::Rgb(d) = img {
+                            rgb = Some((d.data, alpha.map(|a| a.data)));
+                        }
+                    },
+                    None,
+                );
+            }
+            self.0.push(rgb);
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    /// A page that draws a 4 × 2 `DeviceRGB` image of 8-bit samples 0, 1, … 23, read with `limits`.
+    /// The samples are one run-length literal run, written in hex.
+    fn draw(limits: DecodeLimits) -> Images {
+        draw_with(limits, RGB)
+    }
+
+    /// The color space and sample size of [`draw`]'s image.
+    const RGB: &str = "/ColorSpace /DeviceRGB /BitsPerComponent 8";
+
+    /// [`draw`], with `extra` in the image's dictionary instead of [`RGB`].
+    fn draw_with(limits: DecodeLimits, extra: &str) -> Images {
+        let run: Vec<u8> = [23].into_iter().chain(0..24).chain([128]).collect();
+        let hex: String = run.iter().map(|b| format!("{b:02X}")).collect();
+        let content = "q 4 0 0 2 0 0 cm /Im0 Do Q";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 2] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 2 /Filter [/ASCIIHexDecode /RunLengthDecode] {extra} /Length {} >> stream\n{hex}>\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            hex.len() + 1
+        );
+        let options = craft_pdf::OpenOptions { decode_limits: limits, ..Default::default() };
+        let pdf = craft_pdf::open_slice_with_options(bytes.as_bytes(), None, &options).unwrap();
+        let page = &pdf.pages()[0];
+        let cache = InterpreterCache::new();
+        let mut context =
+            Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 4.0, 2.0), &cache, page.xref(), InterpreterSettings::default());
+        let mut images = Images::default();
+        craft_pdf::interpret_page(page, &mut context, &mut images).unwrap();
+        images
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn device_rgb_samples_arrive_as_written() {
+        assert_eq!(draw(DecodeLimits::default()).0, [Some(((0..24).collect::<Vec<u8>>(), None))]);
+        // An inverted `/Decode` inverts them.
+        let inverted: Vec<u8> = (0..24).map(|s| 255 - s).collect();
+        assert_eq!(draw_with(DecodeLimits::default(), &format!("{RGB} /Decode [1 0 1 0 1 0]")).rgb(), [Some(inverted)]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_color_key_mask_reads_device_rgb_samples() {
+        // Pixels 0 (0, 1, 2) and 1 (3, 4, 5) have every sample in 0 to 5, so they are masked out.
+        let images = draw_with(DecodeLimits::default(), &format!("{RGB} /Mask [0 5 0 5 0 5]"));
+        assert_eq!(images.0, [Some(((0..24).collect::<Vec<u8>>(), Some(vec![0, 0, 255, 255, 255, 255, 255, 255])))]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_color_key_mask_of_an_emptied_gray_image_reads_its_padding() {
+        // A 1-bit inverted gray image whose samples the byte limit leaves out: the missing samples
+        // read as 0, white once inverted, and inside the key range, so every pixel is masked out.
+        let images =
+            draw_with(DecodeLimits::default().with_max_decoded_image(0), "/ColorSpace /DeviceGray /BitsPerComponent 1 /Decode [1 0] /Mask [0 0]");
+        assert_eq!(images.0, [Some((vec![255; 24], Some(vec![0; 8])))]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn the_pixel_limit_comes_from_the_document() {
+        assert_eq!(draw(DecodeLimits::default().with_max_image_pixels(7)).0, [None], "8 pixels are past a limit of 7");
+        assert_eq!(draw(DecodeLimits::default().with_max_image_pixels(8)).rgb(), [Some((0..24).collect::<Vec<u8>>())]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn the_image_byte_limit_comes_from_the_document() {
+        // The run-length filter stops at 10 bytes: one row is left, its last two samples zero.
+        let cut: Vec<u8> = (0..10).chain([0, 0]).collect();
+        assert_eq!(draw(DecodeLimits::default().with_max_decoded_image(10)).rgb(), [Some(cut)]);
+        assert_eq!(draw(DecodeLimits::default().with_max_decoded_image(1 << 40)).rgb(), [Some((0..24).collect::<Vec<u8>>())]);
+    }
+}
