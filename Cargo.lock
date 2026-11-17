@@ -3254,6 +3254,7 @@ dependencies = [
  "craft-drawingml",
  "craft-opc",
  "craft-sheet",
+ "craft-xlsx",
  "craft-xml",
  "thiserror 2.0.21",
 ]

@@ -60,6 +60,7 @@ mod richdata;
 mod sheet;
 mod strings;
 mod styles;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
 mod workbook;
