@@ -167,8 +167,19 @@ mod native {
             ));
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        // Annotation scale contexts as AutoCAD's DXF has them (see `contexts`).
-        let dxf = super::contexts::contexts(&out.buf, false).unwrap_or(out.buf);
+        // Annotation scale contexts as AutoCAD's DXF has them (see `contexts`), within the limit.
+        let dxf = match super::contexts::contexts(&out.buf, false, limits.max_dxf_bytes) {
+            Ok(Some(dxf)) => dxf,
+            Ok(None) => out.buf,
+            Err(super::contexts::TooLarge) => {
+                return Err(format!(
+                    "DWG: converting this {} file produced more than {} of drawing data (the limit); \
+                     the file is probably damaged, or uses objects the DWG reader misreads",
+                    mb(bytes.len() as u64),
+                    mb(limits.max_dxf_bytes as u64)
+                ));
+            }
+        };
         Ok((add_header_vars(dxf, &doc.header), notes))
     }
 
@@ -1299,15 +1310,17 @@ mod native {
             None => (dxf.to_vec(), false),
         };
         // Annotation scale contexts as acadrust reads them (see `contexts`). The markers and
-        // braces it adds can grow the text, so the limit applies again.
-        let data = super::contexts::contexts(&data, true).unwrap_or(data);
-        if data.len() > Limits::DEFAULT.max_dxf_bytes {
-            return Err(format!(
-                "DXF: the input is {} with its annotation contexts, larger than the {} accepted for DWG conversion",
-                mb(data.len() as u64),
-                mb(Limits::DEFAULT.max_dxf_bytes as u64)
-            ));
-        }
+        // braces it adds can grow the text, so it is held to the same limit.
+        let data = match super::contexts::contexts(&data, true, Limits::DEFAULT.max_dxf_bytes) {
+            Ok(Some(converted)) => converted,
+            Ok(None) => data,
+            Err(super::contexts::TooLarge) => {
+                return Err(format!(
+                    "DXF: the input with its annotation contexts is larger than the {} accepted for DWG conversion",
+                    mb(Limits::DEFAULT.max_dxf_bytes as u64)
+                ));
+            }
+        };
         let (classes, source, legacy) = guarded(AssertUnwindSafe(|| {
             let legacy = if legacy { legacy_field_formats(&data) } else { Vec::new() };
             (dxf_class_names(&data), super::proxy_transport::source_classes(&data), legacy)
@@ -2219,7 +2232,7 @@ mod tests {
         doc.objects.insert(h, ObjectType::ObjectContextData(context));
         let mut ours = Vec::new();
         acadrust::DxfWriter::new(&doc).write_to_writer(&mut ours).unwrap();
-        let autocad = contexts::contexts(&ours, false).unwrap();
+        let autocad = contexts::contexts(&ours, false, usize::MAX).unwrap().unwrap();
         let text = String::from_utf8(autocad.clone()).unwrap();
         assert!(text.contains("ACDB_BLKREFOBJECTCONTEXTDATA_CLASS") && !text.contains("AcDbBlkRefObjectContextData"), "AutoCAD's DXF has no marker");
 

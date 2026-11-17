@@ -32,47 +32,71 @@ const DIM: &str = "DIMOBJECTCONTEXTDATA_CLASS";
 /// Most block records whose names and handles are kept for dimension contexts.
 const MAX_RECORDS: usize = 1_000_000;
 
+/// The converted text would be longer than the limit it was given.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct TooLarge;
+
 /// The DXF with its annotation scale contexts in acadrust's layout (`to_acadrust`), or back in
-/// AutoCAD's. `None` when nothing changes: text that isn't UTF-8, or has no such context.
-pub(super) fn contexts(dxf: &[u8], to_acadrust: bool) -> Option<Vec<u8>> {
-    let text = std::str::from_utf8(dxf).ok()?;
+/// AutoCAD's, at most `limit` bytes long. `Ok(None)` when nothing changes: text that isn't UTF-8,
+/// or has no such context. The conversion stops at the limit: a dimension context's block name
+/// can be much longer than the handle it replaces.
+pub(super) fn contexts(dxf: &[u8], to_acadrust: bool, limit: usize) -> Result<Option<Vec<u8>>, TooLarge> {
+    let Ok(text) = std::str::from_utf8(dxf) else { return Ok(None) };
     let marked = MARKED.iter().any(|(kind, _)| text.contains(kind));
     let dims = text.contains(DIM);
     if !(marked || dims || text.contains(MLEADER)) {
-        return None;
+        return Ok(None);
     }
     let records = if dims { Records::read(text) } else { Records::default() };
-    let mut pass = Pass::new(to_acadrust, &records, dxf.len());
+    let mut pass = Pass::new(to_acadrust, &records, dxf.len().min(limit), limit);
     let mut lines = text.split('\n');
     while let Some(code_line) = lines.next() {
+        if pass.out.exceeded {
+            break;
+        }
         let Some(value_line) = lines.next() else {
             pass.out.line(code_line);
             break;
         };
         pass.pair(code_line, value_line);
     }
-    Some(pass.out.buf)
+    if pass.out.exceeded {
+        return Err(TooLarge);
+    }
+    Ok(Some(pass.out.buf))
 }
 
-/// The output text: lines joined by `\n`, as they were split.
+/// The output text: lines joined by `\n`, as they were split, at most `limit` bytes; past it,
+/// nothing more is written and `exceeded` is set.
 struct Out {
     buf: Vec<u8>,
     started: bool,
+    limit: usize,
+    exceeded: bool,
 }
 
 impl Out {
     fn line(&mut self, line: &str) {
+        self.push(line, false);
+    }
+
+    /// A line of ours, ending in `\r` when `like` (the input line it stands by) does.
+    fn line_like(&mut self, line: &str, like: &str) {
+        self.push(line, like.ends_with('\r'));
+    }
+
+    fn push(&mut self, line: &str, cr: bool) {
+        let size = self.buf.len().saturating_add(usize::from(self.started)).saturating_add(line.len()).saturating_add(usize::from(cr));
+        if self.exceeded || size > self.limit {
+            self.exceeded = true;
+            return;
+        }
         if self.started {
             self.buf.push(b'\n');
         }
         self.started = true;
         self.buf.extend_from_slice(line.as_bytes());
-    }
-
-    /// A line of ours, ending in `\r` when `like` (the input line it stands by) does.
-    fn line_like(&mut self, line: &str, like: &str) {
-        self.line(line);
-        if like.ends_with('\r') {
+        if cr {
             self.buf.push(b'\r');
         }
     }
@@ -99,6 +123,7 @@ impl Records {
                 "2" if in_record => {
                     if let Some(h) = handle.take()
                         && records.by_name.len() < MAX_RECORDS
+                        && records.by_handle.len() < MAX_RECORDS
                     {
                         records.by_name.entry(value.to_ascii_uppercase()).or_insert_with(|| h.clone());
                         records.by_handle.entry(h).or_insert_with(|| value.to_string());
@@ -123,11 +148,13 @@ struct Pass<'a> {
     to_acadrust: bool,
     records: &'a Records,
     out: Out,
-    /// In a block reference or text context: its marker, whether its scale (340) was passed, and
-    /// whether its marker was (read or written).
+    /// In a block reference or text context: its marker, whether its scale (340) was passed,
+    /// whether its marker was (read or written), and whether the input had it (the record is in
+    /// acadrust's layout already, its rotation in radians).
     marker: Option<&'static str>,
     scaled: bool,
     marked: bool,
+    input_marked: bool,
     /// In a dimension context.
     dim: bool,
     /// In a multileader context: whether its scale was passed and its body opened.
@@ -137,14 +164,15 @@ struct Pass<'a> {
 }
 
 impl<'a> Pass<'a> {
-    fn new(to_acadrust: bool, records: &'a Records, size: usize) -> Pass<'a> {
+    fn new(to_acadrust: bool, records: &'a Records, size: usize, limit: usize) -> Pass<'a> {
         Pass {
             to_acadrust,
             records,
-            out: Out { buf: Vec::with_capacity(size.saturating_add(size / 64)), started: false },
+            out: Out { buf: Vec::with_capacity(size.saturating_add(size / 64).min(limit)), started: false, limit, exceeded: false },
             marker: None,
             scaled: false,
             marked: false,
+            input_marked: false,
             dim: false,
             mleader: false,
             mleader_scaled: false,
@@ -188,7 +216,7 @@ impl<'a> Pass<'a> {
             self.out.line_like("}", value_line);
         }
         self.marker = MARKED.iter().find(|(k, _)| *k == kind).map(|(_, m)| *m);
-        (self.scaled, self.marked) = (false, false);
+        (self.scaled, self.marked, self.input_marked) = (false, false, false);
         self.dim = kind.starts_with("ACDB_") && kind.ends_with(DIM);
         (self.mleader, self.mleader_scaled, self.mleader_open) = (kind == MLEADER, false, false);
     }
@@ -219,7 +247,7 @@ impl<'a> Pass<'a> {
     /// the first field after the scale.
     fn marked_group(&mut self, code_line: &str, value_line: &str, code: &str, value: &str, marker: &str) -> bool {
         if code == "100" && value.trim() == marker {
-            self.marked = true;
+            (self.marked, self.input_marked) = (true, true);
             if self.to_acadrust {
                 self.out.line(code_line);
                 self.out.line(value_line);
@@ -237,9 +265,10 @@ impl<'a> Pass<'a> {
         false
     }
 
-    /// A context's rotation (50, after its scale) in radians (to acadrust) or degrees (back).
+    /// A context's rotation (50, after its scale) in radians (to acadrust) or degrees (back). A
+    /// record that came in acadrust's layout (with its marker) has radians already.
     fn rotation(&self, code: &str, value: &str) -> Option<String> {
-        if code != "50" || !self.scaled {
+        if code != "50" || !self.scaled || (self.to_acadrust && self.input_marked) {
             return None;
         }
         let a = value.trim().parse::<f64>().ok().filter(|a| a.is_finite())?;
@@ -252,7 +281,7 @@ mod tests {
     use super::*;
 
     fn to(text: &str, to_acadrust: bool) -> String {
-        String::from_utf8(contexts(text.as_bytes(), to_acadrust).unwrap()).unwrap()
+        String::from_utf8(contexts(text.as_bytes(), to_acadrust, usize::MAX).unwrap().unwrap()).unwrap()
     }
 
     /// A block reference context: the marker goes in after the scale and the rotation becomes
@@ -277,13 +306,24 @@ mod tests {
         }
     }
 
-    /// A rotation before the scale isn't the context's, and a marker already there isn't doubled.
+    /// A rotation before the scale isn't the context's. A record already in acadrust's layout
+    /// (its marker there) keeps its marker once and its rotation, which is radians already.
     #[test]
-    fn only_a_rotation_after_the_scale_changes_and_a_marker_is_not_doubled() {
-        let text = "  0\nACDB_TEXTOBJECTCONTEXTDATA_CLASS\n 50\n90\n340\n51\n100\nAcDbTextObjectContextData\n 50\n0\n  0\nEOF";
-        let ours = to(text, true);
-        assert_eq!(ours.matches("AcDbTextObjectContextData").count(), 1, "{ours}");
-        assert!(ours.starts_with("  0\nACDB_TEXTOBJECTCONTEXTDATA_CLASS\n 50\n90\n"), "{ours}");
+    fn only_a_rotation_after_the_scale_changes_and_a_marked_record_is_left_alone() {
+        let text = "  0\nACDB_TEXTOBJECTCONTEXTDATA_CLASS\n 50\n90\n340\n51\n100\nAcDbTextObjectContextData\n 50\n1.5707963267948966\n  0\nEOF";
+        assert_eq!(to(text, true), text);
+    }
+
+    /// The conversion stops at its limit: here a dimension context's block name is far longer
+    /// than the handle it replaces.
+    #[test]
+    fn the_output_stops_at_its_limit() {
+        let name = "N".repeat(1000);
+        let back = format!("  0\nBLOCK_RECORD\n  5\n1F\n  2\n{name}\n  0\nACDB_ALDIMOBJECTCONTEXTDATA_CLASS\n  2\n1F\n  0\nEOF");
+        let fits = contexts(back.as_bytes(), false, back.len() + 1000).unwrap().unwrap();
+        assert!(String::from_utf8(fits).unwrap().ends_with(&format!("  2\n{name}\n  0\nEOF")));
+        assert_eq!(contexts(back.as_bytes(), false, back.len() + 10), Err(TooLarge));
+        assert_eq!(contexts(back.as_bytes(), false, 0), Err(TooLarge));
     }
 
     /// A dimension context names its geometry block (AutoCAD) or that block's record handle
@@ -316,8 +356,8 @@ mod tests {
     /// Text without a context, or that isn't UTF-8, is left as it is.
     #[test]
     fn other_text_is_left_alone() {
-        assert_eq!(contexts(b"  0\nSECTION\n  2\nENTITIES\n  0\nENDSEC\n  0\nEOF\n", true), None);
-        assert_eq!(contexts(b"  0\nACDB_BLKREFOBJECTCONTEXTDATA_CLASS\n  1\n\xff\n", true), None);
+        assert_eq!(contexts(b"  0\nSECTION\n  2\nENTITIES\n  0\nENDSEC\n  0\nEOF\n", true, usize::MAX), Ok(None));
+        assert_eq!(contexts(b"  0\nACDB_BLKREFOBJECTCONTEXTDATA_CLASS\n  1\n\xff\n", true, usize::MAX), Ok(None));
     }
 
     /// Cut anywhere, a context is converted without a panic, and an odd last line is kept.
@@ -327,7 +367,9 @@ mod tests {
         for n in 0..=text.len() {
             if let Some(cut) = text.get(..n) {
                 for to_acadrust in [true, false] {
-                    let _ = contexts(cut.as_bytes(), to_acadrust);
+                    for limit in [0, n / 2, usize::MAX] {
+                        let _ = contexts(cut.as_bytes(), to_acadrust, limit);
+                    }
                 }
             }
         }
