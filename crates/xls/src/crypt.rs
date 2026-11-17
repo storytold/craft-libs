@@ -337,6 +337,7 @@ impl Rc4 {
 /// Encrypts a Workbook stream the way [`decrypt`] reads it, for tests: the FilePass record
 /// (RC4 1.1 with a fixed salt and verifier) goes right after the globals' BOF. `None` when the
 /// stream does not start with a record.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn encrypt(stream: &[u8], password: &str) -> Option<Vec<u8>> {
     let salt: [u8; 16] = std::array::from_fn(|n| n as u8 + 0x40);
     let verifier: [u8; 16] = std::array::from_fn(|n| n as u8 + 0x60);
@@ -359,6 +360,7 @@ pub(crate) fn encrypt(stream: &[u8], password: &str) -> Option<Vec<u8>> {
 
 /// The FilePass data [`encrypt_cryptoapi`] writes: RC4 CryptoAPI version 4.2, as current Excel
 /// writes it, with a `bits`-bit key (40 to 128) and a fixed salt and verifier.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn cryptoapi_filepass(password: &str, bits: u32) -> Vec<u8> {
     let salt: [u8; SALT_LEN] = std::array::from_fn(|n| (n as u8).wrapping_mul(7).wrapping_add(0x11));
     let verifier: [u8; SALT_LEN] = std::array::from_fn(|n| n as u8 + 0x80);
@@ -381,12 +383,14 @@ pub(crate) fn cryptoapi_filepass(password: &str, bits: u32) -> Vec<u8> {
 }
 
 /// [`encrypt`] with RC4 CryptoAPI ([`cryptoapi_filepass`]).
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn encrypt_cryptoapi(stream: &[u8], password: &str, bits: u32) -> Option<Vec<u8>> {
     with_filepass(stream, &cryptoapi_filepass(password, bits), password)
 }
 
 /// `stream` with a FilePass record holding `filepass` right after its first BOF, encrypted with
 /// `password`.
+#[cfg(any(test, feature = "test-support"))]
 fn with_filepass(stream: &[u8], filepass: &[u8], password: &str) -> Option<Vec<u8>> {
     let (_, bof) = header(stream, 0)?;
     let bof_len = 4 + bof;

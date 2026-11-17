@@ -6,9 +6,9 @@ Source-level platform regression guards and verification utilities for the Craft
 
 `craft-testkit` provides lightweight, non-panicking source guards that prevent applications in the Craft ecosystem from repeating platform defects that were previously diagnosed and resolved in peer applications:
 
-1. **`predefined_quit`**: Flags direct calls to `muda`'s `PredefinedMenuItem::quit` outside comments, strings and character literals, also with whitespace or a line break around `::` and through a `use muda::PredefinedMenuItem as ...` rename. On macOS, this predefined menu item routes directly to `NSApplication terminate:`, completely bypassing application dirty document checks and unsaved changes save prompts. Applications should instead wire Quit through `craft-quit` lifecycle interceptors.
+1. **`predefined_quit`**: Flags direct calls to `muda`'s `PredefinedMenuItem::quit` outside comments, strings and character literals, also with whitespace or a line break around `::`, in the qualified form `<muda::PredefinedMenuItem>::quit`, and through a `use muda::PredefinedMenuItem as ...` rename. A type of the same name reached through another crate or module, such as `other::PredefinedMenuItem::quit`, is not flagged. On macOS, this predefined menu item routes directly to `NSApplication terminate:`, completely bypassing application dirty document checks and unsaved changes save prompts. Applications should instead wire Quit through `craft-quit` lifecycle interceptors.
 2. **`wgsl_float_literals` / `wgsl_float_literals_in`**: Scans WGSL shader sources and flags decimal and hexadecimal float literals whose value, rounded to `f64`, exceeds `f32::MAX` (such as `3.40282347e38` or `0x1p+500f`), or 65504, the largest finite `f16`, for a literal with an `h` suffix. A literal that exceeds the maximum by less than `f64` precision rounds to the maximum and is not reported. Integer literals are not checked. Some native compilers round such literals down, but browser WebGPU compilers reject them with pipeline compilation errors, forcing applications into CPU fallback rendering. `f32::MAX` can be written as the hex float `0x1.fffffep+127f`, which equals it, or as the decimal `3.4028234663852886e38`, which rounds to it.
-3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`. Other crates' `Instant` (such as `web_time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
+3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`, under any name. The parts of a path may be split by whitespace, comments or line breaks. Other crates' `Instant` (such as `web_time::Instant` or `tokio::time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`; code before that attribute or after its item on the same line is still checked. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
 4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), benchmarks (`benches/`), examples (`examples/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`, `test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
 
 ## Epistemic Scope: Syntactic Guards vs Runtime Validation
@@ -26,31 +26,6 @@ Source-level guards provide deterministic syntactic evidence about codebase stru
 - **Driver and host OS behavior**: Syntactic checks do not verify WebGPU driver compatibility or host window manager event dispatch.
 
 Source guards serve as fast, zero-dependency regression gates in application test suites, complementing platform integration tests and CI workflows.
-
-## External oracle programs: `oracle`
-
-`craft_testkit::oracle` finds the external programs that tests compare against, such as ffmpeg, ffprobe, qpdf, `pdftoppm` and `pdftotext`. It is not built for `wasm32`.
-
-`find(program, version_arg)` takes a bare file name: a name that is empty, `.` or `..`, or contains `/`, `\`, `:` or NUL returns `OracleError::InvalidName`. It looks in this order:
-
-1. The file that `CRAFT_<PROGRAM>` names, for example `CRAFT_FFMPEG`. `find_with` takes the variable name from the caller, such as `FILMCRAFT_FFMPEG` or `CRAFT_MEDIA_FFMPEG`. An empty value counts as unset. When the value is not a file the OS can start, the lookup returns `OracleError::InvalidExplicitPath` and does not search further.
-2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is resolved against the current directory at the time of the lookup. On Windows the search tries `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists. Elsewhere it tries the bare name, then `<name>.exe`. A file the OS cannot start is skipped: on Windows a file whose extension is not `.com`, `.exe`, `.bat` or `.cmd` (in any case), and on Unix a file with no execute bit set.
-3. The install folders `known_dirs()` returns: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/opt/local/bin` and `/snap/bin`, or on Windows `C:\ffmpeg\bin`, `C:\Program Files\ffmpeg\bin` and `C:\ProgramData\chocolatey\bin`.
-
-The program found is run once with `version_arg` and standard input closed. `Oracle::version()` is the first non-blank line of its standard output, or of its standard error when standard output is blank. `ProbeLimits` bounds the run: each output stream may hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or the byte limit. On Unix the child runs in its own process group, and the whole group is killed. On Windows only the child is killed. `ProbeLimits::VERSION` (the default) allows 64 KiB per stream and 5 seconds, and `ProbeLimits::LISTING` allows 1 MiB per stream and 5 seconds. These values are this crate's own defaults. A timeout too long to set a deadline, such as `Duration::MAX`, returns `OracleError::InvalidTimeout` without starting the program. A successful lookup is cached for the process under every input it read; a failed lookup is not cached, so the next call searches again.
-
-`find_in` takes the explicit path, the `PATH` list and the install folders as arguments, so a test can search folders it made without changing the process environment.
-
-`ffmpeg_supports_format(ff, name, limits)` runs `ffmpeg -hide_banner -formats` and looks for `name` in the name column only. A run that fails to start, passes `limits` or exits with a failure status returns an error. `ffmpeg_version(ff)` reads the version from ffmpeg's banner line.
-
-No function panics. `require_oracle!`, `require_ffmpeg!` and `require_ffprobe!` expand in the calling test:
-
-```rust
-let qpdf = craft_testkit::require_oracle!(craft_testkit::oracle::find("qpdf", "--version"), "PDFCRAFT_ORACLES_REQUIRED");
-let ff = craft_testkit::require_ffmpeg!("FILMCRAFT_FFMPEG", "FILMCRAFT_REQUIRE_ORACLES");
-```
-
-A missing program prints a `SKIPPED (oracle)` line and returns from the test. When the required variable (`CRAFT_REQUIRE_ORACLES` by default) is exactly `1`, a missing program fails the test instead. Other values, such as `true`, `yes` or `0`, do not count. Every other error, such as a wrong explicit path, a timeout or output over the limit, fails the test.
 
 ## Consumer Adoption Examples
 
@@ -103,27 +78,238 @@ fn no_std_instant_in_code_the_web_build_runs() {
 }
 ```
 
+## deadline
+
+The `deadline` module is not built for `wasm32`.
+
+`with_deadline(limit, label, f)` runs `f` on its own thread and returns its value. When `f` does not
+finish within the limit, the test fails with a message that names `label`, the limit and the variable
+that sets it. A panic in `f` is raised again in the test with its original payload. The limit counts
+from the call, including the time spent starting the thread. When `f` returns or panics after the
+limit has passed, the test fails with the label and the limit, and with the panic's message if it has
+one.
+
+`wait_until(limit, what, cond)` calls `cond` on the test's thread until it returns `true`. It calls
+`cond` at once, then after pauses that start at 1 ms and double up to 50 ms, and does not call it
+again once the limit has passed. When the limit passes first, or `cond` returns `true` only after the
+limit has passed, the test fails with a message that names `what`.
+
+```rust
+use std::time::Duration;
+use craft_testkit::deadline::{DeadlineLimit, wait_until, with_deadline};
+
+// The default of 30 s; CRAFT_TEST_TIMEOUT_SECS replaces it.
+let pixels = with_deadline(Duration::from_secs(30), "decode seed 7", move || decode(&bytes));
+
+// The app's own variable replaces the default instead.
+let limit = DeadlineLimit::new(Duration::from_secs(30)).with_variable("FILMCRAFT_HOSTILE_TIMEOUT_SECS");
+with_deadline(limit, "hostile input 12", move || parse(&input));
+
+wait_until(Duration::from_secs(10), "the export to finish", || job.is_done());
+```
+
+### The limit variable
+
+A `Duration` reads `CRAFT_TEST_TIMEOUT_SECS`. `DeadlineLimit::with_variable` names another variable.
+The variable is read on every call; neither function sets or caches it.
+
+| Value | Result |
+|---|---|
+| Not set | The default limit applies. |
+| Decimal digits above zero, such as `30` or `007` | That many seconds replace the default. |
+| Empty, signed (`+5`, `-5`), fractional (`1.5`), with spaces or units (`5s`), zero, or larger than a `u64` | The test fails with the variable's name and value, before `f` runs or `cond` is called. |
+| Not Unicode | The test fails with the variable's name, before `f` runs or `cond` is called. |
+
+A zero default, a variable name that is empty or holds `=` or a NUL character, and a limit that ends past
+the latest time the platform's clock can represent also fail the test before any work starts.
+
+FilmCraft's `filmcraft-testkit` uses the default when the variable holds something other than a
+number or holds zero. This module fails the test instead. `craft-media-testkit`'s `with_deadline`
+calls this module's.
+
+### Limits
+
+- A body that runs past its limit fails the test, but its thread is left running until the test
+  process exits. A body that never returns can keep the test binary alive after its tests finish.
+- `wait_until` checks its limit only between calls of `cond`. A `cond` that blocks is not interrupted,
+  so it must return promptly.
+- Neither function returns elapsed time. Tests of this crate use channel handshakes, and the only time
+  bounds in them are the limits under test.
+
+## hostile
+
+`mutations(seed, rounds)` yields `rounds` damaged copies of a valid seed. Each round makes one to four
+edits: a bit flip, a random byte, a 1, 2, 4 or 8-byte overwrite with an extreme value
+(0, 1, 0x7F, 0x80, 0xFF, 0xFFFF, 0x8000_0000 or `u64::MAX`) in either byte order, a deletion of up to
+16 bytes, or a truncation. Each copy carries a label that lists its edits, such as
+`flip[3].5 del[7..9]`. The xorshift64* generator behind it is seeded from the seed's length, so the
+same seed length and round count give the same edits on every run and every platform. An empty seed
+yields no copies. `mutations` and `Rng` build for `wasm32`.
+
+`hammer(&config, seed, parse)` runs `parse` on the unmodified seed, on every truncation of it
+(lengths 0 to one less than its length), and on `mutations(seed, rounds)`. The cases run one after
+another on one worker thread, and the test's thread fails the test when a case runs past its limit.
+A case that finishes after its limit also fails the test. The test fails on the first case that
+panics or does not finish, with a message that names the config's label, the case
+(`the unmodified seed`, `truncation to N` or the edits), the input's length and the panic's message.
+`parse` must be `Fn(&[u8]) + Send + Sync + 'static`, since a case that does not finish keeps running
+on the worker thread after the test fails. `hammer` is not built for `wasm32`.
+
+```rust
+use std::time::Duration;
+use craft_testkit::DeadlineLimit;
+use craft_testkit::hostile::{HammerConfig, hammer};
+
+// 2,000 rounds times CRAFT_HOSTILE_MULT; 5 s per case, or CRAFT_TEST_TIMEOUT_SECS.
+hammer(&HammerConfig::new("png seed 3", 2_000), &seed, |data| {
+    let _ = decode(data);
+});
+
+// The app's own variables instead.
+let config = HammerConfig::new("mxf primer", 5_000)
+    .with_multiplier_variable("CRAFT_MEDIA_HOSTILE_MULT")
+    .with_timeout(DeadlineLimit::new(Duration::from_secs(5)).with_variable("FILMCRAFT_HOSTILE_TIMEOUT_SECS"));
+hammer(&config, &primer, |data| {
+    let _ = parse_primer(data);
+});
+```
+
+### The rounds
+
+The rounds are the config's iterations times the multiplier variable, `CRAFT_HOSTILE_MULT` unless
+`with_multiplier_variable` names another. The limit for each case is 5 s, replaced by
+`CRAFT_TEST_TIMEOUT_SECS` or the variable that `with_timeout` names, as in `deadline`. Both variables
+are read once, before any case runs. `HammerConfig::rounds` returns the rounds or the error that `hammer` would fail with.
+
+| Multiplier value | Result |
+|---|---|
+| Not set | The multiplier is 1. |
+| Decimal digits above zero, such as `10` | The rounds are multiplied by that number. |
+| Empty, signed, fractional, with spaces, zero, or larger than a `usize` | The test fails with the variable's name and value before `parse` is called. |
+| Not Unicode | The test fails with the variable's name before `parse` is called. |
+
+A product of the iterations and the multiplier that does not fit in a `usize`, a call that would run
+more than `MAX_CASES` (10,000,000) cases in all, and a limit variable that `deadline` would reject
+also fail the test before `parse` is called.
+
+Changes from `craft-media-testkit`'s `hammer`:
+
+- A case that does not finish fails the test after its limit with the case's label. Before, a case
+  was timed after it returned and failed only when it took longer than 5 s.
+- A panic's message is part of the failure.
+- Every truncation runs. Before, a seed of 8,192 bytes or more ran every `len / 4096`th truncation.
+- The caller names the multiplier variable. Before, it was always `CRAFT_MEDIA_HOSTILE_MULT`, and a
+  value that was not a number counted as 1.
+- An empty seed runs once. Before, it ran once more for each round.
+- A mutation's label joins its edits with single spaces. Before, every edit ended with a space, so
+  each label ended with one.
+- `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
+  moved or shared with an `Arc`.
+
+## oracle
+
+`craft_testkit::oracle` finds the external programs that tests compare against, such as ffmpeg, ffprobe, qpdf, `pdftoppm` and `pdftotext`. It is not built for `wasm32`.
+
+`find(program, version_arg)` takes a bare file name: a name that is empty, `.` or `..`, or contains `/`, `\`, `:` or NUL returns `OracleError::InvalidName`. It looks in this order:
+
+1. The file that `CRAFT_<PROGRAM>` names, for example `CRAFT_FFMPEG`. `find_with` takes the variable name from the caller, such as `FILMCRAFT_FFMPEG` or `CRAFT_MEDIA_FFMPEG`. An empty value counts as unset. When the value is not a file the OS can start, the lookup returns `OracleError::InvalidExplicitPath` and does not search further.
+2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is resolved against the current directory at the time of the lookup. On Windows the search tries `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists. Elsewhere it tries the bare name, then `<name>.exe`. A file the OS cannot start is skipped: on Windows a file whose extension is not `.com`, `.exe`, `.bat` or `.cmd` (in any case), and on Unix a file with no execute bit set.
+3. The install folders `known_dirs()` returns: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/opt/local/bin` and `/snap/bin`, or on Windows `C:\ffmpeg\bin`, `C:\Program Files\ffmpeg\bin` and `C:\ProgramData\chocolatey\bin`.
+
+The program found is run once with `version_arg` and standard input closed. `Oracle::version()` is the first non-blank line of its standard output, or of its standard error when standard output is blank. `ProbeLimits` bounds the run: each output stream may hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or the byte limit. On Unix the child runs in its own process group, and the whole group is killed. On Windows only the child is killed. `ProbeLimits::VERSION` (the default) allows 64 KiB per stream and 5 seconds, and `ProbeLimits::LISTING` allows 1 MiB per stream and 5 seconds. These values are this crate's own defaults. A timeout too long to set a deadline, such as `Duration::MAX`, returns `OracleError::InvalidTimeout` without starting the program. A successful lookup is cached for the process under every input it read; a failed lookup is not cached, so the next call searches again.
+
+`find_in` takes the explicit path, the `PATH` list and the install folders as arguments, so a test can search folders it made without changing the process environment.
+
+`ffmpeg_supports_format(ff, name, limits)` runs `ffmpeg -hide_banner -formats` and looks for `name` in the name column only. A run that fails to start, passes `limits` or exits with a failure status returns an error. `ffmpeg_version(ff)` reads the version from ffmpeg's banner line.
+
+No function panics. `require_oracle!`, `require_ffmpeg!` and `require_ffprobe!` expand in the calling test:
+
+```rust
+let qpdf = craft_testkit::require_oracle!(craft_testkit::oracle::find("qpdf", "--version"), "PDFCRAFT_ORACLES_REQUIRED");
+let ff = craft_testkit::require_ffmpeg!("FILMCRAFT_FFMPEG", "FILMCRAFT_REQUIRE_ORACLES");
+```
+
+A missing program prints a `SKIPPED (oracle)` line and returns from the test. When the required variable (`CRAFT_REQUIRE_ORACLES` by default) is exactly `1`, a missing program fails the test instead. Other values, such as `true`, `yes` or `0`, do not count. Every other error, such as a wrong explicit path, a timeout or output over the limit, fails the test.
+
 ## Origin
+
+### guards
 
 | Module | Source | Path | Commit |
 |---|---|---|---|
 | `guards` | storytold/craft-libs#163 (zachshallbetter), with the rules of PhotoCraft's shader float test and FilmCraft's web clock test | `crates/testkit/src/guards.rs` | `e92825e427` |
-| `oracle` (search order, `find_in`, format and version parsing, `require_ffmpeg!`, `require_ffprobe!`) | storytold/filmcraft | `crates/testkit/src/oracle.rs`, `crates/testkit/src/lib.rs` | `e4ab3c6a` |
-| `oracle` (`Oracle`, version probe, install hints, `or_skip!`) | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `eead4541` |
-| `oracle` (the same probe, with `CRAFT_PDF_ORACLES_REQUIRED`) | storytold/craft-libs | `crates/pdf/tests/cos/oracle.rs` | `75a654f4` |
-| `oracle` (search order and install folders) | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4` |
+
+### deadline
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `with_deadline`, its panic and timeout tests (`a_slow_body_passes`, `a_panic_in_the_body_is_re_raised`, `a_hang_fails_and_names_the_input`) | storytold/filmcraft | `crates/testkit/src/deadline.rs` | `cff7e144` |
+| `with_deadline` under `CRAFT_TEST_TIMEOUT_SECS`, tests `with_deadline_completes` and `with_deadline_times_out` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4` |
+| `within`, a deadline that returns the body's value | storytold/lightcraft | `crates/engine/src/demo/tests.rs` | `487833ad` |
+| `within`, a deadline that returns the body's value | storytold/gridcraft | `crates/math/src/lib.rs` | `c2aba7a3` |
+| `wait_until` | storytold/photocraft | `crates/ui-egui/src/canvas/paint_thread_tests.rs` | `0d3b1e85` |
+| `wait_until` | storytold/lightcraft | `crates/engine/src/availability.rs` | `7ebbb17a` |
+| `wait_until` | storytold/effectcraft | `crates/engine/src/footage/footage_reload.rs` | `53576d22` |
+| `wait_until` | storytold/filmcraft | `crates/ui-egui/tests/it/export_ui.rs` | `cff7e144` |
+
+### hostile
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
+
+### oracle
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| Search order, `find_in`, format and version parsing, `require_ffmpeg!`, `require_ffprobe!` | storytold/filmcraft | `crates/testkit/src/oracle.rs`, `crates/testkit/src/lib.rs` | `e4ab3c6a` |
+| `Oracle`, the version probe, install hints, `or_skip!` | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `eead4541` |
+| The same probe, with `CRAFT_PDF_ORACLES_REQUIRED` | storytold/craft-libs | `crates/pdf/tests/cos/oracle.rs` | `75a654f4` |
+| Search order and install folders | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4` |
 
 ## Migration
+
+### guards
 
 | Consumer | Guard | Replaces | State |
 |---|---|---|---|
 | PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
 | FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |
-| craft-libs `media-testkit` | `oracle` | `tool`, `ffmpeg`, `ffprobe`, `oracles_required` | Not started |
-| craft-libs `pdf` | `oracle` | `tests/cos/oracle.rs` | Not started |
-| FilmCraft | `oracle` | `filmcraft-testkit` `oracle` | Not started |
-| PdfCraft | `oracle` | `pdfcraft-oracle` | Not started |
-| EffectCraft | `oracle` | `crates/opusenc/tests/it/ffmpeg.rs` and the tests that call ffmpeg or ffprobe | Not started |
-| SoundCraft | `oracle` | `crates/video/src/tests.rs` | Not started |
 
-Each `oracle` switch keeps the variable names the repository uses today. A repository whose required variable accepts other values than `1` today changes that reading in its own pull request.
+### deadline
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| FilmCraft | `filmcraft-testkit`'s `with_deadline` (`FILMCRAFT_HOSTILE_TIMEOUT_SECS`) and the export UI tests' `wait_until` | Pending |
+| LightCraft | `within` in the demo tests and `wait_until` in the availability tests | Pending |
+| GridCraft | `within` in the tests of its `crates/math` | Pending |
+| PhotoCraft | `wait_until` in the paint thread tests | Pending |
+| EffectCraft | `wait_until` in the footage reload tests | Pending |
+| `craft-media-testkit` | `with_deadline` (`CRAFT_TEST_TIMEOUT_SECS`) | Done |
+
+An adoption keeps the variable name the app uses today.
+
+### hostile
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| `craft-media-testkit` | `hostile::hammer` (`CRAFT_MEDIA_HOSTILE_MULT`), called by the ISO BMFF, AVI, Matroska, MXF and MPEG TS hostile tests | Done |
+| `craft-cfb` | its `hostile_input_never_panics` test, through `craft-media-testkit` | Done |
+| CADCraft | the mutation loop of `hostile_files_never_panic` in `crates/fonts/src/shx/tests.rs` | Pending |
+| TextureCraft | the `hammer` of `malformed_meshes_are_errors` in `crates/formats/src/mesh_import/tests.rs` | Pending |
+
+CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
+cases change, and keep the test names.
+
+### oracle
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| `craft-media-testkit` | `tool`, `ffmpeg`, `ffprobe`, `oracles_required` | Pending |
+| `craft-pdf` | `tests/cos/oracle.rs` | Pending |
+| FilmCraft | `filmcraft-testkit`'s `oracle` | Pending |
+| PdfCraft | `pdfcraft-oracle` | Pending |
+| EffectCraft | `crates/opusenc/tests/it/ffmpeg.rs` and the tests that call ffmpeg or ffprobe | Pending |
+| SoundCraft | `crates/video/src/tests.rs` | Pending |
+
+Each adoption keeps the variable names the repository uses today. A repository whose required variable accepts other values than `1` today changes that reading in its own pull request.
