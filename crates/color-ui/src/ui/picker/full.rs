@@ -289,10 +289,15 @@ impl<'a> Body<'a> {
             let mode = offered.iter().find(|mode| mode.model().id() == model.id() && mode.strip() == i).copied();
             match mode {
                 Some(mode) => {
-                    let side = SideLabel::new().layout(FieldLayout::After).kind(LabelKind::Hidden);
                     // A grid cell takes one child that is a component: the Row is the cell, the labelled radio its content.
                     Row::new().show(ui, |ui, cx| {
-                        cx.labelled(ui, (model.id(), i), name.clone(), side, Radio::new(mode));
+                        cx.labelled(
+                            ui,
+                            (model.id(), i),
+                            name.clone(),
+                            SideLabel::new().layout(FieldLayout::After).kind(LabelKind::Hidden),
+                            Radio::new(mode),
+                        );
                     });
                 }
                 None => {
