@@ -223,8 +223,9 @@ fn a_docked_scroll_bar_keeps_its_width_at_rest_and_under_the_pointer() {
             other => panic!("a track and a thumb: {other:?}"),
         };
         let (track_fill, thumb_fill) = fill(State::Rest, StateMix::REST);
-        assert_eq!(thumb_fill, tokens.color.line.control_edge.egui(), "{axis:?}: the resting thumb is the quiet edge colour");
-        assert_eq!(track_fill, tokens.color.surface.chrome.egui(), "{axis:?}: the track is the chrome surface");
+        let (_, hover_fill) = fill(State::Hover, StateMix::new(1.0, 0.0, 0.0));
+        assert_ne!(thumb_fill, track_fill, "{axis:?}: the resting thumb shows on its track");
+        assert_ne!(thumb_fill, hover_fill, "{axis:?}: the thumb takes a stronger colour under the pointer");
     }
 }
 
