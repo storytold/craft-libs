@@ -75,18 +75,18 @@ pub fn mesh_scene_from(scene: &Scene, units_in_mm: f64, up: UpAxis) -> FromMesh 
 /// Losses, each counted once and reported in one line.
 #[derive(Default)]
 struct Counts {
-    no_texture: usize,
-    masks: usize,
-    other_maps: usize,
-    no_uvs: usize,
-    vertex_colours: usize,
-    bad_triangles: usize,
-    extras: usize,
-    bad_meshes: usize,
-    bad_materials: usize,
-    bad_nodes: usize,
-    cut: usize,
-    animations: usize,
+    no_texture: u64,
+    masks: u64,
+    other_maps: u64,
+    no_uvs: u64,
+    vertex_colours: u64,
+    bad_triangles: u64,
+    extras: u64,
+    bad_meshes: u64,
+    bad_materials: u64,
+    bad_nodes: u64,
+    cut: u64,
+    animations: u64,
 }
 
 impl Counts {
@@ -124,10 +124,10 @@ fn materials(scene: &Scene, out: &mut MeshScene, counts: &mut Counts) -> Vec<Opt
             AlphaMode::Mask(cutoff) => f64::from(u8::from(a >= f64::from(cutoff))),
         };
         let others = [m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture];
-        counts.other_maps += usize::from(others.iter().any(Option::is_some));
+        counts.other_maps = counts.other_maps.saturating_add(u64::from(others.iter().any(Option::is_some)));
         let slot = m.base_color_texture.filter(|t| embedded(scene, t.image).is_some());
-        counts.no_texture += usize::from(m.base_color_texture.is_some() && slot.is_none());
-        counts.masks += usize::from(slot.is_some() && matches!(m.alpha_mode, AlphaMode::Mask(_)));
+        counts.no_texture = counts.no_texture.saturating_add(u64::from(m.base_color_texture.is_some() && slot.is_none()));
+        counts.masks = counts.masks.saturating_add(u64::from(slot.is_some() && matches!(m.alpha_mode, AlphaMode::Mask(_))));
         let texture = slot.and_then(|t| texture(scene, &t, m, &mut seen, out));
         out.materials.push(SceneMaterial {
             name: name(&m.name),
@@ -175,7 +175,7 @@ fn wrap(w: Wrap) -> TextureWrap {
 }
 
 fn mesh(m: &Mesh, slots: &[Option<TextureRef>], counts: &mut Counts) -> SceneMesh {
-    counts.vertex_colours += usize::from(!m.colors.is_empty());
+    counts.vertex_colours = counts.vertex_colours.saturating_add(u64::from(!m.colors.is_empty()));
     let primitives = m.parts.iter().map(|p| primitive(m, p, slots, counts)).collect();
     SceneMesh { name: name(&m.name), primitives }
 }
@@ -185,18 +185,18 @@ fn mesh(m: &Mesh, slots: &[Option<TextureRef>], counts: &mut Counts) -> SceneMes
 /// origin) when every corner has one in its set.
 fn primitive(m: &Mesh, part: &Part, slots: &[Option<TextureRef>], counts: &mut Counts) -> ScenePrimitive {
     let material = part.material.filter(|i| *i < slots.len());
-    counts.bad_materials += usize::from(part.material.is_some() && material.is_none());
+    counts.bad_materials = counts.bad_materials.saturating_add(u64::from(part.material.is_some() && material.is_none()));
     let slot = material.and_then(|i| slots.get(i).copied().flatten());
     let normals = !m.normals.is_empty() && part.corners.iter().all(|c| (c.normal as usize) < m.normals.len());
     let set = slot.and_then(|t| m.uv_sets.get(t.uv_set as usize)).filter(|s| part.corners.iter().all(|c| (c.uv as usize) < s.len()));
-    counts.no_uvs += usize::from(slot.is_some() && set.is_none() && !part.corners.is_empty());
+    counts.no_uvs = counts.no_uvs.saturating_add(u64::from(slot.is_some() && set.is_none() && !part.corners.is_empty()));
     let transform = slot.and_then(|t| t.transform);
     let mut out = ScenePrimitive { material, ..ScenePrimitive::default() };
     let mut ids: HashMap<Corner, u32> = HashMap::new();
     'tri: for t in part.triangles() {
         // Checked first, so a dropped triangle leaves no vertex behind.
         if t.iter().any(|c| c.position as usize >= m.positions.len()) {
-            counts.bad_triangles += 1;
+            counts.bad_triangles = counts.bad_triangles.saturating_add(1);
             continue;
         }
         let mut tri = [0u32; 3];
@@ -207,7 +207,7 @@ fn primitive(m: &Mesh, part: &Part, slots: &[Option<TextureRef>], counts: &mut C
                 continue;
             }
             let (Some(p), Ok(next)) = (m.positions.get(c.position as usize), u32::try_from(out.positions.len())) else {
-                counts.bad_triangles += 1;
+                counts.bad_triangles = counts.bad_triangles.saturating_add(1);
                 continue 'tri;
             };
             out.positions.push(*p);
@@ -226,21 +226,30 @@ fn primitive(m: &Mesh, part: &Part, slots: &[Option<TextureRef>], counts: &mut C
 
 /// Copies the hierarchy from the roots down into `out.nodes` and `out.roots`.
 fn nodes(scene: &Scene, up: UpAxis, out: &mut MeshScene, counts: &mut Counts) {
-    counts.animations = scene.animations.len();
+    counts.animations = wide(scene.animations.len());
     // (source node, parent copy, depth counting a root as 1)
-    let mut stack: Vec<(usize, Option<usize>, usize)> = scene.roots.iter().rev().map(|r| (*r, None, 1)).collect();
+    let mut stack: Vec<(usize, Option<usize>, usize)> = Vec::new();
+    for (i, root) in scene.roots.iter().enumerate() {
+        if out.nodes.len() >= MAX_NODE_COPIES {
+            counts.cut = counts.cut.saturating_add(wide(scene.roots.len() - i));
+            return;
+        }
+        stack.push((*root, None, 1));
+        copy_subtree(scene, up, &mut stack, out, counts);
+    }
+}
+
+/// Copies what `stack` holds, depth first; children are queued only within the depth and copy
+/// budgets, so the work stays bounded by them even when a node lists itself many times.
+fn copy_subtree(scene: &Scene, up: UpAxis, stack: &mut Vec<(usize, Option<usize>, usize)>, out: &mut MeshScene, counts: &mut Counts) {
     while let Some((source, parent, depth)) = stack.pop() {
         let Some(n) = scene.nodes.get(source) else {
-            counts.bad_nodes += 1;
+            counts.bad_nodes = counts.bad_nodes.saturating_add(1);
             continue;
         };
-        if out.nodes.len() >= MAX_NODE_COPIES {
-            counts.cut += 1;
-            continue;
-        }
-        counts.extras += usize::from(n.skin.is_some() || n.camera.is_some() || n.light.is_some());
+        counts.extras = counts.extras.saturating_add(u64::from(n.skin.is_some() || n.camera.is_some() || n.light.is_some()));
         let mesh = n.mesh.filter(|m| *m < scene.meshes.len());
-        counts.bad_meshes += usize::from(n.mesh.is_some() && mesh.is_none());
+        counts.bad_meshes = counts.bad_meshes.saturating_add(u64::from(n.mesh.is_some() && mesh.is_none()));
         let transform = if parent.is_none() && up == UpAxis::Y { craft_mesh::mat_mul(&Y_TO_Z, &n.transform) } else { n.transform };
         let copy = out.nodes.len();
         out.nodes.push(SceneNode { name: name(&n.name), matrix: (transform != IDENTITY).then_some(transform), mesh, children: Vec::new() });
@@ -248,17 +257,20 @@ fn nodes(scene: &Scene, up: UpAxis, out: &mut MeshScene, counts: &mut Counts) {
             Some(p) => p.children.push(copy),
             None => out.roots.push(copy),
         }
-        // Children are queued only within the depth and copy budgets, so the work stays bounded by
-        // them even when a node lists itself many times.
         let room = if depth < MAX_NODE_DEPTH { MAX_NODE_COPIES.saturating_sub(out.nodes.len().saturating_add(stack.len())) } else { 0 };
         let queued = n.children.len().min(room);
-        counts.cut += n.children.len() - queued;
+        counts.cut = counts.cut.saturating_add(wide(n.children.len() - queued));
         stack.extend(n.children.iter().take(queued).rev().map(|c| (*c, Some(copy), depth + 1)));
     }
 }
 
 /// Turns +Y up into +Z up: (x, y, z) to (x, −z, y), column-major.
 const Y_TO_Z: Mat4 = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+
+/// A count as `u64`, which holds any `usize` on the targets Rust supports.
+fn wide(n: usize) -> u64 {
+    u64::try_from(n).unwrap_or(u64::MAX)
+}
 
 fn name(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_owned())

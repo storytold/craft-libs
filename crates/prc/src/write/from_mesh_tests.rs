@@ -193,7 +193,9 @@ fn a_node_listing_itself_many_times_is_cut_without_queueing_every_reference() {
     scene.nodes[0].children = vec![0; 100_000];
     let out = mesh_scene_from(&scene, 1.0, UpAxis::Z);
     assert!(out.scene.nodes.len() <= super::MAX_NODE_COPIES);
-    assert!(out.warnings.iter().any(|w| w.contains("past the copy or depth limit")), "{:?}", out.warnings);
+    // Over 2^32, so the count must not be a 32-bit `usize`.
+    let cut = format!("{} subtree(s)", 100_000u64 * 100_000 - (out.scene.nodes.len() as u64 - 1));
+    assert!(out.warnings.iter().any(|w| w.starts_with(&cut)), "{cut}: {:?}", out.warnings);
 }
 
 #[test]
