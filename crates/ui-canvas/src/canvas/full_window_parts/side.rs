@@ -3,7 +3,7 @@
 
 use crate::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, FooterPlace, HeaderRegion, NoValue, Outcome, Pad, Props as _, Role, RowAlign, Scroll,
-    Show as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Show as _, ShowContainer as _, Sizing, WordSetCx as _, WrapWidth,
 };
 use crate::layout_components::Row;
 use crate::runtime::focus::FocusPolicy;
@@ -99,7 +99,8 @@ impl Outcome for FullWindowSideOutput {
 ///   [`headerless`](Self::headerless); the body padded by the panel tier.
 /// - **Body.** Scrolls vertically when taller than the room; [`unscrolled`](Self::unscrolled) leaves the scroll out
 ///   for a pane that bounds itself.
-/// - **Size.** As wide as its content; as high as its content, at most the room of the side columns.
+/// - **Size.** As wide as its content; as high as its content, at most the room of the side columns. Its paragraphs
+///   (a message, a failure) wrap at a dialog's line length, so a long one does not widen the column past it.
 /// - **Footer.** None of its own: the dialog's buttons sit in the dialog's footer, which [`SideFooter`] places among
 ///   the side columns.
 /// - **Keyboard and AccessKit.** A group named by the label, an F6 pane; Tab goes top to bottom.
@@ -121,6 +122,7 @@ impl FullWindowSide {
             .surface(SurfaceKind::Panel)
             .pad(Pad::Regular)
             .sizing(Sizing::Content)
+            .wrap_width(WrapWidth::Dialog)
             .header(HeaderRegion::new().rule(true))
             .scroll(Scroll::vertical())
             .focus(FocusPolicy::PANE);
