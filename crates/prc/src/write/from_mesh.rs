@@ -229,19 +229,48 @@ fn nodes(scene: &Scene, up: UpAxis, out: &mut MeshScene, counts: &mut Counts) {
     counts.animations = wide(scene.animations.len());
     // (source node, parent copy, depth counting a root as 1)
     let mut stack: Vec<(usize, Option<usize>, usize)> = Vec::new();
+    let kids = Children::of(scene);
     for (i, root) in scene.roots.iter().enumerate() {
+        if *root >= scene.nodes.len() {
+            counts.bad_nodes = counts.bad_nodes.saturating_add(1);
+            continue;
+        }
         if out.nodes.len() >= MAX_NODE_COPIES {
             counts.cut = counts.cut.saturating_add(wide(scene.roots.len() - i));
             return;
         }
         stack.push((*root, None, 1));
-        copy_subtree(scene, up, &mut stack, out, counts);
+        copy_subtree(scene, up, &kids, &mut stack, out, counts);
     }
 }
 
-/// Copies what `stack` holds, depth first; children are queued only within the depth and copy
-/// budgets, so the work stays bounded by them even when a node lists itself many times.
-fn copy_subtree(scene: &Scene, up: UpAxis, stack: &mut Vec<(usize, Option<usize>, usize)>, out: &mut MeshScene, counts: &mut Counts) {
+/// Each node's children split once into those that name a node and a count of those that do
+/// not, so a copy's cost is what it queues, however many references its node lists.
+struct Children {
+    valid: Vec<Vec<usize>>,
+    invalid: Vec<u64>,
+}
+
+impl Children {
+    fn of(scene: &Scene) -> Self {
+        let valid = scene.nodes.iter().map(|n| n.children.iter().copied().filter(|c| *c < scene.nodes.len()).collect::<Vec<_>>());
+        let valid: Vec<Vec<usize>> = valid.collect();
+        let invalid = scene.nodes.iter().zip(&valid).map(|(n, v)| wide(n.children.len() - v.len())).collect();
+        Self { valid, invalid }
+    }
+}
+
+/// Copies what `stack` holds, depth first. Only children that name a node are queued, and only
+/// within the depth and copy budgets, so the work stays bounded by them and by the references
+/// the scene lists, even when a node lists itself or nothing many times.
+fn copy_subtree(
+    scene: &Scene,
+    up: UpAxis,
+    kids: &Children,
+    stack: &mut Vec<(usize, Option<usize>, usize)>,
+    out: &mut MeshScene,
+    counts: &mut Counts,
+) {
     while let Some((source, parent, depth)) = stack.pop() {
         let Some(n) = scene.nodes.get(source) else {
             counts.bad_nodes = counts.bad_nodes.saturating_add(1);
@@ -258,9 +287,11 @@ fn copy_subtree(scene: &Scene, up: UpAxis, stack: &mut Vec<(usize, Option<usize>
             None => out.roots.push(copy),
         }
         let room = if depth < MAX_NODE_DEPTH { MAX_NODE_COPIES.saturating_sub(out.nodes.len().saturating_add(stack.len())) } else { 0 };
-        let queued = n.children.len().min(room);
-        counts.cut = counts.cut.saturating_add(wide(n.children.len() - queued));
-        stack.extend(n.children.iter().take(queued).rev().map(|c| (*c, Some(copy), depth + 1)));
+        let valid = kids.valid.get(source).map_or(&[][..], Vec::as_slice);
+        counts.bad_nodes = counts.bad_nodes.saturating_add(kids.invalid.get(source).copied().unwrap_or(0));
+        let queued = valid.len().min(room);
+        counts.cut = counts.cut.saturating_add(wide(valid.len() - queued));
+        stack.extend(valid.iter().take(queued).rev().map(|c| (*c, Some(copy), depth + 1)));
     }
 }
 

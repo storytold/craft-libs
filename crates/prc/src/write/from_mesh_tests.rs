@@ -206,3 +206,16 @@ fn more_roots_than_the_copy_limit_are_cut() {
     assert_eq!(out.scene.nodes.len(), super::MAX_NODE_COPIES);
     assert!(out.warnings.iter().any(|w| w.starts_with("5 subtree(s)")), "{:?}", out.warnings);
 }
+
+#[test]
+fn invalid_children_are_counted_once_per_copy_not_queued() {
+    // 50,000 references naming nothing, then 50,000 to the node itself: each copy queues only the valid
+    // ones, so the invalid ones cannot keep refilling the queue (before, this took billions of visits).
+    let mut scene = Scene::from_meshes(vec![triangle(None)], Vec::new());
+    scene.nodes[0].children = (0..100_000).map(|i| if i < 50_000 { 9_999_999 } else { 0 }).collect();
+    let out = mesh_scene_from(&scene, 1.0, UpAxis::Z);
+    let copies = out.scene.nodes.len() as u64;
+    assert_eq!(copies, super::MAX_NODE_COPIES as u64);
+    let bad = format!("{} ", 50_000 * copies);
+    assert!(out.warnings.iter().any(|w| w.starts_with(&bad) && w.contains("node")), "{bad}: {:?}", out.warnings);
+}
