@@ -546,6 +546,38 @@ documentation has the recipe for a shortcut smoke test on a non-Latin layout thr
 letters such as ổ, so an app relying on it fails the `vi` screens until its own face covers them. The per-release manual checks are in
 [language-testing.md](../../docs/language-testing.md).
 
+### Input steps and review screenshots
+
+`testing::input` drives any egui_kittest `Harness<State>` with a fixed number of frames per step:
+`move_to` (1), `press` and `release` (2 each), `click` (3), `drag` (`steps` + 3, primary button,
+1 to `MAX_DRAG_STEPS` moves), `key` (2), `type_text` (2) and `wheel` (2, in points). The modifiers
+given to a step are held from its first frame and released in its last; `press` keeps them held
+until the matching `release`. A drag with another button is `press`, `move_to` and `release`. The
+module documentation lists the events of each frame. The counts hold when no events queued with
+`Harness::event` are waiting, so run the harness after queuing events. `docking::testing::DockDriver` runs its own
+egui context and keeps its own `window_click` and `window_hold`.
+
+`testing::snapshot` writes screenshots for review and compares nothing. `snapshot_dir(var)` reads
+the folder from the environment variable `var`: `DEFAULT_DIR_VAR` (`CRAFT_UI_SNAPSHOT_DIR`), or an
+app's own variable name. With no folder, `with_snapshot_renderer` leaves the builder unchanged and
+no GPU is set up; with one, it sets up wgpu and returns `SnapshotError::Render` on a machine that
+can't render. `save(harness, dir, name)` renders the last frame to `{dir}/{name}.png`, creating the
+folder, and runs no frames, so settle the screen and set the theme first. Names are plain file
+names (ASCII letters, digits, `-`, `_`, `.`, `@`).
+
+```rust,ignore
+use craft_ui::testing::{input, snapshot};
+use egui::{Modifiers, PointerButton, pos2};
+
+let dir = snapshot::snapshot_dir("CRAFT_EXPORT_SNAPSHOTS");
+let mut harness = snapshot::with_snapshot_renderer(Harness::builder(), dir.as_deref())?.build_ui_state(export_ui, state);
+input::click(&mut harness, pos2(40.0, 20.0), PointerButton::Primary, Modifiers::NONE);
+harness.run();
+if let Some(dir) = &dir {
+    snapshot::save(&mut harness, dir, "export-dialog")?;
+}
+```
+
 ## Print settings and feedback
 
 `printing::State` holds the transient printer selection, copies, duplex and grayscale settings,
@@ -678,7 +710,8 @@ verify the actual pixels as well as callback routing.
 The crate uses egui 0.37 and Rust 1.95 or later. Its production dependency disables egui's default
 features, so egui's bundled fonts and rendering features remain the application's choice. It has
 no default features; see [UI fonts](#ui-fonts) for `color_fonts` and `system_fonts`, and
-[Testing screens in each language](#testing-screens-in-each-language) for `screen-testing`;
+[Testing screens in each language](#testing-screens-in-each-language) for `screen-testing`, which
+also adds `testing::input` and `testing::snapshot`;
 `testing` adds the headless docking driver `docking::testing`. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 

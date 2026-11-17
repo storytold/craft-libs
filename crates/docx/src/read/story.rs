@@ -22,6 +22,7 @@ use craft_wordmodel::wordart::TextWarp;
 mod blocks;
 mod drawing;
 mod fields;
+mod locked_canvas;
 mod runs;
 mod vml;
 
