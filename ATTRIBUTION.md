@@ -122,6 +122,11 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 ## TAR/CPIO compatibility updates
 
 The old GNU sparse-extension traversal, GNU CRC-symlink compatibility and PAX-size precedence fixes and their regression tests in `crates/tar` are ported from RRFZ's Craft Anything PRs #1973 (`8ea2ec66a1bc80f0420f3695baac877a0cb9b9a5`), #1984 (`b226a475f7dce9710e3af7a069386fe7a9720df7`) and #2007 (`d29465c20b0d570ea4973be512a0cb4e212bb60f`). Source is MIT OR Apache-2.0; RRFZ remains the primary Git author of each port. The PAX update adapts to the shared parser's existing `PaxOverrides` structure without changing the source policy.
+
+## Aligned stored ZIP entries
+
+The USDZ alignment requirement and compatibility fixture for `Writer::add_stored_aligned` come from TextureCraft `crates/formats/src/mesh_export/usd.rs`, introduced by bflatastic in `bdbb52c9` and maintained through `9eb20086` (MIT OR Apache-2.0). The shared API and alignment validation are subsequent Dylan M. Taylor work. Scene/material mapping remains in TextureCraft.
+
 The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
 AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
 Sanitization, animation fitting and numeric output policy remain caller-owned.
