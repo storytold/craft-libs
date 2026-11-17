@@ -33,6 +33,9 @@ pub enum AppCommand {
     /// Shows or hides the rulers.
     #[command(label = "Rulers", kind = "toggle", default = "Cmd+R")]
     Rulers,
+    /// Shows or hides the toolbar.
+    #[command(label = "Tools", kind = "toggle")]
+    ShowTools,
     /// Shows or hides the canvas panel.
     #[command(label = "Canvas", kind = "toggle")]
     ShowCanvas,
@@ -48,6 +51,7 @@ impl AppCommand {
     /// The command that shows or hides `panel`.
     pub const fn showing(panel: Panel) -> AppCommand {
         match panel {
+            Panel::Tools => AppCommand::ShowTools,
             Panel::Canvas => AppCommand::ShowCanvas,
             Panel::Navigator => AppCommand::ShowNavigator,
             Panel::Layers => AppCommand::ShowLayers,
@@ -57,6 +61,7 @@ impl AppCommand {
     /// The panel the command shows or hides.
     pub const fn panel(self) -> Option<Panel> {
         match self {
+            AppCommand::ShowTools => Some(Panel::Tools),
             AppCommand::ShowCanvas => Some(Panel::Canvas),
             AppCommand::ShowNavigator => Some(Panel::Navigator),
             AppCommand::ShowLayers => Some(Panel::Layers),

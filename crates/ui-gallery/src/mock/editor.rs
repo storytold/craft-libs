@@ -11,7 +11,7 @@ use craft_theme::variant::Tone;
 use craft_ui::bars::{Bar, BarKind, StatusMessage, StatusReadout, StatusValues};
 use craft_ui::buttons::{IconButton, Link};
 use craft_ui::canvas::{PickStep, ViewCommands};
-use craft_ui::contract::{Bind, BodyCx, PaneEdge, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogResult, PromptChoice, StandardPrompt};
 use craft_ui::display::{Divider, Text};
 use craft_ui::docking::{DockConfig, DockEvent, DockPanels as _};
@@ -20,7 +20,6 @@ use craft_ui::patterns::dock::DockArea;
 use craft_ui::patterns::form_dialogs::{
     DialogFields, HostedImageSize, HostedParamDialog, ImageSize, ImageSizeValues, Param, ParamDialog, ParamResult,
 };
-use craft_ui::rails::ToolRail;
 use craft_ui::runtime::commands::{self, CommandRef, Commands as _, EditCommands};
 use craft_ui::runtime::env::{Env, Label, WindowKey};
 use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
@@ -36,10 +35,10 @@ const BLUR_KEY: &str = "gaussianBlur";
 /// Where Gaussian Blur remembers its values.
 const BLUR_MEMORY: SaveKey = SaveKey::new("craft_ui_gallery.gaussianBlur");
 
-/// The mock editor: the shell with its title bar and menus, options bar, tool rail and status bar around a dock whose
-/// canvas group holds the document tabs, the canvas with its rulers and pasteboard, and the Navigator and layer panels.
+/// The mock editor: the shell with its title bar and menus, options bar and status bar around a dock whose canvas group
+/// holds the document tabs, the canvas with its rulers and pasteboard, and the toolbar, Navigator and layer panels.
 ///
-/// - Tool: the rail and the tool keys pick the current tool; Hand and Zoom run in the canvas's tool host.
+/// - Tool: the toolbar (a stepped dock column) and the tool keys pick the current tool; Hand and Zoom run in the canvas's tool host.
 /// - Menus: every row is an app command with its chord; the body takes them.
 /// - Dialogs: Layer, Delete, Layer and Filter, Gaussian Blur open on the window's dialog host; Image, Image Size
 ///   shows its dialog over the document's size.
@@ -82,7 +81,6 @@ impl<'a> EditorMock<'a> {
             .screen_mode(screen_mode)
             .title_bar_if(true, |ui, _, state: &mut MockState| title_bar(ui, state))
             .options_bar(true, |ui, _, state: &mut MockState| options_bar(ui, state))
-            .tools(PaneEdge::Start, 1, true, |ui, _, state: &mut MockState| tool_rail(ui, state))
             .status(true, |ui, _, state: &mut MockState| status_bar(ui, state))
             .body_label(label)
             .body(|ui, cx, state: &mut MockState| body(ui, cx, state));
@@ -96,15 +94,22 @@ impl<'a> EditorMock<'a> {
 /// The dock, then the commands and dialog answers of this pass.
 fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
     let mut tools = cx.keep::<Tools>().clone();
-    let events = {
-        let mut panels = Panels { document: &mut state.document, tool: state.tool, tools: &mut tools };
+    let ctx = ui.ctx().clone();
+    let (events, picked) = {
+        let mut panels =
+            Panels { document: &mut state.document, tool: state.tool, tools: &mut tools, last_used: &mut state.last_used, picked: None, ctx: &ctx };
         // The mock app is a preview inside the gallery's page: its floats stay in it.
-        let mut area = DockArea::new("Dock", Bind::bound(&mut state.workspace), &mut panels, DockConfig::default().native_windows(false));
+        let mut area = DockArea::new("Dock", Bind::bound(&mut state.workspace), &mut panels, DockConfig::default().native_windows(false))
+            .flyout(Bind::bound(&mut state.flyout));
         if let Some(panel) = state.maximized {
             area = area.maximized(panel);
         }
-        area.show(ui).events
+        let events = area.show(ui).events;
+        (events, panels.picked)
     };
+    if let Some(tool) = picked {
+        select(ui, state, tool);
+    }
     for event in events {
         if let DockEvent::ToggleMaximize { panel, .. } = event {
             state.maximized = if state.maximized == Some(panel) { None } else { Some(panel) };
@@ -132,8 +137,20 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
     let mut dialogs = Vec::new();
     for command in asked {
         if let Some(panel) = command.panel() {
+            // A panel in a column collapsed to icons shows in its flyout: the command opens or closes that.
+            if state.workspace.layout.opens_in_flyout(&panel) {
+                state.flyout = if state.flyout == Some(panel) { None } else { Some(panel) };
+                continue;
+            }
             let shown = state.workspace.layout.panel_state(&panel) != PanelState::Hidden;
-            let panels = Panels { document: &mut state.document, tool: state.tool, tools: &mut tools };
+            let panels = Panels {
+                document: &mut state.document,
+                tool: state.tool,
+                tools: &mut tools,
+                last_used: &mut state.last_used,
+                picked: None,
+                ctx: &ctx,
+            };
             let _ = state.workspace.set_visible(panel, !shown, None, false, |panel| panels.permissions(panel));
             continue;
         }
@@ -249,7 +266,12 @@ fn title_bar(ui: &mut Ui, state: &MockState) {
                 }),
                 MenuTitle::new("&Window", |ui| {
                     for panel in Panel::ALL {
-                        let shown = state.workspace.layout.panel_state(&panel) != PanelState::Hidden;
+                        let layout = &state.workspace.layout;
+                        let shown = if layout.opens_in_flyout(&panel) {
+                            state.flyout == Some(panel)
+                        } else {
+                            layout.panel_state(&panel) != PanelState::Hidden
+                        };
                         MenuItem::command(AppCommand::showing(panel)).check(shown).enabled(!panel.protected()).show(ui);
                     }
                 }),
@@ -267,19 +289,6 @@ fn options_bar(ui: &mut Ui, state: &MockState) {
     let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
         Text::new(format!("Foreground #{:06X}   Background #{:06X}", colors.foreground, colors.background)).show(ui);
     });
-}
-
-fn tool_rail(ui: &mut Ui, state: &mut MockState) {
-    let slots = Tool::slots();
-    let current = state.tool;
-    let last_used = state.last_used.clone();
-    let output = ToolRail::new("Tools", &slots, &current, &last_used).show_rail(ui, |_, _| {});
-    if let Some(tool) = output.select {
-        select(ui, state, tool);
-    }
-    if let Some(last_used) = output.last_used {
-        state.last_used = last_used;
-    }
 }
 
 /// The status bar: the zoom and the chosen readout item, the colour mode, the layer count and the message, and the

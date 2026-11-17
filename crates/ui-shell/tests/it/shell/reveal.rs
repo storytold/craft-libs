@@ -1,10 +1,10 @@
 //! Tab in a window shell: it hides and shows the chrome, and a screen-mode change clears what it did.
 
-use craft_ui::contract::{Bind, PaneEdge, Show as _};
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::display::Text;
 use craft_ui::runtime::env::{RootEnv, WindowKey};
 use craft_ui::runtime::focus::{KeyUse, host_canvas};
-use craft_ui::shell::{AppShell, ScreenMode};
+use craft_ui::shell::{AppShell, ScreenMode, Slot};
 use craft_ui::testing::{Frames, trial};
 use egui::{Event, Key, Modifiers, Sense};
 
@@ -24,7 +24,7 @@ fn shown(windows: &mut Frames, mode: &mut ScreenMode, events: Vec<Event>) -> (us
     windows.frame(events, |ui| {
         let out = AppShell::new(WindowKey::main())
             .screen_mode(Bind::bound(&mut *mode))
-            .tools(PaneEdge::Start, 1, true, |ui, _, _: &mut ()| {
+            .start(Slot::new("tools").reveal(), |ui, _, _: &mut ()| {
                 Text::new("Tools").show(ui);
             })
             .options_bar(false, |ui, _, _: &mut ()| {

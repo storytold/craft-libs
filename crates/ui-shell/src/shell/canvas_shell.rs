@@ -1,13 +1,13 @@
 //! The canvas preset's slot keys and `CanvasPanel`, which lays out the canvas panel in the body of a document editor's
-//! shell. The editor's slots are the canvas setters of `AppShell` (`title_bar_if`, `options_bar`, `tools`, `status`).
+//! shell. The editor's slots are the canvas setters of `AppShell` (`title_bar_if`, `options_bar`, `status`).
 //!
 //! ```text
 //! +-----------------------------------------+
 //! | title                                   |
 //! | options                                 |
-//! +-------+---------------------------------+
-//! | tools |  body (dock with canvas panel)  |
-//! +-------+---------------------------------+
+//! +-----------------------------------------+
+//! |  body (dock with toolbar, canvas panel) |
+//! +-----------------------------------------+
 //! | status                                  |
 //! +-----------------------------------------+
 //!
@@ -37,8 +37,6 @@ pub mod slots {
     pub const TITLE: SlotKey = "title";
     /// The options bar, below the title.
     pub const OPTIONS: SlotKey = "options";
-    /// The tool rail at the start edge.
-    pub const TOOLS: SlotKey = "tools";
     /// The status bar, the lowest bottom bar.
     pub const STATUS: SlotKey = "status";
 }
