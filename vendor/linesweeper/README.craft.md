@@ -63,13 +63,15 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests, and runs the unit
+and regression tests again with the `slow-asserts` feature. The `craft-prepress`
 tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter lists this directory,
 so a pull request that changes files here starts `pdf.yml`. No workflow runs clippy on this copy. Run
 the tests and clippy from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
+cargo test --locked --lib --test regression --features slow-asserts
 cargo test --locked --doc
 cargo clippy --locked --all-features --lib --test regression -- -D warnings
 cargo clippy --locked --all-features --lib --profile test -- -D warnings

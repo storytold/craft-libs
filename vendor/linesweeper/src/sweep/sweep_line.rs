@@ -2157,6 +2157,12 @@ mod tests {
                     _ => {}
                 }
                 check_positions(&line, 10);
+                for (i, entry) in line.segs.iter().enumerate() {
+                    assert_eq!(line.position(entry.seg), Some(i));
+                    if let Some(old_seg) = entry.old_seg {
+                        assert_eq!(line.position(old_seg), Some(i));
+                    }
+                }
             }
             check_positions(&line, next_seg);
         }
