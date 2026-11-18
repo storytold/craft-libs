@@ -691,7 +691,7 @@ pub struct Reference {
 const MAX_REFERENCE_BYTES: usize = 64 << 20;
 
 /// Every instruction that refers to class `desc` (optionally only its methods named `method`).
-/// Reports truncation when instruction decoding is incomplete or a count/retained-byte limit is reached.
+/// Reports truncation when instruction decoding is incomplete or the count or byte budget is exhausted.
 pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -> (Vec<Reference>, bool) {
     references_with_byte_limit(dex, desc, method, max, MAX_REFERENCE_BYTES)
 }
@@ -699,13 +699,13 @@ pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -
 fn references_with_byte_limit(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize, max_bytes: usize) -> (Vec<Reference>, bool) {
     let mut bytes_left = max_bytes;
     let mut out = Vec::new();
-    let mut decoded = true;
+    let mut complete = true;
     for c in &dex.classes {
         let cd = dex.class_data(c);
         for m in cd.direct_methods.iter().chain(&cd.virtual_methods) {
             let Some(code) = dex.code(m.code_off) else { continue };
-            let (insns, complete) = crate::dex_ops::decode(&code.insns, 200_000);
-            decoded &= complete;
+            let (insns, decoded) = crate::dex_ops::decode(&code.insns, 200_000);
+            complete &= decoded;
             for i in &insns {
                 let Some(idx) = i.index else { continue };
                 let hit = match i.index_kind {
@@ -737,7 +737,7 @@ fn references_with_byte_limit(dex: &Dex<'_>, desc: &str, method: Option<&str>, m
             }
         }
     }
-    (out, !decoded)
+    (out, !complete)
 }
 
 #[cfg(test)]
@@ -1036,5 +1036,52 @@ mod tests {
         assert!(truncated);
         assert!(zero.is_empty());
         assert_eq!(references(&dex, &desc, Some("run"), 100), (all, false));
+    }
+    #[test]
+    fn references_report_incomplete_instruction_decoding() {
+        for (insns, incomplete) in [(vec![0x000e], false), (vec![0x0071], true), (vec![0; 200_001], true)] {
+            let mut b = fx::DexBuilder::default();
+            let class = b.ty("Ltest;");
+            let method = b.method("Ltest;", "run", "V", &[]);
+            b.classes.push(fx::ClassSpec {
+                class,
+                direct: vec![fx::MethodSpec { method, access: 0, code: Some(fx::CodeSpec { insns, ..Default::default() }) }],
+                ..Default::default()
+            });
+            let bytes = b.build();
+            let dex = parse(&bytes).unwrap();
+            let (hits, truncated) = references(&dex, "Lmissing;", None, 100);
+            assert!(hits.is_empty());
+            assert_eq!(truncated, incomplete);
+        }
+    }
+
+    #[test]
+    fn references_keep_incompleteness_across_later_complete_methods() {
+        let mut b = fx::DexBuilder::default();
+        let class = b.ty("Ltest;");
+        let broken = b.method("Ltest;", "broken", "V", &[]);
+        let complete = b.method("Ltest;", "complete", "V", &[]);
+        b.classes.push(fx::ClassSpec {
+            class,
+            direct: vec![
+                fx::MethodSpec { method: broken, access: 0, code: Some(fx::CodeSpec { insns: vec![0x0071], ..Default::default() }) },
+                fx::MethodSpec { method: complete, access: 0, code: Some(fx::CodeSpec { insns: vec![0x000e], ..Default::default() }) },
+            ],
+            ..Default::default()
+        });
+        let bytes = b.build();
+        let dex = parse(&bytes).unwrap();
+        assert_eq!(references(&dex, "Lmissing;", None, 100), (Vec::new(), true));
+    }
+
+    #[test]
+    fn fixture_strings_round_trip_supplementary_and_null_characters() {
+        let mut b = fx::DexBuilder::default();
+        let text = "a\0é😀z";
+        let id = b.string(text);
+        let bytes = b.build();
+        let dex = parse(&bytes).unwrap();
+        assert_eq!(dex.string(id), text);
     }
 }
