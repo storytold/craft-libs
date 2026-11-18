@@ -194,12 +194,12 @@ fn shaders_write_no_value_wgsl_cannot_read() {
 // The GPU half: the passes against the CPU reference. A machine without a graphics adapter skips
 // these comparisons and says so on stderr.
 
-fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(crate) fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     device_with(|l| l)
 }
 
 /// A device with the adapter's limits as `limits` changes them.
-fn device_with(limits: impl FnOnce(wgpu::Limits) -> wgpu::Limits) -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(crate) fn device_with(limits: impl FnOnce(wgpu::Limits) -> wgpu::Limits) -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("no graphics adapter: the GPU half of this test is skipped");
@@ -216,7 +216,7 @@ fn device_with(limits: impl FnOnce(wgpu::Limits) -> wgpu::Limits) -> Option<(wgp
 }
 
 /// `src` (its pixels, width and height) converted on the GPU to `out` (width and height).
-fn gpu_convert(device: &wgpu::Device, queue: &wgpu::Queue, src: (&[u8], u32, u32), c: Conversion, out: (u32, u32)) -> Vec<u8> {
+pub(crate) fn gpu_convert(device: &wgpu::Device, queue: &wgpu::Queue, src: (&[u8], u32, u32), c: Conversion, out: (u32, u32)) -> Vec<u8> {
     let ((rgba, sw, sh), (w, h)) = (src, out);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
@@ -261,7 +261,7 @@ fn tolerance(format: Format) -> u16 {
     if format.bits() == 10 { 6 } else { 2 }
 }
 
-fn assert_close(gpu: &[u8], cpu: &[u8], c: Conversion, what: &str) {
+pub(crate) fn assert_close(gpu: &[u8], cpu: &[u8], c: Conversion, what: &str) {
     assert_eq!(gpu.len(), cpu.len(), "{what}");
     let (g, k) = (samples(gpu, c.format), samples(cpu, c.format));
     let worst = g.iter().zip(&k).enumerate().max_by_key(|(_, (a, b))| a.abs_diff(**b));
@@ -271,7 +271,7 @@ fn assert_close(gpu: &[u8], cpu: &[u8], c: Conversion, what: &str) {
 }
 
 /// A picture with hard edges: each pixel's channels from a fixed pseudo-random sequence.
-fn noise(w: u32, h: u32) -> Vec<u8> {
+pub(crate) fn noise(w: u32, h: u32) -> Vec<u8> {
     let mut x = 0x2545_f491_u32;
     (0..w * h * 4)
         .map(|i| {
@@ -284,7 +284,7 @@ fn noise(w: u32, h: u32) -> Vec<u8> {
 }
 
 /// A smooth picture: three ramps at different angles.
-fn ramps(w: u32, h: u32) -> Vec<u8> {
+pub(crate) fn ramps(w: u32, h: u32) -> Vec<u8> {
     (0..h)
         .flat_map(|y| {
             (0..w).flat_map(move |x| {

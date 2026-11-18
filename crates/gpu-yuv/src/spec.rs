@@ -100,8 +100,9 @@ impl Conversion {
 
 /// The weights and the scale of one conversion. The code value of luma is
 /// `dot(y, rgb) * y_scale + y_offset`, of Cb `dot(cb, rgb) * c_scale + c_offset`, and of Cr
-/// `dot(cr, rgb) * c_scale + c_offset`, rounded half to even and clamped to `0..=max`, for `rgb`
-/// from 0 to 1.
+/// `dot(cr, rgb) * c_scale + c_offset`, rounded with halves away from zero and clamped to
+/// `0..=max`, for `rgb` from 0 to 1. That rounding is `INT` in BT.709 and BT.2020 and `Round` in
+/// BT.2100.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Coefficients {
     pub y: [f32; 3],
@@ -132,7 +133,7 @@ impl Coefficients {
     /// The code values of luma, Cb and Cr for `rgb`.
     pub fn codes(&self, rgb: [f32; 3]) -> [u16; 3] {
         let dot = |w: [f32; 3]| w[0] * rgb[0] + w[1] * rgb[1] + w[2] * rgb[2];
-        let code = |v: f32| v.round_ties_even().clamp(0.0, self.max) as u16;
+        let code = |v: f32| v.round().clamp(0.0, self.max) as u16;
         [
             code(dot(self.y) * self.y_scale + self.y_offset),
             code(dot(self.cb) * self.c_scale + self.c_offset),
@@ -163,6 +164,9 @@ pub enum Error {
     /// A frame layout's fields are not what [`crate::FrameLayout::new`] gives for its format and
     /// size.
     Layout,
+    /// The device reported an error (validation, out of memory, a failed map or poll) while
+    /// [`crate::YuvProvider`] ran a job on it.
+    Device(String),
 }
 
 impl fmt::Display for Error {
@@ -177,6 +181,7 @@ impl fmt::Display for Error {
             Error::Offset(offset) => write!(f, "buffer offset {offset} is not a multiple of {}", wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
             Error::Mismatch { converter, planes } => write!(f, "{planes} planes given to a {converter} converter"),
             Error::Layout => f.write_str("the frame layout does not match its format and size"),
+            Error::Device(message) => write!(f, "the device reported an error: {message}"),
         }
     }
 }

@@ -184,10 +184,12 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
-- [`craft-gpu-yuv`](crates/gpu-yuv/README.md): RGBA to NV12, P010 and I420 on the GPU, scaled to
-  the output size, in BT.601, BT.709 and BT.2020 at limited or full range; each output texel
-  averages the part of the source it covers; read-back layouts and unpacking to a packed frame;
-  and the same conversion on the CPU. Encoders and scopes stay in each app.
+- [`craft-gpu-yuv`](crates/gpu-yuv/README.md): the `craft.yuv` GPU provider. It converts RGBA to
+  NV12, P010 and I420, scaled to the output size, in BT.601, BT.709 and BT.2020 at limited or full
+  range, through the `craft-gpu` job registry on the null context or on a device. Each output texel
+  averages the part of the source it covers. The crate also has the render passes for a caller's
+  own encoder, read-back layouts with unpacking to a packed frame, and the same conversion on the
+  CPU. Encoders and scopes stay in each app.
 - [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
   (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
   unread and written back into a list. The workbook model and what follows a read stay in GridCraft.

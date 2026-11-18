@@ -6,6 +6,11 @@
 //! source is at most twice the plane's size, one more for each further 2:1 of reduction. The
 //! average of the taps goes through the matrix. At the same size the chroma tap lands between
 //! four source pixels, so each chroma sample is the average of the 2 × 2 pixels it covers.
+//!
+//! The scaler here takes the shader's taps at the shader's positions instead of using a
+//! resampling crate such as `fast_image_resize`: this function is the reference the shader is
+//! tested against, and another kernel would differ from the shader at every edge. For another
+//! filter, resize with such a crate first and convert at the same size.
 
 use crate::layout::FrameLayout;
 use crate::spec::{Coefficients, Conversion, Error};
