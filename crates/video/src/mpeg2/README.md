@@ -78,14 +78,16 @@ the synthetic-stream tests confirmed against FFmpeg:
 ## Encoder (feature `mpeg2-encode`)
 
 The encoder is built in steps, tracked in storytold/craft-libs#1133: I and P pictures came in
-#1136, B pictures in the second step. It writes valid MPEG-2 elementary streams, but not yet DVD or
+#1136, B pictures in #1195, and constant and variable bitrate with a VBV guarantee in the third
+step. It writes valid MPEG-2 elementary streams that meet their VBV buffer, but not yet DVD or
 broadcast deliverables: those need the later steps listed below.
 
 ```rust
 use craft_video::mpeg2::{Encoder, EncoderConfig, RateControl, YuvFrame};
 
 let mut cfg = EncoderConfig::new(720, 576, 25, 1);
-cfg.rate = RateControl::Abr { kbps: 6000 };   // or RateControl::Quantiser(1..=31)
+cfg.rate = RateControl::Vbr { kbps: 6000, max_kbps: 9800 }; // or Cbr, Abr, Quantiser(1..=31)
+cfg.vbv_buffer_bits = Some(1_835_008);        // default: the level's maximum
 cfg.gop_size = 12;                            // pictures from one I picture to the next
 cfg.b_pictures = 2;                           // I B B P B B P ...; 0 for I and P only
 cfg.closed_gop = true;                        // or open GOPs
@@ -101,7 +103,8 @@ es.extend_from_slice(enc.end_of_sequence());
 What it does:
 
 - Main Profile (4:2:0) at Low, Main, High-1440 and High Level, and 4:2:2 Profile at Main and
-  High Level. The lowest level that holds the size, frame rate and (average) bitrate is chosen;
+  High Level. The lowest level that holds the size, frame rate, bitrate (the peak of a variable
+  bitrate) and VBV buffer size is chosen;
   sizes beyond High Level are refused. Any even picture size; edges are padded by repetition.
 - Progressive frame pictures, I, P and B. Every GOP starts with a sequence header, sequence
   extension and GOP header (with a time code), so every I picture is a random access point.
@@ -128,17 +131,32 @@ What it does:
   previous macroblock's directions with the predictors), whichever costs least, or intra.
   Interpolated predictions are averaged in the decoder's order.
 - Adaptive quantisation by macroblock activity (Test Model 5 §5.2.3).
-- Rate control: a constant quantiser (B pictures at 1.25 times it), or single-pass average
-  bitrate with Test Model 5's target bit allocation at picture level (B pictures weighted by
-  K_b = 1.4). Streams are signalled as variable bitrate
-  (`vbv_delay` 0xFFFF, the level's maximum bitrate and VBV size in the sequence header); the VBV
-  buffer is not modelled.
+- Rate control: a constant quantiser (B pictures at 1.25 times it), or single-pass average,
+  constant or variable bitrate with Test Model 5's target bit allocation at picture level (B
+  pictures weighted by K_b = 1.4). The sequence header carries the constant bitrate, the
+  variable bitrate's peak, or for a constant quantiser and average bitrate the level's maximum,
+  rounded up to 400 bit/s, and the VBV buffer size (the level's maximum unless set).
+- VBV guarantee (H.262 Annex C): the encoder models the decoder's buffer in decoding order,
+  exactly (fullness in 1/fps_num bit), and caps every picture at what the buffer holds at its
+  decoding time. Average bitrate control aims a picture at no more than 85 % of that. A
+  picture over its cap is coded again with a coarser quantiser (three times, then the coarsest);
+  an I picture still too large keeps only its DC coefficients, and as a last resort the picture
+  becomes the smallest there is: a grey I picture, or a P or B picture that repeats its
+  reference with zero vectors and no residual. That picture's size depends only on the picture
+  size, so `Encoder::new` codes one of each type and refuses a bitrate whose picture interval
+  brings fewer bits, or a buffer that cannot hold it; then the buffer cannot underflow.
+- Constant bitrate: each picture header carries its `vbv_delay`; a picture that would let the
+  buffer overflow is padded with zero bytes before the next start code; the first picture is
+  decoded when the buffer is 7/8 full; the buffer used is at most what 0.728 s of the bitrate
+  fills (the longest `vbv_delay`), and must hold two picture intervals. Variable bitrate
+  (`vbv_delay` 0xFFFF): the buffer fills at the peak bitrate until full, before the first
+  picture too. The model takes the pictures to be decoded one picture interval apart.
 - The reconstruction uses the decoder's own dequantisation, mismatch control, IDCT and motion
   compensation, so this crate's decoder outputs exactly the encoder's reconstruction.
 - Slices (one per macroblock row) are coded in parallel on rayon with `threads`; the stream is
   identical either way.
 
-Later steps (#1133): CBR and VBR with a VBV guarantee; DVD presets
+Later steps (#1133): DVD presets
 (sizes, aspect, GOP length, 9.8 Mb/s, 23.976 soft telecine); interlaced coding (field/frame DCT,
 field prediction, alternate scan) and 4:2:2 High Level CBR for XDCAM HD422. MPEG-2 essence in the
 MXF writer and a program stream muxer belong to `craft-media`.
@@ -213,9 +231,24 @@ fell to 77–150 fps). These are lower bounds.
   decodes from its I picture with its leading B pictures and an open one without them; B pictures
   are smaller than P pictures; uneven presentation times are refused with B pictures; quality and
   size follow the quantiser; repeated pictures skip; levels and aspect in the sequence header;
-  bad configurations and short or inconsistent planes are refused.
+  bad configurations and short or inconsistent planes are refused. A VBV checker that reads only
+  the stream (the sequence header's bit rate and buffer size, each picture's size and
+  `vbv_delay`) replays Annex C: constant bitrate streams (with and without B pictures, open GOPs,
+  intra only, a 48 kbit buffer, uniform noise, a still picture, 4:2:2 at 29.97 fps) decode one
+  picture interval apart, never underflow or overflow, and carry their bitrate to within one
+  buffer; variable bitrate, average bitrate and constant quantiser streams (noise at quantiser 1
+  into a 64 kbit buffer, intra only, 4 B pictures) never underflow; all of them decode exactly to
+  the reconstruction, including the pictures that fell back to DC only or to the smallest
+  picture. Still pictures at a constant bitrate are padded; the smallest pictures are the same
+  size for any source; the sequence header carries the bit rate (rounded up to 400 bit/s) and
+  buffer size; bitrates below the smallest picture, buffers too small for it (or, at a constant
+  bitrate, for two picture intervals) are refused, and the lowest bitrate accepted for CIF
+  meets the buffer with noise. The `vbv.rs` model itself: both bounds of a constant bitrate
+  buffer, a full variable bitrate buffer stops filling, 29.97 fps does not drift.
 - `tests/mpeg2/encode.rs`: FFmpeg decodes our streams of `testsrc2` (CIF and 576-line 4:2:2;
   without B pictures, with 2 and 4, closed and open GOPs) without errors and within the decoder
   suite's tolerance of our reconstruction, ffprobe reports the profile, level, pixel format and
   picture types in display order, and average bitrate lands within 10 % of 800 and 2500 kbit/s
-  targets.
+  targets; constant bitrate CIF streams at 1500 and 3000 kbit/s decode and carry their bitrate
+  to within one buffer (1540 and 3021 kbit/s over 4 s with a 256 kbit buffer); a DVD-like
+  720×576 stream (variable bitrate, 9.8 Mbit/s peak, 1835008-bit buffer) decodes.
