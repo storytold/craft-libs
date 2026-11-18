@@ -40,7 +40,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// the width the column settles on.
     pub(super) fn width_from_content(&mut self, comp: &C, ui: &Ui, id: Id, room: Vec2, item: Option<Vec2>, scx: &StyleCx<'_>) -> f32 {
         let rows = if self.header.has_columns() { self.header.least_width() } else { self.largest_in(comp, ui, id, room).x };
-        rows.max(comp.ideal_width(item, scx)).min(room.x)
+        rows.max(comp.ideal_width(item, self.source.len(), scx)).min(room.x)
     }
 
     /// The largest ideal size of the rows in this pass, and the widest cell each column's items reported: each row is

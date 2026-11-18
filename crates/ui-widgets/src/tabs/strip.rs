@@ -567,6 +567,17 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         &self.items
     }
 
+    /// The strip asks for the largest tab's size, which `ideal_width` reads.
+    fn measures_items(&self) -> bool {
+        true
+    }
+
+    /// Where the strip takes its width from its content (a dialog sized by what it holds), every tab fits in a row:
+    /// as many as the source holds, each as wide as the widest, so the strip does not send tabs to its overflow menu.
+    fn ideal_width(&self, item: Option<Vec2>, rows: usize, _: &StyleCx<'_>) -> f32 {
+        item.map_or(0.0, |largest| largest.x * rows as f32)
+    }
+
     /// The shown tab is the single selection; the strip reports a change and the host applies it.
     fn selection(&mut self) -> Option<BindMut<'_, Selection<K>>> {
         self.held = Bind::given(self.shown.clone().map_or_else(Selection::default, Selection::single));
