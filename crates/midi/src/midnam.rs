@@ -2,9 +2,12 @@
 
 use craft_xml::{Doctype, El, Limits, Options};
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 pub const MAX_MIDNAM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PATCH_REFERENCES: usize = 65_536;
+const MAX_OUTPUT_NAME_BYTES: usize = 16 * 1024 * 1024;
+const NAME_SEPARATOR: &str = " · ";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MidnamProfile {
@@ -29,6 +32,8 @@ pub enum MidnamError {
     NoBanks,
     #[error("Too many MIDI patch references")]
     TooManyPatches,
+    #[error("Expanded MIDI patch names exceed the size limit")]
+    OutputTooLarge,
 }
 
 /// Reads channel sets from master device definitions and the default custom mode when provided.
@@ -46,6 +51,7 @@ pub fn read_midnam(bytes: &[u8]) -> Result<Vec<MidnamProfile>, MidnamError> {
     }
     let mut profiles = Vec::new();
     let mut remaining = MAX_PATCH_REFERENCES;
+    let mut name_bytes = MAX_OUTPUT_NAME_BYTES;
     let multiple = root.children("MasterDeviceNames").nth(1).is_some();
     for (index, device) in root.children("MasterDeviceNames").enumerate() {
         let model = if multiple {
@@ -65,10 +71,12 @@ pub fn read_midnam(bytes: &[u8]) -> Result<Vec<MidnamProfile>, MidnamError> {
                     set.child("AvailableForChannels")
                         .map(|node| mask(node.children("AvailableChannel").filter(|a| a.attr("Available") != Some("false"))))
                 });
-            let banks = read_banks(set, &lists, &mut remaining)?;
+            let banks = read_banks(set, &lists, &mut remaining, &mut name_bytes)?;
             if !banks.is_empty() {
+                let prefix_len = model.as_ref().map_or(0, |model| model.len() + NAME_SEPARATOR.len());
+                charge_name_bytes(&mut name_bytes, prefix_len + name.len())?;
                 profiles.push(MidnamProfile {
-                    name: model.as_ref().map_or_else(|| name.to_owned(), |model| format!("{model} · {name}")),
+                    name: model.as_ref().map_or_else(|| name.to_owned(), |model| format!("{model}{NAME_SEPARATOR}{name}")),
                     channels,
                     banks,
                 });
@@ -97,7 +105,17 @@ fn bank_select(commands: Option<&El>, mut bank: u16) -> Option<u16> {
     Some(bank)
 }
 
-fn read_banks(set: &El, lists: &BTreeMap<&str, &El>, remaining: &mut usize) -> Result<BTreeMap<u16, MidnamBank>, MidnamError> {
+fn charge_name_bytes(remaining: &mut usize, bytes: usize) -> Result<(), MidnamError> {
+    *remaining = remaining.checked_sub(bytes).ok_or(MidnamError::OutputTooLarge)?;
+    Ok(())
+}
+
+fn read_banks(
+    set: &El,
+    lists: &BTreeMap<&str, &El>,
+    remaining: &mut usize,
+    name_bytes: &mut usize,
+) -> Result<BTreeMap<u16, MidnamBank>, MidnamError> {
     let mut banks = BTreeMap::new();
     for bank in set.children("PatchBank") {
         let Some(address) = bank_select(bank.child("MIDICommands"), 0) else { continue };
@@ -113,11 +131,15 @@ fn read_banks(set: &El, lists: &BTreeMap<&str, &El>, remaining: &mut usize) -> R
                 continue;
             };
             let Some(address) = bank_select(commands, address) else { continue };
-            banks
-                .entry(address)
-                .or_insert_with(|| MidnamBank { name: name.to_owned(), programs: BTreeMap::new() })
-                .programs
-                .insert(program, label.to_owned());
+            let bank = match banks.entry(address) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    charge_name_bytes(name_bytes, name.len())?;
+                    entry.insert(MidnamBank { name: name.to_owned(), programs: BTreeMap::new() })
+                }
+            };
+            charge_name_bytes(name_bytes, label.len())?;
+            bank.programs.insert(program, label.to_owned());
         }
     }
     Ok(banks)
@@ -151,5 +173,20 @@ mod tests {
     fn rejects_internal_dtds_and_unrelated_xml() {
         assert!(matches!(read_midnam(b"<!DOCTYPE MIDINameDocument [<!ENTITY a 'a'>]><MIDINameDocument/>"), Err(MidnamError::Xml(_))));
         assert_eq!(read_midnam(b"<other/>"), Err(MidnamError::NoBanks));
+    }
+
+    #[test]
+    fn bounds_names_expanded_from_shared_patch_lists_across_profiles() {
+        let label = "x".repeat(256 * 1024);
+        let mut xml =
+            format!(r#"<MIDINameDocument><MasterDeviceNames><PatchNameList Name="Shared"><Patch Name="{label}" ProgramChange="0"/></PatchNameList>"#);
+        for index in 0..65 {
+            xml.push_str(&format!(
+                r#"<ChannelNameSet Name="Set {index}"><PatchBank Name="Shared Bank"><UsesPatchNameList Name="Shared"/></PatchBank></ChannelNameSet>"#
+            ));
+        }
+        xml.push_str("</MasterDeviceNames></MIDINameDocument>");
+        assert!(xml.len() < MAX_MIDNAM_BYTES);
+        assert_eq!(read_midnam(xml.as_bytes()), Err(MidnamError::OutputTooLarge));
     }
 }
