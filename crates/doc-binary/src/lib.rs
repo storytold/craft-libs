@@ -1256,7 +1256,12 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
         };
         // The run's character style, whose formatting joins the paragraph style's as the base of
         // the run's own sprms (see `fmt::with_char_style`).
-        let prc_style = prc_with_style(ctx.pieces.piece_prm(cp));
+        // A Prm1's Prc is charged to `work` once, before it is read: for its style, for the reset
+        // of the CHPX that style makes, and when applied. Once that is spent, the Prc counts for
+        // none of them.
+        let prm_ref = ctx.pieces.piece_prm(cp);
+        let prc = admitted_prc(&prm_ref, ctx.work);
+        let prc_style = prc.filter(|g| fmt::char_style_istd(g).is_some());
         let char_style = char_style(ctx, prc_style.unwrap_or(grpprl));
         let combined;
         let base = match char_style {
@@ -1277,7 +1282,7 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
             }
             None => char_props(grpprl, ctx.fonts, base),
         };
-        apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
+        apply_prm(&mut props, prm_ref, prc, ctx.fonts, base);
         // Kept as direct formatting: what differs from what the styles give the run, as the model
         // resolves them (the paragraph style, then the character style over it). A toggle the
         // styles cancel is kept, since the model overlays them (#1801).
@@ -1343,7 +1348,8 @@ fn style_ahead(ctx: &WalkCtx<'_>, cp: u32, end: u32) -> Option<String> {
     // No further than the walk may read: past that it stops anyway, and a file whose pieces
     // repeat a stretch with no paragraph mark can't make this scan run on for it. Each step,
     // a character or a skipped stretch, counts.
-    let mut left = ctx.budget.get();
+    // The walk has already paid for the character at `cp`, which this reads again.
+    let mut left = ctx.budget.get().saturating_add(1);
     while at < end {
         if left == 0 {
             return None;
@@ -1434,9 +1440,17 @@ fn prm_sprms(prm: PrmRef<'_>, work: &Work, wanted: impl Fn(u8) -> bool) -> Vec<u
     out
 }
 
-/// Apply a piece's Prm (Prm0 short sprm or Prm1 grpprl) to character properties. A Prm1
-/// grpprl is charged to `work`; once that is spent the grpprl is skipped.
-fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &CharProps, work: &Work) {
+/// A piece's Prm1 grpprl, charged to `work`: `None` once that is spent (or for any other Prm).
+fn admitted_prc<'w>(prm: &PrmRef<'w>, work: &Work) -> Option<&'w [u8]> {
+    match *prm {
+        PrmRef::Grpprl(Some(g)) => work.charge(g.len() as u64, Cost::Formatting).then_some(g),
+        _ => None,
+    }
+}
+
+/// Apply a piece's Prm to character properties: a Prm0's short sprm, or the Prm1's grpprl that
+/// [`admitted_prc`] let through as `prc`.
+fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, prc: Option<&[u8]>, fonts: &[String], base: &CharProps) {
     match prm {
         PrmRef::None => {}
         PrmRef::Sprm0 { isprm, val } => {
@@ -1448,15 +1462,11 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
                 }
             }
         }
-        PrmRef::Grpprl(Some(g)) => {
-            if !work.charge(g.len() as u64, Cost::Formatting) {
-                return;
-            }
-            for prl in fmt::after_istd(g) {
+        PrmRef::Grpprl(_) => {
+            for prl in prc.into_iter().flat_map(fmt::after_istd) {
                 fmt::apply_char(props, &prl, base, fonts);
             }
         }
-        PrmRef::Grpprl(None) => {}
     }
 }
 
@@ -1467,15 +1477,6 @@ fn char_props(grpprl: &[u8], fonts: &[String], base: &CharProps) -> CharProps {
         fmt::apply_char(&mut p, &prl, base, fonts);
     }
     p
-}
-
-/// A piece's Prm1 grpprl, when it names a character style (`sprmCIstd`): applied after the
-/// CHPX, its style is the run's and resets the CHPX's formatting.
-fn prc_with_style<'w>(prm: PrmRef<'w>) -> Option<&'w [u8]> {
-    match prm {
-        PrmRef::Grpprl(Some(g)) if fmt::char_style_istd(g).is_some() => Some(g),
-        _ => None,
-    }
 }
 
 /// Read a root-level stream fully; `None` if it is absent or cannot be read. A stream larger than
