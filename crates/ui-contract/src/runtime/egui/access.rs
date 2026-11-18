@@ -1,6 +1,7 @@
 //! AccessKit node building, `register_accesskit_parent` and `set_accesskit_focus`: the one place that names
 //! AccessKit's node API. `node` writes a decided node, `patch` applies the label scope and the status node, `tree`
-//! reads a finished tree update. What a node says is decided in `runtime::access`.
+//! reads a finished tree update, which automation keeps per viewport (`keep_trees`). What a node says is decided in
+//! `runtime::access`.
 
 mod node;
 mod patch;
@@ -9,9 +10,7 @@ mod text;
 mod tree;
 
 use crate::runtime::pass_state;
-#[cfg(feature = "testing")]
-use egui::FullOutput;
-use egui::{Context, Id, IdMap, IdSet, ViewportId};
+use egui::{Context, FullOutput, Id, IdMap, IdSet, ViewportId};
 use std::collections::HashMap;
 
 use super::pass;
@@ -110,7 +109,6 @@ struct Emitted {
     /// Whether the runtime reported a focused node this pass.
     focus_set: bool,
     /// Components that offer a context menu this pass (a `Trigger::Context` opener on them).
-    #[allow(dead_code)] // P3(pdf-shell-w1): SH-C6
     context: IdSet,
 }
 
@@ -124,11 +122,16 @@ impl Emitted {
 /// One store per viewport: every viewport's pass ends with its own `order_children`, and a nested viewport's pass
 /// runs inside its parent's.
 #[derive(Default)]
-pub(crate) struct Reported(HashMap<ViewportId, Emitted>);
+pub(crate) struct Reported {
+    emitted: HashMap<ViewportId, Emitted>,
+    /// The viewport whose pass ended last. egui leaves a viewport before it runs the output hook of its pass, and a
+    /// nested viewport's output hook runs before its parent's pass ends, so this names the pass an output came from.
+    ended: Option<ViewportId>,
+}
 
 fn with_emitted<R>(ctx: &Context, f: impl FnOnce(&mut Emitted) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
-    pass_state::with::<Reported, _>(ctx, |reported| f(reported.0.entry(viewport).or_default()))
+    pass_state::with::<Reported, _>(ctx, |reported| f(reported.emitted.entry(viewport).or_default()))
 }
 
 /// Makes `parent` the node `id` attaches to. Call it before the node of `id` is created.
@@ -165,7 +168,11 @@ pub(crate) fn note_written(ctx: &Context, id: Id) {
 /// (the active item of a list the field drives).
 pub(crate) fn order_children(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let emitted = pass_state::with::<Reported, _>(ctx, |reported| reported.0.remove(&viewport)).unwrap_or_default();
+    let emitted = pass_state::with::<Reported, _>(ctx, |reported| {
+        reported.ended = Some(viewport);
+        reported.emitted.remove(&viewport)
+    })
+    .unwrap_or_default();
     if !emitted.focus_set
         && let Some(owner) = ctx.memory(|memory| memory.focused()).and_then(|widget| emitted.folded.get(&widget))
     {
@@ -197,18 +204,69 @@ fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &IdSet) {
 }
 
 /// Records that the component `id` has a `Trigger::Context` opener in this pass, so its node declares the context
-/// menu action.
-#[allow(dead_code)] // P3(pdf-shell-w1): SH-C6
+/// menu action. An opener that runs after the component reported (a context menu hung on its response after `show`)
+/// adds the action to the node written already: only the node's own write clears its actions, and that ran.
 pub(crate) fn offer_context_menu(ctx: &Context, id: Id) {
-    let _ = (ctx, id);
-    todo!("SH-C6")
+    let written = with_emitted(ctx, |emitted| {
+        emitted.context.insert(id);
+        emitted.written.contains(&id)
+    });
+    if written {
+        ctx.accesskit_node_builder(id, |node| node.add_action(accesskit::Action::ShowContextMenu));
+    }
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| offer_context_menu(ctx, id));
 }
 
 /// Whether `id` has a `Trigger::Context` opener recorded in this pass.
-#[allow(dead_code)] // P3(pdf-shell-w1): SH-C6
 pub(crate) fn offers_context_menu(ctx: &Context, id: Id) -> bool {
-    let _ = (ctx, id);
-    todo!("SH-C6")
+    with_emitted(ctx, |emitted| emitted.context.contains(&id))
+}
+
+/// The AccessKit trees automation reads ([`keep_trees`], [`kept_tree`]): an observation of finished output, kept
+/// apart from the pass state, which no pass reads.
+#[derive(Default)]
+struct KeptTrees {
+    /// Whether trees are kept: automation asked for them.
+    on: bool,
+    /// Each viewport's tree update from its last presented pass.
+    trees: HashMap<ViewportId, accesskit::TreeUpdate>,
+}
+
+fn with_kept<R>(ctx: &Context, f: impl FnOnce(&mut KeptTrees) -> R) -> R {
+    super::memory::Service::<KeptTrees>::run(ctx, f)
+}
+
+/// Turns AccessKit output on and keeps every viewport's tree from then on. The trees of closed viewports go in the
+/// frame loop's prune step.
+pub(crate) fn keep_trees(ctx: &Context) {
+    let first = with_kept(ctx, |kept| !std::mem::replace(&mut kept.on, true));
+    if first {
+        crate::runtime::frame::register_prune(ctx, std::any::TypeId::of::<KeptTrees>(), prune_kept);
+    }
+    ctx.enable_accesskit();
+}
+
+fn prune_kept(ctx: &Context, live: &[ViewportId]) {
+    with_kept(ctx, |kept| kept.trees.retain(|viewport, _| live.contains(viewport)));
+}
+
+/// The output hook's step: keeps a copy of the tree update `output` carries, for the viewport whose pass made it,
+/// while [`keep_trees`] is on. The update itself goes on to the platform untouched. A frame that reruns a pass keeps
+/// the last pass's tree, the one presented.
+pub(crate) fn keep_output(ctx: &Context, output: &FullOutput) {
+    // AccessKit off: no update, and nothing to look up.
+    let Some(update) = &output.platform_output.accesskit_update else { return };
+    let Some(viewport) = pass_state::with::<Reported, _>(ctx, |reported| reported.ended) else { return };
+    with_kept(ctx, |kept| {
+        if kept.on {
+            kept.trees.insert(viewport, update.clone());
+        }
+    });
+}
+
+/// The tree [`keep_trees`] kept for `viewport`; `None` before its first presented pass or while trees are not kept.
+pub(crate) fn kept_tree(ctx: &Context, viewport: ViewportId) -> Option<AccessTree> {
+    with_kept(ctx, |kept| kept.trees.get(&viewport).cloned()).map(AccessTree::new)
 }
 
 /// The tree update of a finished frame.

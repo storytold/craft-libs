@@ -271,6 +271,94 @@ fn files_that_leave_the_window_end_the_drag_without_a_drop() {
     assert!(landed.borrow().rows.is_empty() && landed.borrow().window.is_empty(), "nothing landed");
 }
 
+/// A drop of files anywhere in the window, with each file's content.
+struct ReadOnWindow;
+
+impl WindowDropTarget<OsFiles> for ReadOnWindow {
+    type Drop = Vec<(String, Option<Vec<u8>>)>;
+
+    fn accept(&self, files: &OsFiles, _: DropOperation) -> Option<Self::Drop> {
+        Some(files.files.iter().map(|file| (file.name.clone(), file.bytes.as_deref().map(<[u8]>::to_vec))).collect())
+    }
+
+    fn mark(&self, _: &Self::Drop) -> DropMark {
+        DropMark::Into(WINDOW)
+    }
+}
+
+/// A window that takes dropped files with their content, and the pass of its frame each drop landed in.
+#[derive(Component)]
+struct ReadDrop<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Vec<(usize, Vec<(String, Option<Vec<u8>>)>)>>,
+    pass: usize,
+}
+
+impl Component for ReadDrop<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: ReadDropStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        LIST.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(files) = cx.window_drop_target(&ReadOnWindow) {
+            self.landed.borrow_mut().push((self.pass, files));
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// L-54: a web page reads a dropped file's bytes only after the drop, so the drop used to reach its target with no
+/// bytes. The drag waits for the read: the drop frame delivers nothing, and the file arrives once, with its bytes, in
+/// the first pass of the frame after its bytes came; a rerun pass of that frame and the next frame deliver nothing.
+#[trial]
+fn a_pathless_drop_is_delivered_once_its_bytes_are_read() {
+    let landed = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    let pass = std::cell::Cell::new(0);
+    let mut show = |ui: &mut Ui| {
+        ReadDrop { common: Common::new(), landed: &landed, pass: pass.get() }.id_salt("window").show_at(ui, LIST);
+        pass.set(pass.get() + 1);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["scan.pdf"]);
+    frames.idle(2, &mut show);
+    assert!(drag::active::<OsFiles>(&frames.ctx).is_some(), "the hovering file is the active payload");
+
+    frames.read_dropped("scan.pdf", b"%PDF-1.7");
+    pass.set(0);
+    frames.idle(1, &mut show);
+    assert!(landed.borrow().is_empty(), "the drop frame delivers nothing while the file is read");
+    assert!(drag::active::<OsFiles>(&frames.ctx).is_some(), "the drag waits for the read");
+
+    pass.set(0);
+    let mut first = true;
+    let passes = frames.frame(Vec::new(), |ui| {
+        if std::mem::take(&mut first) {
+            craft_ui::runtime::frame::discard_pass(ui.ctx(), "test");
+        }
+        show(ui);
+    });
+    assert_eq!(passes, 2, "the frame after the read reruns");
+    let delivered = vec![(0, vec![("scan.pdf".to_owned(), Some(b"%PDF-1.7".to_vec()))])];
+    assert_eq!(*landed.borrow(), delivered, "the file arrives once, with its bytes, in the first pass after the read");
+
+    frames.idle(2, &mut show);
+    assert_eq!(*landed.borrow(), delivered, "later frames deliver nothing more");
+    assert!(drag::active::<OsFiles>(&frames.ctx).is_none(), "the drop ends the drag");
+}
+
 /// Where the window's inner rect sits on the desktop in the desktop-pointer trial.
 const WINDOW_AT: Pos2 = Pos2::new(100.0, 50.0);
 

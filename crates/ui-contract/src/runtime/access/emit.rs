@@ -152,7 +152,6 @@ fn write_position(spec: &mut NodeSpec, position: Option<SetPosition>, level: Opt
 
 /// The actions the interaction and the numeric facts declare.
 fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, context_menu: bool, numeric: Option<&Numeric>) {
-    let _ = context_menu; // P3(pdf-shell-w1): SH-C6
     // A read-only value offers no action that would change it.
     let numeric = numeric.filter(|_| !spec.read_only);
     if focusable {
@@ -160,6 +159,9 @@ fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, contex
     }
     if clickable {
         spec.actions.push(NodeAction::Click);
+    }
+    if context_menu {
+        spec.actions.push(NodeAction::ContextMenu);
     }
     if let Some(numeric) = numeric.filter(|numeric| numeric.step.is_some()) {
         // A step that cannot move the value is not offered: no Increment at the range's end, unless the value wraps.

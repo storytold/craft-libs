@@ -15,9 +15,17 @@ pub(crate) fn set_cursor_image(ctx: &Context, image: Option<&CursorBitmap>) {
     ctx.set_cursor_image(image.map(|image| egui::CustomCursorImage { rgba: image.rgba.clone(), size: image.size, hotspot: image.hotspot }));
 }
 
-/// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set.
+/// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set. On the web a new tab
+/// opens through the platform's one web opener, which gives the page no handle on the app (`noopener,noreferrer`).
 pub(crate) fn open_url(ctx: &Context, url: &str, new_tab: bool) {
     if !crate::runtime::measure::effect(ctx, "open_url") {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if new_tab {
+        if let Err(error) = craft_platform::open::open_external(url) {
+            log::warn!("could not open {url:?} in a new tab: {error}");
+        }
         return;
     }
     ctx.open_url(if new_tab { egui::OpenUrl::new_tab(url) } else { egui::OpenUrl::same_tab(url) });

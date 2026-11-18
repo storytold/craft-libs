@@ -20,8 +20,12 @@ pub(crate) fn save_placement(ctx: &Context, key: &str, placement: &Placement) {
     store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set(key, placement);
 }
 
-/// Keeps the window's placement in the store, as [`placement_of`] records it.
+/// Keeps the window's placement in the store, as [`placement_of`] records it. A minimized window keeps the last
+/// placement it was shown at: Windows reports it as 0 × 0 far off screen, which would reopen at egui's size floor.
 pub(super) fn record_placement(ctx: &Context, viewport: ViewportId, key: &str, facts: &viewports::Facts) {
+    if facts.minimized {
+        return;
+    }
     let Some(inner) = facts.inner else { return };
     let geometry = Geometry { inner, outer: facts.outer, scale: facts.native_scale, maximized: facts.maximized, fullscreen: facts.fullscreen };
     let unchanged = PerViewport::<Record>::with(ctx, viewport, |record| record.placed.replace(geometry) == Some(geometry));

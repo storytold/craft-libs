@@ -24,6 +24,10 @@ impl Hwnd {
         Hwnd(raw)
     }
 
+    pub(crate) fn raw(self) -> isize {
+        self.0
+    }
+
     fn of(window: &w::HWND) -> Self {
         Hwnd(window.ptr() as isize)
     }

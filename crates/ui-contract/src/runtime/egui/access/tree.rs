@@ -69,7 +69,7 @@ pub enum Declared {
 }
 
 impl Declared {
-    fn action(self) -> Action {
+    pub(crate) fn action(self) -> Action {
         match self {
             Declared::Focus => Action::Focus,
             Declared::Click => Action::Click,

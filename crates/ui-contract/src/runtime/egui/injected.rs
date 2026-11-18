@@ -162,7 +162,6 @@ struct Step {
     pen: Option<PointerSample>,
     hold: Option<Hold>,
     /// Files the step hovers over the window, or drops.
-    #[allow(dead_code)] // P3(pdf-shell-w1): WF-W7
     pub files: Option<InjectedFiles>,
 }
 
@@ -408,6 +407,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
         }
         if let Some(step) = lane.queue.pop_front() {
             input.events.extend(step.events.iter().cloned());
+            if let Some(files) = &step.files {
+                give_files(input, files);
+            }
             let until = (step.rest > 0.0).then_some(input.time).flatten().map(|now| now + step.rest);
             let held = injected.held.entry(viewport).or_default();
             let before = held.clone();
@@ -657,16 +659,54 @@ pub(crate) fn inject_text(ctx: &Context, viewport: ViewportId, text: &str) {
     });
 }
 
-/// Queues the hover of `paths` over `at` and, with `drop`, their drop in the following step.
+/// Queues the hover of `paths` over `at` (a move there first; with no `at` the pointer stays) and, with `drop`, their
+/// drop in the following step. No path, or a non-finite `at`, queues nothing.
 pub(crate) fn inject_files(ctx: &Context, viewport: ViewportId, at: Option<Pos2>, paths: Vec<std::path::PathBuf>, drop: bool) {
-    let _ = (ctx, viewport, at, paths, drop);
-    todo!("WF-W7")
+    if paths.is_empty() || at.is_some_and(|at| finite(at).is_none()) {
+        return;
+    }
+    queue(ctx, viewport, |request| {
+        let mods = request.held.mods;
+        if let Some(at) = at {
+            request.move_to(at, mods, None);
+        }
+        request.step(mods, []).files = Some(InjectedFiles { paths: paths.clone(), dropped: false });
+        if drop {
+            request.step(mods, []).files = Some(InjectedFiles { paths, dropped: true });
+        }
+    });
 }
 
-/// Queues one AccessKit action request (click, focus or context menu) on `node`, behind earlier injected input.
+/// Gives `input` the files of a step through the input a window's file drag fills: hovered files, or dropped ones,
+/// which the window's drag session reads as from the OS.
+fn give_files(input: &mut egui::RawInput, files: &InjectedFiles) {
+    if files.dropped {
+        input.hovered_files.clear();
+        input.dropped_files.extend(
+            files.paths.iter().map(|path| std::sync::Arc::new(super::files::DroppedPath(path.clone())) as egui::DroppedFileHandle),
+        );
+    } else {
+        input.hovered_files =
+            files.paths.iter().map(|path| egui::HoveredFile { path: Some(path.clone()), mime: String::new() }).collect();
+    }
+}
+
+/// Queues one AccessKit action request on `node` as one step, behind earlier injected input: a click, a focus or a
+/// context menu request, the actions that carry no data. Any other action queues nothing.
 pub(crate) fn inject_access(ctx: &Context, viewport: ViewportId, node: NodeKey, action: Declared) {
-    let _ = (ctx, viewport, node, action);
-    todo!("SH-C9")
+    if !matches!(action, Declared::Click | Declared::Focus | Declared::ContextMenu) {
+        return;
+    }
+    let request = accesskit::ActionRequest {
+        action: action.action(),
+        target_tree: accesskit::TreeId::ROOT,
+        target_node: accesskit::NodeId(node.raw()),
+        data: None,
+    };
+    queue(ctx, viewport, move |writing| {
+        let mods = writing.held.mods;
+        writing.step(mods, [Event::AccessKitActionRequest(request)]);
+    });
 }
 
 /// Queues one IME event (a preedit or a commit) with the held modifiers, behind earlier injected input.

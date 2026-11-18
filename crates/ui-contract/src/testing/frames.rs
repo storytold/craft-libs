@@ -242,11 +242,13 @@ impl Frames {
         self.files.dropped = names.iter().map(|name| (*name).to_owned()).collect();
     }
 
-    /// A file the page read asynchronously (a web drop with neither path nor bytes) arrives with its `bytes`: the fixture
-    /// posts it into the file inbox as the wasm read does, and the next pass delivers it once.
+    /// The hovering files drop on the window in the next frame as a web page drops them, with neither path nor bytes:
+    /// the page reads the file `name` asynchronously, and its `bytes` arrive after that frame. The fixture opens the read
+    /// in the drop frame and posts the file into the file inbox after it, as the wasm read does; the pass after it
+    /// delivers the drop once.
     pub fn read_dropped(&mut self, name: &str, bytes: &[u8]) {
-        let _ = (name, bytes);
-        todo!("SH-C11")
+        self.files.hovered.clear();
+        self.files.read.push((name.to_owned(), bytes.to_vec()));
     }
 
     /// Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls
@@ -287,7 +289,11 @@ impl Frames {
             self.told = self.modifiers;
             events.insert(0, fixture::modifiers_changed(self.modifiers));
         }
-        let files = fixture::OsFiles { hovered: self.files.hovered.clone(), dropped: std::mem::take(&mut self.files.dropped) };
+        let files = fixture::OsFiles {
+            hovered: self.files.hovered.clone(),
+            dropped: std::mem::take(&mut self.files.dropped),
+            read: std::mem::take(&mut self.files.read),
+        };
         let mut result = fixture::run_frame(&self.ctx, self.time, self.screen, self.pixels_per_point, viewport, events, files, ui);
         match &mut self.paint {
             Some(Recorded(paint)) => {

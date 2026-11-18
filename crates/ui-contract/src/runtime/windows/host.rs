@@ -5,7 +5,7 @@ use super::native::{WindowAction, act};
 use super::placement::placement_of;
 use super::shell::{base_shell, shell_of, window_info};
 use super::spec::frame_of;
-use super::{Record, shared};
+use super::{Record, keep_root_frame, shared};
 use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
 use crate::runtime::egui::injected::{self, InjectedPointer, Released};
 use crate::runtime::egui::input_filter;
@@ -17,7 +17,7 @@ use craft_behavior::{Monitor, PointerButton};
 use craft_host::target::{Caps, ShellInfo, WindowState};
 use craft_keymap::{Chord, Key, Mods};
 use craft_window::desktop::Desktop;
-use craft_window::policy::Frame;
+use craft_window::policy::{Decision, Frame, LayoutWatch};
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 
 /// What the OS tells about a window, in desktop points.
@@ -222,21 +222,36 @@ impl WindowHost {
 
     /// Turns AccessKit output on and, from then on, keeps each viewport's tree from the last presented frame.
     pub fn keep_access_tree(&self) {
-        todo!("SH-C7")
+        crate::runtime::egui::access::keep_trees(&self.ctx);
     }
 
     /// The kept AccessKit tree of `viewport`: `None` before its first presented frame or without
     /// [`keep_access_tree`](Self::keep_access_tree).
     pub fn access_tree(&self, viewport: ViewportId) -> Option<AccessTree> {
-        let _ = viewport;
-        todo!("SH-C8")
+        crate::runtime::egui::access::kept_tree(&self.ctx, viewport)
     }
 
-    /// Changes the open root window's frame to `decision`'s and returns true; a change to or from the inset frame
-    /// cannot reach an open window, keeps the current decision and returns false.
-    pub fn set_root_frame(&self, decision: craft_window::policy::Decision) -> bool {
-        let _ = decision;
-        todo!("SH-C1")
+    /// Changes the open root window's frame to `decision`'s and returns true: the window gets the commands
+    /// [`policy::reframe`](craft_window::policy::reframe) gives, and [`frame`](Self::frame),
+    /// [`desktop`](Self::desktop) and the root shell's chrome follow at once. A change of caption buttons alone sends
+    /// no command, and the decision in force changes nothing. A change to or from the inset frame cannot reach an open
+    /// window: it keeps the current decision and returns false. Call it when the app's decision changes (the user's
+    /// title bar setting); between calls the caption layout follows the desktop.
+    pub fn set_root_frame(&self, decision: Decision) -> bool {
+        let (installed, desktop) = shared(&self.ctx, |shared| (shared.root_frame.clone(), shared.desktop.clone()));
+        let current = installed.unwrap_or_else(|| frame_in(&self.ctx, ViewportId::ROOT));
+        let Some(commands) = craft_window::policy::reframe(&current, &decision.frame) else { return false };
+        if current == decision.frame && desktop.as_ref() == Some(&decision.desktop) {
+            return true;
+        }
+        // The watch may read the desktop's settings, so it is built outside the lock.
+        let layouts = LayoutWatch::new(&decision);
+        shared(&self.ctx, |shared| keep_root_frame(shared, decision, layouts));
+        for command in commands {
+            viewports::command(&self.ctx, ViewportId::ROOT, command);
+        }
+        self.ctx.request_repaint_of(ViewportId::ROOT);
+        true
     }
 
     /// Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass
@@ -292,7 +307,8 @@ impl WindowHost {
     /// The main window's native handle (the Win32 `HWND` value, read through the safe `HasWindowHandle` API), `None` on
     /// other platforms and where no window is open. A driver dialog takes it as its owner.
     pub fn main_window_handle(&self) -> Option<std::num::NonZeroIsize> {
-        todo!("L-178")
+        // The root window's OS window comes from eframe's handle (`route_root`), read through `HasWindowHandle`.
+        PerViewport::<Record>::with(&self.ctx, ViewportId::ROOT, |record| record.native.clone())?.raw_handle()
     }
 
     /// Moves the system pointer to `to` in desktop points; false where the platform cannot.
@@ -381,8 +397,7 @@ impl WindowHost {
         {
             return frame;
         }
-        let captions = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.captions.clone());
-        frame_of(window_info(&self.ctx, viewport, &base_shell(&self.ctx)).chrome, captions)
+        frame_in(&self.ctx, viewport)
     }
 
     /// The desktop the app's windows open on, as the installed frame decision detected it; `None` when the app
@@ -411,6 +426,13 @@ impl WindowHost {
         let inner = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts.and_then(|facts| facts.inner))?;
         inner.contains(desktop).then(|| Pos2::ZERO + (desktop - inner.min))
     }
+}
+
+/// The frame of `viewport`'s window as its chrome and the caption buttons it was opened with tell it, for a window
+/// with no installed decision.
+fn frame_in(ctx: &Context, viewport: ViewportId) -> Frame {
+    let captions = PerViewport::<Record>::with(ctx, viewport, |record| record.captions.clone());
+    frame_of(window_info(ctx, viewport, &base_shell(ctx)).chrome, captions)
 }
 
 /// The connected monitors in physical pixels; none where the platform does not list them.

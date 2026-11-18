@@ -17,7 +17,6 @@ pub(crate) enum Toggle {
 pub(crate) enum NodeAction {
     Focus,
     Click,
-    #[allow(dead_code)] // P3(pdf-shell-w1): SH-C6
     ContextMenu,
     Increment,
     Decrement,

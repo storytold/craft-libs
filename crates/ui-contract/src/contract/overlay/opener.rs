@@ -67,6 +67,9 @@ impl Opener {
         // The opener's `Response` carries the press path's verdict, for a root with its own egui widget and for an
         // arena member alike: whether the open press is on it and whether a click released on it.
         let pressed_on = response::is_pressed(anchor);
+        if trigger == Trigger::Context && anchor.enabled() {
+            crate::runtime::egui::access::offer_context_menu(&anchor.ctx, anchor.id);
+        }
         let request = keys::context_request(&anchor.ctx, anchor.id);
         let (fired, opening, pressed, clicked) = pointer::with_pass_pointer(&anchor.ctx, |pass| {
             let Some(frame) = pass.frame.as_ref() else { return (false, Opening::Plain, false, false) };

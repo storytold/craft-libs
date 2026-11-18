@@ -292,8 +292,14 @@ pub fn apply(builder: egui::ViewportBuilder, frame: &Frame) -> egui::ViewportBui
 /// `[]`. A change to or from `Inset` gives `None`, as egui has no runtime command for its builder-only settings.
 #[cfg(feature = "ui")]
 pub fn reframe(from: &Frame, to: &Frame) -> Option<Vec<egui::ViewportCommand>> {
-    let _ = (from, to);
-    todo!("SH-C37")
+    match (from, to) {
+        // The full-size content view, hidden title and hidden title bar are set only through the builder.
+        (Frame::Inset(_), _) | (_, Frame::Inset(_)) => (from == to).then(Vec::new),
+        (Frame::Native, Frame::Integrated(_)) => Some(vec![egui::ViewportCommand::Decorations(false)]),
+        (Frame::Integrated(_), Frame::Native) => Some(vec![egui::ViewportCommand::Decorations(true)]),
+        // The caption buttons are the app's own drawing: no window command changes them.
+        (Frame::Native, Frame::Native) | (Frame::Integrated(_), Frame::Integrated(_)) => Some(Vec::new()),
+    }
 }
 
 impl From<&crate::Frame> for Frame {
@@ -351,5 +357,25 @@ mod tests {
         assert_ne!(laid.layout, base.layout);
 
         assert_eq!(decided(TitleBarPref::System, Some("breeze"), Some("close:")), Frame::Native, "a native frame has no captions to change");
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn reframe_moves_an_open_window_between_native_and_integrated_and_refuses_inset() {
+        use egui::ViewportCommand::Decorations;
+        let integrated = decided(TitleBarPref::Integrated, None, None);
+        let restyled = decided(TitleBarPref::Integrated, Some("breeze"), Some("close:"));
+        let inset = Frame::Inset(MacInset::default());
+
+        assert_eq!(reframe(&Frame::Native, &integrated), Some(vec![Decorations(false)]), "the app's bar turns the OS frame off");
+        assert_eq!(reframe(&integrated, &Frame::Native), Some(vec![Decorations(true)]), "the system's bar turns it back on");
+        assert_eq!(reframe(&integrated, &restyled), Some(Vec::new()), "the caption buttons are the app's drawing");
+        assert_eq!(reframe(&Frame::Native, &Frame::Native), Some(Vec::new()));
+        assert_eq!(reframe(&inset, &inset), Some(Vec::new()), "an unchanged inset frame needs no command");
+
+        assert_eq!(reframe(&Frame::Native, &inset), None, "the inset frame is set only before the window opens");
+        assert_eq!(reframe(&inset, &Frame::Native), None);
+        assert_eq!(reframe(&inset, &integrated), None);
+        assert_eq!(reframe(&integrated, &inset), None);
     }
 }

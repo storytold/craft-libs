@@ -340,7 +340,9 @@ pub(crate) fn begin(ctx: &Context) {
 }
 
 /// The session of files the OS drags over the window (8.4): files held over the window start one, the dropped files
-/// replace its payload in the frame of the drop, and files that leave without a drop end it.
+/// replace its payload in the frame of the drop, and files that leave without a drop end it. A drop whose files are
+/// still being read (`Seen::reading`) keeps the session, and its targets, until the pass that receives the files: that
+/// pass is the drop's.
 fn os_files(ctx: &Context) {
     let seen = files::seen(ctx);
     let frame = pass::root_frame_nr(ctx);
@@ -372,7 +374,7 @@ fn os_files(ctx: &Context) {
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
                 session.dropped = Some(frame);
-            } else if !hovering && session.dropped != Some(frame) {
+            } else if !hovering && !seen.reading && session.dropped != Some(frame) {
                 board.session = None;
             }
         }

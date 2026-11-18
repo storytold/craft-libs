@@ -479,6 +479,52 @@ fn one_pointer_resolution_per_pass_whatever_the_number_of_roots() {
     assert!(one.contains(&1), "the pointer in the window is resolved: {one:?}");
 }
 
+const LINK: PartKey = PartKey::new("link");
+const SURFACE: PartKey = PartKey::new("surface");
+
+/// L-19: a link on a page clicks, but a drag that starts on it belongs to the page under it (production's
+/// `Hit::declines_drag`). A press past slop on a click part that passes its drag gives the `DragStart` to the next
+/// shape below that drags, whether that shape is the same root's own part or a root shown below; the link sees no
+/// press of its own then, and a release within slop is the link's click with nothing below pressed.
+#[trial]
+fn a_press_over_a_passing_click_part_hands_its_drag_to_the_shape_below_in_its_root_and_in_the_root_below() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let link_rect = rect(150.0, 150.0, 60.0, 20.0);
+    let link = || ProbePart::new(LINK, link_rect, Sense::CLICK | Sense::PASSES_DRAG).level(HitLevel::Edge, 0);
+    let surface = || ProbePart::new(SURFACE, page, Sense::DRAG).level(HitLevel::Background, 0);
+    let own = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()).part(link())];
+    let stacked = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()), ProbeRoot::new("link", link_rect, Sense::empty()).part(link())];
+    // Each case: its roots, the root of the link and the root of the dragging shape below it.
+    for (case, roots, link_root, below_root) in [("in its own root", own, 0, 0), ("in the root below", stacked, 1, 0)] {
+        let (mut show_frame, log) = scene(roots);
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show_frame);
+        let on_link = link_rect.center();
+        log.borrow_mut().clear();
+
+        drag(&mut frames, on_link, Vec2::new(40.0, 30.0), &mut show_frame);
+        {
+            let log = log.borrow();
+            let below = log.root_phases(below_root, Some(SURFACE));
+            assert_eq!(drags(&below), 1, "{case}: the shape below takes the drag: {below:?}");
+            assert!(matches!(below.last(), Some(PressPhase::Release { .. })), "{case}: and its release: {below:?}");
+            let on = log.root_phases(link_root, Some(LINK));
+            assert!(
+                !on.iter().any(|phase| matches!(phase, PressPhase::DragStart { .. } | PressPhase::Release { click: true, .. })),
+                "{case}: the link neither drags nor clicks: {on:?}"
+            );
+        }
+
+        log.borrow_mut().clear();
+        pointer::click(&mut frames, on_link, &mut show_frame);
+        let log = log.borrow();
+        let on = log.root_phases(link_root, Some(LINK));
+        assert!(on.iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })), "{case}: a release within slop clicks the link: {on:?}");
+        let below = log.root_phases(below_root, Some(SURFACE));
+        assert!(below.is_empty(), "{case}: the shape below sees no press of a click: {below:?}");
+    }
+}
+
 /// While a press on one root is held, another root the pointer moves over does not hover; it hovers once the press
 /// ends.
 #[trial]

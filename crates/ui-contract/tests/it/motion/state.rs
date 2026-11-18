@@ -128,3 +128,35 @@ fn a_component_animating_on_does_not_fight_the_state_mix() {
     frames.idle(60, &mut show);
     assert_eq!(frames.repaint_delay(), None, "with no loop under reduced motion, nothing is left to animate");
 }
+
+/// Under reduced motion nothing eases: the hover state mix, a component's own tween and a presence that opens are at
+/// their end in the frames their target changes in, and ask for no pass after them. Full motion would still be easing
+/// there and asking for the next pass.
+#[trial]
+fn reduced_motion_settles_every_animation_at_once() {
+    let hover = Cell::new(0.0);
+    let seen = Seen::default();
+    let open = Cell::new(false);
+    let mut frames = Frames::new();
+    frames.root(RootEnv::default().motion(MotionMode::Reduced));
+    let mut show = |ui: &mut egui::Ui| {
+        Hovered { common: Common::new(), seen: &hover }.show(ui);
+        Animator { common: Common::new(), open: open.get(), seen: &seen }.show(ui);
+    };
+    frames.idle(3, &mut show);
+    assert_eq!(seen.own_on.get(), ON, "the component's own tween is at its target from its first frames");
+    let rest = hover.get();
+
+    // The pointer arrives over the hovered component and the panel opens in one frame; the hover reads a pass later.
+    open.set(true);
+    frames.frame(vec![moved(Pos2::new(10.0, 10.0))], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let (hovered, presence) = (hover.get(), seen.presence.get());
+    assert_eq!(frames.repaint_delay(), None, "nothing is left easing: {hovered} {presence:?}");
+    assert!(matches!(presence, Some((_, true, false))), "the panel shows and is not leaving: {presence:?}");
+
+    frames.idle(30, &mut show);
+    assert!(hovered > rest, "the hover rose from {rest}");
+    assert_eq!(hover.get(), hovered, "the hover was already at its end");
+    assert_eq!(seen.presence.get(), presence, "the presence was already at its end");
+}

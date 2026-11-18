@@ -38,8 +38,14 @@ pub fn system_appearance(ctx: &Context) -> SystemState {
 
 /// The desktop text scale from the installed [`SystemReader`], `None` where the OS gives none.
 pub fn system_text_scale(ctx: &Context) -> Option<f32> {
-    let _ = ctx;
-    todo!("SH-C4")
+    Service::<Source>::run(ctx, |source| source.0.text_scale())
+}
+
+/// Tells the reader whether the app is active, so a desktop source that reports the appearance only for an active app
+/// reads again when the root window gains focus.
+pub(crate) fn set_active(ctx: &Context, active: bool) {
+    // PLAN: assumed SystemReader::set_active(&self, bool) (pdf-shell-w3)
+    Service::<Source>::run(ctx, |source| source.0.set_active(active));
 }
 
 pub(crate) fn install(ctx: &Context, reader: SystemReader) {
