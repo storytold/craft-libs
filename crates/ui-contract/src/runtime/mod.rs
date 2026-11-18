@@ -36,3 +36,5 @@ pub mod windows;
 pub mod words;
 
 pub use install::{InstallError, InstallSpec, install};
+#[doc(hidden)]
+pub use replay::journal;

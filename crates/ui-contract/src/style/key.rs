@@ -24,7 +24,7 @@ pub enum Ink {
 }
 
 /// The key of everything a style depends on besides its own key: tokens, direction, scale, the OS, the window's
-/// active state and the style-affecting app values.
+/// active state, the style-affecting app values and the language of the built-in words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct EnvKey(u64);
 
@@ -44,6 +44,12 @@ impl EnvKey {
     /// This key with the line height per point of the interface stack's leading face folded in: control heights follow it.
     pub(crate) fn with_line(self, line_ratio: f32) -> Self {
         self.folded(u64::from(line_ratio.to_bits()))
+    }
+
+    /// This key with the generation of the scope's built-in words folded in (`Words::generation`): text, and with it
+    /// sizes, follow the language.
+    pub(crate) fn with_words(self, generation: u64) -> Self {
+        self.folded(generation)
     }
 
     /// This key with one more input folded in: a face's styles depend on the host's ink as well.
