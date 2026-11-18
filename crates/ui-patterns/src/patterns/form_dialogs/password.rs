@@ -1,9 +1,9 @@
 //! `PasswordDialog`: the password for a protected file, a permissions password, or a new password with its strength.
 
 use crate::buttons::ToggleButton;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, BodyCx, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use crate::dialog::{Dialog, DialogOutput};
-use crate::display::{Icon, Progress, Text};
+use crate::display::{Icon, Progress, Shade, Text};
 use crate::form::{Field, FieldGroup, Help};
 use crate::layout_components::{Row, Stack};
 use crate::primitives::IconSpec;
@@ -49,6 +49,11 @@ craft_ui::words! {
         medium: "passwordDialog.medium" = "Medium";
         strong: "passwordDialog.strong" = "Strong";
         wrong: "passwordDialog.wrong" = "That password is not correct.";
+        open_several: count "passwordDialog.openSeveral" =
+            "{n} file is protected. Enter a password to open it." | "{n} files are protected. Enter a password to open them.";
+        permissions_several: count "passwordDialog.permissionsSeveral" =
+            "{n} file has security restrictions. Enter its permissions password to lift them."
+            | "{n} files have security restrictions. Enter their permissions password to lift them.";
     }
 }
 
@@ -167,14 +172,12 @@ impl PasswordPurpose {
 
     /// The purpose of opening `count` files with one password.
     pub fn open_several(count: usize) -> Self {
-        let _ = count;
-        todo!("WF-W13")
+        PasswordPurpose::Open { files: PasswordFiles::Several(count) }
     }
 
     /// The purpose of lifting the restrictions of `count` files with one password.
     pub fn permissions_several(count: usize) -> Self {
-        let _ = count;
-        todo!("WF-W13")
+        PasswordPurpose::Permissions { files: PasswordFiles::Several(count) }
     }
 }
 
@@ -240,6 +243,14 @@ pub struct PasswordFieldsOutput {
     pub valid: bool,
 }
 
+impl Outcome for PasswordFieldsOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
 /// The password fields: the masked field with the reveal toggle that hands the focus back, the Re-type field with the
 /// mismatch help, the strength help and meter, and an error line.
 #[must_use = "show the fields with `show`"]
@@ -271,27 +282,104 @@ impl<'a> PasswordFields<'a> {
         self
     }
 
-    /// Shows the fields.
+    /// Shows the fields. With a confirmation field the first one takes the strength help once something is typed,
+    /// else the error line; without one, the error line.
     pub fn show(self, ui: &mut Ui) -> PasswordFieldsOutput {
-        let PasswordFields { label, input, confirm, error } = self;
-        let _ = (ui, label, input, confirm, error);
-        todo!("DG-C15")
+        let PasswordFields { label, mut input, mut confirm, error } = self;
+        let env = Env::of(ui);
+        let words = env.words::<PasswordWords>();
+        let mut valid = false;
+        let shown = Stack::new().show(ui, |ui, cx| {
+            let mut revealed = cx.memory::<Revealed>().0;
+            let typed = bound_text(&mut input, cx);
+            let retyped = confirm.as_mut().map(|confirm| bound_text(confirm, cx));
+            let strength = (retyped.is_some() && !typed.is_empty()).then(|| PasswordStrength::of(&typed));
+            FieldGroup::new(words.fields.clone()).show(ui, |ui, _| {
+                let mut field = Field::new(label.clone());
+                if let Some(strength) = strength {
+                    let (word, tone) = match strength {
+                        PasswordStrength::Weak => (&words.weak, Tone::Bad),
+                        PasswordStrength::Medium => (&words.medium, Tone::Warn),
+                        PasswordStrength::Strong => (&words.strong, Tone::Good),
+                    };
+                    field = field.help(Help::Status(tone, Label::from(words.strength.fill(&[("strength", word.as_str())]))));
+                } else if let Some(error) = &error {
+                    field = field.help(Help::Status(Tone::Bad, error.clone()));
+                }
+                field.show(ui, |ui, _| {
+                    Row::new().show(ui, |ui, _| {
+                        let mut text = TextField::new(label.clone(), input.reborrowed());
+                        if !revealed {
+                            text = text.masked();
+                        }
+                        let text = text.show(ui);
+                        let name = if revealed { words.hide.clone() } else { words.show.clone() };
+                        let reveal = ToggleButton::new(name, Bind::bound(&mut revealed))
+                            .icon(IconId::new("eye"))
+                            .on_icon(IconId::new("eye_off"))
+                            .icon_only()
+                            .show(ui);
+                        // Typing goes on in the field: the reveal button hands the focus back, as does a press that left
+                        // nothing focused.
+                        if clicked(reveal.response()) || focus::focused_rec(ui.ctx()).is_none() {
+                            focus::request(ui.ctx(), FocusTarget::Id(text.response().id));
+                        }
+                    });
+                });
+                if let (Some(confirm), Some(retyped)) = (confirm.as_mut(), &retyped) {
+                    let mismatch = (!retyped.is_empty() && typed != *retyped).then(|| words.mismatch.clone());
+                    let mut field = Field::new(words.retype_password.clone());
+                    if let Some(mismatch) = mismatch {
+                        field = field.help(Help::Status(Tone::Bad, mismatch));
+                    }
+                    field.show(ui, |ui, _| {
+                        let mut text = TextField::new(words.retype_password.clone(), confirm.reborrowed());
+                        if !revealed {
+                            text = text.masked();
+                        }
+                        text.show(ui);
+                    });
+                }
+            });
+            if let Some(strength) = strength {
+                let (filled, variant) = match strength {
+                    PasswordStrength::Weak => (1.0 / 3.0, Variant::DANGER),
+                    PasswordStrength::Medium => (2.0 / 3.0, Variant::look(Emphasis::Solid, Tone::Warn)),
+                    PasswordStrength::Strong => (1.0, Variant::look(Emphasis::Solid, Tone::Good)),
+                };
+                Progress::new(filled).variant(variant).label(words.strength_meter.clone()).show(ui);
+            }
+            // The entries after this pass's edits: a bound or kept entry holds them now.
+            let typed = bound_text(&mut input, cx);
+            let retyped = confirm.as_mut().map(|confirm| bound_text(confirm, cx));
+            valid = entries_valid(&typed, retyped.as_deref());
+            *cx.memory::<Revealed>() = Revealed(revealed);
+        });
+        PasswordFieldsOutput { response: shown.output, valid }
     }
 }
 
-/// What the dialog keeps while it is open: the entries and whether they show as text.
+/// Whether the fields show their text, kept per [`PasswordFields`].
+#[derive(Clone, Copy, Default)]
+struct Revealed(bool);
+
+/// The text `bind` holds this pass; empty while a kept binding holds nothing.
+fn bound_text(bind: &mut Bind<'_, String>, cx: &mut BodyCx<'_>) -> String {
+    bind.reborrow().read(cx).and_then(|value| value.same().cloned()).unwrap_or_default()
+}
+
+/// Whether password entries may be accepted: with a confirmation, a non-empty entry that the confirmation repeats.
+fn entries_valid(input: &str, confirm: Option<&str>) -> bool {
+    confirm.is_none_or(|confirm| !input.is_empty() && input == confirm)
+}
+
+/// What the dialog keeps while it is open: the entries and whether the fields found them valid after the last pass.
 #[derive(Clone, Default)]
 struct Entries {
     input: String,
     confirm: String,
-    reveal: bool,
-}
-
-impl Entries {
-    /// Whether OK may be pressed: a new password needs a non-empty entry that its confirmation repeats.
-    fn valid(&self, setting: bool) -> bool {
-        !setting || (!self.input.is_empty() && self.input == self.confirm)
-    }
+    /// The fields' verdict; `None` before the first pass, when only a dialog that asks no confirmation may be accepted.
+    valid: Option<bool>,
 }
 
 /// A question with a lock icon, the message, the masked field and the buttons. A new password adds a confirmation
@@ -320,15 +408,6 @@ pub struct PasswordDialog<'a> {
     open: Option<Bind<'a, bool>>,
 }
 
-/// The name of the one file `files` holds; a count of several files has the plural message instead.
-fn single_name(files: &PasswordFiles) -> &str {
-    // P3(pdf-dialogs-w2): WF-W13 — the writer words the several-files message.
-    match files {
-        PasswordFiles::One(name) => name.as_str(),
-        PasswordFiles::Several(_) => todo!("WF-W13"),
-    }
-}
-
 impl<'a> PasswordDialog<'a> {
     /// A dialog for `purpose`, with no error line and no tag.
     pub fn new(purpose: PasswordPurpose) -> Self {
@@ -338,27 +417,39 @@ impl<'a> PasswordDialog<'a> {
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> PasswordOutput {
         let PasswordDialog { purpose, tag, error, note, open } = self;
-        let _ = note; // P3(pdf-dialogs-w2): WF-W13
         let env = Env::of(ui);
         let words = env.words::<PasswordWords>();
         let common = env.words::<CommonWords>();
         let setting = matches!(purpose, PasswordPurpose::Set);
+        let counted = |count: usize| (count as u64, env.format().integer(count as u64));
         let (title, message, ok) = match &purpose {
             PasswordPurpose::Open { files } => {
-                (words.open_title.clone(), Some(Label::from(words.open_message.fill(&[("name", single_name(files))]))), words.open.clone())
+                let message = match files {
+                    PasswordFiles::One(name) => words.open_message.fill(&[("name", name.as_str())]),
+                    PasswordFiles::Several(count) => {
+                        let (n, digits) = counted(*count);
+                        words.open_several.text(n, &digits)
+                    }
+                };
+                (words.open_title.clone(), Some(Label::from(message)), words.open.clone())
             }
-            PasswordPurpose::Permissions { files } => (
-                words.permissions_title.clone(),
-                Some(Label::from(words.permissions_message.fill(&[("name", single_name(files))]))),
-                words.unlock.clone(),
-            ),
+            PasswordPurpose::Permissions { files } => {
+                let message = match files {
+                    PasswordFiles::One(name) => words.permissions_message.fill(&[("name", name.as_str())]),
+                    PasswordFiles::Several(count) => {
+                        let (n, digits) = counted(*count);
+                        words.permissions_several.text(n, &digits)
+                    }
+                };
+                (words.permissions_title.clone(), Some(Label::from(message)), words.unlock.clone())
+            }
             PasswordPurpose::Set => (words.set_title.clone(), None, common.ok.clone()),
         };
         let mut dialog = Dialog::new(title)
             .buttons([FooterButton::new(ok, DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
-            .close_guard(move |_, cx| cx.memory::<Entries>().valid(setting))
+            .close_guard(move |_, cx| cx.memory::<Entries>().valid.unwrap_or(!setting))
             .settle_buttons(move |cx, buttons| {
-                let valid = cx.memory::<Entries>().valid(setting);
+                let valid = cx.memory::<Entries>().valid.unwrap_or(!setting);
                 if let Some(accept) = buttons.first_mut() {
                     accept.set_enabled(valid);
                 }
@@ -377,65 +468,19 @@ impl<'a> PasswordDialog<'a> {
                         Text::new(message.clone()).show(ui);
                     });
                 }
-                let strength = (setting && !entries.input.is_empty()).then(|| PasswordStrength::of(&entries.input));
-                FieldGroup::new(words.fields.clone()).show(ui, |ui, _| {
-                    let first = if setting { words.type_password.clone() } else { words.password.clone() };
-                    let mut field = Field::new(first.clone());
-                    if let Some(strength) = strength {
-                        let (word, tone) = match strength {
-                            PasswordStrength::Weak => (&words.weak, Tone::Bad),
-                            PasswordStrength::Medium => (&words.medium, Tone::Warn),
-                            PasswordStrength::Strong => (&words.strong, Tone::Good),
-                        };
-                        field = field.help(Help::Status(tone, Label::from(words.strength.fill(&[("strength", word.as_str())]))));
-                    } else if let (false, Some(error)) = (setting, &error) {
-                        field = field.help(Help::Status(Tone::Bad, error.clone()));
-                    }
-                    field.show(ui, |ui, _| {
-                        Row::new().show(ui, |ui, _| {
-                            let mut text = TextField::new(first.clone(), Bind::bound(&mut entries.input));
-                            if !entries.reveal {
-                                text = text.masked();
-                            }
-                            let text = text.show(ui);
-                            let name = if entries.reveal { words.hide.clone() } else { words.show.clone() };
-                            let reveal = ToggleButton::new(name, Bind::bound(&mut entries.reveal))
-                                .icon(IconId::new("eye"))
-                                .on_icon(IconId::new("eye_off"))
-                                .icon_only()
-                                .show(ui);
-                            // Typing goes on in the field: the reveal button hands the focus back, as does a press that left
-                            // nothing focused.
-                            if clicked(reveal.response()) || focus::focused_rec(ui.ctx()).is_none() {
-                                focus::request(ui.ctx(), FocusTarget::Id(text.response().id));
-                            }
-                        });
-                    });
-                    if setting {
-                        let mismatch = (!entries.confirm.is_empty() && entries.input != entries.confirm).then(|| words.mismatch.clone());
-                        let mut confirm = Field::new(words.retype_password.clone());
-                        if let Some(mismatch) = mismatch {
-                            confirm = confirm.help(Help::Status(Tone::Bad, mismatch));
-                        }
-                        confirm.show(ui, |ui, _| {
-                            let mut text = TextField::new(words.retype_password.clone(), Bind::bound(&mut entries.confirm));
-                            if !entries.reveal {
-                                text = text.masked();
-                            }
-                            text.show(ui);
-                        });
-                    }
-                });
-                if let Some(strength) = strength {
-                    let (filled, variant) = match strength {
-                        PasswordStrength::Weak => (1.0 / 3.0, Variant::DANGER),
-                        PasswordStrength::Medium => (2.0 / 3.0, Variant::look(Emphasis::Solid, Tone::Warn)),
-                        PasswordStrength::Strong => (1.0, Variant::look(Emphasis::Solid, Tone::Good)),
-                    };
-                    Progress::new(filled).variant(variant).label(words.strength_meter.clone()).show(ui);
+                if let Some(note) = &note {
+                    Text::new(note.clone()).shade(Shade::Muted).show(ui);
                 }
+                let first = if setting { words.type_password.clone() } else { words.password.clone() };
+                // A new password has no wrong-password line: its first field shows the strength instead.
+                let mut fields = PasswordFields::new(first, Bind::bound(&mut entries.input)).error(if setting { None } else { error.clone() });
+                if setting {
+                    fields = fields.confirm(Bind::bound(&mut entries.confirm));
+                }
+                let shown = fields.show(ui);
+                valid.set(shown.valid);
+                entries.valid = Some(shown.valid);
             });
-            valid.set(entries.valid(setting));
             *typed.borrow_mut() = entries.input.clone();
             *cx.memory::<Entries>() = entries;
         });

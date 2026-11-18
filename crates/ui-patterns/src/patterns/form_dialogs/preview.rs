@@ -4,7 +4,7 @@
 use crate::buttons::IconButton;
 use crate::contract::{
     Bind, Common, Component, Cx, DisabledLook, Focus as _, Input, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role,
-    Show as _, ShowContainer as _,
+    Show as _, ShowContainer as _, Styled as _,
 };
 use crate::display::{Progress, Text};
 use crate::layout_components::Row;
@@ -17,8 +17,9 @@ use crate::text::NumberField;
 use craft_behavior::{
     AccessAction, AccessData, CanvasTransform, CursorIcon, CursorPriority, IconId, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense,
 };
+
 use egui::load::SizedTexture;
-use egui::{Pos2, Rect, Response, Ui, Vec2, pos2};
+use egui::{Mesh, Pos2, Rect, Response, Shape, Ui, Vec2, pos2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "testing")]
@@ -287,7 +288,6 @@ pub struct PreviewPane<'a> {
     overlay: Option<PaneOverlay<'a>>,
     /// Multiplies the `Ready` picture's colours, as `ThumbPaint::tint` does.
     #[prop]
-    #[allow(dead_code)] // P3(pdf-dialogs-w2): DG-C12
     tint: Option<DataColor>,
     /// Whether the picture overflows the well horizontally, and vertically. Set by `parts`, which runs before the
     /// root's sense is read: the wheel scrolls the pane only on an axis it pans on.
@@ -583,7 +583,15 @@ impl Component for PreviewPane<'_> {
                             pos2((visible.min.x - picture.min.x) / size.x, (visible.min.y - picture.min.y) / size.y),
                             pos2((visible.max.x - picture.min.x) / size.x, (visible.max.y - picture.min.y) / size.y),
                         );
-                        painter.picture(texture.id, visible, uv, 0.0);
+                        match self.tint {
+                            // The tint multiplies the mesh's vertex colours; as data, a Disabled pane still dims it.
+                            Some(tint) => {
+                                let mut mesh = Mesh::with_texture(texture.id);
+                                mesh.add_rect_with_uv(visible, uv, tint.0);
+                                painter.data_shapes([Shape::mesh(mesh)]);
+                            }
+                            None => painter.picture(texture.id, visible, uv, 0.0),
+                        }
                     }
                     if let Some(PaneOverlay(overlay)) = self.overlay.take() {
                         overlay(&painter, view, picture);
@@ -731,13 +739,46 @@ pub struct PanePager {
 impl PanePager {
     /// The caption: "Page {p} of {n}" or "Sheet {p} of {n}", or "No pages" or "No sheets" when `count` is 0.
     pub fn caption(&self, env: &Env) -> Label {
-        let _ = env;
-        todo!("DG-C10")
+        let words = env.words::<PreviewWords>();
+        if self.count == 0 {
+            return match self.unit {
+                PagerUnit::Page => words.no_pages.clone(),
+                PagerUnit::Sheet => words.no_sheets.clone(),
+            };
+        }
+        let shown = match &self.shown_label {
+            Some(label) => label.as_str().to_owned(),
+            None => env.format().integer(self.shown as u64),
+        };
+        let count = env.format().integer(self.count as u64);
+        let template = match self.unit {
+            PagerUnit::Page => &words.page_of,
+            PagerUnit::Sheet => &words.sheet_of,
+        };
+        Label::from(template.fill(&[("p", &shown), ("n", &count)]))
     }
 
-    /// Shows the row; the step a press made in this pass.
+    /// Shows the row; the step a press made in this pass. A second pass of a frame finds no press, so a step is
+    /// reported once.
     pub fn show(self, ui: &mut Ui) -> Option<PagerStep> {
-        let _ = ui;
-        todo!("DG-C10")
+        let env = Env::of(ui);
+        let words = env.words::<PreviewWords>();
+        let caption = self.caption(&env);
+        let mut step = None;
+        Row::new().show(ui, |ui, _| {
+            let back = IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(self.back).show(ui);
+            // An empty pager has no position to report: its caption says so.
+            let text = Text::new(caption);
+            if self.count > 0 { text.numeric(self.shown as f64) } else { text }.show(ui);
+            let next = IconButton::new(IconId::new("chevron_right")).label(words.next.clone()).enabled(self.next).show(ui);
+            if crate::contract::clicked(&back) {
+                step = Some(PagerStep::Back);
+            }
+            if crate::contract::clicked(&next) {
+                step = Some(PagerStep::Next);
+            }
+        });
+        step
     }
 }
+

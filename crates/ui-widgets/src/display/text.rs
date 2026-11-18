@@ -2,6 +2,7 @@
 
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Styled as _};
 use crate::primitives::{DocRun, DocText, Span, TextRun, Wrap};
+use crate::runtime::access::{Access, Numeric};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx, TextLook, TypeRole};
 use craft_behavior::{Metrics, Proposal, Sense};
@@ -78,12 +79,14 @@ pub struct Text {
     spans: Vec<DocRun<'static>>,
     /// The label's text is set in italics.
     italic: bool,
+    /// The number the text stands for, reported to assistive technology next to the text.
+    numeric: Option<f64>,
 }
 
 impl Text {
     /// `text`, which is also its accessible name, in body type and the normal shade.
     pub fn new(text: impl Into<Label>) -> Self {
-        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new(), italic: false }
+        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new(), italic: false, numeric: None }
             .label(text)
     }
 
@@ -100,6 +103,14 @@ impl Text {
     /// Sets the text in italics: a value set apart from the words around it.
     pub fn italic(mut self) -> Self {
         self.italic = true;
+        self
+    }
+
+    /// Gives the text an accessible numeric value, `value`, so tests and assistive technology read a position or a count
+    /// without parsing the translated text.
+    #[must_use]
+    pub fn numeric(mut self, value: f64) -> Self {
+        self.numeric = Some(value);
         self
     }
 
@@ -189,6 +200,12 @@ impl Component for Text {
 
     fn sense(&self) -> Sense {
         super::display_sense(&self.common, self.elide != Elide::Off)
+    }
+
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if let Some(value) = self.numeric {
+            access.numeric(Numeric::new(value, value..=value).text(cx.resolved.label));
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

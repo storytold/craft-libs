@@ -178,7 +178,9 @@ impl RecoveryDialog {
             (Some(CloseReason::Activated | CloseReason::Enter), Some(_)) => Some(RecoveryAnswer::Recover),
             _ => None,
         };
-        let answer = answer.map(|answer| self.choice(answer, ticked));
+        // P3(pdf-shell-w5): SH-C34: the Apply to All box is not shown yet.
+
+        let answer = answer.map(|answer| RecoveryChoice { answer, apply_to_all: false });
         RecoveryOutput { response: shown.response, closed: shown.closed, answer }
     }
 

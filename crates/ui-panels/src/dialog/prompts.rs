@@ -38,8 +38,8 @@ pub enum PromptKind {
         /// The file's name.
         name: String,
     },
-    /// The document's own file changed on disk since it was opened or saved: Replace or Cancel (Save As keeps both;
-    /// the message says so).
+    /// The document's own file changed on disk since it was opened or saved: Replace (Proceed), Save As… (the
+    /// Alternate, which keeps both files) or Cancel.
     #[non_exhaustive]
     ChangedOnDisk {
         /// The document's file name.
@@ -67,9 +67,10 @@ pub enum PromptKind {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum PromptChoice {
-    /// The default button: Delete, Open Anyway, Replace, Apply.
+    /// The main action, and the default button unless `StandardPrompt::default_choice` names another: Delete, Open
+    /// Anyway, Replace, Apply.
     Proceed,
-    /// The Alternate button where the prompt has one (Trash mask's Delete).
+    /// The Alternate button where the prompt has one (Trash mask's Delete, changed on disk's Save As…).
     Alternate,
     /// Dismiss without acting.
     Cancel,
@@ -85,13 +86,15 @@ impl PromptChoice {
     }
 }
 
-/// What a `StandardPrompt` answers with: the choice, whether "Don't show again" was ticked with Proceed, and the
-/// `tag` the app gave the prompt, so a result says which question it answers (the document, the path, the layers).
+/// What a `StandardPrompt` answers with: the choice, whether "Don't show again" was ticked with an answer other than
+/// Cancel, and the `tag` the app gave the prompt, so a result says which question it answers (the document, the path,
+/// the layers).
 #[non_exhaustive]
 pub struct PromptAnswer {
     /// The button the user pressed.
     pub choice: PromptChoice,
-    /// "Don't show again" was ticked and the choice is Proceed: the app stores it and skips the prompt next time.
+    /// "Don't show again" was ticked and the choice is not Cancel: the app stores the choice and gives it next time
+    /// without asking. A cancelled prompt is asked again.
     pub skip: bool,
     tag: Option<Box<dyn Any + Send>>,
 }
@@ -131,7 +134,7 @@ pub struct StandardPromptOutput {
     /// The answer given in this pass; `None` while the prompt stays open.
     pub answer: Option<PromptAnswer>,
     /// The "Don't show again" box is ticked. Storing it is the app's: it skips the prompt next time when the answer
-    /// is Proceed.
+    /// is not Cancel.
     pub skipped: bool,
 }
 
@@ -160,8 +163,11 @@ pub struct StandardPrompt {
     skip_box: bool,
     skip: bool,
     open: bool,
-    /// What a programmatic OK answers.
-    chosen: PromptChoice,
+    /// What a programmatic OK answers; the default answer until `set_choice` names another.
+    chosen: Option<PromptChoice>,
+    /// The button drawn as default and answered by Enter; kept apart from `chosen`, so automation setting the answer
+    /// does not move the default the user sees.
+    default: PromptChoice,
     /// Carries a typed tag back in the `PromptAnswer` (a document id with the layer ids); read it with
     /// `PromptAnswer::tag` or `PromptAnswer::take_tag`.
     #[prop(boxed)]
@@ -211,7 +217,8 @@ impl StandardPrompt {
             skip_box: false,
             skip: false,
             open: true,
-            chosen: PromptChoice::Proceed,
+            chosen: None,
+            default: PromptChoice::Proceed,
             tag: None,
             escape: PromptChoice::Cancel,
             noun: None,
@@ -237,10 +244,11 @@ impl StandardPrompt {
         self
     }
 
-    /// The answer a host-side `confirm` gives, as pressing that button would; Proceed (the default button) until
-    /// set. A choice the prompt has no enabled button for gives none.
+    /// The answer a host-side `confirm` gives, as pressing that button would; the default choice until set. A choice
+    /// the prompt has no enabled button for gives none. The button drawn as default stays where `default_choice` put
+    /// it.
     pub fn set_choice(&mut self, choice: PromptChoice) {
-        self.chosen = choice;
+        self.chosen = Some(choice);
     }
 
     /// The choice Escape and the close action answer, when the prompt has a button that takes it; `None` otherwise.
@@ -276,11 +284,22 @@ impl StandardPrompt {
     }
 
     /// The answer Enter gives and the button drawn as default: Proceed unless set. A choice with no button leaves
-    /// Proceed.
+    /// Proceed. It is also the answer a host-side `confirm` gives until `set_choice` names another.
     #[must_use]
-    pub fn default_choice(self, choice: PromptChoice) -> Self {
-        let _ = choice;
-        todo!("DG-C16")
+    pub fn default_choice(mut self, choice: PromptChoice) -> Self {
+        self.default = choice;
+        self
+    }
+
+    /// What a programmatic OK answers: the choice `set_choice` named, else the default answer.
+    fn chosen_answer(&self) -> PromptChoice {
+        self.chosen.unwrap_or_else(|| self.default_answer())
+    }
+
+    /// The choice the default button answers: the one `default_choice` set when it has a button that takes a press,
+    /// else Proceed.
+    fn default_answer(&self) -> PromptChoice {
+        if self.takes(self.default) { self.default } else { PromptChoice::Proceed }
     }
 
     /// Adds a paragraph after the message, a label of its own.
@@ -291,7 +310,8 @@ impl StandardPrompt {
     }
 
     /// Adds a button with the app's label; its letter comes from the translated labels of the prompt. The first call
-    /// replaces the kind's own buttons. `PromptChoice::Proceed` is the default button (Enter), `PromptChoice::Cancel`
+    /// replaces the kind's own buttons. `PromptChoice::Proceed` is the default button (Enter) unless `default_choice`
+    /// names another, `PromptChoice::Cancel`
     /// answers Escape and the close action unless `escape` names another choice, and `PromptChoice::Alternate` is a
     /// third answer; each is listed once.
     #[must_use]
@@ -348,17 +368,31 @@ impl StandardPrompt {
         if let Some(own) = &self.message {
             message = own.clone();
         }
+        let alternate = match self.kind {
+            PromptKind::ChangedOnDisk { .. } => &words.save_as,
+            _ => &words.discard,
+        };
+        // `Prompt` and the footer take the first Accept answer as the default (Enter and the default stop), so the
+        // default choice's reply is the Accept one and an Accept Proceed that is not the default steps back to Other.
+        // A Destructive Proceed keeps its look.
+        let default = self.default_answer();
         let answers = self
             .offered()
             .into_iter()
             .map(|(choice, enabled)| {
-                let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| Reply::new(label.clone(), choice.role()));
-                let reply = own.unwrap_or_else(|| match choice {
-                    PromptChoice::Proceed => Reply::new(proceed.clone(), role),
-                    PromptChoice::Alternate => Reply::new(words.discard.clone(), DialogRole::Other),
-                    PromptChoice::Cancel => Reply::new(common.cancel.clone(), DialogRole::Cancel),
+                let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| (label.clone(), choice.role()));
+                let (label, role) = own.unwrap_or_else(|| match choice {
+                    PromptChoice::Proceed => (proceed.clone(), role),
+                    PromptChoice::Alternate => (alternate.clone(), DialogRole::Other),
+                    PromptChoice::Cancel => (common.cancel.clone(), DialogRole::Cancel),
                 });
-                (choice, reply.enabled(enabled, None))
+                let role = match role {
+                    _ if default == PromptChoice::Proceed => role,
+                    _ if choice == default => DialogRole::Accept,
+                    DialogRole::Accept => DialogRole::Other,
+                    role => role,
+                };
+                (choice, Reply::new(label, role).enabled(enabled, None))
             })
             .collect();
         if title.as_str().is_empty() {
@@ -376,6 +410,7 @@ impl StandardPrompt {
         match self.kind {
             PromptKind::Custom => Vec::new(),
             PromptKind::TrashMask => vec![(PromptChoice::Proceed, self.can_apply), (PromptChoice::Alternate, true), (PromptChoice::Cancel, true)],
+            PromptKind::ChangedOnDisk { .. } => vec![(PromptChoice::Proceed, true), (PromptChoice::Alternate, true), (PromptChoice::Cancel, true)],
             _ => vec![(PromptChoice::Proceed, true), (PromptChoice::Cancel, true)],
         }
     }
@@ -429,9 +464,9 @@ impl StandardPrompt {
         }
     }
 
-    /// The answer of `choice`; Proceed reports the skip box when it is `ticked`.
+    /// The answer of `choice`; every choice but Cancel reports the skip box when it is `ticked`.
     fn answer(&mut self, choice: PromptChoice, ticked: bool) -> PromptAnswer {
-        PromptAnswer { choice, skip: choice == PromptChoice::Proceed && self.skip_box && ticked, tag: self.tag.take() }
+        PromptAnswer { choice, skip: choice != PromptChoice::Cancel && self.skip_box && ticked, tag: self.tag.take() }
     }
 
     /// Shows the prompt; `hosted` holds the open state and the box in the prompt's own fields, else in memory.
@@ -449,6 +484,12 @@ impl StandardPrompt {
             .and_then(|choice| choices.iter().position(|listed| *listed == choice))
             .and_then(|at| footer.get(at))
             .map(|button| button.role());
+        // After the default remap a Proceed can share Other with the Alternate; Escape finds its answer by role, so a
+        // shared role would answer whichever comes first. No prompt is built that way: this keeps it so.
+        debug_assert!(
+            escape.is_none_or(|role| footer.iter().filter(|button| button.role() == role).count() == 1),
+            "the escape answer's role names one button"
+        );
         let mut prompt = Prompt::new(title, message).answers(footer);
         if let Some(role) = escape {
             prompt = prompt.escape(role);
@@ -510,13 +551,14 @@ impl StackDialog for StandardPrompt {
     /// The answer set with `set_choice`: the default button's, Proceed, unless set. None while that answer's
     /// button is missing or disabled.
     fn confirm(&mut self, _: &Context) -> Option<PromptAnswer> {
-        self.takes(self.chosen).then(|| self.answer(self.chosen, self.skip))
+        let chosen = self.chosen_answer();
+        self.takes(chosen).then(|| self.answer(chosen, self.skip))
     }
 
     /// `choice`, the answer a programmatic OK gives, and `skip`, the "Don't show again" box where the prompt has
     /// one.
     fn json_fields(&self) -> Option<Value> {
-        let mut fields = json!({ "choice": self.chosen });
+        let mut fields = json!({ "choice": self.chosen_answer() });
         if self.skip_box {
             fields["skip"] = Value::Bool(self.skip);
         }

@@ -2,16 +2,14 @@
 //! `Prompt`.
 
 use super::host::{DialogResult, FieldRefusal, StackDialog};
-use super::prompt::{Prompt, Reply, buttons};
+use super::prompt::{Prompt, Reply, apply_to_all, buttons};
 use super::stack::{DialogId, DialogStack, dialog_id};
 use super::words::DialogWords;
-use crate::choice::Checkbox;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _};
+use crate::contract::{Bind, NoValue, Outcome};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
-use craft_behavior::Mixed;
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 use craft_quit::{CloseAnswer, CloseScope};
@@ -148,16 +146,7 @@ impl UnsavedChangesDialog {
         let mut prompt = Prompt::new(words.unsaved_title.clone(), message).answers(buttons(&env, replies));
         let mut ticked = hosted && self.apply_to_all;
         if self.offers_apply_to_all() {
-            let label = words.unsaved_apply_to_all.clone();
-            let tick = &mut ticked;
-            let mut value = hosted.then_some(&mut self.apply_to_all);
-            prompt = prompt.extras(move |ui| {
-                if let Some(Mixed::Same(shown)) =
-                    Checkbox::new(value.as_mut().map_or_else(Bind::kept, |value| Bind::bound(&mut **value))).label(label.clone()).show(ui).shown
-                {
-                    *tick = *shown;
-                }
-            });
+            prompt = apply_to_all(prompt, words.unsaved_apply_to_all.clone(), self.remaining, hosted.then_some(&mut self.apply_to_all), &mut ticked);
         }
         if hosted {
             prompt = prompt.opened(Bind::bound(&mut self.open));

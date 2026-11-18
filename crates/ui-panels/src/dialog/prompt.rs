@@ -2,6 +2,7 @@
 
 use super::frame::DialogOutput;
 use super::modal::Dialog;
+use crate::choice::Checkbox;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::display::Text;
 use crate::layout_components::Stack;
@@ -10,6 +11,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton, Section};
+use craft_behavior::Mixed;
 use craft_keymap::{Chord, mnemonic};
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
@@ -79,6 +81,22 @@ pub(super) fn buttons(env: &Env, replies: Vec<Reply>) -> Vec<FooterButton> {
             }
         })
         .collect()
+}
+
+/// Adds the "Apply to All" box (`label`) under `prompt`'s message while `remaining`, the documents still asked about
+/// this one included, is above one. `hosted` is the dialog's own field on the dialog host; without one the box keeps
+/// its state in memory. `ticked` starts at the hosted state and holds the box's state once the prompt is shown.
+pub(super) fn apply_to_all<'a>(prompt: Prompt<'a>, label: Label, remaining: usize, hosted: Option<&'a mut bool>, ticked: &'a mut bool) -> Prompt<'a> {
+    if remaining <= 1 {
+        return prompt;
+    }
+    let mut hosted = hosted;
+    prompt.extras(move |ui| {
+        let bind = hosted.as_mut().map_or_else(Bind::kept, |value| Bind::bound(&mut **value));
+        if let Some(Mixed::Same(shown)) = Checkbox::new(bind).label(label.clone()).show(ui).shown {
+            *ticked = *shown;
+        }
+    })
 }
 
 /// What a prompt reports: its response, how it closed in this pass and the answer given.
