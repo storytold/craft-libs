@@ -672,9 +672,11 @@ fn expand_for_overflow(ui: &mut Ui, at: ShowAt, rect: Rect, overflow: f32, rtl: 
 }
 
 /// What the component senses itself: a disabled one that shows a reason on focus stays a Tab stop and senses nothing else.
+/// One bound to an edit command keeps the focus where it is on a press, so the edit reaches the focused component.
 fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense {
     match (inert, resolved.enabled) {
         (true, _) => Sense::HOVER,
+        (false, true) if resolved.command.is_some_and(|command| command.edit) => e.sense().difference(Sense::TAKE_FOCUS).union(Sense::KEEP_FOCUS),
         (false, true) => e.sense(),
         (false, false) if steps::takes_focus(resolved) => Sense::HOVER | e.comp_sense().intersection(Sense::FOCUS),
         (false, false) => Sense::HOVER,

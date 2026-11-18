@@ -276,6 +276,9 @@ pub struct ResolvedCommand {
     pub hint: Option<Arc<str>>,
     /// What the command is.
     pub kind: CommandKind,
+    /// The command is an edit a focused component takes as its own (it has an `EditCommand` link): a control bound to
+    /// it keeps the focus where it is on a press, so the edit reaches the focused component.
+    pub edit: bool,
     pub(crate) command: CommandRef,
     #[doc(hidden)]
     pub instance: Option<Id>,

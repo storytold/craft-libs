@@ -383,7 +383,9 @@ impl Component for BarItems {
             slot(rect, axis, rtl, from, more_length)
         });
         for &(index, cell) in &shown {
-            let part = cx.part(ITEM.at(index as u64), cell).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            // An edit command's item keeps the focus where it is, so the edit reaches the focused component.
+            let sense = if present[index].resolved.edit { Sense::CLICK | Sense::FOCUS | Sense::KEEP_FOCUS } else { Sense::CLICK | Sense::FOCUS };
+            let part = cx.part(ITEM.at(index as u64), cell).sense(sense).focusable();
             if display_of(&present[index]) == ItemDisplay::Icon {
                 let resolved = &present[index].resolved;
                 part.tooltip(match &resolved.chord {

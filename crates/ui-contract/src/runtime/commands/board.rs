@@ -414,6 +414,7 @@ impl Board {
             marked: state.is_some_and(CommandState::is_marked),
             hint: state.and_then(|s| s.hint_ref().cloned()),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
+            edit: self.registry.edit_of(&command.id).is_some(),
             command: command.clone(),
             instance,
         };
