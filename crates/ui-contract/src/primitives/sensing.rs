@@ -16,7 +16,8 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::pointer;
 use crate::runtime::pointer::PassPointer;
 use craft_behavior::{
-    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerSample, PressMachine, PressPhase, PressState, Sense, Shape, Winner,
+    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerSample, PressMachine, PressPhase, PressPick, PressState, Sense,
+    Shape, Winner,
 };
 use craft_keymap::Mods;
 use craft_theme::Flags;
@@ -129,7 +130,6 @@ pub(crate) struct PartDecl {
     /// The component holds a press on the part (`PartBuilder::held`).
     pub held: bool,
     /// The named stacking order among parts of one priority (default 0).
-
     pub stacking: u32,
 }
 
@@ -892,9 +892,13 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             let won = root.and_then(|own| winners.hit_of(own)).map(Hit::from);
             // The kinds of press another root won are not this one's.
             let lost = (Sense::CLICK | Sense::DRAG).difference(won_kinds);
+            // A click that another root's shape took and passes its drag on (L-19) leaves this root only the drag: a
+            // click there gives this root no press at all.
+            let passed = lost.contains(Sense::CLICK) && winners.click.is_some_and(|(click, _)| click.sense.contains(Sense::PASSES_DRAG));
             won.map(|hit| {
                 let sense = hit.sense.difference(lost);
-                (hit, if drag_elsewhere { sense.difference(Sense::DRAG) } else { sense })
+                let pick = PressPick::new(hit, if drag_elsewhere { sense.difference(Sense::DRAG) } else { sense });
+                if passed { pick.passed() } else { pick }
             })
         });
         // A press on a shape that passes its drag (`Sense::PASSES_DRAG`) moved past slop: the drag goes to the shape the

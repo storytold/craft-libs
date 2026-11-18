@@ -101,8 +101,8 @@ pub use part::{PartKey, PartRef};
 pub use pixel_size::PixelSize;
 
 pub use press::{
-    Buttons, MultiTouch, PassInput, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressMachine, PressPhase, PressStart,
-    PressState, PressStep, count_clicks,
+    Buttons, MultiTouch, PassInput, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressMachine, PressPhase, PressPick,
+    PressStart, PressState, PressStep, count_clicks,
 };
 pub use quantity::Reader;
 pub use role_rule::{GridFacts, RoleRule, is_checkable, is_selectable, role_violations};

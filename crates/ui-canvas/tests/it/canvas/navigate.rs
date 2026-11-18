@@ -19,8 +19,9 @@ use egui::{Key, Modifiers, Pos2, TouchPhase, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-/// A canvas over a large document with Touchpad Glide set to `touchpad_glide`, whose view starts 60 points short of
-/// the document's right edge with the pointer over it: the fixture and the view it shows.
+/// A canvas over a large document with Touchpad Glide set to `touchpad_glide`, whose view starts 210 points short of
+/// the document's right edge with the pointer over it, so a fast [`swipe`] (150 points) lifts 60 points short of it:
+/// the fixture and the view it shows.
 fn glide_rig(touchpad_glide: bool) -> (Fixture, Rc<Cell<CanvasView>>) {
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
     let shown = Rc::clone(&view);
@@ -34,7 +35,7 @@ fn glide_rig(touchpad_glide: bool) -> (Fixture, Rc<Cell<CanvasView>>) {
     });
     fixture.settle();
     let mut near = view.get();
-    near.center.x = 4000.0 - f64::from(near.rect.width()) / 2.0 - 60.0;
+    near.center.x = 4000.0 - f64::from(near.rect.width()) / 2.0 - 210.0;
     view.set(near);
     fixture.frame(vec![pointer::moved(near.rect.center())]);
     (fixture, view)
@@ -404,11 +405,6 @@ fn a_latched_middle_scroll_ends_on_escape_a_second_press_or_the_wheel_and_a_held
     };
 
     latch(&mut fixture);
-    eprintln!(
-        "DIAG a_latched_middle_scroll_ends_on_escape_a_second_press_or_the_wheel_and_a_held_press_scrolls_until_its_release: focused {:?}, canvas {:?}",
-        fixture.focused_stop(),
-        canvas.get()
-    );
     assert!(
         fixture.focused_stop().is_some_and(|(id, _)| Some(id) == canvas.get()),
         "the middle press focuses the canvas, which its Escape claim needs"

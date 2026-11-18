@@ -162,7 +162,6 @@ fn a_finished_render_asks_for_a_repaint() {
     let runs = Arc::new(AtomicUsize::new(0));
     // egui's own first frames ask for follow-up passes; the job is asked for once they are over.
     frames.idle(QUIET_FRAMES, |_| {});
-    eprintln!("DIAG a_finished_render_asks_for_a_repaint: before the request, repaint requested {}", frames.repaint_requested());
     frame(&mut frames, || {
         loader.request(&ctx, &1, Revision::new(1), Priority::VISIBLE, || counted(&runs, SMALL));
     });

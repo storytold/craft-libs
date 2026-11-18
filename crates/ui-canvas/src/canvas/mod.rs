@@ -486,7 +486,11 @@ impl<'a> Canvas<'a> {
         let middle = press.phase.start().is_some_and(|start| start.button == PointerButton::Middle);
         let latching = middle && !on_region && self.navigation.middle_button == MiddleButton::AutoScroll;
         let held = latching && press.phase.button_down();
+        // Any press that begins while a latch runs ends it and reaches nothing else, so it is asked before the press
+        // that latches: asked after, the latching press would end its own latch.
+        let swallowed = motion.middle.swallows(press.phase);
         match press.phase {
+            _ if swallowed => {}
             // The latch lives while the canvas holds the focus, and the focus service moves focus on primary presses
             // only: the middle press that latches it takes the focus itself.
             PressPhase::Down { start, .. } if latching => {
@@ -495,12 +499,8 @@ impl<'a> Canvas<'a> {
             }
             PressPhase::Release { .. } if latching => motion.middle.release(),
             PressPhase::Cancel { .. } if latching => motion.middle.cancel(),
-            // Any other press on the background ends a latch.
-            PressPhase::Down { .. } if motion.middle.active() => motion.middle.cancel(),
             _ => {}
         }
-        // PLAN: assumed MiddleScroll::swallows(&mut self, PressPhase) -> bool (pdf-canvas-w2)
-        let swallowed = motion.middle.swallows(press.phase);
         // A latch with the button up ends on Escape, claimed only while it runs, and when the canvas loses focus.
         if motion.middle.active() && !held {
             if cx.take_claimed(LATCH_ESCAPE) || !cx.is_focused() {
