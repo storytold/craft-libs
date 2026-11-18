@@ -142,7 +142,7 @@ fn number_field_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NumberField::new("Size", Bind::bound(data.value("presets", Some(SIZE)))).presets(&presets).show(ui).edit.into()
 }
 
-#[story(NumberField<'static>, covers = [], drive = Drive::Custom(open_popup))]
+#[story(NumberField<'static>, covers = [Open], drive = Drive::Custom(open_popup))]
 fn number_field_popup_slider(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NumberField::new("Size", Bind::bound(data.value("slider", Some(SIZE)))).range(RANGE).popup_slider(RANGE).show(ui).edit.into()
 }

@@ -108,7 +108,7 @@ fn open_list(fixture: &mut Fixture) {
     fixture.settle();
 }
 
-#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_open_with_filters(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = FontPickerSettings { favorites: vec!["Hack".to_owned()], ..FontPickerSettings::default() };
     show_picker(ui, data, demo("Hack", settings, FontFilters { favorites: true, ..FontFilters::default() }))
@@ -124,27 +124,27 @@ fn expand_inter(fixture: &mut Fixture) {
 }
 
 /// A family of two styles with its style rows showing.
-#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(expand_inter))]
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(expand_inter))]
 fn font_picker_expanded_styles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show_with(ui, data, demo("Inter", FontPickerSettings::default(), FontFilters::default()), &styled_catalog(), &Extras::default())
 }
 
 /// Families the host can fetch, listed with the "Not installed" mark.
-#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_served(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let served = ["Gotham".to_owned(), "Proxima Nova".to_owned()];
     show_with(ui, data, demo("Hack", FontPickerSettings::default(), FontFilters::default()), &catalog(), &Extras { served: &served, ..Extras::default() })
 }
 
 /// The preview banner above the filters.
-#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_banner_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let extras = Extras { banner: Some("The quick brown fox"), ..Extras::default() };
     show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras)
 }
 
 /// Large samples: a face with Arabic letters gets the second sample after the Latin one.
-#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_arabic_sample(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = FontPickerSettings { preview: crate::picker::FontPreviewSize::Large, ..FontPickerSettings::default() };
     show_with(ui, data, demo("Inter", settings, FontFilters::default()), &styled_catalog(), &Extras::default())
@@ -163,7 +163,7 @@ fn font_picker_plain(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// The plain list open: recent fonts, all fonts and an action row.
-#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_plain_open_with_recents(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let actions = [Label::from("Add Font…")];
     let extras = Extras { kind: FontPickerKind::Plain, actions: &actions, ..Extras::default() };
@@ -171,7 +171,7 @@ fn font_picker_plain_open_with_recents(ui: &mut Ui, data: &mut StoryData) -> Sto
 }
 
 /// The plain list on a typed query: matches only, no headings and no action rows.
-#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(type_query))]
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(type_query))]
 fn font_picker_plain_typed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let actions = [Label::from("Add Font…")];
     let extras = Extras { kind: FontPickerKind::Plain, actions: &actions, ..Extras::default() };
