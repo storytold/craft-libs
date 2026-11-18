@@ -152,6 +152,8 @@ type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
 /// - **Smooth** replaces the shown map with its moving average over 7 levels (radius 3, shrunk at the ends so the
 ///   first and last levels keep their values: PhotoCraft's `smooth_curve_map`), as one `Set`.
 /// - **Mode icons** report [`CurvesPanelOutput::mode`]; the current mode's icon reports nothing.
+/// - **Reach**: in a dialog a press takes a point up to two hit targets from it ([`CurveEditor::wide_grab`]); in
+///   the Properties panel, one.
 /// - **Selection**: the selected point is the panel's own state ([`CurvesPanelOutput::selected`]); the host sets
 ///   it with [`select`](Self::select), after [`add_point_from_sample`](Self::add_point_from_sample).
 /// - **Sampling under the dialog**: with a [`canvas`](Self::canvas) the panel lets the ⌘/Ctrl-click on the image
@@ -396,6 +398,10 @@ impl<'a> CurvesPanel<'a> {
                 .selection(selection);
             if pencil {
                 editor = editor.pencil();
+            }
+            // Photoshop's Curves dialog takes a press 15 px from a point; the Properties panel was not measured.
+            if context.is_dialog() {
+                editor = editor.wide_grab();
             }
             if let Some(data) = &data {
                 editor = editor.histogram(data);

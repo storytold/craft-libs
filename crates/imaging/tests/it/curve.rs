@@ -3,6 +3,7 @@
 
 use craft_behavior::EditEvent;
 use craft_imaging::ui::ChannelColor;
+use craft_imaging::ui::adjust::{AdjustContext, CurvesPanel, ToneChannels, ToneCurves, ToneSpace};
 use craft_imaging::ui::curve::{Curve, CurveChannel, CurveEditor};
 use craft_theme::{Contrast, Mode};
 use craft_ui::contract::Bind;
@@ -34,6 +35,11 @@ fn kind(event: &EditEvent<Curve>) -> &'static str {
 }
 
 fn rig(points: &[[f32; 2]]) -> Rig {
+    rig_with(points, false)
+}
+
+/// The rig, with [`CurveEditor::wide_grab`] when `wide_grab` is on.
+fn rig_with(points: &[[f32; 2]], wide_grab: bool) -> Rig {
     let curve = Curve::smooth(points.to_vec());
     let shared = Rc::new(RefCell::new(curve.clone()));
     let selected = Rc::new(Cell::new(None));
@@ -42,7 +48,11 @@ fn rig(points: &[[f32; 2]]) -> Rig {
     let channels = [CurveChannel::new("RGB", ChannelColor::Neutral), CurveChannel::new("Red", ChannelColor::Red)];
     let mut fixture = Fixture::new(move |ui| {
         let mut value = c.borrow().clone();
-        let out = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get()).show(ui);
+        let mut editor = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get());
+        if wide_grab {
+            editor = editor.wide_grab();
+        }
+        let out = editor.show(ui);
         for event in &out.edit.events {
             k.borrow_mut().push(kind(event));
         }
@@ -94,6 +104,19 @@ impl Rig {
         self.fixture.frame(vec![release(self.at(q))]);
         self.fixture.idle(1);
     }
+
+    /// A click `by` screen points from the level `q`: press and release in place.
+    fn click_near(&mut self, q: [f32; 2], by: Vec2) {
+        let pos = self.at(q) + by;
+        click(&mut self.fixture, pos);
+    }
+}
+
+fn click(fixture: &mut Fixture, pos: Pos2) {
+    fixture.frame(vec![moved(pos)]);
+    fixture.frame(vec![press(pos)]);
+    fixture.frame(vec![release(pos)]);
+    fixture.idle(1);
 }
 
 /// The room is this many plot widths wide and tall: the editor at its greatest size and the rows under it.
@@ -160,4 +183,67 @@ fn the_fields_and_the_hint_show_under_the_graph_inside_the_editor() {
     for (part, rect) in [("Input", input), ("hint", hint)] {
         assert!(shown.contains_rect(rect), "{part} {rect:?} lies inside the editor's area {shown:?}");
     }
+}
+
+const MIDDLE: [[f32; 2]; 3] = [[0.0, 0.0], [128.0, 128.0], [255.0, 255.0]];
+
+/// Photoshop's Curves dialog at UI scale 1: a press 8, 13 or 15 px from a point selects it and adds nothing, in any
+/// direction.
+#[trial]
+fn a_wide_grab_takes_a_point_up_to_fifteen_px_away() {
+    for by in [vec2(8.0, 0.0), vec2(13.0, 0.0), vec2(15.0, 0.0), vec2(-15.0, 0.0), vec2(9.0, -12.0)] {
+        let mut rig = rig_with(&MIDDLE, true);
+        rig.click_near([128.0, 128.0], by);
+        assert_eq!(rig.points(), MIDDLE.to_vec(), "a click {by:?} from the point adds nothing and does not move it");
+        assert_eq!(rig.selected.get(), Some(1), "a click {by:?} from the point selects it");
+    }
+}
+
+/// A press 30 px from every point still adds one there and selects it.
+#[trial]
+fn a_wide_grab_still_adds_a_point_thirty_px_away() {
+    let mut rig = rig_with(&MIDDLE, true);
+    rig.click_near([128.0, 128.0], vec2(30.0, 0.0));
+    let points = rig.points();
+    assert_eq!(points.len(), 4, "{points:?}");
+    assert_eq!(rig.selected.get(), Some(2), "the new point is selected: {points:?}");
+}
+
+/// Without the wide grab the editor keeps one hit target: a press 13 px from a point adds a second one.
+#[trial]
+fn without_a_wide_grab_a_press_thirteen_px_away_adds_a_point() {
+    let mut rig = rig(&MIDDLE);
+    rig.click_near([128.0, 128.0], vec2(13.0, 0.0));
+    assert_eq!(rig.points().len(), 4, "{:?}", rig.points());
+}
+
+/// The point count of the composite curve after a click 15 px right of its middle point, in the Curves panel shown
+/// in `context`, and the selection after it.
+fn click_beside_the_middle_point(context: AdjustContext) -> (usize, Option<usize>) {
+    let channels = ToneChannels::of(ToneSpace::Rgb, false);
+    let mut start = ToneCurves::identity(&channels);
+    start.curves[0] = Curve::smooth(MIDDLE.to_vec());
+    let curves = Rc::new(RefCell::new(start));
+    let selected = Rc::new(Cell::new(None));
+    let (c, s) = (curves.clone(), selected.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut value = c.borrow().clone();
+        let out = CurvesPanel::new("Curves", Bind::bound(&mut value), channels.clone()).context(context).show(ui);
+        s.set(out.selected);
+        *c.borrow_mut() = value;
+    });
+    fixture.room(room());
+    fixture.settle();
+    let at = fixture.by_label("Point 2 of 3").expect("the middle point").center();
+    click(&mut fixture, at + vec2(15.0, 0.0));
+    let count = curves.borrow().curves[0].points().map_or(0, <[_]>::len);
+    (count, selected.get())
+}
+
+/// The Curves dialog takes a press 15 px from a point; the Properties panel, which was not measured, keeps one hit
+/// target and adds a point there.
+#[trial]
+fn the_curves_dialog_takes_a_point_fifteen_px_away_and_properties_keeps_one_hit_target() {
+    assert_eq!(click_beside_the_middle_point(AdjustContext::dialog(true)), (3, Some(1)), "the dialog selects the point");
+    assert_eq!(click_beside_the_middle_point(AdjustContext::properties(true)), (4, Some(2)), "Properties adds a point");
 }
