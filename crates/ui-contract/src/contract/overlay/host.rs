@@ -274,7 +274,8 @@ impl Nudge {
             return None;
         }
         let policy = layer.env.motion;
-        let left = Nudge::driven(ctx, layer, |driver| {
+        let stage = MemoryStage::open_owned(ctx, sub(layer.id, NUDGE), layer.owner);
+        let left = Nudge::driven(stage, layer, |driver| {
             if appears {
                 driver.jump(NUDGE, 0.0_f32);
             }
@@ -284,9 +285,8 @@ impl Nudge {
         Some(Nudge { left, shakes, amplitude: layer.env.tokens.space.gap.item })
     }
 
-    /// Runs `f` with the motion driver of `layer`'s nudge, in a stage its owner keeps.
-    fn driven<R>(ctx: &Context, layer: &Layer<'_>, f: impl FnOnce(&Driver<'_>) -> R) -> R {
-        let stage = MemoryStage::open_owned(ctx, sub(layer.id, NUDGE), layer.owner);
+    /// Runs `f` with the motion driver of `layer`'s nudge in `stage`, which its owner keeps, and writes the stage back.
+    fn driven<R>(stage: MemoryStage, layer: &Layer<'_>, f: impl FnOnce(&Driver<'_>) -> R) -> R {
         let result = f(&Driver { stage: &stage, base: layer.id, policy: layer.env.motion });
         stage.write_back();
         result
@@ -312,7 +312,9 @@ impl Nudge {
         if self.left > 0.0 || !overlay::pressed_outside(ctx, layer.id) {
             return;
         }
-        Nudge::driven(ctx, layer, |driver| {
+        // `of` claimed the nudge's stage in this pass and wrote it back, so this one claims nothing.
+        let stage = MemoryStage::open_after(ctx, sub(layer.id, NUDGE), layer.owner);
+        Nudge::driven(stage, layer, |driver| {
             driver.jump(NUDGE, 1.0_f32);
             // Aims it at rest from this pass's clock, so it runs and asks for the passes that step it.
             driver.anim(NUDGE, 0.0_f32, motion::spec::OPEN_FADE);
