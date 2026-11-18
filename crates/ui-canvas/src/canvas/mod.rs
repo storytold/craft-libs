@@ -3,12 +3,12 @@
 //! `Canvas` is an arena root: the leaf components its body shows with `show_at(canvas_rect)` (canvas controls,
 //! such as `CropOverlay`) join its arena, and a press away from all of their parts reaches the active tool through
 //! the canvas's background part. A canvas given a view ([`Canvas::view`]) owns what happens to it in a pass: it
-//! sets the view's rect to its own, fits a view never shown, folds in the wheel, a middle-button pan and the view
-//! commands routed to it ([`ViewCommands`]), keeps the document in view with Overscroll off, eases a zoom under
-//! Animated Zoom, publishes the view it shows as a [`CanvasSpace`] to its body, and reports the view the app copies.
+//! sets the view's rect to its own, fits a view never shown, folds in the wheel (eased under the eased wheel, gliding
+//! on after a touchpad lift), a middle-button pan or latched scroll and the view commands routed to it
+//! ([`ViewCommands`]), keeps the document in view with Overscroll off, eases a zoom under Animated Zoom, publishes the
+//! view it shows as a [`CanvasSpace`] to its body, and reports the view the app copies.
 
 mod crop;
-mod frame_step;
 // The full-window dialog family; `dialog` re-exports it.
 pub(crate) mod full_window;
 pub(crate) mod full_window_parts;
@@ -27,7 +27,7 @@ mod tool_host;
 
 pub use crate::canvas_data::{Guide, GuideColor, GuideDrag, GuideKey, GuideLine, NavigatorOptions, NavigatorSettings, ProxyColor};
 pub use crop::{CropOutside, CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
-pub use frame_step::{FRAME_STEP_MAX, frame_step};
+pub use craft_behavior::{FRAME_STEP_MAX, frame_step};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::{ShowReadouts, hud, readout};
 pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned};
@@ -72,8 +72,7 @@ mod zoom_motion;
 
 pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
 pub use navigate::{
-    Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation,
-    WheelScheme, pan,
+    Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, WheelAction, WheelInput, WheelNavigation, WheelScheme, pan,
 };
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
 pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewRequest, ViewTarget, ZoomTool};
@@ -103,9 +102,11 @@ pub mod navigator_panel;
 use crate::contract::{
     Bind, Common, Component, Container, ContainerProps, Cx, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
 };
+use crate::style::AutoScrollMarkLook;
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
+use crate::runtime::frame;
 use crate::runtime::lock_keys;
 use crate::runtime::measure;
 use crate::runtime::motion::{Animate as _, spec};
@@ -113,9 +114,10 @@ use crate::style::{ComponentStyle, Stateful, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
-    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState,
-    Sense, WheelNotch,
+    CanvasTransform, CanvasView, CursorIcon, CursorPriority, EditEvent, HitLevel, HitPriority, HitShape, Intent, Metrics, MiddleButton, Mixed,
+    PartKey, PointerButton, PressPhase, PressState, Sense, Wheel, WheelNotch, WheelUnit,
 };
+use craft_keymap::{Chord, Key};
 use egui::{Pos2, Rect, Response, Vec2};
 use zoom_motion::{Steer, ViewMotion};
 
@@ -128,6 +130,10 @@ const TOOL_REGION: PartKey = PartKey::new("toolRegion");
 /// Why the background part is pointer-only: the keyboard path of the running tool is its command form
 /// ([`CanvasTool::command_form`]), the one owner of that fact.
 const TOOL_PATH: &str = "the running tool's command form";
+
+/// The key that ends a latched middle scroll. The canvas claims it only while a latch runs, so otherwise Escape reaches
+/// the tool and the dialog around the canvas.
+const LATCH_ESCAPE: Chord = Chord::plain(Key::Escape);
 
 /// How a tool is reached without a pointer (8.3, owner question 15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +159,8 @@ pub struct CanvasStyle {
     metrics: Metrics,
     /// How far the rulers' strips push the view's rect in from the canvas's top-left corner, while they show.
     rulers: Vec2,
+    /// The mark a latched middle scroll shows at its anchor.
+    mark: Option<AutoScrollMarkLook>,
 }
 
 /// A canvas: a pasteboard the caller's canvas controls and the active tool share.
@@ -257,6 +265,14 @@ struct Settled {
     easing: bool,
     /// The keys the canvas leaves to its body.
     keys: BodyKeys,
+    /// The wheel share the canvas took this pass, handed on to its body.
+    wheel: Option<Wheel>,
+    /// A latched or held middle scroll runs.
+    auto_scrolling: bool,
+    /// Where a latched middle scroll is anchored.
+    mark: Option<Pos2>,
+    /// The press on the background is the one that ended a latch: it reaches no tool through its release.
+    swallowed: bool,
 }
 
 impl<'a> Canvas<'a> {
@@ -385,8 +401,9 @@ impl<'a> Canvas<'a> {
         if self.show_rulers { Rect::from_min_max(rect.min + style.rulers, rect.max) } else { rect }
     }
 
-    /// The view of this pass from the app's `given` view: this pass's rect, the first fit, the wheel, a middle-button
-    /// pan, the view commands, the Overscroll clamp, and the zoom ease.
+    /// The view of this pass from the app's `given` view: this pass's rect, the first fit, the wheel with its ease and
+    /// the touchpad glide, a middle-button pan or latched scroll, the view commands, the Overscroll clamp, and the zoom
+    /// ease.
     fn settle(&self, cx: &mut Cx<'_, Self>, given: CanvasView) -> Settled {
         let ctx = cx.core.ctx.clone();
         let id = cx.core.id;
@@ -402,22 +419,115 @@ impl<'a> Canvas<'a> {
                 ViewCommands::FitOnScreen.apply(&mut view, &document, None, pixels_per_point);
             }
         }
+        let at_start = view;
+        // The pass clock. A later pass of the same frame reads the same time and no elapsed time, so the glide and the
+        // latched scroll move the view only in the pass that receives the frame's time.
+
+        let now = frame::clock(&ctx);
+        let elapsed = frame::running(&ctx).map_or(0.0, |facts| facts.elapsed);
+        let (press, on_region) = self.pressed(cx);
+        // A press, a zoom, a key move and a view command end the touchpad glide and the eased wheel's owed motion.
+        let mut halt = matches!(press.phase, PressPhase::Down { .. });
         let mut jumped = false;
-        if let Some(wheel) = cx.take_wheel() {
-            let os = cx.env.shell().os;
-            if let Some(action) = motion.wheel.read(&wheel, WheelNavigation::LINE, os, &self.navigation) {
-                // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in its body
-                // covers it.
-                let at = wheel.at.unwrap_or_else(|| view.rect.center());
-                jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
+        let mut line_pan = Vec2::ZERO;
+        let wheel = cx.take_wheel();
+        if let Some(wheel) = wheel {
+            let (line, os) = (self.navigation.wheel_line, cx.env.shell().os);
+            let mut zoomed = false;
+            if let Some(action) = motion.wheel.read(&wheel, line, os, &self.navigation) {
+                match action {
+                    // The eased wheel hands a line's pan to the wheel service, which pays it out over the passes after.
+                    WheelAction::Pan(delta) if self.navigation.eased_wheel && wheel.unit == WheelUnit::Line => line_pan = delta,
+                    action => {
+                        zoomed = !matches!(action, WheelAction::Pan(_));
+                        // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in
+                        // its body covers it.
+                        let at = wheel.at.unwrap_or_else(|| view.rect.center());
+                        jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
+                    }
+                }
             }
             // A trackpad rotation or a twist of two fingers turns the view; a mirrored view turns the other way.
-            if let Some(degrees) = WheelNavigation::rotation(&WheelInput::of(&wheel, WheelNavigation::LINE, os), &self.navigation) {
+            if let Some(degrees) = WheelNavigation::rotation(&WheelInput::of(&wheel, line, os), &self.navigation) {
                 view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(degrees, view.flip_x));
                 jumped = true;
+                zoomed = true;
+            }
+            halt |= zoomed;
+            motion.glide.read(&wheel, now, !zoomed && self.navigation.touchpad_glide);
+            // The wheel ends a latched middle scroll.
+            if motion.middle.active() {
+                motion.middle.cancel();
             }
         }
-        if let Some(delta) = self.background_press(cx).1 {
+        // Every pass feeds the ease, the line pan or nothing, so owed motion keeps paying; the service takes the time
+        // from its own clock, so a later pass of the same frame pays nothing.
+        if self.navigation.eased_wheel && !halt {
+            let step = cx.ease_wheel(line_pan);
+            if step != Vec2::ZERO {
+                pan(&mut view, step);
+                jumped = true;
+            }
+            if step != Vec2::ZERO || line_pan != Vec2::ZERO {
+                frame::request_own_repaint(&ctx);
+            }
+        }
+        let before_glide = view;
+        let glide = if halt { Vec2::ZERO } else { motion.glide.step(now) };
+        if glide != Vec2::ZERO {
+            pan(&mut view, glide);
+            jumped = true;
+        }
+        if motion.glide.gliding() {
+            frame::request_own_repaint(&ctx);
+        }
+        // The middle button latches a scroll over the background (no tool region holds the press): a click latches it,
+        // a second press ends it, and a release after a drag past the dead zone ends it.
+        let middle = press.phase.start().is_some_and(|start| start.button == PointerButton::Middle);
+        let latching = middle && !on_region && self.navigation.middle_button == MiddleButton::AutoScroll;
+        let held = latching && press.phase.button_down();
+        match press.phase {
+            PressPhase::Down { start, .. } if latching => motion.middle.press(start.origin, area.contains(start.origin)),
+            PressPhase::Release { .. } if latching => motion.middle.release(),
+            PressPhase::Cancel { .. } if latching => motion.middle.cancel(),
+            // Any other press on the background ends a latch.
+            PressPhase::Down { .. } if motion.middle.active() => motion.middle.cancel(),
+            _ => {}
+        }
+        // PLAN: assumed MiddleScroll::swallows(&mut self, PressPhase) -> bool (pdf-canvas-w2)
+        let swallowed = motion.middle.swallows(press.phase);
+        // A latch with the button up ends on Escape, claimed only while it runs, and when the canvas loses focus.
+        if motion.middle.active() && !held {
+            if cx.take_claimed(LATCH_ESCAPE) || !cx.is_focused() {
+                motion.middle.cancel();
+            } else {
+                cx.claim(LATCH_ESCAPE);
+            }
+        }
+        if motion.middle.active() {
+            // The pointer is read where it is over the background: the press while the button is held, the hover after.
+            let pointer = match press.phase {
+                PressPhase::Held { pos, .. } | PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } if held => Some(pos),
+                _ => cx.hover_pos(BACKGROUND),
+            };
+            if let Some(pointer) = pointer {
+                let step = motion.middle.step(pointer, held, elapsed, self.navigation.invert_middle);
+                if step != Vec2::ZERO {
+                    pan(&mut view, step);
+                    jumped = true;
+                }
+            }
+            cx.cursor(CursorIcon::ResizeVertical, CursorPriority::Part);
+            frame::request_own_repaint(&ctx);
+        }
+        // Under a latch the held press scrolls by its distance from the anchor; only the Pan mode drags the view 1:1.
+        let held_pan = middle && !latching && press.phase.is_drag();
+        if held_pan {
+            cx.cursor(CursorIcon::Grabbing, CursorPriority::Drag);
+        }
+        let auto_scrolling = motion.middle.active() || held_pan;
+        let mark = motion.middle.anchor();
+        if let Some(delta) = self.background_press(cx, swallowed).1 {
             pan(&mut view, delta);
             jumped = true;
         }
@@ -435,6 +545,7 @@ impl<'a> Canvas<'a> {
             moves.push(mv);
         }
         moves.extend(cx.take_scroll_moves());
+        halt |= !moves.is_empty();
         for (step, mods) in moves {
             if self.keys_to_body {
                 keys.page = Some((step, mods));
@@ -457,6 +568,7 @@ impl<'a> Canvas<'a> {
         let before = view;
         if let Some((next, motion)) = self.view_commands(cx, Some(view)) {
             view = next;
+            halt = true;
             match motion {
                 CommandMotion::Ease if self.navigation.animated_zoom => {
                     // A zoom that keeps the centre eases about it; one that moves the centre (Fit on Screen) eases
@@ -469,6 +581,18 @@ impl<'a> Canvas<'a> {
             }
         }
         let target = clamped(view, self.document_size(), &self.navigation);
+        if glide != Vec2::ZERO {
+            motion.glide.moved(target != before_glide);
+        }
+        if halt {
+            motion.glide.stop();
+            cx.stop_wheel_ease();
+        }
+        // A view that moves during a wheel gesture marks it moved, so a body that turns pages at the edge does not turn
+        // one after a pan or a go-to.
+        if target != at_start {
+            cx.mark_wheel_moved();
+        }
         let mut progress = cx.anim("zoom", motion.animation.target(), spec::MOVE);
         match steer {
             Some(Steer::Ease { mut from, anchor }) => {
@@ -482,7 +606,7 @@ impl<'a> Canvas<'a> {
         let shown = motion.animation.shown(&target, progress);
         let easing = motion.animation.running();
         motion.restore(&ctx, id);
-        Settled { target, shown, easing, keys }
+        Settled { target, shown, easing, keys, wheel, auto_scrolling, mark, swallowed }
     }
 
     /// Measures the document's axes in `x` and `y`, counted from `zero` (document units). The rulers, the guides and
@@ -497,9 +621,9 @@ impl<'a> Canvas<'a> {
 
     /// The space the body and the tool see in this pass; `caps_lock` is whether Caps Lock is on in it.
     fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool) -> Option<CanvasSpace> {
-        let (shown, target, easing, keys) = match self.settled {
-            Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
-            None => (self.given?, self.given?, false, BodyKeys::default()),
+        let (shown, target, easing, keys, wheel) = match self.settled {
+            Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys, settled.wheel),
+            None => (self.given?, self.given?, false, BodyKeys::default(), None),
         };
         let mut space = CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer);
         space.set_view(target);
@@ -513,6 +637,7 @@ impl<'a> Canvas<'a> {
             .with_pasteboard(self.pasteboard)
             .with_background(background)
             .with_precise(self.precise_cursors != caps_lock)
+            .with_wheel(wheel)
             .with_canvas(id);
         Some(match self.picture {
             Some(slot) => space.with_picture(slot),
@@ -526,18 +651,34 @@ impl<'a> Canvas<'a> {
         self.snap.clone().map(|snap| snap.at(&view, os))
     }
 
-    /// The press on the background part, or on the tool region that holds it, as the canvas reports it, and the pan
-    /// of a middle-button drag: a middle press pans the view and is never a tool press.
-    fn background_press(&self, cx: &Cx<'_, Self>) -> (PressState, Option<Vec2>) {
+    /// The press on the background part, or on the tool region that holds it, and whether a tool region holds it.
+    fn pressed(&self, cx: &Cx<'_, Self>) -> (PressState, bool) {
         let region = (0..self.tool_regions.len() as u64)
             .filter_map(|i| cx.part_if_declared(TOOL_REGION.at(i)))
             .map(|result| result.press)
             .find(|press| !matches!(press.phase, PressPhase::Idle));
-        let press = region.unwrap_or(cx.part(BACKGROUND).press);
+        match region {
+            Some(press) => (press, true),
+            None => (cx.part(BACKGROUND).press, false),
+        }
+    }
+
+    /// The press on the background part, or on the tool region that holds it, as the canvas reports it, and the pan
+    /// of a middle-button drag: a middle press pans the view and is never a tool press. Under Invert Middle the drag
+    /// pans the other way, as the latched scroll does. Where the middle button latches (`MiddleButton::AutoScroll`, no
+    /// tool region under the press) the drag does not pan: the latch's step scrolls. A `swallowed` press (the one that
+    /// ended a latch) is idle.
+    fn background_press(&self, cx: &Cx<'_, Self>, swallowed: bool) -> (PressState, Option<Vec2>) {
+        let (press, on_region) = self.pressed(cx);
+        if swallowed {
+            return (PressState::IDLE, None);
+        }
+        let pans = !(self.navigation.middle_button == MiddleButton::AutoScroll && !on_region);
         let middle = press.phase.start().is_some_and(|start| start.button == PointerButton::Middle);
+        let sign = if self.navigation.invert_middle { -1.0 } else { 1.0 };
         match press.phase {
-            PressPhase::DragStart { start, pos, .. } if middle => (PressState::IDLE, Some(pos - start.origin)),
-            PressPhase::Drag { delta, .. } if middle => (PressState::IDLE, Some(delta)),
+            PressPhase::DragStart { start, pos, .. } if middle && pans => (PressState::IDLE, Some((pos - start.origin) * sign)),
+            PressPhase::Drag { delta, .. } if middle && pans => (PressState::IDLE, Some(delta * sign)),
             _ if middle => (PressState::IDLE, None),
             _ => (press, None),
         }
@@ -545,7 +686,7 @@ impl<'a> Canvas<'a> {
 
     /// The tool host's input of this pass: settled in `update`, so the body and `finish` read the same.
     fn tool_pass(&self, cx: &Cx<'_, Self>) -> ToolPass {
-        let press = self.background_press(cx).0;
+        let press = self.background_press(cx, self.settled.is_some_and(|settled| settled.swallowed)).0;
         let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
         let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
         ToolPass {
@@ -647,7 +788,12 @@ impl Component for Canvas<'_> {
     fn style(cx: &StyleCx<'_>, _: CanvasStyleKey) -> CanvasStyle {
         let surface = SurfaceLook::new(Stateful::new(cx.color(cx.tokens.color.surface.canvas))).kind(SurfaceKind::Canvas);
         // The rulers' own layout says where the view lies inside them.
-        CanvasStyle { surface: Some(surface), rulers: Rulers::content_rect(cx, Rect::ZERO).min.to_vec2(), ..CanvasStyle::default() }
+        CanvasStyle {
+            surface: Some(surface),
+            rulers: Rulers::content_rect(cx, Rect::ZERO).min.to_vec2(),
+            mark: Some(cx.auto_scroll_mark()),
+            ..CanvasStyle::default()
+        }
     }
 
     fn sense(&self) -> Sense {
@@ -655,12 +801,19 @@ impl Component for Canvas<'_> {
     }
 
     fn wheel_notch(&self) -> WheelNotch {
-        WheelNotch::Points(WheelNavigation::LINE)
+        WheelNotch::Points(self.navigation.wheel_line)
     }
 
     /// Reserves the slot the picture paints into, under every canvas control of the body (`CanvasSpace::paint_picture`).
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         self.picture = Some(ui.reserve_slot(cx.content_rect));
+    }
+
+    /// The mark of a latched middle scroll, at its anchor above the body.
+    fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if let (Some(anchor), Some(look)) = (self.settled.and_then(|settled| settled.mark), cx.style.mark) {
+            ui.draw().auto_scroll_mark(&look, anchor);
+        }
     }
 
     /// The view of this pass, kept for the body and `finish`.
@@ -726,7 +879,8 @@ impl Component for Canvas<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
-        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, auto_scrolling: false } // P3(pdf-canvas-w1): CV-C6
+        let auto_scrolling = self.settled.is_some_and(|settled| settled.auto_scrolling);
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, auto_scrolling }
     }
 }
 

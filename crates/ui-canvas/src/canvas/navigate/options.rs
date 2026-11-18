@@ -7,8 +7,6 @@ use super::PageKey;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct NavigationOptions {
-    /// General, Zoom with Scroll Wheel: the wheel zooms and Alt + wheel scrolls. Off.
-    pub zoom_with_wheel: bool,
     /// General, Animated Zoom: a zoom command, a Zoom tool click and a Navigator zoom ease on the canvas, and a held Zoom
     /// tool press zooms continuously; the wheel and a pinch follow the input at once. On.
     pub animated_zoom: bool,
@@ -67,7 +65,6 @@ impl WheelScheme {
 impl Default for NavigationOptions {
     fn default() -> Self {
         Self {
-            zoom_with_wheel: false,
             animated_zoom: true,
             zoom_resizes_windows: false,
             zoom_clicked_point_to_center: false,

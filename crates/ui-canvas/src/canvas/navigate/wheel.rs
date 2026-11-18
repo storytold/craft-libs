@@ -5,7 +5,7 @@
 //! reads its share with these rules and applies it to the view it reports; a wheel zoom follows the wheel at once,
 //! with no ease.
 
-use super::NavigationOptions;
+use super::{NavigationOptions, WheelScheme};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
 use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomLadder};
@@ -76,8 +76,12 @@ impl WheelInput {
 /// - The wheel scrolls up and down; Shift or Cmd/Ctrl + wheel scrolls sideways.
 /// - Alt + wheel zooms about the pointer, 1.1 a notch; Shift + Alt + wheel steps the ladder. Alt with the Control
 ///   key is the same zoom: on macOS Control may join it, elsewhere Ctrl (cmd) without Shift (production's #10488).
-/// - A wheel line pans the canvas [`WheelNavigation::LINE`] points.
-/// - Zoom with Scroll Wheel swaps them: the wheel zooms, Alt + wheel scrolls, Shift + wheel steps the ladder.
+/// - A wheel line pans the canvas [`NavigationOptions::wheel_line`] points; a zoom is one notch a line whatever the
+///   wheel line.
+/// - [`WheelScheme::Zoom`] (Zoom with Scroll Wheel) swaps them: the wheel zooms, Alt + wheel scrolls, Shift + wheel
+///   steps the ladder.
+/// - [`WheelScheme::Acrobat`]: Cmd/Ctrl + wheel zooms about the pointer, [`WheelScheme::ACROBAT_NOTCH`] a line;
+///   Shift + wheel scrolls sideways; there is no ladder step.
 /// - A trackpad pinch zooms about the pointer (Zoom with Trackpad Pinch).
 ///
 /// The value keeps the part of a ladder-step notch a trackpad has not finished, so slow scrolling still steps.
@@ -89,9 +93,6 @@ pub struct WheelNavigation {
 impl WheelNavigation {
     /// The zoom factor of one wheel notch.
     pub const NOTCH: f64 = 1.1;
-
-    /// The points one wheel line pans the canvas: Photoshop's 16 (production's #12028).
-    pub const LINE: f32 = 16.0;
 
     /// The most ladder steps one pass takes.
     const MOST_STEPS: f32 = 10.0;
@@ -137,13 +138,18 @@ impl WheelNavigation {
         }
         let scroll_finite = input.scroll.x.is_finite() && input.scroll.y.is_finite();
         let plain = !input.mods.cmd && !input.mods.ctrl;
-        let zooms = if options.zoom_with_wheel { plain && !input.mods.alt } else { Self::alt_gesture(input.mods, input.os) };
-        if zooms && input.mods.shift {
+        // Whether the modifiers zoom, the zoom factor of one line, and whether Shift turns the zoom into ladder steps.
+        let (zooms, line_factor, ladder) = match options.wheel {
+            WheelScheme::Scroll => (Self::alt_gesture(input.mods, input.os), Self::NOTCH, true),
+            WheelScheme::Zoom => (plain && !input.mods.alt, Self::NOTCH, true),
+            WheelScheme::Acrobat => (!plain, WheelScheme::ACROBAT_NOTCH, false),
+        };
+        if zooms && ladder && input.mods.shift {
             return scroll_finite.then(|| self.snap(input.along(), notch)).flatten().map(WheelAction::SnapZoom);
         }
         self.residual = 0.0;
         if zooms {
-            let factor = Self::NOTCH.powf(f64::from(input.along() / notch));
+            let factor = line_factor.powf(f64::from(input.along() / notch));
             return (scroll_finite && factor.is_finite() && factor > 0.0 && factor != 1.0).then_some(WheelAction::Zoom(factor));
         }
         if !scroll_finite || input.scroll == Vec2::ZERO {

@@ -5,7 +5,7 @@
 use super::proxy::{preview_rect, proxy_quad, view_center_for, zoom_to_document_rect};
 use crate::canvas::AppPaint;
 use crate::canvas::zoom_motion::{self, Steer};
-use crate::canvas::{CanvasWords, NavigationOptions, PageKey, ViewCommands, WheelAction, WheelNavigation};
+use crate::canvas::{CanvasWords, NavigationOptions, PageKey, ViewCommands, WheelAction, WheelNavigation, WheelScheme};
 use crate::canvas_data::ProxyColor;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Outcome, PaintUi,
@@ -405,7 +405,7 @@ impl Component for Navigator<'_> {
         if let Some(wheel) = cx.take_wheel()
             && !running
         {
-            let options = NavigationOptions { zoom_with_wheel: true, ..self.navigation };
+            let options = NavigationOptions { wheel: WheelScheme::Zoom, ..self.navigation };
             let (line, os) = (craft_behavior::WheelNotch::DEFAULT.points(0.0), cx.env.shell().os);
             let action = cx.memory::<WheelNavigation>().read(&wheel, line, os, &options);
             if let Some(action @ (WheelAction::Zoom(_) | WheelAction::SnapZoom(_))) = action {

@@ -40,7 +40,6 @@ pub struct CanvasSpace {
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
-    #[allow(dead_code)] // P3(pdf-canvas-w1): CV-C5
     wheel: Option<craft_behavior::Wheel>,
 }
 
@@ -68,14 +67,14 @@ impl CanvasSpace {
 
     /// The wheel share the canvas read this pass, for a body that pages by wheel to read once.
     pub fn wheel(&self) -> Option<craft_behavior::Wheel> {
-        todo!("CV-C5")
+        self.wheel
     }
 
     /// This space with the wheel share the canvas read this pass.
     #[must_use]
-    pub fn with_wheel(self, wheel: Option<craft_behavior::Wheel>) -> Self {
-        let _ = wheel;
-        todo!("CV-C5")
+    pub fn with_wheel(mut self, wheel: Option<craft_behavior::Wheel>) -> Self {
+        self.wheel = wheel;
+        self
     }
 
     /// This space for a pass in which the app's tool moves the view with the pointer

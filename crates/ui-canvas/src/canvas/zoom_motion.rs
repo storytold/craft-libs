@@ -6,12 +6,12 @@
 //! start it through [`ease`].
 
 use super::frame_step;
-use super::navigate::WheelNavigation;
+use super::navigate::{TouchpadGlide, WheelNavigation};
 use crate::runtime::frame;
 use crate::runtime::memory::{global, with_session};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, ZoomLadder};
+use craft_behavior::{CanvasView, MiddleScroll, ZoomLadder};
 use egui::{Context, Id, Pos2, Rect};
 
 /// How far the app's view may differ from the zoom anchor, in document units, before the anchor is dropped.
@@ -130,6 +130,10 @@ pub(crate) struct ViewMotion {
     pub(crate) animation: ZoomAnimation,
     /// What the tool host or the Navigator asked of the ease since the canvas's last pass.
     pub(crate) steer: Option<Steer>,
+    /// The touchpad's glide after the fingers lift.
+    pub(crate) glide: TouchpadGlide,
+    /// The middle button's latched scroll.
+    pub(crate) middle: MiddleScroll,
 }
 
 impl ViewMotion {
