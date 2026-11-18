@@ -1,8 +1,8 @@
 # craft-xfa
 
-Scoped namespace-aware XML DOM extracted unchanged from PDFCraft xfa/xml.rs at 271e479c. This is not a complete XFA implementation: template interpretation, packets, data binding, scripts, layout, fonts and PDF generation remain app-owned.
+Scoped namespace-aware XML DOM extracted from PDFCraft xfa/xml.rs at 271e479c. This is not a complete XFA implementation: template interpretation, packets, data binding, scripts, layout, fonts and PDF generation remain app-owned.
 
-Preserves source byte ranges, coalesced text, namespace shadowing and document-local node identities. Uses craft-xml strict events with DTD rejection by default, depth 1024 and caller node count. Other event-reader defaults remain in force. Namespace snapshots are copied per element as before; this is not a new total-memory bound or a full XML namespaces conformance claim.
+Preserves source byte ranges, coalesced text, namespace shadowing and document-local node identities. Uses craft-xml strict events with DTD rejection by default, depth 1024 and caller node count. Other event-reader defaults remain in force. Namespace snapshots are copied per element as before, with a 64 MiB cumulative pre-allocation budget for snapshot entry headers, prefix/URI bytes and resolved element/attribute namespace URI copies. Excess returns an error. This intentionally tightens resource admission; it is not a total DOM memory bound or a full XML namespaces conformance claim.
 
 Original source by Dylan M. Taylor (eead4541, 7d44e654), MIT OR Apache-2.0.
 

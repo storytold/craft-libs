@@ -2,6 +2,7 @@
 
 use std::ops::Range;
 
+const MAX_NAMESPACE_BYTES: usize = 64 << 20;
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
 
@@ -139,31 +140,49 @@ fn split_qname(qname: &str) -> (&str, &str) {
     }
 }
 
-fn resolve_ns(scope: &[(String, String)], prefix: &str, is_attr: bool) -> Result<Option<String>, String> {
+// One long inherited URI otherwise gets copied into every descendant. Charge retained
+// namespace strings and snapshot entry headers before copying, across the whole document.
+fn charge_namespace(bytes: &mut usize, amount: usize) -> Result<(), String> {
+    *bytes = bytes.checked_sub(amount).ok_or_else(|| "namespace retention budget exceeded".to_string())?;
+    Ok(())
+}
+
+fn copy_namespace(uri: &str, bytes: &mut usize) -> Result<Option<String>, String> {
+    charge_namespace(bytes, uri.len())?;
+    Ok(Some(uri.to_string()))
+}
+
+fn resolve_ns(scope: &[(String, String)], prefix: &str, is_attr: bool, bytes: &mut usize) -> Result<Option<String>, String> {
     if prefix == "xml" {
-        return Ok(Some(XML_NS.to_string()));
+        return copy_namespace(XML_NS, bytes);
     }
     if prefix == "xmlns" {
-        return Ok(Some(XMLNS_NS.to_string()));
+        return copy_namespace(XMLNS_NS, bytes);
     }
     if prefix.is_empty() {
         if is_attr {
             return Ok(None);
         }
-        return Ok(scope.iter().rev().find(|(p, _)| p.is_empty()).and_then(|(_, u)| (!u.is_empty()).then(|| u.clone())));
+        return match scope.iter().rev().find(|(p, _)| p.is_empty()) {
+            Some((_, u)) if !u.is_empty() => copy_namespace(u, bytes),
+            _ => Ok(None),
+        };
     }
     match scope.iter().rev().find(|(p, _)| p == prefix) {
-        Some((_, u)) if !u.is_empty() => Ok(Some(u.clone())),
+        Some((_, u)) if !u.is_empty() => copy_namespace(u, bytes),
         _ => Err(format!("undeclared namespace prefix: {prefix}")),
     }
 }
-
 impl Document {
     pub fn parse(text: &str) -> Result<Self, String> {
         Self::parse_with_options(text, ParsingOptions::default())
     }
 
     pub fn parse_with_options(text: &str, options: ParsingOptions) -> Result<Self, String> {
+        Self::parse_with_namespace_budget(text, options, MAX_NAMESPACE_BYTES)
+    }
+
+    fn parse_with_namespace_budget(text: &str, options: ParsingOptions, mut namespace_bytes: usize) -> Result<Self, String> {
         let mut opts = craft_xml::Options {
             strict: true,
             doctype: if options.allow_dtd { craft_xml::Doctype::Ignore } else { craft_xml::Doctype::Reject },
@@ -194,20 +213,23 @@ impl Document {
                         }
                     }
                     let (el_prefix, el_local) = split_qname(&name);
-                    let el_ns = resolve_ns(&scope, el_prefix, false)?;
+                    let el_ns = resolve_ns(&scope, el_prefix, false, &mut namespace_bytes)?;
                     let mut el_attrs = Vec::new();
                     for (k, v) in attrs {
                         if k == "xmlns" || k.starts_with("xmlns:") {
                             continue;
                         }
                         let (ap, al) = split_qname(&k);
-                        let ans = resolve_ns(&scope, ap, true)?;
+                        let ans = resolve_ns(&scope, ap, true, &mut namespace_bytes)?;
                         el_attrs.push(AttrData { ns: ans, name: al.to_string(), value: v });
                     }
                     // Deduplicate in-scope namespace bindings, keeping the innermost binding per prefix.
                     let mut namespaces: Vec<(String, String)> = Vec::new();
                     for (p, u) in scope.iter().rev() {
                         if !namespaces.iter().any(|(ep, _)| ep == p) {
+                            charge_namespace(&mut namespace_bytes, std::mem::size_of::<(String, String)>())?;
+                            charge_namespace(&mut namespace_bytes, p.len())?;
+                            charge_namespace(&mut namespace_bytes, u.len())?;
                             namespaces.push((p.clone(), u.clone()));
                         }
                     }
@@ -391,6 +413,18 @@ impl<'a> Node<'a> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn inherited_namespace_copies_obey_aggregate_byte_admission() {
+        let uri = format!("urn:{}", "x".repeat(124));
+        let snapshot = std::mem::size_of::<(String, String)>() + 1 + uri.len();
+        for (child, expanded_copies) in [("<n/>", 0), ("<p:n/>", 1), ("<n p:a='v'/>", 1), ("<p:n p:a='v'/>", 2)] {
+            let input = format!("<r xmlns:p='{uri}'>{}</r>", child.repeat(8));
+            let needed = 9 * snapshot + 8 * expanded_copies * uri.len();
+            assert!(Document::parse_with_namespace_budget(&input, ParsingOptions::default(), needed).is_ok());
+            assert!(Document::parse_with_namespace_budget(&input, ParsingOptions::default(), needed - 1).is_err());
+            assert!(Document::parse_with_namespace_budget(&input, ParsingOptions::default(), 0).is_err());
+        }
+    }
     #[test]
     fn namespace_shadowing_attributes_text_and_source_ranges() {
         let text = "<root xmlns='urn:outer' xmlns:p='urn:p' a='v'><p:child xmlns='urn:inner' p:a='x'>one<![CDATA[two]]>three</p:child><leaf xmlns=''/></root>";
