@@ -71,6 +71,7 @@ craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
 craft-cloud-local = { path = "crates/cloud-local" }
 craft-color = { path = "crates/color" }
+craft-color-transform = { path = "crates/color-transform" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }

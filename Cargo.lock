@@ -1693,6 +1693,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-color-transform"
+version = "0.1.0"
+dependencies = [
+ "craft-cms",
+ "craft-color",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-control"
 version = "0.1.0"
 dependencies = [
