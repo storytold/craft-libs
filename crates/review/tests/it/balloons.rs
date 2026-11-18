@@ -165,7 +165,7 @@ fn a_selected_card_in_buttons_form_reports_reply_resolve_reopen_and_delete() {
     );
 }
 
-/// Long bodies are cut to ten rows, selected or not, so the next card stays in view; a locked card's text stays in its
+/// Long bodies are cut to ten rows by the text layout (`Wrap::Clamp`), selected or not, so the next card stays in view; a locked card's text stays in its
 /// card; under right-to-left a card's text starts at its right edge.
 #[trial]
 fn balloons_stack_without_overlap_clip_long_bodies_and_keep_the_next_card_in_view() {
@@ -189,8 +189,9 @@ fn balloons_stack_without_overlap_clip_long_bodies_and_keep_the_next_card_in_vie
             .iter()
             .find(|text| text.text.starts_with("lorem") && text.rect.min.y >= card.top() - 1.0 && text.rect.min.y <= card.bottom())
             .expect("the long body of the card");
-        assert!(body.clip.height() <= 10.0 * line + 1.0, "card {id}: the body is cut to ten rows: {:?} for a row of {line}", body.clip);
-        assert!(body.clip.height() >= 9.0 * line, "card {id}: ten rows of the body show: {:?}", body.clip);
+        assert!(body.rect.height() <= 10.0 * line + 1.0, "card {id}: the body is cut to ten rows: {:?} for a row of {line}", body.rect);
+        assert!(body.rect.height() >= 9.0 * line, "card {id}: ten rows of the body show: {:?}", body.rect);
+        assert!(body.elided, "card {id}: the cut body says it is cut");
     }
     let last = cards[3];
     assert!(last.bottom() <= 1100.0, "the card after the long ones stays in view: {last:?}");
