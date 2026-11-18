@@ -1693,6 +1693,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-color-transform"
+version = "0.1.0"
+dependencies = [
+ "craft-cms",
+ "craft-color",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-control"
 version = "0.1.0"
 dependencies = [
@@ -1777,6 +1787,27 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-develop"
+version = "0.1.0"
+dependencies = [
+ "craft-develop-model",
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "craft-develop-model"
+version = "0.1.0"
+dependencies = [
+ "craft-geom",
+ "craft-metadata",
+ "miniz_oxide 0.9.1",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2186,6 +2217,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-geom"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "craft-gif"
 version = "0.1.0"
 dependencies = [
@@ -2299,6 +2338,7 @@ dependencies = [
  "craft-dds",
  "craft-heif",
  "craft-jpeg",
+ "craft-jxl",
  "craft-media-testkit",
  "craft-metadata",
  "craft-tiff",
@@ -2395,6 +2435,7 @@ dependencies = [
 name = "craft-jxl"
 version = "0.1.0"
 dependencies = [
+ "brotli-decompressor 5.0.3",
  "craft-cms",
  "jixel",
  "jxl-oxide",
