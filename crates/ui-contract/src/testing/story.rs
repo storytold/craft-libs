@@ -562,6 +562,24 @@ pub fn show_as_only_item<C>(ui: &mut Ui, row: C) -> C::Output
 where
     C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
 {
+    only_item(ui, row, None)
+}
+
+/// Shows `row` as the only item of a collection at `rect`, as a collection shows its rows across its columns: a row
+/// with column cells spans the cells it is given, where in the flow it would take its own width.
+pub fn show_as_only_item_at<C>(ui: &mut Ui, row: C, rect: egui::Rect) -> C::Output
+where
+    C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
+{
+    let shown = only_item(ui, row, Some(rect));
+    ui.advance_cursor_after_rect(rect);
+    shown
+}
+
+fn only_item<C>(ui: &mut Ui, row: C, rect: Option<egui::Rect>) -> C::Output
+where
+    C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
+{
     let id = ui.scope_id().with("only item");
     let facts = crate::runtime::env::ItemFacts {
         item: id,
@@ -578,7 +596,11 @@ where
         ui,
         crate::runtime::env::Env::of(ui).derive_local(|scoped| scoped.item_facts = Some(std::sync::Arc::new(facts))),
     );
-    let shown = row.id(id).show(ui);
+    let row = row.id(id);
+    let shown = match rect {
+        Some(rect) => row.show_at(ui, rect),
+        None => row.show(ui),
+    };
     crate::runtime::env::Env::restore(ui.ctx(), installed);
     shown
 }

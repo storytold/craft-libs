@@ -125,7 +125,12 @@ impl Component for ListRow<'_> {
         let above = if self.space_above { sizes.gap_row } else { 0.0 };
         let height = sizes.height(self.thumb, self.detail_line());
         let rtl = cx.env.direction().is_rtl();
-        let room = cx.room.unwrap_or(0.0);
+        // A collection measures a row's height at the row's width (`Proposal::Width`), which offers no room of its own.
+        let offered = match cx.proposal {
+            Proposal::Width(width) => Some(width),
+            _ => cx.room,
+        };
+        let room = offered.unwrap_or(0.0);
         let columns = self
             .toggles
             .iter()
@@ -137,7 +142,7 @@ impl Component for ListRow<'_> {
         let widths = self.widths(sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let probe = self.place_in(&[], sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(room, height)), rtl);
         let probe_min = probe.min_width + toggles;
-        let band = cx.room.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
+        let band = offered.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
         let wrapped = self.lines.as_ref().map_or(0.0, |lines| {
             let run = lines.run().role(cx.style.detail.role).wrap(self.lines_wrap());
             sizes.gap + cx.layout_at(&run, band).size().y
@@ -147,12 +152,6 @@ impl Component for ListRow<'_> {
             let runs = [run];
             DocText::new(&runs).layout(cx.ui.ctx(), cx.tokens, cx.env.text_direction()).size()
         });
-        if self.lines.is_some() {
-            eprintln!(
-                "DIAG row measure: proposal {:?} room {:?} probe.label {:?} toggles {toggles} band {band} wrapped {wrapped} height {height}",
-                cx.proposal, cx.room, probe.label
-            );
-        }
         let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
         let text = sizes.label_line + detail + self.progress_line(sizes) + wrapped + self.below_height(sizes);
         let height = if self.lines.is_some() || self.progress.is_some() || !self.below.is_empty() {

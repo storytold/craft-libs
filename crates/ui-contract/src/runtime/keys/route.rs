@@ -509,8 +509,9 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
         Some(Intent::Move(mv, mods)) => {
             // Up, Down, Page, Home and End leave a row's children: the collection takes the move. A component stop keeps
             // its declared arrows from the roving group around it; a part stop belongs to the component's own group.
-            let leaves_row = is_vertical(mv) && focus::is_row_child(ctx, stop);
-            let kept = stop.part.is_none() && stop.keys.keep.keeps_arrow(mv);
+            let caret = caret_move(mv, stop.keys.owner);
+            let leaves_row = !caret && is_vertical(mv) && focus::is_row_child(ctx, stop);
+            let kept = caret || (stop.part.is_none() && stop.keys.keep.keeps_arrow(mv));
             // A stop that does not act on its moves leaves a move key a scoped command around it binds to that
             // command, ahead of its roving group and the scroll owner.
             if !leaves_row && !kept && !stop.role.moves && commands::binds_scoped(ctx, &chord) {
@@ -550,6 +551,12 @@ fn is_vertical(mv: NavMove) -> bool {
     matches!(mv, NavMove::Up | NavMove::Down | NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End)
 }
 
+/// Whether the move `mv` of a stop with the key class `owner` is its caret's: Home and End of a text field (a row's
+/// rename editor, a search field in a toolbar), which neither its row nor a roving group around it takes.
+fn caret_move(mv: NavMove, owner: OwnerClass) -> bool {
+    matches!(mv, NavMove::Start | NavMove::End) && owner == OwnerClass::Text
+}
+
 /// Acts on the route `press_route` gave `press` of the focused stop `rec`. Returns whether the component's intents
 /// took the press.
 fn apply_press(
@@ -570,8 +577,9 @@ fn apply_press(
         PressRoute::Chord => routed.entry(id).or_default().chords.push(Chord { mods: press.mods, key: press.key }),
         PressRoute::Move(mv, mods) => {
             let horizontal = matches!(press.key, Key::Left | Key::Right);
-            let kept = stop.part.is_none() && stop.keys.keep.keeps_arrow(mv);
-            if let Some(owner) = is_vertical(mv).then(|| focus::leave_row(ctx, stop.key())).flatten() {
+            let caret = caret_move(mv, stop.keys.owner);
+            let kept = caret || (stop.part.is_none() && stop.keys.keep.keeps_arrow(mv));
+            if let Some(owner) = (!caret && is_vertical(mv)).then(|| focus::leave_row(ctx, stop.key())).flatten() {
                 push(routed, Some(owner), Intent::Move(mv, mods), horizontal);
             } else if kept || focus::roving_move(ctx, stop.key(), mv, mods, horizontal).is_none() {
                 // Page, Home and End go to the scroll owner around the stop.

@@ -166,13 +166,6 @@ impl ListRow<'_> {
             draw.layout(&run, self.text_block(label, sizes, 0.0).0.width())
         });
         let lines = wrapped.as_ref().map_or(0.0, |layout| sizes.gap + layout.size().y);
-        if let Some(layout) = &wrapped {
-            eprintln!(
-                "DIAG row paint: label {label:?} text_block width {} wrapped size {:?}",
-                self.text_block(label, sizes, 0.0).0.width(),
-                layout.size()
-            );
-        }
         let (label, mut top) = self.text_block(label, sizes, lines + self.below_height(sizes));
         // A heading's detail sits at the end of the label's line and the title is cut to what it leaves.
         let beside = match (&self.detail, self.heading) {

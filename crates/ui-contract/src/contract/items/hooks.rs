@@ -856,9 +856,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// (`lazy::follow`) moves the offset by how far a change of the heights of rows before the anchor's row moved it,
     /// and the pass runs again. A bound offset is the app's and keeps no anchor.
     ///
-    /// A zoom the collection takes in this pass names its own anchor instead: the row under
-    /// `Collection::zoom_anchor`'s point, at its place in this pass's layout, the one the zoom changes from. `settle`
-    /// keeps it with the offset and the next pass, laid out at the new zoom, puts that row back where it is now.
+    /// A zoom the collection takes in this pass names its own anchor once the anchor an earlier pass named is in place:
+    /// the row under `Collection::zoom_anchor`'s point, at its place in this pass's layout, the one the zoom changes
+    /// from. `settle` keeps it with the offset and the next pass, laid out at the new zoom, puts that row back where it
+    /// is now. While a zoom runs over several passes, the row that pass shifts back keeps its anchor.
     fn follow_anchor(&mut self, comp: &mut C, (ctx, id): (&Context, Id), layout: &C::ItemLayout, (rect, rtl): (Rect, bool)) {
         if comp.scroll().is_some() {
             self.anchor = None;
@@ -875,15 +876,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             CollectionEvent::Zoom { about, .. } => Some(*about),
             _ => None,
         });
-        if let Some(point) = comp.zoom_anchor(wheel) {
-            let point = self.xf.map_or(point, |map| map.to_layer(point));
-            let under = self.visible.clone().filter(|&at| scrolling(at)).find(|&at| self.screen(layout, rect, at, offset, rtl).contains(point));
-            if let Some(at) = under {
-                let child = sub(id, ("key", key_hash(&source.key(at))));
-                self.anchor = Some(lazy::Anchor { child, at: Vec2::new(0.0, layout.rect(at, offset).min.y) });
-                return;
-            }
-        }
+        let zoom_at = comp.zoom_anchor(wheel);
         let named = self.anchor.map(|anchor| anchor.child);
         let mut placed = lazy::Placed::default();
         for at in self.visible.clone().filter(|&at| scrolling(at)) {
@@ -902,9 +895,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let moved = Vec2::new(0.0, (self.offset - self.offset_at_read) as f32);
         let room = (Vec2::new(0.0, self.offset as f32), Vec2::new(0.0, (self.max_offset(view.y) - self.offset) as f32));
-        if named.is_some() {
+        let diag = zoom_at.is_some() || named.is_some_and(|_| source.len() == 120);
+        if diag {
             eprintln!(
-                "DIAG zoom-follow: anchor at {:?} placed.anchor {:?} first {:?} offset {} at_read {} room {room:?} content {:?} visible {:?} source {}",
+                "DIAG zoom-follow {:?}: zoom_at {zoom_at:?} anchor at {:?} placed.anchor {:?} first {:?} offset {} at_read {} room {room:?} content {:?} visible {:?}",
+                std::thread::current().name(),
                 self.anchor.map(|anchor| anchor.at),
                 placed.anchor,
                 placed.first.map(|(_, at)| at),
@@ -912,14 +907,28 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 self.offset_at_read,
                 self.content,
                 self.visible,
-                source.len()
             );
         }
+        // The anchor an earlier pass named is followed first: egui spreads one wheel notch's zoom over the passes of
+        // several frames, and each of them lays the rows out at the zoom the pass before it stepped to.
         if let Some(shift) = lazy::follow(&mut self.anchor, &placed, moved, view, room, (false, true)) {
-            eprintln!("DIAG zoom-follow: shift {shift:?}");
+            if diag {
+                eprintln!("DIAG zoom-follow {:?}: shift {shift:?}", std::thread::current().name());
+            }
             self.offset += f64::from(shift.y);
             log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "collection {id:?} keeps its anchor row in place by {shift:?}");
             crate::runtime::egui::sizing::request_discard(ctx, crate::runtime::egui::sizing::Rerun::Layout);
+            return;
+        }
+        // With the earlier anchor in place, a zoom in this pass names the row under its point, at its place in this
+        // pass's layout.
+        if let Some(point) = zoom_at {
+            let point = self.xf.map_or(point, |map| map.to_layer(point));
+            let under = self.visible.clone().filter(|&at| scrolling(at)).find(|&at| self.screen(layout, rect, at, offset, rtl).contains(point));
+            if let Some(at) = under {
+                let child = sub(id, ("key", key_hash(&source.key(at))));
+                self.anchor = Some(lazy::Anchor { child, at: Vec2::new(0.0, layout.rect(at, offset).min.y) });
+            }
         }
     }
 }

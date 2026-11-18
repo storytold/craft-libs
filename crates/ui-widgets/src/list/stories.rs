@@ -5,10 +5,10 @@ use crate::contract::Show as _;
 use crate::primitives::IconSpec;
 use crate::runtime::env::Env;
 use crate::style::DataColor;
-use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
+use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, show_as_only_item_at, story};
 use craft_behavior::{ColumnKey, IconId};
 use craft_theme::variant::Tone;
-use egui::{Pos2, Rect, Ui};
+use egui::{Pos2, Rect, Ui, Vec2};
 
 #[story(ListRow<'static>, covers = [Default], drive = Drive::Activate)]
 fn list_row(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -41,7 +41,8 @@ fn list_row_text_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         (NAME, Rect::from_min_max(Pos2::new(left, 0.0), Pos2::new(split, height))),
         (SIZE, Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(left + width, height))),
     ];
-    show_as_only_item(ui, ListRow::new("report.pdf").cells(&cells).cell(SIZE, "2.4 MB")).into()
+    let row = Rect::from_min_size(ui.cursor().min, Vec2::new(width, height));
+    show_as_only_item_at(ui, ListRow::new("report.pdf").cells(&cells).cell(SIZE, "2.4 MB"), row).into()
 }
 
 fn trailing_row() -> ListRow<'static> {
@@ -106,5 +107,7 @@ fn list_row_status_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let status = CellStatus::new(Tone::Warn, "2 warnings")
         .tip("The file has form fields that will be flattened.\nIts bookmarks point to pages that are not kept.")
         .action("Details");
-    show_as_only_item(ui, ListRow::new("report.pdf").cells(&cells).cell_status(WARNINGS, status)).into()
+    // The row spans its columns, as a list's row does: the reflection of its cells is the reflection in the row.
+    let row = Rect::from_min_size(ui.cursor().min, Vec2::new(width, height));
+    show_as_only_item_at(ui, ListRow::new("report.pdf").cells(&cells).cell_status(WARNINGS, status), row).into()
 }

@@ -174,14 +174,6 @@ fn rtl_from(story: &Story, ltr: &Fixture) -> Result<(), String> {
     for key in tree.keys().into_iter().filter(|key| is_interactive(tree, *key) && !in_document_space(tree, *key) && !tree.in_ltr_axis(*key)) {
         let (Some(a), Some(b)) = (tree.bounds_of(key), rtl.tree().bounds_of(key)) else { continue };
         if !mirrored(a, b, within) {
-            eprintln!(
-                "DIAG rtl_from {}: own ltr {:?} own rtl {:?} within {within:?} key {key:?} ltr shown {:?} rtl shown {:?}",
-                story.name,
-                own.0,
-                own.1,
-                ltr.shown(),
-                rtl.shown()
-            );
             return Err(format!("{}: a node at {a:?} is at {b:?} under right-to-left, not its reflection", story.name));
         }
     }
