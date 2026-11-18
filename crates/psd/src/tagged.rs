@@ -204,6 +204,35 @@ impl TaggedBlock {
         (alignment - len % alignment) % alignment
     }
 
+    /// Read the raw descriptor prefix of `lfx2`, `SoCo` or `CgEd` with caller limits.
+    ///
+    /// This opt-in recovery ignores both version words of `lfx2` (eight bytes), or
+    /// the one version word of `SoCo` / `CgEd` (four bytes). Trailing bytes are
+    /// ignored and nonfinite descriptor numbers are retained. Strict validation
+    /// and versioned-descriptor parsing are unchanged.
+    ///
+    /// Other keys return `None`. Recognized unloaded blocks, short headers and
+    /// malformed or over-limit descriptors return `Some(Err)`.
+    pub fn descriptor_prefix_recovering_versions_with_limits(
+        &self,
+        limits: crate::descriptor::ParseLimits,
+    ) -> Option<Result<crate::descriptor::Descriptor>> {
+        let words = match &self.key {
+            b"lfx2" => 2,
+            b"SoCo" | b"CgEd" => 1,
+            _ => return None,
+        };
+        if self.stored.is_some() {
+            return Some(Err(PsdError::invalid(format!("{}: block data is still in the source; load it first", self.key_str()))));
+        }
+        Some((|| {
+            let mut r = Reader::new(&self.data);
+            for _ in 0..words {
+                let _version = r.u32()?;
+            }
+            crate::descriptor::Descriptor::read_with_limits(&mut r, limits)
+        })())
+    }
     /// Typed view for known keys. `None` for keys without a typed parser,
     /// `Some(Err)` if a known key's data is malformed.
     pub fn parsed(&self) -> Option<Result<BlockData<'_>>> {
@@ -858,5 +887,55 @@ mod tests {
                 assert!(matches!(TaggedBlock::new(key, data.clone()).parsed(), Some(Err(PsdError::InvalidSignature { .. }))));
             }
         }
+    }
+
+    #[test]
+    fn descriptor_prefix_recovery_keeps_versions_suffixes_and_limits_explicit() {
+        use crate::descriptor::{Descriptor, ParseLimits, Value, VersionedDescriptor};
+        let limits = ParseLimits { max_descriptor_items: 1, max_list_items: 1 };
+        // Independent raw descriptor: empty name, null class, one doub item named num .
+        let mut raw = vec![0; 8];
+        raw.extend(b"null");
+        raw.extend(1u32.to_be_bytes());
+        raw.extend(0u32.to_be_bytes());
+        raw.extend(b"num doub");
+        raw.extend(f64::NAN.to_be_bytes());
+        for key in [*b"lfx2", *b"SoCo", *b"CgEd"] {
+            let header = if key == *b"lfx2" { 8 } else { 4 };
+            for word in [0u32, 16, u32::MAX] {
+                let mut bytes = word.to_be_bytes().repeat(header / 4);
+                bytes.extend(&raw);
+                for cut in 0..bytes.len() {
+                    assert!(TaggedBlock::new(key, bytes[..cut].to_vec()).descriptor_prefix_recovering_versions_with_limits(limits).unwrap().is_err());
+                }
+                for tail in [vec![], vec![255], vec![1, 2, 3, 4, 5]] {
+                    let mut data = bytes.clone();
+                    data.extend(tail);
+                    let block = TaggedBlock::new(key, data);
+                    let d = block.descriptor_prefix_recovering_versions_with_limits(limits).unwrap().unwrap();
+                    assert!(matches!(d.get("num "), Some(Value::Double(v)) if v.is_nan()));
+                    assert!(block.parsed().is_none());
+                    if key == *b"lfx2" && word != 16 {
+                        assert!(block.check_structure().is_err());
+                    }
+                }
+                assert!(
+                    TaggedBlock::new(key, bytes)
+                        .descriptor_prefix_recovering_versions_with_limits(ParseLimits { max_descriptor_items: 0, ..limits })
+                        .unwrap()
+                        .is_err()
+                );
+            }
+            let mut list = vec![0; header];
+            list.extend(Descriptor::new("null").with("list", Value::List(vec![Value::Integer(1), Value::Integer(2)])).to_bytes());
+            assert!(TaggedBlock::new(key, list).descriptor_prefix_recovering_versions_with_limits(limits).unwrap().is_err());
+            let mut unloaded = TaggedBlock::new(key, vec![]);
+            unloaded.stored = Some(crate::source::Stored { source: crate::source::Source::new(Vec::<u8>::new()), offset: 0, len: 0 });
+            assert!(unloaded.descriptor_prefix_recovering_versions_with_limits(limits).unwrap().is_err());
+        }
+        assert!(TaggedBlock::new(*b"zzzz", raw.clone()).descriptor_prefix_recovering_versions_with_limits(limits).is_none());
+        let mut versioned = 99u32.to_be_bytes().to_vec();
+        versioned.extend(raw);
+        assert!(VersionedDescriptor::parse_prefix(&versioned).is_err());
     }
 }
