@@ -1,5 +1,5 @@
-//! The font picker's flows: style rows under an expanded family, served families and the rested report, and similar
-//! fonts.
+//! The font picker's flows: style rows under an expanded family, served families and the rested report, similar
+//! fonts, and the host's rows.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use craft_behavior::Preview;
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
-use craft_font_manager::picker::{FontFilters, FontPicker, FontPickerSettings, SIMILAR_COUNT, family_rows};
+use craft_font_manager::picker::{FontFilters, FontPicker, FontPickerSettings, HostFontGroup, HostFontRow, SIMILAR_COUNT, family_rows};
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::focus::AccessActionKind;
@@ -33,16 +33,34 @@ struct Seen {
     rested: Vec<String>,
     /// The family the open list proposes as a live preview, as the last pass reported it.
     preview: Option<String>,
+    /// The keys of the host rows picked, in order.
+    host_picks: Vec<String>,
 }
 
 fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>>) {
+    rig_with_host(catalog, served, Vec::new(), None)
+}
+
+/// A picker with one host group (without a heading) per entry of `host`, showing the host row `current_host` as its
+/// value when given.
+fn rig_with_host(
+    catalog: Arc<Catalog>,
+    served: Vec<String>,
+    host: Vec<Vec<HostFontRow>>,
+    current_host: Option<String>,
+) -> (Fixture, Rc<RefCell<Seen>>) {
     let seen = Rc::new(RefCell::new(Seen::default()));
     let shown = Rc::clone(&seen);
     let mut settings = FontPickerSettings::default();
     let mut fx = Fixture::new(move |ui| {
         let mut seen = shown.borrow_mut();
-        let out =
-            FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served).show(ui);
+        let groups: Vec<HostFontGroup<'_>> = host.iter().map(|rows| HostFontGroup::new(None, rows)).collect();
+        let mut picker =
+            FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served).host(&groups);
+        if let Some(key) = &current_host {
+            picker = picker.current_host(key.clone());
+        }
+        let out = picker.show(ui);
         match out.preview {
             Preview::Shows(family) => seen.preview = Some(family),
             Preview::Ended => seen.preview = None,
@@ -52,6 +70,7 @@ fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>
             seen.picks.push((family, out.picked_style));
         }
         seen.rested.extend(out.rested);
+        seen.host_picks.extend(out.host_picked);
     });
     fx.in_room(Room::Window);
     fx.settle();
@@ -170,6 +189,43 @@ fn a_preview_over_a_typed_query_keeps_the_query_and_the_list() {
     assert_eq!(seen.borrow().preview, None, "leaving the rows ends the preview");
     assert!(fx.by_label("Hack").is_some(), "the list stays open after the preview ends");
     assert!(present(&fx, "Ha"), "and the query stays");
+}
+
+#[trial]
+fn a_host_row_pick_reports_its_key_and_leaves_the_family() {
+    let host = || {
+        vec![vec![
+            HostFontRow::face("document", "Document Sans", None),
+            HostFontRow::notice("Subset fonts can't take new text"),
+            HostFontRow::action("load", "Load font file"),
+        ]]
+    };
+    let (mut fx, seen) = rig_with_host(catalog_of(&[INTER_REGULAR]), vec![], host(), None);
+    open(&mut fx);
+    let load = fx.by_label("Load font file").expect("the action row");
+    fx.click(&load);
+    fx.settle();
+    assert_eq!(seen.borrow().host_picks, ["load"], "the action row reports its key");
+    assert_eq!(seen.borrow().family, "", "a host pick writes no family");
+    assert!(seen.borrow().picks.is_empty(), "a host pick is no family pick and no recent family");
+    assert!(fx.by_label("Load font file").is_none(), "the list closed");
+
+    open(&mut fx);
+    let face = fx.by_label("Document Sans").expect("the face row");
+    fx.click(&face);
+    fx.settle();
+    assert_eq!(seen.borrow().host_picks, ["load", "document"], "the face row reports its key");
+    assert_eq!(seen.borrow().family, "", "a host face writes no family");
+    assert!(seen.borrow().picks.is_empty(), "a host face is no family pick");
+
+    // The closed field shows the host face; ArrowDown steps over the notice to the action row.
+    let (mut fx, seen) = rig_with_host(catalog_of(&[INTER_REGULAR]), vec![], host(), Some("document".to_owned()));
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(seen.borrow().host_picks, ["load"], "the arrow skips the notice");
+    assert!(seen.borrow().picks.is_empty(), "and picks no family");
+    assert_eq!(seen.borrow().family, "");
 }
 
 #[trial]

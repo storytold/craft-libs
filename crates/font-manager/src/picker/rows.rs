@@ -1,5 +1,5 @@
-//! The picker's popup: the preview banner, the filter toggles, the class column and the list of family rows with the
-//! styles of the families opened in it.
+//! The picker's popup: the preview banner, the filter toggles, the class column and the list of the host's rows and
+//! the family rows with the styles of the families opened in it.
 
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
@@ -22,10 +22,10 @@ use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::Label;
 use egui::Rect;
 
-use super::rank::{Infos, Language, Listing, list, shown_name};
+use super::rank::{Infos, Language, Listing, host_rows, list, shown_name};
 use super::{
-    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerSettings, FontPickerWords, POPUP, STAR, Typing, infos, read, ui_language,
-    write,
+    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerSettings, FontPickerWords, HostFontGroup, HostFontKind, HostFontRow, POPUP,
+    STAR, Typing, infos, read, ui_language, write,
 };
 use crate::panel::faces::{Owner, Shown, paint_sample, shown};
 use craft_ui::style::DataColor;
@@ -37,19 +37,31 @@ const SAMPLE_ASPECT: (u16, u16) = (4, 1);
 /// The banner's sample is this many times as wide as high.
 const BANNER_ASPECT: (u16, u16) = (12, 1);
 
-/// One position of the list: a family, one style of an open family, or the gap between the recents and the other
-/// families.
+/// Which gap a gap slot is: the one after a host group (before the next group or the families), or the one between
+/// the recents and the other families.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Gap {
+    Host(usize),
+    Recents,
+}
+
+/// One position of the list: a host group's heading, a host row (`at` in group `group`), a family, one style of an
+/// open family, or a gap.
 enum Slot {
+    Heading { group: usize, name: Label },
+    Host { group: usize, at: usize, row: HostFontRow },
     Family { row: FamilyRow, open: bool },
     Style { family: String, style: String },
-    Gap,
+    Gap(Gap),
 }
 
 /// What names a slot across passes. A family opening shifts the positions after it, so the list keys its rows by what
 /// they are and the lead stays on its row.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum SlotKey {
-    Gap,
+    Gap(Gap),
+    Heading(usize),
+    Host { group: usize, at: usize },
     Family { family: String, recent: bool },
     Style { family: String, style: String },
 }
@@ -57,18 +69,21 @@ enum SlotKey {
 impl Slot {
     fn key(&self) -> SlotKey {
         match self {
+            Slot::Heading { group, .. } => SlotKey::Heading(*group),
+            Slot::Host { group, at, .. } => SlotKey::Host { group: *group, at: *at },
             Slot::Family { row, .. } => SlotKey::Family { family: row.family.clone(), recent: row.recent },
             Slot::Style { family, style } => SlotKey::Style { family: family.clone(), style: style.clone() },
-            Slot::Gap => SlotKey::Gap,
+            Slot::Gap(gap) => SlotKey::Gap(*gap),
         }
     }
 
-    /// The family the slot stands for, which the lead previews.
+    /// The family the slot stands for, which the lead previews. A host row has no catalogue family to preview or
+    /// rest on.
     fn family(&self) -> Option<&str> {
         match self {
             Slot::Family { row, .. } => Some(&row.family),
             Slot::Style { family, .. } => Some(family),
-            Slot::Gap => None,
+            Slot::Heading { .. } | Slot::Host { .. } | Slot::Gap(_) => None,
         }
     }
 
@@ -77,7 +92,7 @@ impl Slot {
         match self {
             Slot::Family { row, .. } => Some((&row.family, None)),
             Slot::Style { family, style } => Some((family, Some(style))),
-            Slot::Gap => None,
+            Slot::Heading { .. } | Slot::Host { .. } | Slot::Gap(_) => None,
         }
     }
 }
@@ -116,27 +131,56 @@ impl DisplayOrder<SlotKey> for Slots<'_> {
     }
 
     fn is_section(&self, at: usize) -> bool {
-        matches!(self.0[at], Slot::Gap)
+        matches!(self.0[at], Slot::Gap(_) | Slot::Heading { .. })
+    }
+
+    /// A notice is text, which neither the keys nor a click take.
+    fn enabled(&self, at: usize) -> bool {
+        !matches!(&self.0[at], Slot::Host { row, .. } if matches!(row.kind, HostFontKind::Notice))
     }
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {
         match &self.0[at] {
+            Slot::Heading { name, .. } => Some(Cow::Borrowed(name.as_str())),
+            Slot::Host { row, .. } => Some(Cow::Borrowed(row.name.as_str())),
             Slot::Family { row, .. } => Some(Cow::Borrowed(row.shown.as_str())),
             Slot::Style { style, .. } => Some(Cow::Borrowed(style.as_str())),
-            Slot::Gap => None,
+            Slot::Gap(_) => None,
         }
     }
 }
 
 impl ItemSource<SlotKey> for Slots<'_> {}
 
-/// The rows with a gap after the recents and the styles of each expanded family under its row.
-fn slots(catalog: &Catalog, rows: Vec<FamilyRow>, expanded: &[String]) -> Vec<Slot> {
+/// The `shown` host rows (as `host_rows` lists them) by group, each under its group's heading, with a gap after each
+/// group that has rows; then the family rows with a gap after the recents and the styles of each expanded family
+/// under its row.
+fn slots(catalog: &Catalog, host: &[HostFontGroup<'_>], shown: &[(usize, usize)], rows: Vec<FamilyRow>, expanded: &[String]) -> Vec<Slot> {
     let recents = rows.iter().take_while(|row| row.recent).count();
-    let mut slots: Vec<Slot> = Vec::with_capacity(rows.len() + 1);
+    let mut slots: Vec<Slot> = Vec::with_capacity(shown.len() + rows.len() + 1);
+    let mut last_group: Option<usize> = None;
+    for &(group, at) in shown {
+        let Some(of) = host.get(group) else { continue };
+        let Some(row) = of.rows.get(at) else { continue };
+        if last_group != Some(group) {
+            if let Some(last) = last_group {
+                slots.push(Slot::Gap(Gap::Host(last)));
+            }
+            if let Some(name) = &of.heading {
+                slots.push(Slot::Heading { group, name: name.clone() });
+            }
+            last_group = Some(group);
+        }
+        slots.push(Slot::Host { group, at, row: row.clone() });
+    }
+    if let Some(last) = last_group
+        && !rows.is_empty()
+    {
+        slots.push(Slot::Gap(Gap::Host(last)));
+    }
     for (at, row) in rows.into_iter().enumerate() {
         if at == recents && recents > 0 {
-            slots.push(Slot::Gap);
+            slots.push(Slot::Gap(Gap::Recents));
         }
         let open = !row.recent && row.styles > 1 && expanded.contains(&row.family);
         let family = row.family.clone();
@@ -236,6 +280,29 @@ fn face_thumb<'a>(catalog: &'a Arc<Catalog>, infos: &'a Infos, family: &'a str, 
     }
 }
 
+/// The line of a host row: a face with its name painted in its own face at the preview size, an action, or a notice
+/// that takes no activation.
+fn host_line<'r>(row: &HostFontRow, checked: bool, size: ThumbSize) -> ListRow<'r> {
+    match &row.kind {
+        HostFontKind::Notice => ListRow::new(row.name.clone()).depth(0).enabled(false),
+        HostFontKind::Action => ListRow::new(row.name.clone()).option().depth(0),
+        HostFontKind::Face(face) => {
+            let line = ListRow::new(row.name.clone()).option().depth(0).check(checked);
+            match face.clone().filter(|_| size != ThumbSize::None) {
+                Some(font) => {
+                    let text = row.name.as_str().to_owned();
+                    let aspect = ThumbAspect::new(SAMPLE_ASPECT.0, SAMPLE_ASPECT.1);
+                    line.thumb_aspect(size, aspect, move |cx, rect| {
+                        let ink = DataColor::new(cx.ink());
+                        paint_sample(cx, rect, &font, &text, rect.height() * SAMPLE_EM, ink);
+                    })
+                }
+                None => line,
+            }
+        }
+    }
+}
+
 /// The banner: `text` in the face of `family`, on one line cut at the end, in a picture as high as the large thumbnail.
 fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &Infos, family: &str, shown_name: &str, text: &str) {
     Picture::painter(shown_name.to_owned(), ThumbAspect::new(BANNER_ASPECT.0, BANNER_ASPECT.1), face_thumb(catalog, infos, family, text.to_owned()))
@@ -285,15 +352,17 @@ pub(super) fn end_preview<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontP
     }
 }
 
-/// The list popup: one option row per family, the committed family's row selected, and the styles of the open
-/// families under their rows. A pick comes back as `Activate` (Enter, Tab or a click), a row the lead moves to is
-/// reported as the preview (the field's value and text stay), and a star flips a favourite. Each pass reports only the events of its own input.
+/// The list popup: the host rows above, one option row per family, the current row selected, and the styles of the
+/// open families under their rows. A pick comes back as `Activate` (Enter, Tab or a click), a family row the lead
+/// moves to is reported as the preview (the field's value and text stay), and a star flips a favourite. A host face
+/// or action row picked is reported as `host_picked` and proposes no family. Each pass reports only the events of its
+/// own input.
 pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, FontPicker<'a>>) {
     let popup = cx.popup(POPUP);
     let words = cx.words::<FontPickerWords>();
-    let (query, lead, expanded) = {
+    let (query, drafting, lead, expanded) = {
         let typing = cx.memory::<Typing>();
-        (typing.draft.clone().unwrap_or_default(), typing.lead.clone(), typing.expanded.clone())
+        (typing.draft.clone().unwrap_or_default(), typing.draft.is_some(), typing.lead.clone(), typing.expanded.clone())
     };
     let mut hide_classes = cx.memory::<Typing>().hide_classes;
     let family = cx.value().cloned().unwrap_or_default();
@@ -314,8 +383,12 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         served: picker.served,
     };
     let (found, comparable) = list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, true);
-    let slots = slots(catalog, found, &expanded);
-    let current = slots.iter().position(|slot| matches!(slot, Slot::Family { row, .. } if row.family == family));
+    let shown_host = host_rows(picker.host, &query, &folder);
+    let slots = slots(catalog, picker.host, &shown_host, found, &expanded);
+    let current = match picker.current_host.as_deref() {
+        Some(key) => slots.iter().position(|slot| matches!(slot, Slot::Host { row, .. } if row.key == key)),
+        None => slots.iter().position(|slot| matches!(slot, Slot::Family { row, .. } if row.family == family)),
+    };
     let size = settings.as_ref().map_or(ThumbSize::None, |s| s.preview.thumb());
     let favorites_empty = settings.as_ref().is_none_or(|s| s.favorites.is_empty());
     // Rows are keyed, so the stamp names only what rebuilds the list: opening a family keeps the lead.
@@ -364,7 +437,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                         .selection(Bind::given(selection))
                         .rows_stamp(stamp.finish())
                         .show_items(ui, &source, &mut |_, item| match &slots[item.at] {
-                            Slot::Gap => ListRow::spacer(),
+                            Slot::Gap(_) => ListRow::spacer(),
+                            Slot::Heading { name, .. } => ListRow::new(name.clone()).heading(),
+                            Slot::Host { row, .. } => host_line(row, current == Some(item.at), size),
                             Slot::Style { style, .. } => ListRow::new(style.clone()).option().depth(1),
                             Slot::Family { row, open } => {
                                 let icon = if row.starred { "star_filled" } else { "star" };
@@ -408,8 +483,12 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     for event in events.into_iter().flatten() {
         match event {
             CollectionEvent::LeadMoved { key, by } => {
-                if let Some(family) = slot_of(&slots, &key).and_then(Slot::family) {
-                    show_preview(picker, cx, family.to_owned(), by == LeadSource::Pointer);
+                if let Some(slot) = slot_of(&slots, &key) {
+                    match slot.family() {
+                        Some(family) => show_preview(picker, cx, family.to_owned(), by == LeadSource::Pointer),
+                        // A host row previews nothing, so the family the lead left stops showing.
+                        None => end_preview(picker, cx),
+                    }
                 }
             }
             CollectionEvent::Rested(key) => {
@@ -463,12 +542,26 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     {
         write(&mut picker.filters, cx, filters, "Font filters");
     }
-    if let Some((family, style)) = picked.and_then(|key| slot_of(&slots, &key)).and_then(Slot::pick) {
-        picker.picked = Some(family.to_owned());
-        picker.picked_style = style.map(str::to_owned);
-        end_preview(picker, cx);
-        cx.propose(family.to_owned());
-        cx.commit();
-        popup.close(cx);
+    match picked.and_then(|key| slot_of(&slots, &key)) {
+        Some(Slot::Host { row, .. }) if !matches!(row.kind, HostFontKind::Notice) => {
+            picker.host_picked = Some(row.key.clone());
+            end_preview(picker, cx);
+            // A host pick writes no family, so a typed query goes back to the field's text.
+            if drafting {
+                cx.set_draft(None);
+            }
+            popup.close(cx);
+        }
+        Some(slot) => {
+            if let Some((family, style)) = slot.pick() {
+                picker.picked = Some(family.to_owned());
+                picker.picked_style = style.map(str::to_owned);
+                end_preview(picker, cx);
+                cx.propose(family.to_owned());
+                cx.commit();
+                popup.close(cx);
+            }
+        }
+        None => {}
     }
 }

@@ -1,16 +1,18 @@
-//! Stories of `FontPicker`: the closed field, the list open with recents and a typed query, and the list open with
-//! the class column and a filter on. They draw from the two faces egui ships in an in-memory catalog.
+//! Stories of `FontPicker`: the closed field, the list open with recents and a typed query, the list open with the
+//! class column and a filter on, and the list open with host rows above the families. They draw from the two faces
+//! egui ships in an in-memory catalog.
 
 use std::sync::{Arc, OnceLock};
 
 use craft_behavior::Mixed;
 use craft_ui::contract::{Bind, Show as _, Validity};
-use craft_ui::runtime::env::Message;
+use craft_ui::fonts::FontRef;
+use craft_ui::runtime::env::{Label, Message};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};
 
-use super::{FontFilters, FontPicker, FontPickerSettings};
+use super::{FontFilters, FontPicker, FontPickerSettings, HostFontGroup, HostFontRow};
 use crate::Catalog;
 use crate::craft_font_catalog::{Limits, Source};
 use crate::panel::fixtures::story_catalog;
@@ -55,6 +57,7 @@ fn styled_catalog() -> Arc<Catalog> {
 struct Extras<'a> {
     served: &'a [String],
     banner: Option<&'a str>,
+    host: &'a [HostFontGroup<'a>],
 }
 
 fn show_with(ui: &mut Ui, data: &mut StoryData, init: Demo, catalog: &Arc<Catalog>, extras: &Extras<'_>) -> StoryOutput {
@@ -62,7 +65,8 @@ fn show_with(ui: &mut Ui, data: &mut StoryData, init: Demo, catalog: &Arc<Catalo
     let mut picker = FontPicker::new("Font family", Bind::bound(family), catalog)
         .settings(Bind::bound(settings))
         .filters(Bind::bound(filters))
-        .served(extras.served);
+        .served(extras.served)
+        .host(extras.host);
     if let Some(text) = extras.banner {
         picker = picker.preview_text(text);
     }
@@ -123,13 +127,27 @@ fn font_picker_expanded_styles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 #[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
 fn font_picker_served(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let served = ["Gotham".to_owned(), "Proxima Nova".to_owned()];
-    show_with(ui, data, demo("Hack", FontPickerSettings::default(), FontFilters::default()), &catalog(), &Extras { served: &served, banner: None })
+    show_with(ui, data, demo("Hack", FontPickerSettings::default(), FontFilters::default()), &catalog(), &Extras { served: &served, ..Extras::default() })
+}
+
+/// A host group above the families: a face with its sample, an action and a notice, under the group's heading.
+#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+fn font_picker_host_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = [
+        HostFontRow::face("document-sans", "Document Sans", Some(FontRef::proportional())),
+        HostFontRow::face("document-mono", "Document Mono", Some(FontRef::monospace())),
+        HostFontRow::action("load", "Load font file"),
+        HostFontRow::notice("Subset fonts can't take new text"),
+    ];
+    let host = [HostFontGroup::new(Some(Label::from("Document fonts")), &rows)];
+    let extras = Extras { host: &host, ..Extras::default() };
+    show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras)
 }
 
 /// The preview banner above the filters.
 #[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
 fn font_picker_banner_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let extras = Extras { served: &[], banner: Some("The quick brown fox") };
+    let extras = Extras { banner: Some("The quick brown fox"), ..Extras::default() };
     show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras)
 }
 
