@@ -1,11 +1,10 @@
 //! Gray-scale image decoding procedure (Annex C).
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS};
+use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS, try_filled};
 use crate::decode::generic::{ContextGatherer, decode_bitmap_mmr};
 use crate::decode::{AdaptiveTemplatePixel, Template};
 use crate::error::{OverflowError, Result, bail};
@@ -221,8 +220,8 @@ where
     let mut bitplane = Bitmap::new(width, height, max_cells)?;
 
     // `GSVALS` - The decoded gray-scale image array.
-    let mut values = vec![0_u32; size];
-    let mut prev_plane = vec![0; bitplane.data.len()];
+    let mut values = try_filled(0_u32, size)?;
+    let mut prev_plane = try_filled(0, bitplane.data.len())?;
 
     simd::dispatch!(Level::new(), simd => {
         for j in (0..bits_per_pixel).rev() {

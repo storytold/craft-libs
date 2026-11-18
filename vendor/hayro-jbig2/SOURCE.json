@@ -62,7 +62,7 @@
       "path": "src/bitmap.rs",
       "source_sha256": "59ed83d8bac6c39e40270a9856ca3faee628de7d9efae1b01f714e140e2b6b7e",
       "source_git_blob": "35ed97561597d30a70fe819cf8cfbd3780538f75",
-      "sha256": "9e4b20c4e1cb1759d8f4ed582d6aa5f3afe1be13a8a9d2cc4a1c86a0d5bc56dd"
+      "sha256": "5a6f6a6f3aadb4ad187e1c3785c5c8a5bf16b0b2d9c0bda3b11d4c4d4fd682e1"
     },
     {
       "path": "src/decode/generic.rs",
@@ -122,7 +122,7 @@
       "path": "src/gray_scale.rs",
       "source_sha256": "46f12893f4573610789015ba7036f6afb1d30b1454c0c674fc7ccdd9337d7487",
       "source_git_blob": "2836ec77a7c8d3970b13dd46f576778c64bfe2d9",
-      "sha256": "da0af5393e697dbbe03c1f8528308c873d13a44813b737fa35d87b298eb9b590"
+      "sha256": "c7eb7b3e120eebafe1d20b275d2330cb7d9fa40d3a428f3007ad5ce7e836f21e"
     },
     {
       "path": "src/huffman_table.rs",

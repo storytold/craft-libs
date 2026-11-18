@@ -7,7 +7,6 @@
 
 use crate::decode::CombinationOperator;
 use crate::error::{OverflowError, Result, bail};
-use alloc::vec;
 use alloc::vec::Vec;
 
 // To guard better against malicious files, we limit bitmap dimensions
@@ -123,6 +122,18 @@ pub(crate) fn check_page_size(width: u32, height: u32, max_pixels: u64) -> Resul
     Ok(())
 }
 
+/// Craft patch: a vector of `len` copies of `value`, or `OverflowError::BitmapLimit` when the
+/// memory for it cannot be reserved. A raised [`Limits`] lets a bitmap or a gray-scale image take
+/// gigabytes, and `vec!` ends the process when such an allocation fails.
+pub(crate) fn try_filled<T: Clone>(value: T, len: usize) -> Result<Vec<T>> {
+    let mut filled = Vec::new();
+    if filled.try_reserve_exact(len).is_err() {
+        bail!(OverflowError::BitmapLimit);
+    }
+    filled.resize(len, value);
+    Ok(filled)
+}
+
 /// A decoded bitmap with position information.
 ///
 /// "Pixels decoded by the MMR decoder having the value 'black' shall be treated
@@ -185,7 +196,7 @@ impl Bitmap {
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
-        let data = vec![default_word; stride as usize * height as usize];
+        let data = try_filled(default_word, stride as usize * height as usize)?;
         let mut bitmap = Self {
             width,
             height,
@@ -468,6 +479,14 @@ mod pdfcraft_limit_tests {
         assert_eq!(Limits::with_max_pixels(7).grid_cells(), 1);
         assert_eq!(Limits::with_max_pixels(8).grid_cells(), 1);
         assert_eq!(Limits::with_max_pixels(9).grid_cells(), 2);
+    }
+
+    /// Craft patch: memory that cannot be reserved is an error, not the end of the process.
+    #[test]
+    fn memory_that_cannot_be_reserved_is_refused() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(try_filled(0_u32, usize::MAX), limit);
+        assert_eq!(try_filled(7_u32, 3).as_deref(), Ok(&[7, 7, 7][..]));
     }
 
     /// Craft patch: a low limit still pays for decoding a bitmap it allows, the row cost of

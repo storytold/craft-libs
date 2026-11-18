@@ -476,8 +476,11 @@ keep the defaults. hayro-syntax's JBIG2 filter passes the document's
 `cargo test --manifest-path vendor/hayro-syntax/Cargo.toml` builds against the patched decoder.
 Each side of a bitmap is still at most 65535. A halftone grid whose array of gray-scale values
 would take more than `isize::MAX` bytes is refused with `OverflowError::BitmapLimit` before the
-array is allocated; with 32-bit pointers a raised `Limits` can reach that size. Tests:
+array is allocated; with 32-bit pointers a raised `Limits` can reach that size. A bitmap's words
+and a gray-scale image's values are reserved fallibly, and memory that cannot be reserved is
+refused with `OverflowError::BitmapLimit`. Tests:
 `bitmap::pdfcraft_limit_tests::the_pixel_bound_follows_the_limits`,
+`bitmap::pdfcraft_limit_tests::memory_that_cannot_be_reserved_is_refused`,
 `bitmap::pdfcraft_limit_tests::a_low_limit_pays_for_a_bitmap_it_allows`,
 `bitmap::pdfcraft_limit_tests::a_low_limit_allows_a_grid_of_one_cell`,
 `gray_scale::pdfcraft_limit_tests::gray_scale_values_past_one_allocation_are_refused_by_a_limit`,
