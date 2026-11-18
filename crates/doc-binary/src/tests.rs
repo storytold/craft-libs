@@ -3330,18 +3330,25 @@ fn a_large_prc_is_interpreted_once_per_formatting_change() {
 }
 
 /// #3692: Prm grpprls are charged to a document-wide work budget; once it is spent the Prm
-/// is skipped (the text keeps its CHPX formatting).
+/// is skipped (the text keeps its CHPX formatting). The one admission decides every use of the
+/// Prc, its character style too, so a refused Prc is `None` for all of them.
 #[test]
 fn prm_grpprls_past_the_work_budget_are_skipped() {
     use craft_wordmodel::props::CharProps;
     let g = grpprl(&[(0x0835, &[0x01])]);
     let work = super::Work::new(g.len() as u64 + 1);
     let base = CharProps::default();
+    let apply = |props: &mut CharProps| {
+        let prm = crate::piece::PrmRef::Grpprl(Some(&g));
+        let prc = super::admitted_prc(&prm, &work);
+        super::apply_prm(props, prm, prc, &[], &base);
+        prc.is_some()
+    };
     let mut first = CharProps::default();
-    super::apply_prm(&mut first, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    assert!(apply(&mut first));
     assert_eq!(first.bold, Some(true));
     let mut second = CharProps::default();
-    super::apply_prm(&mut second, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    assert!(!apply(&mut second));
     assert_eq!(second.bold, None);
     assert_eq!(work.left.get(), 1);
     assert_eq!(work.dropped(), [super::Cost::Formatting]);
