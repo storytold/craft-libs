@@ -155,6 +155,11 @@ impl Reader {
             // Odd hex digit count: drop the dangling nibble.
         }
         let data = std::mem::take(&mut self.pict_hex);
+        // The picture Word writes of a shape just read (`\defshp`), for readers without shapes.
+        let after_shape = std::mem::take(&mut self.pict_after_shape);
+        if std::mem::take(&mut self.pict_defshp) && after_shape {
+            return;
+        }
         if self.pict_kind == 0 || data.is_empty() {
             return;
         }
@@ -189,31 +194,39 @@ impl Reader {
         }
     }
 
+    /// The current formatting with its tracked changes (insertion, deletion, formatting change).
+    pub(super) fn text_fmt(&mut self) -> Fmt {
+        let mut f = self.st.fmt.clone();
+        let r = self.st.rev;
+        if r.ins {
+            f.ins = Some(self.rev_mark(r.auth, r.dttm));
+        }
+        if r.del {
+            f.del = Some(self.rev_mark(r.authdel, r.dttmdel));
+        }
+        let c = &self.st.chg_c;
+        if let Some(words) = c.old.clone() {
+            let mark = self.rev_mark(c.auth, c.date);
+            let old = self.old_fmt(&words);
+            f.fmt_change = Some(Box::new(model::FmtChange { mark, old }));
+        }
+        f
+    }
+
     pub(super) fn text(&mut self, s: &str) {
         match self.st.dest {
             Dest::Body => {
                 if self.st.hidden {
+                    self.hidden_text_dropped();
                     return;
                 }
-                let mut f = self.st.fmt.clone();
                 if s.contains([MARK_OPEN, MARK_CLOSE]) {
+                    let f = self.st.fmt.clone();
                     self.para.push_text(&s.replace([MARK_OPEN, MARK_CLOSE], "\u{FFFD}"), &f);
                     self.para_has = true;
                     return;
                 }
-                let r = self.st.rev;
-                if r.ins {
-                    f.ins = Some(self.rev_mark(r.auth, r.dttm));
-                }
-                if r.del {
-                    f.del = Some(self.rev_mark(r.authdel, r.dttmdel));
-                }
-                let c = &self.st.chg_c;
-                if let Some(words) = c.old.clone() {
-                    let mark = self.rev_mark(c.auth, c.date);
-                    let old = self.old_fmt(&words);
-                    f.fmt_change = Some(Box::new(model::FmtChange { mark, old }));
-                }
+                let f = self.text_fmt();
                 self.para.push_text(s, &f);
                 self.para_has = true;
             }
@@ -296,7 +309,8 @@ impl Reader {
                     }
                 }
             }
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
+            Dest::ShpSn | Dest::ShpSv => self.shape_text(s),
+            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
         }
     }
 

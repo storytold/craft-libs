@@ -14,6 +14,7 @@ mod ply;
 mod stl;
 #[cfg(feature = "threemf")]
 mod threemf;
+mod triangulate;
 
 /// Every truncation of `good` and two mutations of every byte go through `read`: it may refuse
 /// them, it must not panic, and what it accepts must be a valid scene.

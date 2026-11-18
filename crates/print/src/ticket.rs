@@ -197,11 +197,24 @@ pub(crate) fn paper_names(width: f64, height: f64) -> &'static [&'static str] {
 }
 
 /// Whether a driver's paper name is `name`: it starts with it, ignoring case, and the name ends
-/// there ("A4 210 x 297 mm", not "A4 Extra" for "A4" or "ARCH E1" for "ARCH E").
+/// there — either nothing follows ("arch d"), or a separator and the sheet's dimensions ("A4
+/// 210 x 297 mm"). After a separator, dimensions are a digit: a word is a modifier, another
+/// paper ("A4 Extra", "A4 (Extra)"), and anything joined to the name without a separator is
+/// another paper too ("A4Extra", "ARCH E1" for "ARCH E").
 pub(crate) fn names_paper(display: Option<&str>, name: &str) -> bool {
     let Some(display) = display else { return false };
-    display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name))
-        && display.get(name.len()..).is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+    let Some(rest) = display.get(name.len()..) else { return false };
+    if !display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name)) {
+        return false;
+    }
+    let after = rest.trim_start_matches(|c: char| !c.is_alphanumeric());
+    match after.chars().next() {
+        // The name ends here, or a separator introduces the sheet's dimensions.
+        None => true,
+        Some(c) if !c.is_alphabetic() => after.len() < rest.len(),
+        // A word, directly after the name or after a separator, is a modifier: another paper.
+        Some(_) => false,
+    }
 }
 
 /// A driver paper offered for the job: its size in micrometres (as the driver lists it), its
@@ -218,6 +231,17 @@ pub(crate) struct Paper<'a> {
 /// The driver paper for a sheet of `width` × `height` points (either way round): within a
 /// quarter of a millimetre, preferring the one named like the standard size, then a Print Schema
 /// keyword, then the closest; on a tie the driver's own order. Its index in `papers`.
+///
+/// An entry the driver keeps only one side of (the other reads zero, a legacy host-based driver's
+/// DEVMODE metric, storytold/craft-libs#7230) is a candidate of last resort (INV-4): only when no
+/// full entry matched, only a Print Schema keyword entry, and only while its known side agrees
+/// with the sheet, either way round. A single such entry is still refused when its own name is
+/// known and contradicts the requested standard sheet (INV-4): a known conflicting name is
+/// evidence against the choice, and failing closed is safer than a guess. Without a name there is
+/// nothing contradicting, so the agreement alone is enough. Several such entries that all agree
+/// (a Letter and a Legal option share a width) are told apart by name, as full candidates are:
+/// the one named like the requested standard sheet wins, and when that leaves more than one, or
+/// none, nothing is chosen — a guess here would lay the sheets out for the wrong paper.
 pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> Option<usize> {
     let (w, h) = (micrometres(width.min(height))?, micrometres(width.max(height))?);
     let names = paper_names(width, height);
@@ -231,7 +255,33 @@ pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> O
         })
         .collect();
     candidates.sort_by_key(|(_, p, off)| (!names.iter().any(|n| names_paper(p.name, n)), !p.keyword, *off));
-    candidates.first().map(|(i, _, _)| *i)
+    if let Some(index) = candidates.first().map(|(i, _, _)| *i) {
+        return Some(index);
+    }
+    let agrees = |side: u32| side.abs_diff(w) <= PAPER_TOLERANCE || side.abs_diff(h) <= PAPER_TOLERANCE;
+    let partials: Vec<usize> = papers
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.keyword && (p.width == 0) != (p.height == 0) && (p.width == 0 || agrees(p.width)) && (p.height == 0 || agrees(p.height)))
+        .map(|(i, _)| i)
+        .collect();
+    match partials.as_slice() {
+        [only] => {
+            // INV-4: a known name that contradicts the requested standard sheet is evidence
+            // against this single partial record — refuse it; without a name, the known side's
+            // agreement is all the evidence there is, and the record stands.
+            let contradicts = papers[*only].name.is_some_and(|name| !names.iter().any(|n| names_paper(Some(name), n)));
+            (!contradicts).then_some(*only)
+        }
+        // Ambiguous by agreement alone: a partial named like the requested standard sheet wins.
+        _ => {
+            let named: Vec<usize> = partials.iter().copied().filter(|i| names.iter().any(|n| names_paper(papers[*i].name, n))).collect();
+            match named.as_slice() {
+                [only] => Some(*only),
+                _ => None,
+            }
+        }
+    }
 }
 
 fn named(node: roxmltree::Node<'_, '_>, local: &str) -> bool {
@@ -274,12 +324,32 @@ pub(crate) fn two_sided(xml: &str) -> Option<bool> {
     )
 }
 
-/// The integer value of the Print Schema element under `node` with this keyword name.
-fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> {
+/// The `Value` of the Print Schema element `element`: its own, or one a `ParameterRef` names
+/// through the `ParameterInit` under the document's root that sets it (a driver may keep a paper
+/// side or a resolution this way). `None` when the element has neither, or names a parameter the
+/// ticket does not set.
+fn resolved_value<'a>(document: &'a roxmltree::Document<'a>, element: roxmltree::Node<'a, 'a>) -> Option<roxmltree::Node<'a, 'a>> {
+    let value = element.children().find(|v| v.has_tag_name((NS_PSF, "Value")) || v.has_tag_name((NS_PSF, "ParameterRef")))?;
+    if value.has_tag_name((NS_PSF, "Value")) {
+        return Some(value);
+    }
+    let parameter = expanded(value, value.attribute("name")?);
+    document
+        .root_element()
+        .children()
+        .filter(|p| p.has_tag_name((NS_PSF, "ParameterInit")))
+        .find(|p| p.attribute("name").is_some_and(|name| expanded(*p, name) == parameter))?
+        .children()
+        .find(|v| v.has_tag_name((NS_PSF, "Value")))
+}
+
+/// The integer value of the Print Schema element under `node` with this keyword name, direct or
+/// through a `ParameterRef` the ticket resolves ([`resolved_value`]).
+fn integer(document: &roxmltree::Document<'_>, node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> {
     node.descendants()
         .find(|n| n.has_tag_name((NS_PSF, tag)) && named(*n, name))
-        .and_then(|n| n.children().find(|v| v.has_tag_name((NS_PSF, "Value"))))
-        .and_then(|n| n.text())
+        .and_then(|element| resolved_value(document, element))
+        .and_then(|value| value.text())
         .and_then(|v| v.trim().parse::<u32>().ok())
 }
 
@@ -287,14 +357,35 @@ fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> 
 /// paper (when `paper` is given, that one, to a quarter of a millimetre). Returns the paper's
 /// width and height in micrometres as the driver lists it. Only those schema fields are read:
 /// some drivers return empty vendor parameters that a stricter parser would refuse.
+///
+/// A zero or unreadable side (`MediaSizeWidth` gone) is roll-like only while the request itself
+/// names no sheet (INV-2): a legacy host-based driver keeps the paper metric in its DEVMODE
+/// extension and reads back a zero side for a real sheet (HP LaserJet P1102, storytold/craft-libs#7230), so
+/// with a sheet named the job falls back to the size the request asked for (INV-1,
+/// fail-closed: every refusal here is before anything reaches the spooler). A side the driver
+/// did report must agree with the sheet asked for, either way round (INV-3); both sides gone is
+/// refused whatever the request names (INV-5). The fallback is logged (INV-7).
 pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
     let document = crate::xml::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
-    let size = integer(media, "ScoredProperty", "MediaSizeWidth")
-        .zip(integer(media, "ScoredProperty", "MediaSizeHeight"))
-        .filter(|(w, h)| *w > 0 && *h > 0)
-        .ok_or_else(|| spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent"))?;
+    let width = integer(&document, media, "ScoredProperty", "MediaSizeWidth").filter(|w| *w > 0);
+    let height = integer(&document, media, "ScoredProperty", "MediaSizeHeight").filter(|h| *h > 0);
+    let without_a_size = spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent");
+    let size = match (width, height, paper) {
+        (Some(w), Some(h), _) => (w, h),
+        (None, None, _) | (_, _, None) => return Err(without_a_size),
+        (Some(reported), None, Some(wanted)) | (None, Some(reported), Some(wanted)) => {
+            let (w, h) = wanted;
+            // Either way round: the one side the driver did report against the sheet's width or height.
+            let agrees = |other: u32| reported.abs_diff(other) <= PAPER_TOLERANCE;
+            if !agrees(w) && !agrees(h) {
+                return Err(spool_error("the printer's driver changed the paper size; nothing was sent (choose a paper size it has)"));
+            }
+            log::warn!("the printer's driver reported only {reported} µm of the paper; going on with the requested {w} × {h} µm");
+            (w, h)
+        }
+    };
     if let Some((w, h)) = paper {
         let same = |a: (u32, u32), b: (u32, u32)| a.0.abs_diff(b.0) <= PAPER_TOLERANCE && a.1.abs_diff(b.1) <= PAPER_TOLERANCE;
         if !same(size, (w, h)) && !same(size, (h, w)) {
@@ -384,7 +475,9 @@ pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
             _ => return None,
         }
     }
-    if features(&["JobNUpAllDocumentsContiguously", "DocumentNUp"]).any(|f| integer(f, "ScoredProperty", "PagesPerSheet").is_some_and(|n| n > 1)) {
+    if features(&["JobNUpAllDocumentsContiguously", "DocumentNUp"])
+        .any(|f| integer(&document, f, "ScoredProperty", "PagesPerSheet").is_some_and(|n| n > 1))
+    {
         return None;
     }
     if features(&["JobBindAllDocuments", "DocumentBinding", "JobStapleAllDocuments", "DocumentStaple"])
@@ -421,7 +514,7 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
     };
     let refused = |field: &str| spool_error(format!("the printer's driver did not retain the requested {field}; nothing was sent"));
     let copies = job.copies.clamp(1, 999);
-    if integer(root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
+    if integer(&document, root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
         return Err(refused("copy count"));
     }
     if copies > 1 && pages > 1 && !option("DocumentCollate").is_some_and(|n| named(n, if job.collate { "Collated" } else { "Uncollated" })) {
@@ -497,19 +590,7 @@ fn feature_option(document: &roxmltree::Document<'_>, feature: &str) -> Option<F
         .children()
         .filter(|n| n.has_tag_name((NS_PSF, "ScoredProperty")))
         .filter_map(|n| {
-            let value = match n.children().find(|v| v.has_tag_name((NS_PSF, "Value")) || v.has_tag_name((NS_PSF, "ParameterRef")))? {
-                value if value.has_tag_name((NS_PSF, "Value")) => value,
-                reference => {
-                    let parameter = expanded(reference, reference.attribute("name")?);
-                    document
-                        .root_element()
-                        .children()
-                        .filter(|p| p.has_tag_name((NS_PSF, "ParameterInit")))
-                        .find(|p| p.attribute("name").is_some_and(|name| expanded(*p, name) == parameter))?
-                        .children()
-                        .find(|v| v.has_tag_name((NS_PSF, "Value")))?
-                }
-            };
+            let value = resolved_value(document, n)?;
             let text = value.text()?.trim();
             let value = match text.parse::<i64>() {
                 _ if is_qname_value(value) => expanded(value, text),
@@ -766,11 +847,11 @@ pub(crate) fn prefixes_unlike_the_drivers(ticket: &str, driver: &str) -> Option<
 pub(crate) fn imageable_margin(capabilities_xml: &str) -> Option<u32> {
     let document = crate::xml::parse(capabilities_xml).ok()?;
     let imageable = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Property")) && named(*n, "PageImageableSize"))?;
-    let width = integer(imageable, "Property", "ImageableSizeWidth")?;
-    let height = integer(imageable, "Property", "ImageableSizeHeight")?;
+    let width = integer(&document, imageable, "Property", "ImageableSizeWidth")?;
+    let height = integer(&document, imageable, "Property", "ImageableSizeHeight")?;
     let area = imageable.children().find(|n| n.has_tag_name((NS_PSF, "Property")) && named(*n, "ImageableArea"))?;
-    let (x, y) = (integer(area, "Property", "OriginWidth")?, integer(area, "Property", "OriginHeight")?);
-    let (w, h) = (integer(area, "Property", "ExtentWidth")?, integer(area, "Property", "ExtentHeight")?);
+    let (x, y) = (integer(&document, area, "Property", "OriginWidth")?, integer(&document, area, "Property", "OriginHeight")?);
+    let (w, h) = (integer(&document, area, "Property", "ExtentWidth")?, integer(&document, area, "Property", "ExtentHeight")?);
     let right = width.checked_sub(x)?.checked_sub(w)?;
     let bottom = height.checked_sub(y)?.checked_sub(h)?;
     Some(x.max(y).max(right).max(bottom))
@@ -1056,6 +1137,89 @@ mod tests {
         assert!(verify_ticket(&validated(letter, "Portrait", None), Some(letter), false).is_ok(), "a driver without scaling");
         assert!(verify_ticket(&validated((0, 279_400), "Portrait", None), None, false).is_err(), "a roll has no length");
         assert!(verify_ticket("<not xml", Some(letter), false).is_err());
+    }
+
+    /// A validated ticket that keeps only the sides its DEVMODE extension could read, as a legacy
+    /// host-based driver (HP LaserJet P1102, storytold/craft-libs#7230) returns one.
+    fn validated_partial(width: Option<u32>, height: Option<u32>) -> String {
+        let side = |name: &str, value: Option<u32>| {
+            value.map_or(String::new(), |v| {
+                format!(r#"<psf:ScoredProperty name="psk:{name}"><psf:Value xsi:type="xsd:integer">{v}</psf:Value></psf:ScoredProperty>"#)
+            })
+        };
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:ISOA4">{}{}</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
+</psf:PrintTicket>"#,
+            side("MediaSizeWidth", width),
+            side("MediaSizeHeight", height)
+        )
+    }
+
+    /// storytold/craft-libs#7230: the driver reports one side of the paper as zero for a real
+    /// sheet. With the sheet the request names, the job goes on with the size it asked for; a
+    /// side the driver did report must still agree with it, and a request that names no sheet is
+    /// refused as before.
+    #[test]
+    fn a_legacy_v3_drivers_zero_side_falls_back_to_the_requested_paper() {
+        let a4 = (210_000, 297_000);
+        assert_eq!(verify_ticket(&validated_partial(None, Some(297_000)), Some(a4), false), Ok(a4));
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_000)), Some(a4), false), Ok(a4), "a zero side is a missing one");
+        assert_eq!(verify_ticket(&validated_partial(Some(297_000), None), Some(a4), false), Ok(a4), "either way round");
+        // 0.5 pt (176 µm) inside the tolerance still agrees.
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_176)), Some(a4), false), Ok(a4));
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_250)), Some(a4), false), Ok(a4), "exactly the tolerance");
+        // A side that disagrees means the driver changed the paper, not that it has a roll.
+        let changed = verify_ticket(&validated_partial(Some(0), Some(279_400)), Some(a4), false).unwrap_err();
+        assert!(changed.to_string().contains("changed the paper size"), "{changed}");
+        assert!(!changed.to_string().contains("roll"), "{changed}");
+        assert!(verify_ticket(&validated_partial(Some(0), Some(297_251)), Some(a4), false).is_err(), "one µm past the tolerance");
+        // Without a sheet named the zero side stays roll-like.
+        assert!(verify_ticket(&validated_partial(Some(0), Some(297_000)), None, false).is_err());
+        assert!(verify_ticket(&validated_partial(None, Some(297_000)), None, false).is_err());
+        // Both sides gone is refused whatever the request names.
+        for wanted in [Some(a4), None] {
+            for (width, height) in [(None, None), (Some(0), Some(0))] {
+                let refused = verify_ticket(&validated_partial(width, height), wanted, false).unwrap_err();
+                assert!(refused.to_string().contains("roll"), "{refused}");
+            }
+        }
+    }
+
+    /// A validated ticket whose width the option refers to a parameter the ticket sets
+    /// (`MediaSizeWidth` a `ParameterRef`, storytold/craft-libs#1225), as a driver writes one.
+    fn validated_referenced(width: u32, height: u32) -> String {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="psk:PageMediaSizeWidth"><psf:Value xsi:type="xsd:integer">{width}</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:ISOA4">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeWidth"/></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">{height}</psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
+</psf:PrintTicket>"#
+        )
+    }
+
+    /// A paper side a driver keeps in a `ParameterRef` is resolved through the `ParameterInit`
+    /// the ticket sets, and checked like a direct one: a referenced width that disagrees with the
+    /// sheet the request names is refused, one that agrees is taken.
+    #[test]
+    fn a_referenced_paper_side_is_resolved_through_the_parameter_it_names() {
+        let a4 = (210_000, 297_000);
+        assert_eq!(verify_ticket(&validated_referenced(210_000, 297_000), Some(a4), false), Ok(a4));
+        assert_eq!(verify_ticket(&validated_referenced(209_750, 297_000), Some(a4), false), Ok((209_750, 297_000)), "exactly the tolerance");
+        // A referenced size that disagrees is refused, not rewritten from the request.
+        let changed = verify_ticket(&validated_referenced(400_000, 297_000), Some(a4), false).unwrap_err();
+        assert!(changed.to_string().contains("changed the paper size"), "{changed}");
+        // A reference to a parameter the ticket does not set is a missing side, which falls back
+        // to the requested paper like any unreadable one.
+        let unset =
+            validated_referenced(400_000, 297_000).replace(r#"name="psk:PageMediaSizeWidth"><psf:Value"#, r#"name="psk:OtherParameter"><psf:Value"#);
+        assert_eq!(verify_ticket(&unset, Some(a4), false), Ok(a4), "a parameter the ticket does not set is a missing side");
     }
 
     /// The namespace of the Brother driver's own keywords.
@@ -1544,8 +1708,81 @@ mod tests {
         assert!(!names_paper(Some("ANSI D"), "ARCH D"));
         assert!(!names_paper(Some("ARCH E1"), "ARCH E"));
         assert!(!names_paper(Some("A4Extra"), "A4"));
+        // storytold/craft-libs#1225: a word after a separator is a modifier, not dimensions.
+        assert!(!names_paper(Some("A4 Extra"), "A4"));
+        assert!(!names_paper(Some("A4 (Extra)"), "A4"));
+        assert!(names_paper(Some("A4 210 x 297 mm"), "A4"));
         assert!(!names_paper(Some("Ä"), "A4"), "never slices inside a character");
         assert!(!names_paper(None, "A4"));
+    }
+
+    /// A paper the driver keeps one side of (storytold/craft-libs#7230) is a candidate of last
+    /// resort only: no full entry matched, a Print Schema keyword entry, and its known side
+    /// agrees with the sheet.
+    #[test]
+    fn a_partially_known_paper_is_a_candidate_of_last_resort_only() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        let partial = paper(0, 297_000, Some("A4"), true);
+        let alone = [partial.clone()];
+        assert_eq!(matching_paper(&alone, 595.28, 841.89), Some(0), "no full entry: the partial one is taken");
+        // A full candidate, however it spells its option, wins over the partial one.
+        let with_full = [partial, paper(210_100, 297_000, Some("A4"), false)];
+        assert_eq!(matching_paper(&with_full, 595.28, 841.89), Some(1), "the full entry wins");
+        // A vendor's own entry is no partial candidate.
+        assert_eq!(matching_paper(&[paper(0, 297_000, Some("A4"), false)], 595.28, 841.89), None);
+        // A partial entry whose known side disagrees is no candidate.
+        assert_eq!(matching_paper(&[paper(0, 279_400, Some("Letter"), true)], 595.28, 841.89), None);
+        // Both sides gone: nothing known to agree with.
+        assert_eq!(matching_paper(&[paper(0, 0, Some("A4"), true)], 595.28, 841.89), None);
+    }
+
+    /// One partial paper whose known side agrees is still taken, named like the requested
+    /// standard sheet or not. The known side agrees only to a quarter of a millimetre: exactly
+    /// the tolerance is taken, one micrometre past it is another paper.
+    #[test]
+    fn a_single_partially_known_paper_that_agrees_is_still_taken() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        assert_eq!(matching_paper(&[paper(215_900, 0, Some("Legal 215.9 x 355.6 mm"), true)], 612.0, 1008.0), Some(0), "named like the sheet");
+        assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "or without a name at all");
+        assert_eq!(matching_paper(&[paper(0, 297_250, None, true)], 595.28, 841.89), Some(0), "exactly the tolerance");
+        assert_eq!(matching_paper(&[paper(0, 297_251, None, true)], 595.28, 841.89), None, "one µm past the tolerance");
+    }
+
+    /// storytold/craft-libs#1225 (Code Rabbit, second round): a single partial paper whose known
+    /// side agrees is still refused when its own name is known and contradicts the requested
+    /// standard sheet — the width the driver kept is shared by Letter and Legal, and a known
+    /// Letter name is evidence against choosing it for a Legal sheet (INV-4). "Extra" is a
+    /// modifier word, another paper: a known "Letter Extra" name contradicts a Letter sheet too.
+    /// Without a name there is nothing contradicting, and the agreeing entry is taken as before.
+    #[test]
+    fn a_single_partially_known_paper_whose_known_name_contradicts_the_sheet_is_refused() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        assert_eq!(
+            matching_paper(&[paper(215_900, 0, Some("Letter 215.9 x 279.4 mm"), true)], 612.0, 1008.0),
+            None,
+            "a known Letter name is not a Legal sheet"
+        );
+        assert_eq!(
+            matching_paper(&[paper(215_900, 0, Some("Letter Extra 215.9 x 431.8 mm"), true)], 612.0, 792.0),
+            None,
+            "a known \"Letter Extra\" name is not a Letter sheet"
+        );
+        assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "an unnamed twin stands, the agreement alone");
+    }
+
+    /// storytold/craft-libs#1225: two partial papers that both agree (Letter and Legal share a
+    /// width) are told apart by name, as full candidates are; when nothing tells them apart,
+    /// none is chosen, not the first one that agrees.
+    #[test]
+    fn two_partially_known_papers_that_agree_are_told_apart_by_their_names() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        let both = [paper(215_900, 0, Some("Letter"), true), paper(215_900, 0, Some("Legal"), true)];
+        assert_eq!(matching_paper(&both, 612.0, 1008.0), Some(1), "the partial named like the sheet wins");
+        assert_eq!(matching_paper(&both, 612.0, 792.0), Some(0), "and for a Letter sheet, the Letter one");
+        let unnamed = [paper(215_900, 0, None, true), paper(215_900, 0, None, true)];
+        assert_eq!(matching_paper(&unnamed, 612.0, 1008.0), None, "nothing to tell them apart by");
+        let same_name = [paper(215_900, 0, Some("Legal"), true), paper(215_900, 0, Some("Legal"), true)];
+        assert_eq!(matching_paper(&same_name, 612.0, 1008.0), None, "two of the same name are ambiguous too");
     }
 
     #[test]

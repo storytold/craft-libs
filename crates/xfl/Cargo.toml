@@ -11,5 +11,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-xml = { workspace = true }
 miniz_oxide = "0.8"
 thiserror = { workspace = true }

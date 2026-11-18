@@ -3,16 +3,32 @@ use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
 
 impl Reader {
+    /// The logical alignment for a side word (`Left` for `\ql`, `Right` for `\qr`). The model's
+    /// alignment is logical (start/end), and Word reads a side word that comes after `\rtlpar` as
+    /// start/end: the sides swap in a paragraph already marked right to left. Before `\rtlpar`
+    /// the side keeps its plain meaning, which is why the writer puts the alignment first.
+    fn side_align(&self, side: Align) -> Align {
+        match (self.st.rtldir, side) {
+            (Some(true), Align::Left) => Align::Right,
+            (Some(true), Align::Right) => Align::Left,
+            _ => side,
+        }
+    }
+
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
         // Every control word ends a multibyte run: the code page it is read in may change here
         // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
+        self.note_defshp(w);
         if self.skip_destination_word(w, pv) {
             return;
         }
-        if w == "shppict" || self.start_header_footer_word(w) {
+        if self.shape_word(w, p, first_in_group) {
+            return;
+        }
+        if self.shppict_word(w) || self.start_header_footer_word(w) {
             return;
         }
         if self.start_note_word(w) {
@@ -26,6 +42,8 @@ impl Reader {
                 }
                 Dest::Pict => {
                     self.pict_depth = Some(self.depth());
+                    self.pict_defshp = false;
+                    self.pict_after_shape = self.pict_follows_shape();
                     self.pict_hex.clear();
                     self.pict_half = None;
                     self.pict_kind = 0;
@@ -63,6 +81,7 @@ impl Reader {
             "row" => self.end_row(),
             "line" | "softline" => self.ch('\n'),
             "tab" => self.ch('\t'),
+            "chpgn" => self.page_number_symbol(),
             "page" | "softpage" => self.ch('\u{000C}'),
             "column" => self.ch('\u{000E}'),
             "emdash" => self.ch('—'),
@@ -166,11 +185,15 @@ impl Reader {
             "cf" => self.st.fmt.color = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "highlight" | "chcbpat" | "cb" => self.st.fmt.background = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "v" => self.st.hidden = on,
-            "ql" => self.st.align = Some(Align::Left),
+            "ql" => self.st.align = Some(self.side_align(Align::Left)),
             "qc" => self.st.align = Some(Align::Center),
-            "qr" => self.st.align = Some(Align::Right),
+            "qr" => self.st.align = Some(self.side_align(Align::Right)),
             "qj" => self.st.align = Some(Align::Justify),
             "qd" => self.st.align = Some(Align::Distribute),
+            // `\rtldir`/`\ltrdir` are not paragraph words (they set a table's or section's
+            // direction in RTF); some writers used them for paragraphs, so they are read too.
+            "rtlpar" | "rtldir" => self.st.rtldir = Some(true),
+            "ltrpar" | "ltrdir" => self.st.rtldir = Some(false),
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
@@ -267,8 +290,13 @@ impl Reader {
                     self.defs.push(d);
                 }
             }
-            "field" => self.start_field(),
+            "field" => {
+                self.start_field();
+                self.open_field();
+            }
+            "fldlock" => self.field_word(w),
             "fldrslt" => {
+                self.field_word(w);
                 let link = self.st.field.and_then(|i| self.fields.get(i)).and_then(|s| hyperlink(s));
                 if link.is_some() {
                     self.st.fmt.link = link.as_deref().and_then(model::kept_link);
@@ -417,6 +445,8 @@ impl Reader {
                     "i" => def.italic = Some(on),
                     "fs" => def.size = (value > 0).then(|| (value as f32 / 2.0).clamp(1.0, 1638.0)),
                     "f" => def.font = Some(value),
+                    "rtlpar" | "rtldir" => def.rtl = Some(true),
+                    "ltrpar" | "ltrdir" => def.rtl = Some(false),
                     _ => {}
                 }
                 true
@@ -441,6 +471,8 @@ impl Reader {
             }
             Dest::RevTbl if !matches!(word, "u" | "uc") => true,
             Dest::RevTbl => false,
+            // Read by `shape_word`, which takes every word there.
+            Dest::ShpInst | Dest::ShpSn | Dest::ShpSv => true,
             Dest::Pict => {
                 self.picture_word(word, value);
                 true
