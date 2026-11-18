@@ -414,8 +414,11 @@ fn a_triangle_radius_past_what_the_shape_holds_is_capped_and_zero_is_sharp() {
         assert!(got.iter().all(|p| rect.inflate(1e-9, 1e-9).contains(*p)), "{radius}: the outline stays in the box: {got:?}");
         if radius.is_finite() && radius > 0.0 {
             assert_eq!(got.len(), 6, "{radius}: still two points per corner");
-            // The base's two arcs meet in its middle, halfway along the shortest edge.
-            assert!(got.iter().any(|p| near(*p, Point::new(100.0, 100.0))), "{radius}: capped at half the base: {got:?}");
+            // The slanted edges (about 141 px) are shorter than the 200 px base: the arcs at their two ends meet
+            // halfway along each of them.
+            for middle in [Point::new(50.0, 50.0), Point::new(150.0, 50.0)] {
+                assert_eq!(got.iter().filter(|p| near(**p, middle)).count(), 2, "{radius}: capped at half a slanted edge: {got:?}");
+            }
         } else {
             assert_eq!(got, vec![Point::new(100.0, 0.0), Point::new(200.0, 100.0), Point::new(0.0, 100.0)], "{radius}: sharp corners");
         }
@@ -425,6 +428,7 @@ fn a_triangle_radius_past_what_the_shape_holds_is_capped_and_zero_is_sharp() {
 /// A Triangle drag takes the Triangle's own corner radius from the tool settings, not the Rectangle's, and a
 /// Rectangle drag keeps the Rectangle's.
 #[trial]
+#[allow(clippy::field_reassign_with_default, reason = "ShapeToolSettings is non_exhaustive: no struct literal outside its crate")]
 fn a_triangle_drag_takes_the_triangle_radius_from_the_settings() {
     let mut settings = craft_draw::ui::shape::ShapeToolSettings::default();
     settings.corner_radius = 7.0;

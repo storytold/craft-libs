@@ -296,6 +296,7 @@ struct BarHost {
 /// `triangle_corner_radius`, not the Rectangle's radius, reports a typed value as `CornerRadius`, and keeps a value
 /// past 0–150,000 px at the end with one range alert. The Ellipse's bar has no Radius.
 #[trial]
+#[allow(clippy::field_reassign_with_default, reason = "ShapeToolSettings is non_exhaustive: no struct literal outside its crate")]
 fn the_triangle_bar_shows_its_own_radius() {
     let kind = Rc::new(RefCell::new(ShapeKind::Triangle));
     let mut settings = ShapeToolSettings::default();
