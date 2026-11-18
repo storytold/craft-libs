@@ -437,11 +437,10 @@ impl<'a> PageView<'a> {
         let frame = Frame::of(&geo);
         let given = frame.view(rect, start.offset, geo.scale / SCREEN_POINTS_PER_POINT);
         let mut navigation = navigation;
-        navigation.overscroll = !start.continuous;
-        let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true);
-        if start.continuous {
-            canvas = canvas.document(frame.document(&geo));
-        }
+        // The canvas keeps the view inside the shown row, as the pass does, so a wheel share that cannot pan a row at its
+        // edge leaves the gesture unmoved and a page turn can follow it.
+        navigation.overscroll = false;
+        let canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).document(frame.document(&geo));
         let mut held = Held::new(Bind::bound(state));
         let mut seen: Option<Seen> = None;
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
@@ -629,18 +628,11 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     // A scale the fit (a new viewport or pages) or the app changed keeps the document point at the centre of the
     // view where it was, unless the app moved the view or asked for a go-to in the same breath.
     let unmoved = mem.offset == Some(state.offset);
-    if let Some((_, previous)) = previous.filter(|(_, p)| !scale_settled(p.scale, geo.scale)).filter(|_| unmoved && state.go_to.is_none())
-        && let Some(offset) = centred_offset(&previous, &geo, state.offset, (vw, vh))
+    if let Some((key, previous)) = previous.filter(|(_, p)| !scale_settled(p.scale, geo.scale)).filter(|_| unmoved && state.go_to.is_none())
+        && let Some(offset) = centred_offset(&previous, &geo, state.offset, (key.viewport.width, key.viewport.height), (vw, vh))
     {
         state.offset = offset;
     }
-    eprintln!(
-        "DIAG a_changed_zoom_keeps_the_point_at_the_centre_in_place: unmoved {unmoved} scale {} offset {:?} mem {:?} go_to {}",
-        geo.scale,
-        state.offset,
-        mem.offset,
-        state.go_to.is_some()
-    );
     state.zoom = geo.scale / SCREEN_POINTS_PER_POINT;
 
     // The canvas folded the wheel, a pinch and the view commands into the view it settled on: a different zoom is the
@@ -751,10 +743,6 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         })
         .collect();
     let near = near_pages(&drawn, state.continuous, &visible, count, &build.layout_options(&state), travel);
-    eprintln!(
-        "DIAG prefetch_asks_for_the_rows_ahead_of_the_motion_and_none_behind: travel {travel} last {:?} want {want:?} visible {visible:?} near {near:?}",
-        mem.offset
-    );
     let kept = keep.iter().copied().filter(|page| *page < count && !rows.contains(page) && !near.contains(page));
     for page in near.iter().copied().chain(kept) {
         let size = drawn.layout.rects[page].size();
@@ -1108,9 +1096,10 @@ fn offset_range(lo: f64, hi: f64, len: f64) -> (f64, f64) {
 
 /// The offset that keeps the document point at the centre of a view `(vw, vh)` points where it was when the scale
 /// goes from `old`'s to `new`'s: the page under the centre keeps the same fractions of its width and height there;
-/// with the centre in a gap, the next page keeps its distance below the centre. `None` when `new` has no such page.
-fn centred_offset(old: &Placed, new: &Placed, offset: (f64, f64), (vw, vh): (f64, f64)) -> Option<(f64, f64)> {
-    let centre = Point::new(offset.0 + vw / 2.0, offset.1 + vh / 2.0);
+/// with the centre in a gap, the next page keeps its distance below the centre. `offset` is of a view of `old_view`
+/// points, the result of one of `(vw, vh)` points (a new room changes both). `None` when `new` has no such page.
+fn centred_offset(old: &Placed, new: &Placed, offset: (f64, f64), old_view: (f64, f64), (vw, vh): (f64, f64)) -> Option<(f64, f64)> {
+    let centre = Point::new(offset.0 + old_view.0 / 2.0, offset.1 + old_view.1 / 2.0);
     let pages = 0..old.layout.rects.len();
     let band = |page: usize| band_rect(&old.layout, page);
     let fraction = |at: f64, from: f64, len: f64| if len > 0.0 { (at - from) / len } else { 0.0 };

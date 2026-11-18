@@ -87,11 +87,8 @@ fn rig_over(source: impl PageSource + 'static, start: PageViewState, navigation:
         let mut now = kept.borrow().clone();
         let offset = now.offset;
         let keep = held.borrow().clone();
-        let shown = PageView::new("Pages", &source, &mut now, PAPER)
-            .options(LayoutOptions::ACROBAT)
-            .navigation(navigation)
-            .keep(&keep)
-            .show(ui, |_, _| ());
+        let shown =
+            PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show(ui, |_, _| ());
         *seen.borrow_mut() =
             Out { offset, rects: shown.layout.rects.clone(), pages: shown.pages, visible: shown.visible, view: shown.canvas.response.rect };
         *kept.borrow_mut() = now;
@@ -126,7 +123,10 @@ fn assert_centre_kept(out: &Out, before: (usize, kurbo::Point), what: &str) {
     let (page, point) = before;
     let now = out.point(page, point);
     let centre = out.centre();
-    assert!((now.x - centre.x).abs() < 1.0 && (now.y - centre.y).abs() < 1.0, "{what}: {point:?} of page {page} is at {now:?}, the centre at {centre:?}");
+    assert!(
+        (now.x - centre.x).abs() < 1.0 && (now.y - centre.y).abs() < 1.0,
+        "{what}: {point:?} of page {page} is at {now:?}, the centre at {centre:?}"
+    );
 }
 
 #[trial]
@@ -174,7 +174,13 @@ fn wheel(fixture: &mut Fixture, lines: f32) {
 
 /// A scroll of `dy` points over the middle of the room from `source`, in device phase `phase`.
 fn swipe(fixture: &mut Fixture, dy: f32, phase: egui::TouchPhase, source: egui::MouseWheelSource) {
-    fixture.frame(vec![egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, dy), modifiers: Modifiers::NONE, phase, source }]);
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, dy),
+        modifiers: Modifiers::NONE,
+        phase,
+        source,
+    }]);
 }
 
 /// Frames until the wheel service has ended the running gesture.
@@ -455,7 +461,8 @@ fn a_fit_holds_the_page_at_the_top_still_while_pages_of_other_sizes_scroll_past(
 #[trial]
 fn prefetch_asks_for_the_rows_ahead_of_the_motion_and_none_behind() {
     // The pages outside the view the source was asked to render since the last call.
-    let outside = |asked: &RefCell<Vec<usize>>, out: &Out| -> Vec<usize> { asked.borrow_mut().drain(..).filter(|page| !out.visible.contains(page)).collect() };
+    let outside =
+        |asked: &RefCell<Vec<usize>>, out: &Out| -> Vec<usize> { asked.borrow_mut().drain(..).filter(|page| !out.visible.contains(page)).collect() };
     for two_up in [false, true] {
         let asked: Rc<RefCell<Vec<usize>>> = Rc::default();
         let source = Recording::new(DemoPages::new(24), vec![LETTER; 24], &asked);
@@ -475,7 +482,11 @@ fn prefetch_asks_for_the_rows_ahead_of_the_motion_and_none_behind() {
             fixture.frame(Vec::new());
             let out = out.borrow();
             let asked = outside(&asked, &out);
-            assert!(asked.iter().all(|page| *page >= out.visible.end), "two-up {two_up}: forward asks ahead only: {asked:?} beside {:?}", out.visible);
+            assert!(
+                asked.iter().all(|page| *page >= out.visible.end),
+                "two-up {two_up}: forward asks ahead only: {asked:?} beside {:?}",
+                out.visible
+            );
             ahead += asked.len();
         }
         assert!(ahead > 0, "two-up {two_up}: forward travel asks for the pages ahead");
@@ -485,7 +496,9 @@ fn prefetch_asks_for_the_rows_ahead_of_the_motion_and_none_behind() {
         let still = outside(&asked, &out.borrow());
         assert!(still.is_empty(), "two-up {two_up}: a still view asks for nothing it had not asked for: {still:?}");
 
-        state.borrow_mut().offset.1 += 4000.0;
+        // To the end of the document, far from every page the run forward and its rests asked for: a page the source
+        // rendered before is cached, so only pages never asked for show what the back travel asks for.
+        state.borrow_mut().offset.1 = 1.0e6;
         fixture.idle(3);
         asked.borrow_mut().clear();
         let mut behind = 0;
@@ -679,8 +692,7 @@ fn reselecting_the_display_moves_nothing_and_a_change_keeps_the_current_page() {
     view.fixture.idle(2);
     assert_eq!(view.state.borrow().offset, offset, "writing the display it has moves nothing");
 
-    let changes: [(&str, fn(&mut PageViewState)); 2] =
-        [("display", |s| s.display = PageDisplay::TwoUp), ("fit", |s| s.fit = Fit::Page)];
+    let changes: [(&str, fn(&mut PageViewState)); 2] = [("display", |s| s.display = PageDisplay::TwoUp), ("fit", |s| s.fit = Fit::Page)];
     for (what, change) in changes {
         // Where a go-to to the current page puts the view, from the same state.
         let mut reference = rig(6, view.state.borrow().clone());
@@ -693,7 +705,10 @@ fn reselecting_the_display_moves_nothing_and_a_change_keeps_the_current_page() {
         change(&mut view.state.borrow_mut());
         view.fixture.idle(2);
         let (got, want) = (view.state.borrow().offset, reference.state.borrow().offset);
-        assert!((got.0 - want.0).abs() < 1.0 && (got.1 - want.1).abs() < 1.0, "a new {what} keeps the current page in view: {got:?} against {want:?}");
+        assert!(
+            (got.0 - want.0).abs() < 1.0 && (got.1 - want.1).abs() < 1.0,
+            "a new {what} keeps the current page in view: {got:?} against {want:?}"
+        );
         assert_eq!(view.state.borrow().current, current, "a new {what} keeps the current page");
     }
 }
@@ -764,11 +779,8 @@ fn a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass
     });
     let Rig { mut fixture, state, .. } = rig_over(source, start, NavigationOptions::default(), true);
     assert!(*parts.borrow() > 0, "precondition: a page past the texture side asks for the part in view");
-    let bar = fixture
-        .by_role(Role::SCROLL_BAR)
-        .into_iter()
-        .max_by(|a, b| a.rect.height().total_cmp(&b.rect.height()))
-        .expect("the view has scroll bars");
+    let bar =
+        fixture.by_role(Role::SCROLL_BAR).into_iter().max_by(|a, b| a.rect.height().total_cmp(&b.rect.height())).expect("the view has scroll bars");
     let grab = pos2(bar.rect.center().x, bar.rect.min.y + 6.0);
     let (before, offset) = (*parts.borrow(), state.borrow().offset.1);
     fixture.frame(vec![craft_ui::testing::pointer::moved(grab)]);
