@@ -103,7 +103,9 @@ fn neutral_settings_are_delayed_identity() {
         let (a, b) = run(e.as_mut(), &l, &r);
         let mut worst = 0.0f32;
         for i in lat..n {
-            worst = worst.max((a[i] - l[i - lat]).abs()).max((b[i] - r[i - lat]).abs());
+            let (el, er) = ((a[i] - l[i - lat]).abs(), (b[i] - r[i - lat]).abs());
+            assert!(el.is_finite() && er.is_finite(), "{id}: neutral output at {i} is not finite");
+            worst = worst.max(el).max(er);
         }
         assert!(worst < 2e-4, "{id}: neutral output differs by {worst}");
         checked += 1;
@@ -539,6 +541,78 @@ fn mastering_maximizer_ramps_out() {
     let (z, _) = run(e.as_mut(), &x, &x);
     assert!(z[0] > 0.035, "the boost dropped at once: {}", z[0]);
     assert!((z[z.len() - 1] - 0.01).abs() < 1e-4, "{}", z[z.len() - 1]);
+}
+
+#[test]
+fn mastering_eq_gain_ramps_and_reset_snaps() {
+    let n = SR as usize / 10;
+    let (pre, post) = (noise(41, n, 0.25), noise(42, n, 0.25));
+    for (id, gain) in [("eq_high", 12.0), ("eq_low", -12.0), ("eq_mid", 12.0)] {
+        let (mut a, mut b) = (fx("mastering", &[]), fx("mastering", &[]));
+        run(a.as_mut(), &pre, &pre);
+        run(b.as_mut(), &pre, &pre);
+        assert!(a.set_param(id, gain));
+        let (ya, _) = run(a.as_mut(), &post, &post);
+        let (yb, _) = run(b.as_mut(), &post, &post);
+        // The first samples after the change still sound like the old setting.
+        let step = ya[..8].iter().zip(&yb[..8]).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+        assert!(step < 0.03, "{id}: the output jumped by {step} at the change");
+        // After the ramp the output is what the new setting gives.
+        let mut c = fx("mastering", &[(id, gain)]);
+        run(c.as_mut(), &pre, &pre);
+        let (yc, _) = run(c.as_mut(), &post, &post);
+        let late = ya[n / 2..].iter().zip(&yc[n / 2..]).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+        assert!(late < 1e-4, "{id}: after the ramp the output differs by {late}");
+        // Reset goes straight to the new setting.
+        assert!(b.set_param(id, gain));
+        b.reset();
+        c.reset();
+        assert_eq!(run(b.as_mut(), &post, &post), run(c.as_mut(), &post, &post), "{id}: reset did not snap");
+    }
+}
+
+#[test]
+fn mastering_eq_ramp_does_not_depend_on_the_block_size() {
+    let n = SR as usize / 20;
+    let x = noise(43, n, 0.25);
+    let ramp = |block: usize| {
+        let mut e = fx("mastering", &[]);
+        run(e.as_mut(), &x[..1000], &x[..1000]);
+        assert!(e.set_param("eq_high", 12.0));
+        let mut out = vec![];
+        for part in x.chunks(block) {
+            out.extend(run(e.as_mut(), part, part).0);
+        }
+        out
+    };
+    let whole = ramp(n);
+    for block in [1, 7, 100] {
+        let worst = whole.iter().zip(&ramp(block)).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(worst <= 1e-6, "blocks of {block} differ by {worst}");
+    }
+}
+
+#[test]
+fn binauralizer_tail_covers_the_far_ear() {
+    let n = SR as usize / 10;
+    for angle in [30.0, 90.0] {
+        let mut e = fx("binauralizer", &[("angle", angle), ("head_size", 24.0)]);
+        // A left-only impulse in the last frame of the input.
+        let mut l = vec![0.0f32; n];
+        l[n - 1] = 1.0;
+        run(e.as_mut(), &l, &vec![0.0; n]);
+        let tail = e.tail_samples();
+        let silence = vec![0.0f32; SR as usize / 10];
+        let (a, b) = run(e.as_mut(), &silence, &silence);
+        let last = |s: &[f32]| s.iter().rposition(|v| v.abs() > 1e-6).map_or(0, |i| i + 1);
+        assert!(last(&b) > 10, "{angle}: the right ear's delayed sound ends at {}", last(&b));
+        assert!(last(&a).max(last(&b)) <= tail, "{angle}: sound until {} after a tail of {tail}", last(&a).max(last(&b)));
+    }
+    // A delay that ramps longer is covered from the start of the ramp.
+    let mut e = fx("binauralizer", &[("angle", 0.0)]);
+    assert!(e.set_param("angle", 90.0));
+    let itd = 0.0875 / 343.0 * (std::f32::consts::FRAC_PI_2 + 1.0) * SR;
+    assert!(e.tail_samples() as f32 >= itd, "{} below the target delay {itd}", e.tail_samples());
 }
 
 #[test]

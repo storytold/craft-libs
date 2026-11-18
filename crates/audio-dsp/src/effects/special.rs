@@ -352,6 +352,9 @@ pub struct Mastering {
     pv: ParamValues,
     sr: f32,
     eq: [Coeffs; 3],
+    /// The EQ settings the coefficients ramp through: low shelf gain, peak frequency (log2 Hz),
+    /// peak gain and high shelf gain.
+    eq_set: [Smoothed; 4],
     st: Vec<[Biquad; 3]>,
     rev: Reverb,
     scratch: [[f32; CHUNK]; 2],
@@ -394,6 +397,7 @@ impl Mastering {
             pv: ParamValues::new(Self::PARAMS),
             sr: sample_rate,
             eq: [Coeffs::IDENTITY; 3],
+            eq_set: [sm(0.0, sample_rate), sm(1000f32.log2(), sample_rate), sm(0.0, sample_rate), sm(0.0, sample_rate)],
             st: vec![[Biquad::new(); 3]; ch],
             rev,
             scratch: [[0.0; CHUNK]; 2],
@@ -411,14 +415,28 @@ impl Mastering {
         s
     }
 
-    fn apply_params(&mut self, snap: bool) {
+    /// The EQ's coefficients at the ramps' current values, or at their targets.
+    fn eq_coeffs(&self, target: bool) -> [Coeffs; 3] {
         let sr = self.sr as f64;
         let q = std::f64::consts::FRAC_1_SQRT_2;
-        self.eq = [
-            Coeffs::design(FilterType::LowShelf, sr, 100.0, q, self.pv.v("eq_low") as f64),
-            Coeffs::design(FilterType::Peaking, sr, self.pv.v("eq_mid_freq") as f64, 1.0, self.pv.v("eq_mid") as f64),
-            Coeffs::design(FilterType::HighShelf, sr, 8000.0, q, self.pv.v("eq_high") as f64),
-        ];
+        let [low, freq, mid, high] = self.eq_set.map(|s| f64::from(if target { s.target() } else { s.value() }));
+        [
+            Coeffs::design(FilterType::LowShelf, sr, 100.0, q, low),
+            Coeffs::design(FilterType::Peaking, sr, 2f64.powf(freq), 1.0, mid),
+            Coeffs::design(FilterType::HighShelf, sr, 8000.0, q, high),
+        ]
+    }
+
+    fn apply_params(&mut self, snap: bool) {
+        let [low, freq, mid, high] = &mut self.eq_set;
+        low.set(self.pv.v("eq_low"));
+        freq.set(self.pv.v("eq_mid_freq").max(1.0).log2());
+        mid.set(self.pv.v("eq_mid"));
+        high.set(self.pv.v("eq_high"));
+        if snap {
+            self.eq_set.iter_mut().for_each(Smoothed::snap);
+        }
+        self.eq = self.eq_coeffs(false);
         self.rev_amt.set(0.4 * self.pv.v("reverb") / 100.0);
         self.exc.set(0.6 * self.pv.v("exciter") / 100.0);
         self.width.set(self.pv.v("widener") / 100.0);
@@ -440,9 +458,11 @@ impl AudioEffect for Mastering {
         if self.pv.v("reverb") > 0.0 || self.rev_amt.is_smoothing() { self.rev.tail_samples() } else { 0 }
     }
     fn response_db(&self, freq: f64) -> Option<f64> {
-        Some(self.eq.iter().map(|c| c.magnitude_db(freq, self.sr as f64)).sum::<f64>() + self.pv.v("output") as f64)
+        Some(self.eq_coeffs(true).iter().map(|c| c.magnitude_db(freq, self.sr as f64)).sum::<f64>() + self.pv.v("output") as f64)
     }
     fn reset(&mut self) {
+        self.eq_set.iter_mut().for_each(Smoothed::snap);
+        self.eq = self.eq_coeffs(false);
         self.st.iter_mut().for_each(|s| s.iter_mut().for_each(Biquad::reset));
         self.rev.reset();
         self.hp.iter_mut().for_each(OnePole::reset);
@@ -469,15 +489,28 @@ impl AudioEffect for Mastering {
             // The reverb runs until its amount has faded to 0.
             let use_rev = rev_param || self.rev_amt.is_smoothing();
             self.rev_on = use_rev;
-            // EQ in place.
-            for ch in 0..nch {
-                for v in channels[ch][start..start + len].iter_mut() {
-                    let mut y = *v as f64;
-                    for (k, c) in self.eq.iter().enumerate() {
-                        y = self.st[ch][k].tick(c, y);
+            // EQ in place. While a setting ramps, the coefficients are designed again for every
+            // sample; once the ramps end, the rest of the chunk runs on fixed coefficients.
+            let mut i = 0;
+            while i < len {
+                let ramping = self.eq_set.iter().any(Smoothed::is_smoothing);
+                if ramping {
+                    for s in &mut self.eq_set {
+                        s.tick();
                     }
-                    *v = y as f32;
+                    self.eq = self.eq_coeffs(false);
                 }
+                let step = if ramping { 1 } else { len - i };
+                for ch in 0..nch {
+                    for v in channels[ch][start + i..start + i + step].iter_mut() {
+                        let mut y = *v as f64;
+                        for (k, c) in self.eq.iter().enumerate() {
+                            y = self.st[ch][k].tick(c, y);
+                        }
+                        *v = y as f32;
+                    }
+                }
+                i += step;
             }
             if use_rev {
                 for i in 0..len {
@@ -783,6 +816,23 @@ impl Binauralizer {
 
 impl AudioEffect for Binauralizer {
     param_plumbing!("binauralizer");
+    /// The far ear's delay (the longer of the current and target delay while it ramps) and the
+    /// head-shadow filters' decay to a millionth.
+    fn tail_samples(&self) -> usize {
+        if self.mix.target() <= 0.0 && !self.mix.is_smoothing() {
+            return 0;
+        }
+        let delay = self.itd.value().max(self.itd.target()).max(0.0).ceil() as usize + 2;
+        let pole = self.sh.iter().fold(0.0f32, |p, s| p.max(s.a1.abs()));
+        let decay = if pole <= 0.0 {
+            1
+        } else if pole < 1.0 {
+            (1e-6f32.ln() / pole.ln()).ceil() as usize + 1
+        } else {
+            super::util::tail_samples(f32::INFINITY, self.sr)
+        };
+        delay + decay
+    }
     fn reset(&mut self) {
         self.lines.iter_mut().for_each(DelayLine::reset);
         for s in &mut self.sh {
