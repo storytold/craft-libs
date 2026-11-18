@@ -67,6 +67,10 @@ fn finite(value: f64) -> f64 {
     if value.is_finite() { value } else { 0.0 }
 }
 
+/// A usable normalization rectangle needs finite positive extents on both axes.
+fn valid_bounds([l, t, r, b]: [f64; 4]) -> bool {
+    [l, t, r, b].iter().all(|v| v.is_finite()) && (r - l).is_finite() && r > l && (b - t).is_finite() && b > t
+}
 /// The corner quad (top-left, top-right, bottom-right, bottom-left) from x0 y0 … x3 y3.
 fn quad_from(t: [f64; 8]) -> [[f64; 2]; 4] {
     [[t[0], t[1]], [t[2], t[3]], [t[4], t[5]], [t[6], t[7]]]
@@ -102,12 +106,14 @@ fn quilt_patches(slices: &[f64]) -> Result<usize> {
         return Err(PsdError::Unsupported("invalid quilt divisions".into()));
     }
     // Compare against the same endpoint interpolation the writer uses. At large
-    // coordinate offsets a uniform grid can have differently rounded adjacent widths.
+    // coordinate offsets a uniform grid can have differently rounded adjacent widths,
+    // including coincident boundaries. Only canonical rounded positions are accepted;
+    // the model keeps the patch count and evaluates in its uniform parameter domain.
     let tolerance = (extent / patches as f64) * 1e-9;
-    if slices.windows(2).any(|pair| pair[1] <= pair[0])
-        || slices.iter().enumerate().any(|(i, value)| {
+    if slices.windows(2).any(|pair| pair[1] < pair[0])
+        || slices.iter().enumerate().take(patches).skip(1).any(|(i, value)| {
             let expected = slices[0] + extent * (i as f64 / patches as f64);
-            (value - expected).abs() > tolerance
+            !expected.is_finite() || (value - expected).abs() > tolerance
         })
     {
         return Err(PsdError::Unsupported("unequal quilt divisions".into()));
@@ -122,7 +128,10 @@ impl Warp {
     }
 
     /// Reads a warp, rejecting unequal or invalid quilt divisions rather than
-    /// interpreting them as equal-sized patches. Nonfinite geometry becomes zero.
+    /// interpreting them as equal-sized patches. Canonical uniform boundaries may coincide
+    /// after floating-point rounding; their patch count is retained. This is the internal
+    /// uniform-model contract, not a guarantee of other readers' handling of coincident slices.
+    /// Nonfinite geometry becomes zero.
     pub fn try_from_descriptor(d: &Descriptor) -> Result<Option<Warp>> {
         let style = d.get_enum("warpStyle").unwrap_or_else(|| "warpNone".to_string());
         let side = |b: &Descriptor, k: &str| finite(b.get_number(k).unwrap_or(0.0));
@@ -146,7 +155,7 @@ impl Warp {
             if !slice_x.is_empty() || !slice_y.is_empty() {
                 // The evaluator normalizes over bounds, not stored slice coordinates.
                 // Infer an absent rectangle only when both explicit axes define it.
-                if !(w.bounds[2] > w.bounds[0] && w.bounds[3] > w.bounds[1]) {
+                if !valid_bounds(w.bounds) {
                     if d.get("bounds").is_some() {
                         return Err(PsdError::Unsupported("invalid explicit quilt bounds".into()));
                     }
@@ -155,6 +164,9 @@ impl Warp {
                         return Err(PsdError::Unsupported("quilt divisions need bounds or both axes".into()));
                     };
                     w.bounds = [left, top, right, bottom];
+                    if !valid_bounds(w.bounds) {
+                        return Err(PsdError::Unsupported("invalid inferred quilt bounds".into()));
+                    }
                 }
                 for (slices, start, end) in [(&slice_x, w.bounds[0], w.bounds[2]), (&slice_y, w.bounds[1], w.bounds[3])] {
                     if let (Some(&first), Some(&last)) = (slices.first(), slices.last()) {
@@ -187,7 +199,7 @@ impl Warp {
 
     /// The warp of a content point (content pixels → content pixels).
     pub fn apply(&self, p: [f64; 2], w: f64, h: f64) -> [f64; 2] {
-        let [l, t, r, b] = if self.bounds[2] > self.bounds[0] && self.bounds[3] > self.bounds[1] { self.bounds } else { [0.0, 0.0, w, h] };
+        let [l, t, r, b] = if valid_bounds(self.bounds) { self.bounds } else { [0.0, 0.0, w, h] };
         let (bw, bh) = (r - l, b - t);
         let (u, v) = ((p[0] - l) / bw, (p[1] - t) / bh);
         if self.style == "warpCustom" {
@@ -1078,6 +1090,14 @@ mod tests {
         assert_eq!(quilt_patches(&[0.0, 10.0, 20.0]).unwrap(), 2);
         assert_eq!(quilt_patches(&[1e16, 1e16 + 2.0, 1e16 + 6.0, 1e16 + 8.0]).unwrap(), 3);
         assert!(quilt_patches(&[1e16, 1e16 + 4.0, 1e16 + 6.0, 1e16 + 8.0]).is_err());
+        let lo = 3.0 * 2.0_f64.powi(970);
+        assert!((f64::MAX - lo).is_finite());
+        assert!((lo + (f64::MAX - lo)).is_infinite());
+        assert_eq!(quilt_patches(&[lo, f64::MAX]).unwrap(), 1);
+        assert_eq!(quilt_patches(&[1e16, 1e16, 1e16, 1e16 + 2.0, 1e16 + 2.0]).unwrap(), 4);
+        for invalid in [vec![0.0, 0.0, 20.0], vec![0.0, 10.0, 10.0, 20.0], vec![1e16, 1e16 + 2.0, 1e16, 1e16 + 2.0]] {
+            assert!(quilt_patches(&invalid).is_err());
+        }
     }
 
     #[test]
@@ -1135,8 +1155,26 @@ mod tests {
         assert!(Warp::try_from_descriptor(&explicit_invalid).is_err());
         let data = placed_layer_data("invalid bounds", [0.0; 8], |d| d.with("quiltWarp", Value::Descriptor(explicit_invalid)));
         assert!(matches!(SmartObject::from_placed_layer_data(&data), Err(PsdError::Unsupported(_))));
-        let missing = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![]);
+        let mut missing = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]);
+        let Value::Descriptor(env) = &mut missing.items.iter_mut().find(|(key, _)| key.is("customEnvelopeWarp")).unwrap().1 else {
+            panic!("envelope")
+        };
+        env.items.retain(|(key, _)| !key.is("quiltSliceY"));
         assert!(Warp::try_from_descriptor(&missing).is_err());
+        let bounds = |top, bottom| {
+            Descriptor::new("bounds")
+                .with("Left", Value::Double(0.0))
+                .with("Top ", Value::Double(top))
+                .with("Rght", Value::Double(20.0))
+                .with("Btom", Value::Double(bottom))
+        };
+        let present = missing.clone().with("bounds", Value::Descriptor(bounds(0.0, 10.0)));
+        let parsed = Warp::try_from_descriptor(&present).unwrap().unwrap();
+        assert_eq!((parsed.cols, parsed.rows), (2, 1));
+        assert_eq!(parsed.bounds, [0.0, 0.0, 20.0, 10.0]);
+        // Even the absent slice axis needs a finite normalization extent.
+        let overflow = missing.with("bounds", Value::Descriptor(bounds(-f64::MAX, f64::MAX)));
+        assert!(Warp::try_from_descriptor(&overflow).is_err());
     }
     #[test]
     fn finite_warp_views_preserve_raw_descriptor_values() {

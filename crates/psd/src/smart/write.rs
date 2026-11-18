@@ -3,7 +3,7 @@
 //! read back. Came from PhotoCraft's `crates/io/src/smart_map/placed.rs`, on this crate's
 //! placement types: the caller works out the quad and the warp from its own geometry.
 
-use super::{SmartObject, Warp};
+use super::{SmartObject, Warp, valid_bounds};
 use crate::descriptor::{Descriptor, Id, ObjectArray, UnicodeString, Value, VersionedDescriptor};
 use crate::io::WriteExt;
 
@@ -124,7 +124,9 @@ impl Warp {
     /// `deformNumCols` × `deformNumRows` of them, and the patch boundaries (`quiltSliceX` /
     /// `quiltSliceY`) evenly across the warp's bounds. Invalid axes use 0..1 because this standalone
     /// method has no content size; the placed-layer writer supplies that size when available.
-    /// `None` for any other warp.
+    /// Canonical boundaries may coincide after rounding at large offsets. The shared reader
+    /// preserves their uniform-model parameterization; external reader interoperability for
+    /// coincident slices is not guaranteed. `None` for any other warp.
     pub fn quilt_descriptor(&self) -> Option<Descriptor> {
         if !self.is_split() {
             return None;
@@ -135,7 +137,17 @@ impl Warp {
         let (l, r) = axis(self.bounds[0], self.bounds[2]);
         let (t, b) = axis(self.bounds[1], self.bounds[3]);
         let slices = |key: &str, n: usize, lo: f64, hi: f64| {
-            let values: Vec<f64> = (0..=n).map(|i| lo + (hi - lo) * (i as f64 / n as f64)).collect();
+            let values: Vec<f64> = (0..=n)
+                .map(|i| {
+                    if i == 0 {
+                        lo
+                    } else if i == n {
+                        hi
+                    } else {
+                        lo + (hi - lo) * (i as f64 / n as f64)
+                    }
+                })
+                .collect();
             let prefix = values.len() as u32;
             Value::ObjectArray(ObjectArray { prefix, body: Descriptor::new("UntF").with(key, Value::UnitFloats { unit: *b"#Pxl", values }) })
         };
@@ -170,7 +182,7 @@ impl SmartObject {
         let mut warp = self.warp.clone().unwrap_or_else(|| Warp::none([0.0, 0.0, w, h]));
         // Match Warp::apply's whole-rectangle fallback before encoding explicit
         // quilt slices. Otherwise default bounds would change the mapping on readback.
-        if warp.is_split() && !(warp.bounds[2] > warp.bounds[0] && warp.bounds[3] > warp.bounds[1]) {
+        if warp.is_split() && !valid_bounds(warp.bounds) {
             warp.bounds = [0.0, 0.0, w, h];
         }
         warp
@@ -313,6 +325,7 @@ mod tests {
             ([f64::NAN, 3.0, 22.0, 13.0], [0.0, 3.0, 1.0, 13.0]),
             ([-f64::MAX, 0.0, f64::MAX, 1.0], [0.0, 0.0, 1.0, 1.0]),
             ([0.0, 0.0, 1e308, 10.0], [0.0, 0.0, 1e308, 10.0]),
+            ([3.0 * 2.0_f64.powi(970), 0.0, f64::MAX, 10.0], [3.0 * 2.0_f64.powi(970), 0.0, f64::MAX, 10.0]),
         ] {
             let warp = Warp { style: "warpCustom".into(), bounds, cols: 2, rows: 1, mesh: grid(2, 1, 20.0, 10.0), ..Warp::default() };
             let descriptor = warp.quilt_descriptor().unwrap();
@@ -332,7 +345,7 @@ mod tests {
         assert_eq!(Warp::try_from_descriptor(&high_offset.quilt_descriptor().unwrap()).unwrap(), Some(high_offset));
         // At the placed-layer boundary content size is available: preserve the
         // evaluator's fallback mapping, not merely the ability to parse the output.
-        for bounds in [[0.0; 4], [2.0, 3.0, 22.0, 3.0], [f64::NAN, 0.0, 20.0, 10.0]] {
+        for bounds in [[0.0; 4], [2.0, 3.0, 22.0, 3.0], [f64::NAN, 0.0, 20.0, 10.0], [-f64::MAX, 0.0, f64::MAX, 10.0]] {
             let warp = Warp { style: "warpCustom".into(), bounds, cols: 2, rows: 1, mesh: grid(2, 1, 20.0, 10.0), ..Warp::default() };
             let so = SmartObject { size: Some([20.0, 10.0]), ..placed(Some(warp.clone())) };
             let bytes = so.to_placed_layer_data(&PlacedLayerOptions::default());
@@ -340,6 +353,36 @@ mod tests {
             let parsed = back.warp.as_ref().unwrap();
             assert_eq!(parsed.bounds, [0.0, 0.0, 20.0, 10.0]);
             for p in [[0.0, 0.0], [5.0, 4.0], [10.0, 5.0], [20.0, 10.0]] {
+                assert_eq!(parsed.apply(p, 20.0, 10.0), warp.apply(p, 20.0, 10.0));
+            }
+            let template = VersionedDescriptor::parse_prefix(&bytes[8..]).unwrap().0.descriptor;
+            let rewritten = back.to_placed_layer_data(&PlacedLayerOptions { template: Some(&template), ..Default::default() });
+            assert_eq!(SmartObject::from_placed_layer_data(&rewritten).unwrap(), back);
+        }
+    }
+    #[test]
+    fn canonically_collapsed_boundaries_preserve_both_axes_mapping() {
+        let lo = 1e16;
+        let hi = lo + 2.0;
+        for (cols, rows, bounds, axis) in
+            [(4, 1, [lo, 0.0, hi, 10.0], "quiltSliceX"), (1, 4, [0.0, lo, 20.0, hi], "quiltSliceY"), (4, 4, [lo, lo, hi, hi], "quiltSliceX")]
+        {
+            let warp = Warp { style: "warpCustom".into(), bounds, cols, rows, mesh: grid(cols, rows, 20.0, 10.0), ..Warp::default() };
+            let descriptor = warp.quilt_descriptor().unwrap();
+            let env = descriptor.get_object("customEnvelopeWarp").unwrap();
+            let Value::ObjectArray(slices) = env.get(axis).unwrap() else { panic!("slices") };
+            let values = slices.body.get_numbers(axis);
+            assert_eq!(values, vec![lo, lo, lo, hi, hi]);
+            // The first, middle and last intervals all have rounded coincident endpoints.
+            assert_eq!(values[0], values[1]);
+            assert_eq!(values[1], values[2]);
+            assert_eq!(values[3], values[4]);
+            let so = placed(Some(warp.clone()));
+            let bytes = so.to_placed_layer_data(&PlacedLayerOptions::default());
+            let back = SmartObject::from_placed_layer_data(&bytes).unwrap();
+            assert_eq!(back.warp, Some(warp.clone()));
+            let parsed = back.warp.as_ref().unwrap();
+            for p in [[bounds[0], bounds[1]], [bounds[2], bounds[1]], [bounds[0], bounds[3]], [bounds[2], bounds[3]]] {
                 assert_eq!(parsed.apply(p, 20.0, 10.0), warp.apply(p, 20.0, 10.0));
             }
             let template = VersionedDescriptor::parse_prefix(&bytes[8..]).unwrap().0.descriptor;
