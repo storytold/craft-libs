@@ -134,7 +134,10 @@ struct Placed {
     detail: Option<Rect>,
     /// The modified mark, right after the last text.
     mark: Option<Rect>,
-    progress: Option<Rect>,
+    /// The band the label, detail and mark share.
+    band: Rect,
+    /// Whether the band cuts the label or the detail.
+    cut: bool,
 }
 
 /// One tab of a strip.
@@ -175,7 +178,6 @@ pub struct Tab<'a> {
     /// The tab's place in its set when it is shown alone; inside a strip the item step gives it.
     #[prop]
     position: Option<SetPosition>,
-    placed: Option<Placed>,
     event: Option<TabPartEvent>,
 }
 
@@ -194,7 +196,6 @@ impl<'a> Tab<'a> {
             progress: None,
             close_label: None,
             position: None,
-            placed: None,
             event: None,
         }
         .label(label)
@@ -221,6 +222,49 @@ impl<'a> Tab<'a> {
     /// The modified mark, in the label's type.
     fn mark_run(&self, style: &TabStyle) -> TextRun<'static> {
         TextRun::new(MARK).role(style.label.role)
+    }
+
+    /// Where the parts lie in `content`, with `natural` the unbounded width of a run. `parts` registers its parts
+    /// here and `paint` paints here, so a tab worn as a face, which runs no `parts`, paints the same.
+    fn place(&self, style: &TabStyle, content: Rect, rtl: bool, label: &str, natural: impl Fn(&TextRun<'_>) -> f32) -> Placed {
+        let sizes = style.sizes;
+        let mut flow = Flow::new(content, rtl);
+        let mut close = None;
+        if self.shows_close() {
+            let at_start = style.close_side == if rtl { CloseSide::Right } else { CloseSide::Left };
+            let (slot, rest) = if at_start { flow.take_start(sizes.close_box) } else { flow.take_end(sizes.close_box) };
+            close = Some(slot);
+            flow = if at_start { rest.take_start(sizes.gap).1 } else { rest.take_end(sizes.gap).1 };
+        }
+        flow = flow.take_end(sizes.tail).1;
+        let mut icon = None;
+        if self.icon.is_some() {
+            let (slot, rest) = flow.take_start(sizes.icon);
+            icon = Some(Rect::from_center_size(slot.center(), Vec2::splat(sizes.icon)));
+            flow = rest.take_start(sizes.gap).1;
+        }
+        let band = flow.rect();
+        let label_natural = natural(&self.label_run(style, label));
+        let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(style.detail.role)));
+        let mark_width = if self.modified { natural(&self.mark_run(style)) } else { 0.0 };
+        let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
+        let label_width = label_natural.min((band.width() - mark_width - detail_gap - detail_natural).max(0.0));
+        let detail_width = detail_natural.min((band.width() - mark_width - label_width - detail_gap).max(0.0));
+        let line = |rect: Rect, height: f32| {
+            let top = if sizes.text_only { content.top() } else { content.center().y - height / 2.0 };
+            Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
+        };
+        let (label, rest) = flow.take_start(label_width);
+        let (detail, after) = if detail_width > 0.0 {
+            let (detail, after) = rest.take_start(detail_gap).1.take_start(detail_width);
+            (Some(line(detail, sizes.detail_line)), after)
+        } else {
+            (None, rest)
+        };
+        let mark = self.modified.then(|| line(after.take_start(mark_width).0, sizes.label_line));
+        let label = line(label, sizes.label_line);
+        let cut = label_width < label_natural || detail_width < detail_natural;
+        Placed { close, icon, label, detail, mark, band, cut }
     }
 
     fn name(&self, label: &str, words: &TabWords) -> String {
@@ -343,60 +387,22 @@ impl Component for Tab<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let sizes = cx.style.sizes;
-        let rtl = cx.flow.is_rtl();
-        let content = cx.content_rect;
-        let mut flow = Flow::new(content, rtl);
-        let mut close = None;
-        if self.shows_close() {
-            let at_start = cx.style.close_side == if rtl { CloseSide::Right } else { CloseSide::Left };
-            let (slot, rest) = if at_start { flow.take_start(sizes.close_box) } else { flow.take_end(sizes.close_box) };
-            close = Some(slot);
-            flow = if at_start { rest.take_start(sizes.gap).1 } else { rest.take_end(sizes.gap).1 };
-        }
-        flow = flow.take_end(sizes.tail).1;
-        let mut icon = None;
-        if self.icon.is_some() {
-            let (slot, rest) = flow.take_start(sizes.icon);
-            icon = Some(Rect::from_center_size(slot.center(), Vec2::splat(sizes.icon)));
-            flow = rest.take_start(sizes.gap).1;
-        }
-        let band = flow.rect();
-        let natural = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
-        let label_natural = natural(&self.label_run(cx.style, cx.resolved.label));
-        let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(cx.style.detail.role)));
-        let mark_width = if self.modified { natural(&self.mark_run(cx.style)) } else { 0.0 };
-        let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
-        let label_width = label_natural.min((band.width() - mark_width - detail_gap - detail_natural).max(0.0));
-        let detail_width = detail_natural.min((band.width() - mark_width - label_width - detail_gap).max(0.0));
-        let line = |rect: Rect, height: f32| {
-            let top = if sizes.text_only { content.top() } else { content.center().y - height / 2.0 };
-            Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
-        };
-        let (label, rest) = flow.take_start(label_width);
-        let (detail, after) = if detail_width > 0.0 {
-            let (detail, after) = rest.take_start(detail_gap).1.take_start(detail_width);
-            (Some(line(detail, sizes.detail_line)), after)
-        } else {
-            (None, rest)
-        };
-        let mark = self.modified.then(|| line(after.take_start(mark_width).0, sizes.label_line));
-        let label = line(label, sizes.label_line);
-        let cut = label_width < label_natural || detail_width < detail_natural;
-        if cut {
+        let placed = self.place(cx.style, cx.content_rect, cx.flow.is_rtl(), cx.resolved.label, |run| cx.layout_at(run, f32::INFINITY).size().x);
+        if placed.cut {
             let full = match self.detail_text() {
                 Some(detail) => format!("{}, {detail}", cx.resolved.label),
                 None => cx.resolved.label.to_owned(),
             };
-            let _ = cx.part(TEXT, band).tooltip(full);
+            let _ = cx.part(TEXT, placed.band).tooltip(full);
         }
-        if let Some(slot) = close {
+        if let Some(slot) = placed.close {
             let name = self.close_label.clone();
             let part = cx.part(CLOSE, slot).sense(Sense::CLICK).pointer_only(CLOSE_REASON);
             if let Some(name) = name {
                 let _ = part.tooltip(name);
             }
         }
+        let sizes = cx.style.sizes;
         let progress = self.progress.map(|_| {
             let bar = cx.face(Progress::new(0.0)).y.min(rect.height());
             Rect::from_min_max(
@@ -407,7 +413,6 @@ impl Component for Tab<'_> {
         if let Some(bar) = progress {
             let _ = cx.part(PROGRESS, bar);
         }
-        self.placed = Some(Placed { close, icon, label, detail, mark, progress });
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -437,11 +442,11 @@ impl Component for Tab<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let Some(placed) = self.placed.take() else { return };
         let (style, rect) = (cx.style, cx.rect);
         let sizes = style.sizes;
         let selected = cx.resolved.selected == Some(true) || cx.state().flags.contains(Flags::SELECTED);
         let draw = ui.draw();
+        let placed = self.place(style, cx.content_rect, cx.flow.is_rtl(), cx.resolved.label, |run| draw.layout(run, f32::INFINITY).size().x);
         if style.divider {
             draw.edge_rule(RuleKind::Divider, rect, RectSide::end(cx.flow.is_rtl()));
         }
@@ -478,7 +483,7 @@ impl Component for Tab<'_> {
             };
             ui.face(CLOSE, IconButton::new(IconId::new("close")).label(name));
         }
-        if let (Some(_), Some(fraction)) = (placed.progress, self.progress) {
+        if let Some(fraction) = self.progress {
             ui.face(PROGRESS, Progress::new(fraction).label(cx.resolved.label.to_owned()));
         }
     }
