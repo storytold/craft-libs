@@ -176,8 +176,7 @@ pub mod android {
             for s in &self.strings {
                 string_offs.push(at(&d));
                 uleb(&mut d, s.encode_utf16().count() as u32);
-                for ch in s.chars() {
-                    let c = ch as u32;
+                for c in s.encode_utf16() {
                     if c == 0 {
                         d.extend_from_slice(&[0xc0, 0x80]);
                     } else if c < 0x80 {
