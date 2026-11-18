@@ -2241,6 +2241,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rfd",
+ "serde_json",
  "zbus",
 ]
 
@@ -3974,6 +3975,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "craft-behavior",
+ "craft-codepage",
  "craft-font-catalog",
  "craft-fonts-build",
  "craft-host",
