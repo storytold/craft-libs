@@ -1,6 +1,6 @@
 //! Stories of the Foundations cards.
 
-use super::{Colours, EditPolicy};
+use super::{Colours, EditPolicy, PointerLooks};
 use craft_behavior::EditPolicy as Policy;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -23,5 +23,12 @@ fn write_through(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(EditPolicy, covers = [], drive = Drive::Never, group = "Event log", title = "On commit")]
 fn on_commit(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     EditPolicy::new(Policy::OnCommit).show(ui);
+    StoryOutput::default()
+}
+
+// The painted pointers at three scales, as the window takes them (owed by chrome-w2: canvas-w3's card, cv.K29).
+#[story(PointerLooks, covers = [], drive = Drive::Never, title = "Pointer looks")]
+fn pointer_looks(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    PointerLooks::new().show(ui);
     StoryOutput::default()
 }
