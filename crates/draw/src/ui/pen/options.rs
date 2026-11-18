@@ -125,6 +125,10 @@ impl<'a> PathOptionsPopover<'a> {
     pub fn show(mut self, ui: &mut Ui, open: &mut bool) -> PathOptionsOutput {
         let words = Env::of(ui).words::<PathOptionsWords>();
         let gear = IconButton::new(IconId::new("settings")).label(words.title.clone()).show(ui).response;
+        // The popover hangs from the gear with a manual opener: the gear's click is the pattern's to apply.
+        if craft_ui::contract::clicked(&gear) {
+            *open = !*open;
+        }
         let (mut edit, mut pick_color) = (None, None);
         let (settings, default_color, rubber_band) = (&mut self.settings, self.default_color, self.rubber_band);
         let _shown = Popover::new(self.label.clone(), Bind::bound(open)).opened_by(&gear).show(ui, |ui, cx| {

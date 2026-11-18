@@ -583,3 +583,25 @@ fn only_the_pens_path_options_show_the_rubber_band() {
         assert!(host.borrow().0.rubber_band, "pen {pen}: the setting is left as it is");
     }
 }
+
+/// A click on the gear opens the popover and a second click closes it, as the gear's own description says.
+#[trial]
+fn a_click_on_the_gear_opens_and_closes_the_path_options() {
+    let host = Rc::new(RefCell::new((PathOptionsSettings::default(), false)));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let (settings, open) = &mut *held;
+        let _ = PathOptionsPopover::new("Pen options", Bind::bound(settings)).show(ui, open);
+    });
+    fixture.settle();
+    let gear = fixture.by_label("Path Options").expect("the gear");
+    fixture.click(&gear);
+    fixture.idle(3);
+    assert!(host.borrow().1, "the click opens it");
+    assert!(fixture.by_label("Thickness").is_some(), "the popover shows");
+    let gear = fixture.by_label("Path Options").expect("the gear");
+    fixture.click(&gear);
+    fixture.idle(3);
+    assert!(!host.borrow().1, "a second click closes it");
+}
