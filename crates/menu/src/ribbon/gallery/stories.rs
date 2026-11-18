@@ -75,7 +75,7 @@ fn open_more(fixture: &mut Fixture) {
     fixture.idle(2);
 }
 
-#[story(Gallery<'static, usize>, covers = [], drive = Drive::Custom(open_more))]
+#[story(Gallery<'static, usize>, covers = [Open], drive = Drive::Custom(open_more))]
 fn gallery_more_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     pictured(ui)
 }
@@ -105,13 +105,4 @@ fn gallery_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .map(|at| GalleryItem { key: at, label: name(at), face: GalleryFace::Rendered { key: at as u64, thumbnails: &thumbnails, source: &source } })
         .collect();
     show(ui, &items)
-}
-
-#[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
-fn gallery_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    with_env(
-        ui,
-        |set| set.direction = Some(craft_i18n::Direction::Rtl),
-        |ui| pictured(ui),
-    )
 }
