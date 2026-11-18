@@ -1259,7 +1259,7 @@ mod tests {
                             env.items.push((Id::new(key), Value::UnitFloats { unit: *b"#Pxl", values: vec![0.0, end] }));
                         }
                     }
-                    let expected = |quilt| {
+                    let expected = |quilt: bool| {
                         if bounds.is_none() { axes == 0 || axes == 3 } else { *valid || (!quilt && axes == 0) }
                     };
                     assert_eq!(
