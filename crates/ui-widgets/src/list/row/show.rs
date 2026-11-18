@@ -147,6 +147,12 @@ impl Component for ListRow<'_> {
             let runs = [run];
             DocText::new(&runs).layout(cx.ui.ctx(), cx.tokens, cx.env.text_direction()).size()
         });
+        if self.lines.is_some() {
+            eprintln!(
+                "DIAG row measure: proposal {:?} room {:?} probe.label {:?} toggles {toggles} band {band} wrapped {wrapped} height {height}",
+                cx.proposal, cx.room, probe.label
+            );
+        }
         let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
         let text = sizes.label_line + detail + self.progress_line(sizes) + wrapped + self.below_height(sizes);
         let height = if self.lines.is_some() || self.progress.is_some() || !self.below.is_empty() {
@@ -268,15 +274,10 @@ impl Component for ListRow<'_> {
         let role = cx.style.cell.role;
         for (at, position, cell) in &placed.statuses {
             let cell = Rect::from_x_y_ranges(cell.x_range(), rect.y_range());
-            let slots = self.status_slots(
-                *at,
-                cell,
-                &cx.style.sizes,
-                cx.flow.is_rtl(),
-                role,
-                &|run| cx.layout_at(run, f32::INFINITY).size().x,
-                &|action| cx.face(action_link(action, role)).x,
-            );
+            let slots =
+                self.status_slots(*at, cell, &cx.style.sizes, cx.flow.is_rtl(), role, &|run| cx.layout_at(run, f32::INFINITY).size().x, &|action| {
+                    cx.face(action_link(action, role)).x
+                });
             let status = &self.statuses[*at].status;
             if let Some(tip) = &status.tip {
                 // The tip covers the icon and the text; the action keeps its own pointer target beside them.

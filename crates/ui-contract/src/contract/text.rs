@@ -467,6 +467,7 @@ pub(crate) fn run<C: Component>(
     let back_from_menu = menu_held && state.held_selection.is_none();
     if out.focused && !left_for_part && !was_focused && !back_from_menu {
         let len = decl.shown.chars().count();
+        eprintln!("DIAG text focus select: widget {widget:?} caret {:?} len {len} was_focused {was_focused}", decl.caret);
         match decl.caret {
             Caret::All => adapter::select(&ctx, widget, 0, len),
             _ => adapter::select(&ctx, widget, len, len),

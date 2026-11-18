@@ -1418,7 +1418,12 @@ fn a_rename_editor_selects_the_name_once_keeps_the_caret_and_escape_cancels() {
     fixture.settle();
     let field = egui_focused(fixture.ctx()).expect("the rename field takes the focus");
     assert_eq!(caret(fixture.ctx(), field), Some(name.chars().count()), "the field opens with the whole name selected");
-    fixture.key(Key::Home, Modifiers::NONE).idle(3);
+    fixture.key(Key::Home, Modifiers::NONE);
+    eprintln!("DIAG rename caret: right after Home {:?} focused {:?}", caret(fixture.ctx(), field), egui_focused(fixture.ctx()) == Some(field));
+    for frame in 0..3 {
+        fixture.idle(1);
+        eprintln!("DIAG rename caret: idle {frame} {:?} focused {:?}", caret(fixture.ctx(), field), egui_focused(fixture.ctx()) == Some(field));
+    }
     assert_eq!(caret(fixture.ctx(), field), Some(0), "later frames keep the caret the user put");
     fixture.key(Key::Escape, Modifiers::NONE).settle();
     assert!(edits(&seen).is_empty(), "Escape ends the rename with no edit: {:?}", seen.borrow());

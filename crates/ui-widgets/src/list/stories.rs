@@ -103,11 +103,6 @@ fn list_row_status_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
                 Rect::from_min_max(Pos2::new(2.0 * left + width - cell.max.x, cell.min.y), Pos2::new(2.0 * left + width - cell.min.x, cell.max.y));
         }
     }
-    eprintln!(
-        "DIAG suite ListRow variants rtl list_row_status_cell: rtl {} left {left} width {width} cursor {:?} cells {cells:?}",
-        Env::of(ui).view().direction().is_rtl(),
-        ui.cursor()
-    );
     let status = CellStatus::new(Tone::Warn, "2 warnings")
         .tip("The file has form fields that will be flattened.\nIts bookmarks point to pages that are not kept.")
         .action("Details");

@@ -902,7 +902,21 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let moved = Vec2::new(0.0, (self.offset - self.offset_at_read) as f32);
         let room = (Vec2::new(0.0, self.offset as f32), Vec2::new(0.0, (self.max_offset(view.y) - self.offset) as f32));
+        if named.is_some() {
+            eprintln!(
+                "DIAG zoom-follow: anchor at {:?} placed.anchor {:?} first {:?} offset {} at_read {} room {room:?} content {:?} visible {:?} source {}",
+                self.anchor.map(|anchor| anchor.at),
+                placed.anchor,
+                placed.first.map(|(_, at)| at),
+                self.offset,
+                self.offset_at_read,
+                self.content,
+                self.visible,
+                source.len()
+            );
+        }
         if let Some(shift) = lazy::follow(&mut self.anchor, &placed, moved, view, room, (false, true)) {
+            eprintln!("DIAG zoom-follow: shift {shift:?}");
             self.offset += f64::from(shift.y);
             log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "collection {id:?} keeps its anchor row in place by {shift:?}");
             crate::runtime::egui::sizing::request_discard(ctx, crate::runtime::egui::sizing::Rerun::Layout);

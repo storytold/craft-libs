@@ -166,6 +166,13 @@ impl ListRow<'_> {
             draw.layout(&run, self.text_block(label, sizes, 0.0).0.width())
         });
         let lines = wrapped.as_ref().map_or(0.0, |layout| sizes.gap + layout.size().y);
+        if let Some(layout) = &wrapped {
+            eprintln!(
+                "DIAG row paint: label {label:?} text_block width {} wrapped size {:?}",
+                self.text_block(label, sizes, 0.0).0.width(),
+                layout.size()
+            );
+        }
         let (label, mut top) = self.text_block(label, sizes, lines + self.below_height(sizes));
         // A heading's detail sits at the end of the label's line and the title is cut to what it leaves.
         let beside = match (&self.detail, self.heading) {
@@ -270,15 +277,8 @@ impl ListRow<'_> {
             let action = {
                 let draw = ui.draw();
                 // The action's slot is its part's rect, which `parts` declared from the link's measured width.
-                let slots = self.status_slots(
-                    *at,
-                    cell,
-                    sizes,
-                    rtl,
-                    role,
-                    &|run| draw.layout(run, f32::INFINITY).size().x,
-                    &|_| cx.part(part).rect.width(),
-                );
+                let slots =
+                    self.status_slots(*at, cell, sizes, rtl, role, &|run| draw.layout(run, f32::INFINITY).size().x, &|_| cx.part(part).rect.width());
                 if let (Some(slot), Some(icon)) = (slots.icon, tone_icon(status.tone)) {
                     draw.icon(Rect::from_center_size(slot.center(), Vec2::splat(sizes.mark)), &IconSpec::svg(IconId::new(icon)).color(ink));
                 }
