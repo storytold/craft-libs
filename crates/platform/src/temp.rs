@@ -121,18 +121,24 @@ fn check_plain(name: &str) -> std::io::Result<()> {
 /// `is_symlink()` is never true.
 // cadcraft: crates/ui-egui/src/control.rs:609 is_private_shot_dir
 pub fn is_private_dir(meta: &Metadata) -> bool {
-    if !meta.is_dir() || meta.file_type().is_symlink() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        meta.permissions().mode() & 0o077 == 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    // A real directory, so nothing is followed, whose mode grants group and other nothing; the
+    // mode comes off this same snapshot, never a second stat.
+    meta.is_dir() && !meta.file_type().is_symlink() && has_private_mode(meta)
+}
+
+/// The Unix half of [`is_private_dir`]: `meta`'s mode has no group or other permission bit. It
+/// reads the mode off the same snapshot the caller was given, so it never stats another file.
+#[cfg(unix)]
+fn has_private_mode(meta: &Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    meta.permissions().mode() & 0o077 == 0
+}
+
+/// Without Unix mode bits, the documented fallback accepts a real directory once the caller has
+/// rejected files and symlinks; this does not inspect or make a claim about platform ACLs.
+#[cfg(not(unix))]
+fn has_private_mode(_meta: &Metadata) -> bool {
+    true
 }
 
 /// Temporary folders the app owns until it is done with them: print previews open in the system

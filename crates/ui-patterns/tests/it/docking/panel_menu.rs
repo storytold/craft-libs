@@ -4,7 +4,7 @@
 use craft_behavior::Axis;
 use craft_behavior::PartKey;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, Role, ShowContainer as _};
 use craft_ui::docking::{DockConfig, DockPanels, PanelSpec, WindowMenuRows};
 use craft_ui::menu::{Menu, PanelRow};
 use craft_ui::patterns::dock::DockArea;
