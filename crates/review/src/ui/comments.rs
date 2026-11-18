@@ -5,7 +5,7 @@
 //! for edit in out.edits {
 //!     match edit {
 //!         CommentEdit::Add { text } => doc.add_note(text),
-//!         CommentEdit::Select(thread) => doc.select(thread),
+//!         CommentEdit::Select(threads) => doc.select(threads),
 //!         _ => {}
 //!     }
 //! }
@@ -18,8 +18,6 @@ mod row;
 mod stories;
 
 use std::collections::BTreeMap;
-
-use std::marker::PhantomData;
 
 use craft_behavior::{Selection, Value};
 use craft_i18n::{DateStyle, DateTime, TimeZone};
@@ -39,6 +37,7 @@ use crate::comments::{CommentFilter, CommentSort, CommentThread, PageOrder, Revi
 
 use list::{CardEvent, CardKey, CommentList, RowEntry, Rows};
 use menus::{card_menu, filter_menu, pages_menu, sort_menu};
+pub use menus::{comments_filter_menu, comments_more_menu};
 use row::{CommentRow, MORE};
 
 /// Ages under this many seconds (one week) read relative; older ones read as a date.
@@ -79,6 +78,7 @@ craft_ui::words! {
         unknown_author: "comments.unknownAuthor" = "Unknown author";
         page: template "comments.page" = "Page {label}";
         card_name: template "comments.cardName" = "{author}: {text}";
+        reviewer_status: template "comments.reviewerStatus" = "{reviewer}: {status}";
         plain_kind: "comments.plainKind" = "Comment";
         no_color: "comments.noColor" = "No color";
         no_match: "comments.noMatch" = "No comments match.";
@@ -115,7 +115,7 @@ pub struct CommentsPanelState {
     pub filter: CommentFilter,
     /// The pages whose group is folded under the Page sort.
     pub collapsed_pages: Vec<usize>,
-    /// The selected threads.
+    /// The selected threads; the first is the lead, whose card shows the reply box.
     pub selected: Selection<ThreadId>,
     /// The search box is open.
     pub search_open: bool,
@@ -137,11 +137,11 @@ struct Line {
 }
 
 impl CommentsPanelState {
-    /// Selects `thread` as a click on its card does, and unfolds its page group: for a comment
-    /// the app selected elsewhere (on the page, or just added), whose card must be drawn.
+    /// Selects only `thread`, and has the next `show` unfold its page group and scroll its card into view: for a
+    /// comment the app selected elsewhere (on the page, or just added), whose card must be drawn.
     pub fn reveal(&mut self, thread: ThreadId) {
-        select_thread(self, thread);
-        self.revealing = Some(thread); // P3(pdf-comments-w4): CM-C21 (`show` unfolds the page group and takes it)
+        set_selection(self, Selection::single(thread));
+        self.revealing = Some(thread);
     }
 }
 
@@ -181,7 +181,7 @@ pub enum CommentEdit {
         /// Message index; 0 deletes the whole thread.
         index: usize,
     },
-    /// Set a thread's review status.
+    /// Set a thread's review status; the app records it for its current user.
     #[non_exhaustive]
     SetStatus {
         #[allow(missing_docs)]
@@ -197,7 +197,8 @@ pub enum CommentEdit {
         #[allow(missing_docs)]
         marked: bool,
     },
-    /// A card was selected: the app selects the annotation on the page and scrolls to it.
+    /// The selected cards changed, the lead first: the app selects the annotations on the page and scrolls to the
+    /// lead's.
     Select(Vec<ThreadId>),
     /// Copy text of message `index`; the app puts it on the clipboard.
     #[non_exhaustive]
@@ -239,8 +240,11 @@ pub enum CommentEdit {
     },
 }
 
-/// "5 min ago" under a week, then the date.
+/// "5 min ago" under a week, then the date; nothing for `then` 0, a message or version that carries no date.
 pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
+    if then == 0 {
+        return String::new();
+    }
     let age = now.saturating_sub(then).max(0).unsigned_abs();
     if age < AGE_SHOWN_AS_DATE {
         env.relative_age(age, AgeStyle::Short)
@@ -251,20 +255,22 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
 
 /// Acrobat's right-hand comment list.
 ///
-/// - Header "Comments N" with "N replies" under it, search, the Sort by menu, the funnel menu
-///   ([`CommentFilter`]: Type, Author, Status, Color, Checkmark rows that hide what they name) and,
-///   under the Page sort, a menu with Collapse all pages and Expand all pages. A search or filter
-///   that leaves nothing shows "No comments match."
+/// - Header ([`CommentsHeader::Own`]) "Comments N" with "N replies" under it, search, the Sort by menu, the funnel
+///   menu ([`CommentFilter`]: Type, Author, Status, Color, Checkmark rows that hide what they name) and, under the
+///   Page sort, a menu with Collapse all pages and Expand all pages. Under [`CommentsHeader::Hosted`] the host draws
+///   the header and places [`comments_more_menu`] and [`comments_filter_menu`]; the panel shows the search box while
+///   [`CommentsPanelState::search_open`]. A search or filter that leaves nothing shows "No comments match."
 /// - "Add a comment" box: a field whose Enter posts a sticky note.
 /// - Cards in one collection, grouped under headings by [`sort_threads`]; under the Page sort a
 ///   heading names the page, shows the count of the page's comments before filtering and folds its
 ///   cards. A card shows the kind's icon, author, age (relative under a week, then the date), the
-///   text, a status icon, the checkmark, a lock icon and the replies, each with its own "..." menu.
-/// - The selected card has the accent bar, the reply box and "..." (Edit, Set status, Delete).
-///   Locked threads and `read_only` hide the editing items.
-/// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the selected
-///   card's reply box, Cmd+Enter (Ctrl+Enter off macOS) in the reply box or an inline editor posts,
-///   Escape in a control of a card returns to the card.
+///   text, a badge per reviewer's status, the checkmark, a lock icon and the replies, each with its own "..." menu.
+/// - Selected cards have the highlight; the lead (the first selected) has the accent bar, the reply box and "..."
+///   (Edit, Set status, Delete, then the host's [`card_rows`](CommentsPanel::card_rows)). Locked threads and
+///   `read_only` hide the editing items. A double click on a card edits its comment in place.
+/// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the lead card's reply box,
+///   the [`reply_submit`](CommentsPanel::reply_submit) key in the reply box and Cmd+Enter (Ctrl+Enter off macOS) in
+///   an inline editor post, Escape in a control of a card returns to the card.
 ///
 /// ```ignore
 /// let out = CommentsPanel::new("Comments", &threads, &mut state).now(now).show(ui);
@@ -279,7 +285,11 @@ pub struct CommentsPanel<'a, H: Value = NoHostRow> {
     read_only: bool,
     now: i64,
     page_label: Option<Box<dyn Fn(usize) -> String + 'a>>,
-    host_rows: PhantomData<H>,
+    header: CommentsHeader,
+    page_order: PageOrder,
+    reply_submit: SubmitKey,
+    select_mode: SelectMode,
+    host_rows: Option<Box<dyn Fn(&CommentThread, usize) -> Vec<Entry<H>> + 'a>>,
 }
 
 /// The host row type of a panel whose cards' menus take no host rows: it has no value.
@@ -301,50 +311,69 @@ impl<'a> CommentsPanel<'a> {
     /// The panel named `label` over `threads`. The edits carry only the text; the app signs new
     /// comments with its own identity.
     pub fn new(label: impl Into<Label>, threads: &'a [CommentThread], state: &'a mut CommentsPanelState) -> Self {
-        CommentsPanel { label: label.into(), threads, state, read_only: false, now: 0, page_label: None, host_rows: PhantomData }
+        CommentsPanel {
+            label: label.into(),
+            threads,
+            state,
+            read_only: false,
+            now: 0,
+            page_label: None,
+            header: CommentsHeader::Own,
+            page_order: PageOrder::default(),
+            reply_submit: SubmitKey::default(),
+            select_mode: SelectMode::Single,
+            host_rows: None,
+        }
     }
 
     /// The rows a card's menu appends behind a separator, from the thread and the card's message index; a row the
     /// user picks is reported as `CommentsPanelOutput::host`.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w4): CM-C22
     pub fn card_rows<H: Value>(self, rows: impl Fn(&CommentThread, usize) -> Vec<Entry<H>> + 'a) -> CommentsPanel<'a, H> {
-        let _ = rows;
-        todo!("CM-C22")
+        let CommentsPanel { label, threads, state, read_only, now, page_label, header, page_order, reply_submit, select_mode, host_rows: _ } = self;
+        CommentsPanel {
+            label,
+            threads,
+            state,
+            read_only,
+            now,
+            page_label,
+            header,
+            page_order,
+            reply_submit,
+            select_mode,
+            host_rows: Some(Box::new(rows)),
+        }
     }
 }
 
 impl<'a, H: Value> CommentsPanel<'a, H> {
     /// Who draws the header.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w4): CM-C22
-    pub fn header(self, header: CommentsHeader) -> Self {
-        let _ = header;
-        todo!("CM-C22")
+    pub fn header(mut self, header: CommentsHeader) -> Self {
+        self.header = header;
+        self
     }
 
     /// How threads on one page are ordered under the Page sort.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w4): CM-C22
-    pub fn page_order(self, order: PageOrder) -> Self {
-        let _ = order;
-        todo!("CM-C22")
+    pub fn page_order(mut self, order: PageOrder) -> Self {
+        self.page_order = order;
+        self
     }
 
     /// The key that submits the reply box; an inline editor keeps `CommandEnter`.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w4): CM-C22
-    pub fn reply_submit(self, key: SubmitKey) -> Self {
-        let _ = key;
-        todo!("CM-C22")
+    pub fn reply_submit(mut self, key: SubmitKey) -> Self {
+        self.reply_submit = key;
+        self
     }
 
     /// How a click selects cards.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w4): CM-C22
-    pub fn select_mode(self, mode: SelectMode) -> Self {
-        let _ = mode;
-        todo!("CM-C22")
+    pub fn select_mode(mut self, mode: SelectMode) -> Self {
+        self.select_mode = mode;
+        self
     }
 
     /// No posting or editing (a document that forbids comments).
@@ -379,27 +408,6 @@ pub struct CommentsPanelOutput<H = NoHostRow> {
     pub host: Option<(ThreadId, usize, H)>,
 }
 
-/// The panel's More menu: Collapse all pages, Expand all pages and the host's `host_rows`; the row picked. The
-/// `Own` header calls the same function.
-#[allow(dead_code)] // P3(pdf-comments-w4): CM-C23
-pub fn comments_more_menu<H: Value>(
-    ui: &mut Ui,
-    opener: &Response,
-    threads: &[CommentThread],
-    state: &mut CommentsPanelState,
-    host_rows: &[Entry<H>],
-) -> Option<H> {
-    let _ = (ui, opener, threads, state, host_rows);
-    todo!("CM-C23")
-}
-
-/// The panel's filter menu over `threads`; the `Own` header calls the same function.
-#[allow(dead_code)] // P3(pdf-comments-w4): CM-C23
-pub fn comments_filter_menu(ui: &mut Ui, opener: &Response, threads: &[CommentThread], state: &mut CommentsPanelState) {
-    let _ = (ui, opener, threads, state);
-    todo!("CM-C23")
-}
-
 impl<H: Value> Outcome for CommentsPanelOutput<H> {
     type Value = NoValue;
 
@@ -426,6 +434,8 @@ enum CardMenu {
     Status(ReviewStatus),
     Copy,
     Delete,
+    /// The host row at this index of the card's host rows.
+    Host(usize),
 }
 
 /// Adds `value` to `list`, or takes it out when it is there.
@@ -438,15 +448,46 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, value: T) {
     }
 }
 
-/// Makes `thread` the selected one; false when it already was.
-fn select_thread(state: &mut CommentsPanelState, thread: ThreadId) -> bool {
-    let changed = state.selected.lead != Some(thread); // P3(pdf-comments-w4): CM-C21
-    if changed {
-        state.selected = Selection::single(thread);
+/// Makes `next` the selection; true when its threads changed. A new lead drops the reply draft and the inline edit,
+/// which belong to the old lead's card.
+fn set_selection(state: &mut CommentsPanelState, next: Selection<ThreadId>) -> bool {
+    let changed = next.items != state.selected.items;
+    if next.lead != state.selected.lead {
         state.reply.clear();
         state.editing = None;
     }
+    state.selected = next;
     changed
+}
+
+/// The card collection's selection of the threads in `selected`, in its order.
+fn card_selection(selected: &Selection<ThreadId>) -> Selection<CardKey> {
+    Selection::new(selected.items.iter().copied().map(CardKey::Thread).collect(), selected.lead.map(CardKey::Thread), selected.anchor.map(CardKey::Thread))
+}
+
+/// The threads the collection's `selection` holds, headings left out.
+fn thread_selection(selection: &Selection<CardKey>) -> Selection<ThreadId> {
+    let thread = |key: &CardKey| match key {
+        CardKey::Thread(id) => Some(*id),
+        CardKey::Group(_) => None,
+    };
+    Selection::new(
+        selection.items.iter().filter_map(thread).collect(),
+        selection.lead.as_ref().and_then(thread),
+        selection.anchor.as_ref().and_then(thread),
+    )
+}
+
+/// The selected threads in the order [`CommentEdit::Select`] reports them: the lead first.
+fn lead_first(selected: &Selection<ThreadId>) -> Vec<ThreadId> {
+    let mut items = selected.items.clone();
+    if let Some(lead) = selected.lead
+        && let Some(at) = items.iter().position(|id| *id == lead)
+    {
+        let lead = items.remove(at);
+        items.insert(0, lead);
+    }
+    items
 }
 
 fn status_label(words: &CommentsWords, status: ReviewStatus) -> &Label {
@@ -494,27 +535,43 @@ fn group_of(
 impl<H: Value> CommentsPanel<'_, H> {
     /// Shows the panel and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> CommentsPanelOutput<H> {
-        let CommentsPanel { label, threads, state, read_only, now, page_label, host_rows: _ } = self;
+        let CommentsPanel { label, threads, state, read_only, now, page_label, header, page_order, reply_submit, select_mode, host_rows } = self;
         let env = Env::of(ui);
         let words = env.words::<CommentsWords>();
         let kinds = env.words::<AnnotateWords>();
         let folder = env.folder();
         let format = env.format();
         let page_label = page_label.unwrap_or_else(|| Box::new(|page: usize| page.to_string()));
+        // A reveal is a request for one pass: this one unfolds the thread's page and scrolls its card in, so later
+        // passes leave the list where the user puts it.
+        let revealing = state.revealing.take();
+        if let Some(page) = revealing.and_then(|id| threads.iter().find(|thread| thread.id == id)).and_then(|thread| thread.anchor.page()) {
+            state.collapsed_pages.retain(|&folded| folded != page);
+        }
         let mut edits = Vec::new();
+        let mut host = None;
         let body = |ui: &mut Ui, _: &mut craft_ui::contract::BodyCx<'_>| -> Response {
             let digits = |n: usize| format.integer(n as u64);
-            let replies: usize = threads.iter().map(CommentThread::replies).sum();
-            Text::new(words.title.fill(&[("n", &digits(threads.len()))])).role(TypeRole::Title).show(ui);
-            Text::new(words.replies.text(replies as u64, &digits(replies))).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-            TextField::search(words.search.clone(), Bind::bound(&mut state.search)).placeholder(words.search.clone()).show(ui);
-            Row::new().show(ui, |ui, _| {
-                sort_menu(ui, &words, state);
-                filter_menu(ui, &words, &kinds, threads, state);
-                if state.sort == CommentSort::Page {
-                    pages_menu(ui, &words, threads, state);
+            match header {
+                CommentsHeader::Own => {
+                    let replies: usize = threads.iter().map(CommentThread::replies).sum();
+                    Text::new(words.title.fill(&[("n", &digits(threads.len()))])).role(TypeRole::Title).show(ui);
+                    Text::new(words.replies.text(replies as u64, &digits(replies))).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                    TextField::search(words.search.clone(), Bind::bound(&mut state.search)).placeholder(words.search.clone()).show(ui);
+                    Row::new().show(ui, |ui, _| {
+                        sort_menu(ui, &words, state);
+                        filter_menu(ui, &words, &kinds, threads, state);
+                        if state.sort == CommentSort::Page {
+                            pages_menu(ui, &words, threads, state);
+                        }
+                    });
                 }
-            });
+                CommentsHeader::Hosted => {
+                    if state.search_open {
+                        TextField::search(words.search.clone(), Bind::bound(&mut state.search)).placeholder(words.search.clone()).show(ui);
+                    }
+                }
+            }
             if !read_only {
                 let field = TextField::new(words.add_comment.clone(), Bind::bound(&mut state.new_comment))
                     .placeholder(words.add_comment.clone())
@@ -531,7 +588,7 @@ impl<H: Value> CommentsPanel<'_, H> {
             }
             let query = state.search.trim().to_owned();
             let kind_of = |kind: AnnotationKind| kind_name(&words, &kinds, Some(kind));
-            let shown: Vec<&CommentThread> = sort_threads(threads, state.sort, PageOrder::default(), kind_of) // P3(pdf-comments-w4): CM-C20
+            let shown: Vec<&CommentThread> = sort_threads(threads, state.sort, page_order, kind_of)
                 .into_iter()
                 .map(|i| &threads[i])
                 .filter(|thread| state.filter.shows(thread))
@@ -582,40 +639,48 @@ impl<H: Value> CommentsPanel<'_, H> {
                 }
             }
             let source = Rows { entries };
-            let selected = state.selected.lead; // P3(pdf-comments-w4): CM-C21
-            let mut selection = selected.map_or_else(Selection::default, |thread| Selection::single(CardKey::Thread(thread)));
+            let lead = state.selected.lead;
+            let chosen = state.selected.items.clone();
+            let mut selection = card_selection(&state.selected);
             let reply: &str = &state.reply;
             let editing = state.editing.as_ref().map(|(thread, index, text)| (*thread, *index, text.as_str()));
             let mut openers = Vec::new();
-            let out =
-                CommentList::new(label.clone(), Some(Bind::bound(&mut selection)), grouped).show_items(ui, &source, &mut |_, item| match &source
-                    .entries[item.at]
-                    .1
-                {
+            let out = CommentList::new(label.clone(), Some(Bind::bound(&mut selection)), grouped, select_mode)
+                .revealing(revealing.map(CardKey::Thread))
+                .show_items(ui, &source, &mut |_, item| match &source.entries[item.at].1 {
                     RowEntry::Group { title, count, open, .. } => CommentRow::heading(title.clone(), count.clone(), *open),
                     RowEntry::Card { thread, .. } => {
                         let name = thread
                             .messages
                             .first()
                             .map_or_else(String::new, |first| words.card_name.fill(&[("author", &first.author), ("text", &first.text)]));
-                        let is_selected = selected == Some(thread.id);
+                        let is_lead = lead == Some(thread.id);
                         let editing = editing.filter(|(id, ..)| *id == thread.id).map(|(_, index, text)| (index, text));
-                        if is_selected {
+                        if is_lead {
                             openers.extend((0..thread.messages.len()).map(|index| (index, item.part_opener(MORE.at(index as u64)))));
                         }
                         CommentRow::card(thread, name)
-                            .state(is_selected, !read_only && !thread.locked, now)
-                            .focus_reply(is_selected && item.row.activated_by_key)
-                            .drafts(editing, if is_selected { reply } else { "" })
+                            .state(chosen.contains(&thread.id), !read_only && !thread.locked, now)
+                            .lead(is_lead)
+                            .focus_reply(is_lead && item.row.activated_by_key)
+                            .submit_key(reply_submit)
+                            .drafts(editing, if is_lead { reply } else { "" })
                     }
                 });
             let list = out.response.clone();
+            let clicks = out.activation_clicks;
             let buttons: Vec<(usize, Response)> =
                 openers.into_iter().filter_map(|(index, opener)| Some((index, out.opener(opener)?.clone()))).collect();
             let group_page = |at: usize| match source.entries.iter().find(|(key, _)| *key == CardKey::Group(at)) {
                 Some((_, RowEntry::Group { page, .. })) => *page,
                 _ => None,
             };
+            let picked = thread_selection(&selection);
+            // A click on a heading picks the heading alone: the threads stay selected.
+            let headings_only = picked.items.is_empty() && !selection.items.is_empty();
+            if !headings_only && set_selection(state, picked) {
+                edits.push(CommentEdit::Select(lead_first(&state.selected)));
+            }
             for event in out.events {
                 match event {
                     CollectionEvent::Item(_, card_events) => {
@@ -627,6 +692,13 @@ impl<H: Value> CommentsPanel<'_, H> {
                     CollectionEvent::Activate(CardKey::Group(at)) => {
                         if let Some(page) = group_page(at) {
                             toggle(&mut state.collapsed_pages, page);
+                        }
+                    }
+                    // A double click on a card edits its comment in place.
+                    CollectionEvent::Activate(CardKey::Thread(id)) if clicks == 2 && !read_only => {
+                        if let Some(thread) = threads.iter().find(|thread| thread.id == id && !thread.locked) {
+                            let text = thread.messages.first().map(|message| message.text.clone()).unwrap_or_default();
+                            state.editing = Some((id, 0, text));
                         }
                     }
                     CollectionEvent::Open(change) => {
@@ -642,16 +714,13 @@ impl<H: Value> CommentsPanel<'_, H> {
                     _ => {}
                 }
             }
-            if let Some(CardKey::Thread(thread)) = selection.items.first().copied()
-                && select_thread(state, thread)
-            {
-                edits.push(CommentEdit::Select(vec![thread])); // P3(pdf-comments-w4): CM-C21
-            }
-            if let Some(thread) = state.selected.lead.and_then(|selected| threads.iter().find(|thread| thread.id == selected)) {
+            // The "..." buttons are the card drawn as the lead this pass.
+            if let Some(thread) = lead.and_then(|selected| threads.iter().find(|thread| thread.id == selected)) {
                 let editable = !read_only && !thread.locked;
                 for (index, button) in &buttons {
-                    if let Some(action) = card_menu(ui, &words, button, *index, thread, editable) {
-                        apply_menu(action, thread, *index, state, &mut edits);
+                    let rows = host_rows.as_ref().map_or_else(Vec::new, |rows| rows(thread, *index));
+                    if let Some(action) = card_menu(ui, &words, button, *index, thread, editable, &rows) {
+                        apply_menu(action, thread, *index, &rows, state, &mut edits, &mut host);
                     }
                 }
             }
@@ -659,7 +728,7 @@ impl<H: Value> CommentsPanel<'_, H> {
         };
         let shown = Stack::new().fill().show(ui, body);
         let response = shown.inner.unwrap_or(shown.output);
-        CommentsPanelOutput { response, edits, host: None }
+        CommentsPanelOutput { response, edits, host }
     }
 }
 
@@ -694,8 +763,16 @@ fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<Comme
     }
 }
 
-/// Applies the row of a card's menu that ran.
-fn apply_menu(action: CardMenu, thread: &CommentThread, index: usize, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
+/// Applies the row of a card's menu that ran; a host row goes to `host` with the value of `rows` at its index.
+fn apply_menu<H: Value>(
+    action: CardMenu,
+    thread: &CommentThread,
+    index: usize,
+    rows: &[Entry<H>],
+    state: &mut CommentsPanelState,
+    edits: &mut Vec<CommentEdit>,
+    host: &mut Option<(ThreadId, usize, H)>,
+) {
     let id = thread.id;
     match action {
         CardMenu::Edit => {
@@ -705,5 +782,10 @@ fn apply_menu(action: CardMenu, thread: &CommentThread, index: usize, state: &mu
         CardMenu::Status(status) => edits.push(CommentEdit::SetStatus { thread: id, status }),
         CardMenu::Copy => edits.push(CommentEdit::CopyText { thread: id, index }),
         CardMenu::Delete => edits.push(CommentEdit::Delete { thread: id, index }),
+        CardMenu::Host(at) => {
+            if let Some(value) = rows.get(at).and_then(Entry::value) {
+                *host = Some((id, index, value.clone()));
+            }
+        }
     }
 }

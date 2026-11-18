@@ -1,39 +1,73 @@
-//! The Comments panel's keys: Enter posts from the add box, Enter on a card goes to its reply box.
+//! The Comments panel: its keys, selection, menus, filter and sorts, folding, reveal, host rows, and cards that change
+//! out of view.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_review::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ThreadId};
-use craft_review::ui::{CommentEdit, CommentsPanel, CommentsPanelState};
+use craft_behavior::Selection;
+use craft_review::AnnotationKind;
+use craft_review::comments::{CommentAnchor, CommentFilter, CommentMessage, CommentSort, CommentThread, PageOrder, ReviewStatus, ReviewerStatus, ThreadId};
+use craft_review::ui::{CommentEdit, CommentsHeader, CommentsPanel, CommentsPanelState, comments_more_menu};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Entry, Role, SelectMode, Show as _};
 use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers};
+use egui::{Key, Modifiers, Rect};
 
-fn thread(id: u64, text: &str) -> CommentThread {
+fn message(author: &str, text: &str) -> CommentMessage {
+    CommentMessage { author: author.into(), created: 0, modified: None, text: text.into(), reactions: Vec::new(), read: true }
+}
+
+fn thread(id: u64, page: usize, text: &str) -> CommentThread {
     CommentThread {
         id: ThreadId(id),
-        anchor: CommentAnchor::Page { page: 1, at: [0.0, id as f64] },
+        anchor: CommentAnchor::Page { page, at: [0.0, id as f64] },
         kind: None,
         color: None,
-        messages: vec![CommentMessage { author: "Ana".into(), created: 0, modified: None, text: text.into(), reactions: Vec::new(), read: true }],
-        status: ReviewStatus::None,
-        statuses: Vec::new(), // P3(pdf-comments-w4): CM-C19
+        messages: vec![message("Ana", text)],
+        statuses: Vec::new(),
         marked: false,
         locked: false,
         resolved: false,
     }
 }
 
+fn reviewer(name: &str, status: ReviewStatus) -> ReviewerStatus {
+    ReviewerStatus { reviewer: name.into(), status, text: String::new() }
+}
+
+/// The names of the collection's rows, headings and cards, in tree order.
+fn row_names(fixture: &Fixture) -> Vec<String> {
+    fixture.by_role(Role::TREE_ITEM).iter().filter_map(|row| fixture.tree().name_of(row.node).map(str::to_owned)).collect()
+}
+
+/// The rect of the built card whose name holds `text`.
+fn card(fixture: &Fixture, text: &str) -> Option<Rect> {
+    fixture.by_role(Role::TREE_ITEM).into_iter().find(|row| fixture.tree().name_of(row.node).is_some_and(|name| name.contains(text))).map(|row| row.rect)
+}
+
+/// The rect of the built heading named `title`.
+fn heading(fixture: &Fixture, title: &str) -> Option<Rect> {
+    fixture.by_role(Role::TREE_ITEM).into_iter().find(|row| fixture.tree().name_of(row.node) == Some(title)).map(|row| row.rect)
+}
+
+/// The threads of the last selection the panel reported.
+fn last_selection(edits: &RefCell<Vec<CommentEdit>>) -> Option<Vec<ThreadId>> {
+    edits.borrow().iter().rev().find_map(|edit| match edit {
+        CommentEdit::Select(ids) => Some(ids.clone()),
+        _ => None,
+    })
+}
+
 /// Enter in "Add a comment" posts it; Tab to the cards and Enter puts the focus in the selected card's reply box,
 /// where Cmd+Enter posts the reply to that card's thread.
 #[trial]
 fn enter_posts_a_comment_and_enter_on_a_card_opens_its_reply_box() {
-    // P3(pdf-comments-w4): CM-C21
     let mut initial = CommentsPanelState::default();
-    initial.selected = craft_behavior::Selection::single(ThreadId(2));
+    initial.selected = Selection::single(ThreadId(2));
     let state = Rc::new(RefCell::new(initial));
     let edits = Rc::new(RefCell::new(Vec::new()));
     let (shown_state, shown_edits) = (state.clone(), edits.clone());
-    let threads = vec![thread(1, "The margin is too narrow."), thread(2, "Use the brand colour.")];
+    let threads = vec![thread(1, 1, "The margin is too narrow."), thread(2, 1, "Use the brand colour.")];
     let mut fixture = Fixture::new(move |ui| {
         let mut state = shown_state.borrow_mut();
         let out = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
@@ -51,10 +85,235 @@ fn enter_posts_a_comment_and_enter_on_a_card_opens_its_reply_box() {
     fixture.key(Key::Tab, Modifiers::NONE).settle();
     fixture.key(Key::Enter, Modifiers::NONE).settle();
     fixture.type_text("Thanks").key(Key::Enter, Modifiers::COMMAND).settle();
-    let selected = state.borrow().selected.lead.expect("a card is selected"); // P3(pdf-comments-w4): CM-C21
+    let selected = state.borrow().selected.lead.expect("a card is selected");
     assert!(
         edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Reply { thread, text, .. } if *thread == selected && text == "Thanks")),
         "Enter on the card put the focus in its reply box, where Cmd+Enter posts: {:?}",
         edits.borrow()
     );
+}
+
+/// Under multi-selection a Shift range over a page heading and a Cmd/Ctrl toggle report thread ids only, the lead
+/// (the card clicked) first.
+#[trial]
+fn multi_selection_reports_only_threads_with_the_lead_first() {
+    let state = Rc::new(RefCell::new(CommentsPanelState::default()));
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let (shown_state, shown_edits) = (state.clone(), edits.clone());
+    // Page 2's heading sits between the cards of page 1 and those of page 2.
+    let threads = vec![thread(1, 1, "Note 1."), thread(2, 1, "Note 2."), thread(3, 2, "Note 3."), thread(4, 2, "Note 4.")];
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = shown_state.borrow_mut();
+        let out = CommentsPanel::new("Comments", &threads, &mut state).select_mode(SelectMode::Multi).show(ui);
+        shown_edits.borrow_mut().extend(out.edits);
+    });
+    fixture.settle();
+    let first = card(&fixture, "Note 1.").expect("card 1");
+    fixture.click_at(first.center()).settle();
+    assert_eq!(last_selection(&edits), Some(vec![ThreadId(1)]), "a click selects its card");
+    let third = card(&fixture, "Note 3.").expect("card 3");
+    fixture.hold(Modifiers::SHIFT).click_at(third.center()).hold(Modifiers::NONE).settle();
+    let range = last_selection(&edits).expect("the Shift click reports the selection");
+    assert_eq!(range.first(), Some(&ThreadId(3)), "the card clicked leads: {range:?}");
+    assert!(range.contains(&ThreadId(1)), "the range keeps its anchor: {range:?}");
+    let mut distinct = range.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), range.len(), "each thread once, and the heading in the range is no thread: {range:?}");
+    let fourth = card(&fixture, "Note 4.").expect("card 4");
+    fixture.hold(Modifiers::COMMAND).click_at(fourth.center()).hold(Modifiers::NONE).settle();
+    let toggled = last_selection(&edits).expect("the Cmd click reports the selection");
+    assert_eq!(toggled.first(), Some(&ThreadId(4)), "the card toggled on leads: {toggled:?}");
+    assert!(toggled.contains(&ThreadId(1)) && toggled.contains(&ThreadId(3)), "a toggle keeps the others: {toggled:?}");
+    let mut kept = state.borrow().selected.items.clone();
+    kept.sort();
+    let mut reported = toggled.clone();
+    reported.sort();
+    assert_eq!(kept, reported, "the panel keeps the selection it reported");
+    assert_eq!(state.borrow().selected.lead, Some(ThreadId(4)), "the card toggled on is the lead");
+}
+
+/// A thread hides by status only when every reviewer's status is hidden; the Checkmark filter hides marked threads;
+/// the Page sort keeps document order under `PageOrder::Document`; the Type sort heads plain comments first.
+#[trial]
+fn the_filter_and_sorts_hide_and_order_threads() {
+    let mut reviewed = thread(9, 1, "Reviewed.");
+    reviewed.statuses = vec![reviewer("Ana", ReviewStatus::Accepted), reviewer("Bo", ReviewStatus::Rejected)];
+    let unreviewed = thread(10, 1, "Unreviewed.");
+    let mut filter = CommentFilter::default();
+    filter.hidden_statuses = vec![ReviewStatus::Accepted];
+    assert!(filter.shows(&reviewed), "Bo's Rejected still shows the thread");
+    assert!(filter.shows(&unreviewed), "a thread without statuses counts as None, which shows");
+    filter.hidden_statuses.push(ReviewStatus::Rejected);
+    assert!(!filter.shows(&reviewed), "every reviewer's status is hidden");
+    filter.hidden_statuses = vec![ReviewStatus::None];
+    assert!(!filter.shows(&unreviewed), "a thread without statuses hides with None");
+    assert!(filter.shows(&reviewed));
+
+    // Note 1 lists first in the document but sits lower on page 1 than Note 2.
+    let mut first = thread(1, 1, "Note 1.");
+    first.anchor = CommentAnchor::Page { page: 1, at: [0.0, 100.0] };
+    let mut second = thread(2, 1, "Note 2.");
+    second.kind = Some(AnnotationKind::Highlight);
+    second.marked = true;
+    let mut third = thread(3, 2, "Note 3.");
+    third.kind = Some(AnnotationKind::Highlight);
+    let threads = vec![first, second, third];
+    let state = Rc::new(RefCell::new(CommentsPanelState::default()));
+    let shown_state = state.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = shown_state.borrow_mut();
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).page_order(PageOrder::Document).show(ui);
+    });
+    fixture.settle();
+    let (one, two) = (card(&fixture, "Note 1.").expect("card 1"), card(&fixture, "Note 2.").expect("card 2"));
+    assert!(one.top() < two.top(), "document order puts Note 1 above Note 2 whatever their positions");
+
+    let funnel = fixture.by_label("Filter comments").expect("the filter button");
+    fixture.click(&funnel).settle();
+    let checkmark = fixture.by_label("Checkmark").expect("the Checkmark submenu");
+    fixture.click(&checkmark).settle();
+    let checked = fixture.by_label("Checked").expect("the Checked row");
+    fixture.click(&checked).settle();
+    assert_eq!(state.borrow().filter.hidden_checks, vec![true], "unchecking Checked hides the marked threads");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(card(&fixture, "Note 2.").is_none(), "the marked thread is hidden");
+    assert!(card(&fixture, "Note 1.").is_some(), "the unmarked thread shows");
+
+    let sort = fixture.by_label("Sort by: Page").expect("the Sort by button");
+    fixture.click(&sort).settle();
+    let by_type = fixture.by_label("Type").expect("the Type row");
+    fixture.click(&by_type).settle();
+    assert_eq!(state.borrow().sort, CommentSort::Type);
+    let names = row_names(&fixture);
+    assert!(names.first().is_some_and(|name| !name.contains("Note")), "a heading comes first: {names:?}");
+    assert!(names.get(1).is_some_and(|name| name.contains("Note 1.")), "the plain comment under the first heading: {names:?}");
+    assert!(names.get(2).is_some_and(|name| !name.contains("Note") && Some(name) != names.first()), "another heading next: {names:?}");
+    assert!(names.get(3).is_some_and(|name| name.contains("Note 3.")), "the unmarked highlight under it: {names:?}");
+}
+
+/// A heading's click folds its page; a reveal unfolds it and selects only its thread, once; a double click on a card
+/// edits its comment in place.
+#[trial]
+fn a_heading_folds_its_page_and_a_double_click_edits_a_card() {
+    let state = Rc::new(RefCell::new(CommentsPanelState::default()));
+    let shown_state = state.clone();
+    let threads = vec![thread(1, 1, "Note 1."), thread(2, 2, "Note 2.")];
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = shown_state.borrow_mut();
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+    });
+    fixture.settle();
+    let page_one = heading(&fixture, "Page 1").expect("page 1's heading");
+    fixture.click_at(page_one.center()).settle();
+    assert_eq!(state.borrow().collapsed_pages, vec![1], "the click folds page 1");
+    assert!(card(&fixture, "Note 1.").is_none(), "a folded page hides its cards");
+
+    state.borrow_mut().reveal(ThreadId(1));
+    fixture.settle();
+    assert!(state.borrow().collapsed_pages.is_empty(), "the reveal unfolds the thread's page");
+    assert_eq!(state.borrow().selected.items, vec![ThreadId(1)], "the reveal selects only its thread");
+    assert!(card(&fixture, "Note 1.").is_some(), "the revealed card is drawn");
+
+    let page_one = heading(&fixture, "Page 1").expect("page 1's heading");
+    fixture.click_at(page_one.center()).settle();
+    assert_eq!(state.borrow().collapsed_pages, vec![1], "the reveal was taken once: later passes do not unfold the page again");
+
+    let note = card(&fixture, "Note 2.").expect("card 2").center();
+    fixture.click_at(note).click_at(note).settle();
+    assert_eq!(state.borrow().editing, Some((ThreadId(2), 0, "Note 2.".to_owned())), "the double click opens the comment's editor");
+}
+
+/// The Own header draws its Sort, filter and Pages buttons and the Hosted one none; the host's rows follow a
+/// message menu's rows and report their value; the More menu returns the host row that ran.
+#[trial]
+fn host_rows_follow_the_cards_rows_and_report_their_value() {
+    let mut initial = CommentsPanelState::default();
+    initial.selected = Selection::single(ThreadId(1));
+    let state = Rc::new(RefCell::new(initial));
+    let header = Rc::new(Cell::new(CommentsHeader::Own));
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let (shown_state, shown_header, shown_picked, shown_ran) = (state.clone(), header.clone(), picked.clone(), ran.clone());
+    let threads = vec![thread(1, 1, "Note 1."), thread(2, 1, "Note 2.")];
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = shown_state.borrow_mut();
+        let header = shown_header.get();
+        if header == CommentsHeader::Hosted {
+            let opener = Button::new("Panel options").show(ui);
+            if let Some(value) = comments_more_menu(ui, &opener, &threads, &mut state, &[Entry::new(9_u32, "Export comments")]) {
+                shown_ran.borrow_mut().push(value);
+            }
+        }
+        let out = CommentsPanel::new("Comments", &threads, &mut state).header(header).card_rows(|_, _| vec![Entry::new(7_u32, "Flag message")]).show(ui);
+        shown_picked.borrow_mut().extend(out.host);
+    });
+    fixture.settle();
+    for name in ["Sort by: Page", "Filter comments", "Pages"] {
+        assert!(fixture.by_label(name).is_some(), "the Own header draws {name}");
+    }
+    header.set(CommentsHeader::Hosted);
+    fixture.settle();
+    for name in ["Sort by: Page", "Filter comments", "Pages"] {
+        assert!(fixture.by_label(name).is_none(), "the Hosted header draws no {name}");
+    }
+
+    let more = fixture.by_label("More").expect("the lead card's More button");
+    fixture.click(&more).settle();
+    assert!(fixture.by_label("Delete").is_some(), "the card's own rows come first");
+    let flag = fixture.by_label("Flag message").expect("the host row behind the card's rows");
+    fixture.click(&flag).settle();
+    assert_eq!(picked.borrow().as_slice(), &[(ThreadId(1), 0, 7_u32)], "the host row reports its thread, message and value");
+
+    let options = fixture.by_label("Panel options").expect("the host's button");
+    fixture.click(&options).settle();
+    assert!(fixture.by_label("Date").is_some(), "the More menu holds the Sort by rows");
+    let export = fixture.by_label("Export comments").expect("the host row in the More menu");
+    fixture.click(&export).settle();
+    assert_eq!(ran.borrow().as_slice(), &[9_u32], "the More menu returns the host row that ran");
+}
+
+/// A panel over 120 threads on page 1, scrolled by a reveal to thread 100; the threads are shared so a trial can
+/// change them between frames.
+fn long_list() -> (Rc<RefCell<Vec<CommentThread>>>, Rc<RefCell<CommentsPanelState>>, Fixture) {
+    let threads = Rc::new(RefCell::new((1..=120).map(|id| thread(id, 1, &format!("Note {id}."))).collect::<Vec<_>>()));
+    let state = Rc::new(RefCell::new(CommentsPanelState::default()));
+    let (shown_threads, shown_state) = (threads.clone(), state.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let threads = shown_threads.borrow();
+        let mut state = shown_state.borrow_mut();
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+    });
+    fixture.settle();
+    state.borrow_mut().reveal(ThreadId(100));
+    fixture.settle();
+    (threads, state, fixture)
+}
+
+/// Card 1, far above the cards in view, grows by two replies: the cards in view move down, not stay where its old
+/// height would put them.
+#[trial]
+fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
+    let (threads, _state, mut fixture) = long_list();
+    assert!(card(&fixture, "Note 1.").is_none(), "card 1 is out of view");
+    let before = card(&fixture, "Note 100.").expect("the revealed card is in view").top();
+    if let Some(first) = threads.borrow_mut().first_mut() {
+        first.messages.extend([message("Bo", "A first reply."), message("Bo", "A second reply.")]);
+    }
+    fixture.settle();
+    let after = card(&fixture, "Note 100.").expect("the revealed card stays in view").top();
+    assert!(after > before, "card 1's growth moves the cards below it: {before} then {after}");
+}
+
+/// An editor opened on card 1, far above the cards in view, makes room: the cards in view move down by it.
+#[trial]
+fn an_editor_opened_on_an_out_of_view_card_makes_room_below_it() {
+    let (_threads, state, mut fixture) = long_list();
+    assert!(card(&fixture, "Note 1.").is_none(), "card 1 is out of view");
+    let before = card(&fixture, "Note 100.").expect("the revealed card is in view").top();
+    state.borrow_mut().editing = Some((ThreadId(1), 0, "Note 1.".to_owned()));
+    fixture.settle();
+    let after = card(&fixture, "Note 100.").expect("the revealed card stays in view").top();
+    assert!(after > before, "the editor on card 1 moves the cards below it: {before} then {after}");
 }
