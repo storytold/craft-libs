@@ -56,6 +56,9 @@ const RAW_CHUNK: usize = 4096;
 /// Dir record ids ([MS-OVBA] §2.3.4.2). Only the ones the audit reads are named.
 const REC_CODE_PAGE: u16 = 0x0003;
 const REC_PROJECT_VERSION: u16 = 0x0009;
+/// REFERENCEREGISTERED: [MS-OVBA] §2.3.4.2.2 says the record's `Size` field is ignored on
+/// read; the payload's own nested lengths say where the next record starts.
+const REC_REFERENCE_REGISTERED: u16 = 0x000D;
 const REC_MODULES_COUNT: u16 = 0x000F;
 const REC_MODULE_NAME: u16 = 0x0019;
 const REC_MODULE_STREAM_NAME: u16 = 0x001A;
@@ -106,8 +109,8 @@ pub struct Module {
 
 /// The project inside `word/vbaProject.bin`. Nothing here runs anything.
 pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
-    let mut comp = craft_cfb::CompoundFile::open(bytes).map_err(|e| bad(format!("not a readable compound file ({e})")))?;
-    let dir = stream(&mut comp, "/VBA/dir", MAX_DIR)?;
+    let comp = craft_cfb::CompoundFile::open(bytes).map_err(|e| bad(format!("not a readable compound file ({e})")))?;
+    let dir = stream(&comp, "/VBA/dir", MAX_DIR)?;
     let dir = decompress(&dir, MAX_DIR as usize)?;
     let mut project = walk_dir(&dir)?;
     // Each distinct stream is read once, and the decoded source all modules carry counts
@@ -128,7 +131,7 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
         let shared = match streams.entry(module.stream_name.clone()) {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
-                let read = match module_stream(&mut comp, &path) {
+                let read = match module_stream(&comp, &path) {
                     Ok(v) => Some(Arc::new(v)),
                     Err(err) => {
                         log::warn!("docx: can't read the VBA module {path:?} ({err})");
@@ -166,9 +169,9 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
 /// A module's source from its stream bytes: a performance cache, then the source at
 /// [`Module::text_offset`] — compressed when it starts with the container signature
 /// ([MS-OVBA] §2.4.1.1.4), raw otherwise. The output stops at [`MAX_SOURCE`] or what is left
-/// of `budget` — the decoded source all modules share, which lossy decoding can only expand,
-/// so a take of a third of it can't overshoot — and the module says `truncated` when anything
-/// was cut, instead of the source vanishing.
+/// of `budget` — decoded first (lossy decoding can only expand), then cut to the remaining
+/// budget at a character boundary, so an ASCII source keeps its full bytes while they fit —
+/// and the module says `truncated` when anything was cut, instead of the source vanishing.
 fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, budget: &mut u64) {
     let at = module.text_offset.min(stream.len() as u64) as usize;
     let rest = &stream[at..];
@@ -186,18 +189,22 @@ fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, budget: &mu
         // than [`MAX_SOURCE`] is cut at the cap and says so below.
         (rest.to_vec(), stream_cut)
     };
-    let take = raw.len().min((MAX_SOURCE as usize).min((*budget / 3) as usize));
-    if take == 0 && !raw.is_empty() {
-        // Only the last scraps of the budget (fewer than 3 bytes) are left: the module is
+    let take = raw.len().min(MAX_SOURCE as usize);
+    let decoded = decode(&raw[..take]);
+    let mut end = decoded.len().min(*budget as usize);
+    while !decoded.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 && !decoded.is_empty() {
+        // The total-source budget is spent (or only part of one character fits): the module is
         // listed without source rather than with a cut one.
         log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
         module.source = None;
         return;
     }
-    let source = decode(&raw[..take]);
-    *budget = budget.saturating_sub(source.len() as u64);
-    module.truncated = truncated || raw.len() > take;
-    module.source = Some(source);
+    *budget = budget.saturating_sub(end as u64);
+    module.truncated = truncated || raw.len() > take || end < decoded.len();
+    module.source = Some(decoded[..end].into());
 }
 
 /// A module stream: at most [`MAX_MODULE_STREAM`] bytes, with whether the stream was longer.
@@ -234,6 +241,20 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
         // other, instead of stepping past the stream.
         if id == REC_PROJECT_VERSION {
             let Some(next) = at.checked_add(12).filter(|&next| next <= dir.len()) else { break };
+            at = next;
+            continue;
+        }
+        // REFERENCEREGISTERED: the outer `Size` is ignored on read ([MS-OVBA] §2.3.4.2.2) —
+        // real writers have put 0xFFFFFFFF there — so the walk advances by the payload's own
+        // nested lengths (SizeOfLibid, Libid, Reserved). The generic bound check below would
+        // refuse the record and stop before the module records, listing none.
+        if id == REC_REFERENCE_REGISTERED {
+            let Some(libid_len) = u32_at(dir, at + 6).map(|n| n as usize) else { break };
+            let Some(next) =
+                at.checked_add(10).and_then(|at| at.checked_add(libid_len)).and_then(|at| at.checked_add(2)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
             at = next;
             continue;
         }
@@ -391,12 +412,14 @@ fn decompress_chunk(chunk: &[u8], out: &mut Vec<u8>, cap: usize) -> Result<bool,
                     .checked_add(difference.checked_sub(offset).ok_or_else(|| bad("the copy token reaches past the chunk"))?)
                     .ok_or_else(|| bad("the copy token reaches past the chunk"))?;
                 for i in 0..length {
-                    // The source advances with the copy: overlapping tokens copy runs.
-                    let byte = out.get(from + i).copied().ok_or_else(|| bad("the copy token reaches past the chunk"))?;
-                    out.push(byte);
+                    // The source advances with the copy: overlapping tokens copy runs. The cap
+                    // is checked before each byte, so a copy that ends exactly at the cap is
+                    // complete, not cut — what is cut is a byte that would go past it.
                     if out.len() >= cap {
                         return Ok(true);
                     }
+                    let byte = out.get(from + i).copied().ok_or_else(|| bad("the copy token reaches past the chunk"))?;
+                    out.push(byte);
                 }
             }
         }
