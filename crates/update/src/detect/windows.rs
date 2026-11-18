@@ -30,8 +30,11 @@ pub(crate) fn string_tables(listed: &[(winsafe::LANGID, winsafe::co::CP)]) -> Ve
 
 /// An MSI install found in the registry.
 pub struct MsiInstall {
+    /// The product code, the registry key name under the uninstall list.
     pub product_code: String,
+    /// The version the entry reports, when it has a readable one.
     pub version: Option<crate::version::Version>,
+    /// The app's executable in the install folder, when it can be found.
     pub exe: Option<PathBuf>,
 }
 
@@ -95,6 +98,7 @@ fn exe_path(app: &App, location: Option<PathBuf>) -> Option<PathBuf> {
     exe_candidates(app, location.as_deref(), &roots).into_iter().find(|p| p.exists())
 }
 
+/// The newest MSI install of `app` registered with the Windows Installer, if any.
 pub fn detect(app: &App) -> Option<Installed> {
     let m = msi_installs(app).into_iter().next()?;
     Some(Installed {

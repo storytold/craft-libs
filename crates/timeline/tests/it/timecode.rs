@@ -1,6 +1,7 @@
 //! The timecode field: a drag scrubs a field that is not in edit, and the arrows on the selected text start from its
 //! end. The Timecode panel: each row's menu opens from that row and acts on it.
 
+use craft_keymap::Platform;
 use craft_timeline::ui::{TimecodeField, TimecodePanel, TimecodePanelSettings, TimecodeRow, TimecodeRowKind, TimecodeSource, TimecodeText};
 use craft_timeline::{FrameRate, Tick, TimeFormat};
 use craft_ui::contract::{Bind, Role, Show as _};
@@ -78,6 +79,8 @@ fn open_menu_by_key(fixture: &mut Fixture, readout: &str, key: Key, modifiers: M
 fn a_rows_menu_opens_from_a_secondary_click_or_the_menu_keys_and_acts_on_that_row() {
     use TimecodeRowKind::{CurrentTime, Duration, MediaTime, Remaining};
     let mut fixture = Fixture::story(&Story::new("timecode panel", panel));
+    // The Menu key is a PC key: a Mac keyboard has none, and the shell does not read it there.
+    fixture.os(Platform::Linux);
     fixture.settle();
     let second = "Duration \u{b7} Program: Duration";
     let target = fixture.by_label(second).expect("the second readout");

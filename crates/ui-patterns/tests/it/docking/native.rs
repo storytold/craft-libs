@@ -669,7 +669,7 @@ fn a_native_palette_is_never_sized_below_its_limits() {
     saved.position_px = Some([FLOAT_AT.min.x as i32, FLOAT_AT.min.y as i32]);
     window.native = Some(saved);
     let mut workspace = Workspace::new(Layout::new(None, vec![window]));
-    let mut run = |workspace: &mut Workspace<u32>| {
+    let run = |workspace: &mut Workspace<u32>| {
         let out = windows.frame(vec![], vec![], |ui| {
             let _ = DockArea::new("Native dock", Bind::bound(workspace), &mut Least, DockConfig::default().native_windows(true)).show(ui);
         });

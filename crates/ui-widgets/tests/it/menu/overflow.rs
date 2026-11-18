@@ -2,6 +2,7 @@
 //! below its rows and by the wheel, and reopens at its first row; one that fits shows no strips. A tall submenu of a
 //! low row opens upward.
 
+use craft_host::target::Os;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Entry, Role, STRIP_BACK, STRIP_FORWARD, Show as _, ShowContainer as _, Trigger};
 use craft_ui::menu::bar::{MenuBar, MenuTitle};
@@ -151,6 +152,8 @@ fn a_menu_bar_menu_taller_than_the_window_stays_inside_and_the_wheel_reaches_its
         })];
         MenuBar::new("Main menu", titles).show(ui);
     });
+    // The in-window menu bar and its Alt, F10 and letter keys are PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
     fixture.settle();
     let file = fixture.by_label("File").expect("the File title");
     fixture.click(&file).settle();
@@ -177,6 +180,7 @@ fn no_menu_or_submenu_of_a_menu_bar_covers_the_bar() {
         })];
         MenuBar::new("Main menu", titles).show(ui);
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let file = fixture.by_label("File").expect("the File title");
     fixture.click(&file).settle();
@@ -207,6 +211,7 @@ fn scrolled_bar_menu() -> (Fixture, Rect) {
         })];
         MenuBar::new("Main menu", titles).show(ui);
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let file = fixture.by_label("File").expect("the File title").rect;
     fixture.click_at(file.center()).settle();
@@ -241,6 +246,7 @@ fn a_dropdown_in_a_menu_bar_menu_keeps_its_cap() {
         })];
         MenuBar::new("Main menu", titles).show(ui);
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let view = fixture.by_label("View").expect("the View title");
     fixture.click(&view).settle();
