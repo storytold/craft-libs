@@ -2660,6 +2660,7 @@ dependencies = [
  "egui-wgpu",
  "log",
  "pollster 1.0.1",
+ "tempfile",
 ]
 
 [[package]]
@@ -3375,11 +3376,13 @@ dependencies = [
  "craft-docpath",
  "craft-host",
  "craft-theme",
+ "fmv-macos-events",
  "futures-lite",
  "js-sys",
  "log",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "rfd",
  "serde",
  "serde_json",
  "sysinfo",
@@ -3388,6 +3391,7 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "web-time",
+ "windows",
  "wl-clipboard-rs",
  "x11rb",
  "xcap",
@@ -3464,12 +3468,15 @@ dependencies = [
  "craft-ui",
  "craft-winprint-gdi",
  "egui",
+ "js-sys",
  "log",
  "miniz_oxide 0.9.1",
  "roxmltree 0.21.2",
  "serde",
  "serde_json",
  "tempfile",
+ "wasm-bindgen",
+ "web-sys",
  "winprint",
  "winsafe",
 ]
@@ -3638,11 +3645,14 @@ dependencies = [
  "craft-host",
  "craft-settings",
  "dirs",
+ "log",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "toml_edit",
+ "wasm-bindgen-test",
+ "web-sys",
  "web-time",
 ]
 
@@ -5735,6 +5745,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "fmv-macos-events"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90642cf66dde7f205dc8b42dfe57b47d0f3a29f571b832742883ef512e23fe55"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

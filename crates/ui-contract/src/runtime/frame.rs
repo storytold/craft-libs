@@ -267,14 +267,6 @@ impl<T: Stored> PerViewport<Stamped<T>> {
     }
 }
 
-/// This frame's wheel speed and Alt-code pages, from the `RootEnv` that `set_input` stored before egui ran the input
-/// hook; the defaults when no input was set (owed by platform-w3, S-L151).
-pub(crate) fn root_input(ctx: &Context) -> (crate::runtime::env::WheelSpeed, crate::runtime::env::AltCodePages) {
-    pass_state::with::<FrameState, _>(ctx, |state| {
-        state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes.clone())).unwrap_or_default()
-    })
-}
-
 /// Registers the end hook's prune of a service's per-viewport records, once per service type.
 pub(crate) fn register_prune(ctx: &Context, key: TypeId, prune: fn(&Context, &[ViewportId])) {
     pass_state::with::<FrameState, _>(ctx, |state| {

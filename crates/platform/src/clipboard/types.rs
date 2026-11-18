@@ -56,6 +56,11 @@ impl Flavor {
     pub fn text(text: &str) -> Self {
         Self::new(TEXT, text.as_bytes().to_vec())
     }
+
+    /// The image of an [`RGBA8`] flavor's bytes; `None` when they are not a whole image (pf.C-P3, S-L190).
+    pub fn rgba8_image(&self) -> Option<ClipboardImage> {
+        super::convert::rgba8_image(&self.data)
+    }
 }
 
 /// A bitmap on the clipboard: straight (not premultiplied) RGBA8, rows top to bottom,
