@@ -15,7 +15,7 @@ use craft_text::ui::ruler::{RulerValues, TabAlign, TextRuler, TextRulerOutput, n
 use craft_ui::canvas::{RulerTick, Rulers, TickRule};
 use craft_ui::contract::{
     Access, Bind, Common, Component, Cx, Focus as _, Input, MeasureCx, Name, Numeric, Outcome, NoValue, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _,
-    Role, Show as _, WordSetCx as _,
+    Role, Show as _, Styled as _, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use craft_ui::runtime::env::{Env, Label};

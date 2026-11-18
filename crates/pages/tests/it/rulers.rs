@@ -78,7 +78,7 @@ fn margin_rig(start: PageEdges, mirrored_even: bool) -> (Fixture, Rc<RefCell<Pag
 fn a_margin_drag_is_clamped_by_the_opposite_edge_and_a_mirrored_even_page_swaps_the_sides() {
     let start = PageEdges::new(Margins { top: 72.0, bottom: 72.0, left: 72.0, right: 90.0 });
     let least = MIN_TEXT;
-    let page_width = demo_placed(1, pos2(0.0, 0.0)).remove(0).rect.width();
+    let page_width = f64::from(demo_placed(1, pos2(0.0, 0.0)).remove(0).rect.width());
     let left_name = MarginHandlesWords::default().left;
     let (mut fixture, edges) = margin_rig(start, false);
     let left = fixture.by_label(left_name.as_str()).expect("the left margin edge");
