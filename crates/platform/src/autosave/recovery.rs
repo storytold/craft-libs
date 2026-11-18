@@ -228,7 +228,6 @@ impl RecoveryStore {
                 None if self.owns_key(&key) || self.other_instance_alive() => None,
                 None => copies.first().map(|(ext, path)| {
                     let saved = std::fs::metadata(path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-                    // P3(pdf-shell-w3): SH-C28
                     let meta = RecoveryMeta { name: key.clone(), original: None, extension: ext.clone(), revision: 0, protected: false };
                     RecoveryEntry { key: key.clone(), meta, saved, path: path.clone() }
                 }),
@@ -313,7 +312,7 @@ pub(super) struct Sidecar {
 
 /// A sidecar larger than this is not read.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) const MAX_SIDECAR: u64 = 1 << 20;
+pub(crate) const MAX_SIDECAR: u64 = 1 << 20;
 
 /// How long a temp file of an interrupted write must have been left before it is removed, far
 /// longer than any write, so another run's write in progress is never touched.

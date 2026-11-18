@@ -1,4 +1,5 @@
-//! The XDG Settings portal: reading colour scheme, contrast, motion, button layout and icons, and watching for changes.
+//! The XDG Settings portal: reading colour scheme, contrast, motion, text scale, button layout and icons, and
+//! watching for changes.
 
 use super::{Contrast, Shared, Theme};
 use futures_lite::{StreamExt, future::zip};
@@ -16,6 +17,11 @@ const ICONS_KEY: &str = "icon-theme";
 const CONTRAST_KEY: &str = "contrast";
 const MOTION_KEY: &str = "reduced-motion";
 const ANIMATIONS_KEY: &str = "enable-animations";
+// Read on GNOME-like sessions only (`Shared::gnome`): elsewhere the schema's key holds its default
+// or a GNOME session's value, not what this desktop applies to its own text.
+const TEXT_SCALE_KEY: &str = "text-scaling-factor";
+/// The text scales applied; outside them a desktop's factor is no scaling, never clamped.
+const TEXT_SCALES: std::ops::RangeInclusive<f64> = 0.5..=3.0;
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 // Outer None means unknown/malformed; Some(None) is an explicit no-preference answer.
@@ -88,6 +94,19 @@ fn decode_icons(value: &Value<'_>) -> Option<String> {
 fn icons_reply(value: &Value<'_>, legacy: bool) -> Option<String> {
     decode_icons(unwrap_legacy(value, legacy)?)
 }
+// GNOME's `text-scaling-factor`, a double. Outer `None` means malformed; `Some(None)` is a
+// factor that is not finite or outside `TEXT_SCALES`, which means no scaling.
+fn decode_text_scale(value: &Value<'_>) -> Option<Option<f32>> {
+    let Value::F64(factor) = value else { return None };
+    Some((factor.is_finite() && TEXT_SCALES.contains(factor)).then_some(*factor as f32))
+}
+fn text_scale_reply(value: &Value<'_>, legacy: bool) -> Option<Option<f32>> {
+    decode_text_scale(unwrap_legacy(value, legacy)?)
+}
+// `gsettings get` prints the double as text (`1.25`); text that isn't a number is malformed.
+fn gsettings_text_scale(text: &str) -> Option<Option<f32>> {
+    decode_text_scale(&Value::F64(text.trim().parse().ok()?))
+}
 fn combined(standard: Option<Option<Theme>>, gnome: Option<Option<Theme>>) -> Option<Option<Theme>> {
     if standard.is_none() && gnome.is_none() { None } else { Some(standard.flatten().or(gnome.flatten())) }
 }
@@ -137,11 +156,12 @@ pub(super) struct Fallbacks {
     theme_used: bool,
     layout_used: bool,
     icons_used: bool,
+    text_scale_used: bool,
     path: Option<std::ffi::OsString>,
 }
 impl Fallbacks {
     fn from_env() -> Self {
-        Self { theme_used: false, layout_used: false, icons_used: false, path: std::env::var_os("PATH") }
+        Self { theme_used: false, layout_used: false, icons_used: false, text_scale_used: false, path: std::env::var_os("PATH") }
     }
     async fn get(&self, schema: &str, key: &str) -> Option<String> {
         let exe = gsettings_exe(self.path.as_deref())?;
@@ -178,6 +198,16 @@ impl Fallbacks {
             shared.publish_layout(answer);
         }
     }
+    async fn text_scale(&mut self, shared: &Shared) {
+        if std::mem::replace(&mut self.text_scale_used, true) || !shared.gnome {
+            return;
+        }
+        if let Some(text) = self.get(GNOME, TEXT_SCALE_KEY).await
+            && let Some(answer) = gsettings_text_scale(&text)
+        {
+            shared.publish_text_scale(answer);
+        }
+    }
 }
 pub(super) async fn watch(shared: Arc<Shared>) {
     let mut retry = Duration::from_secs(5);
@@ -209,6 +239,7 @@ async fn session(shared: &Shared, fallbacks: &mut Fallbacks, connected: &mut boo
         fallbacks.theme(shared).await;
         fallbacks.layout(shared).await;
         fallbacks.icons(shared).await;
+        fallbacks.text_scale(shared).await;
         return None;
     };
     watch_connection(shared, fallbacks, connected, connection).await
@@ -246,6 +277,11 @@ impl Answers {
             (STANDARD, CONTRAST_KEY) => {
                 if let Some(contrast) = decode_contrast(namespace, value) {
                     shared.publish_contrast(contrast);
+                }
+            }
+            (GNOME, TEXT_SCALE_KEY) if shared.gnome => {
+                if let Some(scale) = decode_text_scale(value) {
+                    shared.publish_text_scale(scale);
                 }
             }
             (STANDARD, MOTION_KEY) | (GNOME, ANIMATIONS_KEY) => {
@@ -295,19 +331,25 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
         subscribe(&connection, rule(CONTRAST_KEY), 8).await?,
         subscribe(&connection, rule(MOTION_KEY), 8).await?,
         subscribe(&connection, rule(ANIMATIONS_KEY), 8).await?,
+        subscribe(&connection, rule(TEXT_SCALE_KEY), 8).await?,
     ];
     let mut owners = subscribe(&connection, owner_rule(), 8).await?;
-    // Concurrent reads, so contrast and motion are known by the time the theme settles
-    // `wait_first` without adding round trips before it.
-    let ((standard, gnome), (contrast, (motion, gnome_motion))) = zip(
-        zip(read(&connection, STANDARD, shared.gnome), read(&connection, GNOME, shared.gnome)),
+    // Concurrent reads, so contrast, motion and text scale are known by the time the theme
+    // settles `wait_first` without adding round trips before it.
+    let (((standard, gnome), (contrast, (motion, gnome_motion))), text_scale) = zip(
         zip(
-            read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply),
+            zip(read(&connection, STANDARD, shared.gnome), read(&connection, GNOME, shared.gnome)),
             zip(
-                read_with(&connection, STANDARD, MOTION_KEY, |value, legacy| motion_reply(STANDARD, value, legacy)),
-                read_with(&connection, GNOME, ANIMATIONS_KEY, |value, legacy| motion_reply(GNOME, value, legacy)),
+                read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply),
+                zip(
+                    read_with(&connection, STANDARD, MOTION_KEY, |value, legacy| motion_reply(STANDARD, value, legacy)),
+                    read_with(&connection, GNOME, ANIMATIONS_KEY, |value, legacy| motion_reply(GNOME, value, legacy)),
+                ),
             ),
         ),
+        async {
+            if shared.gnome { read_with(&connection, GNOME, TEXT_SCALE_KEY, text_scale_reply).await } else { None }
+        },
     )
     .await;
     let mut answers = Answers { standard, gnome, motion, gnome_motion };
@@ -315,6 +357,9 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
         shared.publish_contrast(contrast);
     }
     answers.publish_motion(shared);
+    if let Some(scale) = text_scale {
+        shared.publish_text_scale(scale);
+    }
     match combined(standard, gnome) {
         Some(answer) => {
             *connected = true;
@@ -324,6 +369,7 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
             fallbacks.theme(shared).await;
             fallbacks.layout(shared).await;
             fallbacks.icons(shared).await;
+            fallbacks.text_scale(shared).await;
             return None;
         }
     }
@@ -335,6 +381,10 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
     match read_with(&connection, GNOME, ICONS_KEY, icons_reply).await {
         Some(icons) => shared.publish_icons(icons),
         None => fallbacks.icons(shared).await,
+    }
+    // A portal without GNOME's keys answered nothing for the text scale either.
+    if text_scale.is_none() {
+        fallbacks.text_scale(shared).await;
     }
     loop {
         let message = match next_event(&mut settings, &mut owners).await? {
@@ -390,6 +440,28 @@ mod tests {
         assert!(!gnome(&[("SWAYSOCK", "/run/sway.sock"), ("XDG_CURRENT_DESKTOP", "GNOME")]));
         assert!(!gnome(&[]));
     }
+    // A desktop's text scale is applied only when it is a usable factor: Large Text's 1.25 and the
+    // ends of the range are, while a factor that isn't finite or lies outside 0.5..=3.0 is no
+    // scaling (not a clamped one), and text `gsettings` prints that isn't a number is no answer.
+    #[test]
+    fn gnome_text_scaling_factor_reads_in_range_or_not_at_all() {
+        use super::{decode_text_scale, gsettings_text_scale, text_scale_reply};
+        for (text, scale) in [("1.25\n", 1.25), ("1.0", 1.0), ("0.5", 0.5), ("3.0", 3.0)] {
+            assert_eq!(gsettings_text_scale(text), Some(Some(scale)), "{text}");
+            assert_eq!(decode_text_scale(&Value::F64(f64::from(scale))), Some(Some(scale)), "{text}");
+        }
+        for out_of_range in ["nan", "inf", "-2", "0", "0.49", "3.01", "100"] {
+            assert_eq!(gsettings_text_scale(out_of_range), Some(None), "{out_of_range}");
+        }
+        for not_a_number in ["", "uint32 0", "'1.25'", "1,25"] {
+            assert_eq!(gsettings_text_scale(not_a_number), None, "{not_a_number}");
+        }
+        // The portal answers a double; any other type is malformed. The legacy `Read` wraps it once more.
+        assert_eq!(decode_text_scale(&Value::U32(1)), None);
+        assert_eq!(decode_text_scale(&Value::from("1.25")), None);
+        assert_eq!(text_scale_reply(&Value::Value(Box::new(Value::F64(1.5))), true), Some(Some(1.5)));
+        assert_eq!(text_scale_reply(&Value::F64(1.5), true), None);
+    }
     #[test]
     fn the_generation_rises_once_per_appearance_change_and_never_for_the_layout() -> Result<(), Box<dyn std::error::Error>> {
         use crate::appearance::{Contrast, SystemReader};
@@ -403,14 +475,17 @@ mod tests {
                 shared.publish_contrast(Contrast::High);
                 shared.publish_contrast(Contrast::High);
                 shared.publish_motion(true);
+                shared.publish_text_scale(Some(1.25));
+                shared.publish_text_scale(Some(1.25));
                 shared.publish_layout("appmenu:close".to_owned());
                 let _ = done.send(());
             },
         )
         .ok_or("worker creation failed")?;
         finished.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(watcher.generation(), 3, "theme, contrast and motion each changed once");
+        assert_eq!(watcher.generation(), 4, "theme, contrast, motion and text scale each changed once");
         assert_eq!((watcher.current(), watcher.contrast()), (Some(Theme::Dark), Some(Contrast::High)));
+        assert_eq!(watcher.text_scale(), Some(1.25));
 
         let reader = SystemReader::unwatched();
         let before = reader.generation();

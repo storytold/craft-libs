@@ -346,7 +346,13 @@ pub(crate) fn plan_write(flavors: &[Flavor], decode: Option<&Decode>) -> Result<
             }
             HTML => return Ok((index, Put::Html { html: text_of(flavor), alt: flavors.iter().find(|f| f.mime == TEXT).map(text_of) })),
             TEXT => return Ok((index, Put::Text(text_of(flavor)))),
-            URI_LIST => return Ok((index, Put::Files(parse_uri_list(&text_of(flavor))))),
+            // Only `file:` URIs become files; a list with none falls through to the next flavour.
+            URI_LIST => {
+                let files = parse_uri_list(&text_of(flavor));
+                if !files.is_empty() {
+                    return Ok((index, Put::Files(files)));
+                }
+            }
             _ => {}
         }
     }
@@ -373,10 +379,7 @@ impl ClipboardBackend for SystemClipboard {
             }
             Put::Html { html, alt } => handle.set_html(html, alt),
             Put::Text(text) => handle.set_text(text),
-            Put::Files(files) => {
-                let _ = files;
-                todo!("SH-C27")
-            }
+            Put::Files(files) => handle.set().file_list(&files),
         }
         .map_err(system_error)?;
         Ok(index)

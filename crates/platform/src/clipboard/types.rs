@@ -36,10 +36,11 @@ pub struct Flavor {
 }
 
 impl Flavor {
-    /// A [`URI_LIST`] flavor (RFC 2483) of the files `paths`.
+    /// A [`URI_LIST`] flavor (RFC 2483) of the files `paths`, which a write puts on the system
+    /// clipboard as copied files, the way a file manager's Copy does.
+    #[cfg(all(feature = "clipboard", not(target_arch = "wasm32")))]
     pub fn files(paths: &[std::path::PathBuf]) -> Flavor {
-        let _ = paths;
-        todo!("SH-C27")
+        Self::new(URI_LIST, super::convert::uri_list(paths, cfg!(windows)).into_bytes())
     }
 
     /// A flavor of `data` with the given MIME type.

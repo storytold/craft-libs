@@ -78,6 +78,16 @@ impl SystemReader {
         self.watcher.is_some()
     }
 
+    /// Enables or suppresses the watcher's change notifications; see [`Watcher::set_active`]. The host
+    /// calls it with `true` when its root window gains focus, which on Windows re-reads the animation
+    /// effects setting the user may have changed in Settings meanwhile. Nothing happens where no
+    /// watcher runs.
+    pub fn set_active(&self, active: bool) {
+        if let Some(watcher) = &self.watcher {
+            watcher.set_active(active);
+        }
+    }
+
     /// Takes the colour scheme the windowing integration reports (egui's `Event::SystemTheme`).
     pub fn report_theme(&self, theme: Theme) {
         let reported = &self.reported;
@@ -98,8 +108,9 @@ impl SystemReader {
         reported.set(&reported.motion, if reduced { 2 } else { 1 });
     }
 
-    /// Rises each time a preference [`SystemReader::read`] answers from changes, as its source
-    /// reports it: the watcher's theme, contrast or reduced motion, or a reported value. Read
+    /// Rises each time a preference [`SystemReader::read`] or [`SystemReader::text_scale`] answers
+    /// from changes, as its source reports it: the watcher's theme, contrast, reduced motion or text
+    /// scale, or a reported value. Read
     /// again when it moved. On the web the browser's queries raise it in no case. Read it before
     /// [`SystemReader::read`]: the watcher stores a value before it raises the generation.
     pub fn generation(&self) -> u64 {
@@ -119,9 +130,9 @@ impl SystemReader {
     }
 
     /// The desktop text scale as the watcher last heard it; see [`Watcher::text_scale`]. `None` where the platform
-    /// does not say.
+    /// does not say, on the web and where no watcher runs; the host then applies no text scaling.
     pub fn text_scale(&self) -> Option<f32> {
-        todo!("SH-C24")
+        self.watcher.as_ref().and_then(Watcher::text_scale)
     }
 
     /// The preferences now, without blocking.
