@@ -416,7 +416,9 @@ impl Container for Menu<'_> {
     /// menu.
     fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let Some(bar) = self.companion.as_mut() else { return };
-        eprintln!("DIAG a_press_on_the_companion_bar_or_its_popup_does_not_close_the_menu_and_the_bar_closes_with_the_menu: companion end, open={}", cx.is_open());
+        if cx.is_exiting() {
+            return;
+        }
         let label = Env::of(ui).words::<MenuWords>().bar_companion.clone();
         let _ = CompanionLayer::new(label).show(ui, |ui, _| bar(ui));
     }
