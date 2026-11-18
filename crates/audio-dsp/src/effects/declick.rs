@@ -220,7 +220,9 @@ impl AudioEffect for ClickRemover {
         for (ci, chan) in channels.iter_mut().enumerate().take(nch) {
             let c = &mut self.ch[ci];
             for v in chan[..n].iter_mut() {
-                let x = *v;
+                // A sample that is not finite is kept as silence, so it does not stop the
+                // analysis of the span it is in or come out of a later block.
+                let x = if v.is_finite() { *v } else { 0.0 };
                 *v = c.out[c.pos];
                 c.buf[SPAN - BLOCK + c.pos] = x;
                 c.pos += 1;

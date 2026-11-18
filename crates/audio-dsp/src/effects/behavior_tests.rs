@@ -654,6 +654,23 @@ fn click_remover_repairs_clicks() {
 }
 
 #[test]
+fn click_remover_keeps_a_non_finite_sample_as_silence() {
+    let n = SR as usize / 2;
+    let clean = sine(440.0, 0.3, SR as f64, n, 0.0);
+    let mut dirty = clean.clone();
+    dirty[5000] = f32::NAN;
+    dirty[9000] = f32::INFINITY;
+    // A click in the same span as the NaN.
+    dirty[5100] += 0.6;
+    let mut e = fx("click_remover", &[]);
+    let lat = e.latency();
+    let (y, _) = run(e.as_mut(), &dirty, &dirty);
+    assert!(y.iter().all(|v| v.is_finite()), "a sample that is not finite came out");
+    let click = (y[5100 + lat] - clean[5100]).abs();
+    assert!(click < 0.1, "the click next to the NaN was left at {click}");
+}
+
+#[test]
 fn channel_and_stereo_tools() {
     let n = 4800;
     let l = noise(10, n, 0.3);
