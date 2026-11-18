@@ -31,7 +31,8 @@
 //! ### Permissions
 //! New documents and exports use normal OS creation permissions, including while staging.
 //! Use [`WriteOptions`] with [`NewFilePermissions::Private`] for settings or sensitive payloads.
-//! Existing destinations always stage privately and retain their original Unix mode.
+//! Existing destinations always stage privately and retain their original Unix mode. Restoring
+//! an already-matching mode needs no chmod, including on fixed-mode network filesystems.
 //!
 //! ### Platform Characteristics
 //! - **Windows**: Antivirus scanners, search indexers, and backup utilities briefly hold files
@@ -69,6 +70,9 @@ pub trait AtomicFs {
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
     /// Give the open temporary file its final permissions.
     fn set_permissions(&self, file: &File, perms: std::fs::Permissions) -> io::Result<()>;
+    /// Put the open temporary file in group `gid` (Unix only).
+    #[cfg(unix)]
+    fn set_group(&self, file: &File, gid: u32) -> io::Result<()>;
 }
 
 /// The production file system implementation.
@@ -124,6 +128,11 @@ impl AtomicFs for RealFs {
 
     fn set_permissions(&self, file: &File, perms: std::fs::Permissions) -> io::Result<()> {
         file.set_permissions(perms)
+    }
+
+    #[cfg(unix)]
+    fn set_group(&self, file: &File, gid: u32) -> io::Result<()> {
+        std::os::unix::fs::fchown(file, None, Some(gid))
     }
 }
 
@@ -341,9 +350,29 @@ fn split(target: &Path, path: &Path) -> io::Result<(PathBuf, String)> {
     Ok((dir, name.to_string_lossy().into_owned()))
 }
 
-/// Create a temporary file in `dir`, fill it with `fill`, give it the permissions of the file it
-/// replaces (`replaced`, Unix) and flush it. A leftover file with the same name is skipped. When
-/// any step fails, the temporary file is removed.
+/// Give `perms` the replaced file's group, or drop its group bits when the stage cannot join
+/// that group. A stage already in the group needs no fchown, which some filesystems reject even
+/// as a no-op, and dropping the bits there would narrow a mode the replaced file granted.
+#[cfg(unix)]
+fn adopt_group(fs: &dyn AtomicFs, file: &File, stage_gid: u32, replaced_gid: u32, perms: std::fs::Permissions) -> io::Result<std::fs::Permissions> {
+    use std::os::unix::fs::PermissionsExt;
+    if perms.mode() & 0o070 == 0 || stage_gid == replaced_gid {
+        return Ok(perms);
+    }
+    if fs.set_group(file, replaced_gid).is_ok() {
+        return Ok(perms);
+    }
+    let mut narrowed = perms;
+    narrowed.set_mode(narrowed.mode() & !0o070);
+    Ok(narrowed)
+}
+
+/// Create a temporary file in `dir`, fill it with `fill`, give it the permissions and group of
+/// the file it replaces (`replaced`, Unix) and flush it. Permission restoration is skipped when
+/// the mode already matches after `fill`; the group bits are dropped when the file cannot be put
+/// in the replaced file's group, so they never open the file to a group that was not granted
+/// them. A leftover file with the same name is skipped. When any step fails, the temporary file
+/// is removed.
 fn stage(
     fs: &dyn AtomicFs,
     dir: &Path,
@@ -368,7 +397,32 @@ fn stage(
         };
         let written = fill(&mut file)
             .map_err(|e| write_error(e, path, dir, existed))
-            .and_then(|()| perms.map_or(Ok(()), |p| fs.set_permissions(&file, p).map_err(|e| permissions_error(e, path))))
+            .and_then(|()| {
+                perms
+                    .map_or(Ok(()), |p| {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            // GVfs/SMB and document portals can expose a fixed mode but reject
+                            // chmod, even when the requested mode is already in effect. Check
+                            // after fill: a streaming callback may have changed the stage's mode.
+                            // Compare permission and special bits, not file-type bits.
+                            if (file.metadata()?.permissions().mode() & 0o7777) == (p.mode() & 0o7777) {
+                                return Ok(());
+                            }
+                            // The group bits belong to the replaced file's group, which a new
+                            // inode need not be in (setgid directory, another primary group).
+                            if let Some(replaced) = replaced {
+                                let stage_gid = std::os::unix::fs::MetadataExt::gid(&file.metadata()?);
+                                let replaced_gid = std::os::unix::fs::MetadataExt::gid(replaced);
+                                let perms = adopt_group(fs, &file, stage_gid, replaced_gid, p)?;
+                                return fs.set_permissions(&file, perms);
+                            }
+                        }
+                        fs.set_permissions(&file, p)
+                    })
+                    .map_err(|e| permissions_error(e, path))
+            })
             .and_then(|()| fs.sync(&file).map_err(|e| write_error(e, path, dir, existed)));
         drop(file);
         if written.is_err() {
@@ -539,7 +593,11 @@ pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let stem: String = file.chars().take(64).collect();
-    format!(".{stem}.{}-{n}.craft_tmp", std::process::id())
+    #[cfg(not(target_arch = "wasm32"))]
+    let pid = std::process::id();
+    #[cfg(target_arch = "wasm32")]
+    let pid = 0;
+    format!(".{stem}.{pid}-{n}.craft_tmp")
 }
 
 /// The end of an error message: whether an original file was left as it was.
@@ -602,7 +660,11 @@ mod tests {
     impl TempDir {
         fn new(tag: &str) -> Self {
             static N: AtomicU64 = AtomicU64::new(0);
-            let d = std::env::temp_dir().join(format!("craft-atomic-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+            #[cfg(not(target_arch = "wasm32"))]
+            let pid = std::process::id();
+            #[cfg(target_arch = "wasm32")]
+            let pid = 0;
+            let d = std::env::temp_dir().join(format!("craft-atomic-{tag}-{pid}-{}", N.fetch_add(1, Ordering::Relaxed)));
             let _ = std::fs::remove_dir_all(&d);
             std::fs::create_dir_all(&d).ok();
             Self(d)
@@ -645,14 +707,23 @@ mod tests {
         renames: Cell<u32>,
         no_hard_links: bool,
         fail_permissions: bool,
+        permission_error: Option<io::ErrorKind>,
+        /// Simulate a network filesystem exposing the same fixed mode on every new file.
+        #[cfg(unix)]
+        fixed_mode: Option<u32>,
         fail_sync_dir: bool,
         fail_normal_create: bool,
+        /// Simulate a filesystem that refuses the stage's group change.
+        #[cfg(unix)]
+        fail_set_group: bool,
         normal_collisions: Cell<u32>,
         /// Another process creates the target just before the hard link.
         created_meanwhile: Option<&'static [u8]>,
     }
 
     impl AtomicFs for Faulty {
+        /// Create a real stage with injected failures or a simulated fixed network mode,
+        /// recording the creation policy and the Unix mode exposed by the filesystem.
         fn create_new(&self, path: &Path, permissions: NewFilePermissions) -> io::Result<File> {
             let normal = permissions == NewFilePermissions::PlatformDefault;
             self.events.borrow_mut().push(if normal { "create_new_normal" } else { "create_new" });
@@ -667,6 +738,9 @@ mod tests {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
+                if let Some(mode) = self.fixed_mode {
+                    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+                }
                 self.created_modes.borrow_mut().push(file.metadata()?.permissions().mode() & 0o777);
             }
             Ok(file)
@@ -712,10 +786,24 @@ mod tests {
             }
             RealFs.sync_dir(dir)
         }
+        /// Record permission restoration and payload length, then inject a configured error
+        /// or delegate the mode change to the real filesystem.
+        #[cfg(unix)]
+        fn set_group(&self, file: &File, gid: u32) -> io::Result<()> {
+            self.events.borrow_mut().push("set_group");
+            if self.fail_set_group {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected: set_group failed"));
+            }
+            RealFs.set_group(file, gid)
+        }
+
         fn set_permissions(&self, file: &File, perms: std::fs::Permissions) -> io::Result<()> {
             self.events.borrow_mut().push("set_permissions");
             #[cfg(unix)]
             self.permission_lengths.borrow_mut().push(file.metadata()?.len());
+            if let Some(kind) = self.permission_error {
+                return Err(io::Error::new(kind, "injected permission failure"));
+            }
             if self.fail_permissions {
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected: operation not permitted"));
             }
@@ -917,18 +1005,87 @@ mod tests {
         Ok(())
     }
 
+    /// Matching fixed modes permit byte and streaming replacements under both creation
+    /// policies without calling a permission operation that the mount rejects.
     #[cfg(unix)]
     #[test]
-    fn failing_to_keep_permissions_fails_the_save() {
+    fn unchanged_replacement_modes_need_no_chmod() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let d = TempDir::new("fixed-replacement-mode");
+        // GVfs SMB reports 0700 regardless of the requested creation mode; also cover a
+        // private stage whose normal 0600 mode already matches the original.
+        for mode in [0o600, 0o700] {
+            for policy in [NewFilePermissions::Private, NewFilePermissions::PlatformDefault] {
+                for streaming in [false, true] {
+                    let p = d.0.join(format!("{mode:o}-{policy:?}-{streaming}"));
+                    std::fs::write(&p, ORIGINAL)?;
+                    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))?;
+                    let fs = Faulty { fixed_mode: Some(mode), permission_error: Some(io::ErrorKind::Unsupported), ..Default::default() };
+                    let options = WriteOptions::default().with_new_file_permissions(policy);
+                    if streaming {
+                        options.atomic_write_with_custom(&fs, NO_RETRY, &p, |f| f.write_all(b"replacement"))?;
+                    } else {
+                        options.atomic_write_custom(&fs, NO_RETRY, &p, b"replacement")?;
+                    }
+                    assert_eq!(std::fs::read(&p)?, b"replacement");
+                    assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o7777, mode);
+                    assert!(!fs.events.borrow().contains(&"set_permissions"));
+                    assert_eq!(fs.renames.get(), 1);
+                    assert_no_temp(&d.0);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A required mode change that fails must preserve the original bytes and mode,
+    /// report the error, and remove the stage without publishing it.
+    #[cfg(unix)]
+    #[test]
+    fn failing_to_keep_permissions_fails_the_save() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let d = TempDir::new("perms");
-        let p = d.0.join("doc.craft");
-        std::fs::write(&p, ORIGINAL).ok();
-        let fs = Faulty { fail_permissions: true, ..Default::default() };
-        let msg = atomic_write_custom(&fs, NO_RETRY, &p, b"new").err().map(|e| e.to_string()).unwrap_or_default();
-        assert!(msg.contains("permissions"), "{msg}");
-        assert_eq!(std::fs::read(&p).ok(), Some(ORIGINAL.to_vec()));
-        assert_eq!(fs.renames.get(), 0);
-        assert_no_temp(&d.0);
+        for kind in [io::ErrorKind::Unsupported, io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            let p = d.0.join(format!("{kind:?}.craft"));
+            std::fs::write(&p, ORIGINAL)?;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640))?;
+            let fs = Faulty { permission_error: Some(kind), ..Default::default() };
+            let error =
+                atomic_write_custom(&fs, NO_RETRY, &p, b"new").err().ok_or_else(|| io::Error::other("a required mode change must succeed"))?;
+            assert_eq!(error.kind(), kind);
+            assert!(error.to_string().contains("permissions"), "{error}");
+            assert_eq!(std::fs::read(&p)?, ORIGINAL);
+            assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o7777, 0o640);
+            assert_eq!(fs.renames.get(), 0);
+            assert_no_temp(&d.0);
+        }
+        Ok(())
+    }
+
+    /// A streaming callback that changes permissions or setuid/setgid/sticky bits must not
+    /// bypass restoration of the original mode, even when the modes matched at creation.
+    #[cfg(unix)]
+    #[test]
+    fn replacement_checks_mode_after_streaming_callback() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let d = TempDir::new("callback-mode-change");
+        for callback_mode in [0o640, 0o1600, 0o2600, 0o4600] {
+            let p = d.0.join(format!("doc-{callback_mode:o}.craft"));
+            std::fs::write(&p, ORIGINAL)?;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600))?;
+            let fs = Faulty::default();
+            WriteOptions::default().atomic_write_with_custom(&fs, NO_RETRY, &p, |f| {
+                f.write_all(b"replacement")?;
+                f.set_permissions(std::fs::Permissions::from_mode(callback_mode))?;
+                assert_eq!(f.metadata()?.permissions().mode() & 0o7777, callback_mode);
+                Ok(())
+            })?;
+            assert_eq!(std::fs::read(&p)?, b"replacement");
+            assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o7777, 0o600);
+            assert!(fs.events.borrow().contains(&"set_permissions"));
+            assert_no_temp(&d.0);
+        }
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -982,6 +1139,36 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn group_bits_are_dropped_when_the_stage_cannot_join_the_replaced_group() -> io::Result<()> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let d = TempDir::new("group-fallback");
+        let file = File::create(d.0.join("stage"))?;
+        let gid = file.metadata()?.gid();
+        let elsewhere = gid.wrapping_add(1);
+
+        let fs = Faulty { fail_set_group: true, ..Default::default() };
+        let mode = adopt_group(&fs, &file, gid, elsewhere, std::fs::Permissions::from_mode(0o640))?.mode();
+        assert_eq!(mode & 0o777, 0o600, "group bits are dropped when the group cannot be joined");
+        assert!(fs.events.borrow().contains(&"set_group"));
+
+        // No group bits: the group change is never attempted.
+        let fs = Faulty { fail_set_group: true, ..Default::default() };
+        let mode = adopt_group(&fs, &file, gid, elsewhere, std::fs::Permissions::from_mode(0o600))?.mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(!fs.events.borrow().contains(&"set_group"));
+
+        // A stage already in the replaced file's group keeps its bits untouched.
+        let fs = Faulty { fail_set_group: true, ..Default::default() };
+        let mode = adopt_group(&fs, &file, gid, gid, std::fs::Permissions::from_mode(0o640))?.mode();
+        assert_eq!(mode & 0o777, 0o640);
+        assert!(!fs.events.borrow().contains(&"set_group"));
+
+        assert_no_temp(&d.0);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn normal_policy_preserves_existing_modes_with_private_staging() -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let d = TempDir::new("normal-existing");
@@ -992,6 +1179,11 @@ mod tests {
             let fs = Faulty { fail_normal_create: true, ..Default::default() };
             replace_with_options(&fs, NO_RETRY, &p, NewFilePermissions::PlatformDefault, |f| f.write_all(b"replacement"))?;
             assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o777, mode);
+            assert_eq!(
+                std::os::unix::fs::MetadataExt::gid(&std::fs::metadata(&p)?),
+                std::os::unix::fs::MetadataExt::gid(&d.0.metadata()?),
+                "kept in the directory's group"
+            );
             assert!(!fs.events.borrow().contains(&"create_new_normal"));
             assert_eq!(*fs.created_modes.borrow(), [0o600]);
         }
@@ -1139,5 +1331,19 @@ mod tests {
         assert!(atomic_write_custom(&fs, NO_RETRY, &p, b"best effort data").is_ok());
         assert_eq!(std::fs::read(&p).ok(), Some(b"best effort data".to_vec()));
         assert_no_temp(&d.0);
+    }
+
+    #[test]
+    fn temp_name_format_is_valid() {
+        let name = temp_name("document.craft");
+        assert!(name.starts_with(".document.craft."));
+        assert!(name.ends_with(".craft_tmp"));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn wasm_atomic_write_returns_unsupported() {
+        let err = atomic_write(Path::new("dummy.craft"), b"data").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 }

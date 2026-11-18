@@ -1,0 +1,84 @@
+{
+  "id": "D06",
+  "title": "Overprint stroke and overprint fill, process and spot",
+  "source": "DesignCraft DC06",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 150, 100], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [40, 40, 110, 60],
+      "stroke": {"paint": {"spot": "Gold", "tint": 100}, "width": 10},
+      "overprint": {"stroke": true}
+    },
+    {"type": "rect", "rect": [190, 20, 150, 100], "fill": {"cmyk": [0, 0, 100, 0]}},
+    {
+      "type": "rect",
+      "rect": [210, 40, 110, 60],
+      "stroke": {"paint": {"cmyk": [0, 100, 0, 0]}, "width": 10},
+      "overprint": {"stroke": true}
+    },
+    {"type": "rect", "rect": [20, 130, 320, 70], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [40, 140, 120, 50],
+      "fill": {"cmyk": [0, 100, 0, 0]},
+      "overprint": {"fill": true}
+    },
+    {
+      "type": "rect",
+      "rect": [200, 140, 120, 50],
+      "fill": {"spot": "Gold", "tint": 100},
+      "overprint": {"fill": true}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {
+        "at": [40, 70],
+        "inks": {"Gold": 100, "Cyan": 100},
+        "tol": 2,
+        "note": "spot stroke over cyan"
+      },
+      {"at": [95, 70], "inks": {"Cyan": 100}, "tol": 2, "note": "inside the spot-stroked frame"},
+      {
+        "at": [210, 70],
+        "inks": {"Magenta": 100, "Yellow": 100},
+        "tol": 2,
+        "note": "magenta stroke over yellow"
+      },
+      {
+        "at": [265, 70],
+        "inks": {"Yellow": 100},
+        "tol": 2,
+        "note": "inside the magenta-stroked frame"
+      },
+      {
+        "at": [100, 165],
+        "inks": {"Magenta": 100, "Cyan": 100},
+        "tol": 2,
+        "note": "magenta fill over cyan"
+      },
+      {
+        "at": [260, 165],
+        "inks": {"Gold": 100, "Cyan": 100},
+        "tol": 2,
+        "note": "spot fill over cyan"
+      },
+      {"at": [180, 165], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": true,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["DeviceCMYK", "Separation(Gold, alt DeviceCMYK)"],
+    "ext_g_states": [{"OP": true}, {"op": true}],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

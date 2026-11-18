@@ -39,7 +39,12 @@ fn the_transform_cache_is_shared_safely_between_threads() {
     // Each transform's size and result, built one at a time.
     clear_cache();
     set_cache_budget(usize::MAX);
-    let alone: Vec<(usize, Vec<f32>)> = keys.iter().map(eval).map(|(t, out)| (t.table_bytes(), out)).collect();
+    // An entry holds the transform's tables and both profiles' ICC bytes, which a hit is checked
+    // against.
+    let held = |k: &(Builtin, Builtin, Intent, usize, usize), t: &craft_cms::Transform| {
+        t.table_bytes() + profile(k.0).to_bytes().len() + profile(k.1).to_bytes().len()
+    };
+    let alone: Vec<(usize, Vec<f32>)> = keys.iter().map(|k| (k, eval(k))).map(|(k, (t, out))| (held(k, &t), out)).collect();
     let total: usize = alone.iter().map(|(b, _)| b).sum();
     assert_eq!(cache_usage(), (keys.len(), total), "built one at a time, every transform is counted once");
 

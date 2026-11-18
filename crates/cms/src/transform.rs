@@ -10,7 +10,7 @@ use crate::curve::Curve;
 use crate::math;
 use crate::pipeline::{Pipeline, Stage};
 use crate::profile::{ColorSpace, Pcs, Profile, ProfileClass};
-use crate::{CmsError, Intent, check_len, invalid_arg};
+use crate::{CmsError, GpuMatrixShaper, Intent, check_len, invalid_arg};
 
 /// Sample storage of a byte buffer for [`Transform::convert_bytes_many`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,12 +40,14 @@ impl Default for TransformOptions {
 /// Grid sizes of the device-link tables built for integer (and fast float) evaluation.
 pub const GRID_3D: usize = 33;
 pub const GRID_4D: usize = 17;
-const TABLE_1D: usize = 4096;
+const TABLE_1D: usize = GpuMatrixShaper::INPUT_INTERVALS;
 /// Resolution of output shaper tables (indexed by `x^(1/4)`).
-const OUT_TABLE: usize = 4096;
+const OUT_TABLE: usize = GpuMatrixShaper::OUTPUT_ENTRIES;
+// The blocked matrix/TRC path wraps table indices with a mask instead of a bounds check.
+const _: () = assert!(OUT_TABLE.is_power_of_two());
 
 /// ICC v4 perceptual reference medium black (ICC.1:2010 §6.3.4.4), XYZ.
-const PERCEPTUAL_BLACK: [f64; 3] = [0.00336, 0.0034731, 0.00287];
+pub(crate) const PERCEPTUAL_BLACK: [f64; 3] = [0.00336, 0.0034731, 0.00287];
 
 /// Accelerated representation of a transform.
 #[derive(Debug)]
@@ -92,6 +94,8 @@ pub struct Transform {
     post: Option<Post>,
     /// Pre-located grid coordinates per 8-bit code: (offset contribution, fraction) per input.
     grid8: Vec<[(u32, f32); 256]>,
+    /// For an exact core: the first stage's curves at every 8-bit code.
+    exact8: Vec<[f32; 256]>,
     white: Option<White>,
 }
 
@@ -128,7 +132,8 @@ impl Transform {
             .as_ref()
             .map_or(0, |p| p.tables.capacity() * std::mem::size_of::<Vec<f32>>() + p.tables.iter().map(|t| f32s(t.capacity())).sum::<usize>());
         let white = self.white.as_ref().map_or(0, |w| f32s(w.src.capacity() + w.dst.capacity()) + w.src8.as_ref().map_or(0, Vec::capacity));
-        self.pipeline.table_bytes() + core + post + self.grid8.capacity() * std::mem::size_of::<[(u32, f32); 256]>() + white
+        let exact8 = self.exact8.capacity() * std::mem::size_of::<[f32; 256]>();
+        self.pipeline.table_bytes() + core + post + self.grid8.capacity() * std::mem::size_of::<[(u32, f32); 256]>() + exact8 + white
     }
 
     /// Transform from `src` to `dst` with `intent`, optionally with black point compensation.
@@ -175,10 +180,11 @@ impl Transform {
             let tables = cs
                 .iter()
                 .map(|c| {
+                    let inverse = c.inverse64_many();
                     (0..OUT_TABLE)
                         .map(|i| {
                             let u = i as f64 / (OUT_TABLE - 1) as f64;
-                            c.eval_inverse64(u * u * u * u).clamp(0.0, 1.0) as f32
+                            inverse(u * u * u * u).clamp(0.0, 1.0) as f32
                         })
                         .collect()
                 })
@@ -226,7 +232,13 @@ impl Transform {
                 .collect(),
             _ => Vec::new(),
         };
-        Ok(Transform { inputs, outputs, opts, pipeline, core, post, grid8, white: None })
+        let exact8 = match (&core, pipeline.stages().first()) {
+            (Core::Exact, Some(Stage::Curves(cs))) if cs.len() == inputs && inputs <= 4 => {
+                cs.iter().map(|c| std::array::from_fn(|i| c.eval(i as f32 / 255.0))).collect()
+            }
+            _ => Vec::new(),
+        };
+        Ok(Transform { inputs, outputs, opts, pipeline, core, post, grid8, exact8, white: None })
     }
 
     /// White preservation: the source's device white maps to exactly the destination's device
@@ -301,6 +313,31 @@ impl Transform {
     /// The exact evaluation pipeline.
     pub fn pipeline(&self) -> &Pipeline {
         &self.pipeline
+    }
+
+    /// A separable RGB transform for accurate GPU display conversion, when available.
+    ///
+    /// Reuses the input/matrix/output acceleration of the integer conversion path instead
+    /// of interpolating final encoded RGB over a coarse 3D grid. Returns `None` for other
+    /// channel counts, CLUTs, proofing stages, or invalid/unavailable table data, so callers
+    /// can keep their existing display-LUT fallback. This is an SDR representation; see
+    /// [`GpuMatrixShaper`] for the precise sampling and clamping contract.
+    pub fn gpu_matrix_shaper(&self) -> Option<GpuMatrixShaper> {
+        if self.inputs != 3 || self.outputs != 3 {
+            return None;
+        }
+        let Core::Shaper { curves, matrix, .. } = &self.core else { return None };
+        let mut rows = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        if let Some((nr, nc, coefficients, offsets)) = matrix {
+            if *nr != 3 || *nc != 3 || coefficients.len() != 9 || offsets.len() != 3 {
+                return None;
+            }
+            for (row, (coefficients, offset)) in rows.iter_mut().zip(coefficients.as_chunks::<3>().0.iter().zip(offsets)) {
+                let [r, g, b] = coefficients;
+                *row = [*r, *g, *b, *offset];
+            }
+        }
+        GpuMatrixShaper::from_parts(rows, curves, self.post.as_ref().map(|p| p.tables.as_slice()))
     }
 
     /// Exact evaluation of one colour: `input` holds at least `inputs` normalised values, `out`
@@ -474,6 +511,10 @@ impl Transform {
                     }
                 }
             }
+            Core::Shaper { curves8, matrix: Some((3, 3, m, off)), .. } if self.shaper3_ok(curves8.len(), m.len(), off.len()) => {
+                let load = |sp: &[u8]| [curves8[0][sp[0] as usize], curves8[1][sp[1] as usize], curves8[2][sp[2] as usize]];
+                self.shaper3_blocks(s, ss, d, ds, extra, m, off, load, q);
+            }
             Core::Shaper { curves8, matrix, .. } => {
                 let mut v = [0.0f32; 16];
                 for (sp, dp) in s.chunks_exact(ss).zip(d.chunks_exact_mut(ds)) {
@@ -482,6 +523,27 @@ impl Transform {
                     }
                     apply_matrix(matrix, &v, &mut mid, self.inputs);
                     self.finish(&mid, &mut out);
+                    for k in 0..self.outputs {
+                        dp[k] = q(out[k]);
+                    }
+                    for e in 0..extra {
+                        dp[self.outputs + e] = sp[self.inputs + e];
+                    }
+                }
+            }
+            Core::Exact if !self.exact8.is_empty() => {
+                let mut inp = [0.0f32; 16];
+                for (sp, dp) in s.chunks_exact(ss).zip(d.chunks_exact_mut(ds)) {
+                    let mut v = [0.0f32; 16];
+                    for k in 0..self.inputs {
+                        inp[k] = sp[k] as f32 / 255.0;
+                        v[k] = self.exact8[k][sp[k] as usize];
+                    }
+                    // Device white stays exact, as on the per-pixel exact path.
+                    match self.white_for(&inp) {
+                        Some(w) => out[..self.outputs].copy_from_slice(w),
+                        None => self.pipeline.eval_after_first(&mut v, &mut out),
+                    }
                     for k in 0..self.outputs {
                         dp[k] = q(out[k]);
                     }
@@ -508,6 +570,74 @@ impl Transform {
         }
     }
 
+    fn shaper3_ok(&self, curves: usize, m: usize, off: usize) -> bool {
+        self.inputs == 3
+            && self.outputs == 3
+            && curves == 3
+            && m == 9
+            && off == 3
+            && self.post.as_ref().is_some_and(|p| p.tables.len() == 3 && p.tables.iter().all(|t| t.len() == OUT_TABLE))
+    }
+
+    /// Matrix/TRC transform of whole pixels in blocks: the matrix and the output-table index
+    /// maths run over a block of pixels at a time (same operations, same order, per pixel).
+    #[allow(clippy::too_many_arguments)]
+    fn shaper3_blocks<S: Copy>(
+        &self,
+        s: &[S],
+        ss: usize,
+        d: &mut [S],
+        ds: usize,
+        extra: usize,
+        m: &[f32],
+        off: &[f32],
+        load: impl Fn(&[S]) -> [f32; 3],
+        store: impl Fn(f32) -> S,
+    ) {
+        const B: usize = 64;
+        let Some(post) = self.post.as_ref() else { return };
+        let tabs = [&post.tables[0][..OUT_TABLE], &post.tables[1][..OUT_TABLE], &post.tables[2][..OUT_TABLE]];
+        let m: [f32; 9] = std::array::from_fn(|i| m[i]);
+        let off: [f32; 3] = std::array::from_fn(|i| off[i]);
+        let n_px = (s.len() / ss).min(d.len() / ds);
+        let mut x = [[0.0f32; B]; 3];
+        let mut start = 0;
+        while start < n_px {
+            let n = B.min(n_px - start);
+            let sb = &s[start * ss..(start + n) * ss];
+            let db = &mut d[start * ds..(start + n) * ds];
+            for (j, sp) in sb.chunks_exact(ss).enumerate() {
+                let [a, b, c] = load(sp);
+                for r in 0..3 {
+                    let mut acc = off[r];
+                    acc += m[r * 3] * a;
+                    acc += m[r * 3 + 1] * b;
+                    acc += m[r * 3 + 2] * c;
+                    x[r][j] = acc;
+                }
+            }
+            for (ch, t) in tabs.iter().enumerate() {
+                let mut u = [0.0f32; B];
+                let mut ix = [0i32; B];
+                for j in 0..B {
+                    let v = x[ch][j].clamp(0.0, 1.0).sqrt().sqrt() * (OUT_TABLE - 1) as f32;
+                    let i = (v as i32).min(OUT_TABLE as i32 - 2);
+                    ix[j] = i;
+                    u[j] = v - i as f32;
+                }
+                for (j, dp) in db.chunks_exact_mut(ds).enumerate() {
+                    let i = ix[j] as usize & (OUT_TABLE - 1);
+                    let (v0, v1) = (t[i], t[(i + 1) & (OUT_TABLE - 1)]);
+                    dp[ch] = store(v0 + (v1 - v0) * u[j]);
+                }
+            }
+            for (sp, dp) in sb.chunks_exact(ss).zip(db.chunks_exact_mut(ds)) {
+                dp[3..3 + extra].copy_from_slice(&sp[3..3 + extra]);
+            }
+            start += n;
+        }
+    }
+
     /// Converts 16-bit pixels (see [`Transform::convert_f32`] for the layout).
     pub fn convert_u16(&self, src: &[u16], src_stride: usize, dst: &mut [u16], dst_stride: usize, copy_extra: bool) -> Result<(), CmsError> {
         self.check_buffers(src.len(), src_stride, dst.len(), dst_stride)?;
@@ -517,6 +647,14 @@ impl Transform {
     }
 
     fn run_u16(&self, s: &[u16], ss: usize, d: &mut [u16], ds: usize, extra: usize) {
+        if let Core::Shaper { curves, matrix: Some((3, 3, m, off)), .. } = &self.core
+            && self.shaper3_ok(curves.len(), m.len(), off.len())
+        {
+            let load = |sp: &[u16]| {
+                [table(&curves[0], sp[0] as f32 / 65535.0), table(&curves[1], sp[1] as f32 / 65535.0), table(&curves[2], sp[2] as f32 / 65535.0)]
+            };
+            return self.shaper3_blocks(s, ss, d, ds, extra, m, off, load, |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+        }
         let mut inp = [0.0f32; 16];
         let mut out = [0.0f32; 16];
         for (sp, dp) in s.chunks_exact(ss).zip(d.chunks_exact_mut(ds)) {
@@ -868,8 +1006,13 @@ pub fn clear_cache() {
     c.bytes = 0;
 }
 
+/// A cached transform with the ICC bytes of the profiles it was built from.
 struct Entry {
+    src: Arc<Vec<u8>>,
+    dst: Arc<Vec<u8>>,
     transform: Arc<Transform>,
+    /// What the entry holds, against the budget: the transform's tables and both profiles' ICC
+    /// bytes.
     bytes: usize,
     /// Value of the cache's counter when this transform was last asked for.
     used: u64,
@@ -902,7 +1045,9 @@ fn cache() -> &'static Mutex<Cache> {
     CACHE.get_or_init(Default::default)
 }
 
-/// Process-wide cache of transforms keyed by profile content and options.
+/// Process-wide cache of transforms keyed by profile content and options. The key is the
+/// profiles' 64-bit hashes, which a crafted profile can share with another, so a hit counts only
+/// when the bytes match too; a colliding pair gets its own, uncached transform.
 ///
 /// Least recently used transforms are dropped when the cache passes [`MAX_CACHED`] or its byte
 /// budget ([`set_cache_budget`]). It used to clear itself whole, which dropped the transforms the
@@ -910,27 +1055,36 @@ fn cache() -> &'static Mutex<Cache> {
 /// CMYK document's cache was an order of magnitude larger than an RGB one's (#63).
 pub fn cached(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Arc<Transform>, CmsError> {
     let key = (src.content_hash(), dst.content_hash(), opts);
+    let (src_bytes, dst_bytes) = (src.to_bytes(), dst.to_bytes());
     let cache = cache();
-    {
+    let hit = {
         let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         c.tick += 1;
         let tick = c.tick;
-        if let Some(e) = c.entries.get_mut(&key) {
-            e.used = tick;
-            return Ok(e.transform.clone());
-        }
+        c.entries.get_mut(&key).map(|e| {
+            let same = e.src == src_bytes && e.dst == dst_bytes;
+            if same {
+                e.used = tick;
+            }
+            same.then(|| e.transform.clone())
+        })
+    };
+    match hit {
+        Some(Some(t)) => return Ok(t),
+        Some(None) => return Ok(Arc::new(Transform::with_options(src, dst, opts)?)),
+        None => {}
     }
     // Built without the lock held: another thread may want a different transform meanwhile, and
     // building one takes far longer than a lookup.
     let t = Arc::new(Transform::with_options(src, dst, opts)?);
-    let bytes = t.table_bytes();
+    let bytes = t.table_bytes().saturating_add(src_bytes.len()).saturating_add(dst_bytes.len());
     let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
     c.tick += 1;
     let used = c.tick;
-    if let Some(old) = c.entries.insert(key, Entry { transform: t.clone(), bytes, used }) {
+    if let Some(old) = c.entries.insert(key, Entry { src: src_bytes, dst: dst_bytes, transform: t.clone(), bytes, used }) {
         c.bytes = c.bytes.saturating_sub(old.bytes);
     }
-    c.bytes += bytes;
+    c.bytes = c.bytes.saturating_add(bytes);
     c.evict(BUDGET.load(Ordering::Relaxed));
     Ok(t)
 }

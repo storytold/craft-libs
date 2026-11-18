@@ -127,6 +127,8 @@ fn show_glyph<'a>(
 
     device.set_soft_mask(ctx.get().graphics_state.soft_mask.clone());
     device.set_blend_mode(ctx.get().graphics_state.blend_mode);
+    // Craft patch (flatten): tell the device the overprint parameters.
+    crate::interpret::path::set_overprint(ctx, device);
     let stroke_props = ctx.stroke_props();
 
     // PdfCraft patch: only mode 3 has any effect on text in a Type 3 font (ISO 32000-1
@@ -189,6 +191,16 @@ fn show_glyph<'a>(
         }
         TextRenderingMode::Clip => {
             clip_glyph(ctx, glyph, glyph_transform);
+            // PdfCraft patch (#3116): report clipping text separately from invisible OCR text.
+            // Extraction filters must retain text that is filled through its
+            // clipping path without rendering devices drawing it directly.
+            device.draw_glyph(
+                glyph,
+                ctx.get().ctm,
+                glyph_transform,
+                &get_paint(ctx, false),
+                &GlyphDrawMode::Clip,
+            );
         }
         TextRenderingMode::FillAndClip => {
             clip_glyph(ctx, glyph, glyph_transform);
@@ -231,6 +243,9 @@ fn show_glyph<'a>(
 }
 
 pub(crate) fn clip_glyph(context: &mut Context<'_>, glyph: &Glyph<'_>, transform: Affine) {
+    // PdfCraft patch: this glyph is shown in a clipping mode, so the text object clips at `ET`
+    // whether or not the glyph has an outline to clip to.
+    context.get_mut().text_state.clip_shown = true;
     match glyph {
         Glyph::Outline(o) => {
             let outline = transform * o.outline();
@@ -242,6 +257,9 @@ pub(crate) fn clip_glyph(context: &mut Context<'_>, glyph: &Glyph<'_>, transform
         }
         Glyph::Type3(_) => {
             warn!("text rendering mode clip not implemented for shape glyphs");
+            // PdfCraft patch: the clip this glyph belongs to cannot be built, so `ET` leaves what
+            // follows unclipped rather than applying an empty clip and hiding it.
+            context.get_mut().text_state.clip_unsupported = true;
         }
     }
 }

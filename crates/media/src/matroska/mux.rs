@@ -6,8 +6,17 @@ use std::io::{Seek, SeekFrom, Write};
 
 use crate::matroska::ebml::{write_id, write_size, write_unknown_size};
 use crate::matroska::error::{Error, Result};
-use crate::matroska::ids::*;
-use crate::matroska::track::TrackKind;
+use crate::matroska::ids::{
+    AUDIO, BIT_DEPTH, BITS_PER_CHANNEL, BLOCK, BLOCK_DURATION, BLOCK_GROUP, CB_SUBSAMPLING_HORZ, CB_SUBSAMPLING_VERT, CHANNELS, CHROMA_SITING_HORZ,
+    CHROMA_SITING_VERT, CHROMA_SUBSAMPLING_HORZ, CHROMA_SUBSAMPLING_VERT, CLUSTER, CODEC_DELAY, CODEC_ID, CODEC_PRIVATE, COLOUR,
+    CUE_CLUSTER_POSITION, CUE_POINT, CUE_TIME, CUE_TRACK, CUE_TRACK_POSITIONS, CUES, DEFAULT_DURATION, DOC_TYPE, DOC_TYPE_READ_VERSION,
+    DOC_TYPE_VERSION, DURATION, EBML, EBML_MAX_ID_LENGTH, EBML_MAX_SIZE_LENGTH, EBML_READ_VERSION, EBML_VERSION, FLAG_LACING, INFO, LANGUAGE,
+    LUMINANCE_MAX, LUMINANCE_MIN, MASTERING_METADATA, MATRIX_COEFFICIENTS, MAX_CLL, MAX_FALL, MUXING_APP, NAME, PIXEL_HEIGHT, PIXEL_WIDTH, PRIMARIES,
+    PRIMARY_B_X, PRIMARY_B_Y, PRIMARY_G_X, PRIMARY_G_Y, PRIMARY_R_X, PRIMARY_R_Y, RANGE, REFERENCE_BLOCK, SAMPLING_FREQUENCY, SEEK, SEEK_HEAD,
+    SEEK_ID, SEEK_POSITION, SEEK_PRE_ROLL, SEGMENT, SIMPLE_BLOCK, TIMESTAMP, TIMESTAMP_SCALE, TITLE, TRACK_ENTRY, TRACK_NUMBER, TRACK_TYPE,
+    TRACK_UID, TRACKS, TRANSFER_CHARACTERISTICS, VIDEO, VOID, WHITE_POINT_X, WHITE_POINT_Y, WRITING_APP,
+};
+use crate::matroska::track::{Color, TrackKind};
 
 /// Lacing used for audio tracks. Only frames of a track with a DefaultDuration lace, and a lace
 /// ends where the timestamps stop advancing by that duration.
@@ -31,6 +40,10 @@ pub struct TrackSpec {
     pub name: Option<String>,
     /// Pixel width/height for video tracks.
     pub video_size: Option<(u32, u32)>,
+    /// The video track's `Colour` element (RFC 9559): the fields that are set are written. VP9's
+    /// own colour syntax carries only the matrix and range, so without it a Rec. 2020, P3, PQ or
+    /// HLG stream reads as BT.709. Ignored without a `video_size`.
+    pub color: Option<Color>,
     /// (sampling frequency, channels, bit depth) for audio tracks.
     pub audio: Option<(f64, u64, Option<u64>)>,
     pub codec_delay_ns: u64,
@@ -47,6 +60,7 @@ impl TrackSpec {
             language: None,
             name: None,
             video_size: None,
+            color: None,
             audio: None,
             codec_delay_ns: 0,
             seek_pre_roll_ns: 0,
@@ -64,7 +78,8 @@ pub struct MuxOptions {
     /// Start a new cluster at the next video keyframe (or any frame without video) after this long.
     pub cluster_duration_ns: u64,
     pub lacing: LacingMode,
-    /// Maximum frames per laced block.
+    /// Maximum frames per laced block. Matroska allows 1 to 256; [`MkvWriter::new`] clamps
+    /// other values into that range.
     pub max_lace_frames: usize,
     pub title: Option<String>,
     pub writing_app: String,
@@ -97,6 +112,50 @@ pub(crate) fn el_uint(out: &mut Vec<u8>, id: u32, v: u64) {
 
 pub(crate) fn el_float(out: &mut Vec<u8>, id: u32, v: f64) {
     el(out, id, &v.to_be_bytes());
+}
+
+/// The body of a `Colour` element: every field of `c` that is set.
+fn colour(c: &Color) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (id, v) in [
+        (MATRIX_COEFFICIENTS, c.matrix_coefficients),
+        (BITS_PER_CHANNEL, c.bits_per_channel),
+        (CHROMA_SUBSAMPLING_HORZ, c.chroma_subsampling_horz),
+        (CHROMA_SUBSAMPLING_VERT, c.chroma_subsampling_vert),
+        (CB_SUBSAMPLING_HORZ, c.cb_subsampling_horz),
+        (CB_SUBSAMPLING_VERT, c.cb_subsampling_vert),
+        (CHROMA_SITING_HORZ, c.chroma_siting_horz),
+        (CHROMA_SITING_VERT, c.chroma_siting_vert),
+        (RANGE, c.range),
+        (TRANSFER_CHARACTERISTICS, c.transfer_characteristics),
+        (PRIMARIES, c.primaries),
+        (MAX_CLL, c.max_cll),
+        (MAX_FALL, c.max_fall),
+    ] {
+        if let Some(v) = v {
+            el_uint(&mut out, id, v);
+        }
+    }
+    if let Some(m) = &c.mastering {
+        let [r, g, b] = m.primaries;
+        let mut md = Vec::new();
+        for (id, v) in [
+            (PRIMARY_R_X, r.0),
+            (PRIMARY_R_Y, r.1),
+            (PRIMARY_G_X, g.0),
+            (PRIMARY_G_Y, g.1),
+            (PRIMARY_B_X, b.0),
+            (PRIMARY_B_Y, b.1),
+            (WHITE_POINT_X, m.white_point.0),
+            (WHITE_POINT_Y, m.white_point.1),
+            (LUMINANCE_MAX, m.luminance_max),
+            (LUMINANCE_MIN, m.luminance_min),
+        ] {
+            el_float(&mut md, id, v);
+        }
+        el(&mut out, MASTERING_METADATA, &md);
+    }
+    out
 }
 
 pub(crate) fn el_str(out: &mut Vec<u8>, id: u32, s: &str) {
@@ -136,16 +195,21 @@ pub struct MkvWriter<W: Write + Seek> {
     cluster_start_ns: i64,
     pending: Option<Pending>,
     cues: Vec<(u64, u64, u64)>, // (time ticks, track number, cluster position)
-    cued_tracks_in_cluster: Vec<bool>,
+    /// The cluster number in which each track last had a cue. Starting a cluster bumps
+    /// `cluster_number` instead of clearing an entry for every declared track.
+    track_cued_in: Vec<u64>,
+    cluster_number: u64,
     end_ns: i64,
     has_video: bool,
 }
 
 impl<W: Write + Seek> MkvWriter<W> {
-    pub fn new(mut w: W, tracks: Vec<TrackSpec>, opts: MuxOptions) -> Result<Self> {
+    pub fn new(mut w: W, tracks: Vec<TrackSpec>, mut opts: MuxOptions) -> Result<Self> {
         if tracks.is_empty() || opts.timestamp_scale == 0 {
             return Err(Error::Invalid("muxer needs at least one track and a non-zero timestamp scale".into()));
         }
+        // A block stores its frame count minus one in a byte.
+        opts.max_lace_frames = opts.max_lace_frames.clamp(1, 256);
         let mut out = Vec::new();
         let mut h = Vec::new();
         el_uint(&mut h, EBML_VERSION, 1);
@@ -221,6 +285,9 @@ impl<W: Write + Seek> MkvWriter<W> {
                 let mut v = Vec::new();
                 el_uint(&mut v, PIXEL_WIDTH, pw as u64);
                 el_uint(&mut v, PIXEL_HEIGHT, ph as u64);
+                if let Some(c) = &t.color {
+                    el(&mut v, COLOUR, &colour(c));
+                }
                 el(&mut e, VIDEO, &v);
             }
             if let Some((rate, ch, bits)) = t.audio {
@@ -253,7 +320,8 @@ impl<W: Write + Seek> MkvWriter<W> {
             cluster_start_ns: 0,
             pending: None,
             cues: Vec::new(),
-            cued_tracks_in_cluster: vec![false; n],
+            track_cued_in: vec![u64::MAX; n],
+            cluster_number: 0,
             end_ns: 0,
             has_video,
         })
@@ -294,8 +362,8 @@ impl<W: Write + Seek> MkvWriter<W> {
         }
         let cts = self.cluster_ts.unwrap_or(0);
         // cue: video keyframes, or the first frame of each track per cluster when there is no video
-        if (is_video && keyframe) || (!self.has_video && !self.cued_tracks_in_cluster[track]) {
-            self.cued_tracks_in_cluster[track] = true;
+        if (is_video && keyframe) || (!self.has_video && self.track_cued_in[track] != self.cluster_number) {
+            self.track_cued_in[track] = self.cluster_number;
             let pos = self.w.stream_position()? - self.segment_data_start;
             if self.cues.last().is_none_or(|c| c.2 != pos || c.1 != track as u64 + 1) {
                 self.cues.push((ts as u64, track as u64 + 1, pos));
@@ -329,7 +397,7 @@ impl<W: Write + Seek> MkvWriter<W> {
             block.extend_from_slice(data);
             let mut g = Vec::new();
             el(&mut g, BLOCK, &block);
-            el_uint(&mut g, BLOCK_DURATION, (d as i64 / scale) as u64);
+            el_uint(&mut g, BLOCK_DURATION, ((u128::from(d) + scale as u128 / 2) / scale as u128) as u64);
             if !keyframe {
                 el(&mut g, REFERENCE_BLOCK, &[0xFF]);
             }
@@ -399,7 +467,7 @@ impl<W: Write + Seek> MkvWriter<W> {
         }
         self.cluster.clear();
         self.cluster_ts = None;
-        self.cued_tracks_in_cluster.iter_mut().for_each(|c| *c = false);
+        self.cluster_number = self.cluster_number.wrapping_add(1);
         Ok(())
     }
 
@@ -567,5 +635,92 @@ mod tests {
         let bytes = m.finish().unwrap().into_inner();
         let got: Vec<_> = Demuxer::from_slice(&bytes).unwrap().map(|p| p.unwrap()).map(|p| (p.track, p.pts, p.lace)).collect();
         assert_eq!(got, [(0, 0, 0), (0, 100, 0), (0, 110, 1), (0, 120, 2), (0, 200, 0), (1, 300, 0), (1, 310, 0)]);
+    }
+
+    #[test]
+    fn lace_size_is_clamped_to_256_frames() {
+        let mut a = TrackSpec::new(TrackKind::Audio, "A_PCM/INT/LIT");
+        a.audio = Some((48000.0, 1, Some(16)));
+        a.default_duration_ns = Some(1_000_000);
+        for lacing in [LacingMode::Xiph, LacingMode::Ebml, LacingMode::FixedOrEbml] {
+            let opts = MuxOptions { lacing, max_lace_frames: 300, ..Default::default() };
+            let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![a.clone()], opts).unwrap();
+            for i in 0..300i64 {
+                m.write_frame(0, i * 1_000_000, true, &[i as u8; 4], None).unwrap();
+            }
+            let bytes = m.finish().unwrap().into_inner();
+            let d = Demuxer::from_slice(&bytes).unwrap();
+            assert!(d.file().warnings.is_empty(), "{:?}", d.file().warnings);
+            let got: Vec<_> = d.map(|p| p.unwrap()).map(|p| (p.pts, p.lace, p.data)).collect();
+            let want: Vec<_> = (0..300i64).map(|i| (i, (i % 256) as u16, vec![i as u8; 4])).collect();
+            assert_eq!(got, want);
+        }
+    }
+
+    /// A video track's `Colour` element reads back as it was given, and is absent when not set.
+    #[test]
+    fn colour_element_roundtrip() {
+        use crate::matroska::track::MasteringMetadata;
+        let write = |color: Option<Color>| {
+            let mut v = TrackSpec::new(TrackKind::Video, "V_VP9");
+            v.video_size = Some((16, 16));
+            v.color = color;
+            let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![v], MuxOptions::default()).unwrap();
+            m.write_frame(0, 0, true, &[0; 4], None).unwrap();
+            let bytes = m.finish().unwrap().into_inner();
+            crate::matroska::open(&bytes[..]).unwrap().tracks[0].video.clone().unwrap().color
+        };
+        assert_eq!(write(None), None);
+        // Rec. 2020 PQ, broadcast range: the four fields a render knows
+        let pq = Color { matrix_coefficients: Some(9), range: Some(1), transfer_characteristics: Some(16), primaries: Some(9), ..Default::default() };
+        assert_eq!(write(Some(pq.clone())), Some(pq.clone()));
+        let full = Color {
+            bits_per_channel: Some(10),
+            chroma_subsampling_horz: Some(1),
+            chroma_subsampling_vert: Some(1),
+            cb_subsampling_horz: Some(0),
+            cb_subsampling_vert: Some(0),
+            chroma_siting_horz: Some(1),
+            chroma_siting_vert: Some(2),
+            max_cll: Some(1000),
+            max_fall: Some(400),
+            mastering: Some(MasteringMetadata {
+                primaries: [(0.708, 0.292), (0.17, 0.797), (0.131, 0.046)],
+                white_point: (0.3127, 0.329),
+                luminance_max: 1000.0,
+                luminance_min: 0.0001,
+            }),
+            ..pq
+        };
+        assert_eq!(write(Some(full.clone())), Some(full));
+    }
+
+    #[test]
+    fn block_duration_rounds_to_the_nearest_tick() {
+        let mut v = TrackSpec::new(TrackKind::Video, "V_MJPEG");
+        v.video_size = Some((16, 16));
+        let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![v], MuxOptions::default()).unwrap();
+        m.write_frame(0, 0, true, &[0; 4], Some(41_700_000)).unwrap();
+        let bytes = m.finish().unwrap().into_inner();
+        assert_eq!(Demuxer::from_slice(&bytes).unwrap().next_packet().unwrap().unwrap().duration, 42);
+    }
+
+    #[test]
+    fn audio_only_files_cue_each_track_once_per_cluster() {
+        let mut a = TrackSpec::new(TrackKind::Audio, "A_PCM/INT/LIT");
+        a.audio = Some((48000.0, 1, Some(16)));
+        let opts = MuxOptions { cluster_duration_ns: 1, lacing: LacingMode::None, ..Default::default() };
+        let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![a.clone(), a], opts).unwrap();
+        for i in 0..4i64 {
+            m.write_frame(0, i * 10, true, &[1; 4], None).unwrap();
+            m.write_frame(1, i * 10, true, &[2; 4], None).unwrap();
+            m.write_frame(0, i * 10 + 1, true, &[3; 4], None).unwrap();
+        }
+        // Clusters hold [t0, t1] then [t0] at each step: one cue per track per cluster.
+        let mut seen: Vec<(u64, u64)> = m.cues.iter().map(|c| (c.1, c.2)).collect();
+        assert_eq!(seen.len(), 12, "{:?}", m.cues);
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 12, "{:?}", m.cues);
     }
 }

@@ -8,18 +8,34 @@ use alloc::vec::Vec;
 use core::iter;
 use hayro_ccitt::{DecodeSettings, Decoder, DecoderContext, EncodingMode};
 
+/// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`).
 pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    limit: usize,
 ) -> Option<FilterResult<'static>> {
     let k = params.get::<i32>(K).unwrap_or(0);
 
-    let rows = params.get::<u32>(ROWS).unwrap_or(image_params.height);
+    // PdfCraft patch: `/Rows 0` means the height is not predetermined (ISO 32000-2 Table 11, and
+    // the default), not zero rows. Scanners write it on Group 4 pages, which rendered blank.
+    // PdfCraft patch (19): fewer `/Rows` than the image's `/Height` doesn't cut the image short: a
+    // plotter driver wrote `/Rows` equal to `/Columns`, and the rows after it were drawn black
+    // (#3308). The decoder still stops where the data ends.
+    let rows = params
+        .get::<u32>(ROWS)
+        .filter(|&rows| rows != 0)
+        .map_or(image_params.height, |rows| rows.max(image_params.height));
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
+    // A `/Columns` past `u32::MAX` is refused: truncated, it would wrap to a small width that
+    // passes `ccitt_size_ok` and decode the image at the wrong width.
+    let columns = match params.get::<usize>(COLUMNS) {
+        Some(columns) => u32::try_from(columns).ok()?,
+        None => 1728,
+    };
 
     let settings = DecodeSettings {
-        columns: params.get::<usize>(COLUMNS).unwrap_or(1728) as u32,
+        columns,
         rows,
         end_of_block,
         end_of_line: params.get::<bool>(END_OF_LINE).unwrap_or(false),
@@ -36,6 +52,16 @@ pub(crate) fn decode(
 
     // PdfCraft patch: refuse absurd sizes before the decoder allocates for them.
     if !super::ccitt_size_ok(settings.columns, settings.rows) {
+        return None;
+    }
+    // PdfCraft patch: the decoder stops after `rows` rows; with `/Rows 0` (unknown) it ran to the
+    // end of the data, and a bit of 2D code can repeat a whole row, so a small stream produced
+    // gigabytes. Decode at most the rows that fit the output limit and the pixel cap. The limit
+    // counts the stream's own 1-bit rows (`decode_limit`), whatever depth the rows are widened to.
+    let mut settings = settings;
+    let fit = super::ccitt_max_rows(settings.columns, settings.columns.div_ceil(8), limit);
+    settings.rows = if settings.rows == 0 { fit } else { settings.rows.min(fit) };
+    if settings.rows == 0 {
         return None;
     }
 
@@ -153,4 +179,23 @@ pub(crate) fn decode(
             height: image_params.height,
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode;
+    use crate::object::stream::ImageDecodeParams;
+    use crate::object::{Dict, FromBytes};
+
+    // An 8 x 4 all-black Group 4 stream: one horizontal-mode row, three V0 rows, then EOFB.
+    const ALL_BLACK_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
+
+    #[test]
+    fn columns_past_u32_max_are_refused_not_wrapped() {
+        let params = ImageDecodeParams { width: 8, height: 4, ..Default::default() };
+        let decoded = |dict: &[u8]| decode(&ALL_BLACK_8X4, &Dict::from_bytes(dict).unwrap(), &params, 1 << 20);
+        assert!(decoded(b"<< /K -1 /Columns 8 >>").is_some());
+        // 2^32 + 8 would wrap to 8 columns.
+        assert!(decoded(b"<< /K -1 /Columns 4294967304 >>").is_none());
+    }
 }

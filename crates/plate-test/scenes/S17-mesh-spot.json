@@ -1,0 +1,52 @@
+{
+  "id": "S17",
+  "title": "Mesh gradient with a spot, process and DeviceN corner",
+  "source": "storytold/craft-libs#184 (mesh gradients), CodeRabbit review",
+  "page": [240, 160],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "objects": [
+    {
+      "type": "rect",
+      "rect": [20, 20, 200, 120],
+      "fill": {
+        "mesh": {
+          "rect": [20, 20, 200, 120],
+          "corners": [
+            {"spot": "Gold", "tint": 100},
+            {"cmyk": [100, 0, 0, 0]},
+            {"inks": {"Magenta": 100, "Gold": 50}},
+            {"cmyk": [0, 0, 0, 0]}
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [24, 24], "inks": {"Gold": 95}, "tol": 10, "note": "top left: Gold"},
+      {"at": [216, 24], "inks": {"Cyan": 95}, "tol": 10, "note": "top right: Cyan"},
+      {
+        "at": [216, 136],
+        "inks": {"Magenta": 95, "Gold": 47},
+        "tol": 10,
+        "note": "bottom right: Magenta and half Gold"
+      },
+      {"at": [24, 136], "inks": {}, "tol": 10, "note": "bottom left: paper"},
+      {
+        "at": [120, 80],
+        "inks": {"Gold": 37.5, "Cyan": 25, "Magenta": 25},
+        "tol": 10,
+        "note": "center: bilinear mix of the corners"
+      }
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "smask": false,
+    "color_spaces_include": ["DeviceN(Cyan,Magenta,Gold, alt DeviceCMYK)"],
+    "device_rgb": false,
+    "output_intents": []
+  },
+  "note": "Corner colors in different ink spaces share one DeviceN space: process colorants first, then the spot."
+}

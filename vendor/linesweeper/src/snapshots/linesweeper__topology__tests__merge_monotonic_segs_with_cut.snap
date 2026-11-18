@@ -1,0 +1,320 @@
+---
+source: src/topology.rs
+expression: "(top, contours)"
+---
+(Topology(
+  eps: 0.000001,
+  correctness: GoodEnough,
+  tag: [
+    (),
+    (),
+    (),
+    (),
+  ],
+  open_segs: [
+    [],
+    [],
+    [],
+    [],
+  ],
+  winding: OutputSegVec(
+    inner: [
+      HalfSegmentWindingNumbers(
+        counter_clockwise: 1,
+        clockwise: 0,
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: 0,
+        clockwise: 1,
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: 1,
+        clockwise: 0,
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: -1,
+        clockwise: 0,
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: 0,
+        clockwise: -1,
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: 0,
+        clockwise: -1,
+      ),
+    ],
+  ),
+  points: PointVec(
+    inner: [
+      Point(
+        y: -0.2886751345948129,
+        x: -0.769800358919501,
+      ),
+      Point(
+        y: 0.0,
+        x: -1.0,
+      ),
+      Point(
+        y: 0.0,
+        x: 0.00000000000000016653345369377348,
+      ),
+      Point(
+        y: 0.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 0.28867513459481287,
+        x: 0.7698003589195007,
+      ),
+    ],
+  ),
+  point_idx: HalfOutputSegVec(
+    start: [
+      PointIdx(0),
+      PointIdx(0),
+      PointIdx(1),
+      PointIdx(2),
+      PointIdx(2),
+      PointIdx(3),
+    ],
+    end: [
+      PointIdx(1),
+      PointIdx(2),
+      PointIdx(2),
+      PointIdx(4),
+      PointIdx(3),
+      PointIdx(4),
+    ],
+  ),
+  point_neighbors: HalfOutputSegVec(
+    start: [
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: false,
+        ),
+      ),
+    ],
+    end: [
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: false,
+        ),
+      ),
+    ],
+  ),
+  deleted: OutputSegVec(
+    inner: [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ],
+  ),
+  scan_west: OutputSegVec(
+    inner: [
+      None,
+      Some(OutputSegIdx(0)),
+      None,
+      None,
+      Some(OutputSegIdx(3)),
+      Some(OutputSegIdx(3)),
+    ],
+  ),
+  scan_east: OutputSegVec(
+    inner: [
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+    ],
+  ),
+  scan_after: [],
+  orig_seg: OutputSegVec(
+    inner: [
+      SegIdx(0),
+      SegIdx(1),
+      SegIdx(3),
+      SegIdx(1),
+      SegIdx(3),
+      SegIdx(2),
+    ],
+  ),
+  positively_oriented: OutputSegVec(
+    inner: [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+    ],
+  ),
+), Contours(
+  contours: [
+    Contour(
+      path: BezPath([
+        MoveTo(Point(
+          x: -1.0,
+          y: 0.0,
+        )),
+        CurveTo(Point(
+          x: -1.0,
+          y: -0.5,
+        ), Point(
+          x: -0.5,
+          y: -0.25,
+        ), Point(
+          x: 0.0,
+          y: 0.0,
+        )),
+        LineTo(Point(
+          x: -1.0,
+          y: 0.0,
+        )),
+        ClosePath,
+      ]),
+      parent: None,
+      outer: true,
+    ),
+    Contour(
+      path: BezPath([
+        MoveTo(Point(
+          x: 0.00000000000000016653345369377348,
+          y: 0.0,
+        )),
+        LineTo(Point(
+          x: 1.0,
+          y: 0.0,
+        )),
+        CurveTo(Point(
+          x: 1.0,
+          y: 0.5,
+        ), Point(
+          x: 0.5,
+          y: 0.25,
+        ), Point(
+          x: 0.0,
+          y: 0.0,
+        )),
+        ClosePath,
+      ]),
+      parent: None,
+      outer: true,
+    ),
+  ],
+))

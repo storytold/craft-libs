@@ -1,0 +1,104 @@
+diff --git a/src/text/cid.rs b/src/text/cid.rs
+index 2c52127..dbd4e37 100644
+--- a/src/text/cid.rs
++++ b/src/text/cid.rs
+@@ -238,6 +238,8 @@ impl CIDFont {
+         let num_glyphs = subsetted.num_glyphs();
+         let subsetted_data = subsetted.font_data().0;
+ 
++        // Outlives the stream, which may borrow it.
++        let with_os2;
+         let font_stream = {
+             let mut data = subsetted_data.as_ref().as_ref();
+ 
+@@ -248,6 +250,14 @@ impl CIDFont {
+ 
+             if let Some(cff) = subsetted_ref.data_for_tag(Cff::TAG) {
+                 data = cff.as_bytes();
++            } else if let Some(os2) = self.font.font_ref().data_for_tag(OS2_TAG) {
++                // The subsetter writes no `OS/2`, so the font's embedding permissions
++                // (`fsType`) would not reach the PDF: a Preview & Print or Restricted font
++                // would look unrestricted to what reads it later. Keep the source's table.
++                if let Some(font) = with_table(data, OS2_TAG.to_be_bytes(), os2.as_bytes()) {
++                    with_os2 = font;
++                    data = &with_os2;
++                }
+             }
+ 
+             FilterStreamBuilder::new_from_binary_data(data).finish(&sc.serialize_settings())
+@@ -433,6 +443,75 @@ pub(crate) fn base_font_name<T: Hash>(font: &Font, data: &T) -> String {
+     format!("{subset_tag}+{trimmed}")
+ }
+ 
++const OS2_TAG: skrifa::raw::types::Tag = skrifa::raw::types::Tag::new(b"OS/2");
++
++/// The sfnt `font` with `table` added under `tag`, or `None` when `font` can't be read as one or
++/// already has that table. The table directory is written in tag order with its binary-search
++/// fields, every table 4-byte aligned with its checksum, and `head.checkSumAdjustment`
++/// recomputed (OpenType, "Table directory" and "Calculating checksums").
++fn with_table(font: &[u8], tag: [u8; 4], table: &[u8]) -> Option<Vec<u8>> {
++    let be16 = |at: usize| Some(u16::from_be_bytes(font.get(at..at + 2)?.try_into().ok()?));
++    let be32 = |at: usize| Some(u32::from_be_bytes(font.get(at..at + 4)?.try_into().ok()?));
++    let count = usize::from(be16(4)?);
++    let mut tables: Vec<([u8; 4], &[u8])> = Vec::with_capacity(count + 1);
++    for k in 0..count {
++        let record = 12 + 16 * k;
++        let t: [u8; 4] = font.get(record..record + 4)?.try_into().ok()?;
++        let (offset, length) = (be32(record + 8)? as usize, be32(record + 12)? as usize);
++        tables.push((t, font.get(offset..offset.checked_add(length)?)?));
++    }
++    if tables.iter().any(|(t, _)| *t == tag) {
++        return None;
++    }
++    tables.push((tag, table));
++    tables.sort_by_key(|(t, _)| *t);
++    let n = u16::try_from(tables.len()).ok()?;
++    let entry_selector = 15 - n.leading_zeros() as u16;
++    let search_range = (1u16 << entry_selector).checked_mul(16)?;
++    let range_shift = n.checked_mul(16)?.checked_sub(search_range)?;
++    let checksum = |data: &[u8]| {
++        data.chunks(4).fold(0u32, |sum, c| {
++            let mut word = [0u8; 4];
++            word[..c.len()].copy_from_slice(c);
++            sum.wrapping_add(u32::from_be_bytes(word))
++        })
++    };
++    let mut out = Vec::with_capacity(font.len() + table.len() + 16 + 3);
++    out.extend_from_slice(font.get(0..4)?);
++    for v in [n, search_range, entry_selector, range_shift] {
++        out.extend_from_slice(&v.to_be_bytes());
++    }
++    let mut offset = 12 + 16 * tables.len();
++    let mut head_at = None;
++    for (t, data) in &tables {
++        let mut data = data.to_vec();
++        if t == b"head" {
++            // checkSumAdjustment is zero while the checksums are taken
++            data.get_mut(8..12)?.fill(0);
++            head_at = Some(offset);
++        }
++        out.extend_from_slice(t);
++        out.extend_from_slice(&checksum(&data).to_be_bytes());
++        out.extend_from_slice(&u32::try_from(offset).ok()?.to_be_bytes());
++        out.extend_from_slice(&u32::try_from(data.len()).ok()?.to_be_bytes());
++        offset = offset.checked_add(data.len().next_multiple_of(4))?;
++    }
++    for (t, data) in &tables {
++        let start = out.len();
++        out.extend_from_slice(data);
++        if t == b"head" {
++            out.get_mut(start + 8..start + 12)?.fill(0);
++        }
++        out.resize(out.len().next_multiple_of(4), 0);
++    }
++    if let Some(at) = head_at {
++        let adjustment = 0xB1B0_AFBAu32.wrapping_sub(checksum(&out));
++        out.get_mut(at + 8..at + 12)?
++            .copy_from_slice(&adjustment.to_be_bytes());
++    }
++    Some(out)
++}
++
+ #[cfg_attr(feature = "comemo", comemo::memoize)]
+ fn subset_font(font: Font, glyph_remapper: &GlyphRemapper) -> KrillaResult<(Font, Rect)> {
+     let mut bbox: Option<Rect> = None;

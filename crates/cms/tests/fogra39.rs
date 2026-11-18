@@ -12,7 +12,7 @@
 //! ([`synth::cmyk_profile_from_model`]).
 
 use craft_cms::math::{self, delta_e2000};
-use craft_cms::synth::{self, CmykParams, Forward};
+use craft_cms::synth::{self, CmykParams, Forward, GamutMapping};
 use craft_cms::{Builtin, Intent, Profile, Transform};
 
 const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/FOGRA39.txt");
@@ -346,8 +346,10 @@ fn regen_coated_fogra39() {
         description: Builtin::CoatedFogra39.description().into(),
         copyright: craft_cms::builtin::COATED_FOGRA39_COPYRIGHT.into(),
         tac: 3.3,
+        gcr_curve: vec![[0.0, 0.0], [0.2, 0.05], [0.5, 0.205], [0.67, 0.5], [1.0, 0.95]],
         grid_b2a: 33,
         white_on_node: true,
+        mapping: GamutMapping::Oklab { knee: 0.65, saturation: 1.05 },
         ..CmykParams::default()
     };
     let profile = synth::cmyk_profile_from_model(&f, paper(&p), &params).unwrap();
@@ -563,4 +565,61 @@ fn stand_in_separations_respect_the_ink_limit() {
             assert!(total <= LIMIT, "{name}, {intent:?}: sRGB black total ink {total}");
         }
     }
+}
+
+/// sRGB patches and their separations by the reference application (Convert to Profile to
+/// Coated FOGRA39, dither on), CMYK % per intent: relative + BPC, relative, perceptual,
+/// saturation, absolute. Measured for storytold/photocraft#14267.
+const REFERENCE_SEPARATIONS: [([u8; 3], [[f32; 4]; 5]); 3] = [
+    (
+        [200, 30, 30],
+        [[14.5, 97.7, 95.3, 4.3], [13.3, 100.0, 100.0, 5.5], [18.0, 96.9, 92.9, 8.6], [14.9, 100.0, 100.0, 5.9], [8.6, 100.0, 100.0, 2.4]],
+    ),
+    ([30, 60, 200], [[91.8, 75.3, 0.0, 0.0], [94.5, 76.5, 0.0, 0.0], [94.5, 77.7, 0.0, 0.0], [93.7, 76.9, 0.0, 0.0], [92.6, 74.9, 0.0, 0.0]]),
+    (
+        [128, 128, 128],
+        [[49.0, 38.4, 38.4, 20.0], [49.8, 39.2, 38.8, 21.2], [49.0, 38.4, 38.4, 20.0], [49.0, 38.4, 38.4, 20.0], [46.7, 36.9, 38.4, 18.4]],
+    ),
+];
+
+const SEPARATION_INTENTS: [(Intent, bool); 5] = [
+    (Intent::RelativeColorimetric, true),
+    (Intent::RelativeColorimetric, false),
+    (Intent::Perceptual, true),
+    (Intent::Saturation, true),
+    (Intent::AbsoluteColorimetric, false),
+];
+
+fn separation(intent: Intent, bpc: bool, rgb: [u8; 3]) -> [f32; 4] {
+    let t = Transform::new(Builtin::Srgb.profile(), fogra39(), intent, bpc).unwrap();
+    let mut o = [0.0f32; 4];
+    t.eval(&rgb.map(|v| v as f32 / 255.0), &mut o).unwrap();
+    o.map(|v| v * 100.0)
+}
+
+/// sRGB → Coated FOGRA39 matches the reference application's inks on a red, a saturated blue
+/// and a mid grey for every intent. Most land within 2 % per ink; red at the magenta–yellow
+/// edge lands between table nodes that are and are not clipped, which costs up to 2.2 % with
+/// the 33³ BToA tables.
+#[test]
+fn separates_like_the_reference_application() {
+    let mut worst = 0.0f32;
+    for (rgb, want) in REFERENCE_SEPARATIONS {
+        for ((intent, bpc), want) in SEPARATION_INTENTS.into_iter().zip(want) {
+            let got = separation(intent, bpc, rgb);
+            let diff = (0..4).map(|i| (got[i] - want[i]).abs()).fold(0.0f32, f32::max);
+            eprintln!("{rgb:?} {intent:?} bpc {bpc}: {got:.1?} reference {want:?} (max {diff:.1})");
+            worst = worst.max(diff);
+        }
+    }
+    assert!(worst <= 2.5, "worst ink difference {worst} %");
+}
+
+/// Saturation has its own table: a red separates with more magenta and yellow than
+/// perceptual, whose chroma compression takes some back.
+#[test]
+fn saturation_and_perceptual_separate_differently() {
+    let red = [200, 30, 30];
+    let (perceptual, saturation) = (separation(Intent::Perceptual, true, red), separation(Intent::Saturation, true, red));
+    assert!(saturation[1] > perceptual[1] + 1.0 && saturation[2] > perceptual[2] + 1.0, "perceptual {perceptual:?}, saturation {saturation:?}");
 }
