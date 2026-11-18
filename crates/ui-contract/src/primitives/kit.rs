@@ -341,6 +341,9 @@ const CROSSING_MIN: f64 = 8.0;
 /// Minor lines' share of the major colour's alpha.
 const MINOR_SHARE: f32 = 0.45;
 
+/// How many times a thinned grid doubles its step before it gives up.
+const MAX_DOUBLINGS: u32 = 32;
+
 /// The radius of a dot, in screen points.
 const DOT_RADIUS: f32 = 0.6;
 
@@ -365,15 +368,33 @@ pub struct GridAxis {
     pub major: Vec<f64>,
 }
 
+/// The major step an axis draws at `zoom`: `step` when it is at least [`MIN_STEP`] screen points; else, for `Thin`, the
+/// step doubled (at most 32 times) until it is; `None` when the axis draws nothing. Lines and crossings both read it, so
+/// crossings follow what is drawn.
+fn fitted_step(step: f64, zoom: f64, crowding: GridCrowding) -> Option<f64> {
+    if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    let mut step = step;
+    if crowding == GridCrowding::Thin {
+        for _ in 0..MAX_DOUBLINGS {
+            if step * zoom >= MIN_STEP || !step.is_finite() {
+                break;
+            }
+            step *= 2.0;
+        }
+    }
+    (step.is_finite() && step * zoom >= MIN_STEP).then_some(step)
+}
+
 impl GridAxis {
     /// The lines of one axis between `lo` and `hi`: majors every `step` from `origin`, minors between them when the
     /// minor step is at least [`MIN_STEP`] screen points at `zoom`. An axis whose major step is under `MIN_STEP`
     /// draws nothing; at most [`MAX_LINES`] lines are given.
     fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64, crowding: GridCrowding) -> GridAxis {
-        let _ = crowding; // P3(canvas-w3): cv.K31
-        if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) || step * zoom < MIN_STEP {
+        let Some(step) = fitted_step(step, zoom, crowding) else {
             return GridAxis::default();
-        }
+        };
         let subdivided = subdivisions > 1 && step / f64::from(subdivisions) * zoom >= MIN_STEP;
         let pitch = if subdivided { step / f64::from(subdivisions) } else { step };
         let every = if subdivided { i64::from(subdivisions) } else { 1 };
@@ -421,7 +442,8 @@ impl GridLines {
         let subdivisions = subdivisions.max(1);
         let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x(), crowding);
         let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom, crowding);
-        let crossings = spacing.x * view.zoom_x() >= CROSSING_MIN && spacing.y * view.zoom >= CROSSING_MIN;
+        let wide = |step: f64, zoom: f64| fitted_step(step, zoom, crowding).is_some_and(|fitted| fitted * zoom >= CROSSING_MIN);
+        let crossings = wide(spacing.x, view.zoom_x()) && wide(spacing.y, view.zoom);
         GridLines { x, y, extent: Some(extent), crossings, view: Some(*view) }
     }
 

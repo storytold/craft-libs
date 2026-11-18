@@ -57,6 +57,9 @@ const LOCATOR_SIDE: f32 = 9.0;
 /// The arrow's outline with its tip on the pointer, and the triangles that fill it: the outline is not convex.
 const ARROW: [[f32; 2]; 7] = [[0.0, 0.0], [0.0, 16.0], [3.6, 12.6], [6.8, 19.0], [9.6, 17.8], [6.6, 11.6], [11.5, 11.5]];
 const ARROW_TRIANGLES: [[usize; 3]; 5] = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]];
+/// The direction the base arrow's tip points in, in radians with y down: opposite the bisector of its two edges (67.5
+/// degrees).
+const ARROW_TIP_ANGLE: f32 = 11.0 * PI / 8.0;
 /// The path-text pointer's triangle toward a grabbable start; the end's is its mirror.
 const GRAB_TRIANGLE: [[f32; 2]; 3] = [[3.0, -4.0], [8.0, 0.0], [3.0, 4.0]];
 /// The top-left corner of the tool icon beside a crosshair.
@@ -137,6 +140,8 @@ impl Pen {
 /// A line mark, in points from the pointer.
 enum Line {
     Segment(Vec2, Vec2),
+    /// An axis-aligned segment snapped to whole device pixels.
+    Rule(Vec2, Vec2),
     Circle(Vec2, f32),
     Rect(Rect),
     /// An open line through the points.
@@ -164,6 +169,7 @@ impl Pen {
             for line in lines {
                 self.push(match line {
                     Line::Segment(a, b) => Mark::Line(*a, *b, stroke),
+                    Line::Rule(a, b) => Mark::Rule(*a, *b, stroke),
                     Line::Circle(center, radius) => Mark::Ring(*center, *radius, stroke),
                     Line::Rect(rect) => Mark::Frame(*rect, stroke),
                     Line::Polyline(points) => Mark::Path(points.clone(), false, stroke),
@@ -295,10 +301,16 @@ fn icon_on_halo(pen: &Pen, rect: Rect, icon: SvgIcon) {
     pen.push(Mark::Icon(rect, icon, pen.fill));
 }
 
-/// The I-beam centred on the pointer: its stem and two serifs.
+/// The I-beam centred on the pointer: its stem and two serifs, as rules so each lies on whole device pixels and the
+/// beam stays crisp at every scale.
 fn i_beam() -> [Line; 3] {
     let (b, s) = (BEAM_HALF, SERIF_HALF);
-    [Line::Segment(v([0.0, -b]), v([0.0, b])), Line::Segment(v([-s, -b]), v([s, -b])), Line::Segment(v([-s, b]), v([s, b]))]
+    [Line::Rule(v([0.0, -b]), v([0.0, b])), Line::Rule(v([-s, -b]), v([s, -b])), Line::Rule(v([-s, b]), v([s, b]))]
+}
+
+/// The plain I-beam pointer: the beam in the mark colour over its halo, visible on light and dark grounds alike.
+pub(crate) fn i_beam_pointer(pen: &Pen) {
+    pen.marks(&i_beam());
 }
 
 /// The type tool's pointer: the I-beam inside a dotted ellipse, or crossed by a dotted wave when `path`.
@@ -343,13 +355,26 @@ pub(crate) fn locator(pen: &Pen) {
 }
 
 /// The arrow with its tip on the pointer: filled with the halo and edged in the mark colour, or the other way round when
-/// `hollow`.
-pub(crate) fn arrow(pen: &Pen, hollow: bool) {
+/// `hollow`. With `toward`, the art turns about the tip so the tip points along that direction (a zero or non-finite
+/// one leaves the art unturned); `None` is the base art.
+pub(crate) fn arrow(pen: &Pen, hollow: bool, toward: Option<Vec2>) {
     let (fill, edge) = if hollow { (pen.fill, pen.halo) } else { (pen.halo, pen.fill) };
+    let points: Vec<Vec2> = ARROW.iter().map(|&p| v(p)).collect();
+    let turned: Vec<Vec2> = match toward {
+        None => points,
+        Some(dir) => {
+
+            // The base art's tip points up and left along the bisector of its two edges: 247.5 degrees, y down.
+            let base = Vec2::angled(ARROW_TIP_ANGLE);
+            let u = unit(dir, base);
+            let (cos, sin) = (base.dot(u), base.x * u.y - base.y * u.x);
+            points.into_iter().map(|p| Vec2::new(cos * p.x - sin * p.y, sin * p.x + cos * p.y)).collect()
+        }
+    };
     for triangle in ARROW_TRIANGLES {
-        pen.push(Mark::Polygon(triangle.iter().map(|&i| v(ARROW[i])).collect(), fill, Stroke::NONE));
+        pen.push(Mark::Polygon(triangle.iter().map(|&i| turned[i]).collect(), fill, Stroke::NONE));
     }
-    pen.push(Mark::Path(ARROW.iter().map(|&p| v(p)).collect(), true, Stroke::new(pen.thin, edge)));
+    pen.push(Mark::Path(turned, true, Stroke::new(pen.thin, edge)));
 }
 
 /// The I-beam across a path with a filled triangle toward each grabbable end: right for `start`, left for `end`.
@@ -372,7 +397,7 @@ pub(crate) fn pointer_tool(pen: &Pen, pointer: PointerGlyph, icon: Option<SvgIco
         icon_on_halo(pen, Rect::from_min_size(v(corner).to_pos2(), Vec2::splat(side)), icon);
     }
     match pointer {
-        PointerGlyph::Arrow => arrow(pen, false),
+        PointerGlyph::Arrow => arrow(pen, false, None),
         _ => crosshair(pen, side, width, color),
     }
 }

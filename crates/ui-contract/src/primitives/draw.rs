@@ -333,7 +333,7 @@ impl<'a> Draw<'a> {
 
     /// Records that the face dropped its label, so the component's tooltip text does not count it.
     pub fn drop_label(&self) {
-        todo!("rb.R6")
+        self.record.borrow_mut().label_dropped = true;
     }
 
     /// Paints a laid-out run at `pos`. Records the first baseline and, when the layout cut text, the full text, as
@@ -377,16 +377,24 @@ impl<'a> Draw<'a> {
             }
             _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon),
         }
-        // P3(canvas-w3): rb.R18: only the dot paints; the bar's painting comes with its writer.
-        if let Some(super::IconMark::Dot(badge)) = icon.badge {
-            let radius = self.env.tokens.size.handle.sm / 2.0;
-            let centre = if self.env.direction == Direction::Rtl {
-                square.left_bottom() + Vec2::new(radius, -radius)
-            } else {
-                square.right_bottom() - Vec2::splat(radius)
-            };
-            let ring = Stroke::new(self.width(StrokeWidth::Thin), color);
-            self.paint(&PaintShape::Circle(centre, radius), Some(self.data_color(badge)), Some(ring));
+        match icon.badge {
+            Some(super::IconMark::Dot(badge)) => {
+                let radius = self.env.tokens.size.handle.sm / 2.0;
+                let centre = if self.env.direction == Direction::Rtl {
+                    square.left_bottom() + Vec2::new(radius, -radius)
+                } else {
+                    square.right_bottom() - Vec2::splat(radius)
+                };
+                let ring = Stroke::new(self.width(StrokeWidth::Thin), color);
+                self.paint(&PaintShape::Circle(centre, radius), Some(self.data_color(badge)), Some(ring));
+            }
+            Some(super::IconMark::Bar { color: bar, weight }) => {
+                // The bar lies inside the square at its bottom, so it never leaves the icon's box.
+                let thickness = weight.unwrap_or_else(|| self.width(StrokeWidth::Thick)).clamp(0.0, side);
+                let strip = Rect::from_min_max(Pos2::new(square.min.x, square.max.y - thickness), square.max);
+                self.data_fill(&PaintShape::Rect(strip, CornerRadius::ZERO), bar);
+            }
+            None => {}
         }
     }
 
@@ -501,8 +509,7 @@ impl<'a> Draw<'a> {
     /// disabled component paints it at `Opacity::DISABLED`, and for an inactive part the quad is filled with the
     /// theme's disabled fill. A quad has square corners.
     pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect) {
-        let _ = (corners, texture, uv);
-        todo!("cv.K30")
+        data_quad(self.painter, self.env.tokens, self.data, texture, corners, uv);
     }
 
     /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
@@ -620,10 +627,13 @@ pub(super) fn data_picture(painter: &Painter, tokens: &UiTokens, mode: DataMode,
 
 /// Paints `uv` of `texture` onto the clockwise quad `corners` as the data in `mode`: untinted through `paint_quad`,
 /// or for an inactive part the quad filled with the disabled fill, as `data_picture` fills its rect.
-#[allow(dead_code)] // P3(canvas-w3): cv.K30
-pub(super) fn data_quad(painter: &Painter, tokens: &UiTokens, mode: DataMode, texture: TextureId, corners: [Pos2; 4], uv: Rect) {
-    let _ = (painter, tokens, mode, texture, corners, uv);
-    todo!("cv.K30")
+fn data_quad(painter: &Painter, tokens: &UiTokens, mode: DataMode, texture: TextureId, corners: [Pos2; 4], uv: Rect) {
+    if mode == DataMode::Inactive {
+        let fill = mode.color(tokens, Color32::TRANSPARENT);
+        painter.add(Shape::convex_polygon(corners.to_vec(), fill, Stroke::NONE));
+    } else {
+        crate::runtime::egui::textures::paint_quad(painter, texture, corners, uv, mode.color(tokens, super::textures::UNTINTED));
+    }
 }
 
 /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left, as the data over it in

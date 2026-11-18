@@ -7,7 +7,7 @@ pub(super) mod stories;
 
 use crate::canvas::{CanvasSpace, GuideLine, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
-use crate::primitives::{GridCrowding, GridInk, GridLook, GridStroke, grid_lines_with};
+use crate::primitives::{GridInk, GridLook, GridStroke, grid_lines_with};
 use crate::runtime::env::Label;
 use crate::runtime::memory::Remember as _;
 use crate::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
@@ -16,7 +16,7 @@ use craft_behavior::{CanvasView, Input, Metrics};
 use egui::{Color32, Response, Shape};
 use std::sync::Arc;
 
-pub use crate::primitives::{GridAxis, GridLines, MAX_LINES};
+pub use crate::primitives::{GridAxis, GridCrowding, GridLines, MAX_LINES};
 
 /// The major step of a new grid, in document units.
 const DEFAULT_STEP: f64 = 100.0;

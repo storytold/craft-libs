@@ -22,7 +22,7 @@ mod pixel_grid;
 mod task_bar;
 
 pub use bands::{range_bands, rect_around};
-pub use grid::{CanvasGrid, GridAxis, GridLine, GridLines, GridStyle, MAX_LINES};
+pub use grid::{CanvasGrid, GridAxis, GridCrowding, GridLine, GridLines, GridStyle, MAX_LINES};
 pub use line_preview::{LineGuideStyle, StraightLinePreview};
 pub use marquee::{Marquee, MarqueeLook, MarqueeShape, MarqueeStyle, Run};
 pub use outline::{HoverMask, HoverOutline, HoverShape, OutlineStyle, SelectionOutline, SelectionOutlineLook, path_runs};

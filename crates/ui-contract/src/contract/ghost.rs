@@ -3,9 +3,7 @@
 //! cursor image instead where the window takes one. They come from the drag session's data and the cursor record; the
 //! layer takes no input.
 
-use crate::primitives::pointer_art::{self as pointers, Art};
-
-use crate::primitives::{Draw, DrawEnv, IconSet, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
+use crate::primitives::{Draw, DrawEnv, PaintRecord, PaintShape, RuleKind, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
@@ -44,72 +42,17 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     let closed = pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
     let target = cursor::image_target(ctx).filter(|_| !matches!(cursor, PaintedCursor::Badged { .. }));
     if let Some(target) = target {
-        if cursor::show_image(ctx, &pointer_art(env, &cursor, closed, false), target) {
+        if cursor::show_image(ctx, &cursor::pointer_art(env, &cursor, closed, false), target) {
             return;
         }
         if matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. })
-            && cursor::show_image(ctx, &pointer_art(env, &cursor, closed, true), target)
+            && cursor::show_image(ctx, &cursor::pointer_art(env, &cursor, closed, true), target)
         {
-            pointer_art(env, &cursor.marked(false, None), closed, false).paint(painter, at);
+            cursor::pointer_art(env, &cursor.marked(false, None), closed, false).paint(painter, at);
             return;
         }
     }
-    pointer_art(env, &cursor, closed, false).paint(painter, at);
-}
-
-/// The art of `cursor`: the hand as a fist while `closed`; with `marks_only`, a brush tip's centre cross and badge
-/// without its ring.
-fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, marks_only: bool) -> Art {
-    use craft_behavior::{PaintedCursor, PointerGlyph};
-    let overlay = &env.tokens.color.overlay;
-    let pen = pointers::Pen {
-        art: RefCell::new(Art::default()),
-        fill: crate::style::rgba_color(overlay.stroke),
-        halo: crate::style::rgba_color(overlay.halo),
-        thin: env.tokens.stroke.thin,
-        rtl: env.direction.is_rtl(),
-    };
-    let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
-    let edge = env.tokens.stroke.thin;
-    match cursor {
-        PaintedCursor::Outline { rings, centre, badge, .. } => {
-            if !marks_only {
-                pointers::outline(&pen, rings);
-            }
-            pointers::tip_marks(&pen, *centre || marks_only, *badge, pen.thin, pen.fill);
-        }
-        PaintedCursor::Circle { radius, centre, badge, .. } => {
-            if !marks_only {
-                pointers::circle(&pen, *radius, edge, ink);
-            }
-            pointers::tip_marks(&pen, *centre || marks_only, *badge, edge, ink);
-        }
-        PaintedCursor::Crosshair => pointers::crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
-        PaintedCursor::Hand => pointers::hand(&pen, closed),
-        PaintedCursor::Zoom { out, .. } => pointers::zoom(&pen, *out),
-        PaintedCursor::Tool { icon, hotspot, badge, .. } => {
-            let side = env.tokens.size.icon.md;
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
-            pointers::tool(&pen, icon, *hotspot, *badge, side);
-        }
-        PaintedCursor::Badged { badge, .. } => pointers::badge_beside(&pen, *badge),
-        PaintedCursor::Turn { toward, .. } => pointers::turn(&pen, *toward),
-        PaintedCursor::Distort { dir, .. } => pointers::distort(&pen, *dir),
-        PaintedCursor::Skew { dir, .. } => pointers::skew(&pen, *dir),
-        PaintedCursor::TypeOn { path, .. } => pointers::type_on(&pen, *path),
-        PaintedCursor::Locator => pointers::locator(&pen),
-        PaintedCursor::Arrow { hollow, .. } => pointers::arrow(&pen, *hollow),
-        PaintedCursor::PathText { start, end, .. } => pointers::path_text(&pen, *start, *end),
-        PaintedCursor::PointerTool { pointer, icon, .. } => {
-            // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
-            let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
-            pointers::pointer_tool(&pen, *pointer, icon, side, edge, ink);
-        }
-        // `Hidden` has no marks.
-        _ => {}
-    }
-    pen.art.into_inner()
+    cursor::pointer_art(env, &cursor, closed, false).paint(painter, at);
 }
 
 /// The drag preview and the drop mark of the running drag.
