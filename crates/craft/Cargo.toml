@@ -306,6 +306,7 @@ cms = ["dep:craft-cms"]
 codepage = ["dep:craft-codepage"]
 
 color = ["dep:craft-color"]
+
 color-ui = ["dep:craft-color-ui", "keymap", "settings", "window", "platform"]
 
 control = ["dep:craft-control"]
