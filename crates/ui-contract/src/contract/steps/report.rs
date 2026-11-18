@@ -183,6 +183,8 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     };
     if let Some(facts) = core.text_access.take().or_else(editor_record) {
         crate::runtime::access::text::report_text(ctx, id, &facts);
+    } else if let Some(editor) = &core.editor {
+        crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
     if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);
