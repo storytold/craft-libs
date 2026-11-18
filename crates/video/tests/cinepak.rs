@@ -745,3 +745,63 @@ fn test_decode_error_leaves_decoder_state_unchanged() {
     let px2 = frame2.pixel_rgb(0, 0).expect("pixel");
     assert!(px2[0] > 200 && px2[2] == 0, "codebook should still be red, got {px2:?}");
 }
+
+/// One intra strip over rows `y0..y1` of a 4-wide frame: an optional full V1 colour codebook, then a
+/// V1-only vector chunk selecting codebook entry 0.
+fn strip_with_codebook(y0: u16, y1: u16, codebook: Option<([u8; 4], i8, i8)>) -> Vec<u8> {
+    let mut body = Vec::new();
+    if let Some((y, u, v)) = codebook {
+        body.push(0x22);
+        body.extend_from_slice(&10u32.to_be_bytes()[1..4]);
+        body.extend_from_slice(&y);
+        body.push(u as u8);
+        body.push(v as u8);
+    }
+    body.push(0x32);
+    body.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    body.push(0);
+    let mut strip = Vec::new();
+    strip.extend_from_slice(&0x1000u16.to_be_bytes());
+    strip.extend_from_slice(&((12 + body.len()) as u16).to_be_bytes());
+    for v in [y0, 0, y1, 4] {
+        strip.extend_from_slice(&v.to_be_bytes());
+    }
+    strip.extend_from_slice(&body);
+    strip
+}
+
+fn frame_of(flags: u8, height: u16, strips: &[Vec<u8>]) -> Vec<u8> {
+    let total = 10 + strips.iter().map(Vec::len).sum::<usize>();
+    let mut data = vec![flags];
+    data.extend_from_slice(&(total as u32).to_be_bytes()[1..4]);
+    data.extend_from_slice(&4u16.to_be_bytes());
+    data.extend_from_slice(&height.to_be_bytes());
+    data.extend_from_slice(&(strips.len() as u16).to_be_bytes());
+    for s in strips {
+        data.extend_from_slice(s);
+    }
+    data
+}
+
+/// The first strip of a frame inherits the codebooks of the previous frame's last strip, not its
+/// first.
+#[test]
+fn test_first_strip_inherits_the_last_strip_of_the_previous_frame() {
+    let red = ([72, 72, 72, 72], -37, 91);
+    let green = ([150, 150, 150, 150], -40, -50);
+    let want_red = decode_frame(&build_synthetic_v1_keyframe(red.0, red.1, red.2)).expect("red").pixel_rgb(0, 0).expect("px");
+    let want_green = decode_frame(&build_synthetic_v1_keyframe(green.0, green.1, green.2)).expect("green").pixel_rgb(0, 0).expect("px");
+    assert_ne!(want_red, want_green);
+
+    let mut decoder = Decoder::new();
+    // Frame 0: the first strip carries a red codebook, the last strip a green one.
+    let f0 = frame_of(0, 8, &[strip_with_codebook(0, 4, Some(red)), strip_with_codebook(4, 8, Some(green))]);
+    let frame0 = decoder.decode(&f0).expect("frame 0");
+    assert_eq!(frame0.pixel_rgb(0, 0).expect("px"), want_red);
+    assert_eq!(frame0.pixel_rgb(0, 7).expect("px"), want_green);
+
+    // Frame 1: one strip, inheriting, with no codebook of its own.
+    let f1 = frame_of(1, 4, &[strip_with_codebook(0, 4, None)]);
+    let frame1 = decoder.decode(&f1).expect("frame 1");
+    assert_eq!(frame1.pixel_rgb(0, 0).expect("px"), want_green);
+}

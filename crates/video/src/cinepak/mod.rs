@@ -190,7 +190,8 @@ impl Decoder {
 
         let mut offset = 10;
         let mut prev_bottom_y = 0;
-        let mut any_color = if is_key { false } else { frame.is_color };
+        // Inherited codebooks keep the colour mode of the frame they came from.
+        let mut any_color = if is_key { can_inherit && self.last_frame.as_ref().is_some_and(|f| f.is_color) } else { frame.is_color };
 
         for s_idx in 0..num_strips {
             let strip_hdr_data = data.get(offset..).ok_or(Error::Truncated)?;
@@ -200,10 +201,14 @@ impl Decoder {
             let bounds = hdr.resolve_bounds(s_idx == 0, prev_bottom_y, width, height)?;
             prev_bottom_y = bounds.3;
 
-            // When codebook inheritance is enabled, subsequent strips initialize from the preceding strip.
-            if can_inherit && s_idx > 0 {
-                let prev_strip = strips[s_idx - 1].clone();
-                strips[s_idx] = prev_strip;
+            // When codebook inheritance is enabled, a strip starts from the codebooks of the strip
+            // before it: the previous strip of this frame, or for the first strip the last strip
+            // of the previous frame.
+            if can_inherit {
+                let source = if s_idx > 0 { strips.get(s_idx - 1) } else { self.strips.last() };
+                if let Some(prev_strip) = source.cloned() {
+                    strips[s_idx] = prev_strip;
+                }
             }
 
             let strip_slice = &data[offset + 12..strip_end];
@@ -288,6 +293,8 @@ impl Decoder {
         }
 
         frame.is_color = any_color;
+        // Only this frame's strips count: the next frame's first strip inherits from the last.
+        strips.truncate(num_strips);
         self.strips = strips;
         self.last_frame = Some(frame.clone());
         Ok(frame)
