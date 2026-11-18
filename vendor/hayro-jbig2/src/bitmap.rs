@@ -56,9 +56,10 @@ impl Limits {
         self.max_pixels.saturating_mul(MAX_WORK / MAX_PIXELS).max(one_bitmap)
     }
 
-    /// The most cells a halftone grid may have (see [`MAX_GRID_CELLS`]).
+    /// The most cells a halftone grid may have (see [`MAX_GRID_CELLS`]), rounded up, so a limit
+    /// of fewer than eight pixels still allows a grid of one cell.
     pub(crate) fn grid_cells(&self) -> u64 {
-        self.max_pixels / (MAX_PIXELS / MAX_GRID_CELLS)
+        self.max_pixels.div_ceil(MAX_PIXELS / MAX_GRID_CELLS)
     }
 }
 
@@ -456,6 +457,17 @@ mod pdfcraft_limit_tests {
         assert_eq!(raised.work(), 4 << 30);
         assert_eq!(raised.grid_cells(), 1 << 27);
         assert_eq!(Limits::with_max_pixels(u64::MAX).work(), u64::MAX);
+    }
+
+    /// Craft patch: a limit below eight pixels still allows a halftone grid of one cell, and the
+    /// grid bound rounds up between multiples of eight.
+    #[test]
+    fn a_low_limit_allows_a_grid_of_one_cell() {
+        assert_eq!(Limits::with_max_pixels(0).grid_cells(), 0);
+        assert_eq!(Limits::with_max_pixels(1).grid_cells(), 1);
+        assert_eq!(Limits::with_max_pixels(7).grid_cells(), 1);
+        assert_eq!(Limits::with_max_pixels(8).grid_cells(), 1);
+        assert_eq!(Limits::with_max_pixels(9).grid_cells(), 2);
     }
 
     /// Craft patch: a low limit still pays for decoding a bitmap it allows, the row cost of

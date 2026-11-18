@@ -62,7 +62,7 @@
       "path": "src/bitmap.rs",
       "source_sha256": "59ed83d8bac6c39e40270a9856ca3faee628de7d9efae1b01f714e140e2b6b7e",
       "source_git_blob": "35ed97561597d30a70fe819cf8cfbd3780538f75",
-      "sha256": "7407fdcdb626bcd8cad5a8ae232ee31c1d7eff41a6d015ee7c38d79000d4896d"
+      "sha256": "9e4b20c4e1cb1759d8f4ed582d6aa5f3afe1be13a8a9d2cc4a1c86a0d5bc56dd"
     },
     {
       "path": "src/decode/generic.rs",
