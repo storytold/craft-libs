@@ -509,7 +509,9 @@ fn colour_at(shapes: &[Shape], at: Pos2) -> [f32; 4] {
             Shape::Path(path) if path.closed && encloses(&path.points, at) => path.fill,
             Shape::Mesh(mesh) if mesh.texture_id == TextureId::default() => mesh
                 .indices
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|triangle| triangle.iter().map(|&index| &mesh.vertices[index as usize]).collect::<Vec<_>>())
                 .find(|corners| encloses(&corners.iter().map(|vertex| vertex.pos).collect::<Vec<_>>(), at))
                 .map_or(Color32::TRANSPARENT, |corners| corners[0].color),

@@ -20,6 +20,8 @@ fn a_cjk_title_shows_its_english_letter_and_alt_with_the_letter_opens_it() {
     let mut fixture = Fixture::new(move |ui| {
         MenuBarUi::new(&bar).english(&english).show(ui);
     });
+    // A Mac bar has no letters.
+    fixture.os(Os::Linux);
     fixture.settle();
     assert!(fixture.by_label("文件(F)").is_some(), "the title shows the English letter after it");
     fixture.key(Key::F, Modifiers::ALT);
