@@ -1,7 +1,7 @@
 //! Clean-room pure-Rust Theora video codec (Xiph.Org specification).
 //!
-//! Provides a conformant Theora video decoder ([`Decoder`]) and keyframe/interframe
-//! encoder ([`Encoder`]) operating over byte slices, planar buffers and Ogg streams.
+//! Provides a conformant Theora video decoder (`Decoder`) and keyframe/interframe
+//! encoder (`Encoder`) operating over byte slices, planar buffers and Ogg streams.
 
 #![allow(clippy::needless_range_loop, clippy::type_complexity, clippy::too_many_arguments, clippy::cognitive_complexity)]
 
