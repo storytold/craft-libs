@@ -2002,7 +2002,7 @@ dependencies = [
 name = "craft-automation"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "craft-ai-agents",
  "craft-atomic",
  "craft-behavior",
