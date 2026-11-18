@@ -70,6 +70,9 @@ pub enum Event {
     },
 }
 
+/// An answer with the account generation its job was issued in.
+pub(crate) type Stamped = (u64, Event);
+
 /// Where a worker's answers go.
 ///
 /// Handed to [`CloudBackend::submit`] with the job it belongs to. A worker is
@@ -77,7 +80,10 @@ pub enum Event {
 /// sign-in reports the URL it wants a browser pointed at and then reports that
 /// the user finished there. A send after the window closed is not a failure.
 pub struct Post {
-    tx: Sender<Event>,
+    /// Each event goes with the generation its job was issued in, so
+    /// [`super::pump`] can drop one that waited in the channel across a
+    /// sign-out or a new sign-in.
+    tx: Sender<Stamped>,
     /// The window's account generation as of the moment the job this answers
     /// was issued, beside a handle to what it is now. A sign-out or a new
     /// sign-in bumps the live value; a reply that arrives after is for a
@@ -87,7 +93,7 @@ pub struct Post {
 }
 
 impl Post {
-    pub(crate) fn new(tx: Sender<Event>, generation: Arc<AtomicU64>) -> Post {
+    pub(crate) fn new(tx: Sender<Stamped>, generation: Arc<AtomicU64>) -> Post {
         let issued = generation.load(Ordering::Relaxed);
         Post { tx, generation, issued }
     }
@@ -99,16 +105,19 @@ impl Post {
         Post { tx: self.tx.clone(), generation: self.generation.clone(), issued: self.issued }
     }
 
-    /// Delivers the event, unless the window has signed out or signed in
-    /// again since the job this answers was issued. Silently dropping it
-    /// there, rather than delivering it, is what keeps a late reply from
-    /// restoring the previous session's account, files or busy state on top
-    /// of whatever replaced it.
+    /// Queues the event with the generation its job was issued in.
+    ///
+    /// [`super::pump`] holds the check that keeps a late reply from restoring
+    /// the previous session's account, files or busy state on top of whatever
+    /// replaced it: it drops every event whose generation is not the current
+    /// one, including an event sent here just before a sign-out or a new
+    /// sign-in. This method only skips the send when the generation has
+    /// already moved on, so an answer that `pump` would drop is not queued.
     pub fn send(&self, event: Event) {
         if self.generation.load(Ordering::Relaxed) != self.issued {
             return;
         }
-        let _ = self.tx.send(event);
+        let _ = self.tx.send((self.issued, event));
     }
 }
 
