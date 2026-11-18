@@ -718,6 +718,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),
+        menu_bar_by_claim: std::mem::take(&mut state.menu_bar_by_claim),
         foreign: false,
         host_focus: false,
         host_text: false,

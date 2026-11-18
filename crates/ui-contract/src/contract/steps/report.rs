@@ -9,8 +9,7 @@ use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, Set
 use crate::runtime::commands::{self, ResolvedCommand};
 use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
-use crate::runtime::keys;
-use crate::runtime::pass_state;
+use crate::runtime::{inspect, keys};
 use crate::style::Flags;
 use craft_behavior::Sense;
 use egui::Id;
@@ -113,6 +112,9 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         access.position =
             input.group.and_then(|group| focus::group_position(ctx, id, group)).or_else(|| core.env.facts_of(id).map(|facts| facts.position));
     }
+    // Before any return: a component without an AccessKit node (merged, or AccessKit off) still records its command
+    // for the inspected region, which keytips place their badges by.
+    inspect::note_command(ctx, id, core.command.as_deref().map(|command| command.command.clone()));
     let paint = core.paint.borrow();
     if role == Role::Merged {
         let facts = scope::Merged {

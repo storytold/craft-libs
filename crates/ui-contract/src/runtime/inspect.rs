@@ -183,9 +183,16 @@ impl Recorded {
     }
 
     /// The stop rect of the element at `index` (as [`Recorded::stop_rect`]) mapped into the layer `target`.
+    ///
+    /// A region on another layer than its reader (a title bar's toolbar read from the ribbon's layer) has rects in
+    /// its own layer's points; this maps them through the screen, so the reader never composes transforms itself.
     pub fn rect_in(&self, ctx: &Context, index: usize, target: egui::LayerId) -> Option<Rect> {
-        let _ = (ctx, index, target);
-        todo!("rb.R17")
+        let rect = self.stop_rect(index)?;
+        if target == self.layer {
+            return Some(rect);
+        }
+        let to_target = areas::layer_to_screen(ctx, target).inverse() * areas::layer_to_screen(ctx, self.layer);
+        Some(to_target * rect)
     }
 }
 
@@ -424,11 +431,14 @@ pub(crate) fn close_element(ctx: &Context, id: Id, rect: Rect, content: Rect) {
 }
 
 /// Notes the command bound to the control `id` in the open region's record; the report step calls it with the
-/// component's resolved command.
-#[allow(dead_code)] // P3(ribbon-w5): rb.R17
+/// component's resolved command. It does nothing outside a region or for a component whose record is not open.
 pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
-    let _ = (ctx, id, command);
-    todo!("rb.R17")
+    pass_state::with::<Log, _>(ctx, |log| {
+        let Some(open) = log.open.last_mut() else { return };
+        let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
+        let index = open.stack[at];
+        open.elements[index].0.command = command;
+    });
 }
 
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.

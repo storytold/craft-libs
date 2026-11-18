@@ -30,6 +30,9 @@ struct Strip<'a> {
     /// The chords bound to the window's keys (`commands::window_shortcuts`).
     window_shortcuts: &'a [(WindowShortcut, Chord)],
     menu_bar: bool,
+    /// The registered bar takes only the Alt+letter chords it claims (`FocusedRecord::menu_bar_by_claim`): every other
+    /// Alt+letter is an ordinary press.
+    menu_bar_by_claim: bool,
     /// The focused stop holds drafts (`KeyUse::holds_drafts`): a lone Alt alerts instead of focusing the menu bar.
     holds_drafts: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
@@ -178,6 +181,11 @@ impl Strip<'_> {
             }
             KeyEvent::RightAlt(down) => {
                 alt.right = down;
+                // AltGr types characters: its Alt is no lone Alt, whichever of this event and the modifier change
+                // arrives first.
+                if down {
+                    alt.other_key = true;
+                }
                 true
             }
             KeyEvent::Modifiers(held) => {
@@ -197,7 +205,7 @@ impl Strip<'_> {
     /// lone Alt: the code's digits were the keys between.
     fn alt_change(&self, batch: &mut Batch, alt: &mut AltTrack, held: bool) {
         if held && !alt.down {
-            alt.other_key = false;
+            alt.other_key = alt.right;
         }
         if !held && alt.down && !alt.other_key && !self.alt_code_ended && self.os != Os::Mac {
             if self.holds_drafts {
@@ -220,7 +228,7 @@ impl Strip<'_> {
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
         // scope escape.
         let escape = key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none());
-        let mnemonic = self.menu_bar && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
+        let mnemonic = self.menu_bar && !self.menu_bar_by_claim && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
         let canvas_edit = self.canvas.is_some_and(|canvas| {
             self.edit_chords.iter().any(|(command, chord)| canvas.edits.contains(*command) && self.layout.matches(chord, input, self.os))
@@ -370,9 +378,6 @@ enum PressUse {
 /// component, its arena root and its menu level, and a bare End where it declares `EndKey::EndMode`.
 pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
     let mut claims = record.claims.clone();
-    // The window's registered menu bar holds its claims beside the focused component's: a keytip letter it claims
-    // reaches it wherever the focus is.
-    // PLAN: `FocusedRecord::menu_bar` is `Option<Id>` in ribbon-w5's `runtime/focus.rs` hunk; this reads that type.
     let holds = |owner: Id| [record.focused, record.root, record.menu, record.menu_bar].contains(&Some(owner));
     claims.extend(stage.claims.iter().filter(|(owner, _)| holds(*owner)).map(|(_, chord)| *chord));
     // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles its
@@ -457,7 +462,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let os = crate::runtime::windows::os_of(ctx);
     let record = focus::record(ctx, viewport);
     let keys = record.keys;
-    let menu_bar = record.menu_bar.is_some() && keys.is_none_or(|keys| !matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder));
+    let menu_bar = record.menu_bar.is_some() && keys.is_none_or(|keys| !focus::takes_letters(&keys));
     let before = events.len();
     let canvas = focus::canvas_keys(ctx, viewport).filter(|_| keys.is_none() && !record.foreign);
     let lists_edits = |keys: &KeyUse| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit)));
@@ -481,6 +486,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             edit_chords: &edit_chords,
             window_shortcuts: &window_shortcuts,
             menu_bar,
+            menu_bar_by_claim: record.menu_bar_by_claim,
             holds_drafts: keys.is_some_and(|keys| keys.holds_drafts),
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
