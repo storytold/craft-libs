@@ -491,6 +491,8 @@ pub(crate) struct RowOptions {
     option_descriptions: Vec<(String, Label)>,
     /// The row's select has a search field.
     searchable: bool,
+    /// The indexes of the options a choice row draws a separator before ([`Param::separated_at`]).
+    separated_at: Vec<usize>,
     /// The keys a change of the row's value removes ([`Param::resets`]).
     resets: Vec<String>,
 }
@@ -662,6 +664,18 @@ impl Param {
     #[must_use]
     pub fn searchable(mut self) -> Self {
         self.options.get_or_insert_default().searchable = true;
+        self
+    }
+
+    /// Draws a separator line before the option at `index` in a choice row's open list, between two groups of options
+    /// (standard and custom paper sizes). Repeat the call for each group start. An `index` of 0, or past the last
+    /// option, draws nothing: a separator sits between options.
+    #[must_use]
+    pub fn separated_at(mut self, index: usize) -> Self {
+        let separated = &mut self.options.get_or_insert_default().separated_at;
+        if !separated.contains(&index) {
+            separated.push(index);
+        }
         self
     }
 
@@ -1050,6 +1064,11 @@ impl RowOptions {
     /// Whether a choice row's select has a search field.
     pub(crate) fn searchable(&self) -> bool {
         self.searchable
+    }
+
+    /// Whether a choice row's list has a separator before the option at `index`.
+    pub(crate) fn separated_before(&self, index: usize) -> bool {
+        self.separated_at.contains(&index)
     }
 
     /// The units of a number row.

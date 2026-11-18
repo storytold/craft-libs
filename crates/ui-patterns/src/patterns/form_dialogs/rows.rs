@@ -246,11 +246,8 @@ impl<'a> ParamRows<'a> {
             })
         };
         let shown = if read_only { with_env(ui, |scope| scope.read_only = Some(true), group) } else { group(ui) };
-        let (pick_color, path, eyedropper, listing, out_of_range, action) = if read_only {
-            Default::default()
-        } else {
-            (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range, pass.action)
-        };
+        let (pick_color, path, eyedropper, listing, out_of_range, action) =
+            if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range, pass.action) };
         ParamRowsOutput { response: shown.output, changed, values, pick_color, path, eyedropper, listing, out_of_range, action, edited }
     }
 }
@@ -601,8 +598,15 @@ impl<'p> Pass<'p> {
 
     fn choice(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
-        let entries: Vec<Entry<String>> = options.iter().map(|(id, label)| option_entry(line.param, id, label)).collect();
-        let searchable = line.param.option().searchable();
+        let row = line.param.option();
+        let mut entries: Vec<Entry<String>> = Vec::with_capacity(options.len());
+        for (at, (id, label)) in options.iter().enumerate() {
+            if at > 0 && row.separated_before(at) {
+                entries.push(Entry::separator());
+            }
+            entries.push(option_entry(line.param, id, label));
+        }
+        let searchable = row.searchable();
         line.show(ui, |ui| {
             let mut select = Select::new(line.name.clone(), Bind::given(value.clone()), &entries);
             if searchable {

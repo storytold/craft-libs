@@ -595,7 +595,16 @@ impl Component for PrintPreview<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PrintPreviewOutput {
-        PrintPreviewOutput { edit: cx.edit_response() }
+        let scale = cx.env.scale().0;
+        let paper_px = match &self.sheet.content {
+            SheetContent::Message(_) => None,
+            _ => self.place(cx.rect).map(|place| {
+                let size = place.rect(Rect::from_min_size(Pos2::ZERO, self.sheet.paper)).size();
+                // A float to integer cast saturates and maps NaN to zero, so an odd size cannot wrap.
+                [(size.x * scale).round() as u32, (size.y * scale).round() as u32]
+            }),
+        };
+        PrintPreviewOutput { edit: cx.edit_response(), paper_px }
     }
 }
 
@@ -605,6 +614,9 @@ pub(super) struct PrintPreviewOutput {
     /// The image box drag: `Begin` at the first move past the click slop, `Update` with the image box's position on the
     /// paper in paper points, `Commit` at the release.
     edit: EditResponse<Pos2>,
+    /// The page box as drawn this pass, in physical pixels (its rect times `pixels_per_point`, rounded, saturating).
+    /// `None` before the preview is drawn, while the paper has no area, and for a message in place of a sheet.
+    paper_px: Option<[u32; 2]>,
 }
 
 impl Outcome for PrintPreviewOutput {
@@ -692,8 +704,13 @@ pub struct PrintDialogOutput {
     pub moved: EditEvents<egui::Pos2>,
     /// The panel's Refresh was pressed.
     pub refresh: bool,
+    /// The panel's Properties… was pressed.
+    pub(crate) settings_clicked: bool,
     /// The dialog's requests of the host.
     pub requests: HostRequests,
+    /// The preview's page box as drawn this pass, in physical pixels: the size to render previews at. `None` before it
+    /// is drawn.
+    pub paper_px: Option<[u32; 2]>,
     /// The pager press made this pass.
     pub preview_step: Option<PagerStep>,
     /// The destination the user picked in the panel this pass.
@@ -774,11 +791,15 @@ impl<'a> PrintDialog<'a> {
         }
         let mut moved = EditEvents::new();
         let mut refresh = false;
+        let mut settings_clicked = false;
+        let mut paper_px = None;
         let mut preview_step = None;
         let mut printer_chosen = None;
         let shown = form.show(ui, |ui, form, values| {
             moved = EditEvents::new();
             refresh = false;
+            settings_clicked = false;
+            paper_px = None;
             preview_step = None;
             printer_chosen = None;
             // A measuring run closes nothing: the real run of the same pass makes the close.
@@ -807,6 +828,7 @@ impl<'a> PrintDialog<'a> {
                         .duplex_by_layout(duplex_by_layout)
                         .show(ui);
                     refresh |= panel.refresh;
+                    settings_clicked |= panel.settings_clicked;
                     if panel.printer_chosen.is_some() {
                         printer_chosen = panel.printer_chosen;
                     }
@@ -820,6 +842,7 @@ impl<'a> PrintDialog<'a> {
                 let position = sheet.image_box().map_or(Pos2::ZERO, |image| image.min);
                 let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).show(ui);
                 moved.extend(preview.edit.events);
+                paper_px = preview.paper_px;
                 let mut step = None;
                 if let Some(pager) = preview_pager.as_ref().filter(|_| document) {
                     Row::new().align(RowAlign::Center).fill_width().show(ui, |ui, _| step = pager.clone().show(ui));
@@ -871,7 +894,9 @@ impl<'a> PrintDialog<'a> {
             finish,
             moved,
             refresh,
+            settings_clicked,
             requests: shown.requests,
+            paper_px,
             preview_step,
             printer_chosen,
             held,
@@ -907,6 +932,10 @@ pub struct HostedPrint {
     sheet: Option<PrintSheet>,
     moves: Vec<EditEvent<egui::Pos2>>,
     refresh: bool,
+    /// The panel's Properties… press, not taken yet.
+    settings_clicked: bool,
+    /// The page box the preview drew, in physical pixels, not taken yet.
+    paper_px: Option<[u32; 2]>,
     requests: HostRequests,
     json_form: Option<Box<JsonForm>>,
     layout: PrintLayout,
@@ -935,6 +964,8 @@ impl HostedPrint {
             sheet: None,
             moves: Vec::new(),
             refresh: true,
+            settings_clicked: false,
+            paper_px: None,
             requests: HostRequests::new(),
             json_form: None,
             layout: PrintLayout::Image,
@@ -959,6 +990,19 @@ impl HostedPrint {
     /// second pass of the same frame gets `false`, the app having answered in the first.
     pub fn take_refresh(&mut self) -> bool {
         std::mem::take(&mut self.refresh)
+    }
+
+    /// Whether the panel's Properties… was pressed since the last call: the app opens the driver's options. The press is
+    /// filed in the pass that receives it and taken once.
+    pub fn take_settings_clicked(&mut self) -> bool {
+        std::mem::take(&mut self.settings_clicked)
+    }
+
+    /// The page box the preview drew, in physical pixels (width, height), for the app to render the preview at. It is
+    /// filed in the pass that drew the preview and taken once: `None` until the next pass that draws it, and while the
+    /// preview shows a message or a paper with no area.
+    pub fn take_paper_px(&mut self) -> Option<[u32; 2]> {
+        self.paper_px.take()
     }
 
     /// Asks for a printer list again on the next pass, as Refresh does: the list the app sent was not the system's
@@ -1140,9 +1184,13 @@ impl StackDialog for HostedPrint {
             dialog = dialog.refusal(refusal);
         }
         let shown = dialog.show(ui);
-        let PrintDialogOutput { closed, finish, moved, refresh, requests, printer_chosen, held, .. } = shown;
+        let PrintDialogOutput { closed, finish, moved, refresh, settings_clicked, paper_px, requests, printer_chosen, held, .. } = shown;
         self.moves.extend(moved);
+        if paper_px.is_some() {
+            self.paper_px = paper_px;
+        }
         self.refresh |= refresh;
+        self.settings_clicked |= settings_clicked;
         if printer_chosen.is_some() {
             self.printer_chosen = printer_chosen;
         }

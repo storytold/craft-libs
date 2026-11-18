@@ -5,12 +5,14 @@ use std::rc::Rc;
 use std::sync::mpsc::channel;
 
 use craft_behavior::EditEvent;
-use craft_print::ui::{Destination, HostedPrint, PrintDialog, PrintFinish, PrintLayout, PrintSheet, Printer, Settings, SheetPage, State};
+use craft_print::ui::{
+    Destination, DriverControls, HostedPrint, PrintDialog, PrintFinish, PrintLayout, PrintSheet, Printer, Settings, SheetPage, State,
+};
 use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog as _, dialog_id};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue};
 use craft_ui::primitives::TextureCache;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Label, Scale};
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Color32, ColorImage, Pos2, Rect, Shape, TextureId, Ui, Vec2, pos2, vec2};
@@ -294,4 +296,56 @@ fn a_sheet_of_pages_places_each_page_inside_the_paper() {
     assert!((number.rect.center() - screen(pos2(550.0, 600.0))).length() < 1.0, "the number is centred on the page: {:?}", number.rect);
     assert!(paper.expand(0.5).contains_rect(number.clip), "the page is cut at the paper's edge: clip {:?}, paper {paper:?}", number.clip);
     assert!(!number.clip.contains(reach), "the overhang past the paper is not shown");
+}
+
+/// Properties… on a hosted print dialog is filed in the pass that receives the press and taken once, in a frame that
+/// runs twice too: a press taken again, or lost to the second pass, leaves the app opening the driver's options twice
+/// or never.
+#[trial]
+fn a_properties_press_is_taken_once() {
+    let twice = Rc::new(Cell::new(true));
+    let (mut fixture, host) = held_print(&twice);
+    on_print(&host, |dialog| dialog.set_driver(DriverControls::Properties));
+    fixture.idle(4);
+    assert_eq!(on_print(&host, HostedPrint::take_settings_clicked), Some(false), "nothing is pressed yet");
+    let properties = fixture.by_label("Properties…").expect("the Properties… button");
+    fixture.click(&properties);
+    assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+    fixture.idle(4);
+    assert_eq!(on_print(&host, HostedPrint::take_settings_clicked), Some(true), "the press is filed for the app");
+    assert_eq!(on_print(&host, HostedPrint::take_settings_clicked), Some(false), "the press is taken once");
+    fixture.idle(4);
+    assert_eq!(on_print(&host, HostedPrint::take_settings_clicked), Some(false), "later passes file no press");
+}
+
+/// The page box the hosted dialog drew at `scale` pixels per point, taken from the dialog.
+fn paper_px_at(scale: f32) -> [u32; 2] {
+    let twice = Rc::new(Cell::new(false));
+    let (mut fixture, host) = held_print(&twice);
+    fixture.scale(Scale::new(scale));
+    fixture.idle(4);
+    on_print(&host, HostedPrint::take_paper_px).flatten().expect("the page box is reported once drawn")
+}
+
+/// The preview reports the page box it drew, in physical pixels, so the app renders previews at that size. The preview's
+/// width is fixed in points, so the same dialog at twice the scale has a box twice as large, within a pixel. A constant,
+/// or a box in points, would not follow the scale.
+#[trial]
+fn the_paper_box_follows_the_scale() {
+    let [one_w, one_h] = paper_px_at(1.0);
+    let [two_w, two_h] = paper_px_at(2.0);
+    assert!(one_w > 0 && one_h > 0, "a box at scale 1: {one_w}×{one_h}");
+    assert!(two_w.abs_diff(one_w * 2) <= 1 && two_h.abs_diff(one_h * 2) <= 1, "{one_w}×{one_h} at 1.0, {two_w}×{two_h} at 2.0");
+}
+
+/// The page box is filed in the pass that draws it and taken once: `None` after, until the next pass that draws it.
+#[trial]
+fn the_paper_box_is_taken_once() {
+    let twice = Rc::new(Cell::new(false));
+    let (mut fixture, host) = held_print(&twice);
+    let first = on_print(&host, HostedPrint::take_paper_px).flatten();
+    assert!(first.is_some(), "the box is filed once the dialog is drawn");
+    assert_eq!(on_print(&host, HostedPrint::take_paper_px), Some(None), "the box is taken once");
+    fixture.idle(2);
+    assert_eq!(on_print(&host, HostedPrint::take_paper_px).flatten(), first, "the next drawn pass files it again");
 }

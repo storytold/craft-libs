@@ -89,13 +89,7 @@ fn param_rows_enable_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// Options with descriptions and a disabled option with its reason, on a Choice row and a Radio row.
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_option_descriptions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let modes = || {
-        vec![
-            ("fast".to_owned(), "Fast".into()),
-            ("accurate".to_owned(), "Accurate".into()),
-            ("cloud".to_owned(), "Cloud".into()),
-        ]
-    };
+    let modes = || vec![("fast".to_owned(), "Fast".into()), ("accurate".to_owned(), "Accurate".into()), ("cloud".to_owned(), "Cloud".into())];
     let described = |param: Param| {
         param
             .option_description("fast", "Lower accuracy, finishes in seconds")
@@ -108,6 +102,20 @@ fn param_rows_option_descriptions(ui: &mut Ui, data: &mut StoryData) -> StoryOut
     ];
     let fields = data.value("fields", DialogFields::new());
     ParamRows::new("Recognize Text", &params, Bind::bound(fields)).show(ui).into()
+}
+
+/// A Choice row whose open list has a separator line between the standard paper sizes and the custom one.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_choice_separated(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let sizes = vec![
+        ("letter".to_owned(), "Letter".into()),
+        ("legal".to_owned(), "Legal".into()),
+        ("a4".to_owned(), "A4".into()),
+        ("custom".to_owned(), "Custom".into()),
+    ];
+    let params = vec![Param::new("paper", "Paper Size", ParamKind::choice(sizes, Some("letter".to_owned()))).separated_at(3)];
+    let fields = data.value("fields", DialogFields::new());
+    ParamRows::new("Page Setup", &params, Bind::bound(fields)).show(ui).into()
 }
 
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]

@@ -263,6 +263,19 @@ mod tests {
 
     const APP: AppInfo = AppInfo { id: "test", name: "Test", version: "1.0" };
 
+    /// A write to a path set with `failing_writes` returns the refused-write error and keeps what the path held; every
+    /// other path writes: a refusal that wrote anyway, or that refused every path, would test a failed save on the
+    /// wrong path.
+    #[test]
+    fn failing_writes_refuse_only_their_path() {
+        let files = ScriptedFiles::new().with_file("/docs/a.pdf", b"old".to_vec()).failing_writes("/docs/a.pdf");
+        let refused = files.write(std::path::Path::new("/docs/a.pdf"), b"new", WriteIntent::Save);
+        assert_eq!(refused, Err(FileError::PermissionDenied("/docs/a.pdf".into())));
+        assert_eq!(files.file(std::path::Path::new("/docs/a.pdf")).as_deref(), Some(&b"old"[..]), "the refused write kept the old bytes");
+        assert_eq!(files.write(std::path::Path::new("/docs/b.pdf"), b"new", WriteIntent::Save), Ok(false));
+        assert_eq!(files.file(std::path::Path::new("/docs/b.pdf")).as_deref(), Some(&b"new"[..]));
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn installed_host_survives_a_memory_reset() {

@@ -234,6 +234,49 @@ fn a_blend_row_steps_and_picks_by_its_keys_inside_the_dialog() {
     assert_eq!(held().as_deref(), Some("multiply"), "Down on the closed list skips the greyed mode");
 }
 
+/// The y of each thin horizontal line in `shapes`.
+fn rule_ys(shapes: &[egui::Shape]) -> Vec<f32> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::LineSegment { points, .. } if points[0].y == points[1].y => Some(points[0].y),
+            egui::Shape::Rect(rect) if rect.rect.height() <= 2.0 && rect.rect.width() > 20.0 => Some(rect.rect.center().y),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `separated_at(index)` draws the framework's list separator before that option of a choice row's open list and
+/// between no other two: a separator placed by the wrong index, or one drawn on every option, would split the standard
+/// paper sizes from the wrong neighbour.
+#[trial]
+fn a_choice_row_draws_its_separator_before_the_named_option() {
+    let sizes: Vec<(String, Label)> = [("letter", "Letter"), ("legal", "Legal"), ("a4", "A4"), ("custom", "Custom")]
+        .into_iter()
+        .map(|(id, label)| (id.to_owned(), label.into()))
+        .collect();
+    let params = vec![Param::new("paper", "Paper Size", ParamKind::choice(sizes, Some("letter".to_owned()))).separated_at(3)];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Page Setup", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 800.0));
+    fixture.settle();
+    let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the choice field shows");
+    fixture.click(&field);
+    fixture.idle(3);
+
+    let line_of = |fixture: &Fixture, text: &str| {
+        let run = fixture.texts().iter().rev().find(|run| run.text == text).unwrap_or_else(|| panic!("the list shows {text}"));
+        run.rect
+    };
+    let (legal, a4, custom) = (line_of(&fixture, "Legal"), line_of(&fixture, "A4"), line_of(&fixture, "Custom"));
+    let ys = rule_ys(&fixture.frame_shapes());
+    assert!(ys.iter().any(|y| *y > a4.bottom() && *y < custom.top()), "a line between A4 and Custom: {ys:?}, A4 {a4:?}, Custom {custom:?}");
+    assert!(!ys.iter().any(|y| *y > legal.bottom() && *y < a4.top()), "no line between Legal and A4: {ys:?}");
+}
+
 /// A pattern row shows the first pattern for a stored id the rows lack without writing it, a pick writes the pattern's
 /// id, and a group header takes no pick.
 #[trial]

@@ -7,7 +7,7 @@
 //! one; otherwise the service starts it in the last folder it remembers for the
 //! [`PickRequest::purpose`]. It applies the extension policy to a saved name before the app sees it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -357,6 +357,8 @@ struct ScriptState {
     open: Vec<(PickId, PickRequest)>,
     answered: Vec<PickAnswer>,
     files: HashMap<PathBuf, Vec<u8>>,
+    /// Paths a write to is refused ([`ScriptedFiles::failing_writes`]).
+    refused: HashSet<PathBuf>,
 }
 
 impl ScriptedFiles {
@@ -392,6 +394,14 @@ impl ScriptedFiles {
     /// Puts a file in memory, for [`Files::read`].
     pub fn with_file(self, path: impl Into<PathBuf>, bytes: impl Into<Vec<u8>>) -> Self {
         self.state().files.insert(path.into(), bytes.into());
+        self
+    }
+
+    /// Refuses every write to `path`: [`Files::write`] returns [`FileError::PermissionDenied`] for it and keeps the
+    /// bytes it had. Other paths write as before.
+    #[must_use]
+    pub fn failing_writes(self, path: impl Into<PathBuf>) -> Self {
+        self.state().refused.insert(path.into());
         self
     }
 
@@ -450,11 +460,8 @@ impl Files for ScriptedFiles {
         let id = PickId(state.next);
         let suggested = (state.save_suggested && request.kind == PickKind::Save).then(|| Self::suggested(&request));
         state.asked.push(request.clone());
-        let picked = if state.held {
-            state.queued.pop_front()
-        } else {
-            Some(suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled))
-        };
+        let picked =
+            if state.held { state.queued.pop_front() } else { Some(suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled)) };
         match picked {
             Some(picked) => state.answered.push(PickAnswer { id, request, picked }),
             None => state.open.push((id, request)),
@@ -484,7 +491,11 @@ impl Files for ScriptedFiles {
 
     // Kept in memory whatever the intent; no page takes the bytes.
     fn write(&self, path: &Path, bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
-        self.state().files.insert(path.to_owned(), bytes.to_vec());
+        let mut state = self.state();
+        if state.refused.contains(path) {
+            return Err(FileError::PermissionDenied(path.to_owned()));
+        }
+        state.files.insert(path.to_owned(), bytes.to_vec());
         Ok(false)
     }
 
@@ -515,4 +526,3 @@ fn with_path(e: std::io::Error, path: &Path) -> FileError {
         other => other,
     }
 }
-
