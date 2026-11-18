@@ -20,20 +20,20 @@ use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 /// numerical debris, such as the lens between two nearly coincident curves.
 pub const DEFAULT_SLIVER: f64 = 0.01;
 
-/// The most work the sweep may do, counted as segment comparisons plus segment position checks
-/// plus one unit for every 16 segments a linear search of the sweep line passes plus the
-/// horizontal segments each step of a sweep line visits,
+/// The default for the most work the sweep may do, counted as segment comparisons plus segment
+/// position checks plus one unit for every 16 segments a linear search of the sweep line passes
+/// plus the horizontal segments each step of a sweep line visits,
 /// before the shapes count as too degenerate to sweep. Stacked copies of a shape can need billions
 /// of comparisons; a release build makes about 17 million a second.
-const MAX_SWEEP_WORK: u64 = 100_000_000;
+pub const DEFAULT_MAX_SWEEP_WORK: u64 = 100_000_000;
 
-/// The most output the sweep's topology may hold before the shapes count as too degenerate to
-/// sweep, in units: each output segment takes one unit plus one for each entry of its two winding
-/// numbers (at least one each), so 2,000,000 segments with single-entry windings fill it.
-/// Overlapping horizontal edges are split at every position of the others, so n of them can make
-/// about n^2 output segments, and each segment's windings can hold an entry for every shape that
-/// covers it.
-const MAX_TOPOLOGY_UNITS: usize = 6_000_000;
+/// The default for the most output the sweep's topology may hold before the shapes count as too
+/// degenerate to sweep, in units: each output segment takes one unit plus one for each entry of its
+/// two winding numbers (at least one each), so 2,000,000 segments with single-entry windings fill
+/// it. Overlapping horizontal edges are split at every position of the others, so n of them can
+/// make about n^2 output segments, and each segment's windings can hold an entry for every shape
+/// that covers it.
+pub const DEFAULT_MAX_TOPOLOGY_UNITS: usize = 6_000_000;
 
 /// How a path's winding number decides what is inside it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -122,10 +122,17 @@ pub fn regions(shapes: &[Shape], clips: &[ClipPath]) -> Result<Vec<Region>, Geom
 
 /// [`regions`] with contours narrower than `sliver` dropped.
 pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result<Vec<Region>, GeomError> {
+    regions_with_limits(shapes, clips, sliver, DEFAULT_MAX_SWEEP_WORK, DEFAULT_MAX_TOPOLOGY_UNITS)
+}
+
+/// [`regions_with`] with the sweep stopped, as [`GeomError::Degenerate`], once it passes
+/// `max_work` units of work or its topology passes `max_units` units of output (see
+/// [`DEFAULT_MAX_SWEEP_WORK`] and [`DEFAULT_MAX_TOPOLOGY_UNITS`] for the units).
+pub fn regions_with_limits(shapes: &[Shape], clips: &[ClipPath], sliver: f64, max_work: u64, max_units: usize) -> Result<Vec<Region>, GeomError> {
     if shapes.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(Arrangement::new(shapes, clips, sliver, MAX_SWEEP_WORK)?.regions())
+    Ok(Arrangement::new(shapes, clips, sliver, max_work, max_units)?.regions())
 }
 
 /// The finiteness check [`regions_with`] makes: every point of every shape path and of every clip
@@ -273,7 +280,7 @@ struct Arrangement {
 }
 
 impl Arrangement {
-    fn new(shapes: &[Shape], clips: &[ClipPath], sliver: f64, work_limit: u64) -> Result<Self, GeomError> {
+    fn new(shapes: &[Shape], clips: &[ClipPath], sliver: f64, work_limit: u64, output_limit: usize) -> Result<Self, GeomError> {
         let n = shapes.len();
         let mut used = vec![false; clips.len()];
         let mut shape_clips = Vec::with_capacity(n);
@@ -297,7 +304,7 @@ impl Arrangement {
         snap_horizontals(&mut paths.iter_mut().map(|p| &mut p.0).collect::<Vec<_>>(), eps);
         // The sweep can panic on rare near-degenerate input; the flattener then rasterizes.
         let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Topology::<Multi>::from_paths_with_limits(paths.iter().map(|(p, t)| (p, *t)), eps, work_limit, MAX_TOPOLOGY_UNITS)
+            Topology::<Multi>::from_paths_with_limits(paths.iter().map(|(p, t)| (p, *t)), eps, work_limit, output_limit)
         }));
         // Every subpath is closed, so a path error or a sweep past its work or output limit is a
         // degenerate input too.
@@ -1113,13 +1120,22 @@ mod tests {
     #[test]
     fn sweep_past_its_work_limit_is_degenerate() {
         let shapes = vec![fill(Circle::new((50.0, 50.0), 40.0).to_path(0.01)); 20];
-        assert_eq!(Arrangement::new(&shapes, &[], DEFAULT_SLIVER, 1_000).err(), Some(GeomError::Degenerate));
+        assert_eq!(Arrangement::new(&shapes, &[], DEFAULT_SLIVER, 1_000, DEFAULT_MAX_TOPOLOGY_UNITS).err(), Some(GeomError::Degenerate));
         assert_eq!(regions(&shapes, &[]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn regions_with_limits_takes_the_callers_limits() {
+        let shapes = vec![fill(Circle::new((50.0, 50.0), 40.0).to_path(0.01)); 20];
+        let limited = |work, units| regions_with_limits(&shapes, &[], DEFAULT_SLIVER, work, units);
+        assert_eq!(limited(1_000, DEFAULT_MAX_TOPOLOGY_UNITS).err(), Some(GeomError::Degenerate));
+        assert_eq!(limited(DEFAULT_MAX_SWEEP_WORK, 10).err(), Some(GeomError::Degenerate));
+        assert_eq!(limited(DEFAULT_MAX_SWEEP_WORK, DEFAULT_MAX_TOPOLOGY_UNITS).unwrap().len(), 1);
     }
 
     // 1,100 overlapping shapes made only of horizontal edges at one height take little sweep work,
     // but each edge is split at every position of the others, which makes more than 2,000,000
-    // output segments, past MAX_TOPOLOGY_UNITS.
+    // output segments, past DEFAULT_MAX_TOPOLOGY_UNITS.
     #[test]
     fn sweep_past_its_output_limit_is_degenerate() {
         let n = 1_100;
@@ -1138,7 +1154,7 @@ mod tests {
 
     // 200 staggered rectangles of one height make about 120,000 output segments along their top
     // and bottom edges, fewer than 2,000,000, but the winding numbers of those segments hold an
-    // entry for each rectangle that covers them, which passes MAX_TOPOLOGY_UNITS.
+    // entry for each rectangle that covers them, which passes DEFAULT_MAX_TOPOLOGY_UNITS.
     #[test]
     fn winding_entries_count_toward_the_output_limit() {
         let k = 200;
