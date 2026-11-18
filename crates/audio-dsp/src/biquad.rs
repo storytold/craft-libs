@@ -63,11 +63,12 @@ impl Coeffs {
     /// RBJ cookbook design. `freq` in Hz (clamped below Nyquist), `q` > 0, `gain_db` used by
     /// peaking and shelving types (shelves use `q` as the shelf "Q", S=1 ≙ Q=1/√2). An unusable
     /// rate is replaced as [`crate::sane_sample_rate`] describes. A NaN `freq` designs at 1000 Hz,
-    /// as [`crate::design::realize`] does, and a NaN `gain_db` designs at 0 dB.
+    /// as [`crate::design::realize`] does, and a NaN `gain_db` designs at 0 dB. `gain_db` is
+    /// clamped to ±240 dB, so an infinite or huge gain still gives finite coefficients.
     pub fn design(kind: FilterType, sample_rate: f64, freq: f64, q: f64, gain_db: f64) -> Coeffs {
         let sample_rate = f64::from(crate::sane_sample_rate(sample_rate as f32));
         let freq = if freq.is_nan() { 1000.0 } else { freq };
-        let gain_db = if gain_db.is_nan() { 0.0 } else { gain_db };
+        let gain_db = if gain_db.is_nan() { 0.0 } else { gain_db.clamp(-240.0, 240.0) };
         let f = freq.clamp(1.0, sample_rate * 0.49);
         let q = q.max(1e-3);
         let w0 = 2.0 * PI * f / sample_rate;
@@ -202,6 +203,20 @@ mod tests {
                 let mut x = sine(440.0, 0.5, SR, 256, 0.0);
                 bq.process(&c, &mut x);
                 assert!(x.iter().all(|v| v.is_finite()), "{kind:?} {freq} {gain}: output is not finite");
+            }
+        }
+    }
+
+    #[test]
+    fn an_infinite_or_huge_gain_gives_finite_coefficients_and_output() {
+        for kind in [FilterType::Cut, FilterType::Peaking, FilterType::LowShelf, FilterType::HighShelf] {
+            for gain in [f64::INFINITY, f64::NEG_INFINITY, 1e6, -1e6, f64::MAX, f64::MIN] {
+                let c = Coeffs::design(kind, SR, 1000.0, 0.7, gain);
+                assert!([c.b0, c.b1, c.b2, c.a1, c.a2].iter().all(|v| v.is_finite()), "{kind:?} {gain}: {c:?}");
+                let mut bq = Biquad::new();
+                let mut x = sine(440.0, 0.5, SR, 256, 0.0);
+                bq.process(&c, &mut x);
+                assert!(x.iter().all(|v| v.is_finite()), "{kind:?} {gain}: output is not finite");
             }
         }
     }
