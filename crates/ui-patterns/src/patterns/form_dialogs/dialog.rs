@@ -14,7 +14,9 @@ use super::rows::{ParamRows, ParamRowsOutput};
 
 use crate::contract::{Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
 
-use crate::dialog::{Alert, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id};
+use crate::dialog::{
+    Alert, ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id,
+};
 
 use crate::display::{Shade, Text};
 use crate::form::SliderFieldLayout;
@@ -67,9 +69,9 @@ pub enum ParamLayout {
 }
 
 impl ParamLayout {
-    /// Whether a dialog that previews stands its buttons in a column beside the body.
-    fn side_buttons(self) -> bool {
-        !matches!(self, ParamLayout::Stacked)
+    /// Where a dialog that previews stands its buttons: in a column beside the body, or across the foot.
+    fn button_place(self) -> ButtonPlace {
+        if matches!(self, ParamLayout::Stacked) { ButtonPlace::Foot } else { ButtonPlace::Side }
     }
 
     /// How the range rows arrange their slider and number field.
@@ -482,7 +484,7 @@ impl<'a> ParamDialog<'a> {
             form = form.opened(open);
         }
         if previews {
-            form = form.preview(preview_on).side_buttons(layout.side_buttons());
+            form = form.preview(preview_on).button_place(layout.button_place());
         }
         // The pane shows only in a dialog that previews.
         let preview = preview.filter(|_| previews);

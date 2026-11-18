@@ -1,10 +1,16 @@
 //! Swapping the running launcher for a new copy: AppImage, standalone tarball and release tree.
 
+#[cfg(unix)]
+use super::App;
 use super::detect::marker;
 #[cfg(unix)]
 use super::detect::prefix_with_share;
-use super::helper::{done_file, failure_file, read_record};
-use super::{App, Path, PathBuf, Paths, Release, install};
+#[cfg(not(windows))]
+use super::helper::read_record;
+use super::helper::{done_file, failure_file};
+use super::{Path, Paths, Release};
+#[cfg(not(windows))]
+use super::{PathBuf, install};
 
 /// Records `release` as just installed, so it isn't offered again for [`super::detect::JUST_UPDATED_FOR`]: its
 /// tag, the time, and the version it installs. The outcome records of an earlier update are

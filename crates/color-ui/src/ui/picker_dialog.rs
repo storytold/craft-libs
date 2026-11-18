@@ -16,7 +16,9 @@ use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::{ColorModel, Srgba, builtin_models};
 use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
+use craft_ui::dialog::{
+    ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
+};
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
@@ -79,9 +81,10 @@ enum Title {
     Given(Label),
 }
 
-/// Photoshop's Color Picker dialog on the `DialogHost`: the Full `ColorPicker` with the compare swatch, the
+/// Photoshop's Color Picker dialog on the `DialogHost`: the Full `ColorPicker` with the compare block, the
 /// out-of-gamut and web-colour warnings, Only Web Colors and the eyedroppers, and OK, Cancel and Add to Swatches as the
-/// dialog's buttons.
+/// dialog's buttons, which stand in the picker's actions cell over its second field group (`ButtonPlace::Body`). The
+/// dialog takes the picker's size: one arrangement in every room.
 ///
 /// - **Opening:** the hex field has the focus with its text selected, so typing replaces it. The field shows the
 ///   component it showed last time and Only Web Colors is as it was left ([`ColorPickerMemory`]); with Only Web Colors
@@ -203,7 +206,8 @@ impl ColorPickerDialog {
         self
     }
 
-    /// The compare swatch beside the field; on by default.
+    /// Whether the compare block's current half shows the colour the dialog opened with; on by default. Off, it shows the
+    /// colour at the picker's first show.
     #[must_use]
     pub fn compare(mut self, on: bool) -> ColorPickerDialog {
         self.compare = on;
@@ -454,7 +458,7 @@ impl StackDialog for ColorPickerDialog {
         let shown = Dialog::new(title.clone())
             .opened(Bind::bound(open))
             .buttons(buttons)
-            .side_buttons(true)
+            .button_place(ButtonPlace::Body)
             .close_on_enter(true)
             .initial_focus(Initial::Keep)
             .roomy(true)
@@ -488,8 +492,7 @@ impl StackDialog for ColorPickerDialog {
                     .web_colors(Bind::bound(&mut memory.web_colors))
                     .warnings(warnings)
                     .eyedropper(screen)
-                    .eyedropper_busy(busy)
-                    .focus_on_open(true);
+                    .eyedropper_busy(busy);
                 if let Some(sampled) = sampled {
                     picker = picker.sampled(sampled);
                 }

@@ -364,6 +364,10 @@ impl<'a> FloatingGroup<'a> {
         if let Some(bounds) = self.bounds {
             overlay = overlay.bounds(bounds);
         }
+        // A dock window's move by its title row docks it, so the app runs that move in an OS window too.
+        if self.start_drag.is_some() {
+            overlay = overlay.moved_by_app();
+        }
         match &self.native {
             Some(spec) => Mount::viewport_with(overlay, spec.clone()),
             None => Mount::Layer(overlay),
@@ -433,9 +437,6 @@ impl Component for FloatingGroup<'_> {
     }
 
     fn finish(mut self, mut cx: Cx<'_, Self>) -> FloatingGroupOutput {
-        if self.start_drag.is_some() {
-            native::keeps_app_drag(&cx.core.ctx, cx.core.id);
-        }
         if self.moving
             && let Some(start) = self.start_drag.take()
         {
