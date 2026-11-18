@@ -136,6 +136,7 @@ enum Title {
 ///   the app takes the colour with [`take_add_to_swatches`](Self::take_add_to_swatches).
 /// - **Preview:** [`current`](Self::current) follows every edit, so an app that previews reads it each pass through
 ///   `DialogHost::get_by_id` and shows it live; Cancel is the app's cue to put the old colour back.
+#[derive(craft_ui::contract::Pattern)]
 pub struct ColorPickerDialog {
     id: DialogId,
     /// Which of several pickers of the same key this is ([`instance`](Self::instance)).
@@ -658,6 +659,14 @@ impl StackDialog for ColorPickerDialog {
                 }
             });
         self.current = held.same().copied();
+        if self.layout == ColorPickerDialogLayout::Tabbed {
+            eprintln!(
+                "DIAG the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page: held same={} picked={:?} closed={:?}",
+                self.current.is_some(),
+                shown.output.picked,
+                shown.output.closed
+            );
+        }
 
         let (picked, closed) = (shown.output.picked, shown.output.closed);
         let ok = (picked == Some(0) || closed == Some(CloseReason::Enter)) && self.current.is_some();
