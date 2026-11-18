@@ -23,6 +23,11 @@ fn top_strip() -> [Point; 4] {
     [(120.0, 0.0), (520.0, 0.0), (520.0, 30.0), (120.0, 30.0)].map(|(x, y)| Point::new(x, y))
 }
 
+/// A selection near the document's start edge, with room after it for a bar on its end side.
+fn start_box() -> [Point; 4] {
+    [(40.0, 120.0), (200.0, 120.0), (200.0, 240.0), (40.0, 240.0)].map(|(x, y)| Point::new(x, y))
+}
+
 /// The members of a selection bar.
 fn formatting(ui: &mut Ui) {
     for (icon, name) in [("rotate_ccw", "Rotate left"), ("rotate_cw", "Rotate right")] {
@@ -48,7 +53,7 @@ fn selection_bar_flipped_near_the_top_edge(ui: &mut Ui, _: &mut StoryData) -> St
 /// A selection bar on the other side of its selection: after it in reading order.
 #[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
 fn selection_bar_on_the_other_side(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let corners = turned_frame();
+    let corners = start_box();
     on_canvas(ui, |ui, area, _| TaskBar::selection("Selection", &corners).side(Side::End).show(ui, area, |ui, _| formatting(ui)).output)
 }
 
