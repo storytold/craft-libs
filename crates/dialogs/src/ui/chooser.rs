@@ -363,9 +363,6 @@ impl FileChooser {
 
     /// Shows one pass: the chooser, and over it the Replace question while one is open.
     fn present(&mut self, ui: &mut Ui) -> Option<DialogResult<Answer>> {
-        if let Some(done) = self.finished.take() {
-            return Some(done);
-        }
         // Folders are not watched, so the listings go stale when the window regains focus, as the places tree's do:
         // files changed in another app show on return. egui-winit sends `WindowFocused` from
         // `State::on_window_event` (`WindowEvent::Focused`), and only to a frame's first pass, so a second pass does not
