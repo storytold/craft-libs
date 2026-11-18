@@ -69,11 +69,12 @@ impl DelayLine {
     pub(crate) fn max_delay(&self) -> f32 {
         (self.buf.len() - 3) as f32
     }
-    /// Sample written `d` samples ago (`d` ≥ 0; 0 = the sample written by the last `push`).
+    /// Sample written `d` samples ago (`d` ≥ 0; 0 = the sample written by the last `push`). A NaN
+    /// delay reads as 0.
     #[inline]
     pub(crate) fn read(&self, d: f32) -> f32 {
         let len = self.buf.len();
-        let d = d.clamp(0.0, self.max_delay());
+        let d = if d.is_nan() { 0.0 } else { d.clamp(0.0, self.max_delay()) };
         let di = d.floor();
         let frac = d - di;
         // `w < len` and `di <= len - 3`, so one conditional subtract wraps the index.
@@ -279,7 +280,7 @@ mod tests {
     fn delay_read_matches_modulo_indexing() {
         let reference = |line: &DelayLine, d: f32| {
             let len = line.buf.len();
-            let d = d.clamp(0.0, line.max_delay());
+            let d = if d.is_nan() { 0.0 } else { d.clamp(0.0, line.max_delay()) };
             let di = d.floor();
             let frac = d - di;
             let i0 = (line.w + len - 1 - di as usize) % len;
@@ -293,6 +294,8 @@ mod tests {
                 for d in (-8..=4 * max as i32 + 12).map(|i| i as f32 * 0.25).chain([f32::NAN, f32::INFINITY, -f32::INFINITY, 1e30]) {
                     assert_eq!(line.read(d).to_bits(), reference(&line, d).to_bits(), "max {max} w {} d {d}", line.w);
                 }
+                // A NaN delay reads the newest sample, not NaN.
+                assert_eq!(line.read(f32::NAN).to_bits(), line.tap(0).to_bits(), "max {max} w {}", line.w);
             }
         }
     }

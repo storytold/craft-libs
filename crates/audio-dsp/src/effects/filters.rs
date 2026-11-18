@@ -495,6 +495,12 @@ impl ScientificFilter {
     fn redesign(&mut self) {
         let (f1, f2) = (2f64.powf(self.f1.value() as f64), 2f64.powf(self.f2.value() as f64));
         self.sections = design::realize(&self.proto, self.band, f1, f2, self.sr as f64);
+        // Sections past the cascade stop running; clear them so a later, higher order starts
+        // them from silence instead of from the audio they held before.
+        let active = self.sections.as_slice().len();
+        for st in &mut self.state {
+            st.iter_mut().skip(active).for_each(Biquad::reset);
+        }
         self.dirty = self.f1.is_smoothing() || self.f2.is_smoothing();
     }
 

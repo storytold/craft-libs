@@ -30,16 +30,23 @@ pub struct SyncOptions {
     pub max_lag: Option<i64>,
     /// Upper bound of the coarse search's sample rate (Hz).
     pub coarse_rate: u32,
-    /// Most samples (both signals together) the coarse transform may hold, at least 4,096; longer
-    /// recordings are decimated further, by at most [`MAX_DECIMATION`]. The coarse signals
-    /// therefore hold the larger of this and 1/4,096 of the input, and the transform is the next
-    /// power of two above that.
+    /// Most samples (both signals together) the coarse transform may hold, from 4,096 to
+    /// [`MAX_COARSE_SAMPLES`]; longer recordings are decimated further, by at most
+    /// [`MAX_DECIMATION`]. The coarse signals therefore hold the larger of this and 1/4,096 of the
+    /// input, and the transform is the next power of two above that. When that transform would
+    /// exceed the FFT's largest size, [`find_offset`] returns `None`.
     pub max_coarse_samples: usize,
     /// PHAT weighting exponent (1 = full whitening, 0 = plain cross-correlation).
     pub phat_beta: f32,
-    /// Length of the full-rate refinement window (samples).
+    /// Length of the full-rate refinement window (samples), from 256 to [`MAX_REFINE_WINDOW`].
     pub refine_window: usize,
 }
+
+/// Largest [`SyncOptions::max_coarse_samples`]; a larger value counts as this (8 M samples).
+pub const MAX_COARSE_SAMPLES: usize = 1 << 23;
+
+/// Largest [`SyncOptions::refine_window`]; a larger value counts as this (4 M samples).
+pub const MAX_REFINE_WINDOW: usize = 1 << 22;
 
 impl Default for SyncOptions {
     fn default() -> Self {
@@ -221,13 +228,16 @@ pub fn find_offset(a: &[f32], b: &[f32], sample_rate: u32, opts: &SyncOptions) -
     // ---- coarse
     // The factor `decimate` really applies to both signals, so the coarse lag scales back exactly.
     let d = (sr.div_ceil(opts.coarse_rate.max(500) as usize))
-        .max((a.len() + b.len()).div_ceil(opts.max_coarse_samples.max(1 << 12)))
+        .max((a.len() + b.len()).div_ceil(opts.max_coarse_samples.clamp(1 << 12, MAX_COARSE_SAMPLES)))
         .min(MAX_DECIMATION)
         .min(a.len().min(b.len()))
         .max(1);
     let (ca, cb) = (normalized_decimate(a, d), normalized_decimate(b, d));
     let (la, lb) = (ca.len() as i64, cb.len() as i64);
     let n = ((la + lb) as usize).next_power_of_two();
+    if n > Fft::MAX_SIZE {
+        return None;
+    }
     let rate_c = sr as f32 / d as f32;
     let band = ((40.0 / rate_c).min(0.05), if d > 1 { 0.40 } else { 0.5 });
     let r = gcc(&ca, &cb, n, opts.phat_beta, band);
@@ -239,24 +249,27 @@ pub fn find_offset(a: &[f32], b: &[f32], sample_rate: u32, opts: &SyncOptions) -
     if hi < lo {
         return None;
     }
+    // The peak is taken within `max_lag`; the RMS it is compared with covers every lag with enough
+    // overlap, so a narrow limit does not cap the confidence at √(lags in the limit).
     let mut best = (0i64, 0.0f32);
     let mut sum2 = 0.0f64;
-    let mut count = 0usize;
+    let mut inside = 0usize;
     for l in lo..=hi {
+        let v = corr_at(&r, l);
+        sum2 += (v as f64) * (v as f64);
         if max_lag_c.is_some_and(|m| l.abs() > m) {
             continue;
         }
-        let v = corr_at(&r, l);
-        sum2 += (v as f64) * (v as f64);
-        count += 1;
+        inside += 1;
         if v.abs() > best.1.abs() {
             best = (l, v);
         }
     }
-    if count == 0 || best.1 == 0.0 {
+    if inside == 0 || best.1 == 0.0 {
         return None;
     }
-    let rms = (sum2 / count as f64).sqrt().max(1e-30) as f32;
+    let count = (hi - lo + 1) as f64;
+    let rms = (sum2 / count).sqrt().max(1e-30) as f32;
     let confidence = best.1.abs() / rms;
     let guard = ((rate_c * 0.05) as i64).max(2);
     let mut second = 0.0f32;
@@ -277,7 +290,7 @@ pub fn find_offset(a: &[f32], b: &[f32], sample_rate: u32, opts: &SyncOptions) -
     if ov1 - ov0 < 16 {
         return Some(SyncResult { lag: coarse, lag_fine: coarse as f64, confidence, distinct, inverted });
     }
-    let w = ((ov1 - ov0) as usize).min(opts.refine_window.max(256)) as i64;
+    let w = ((ov1 - ov0) as usize).min(opts.refine_window.clamp(256, MAX_REFINE_WINDOW)) as i64;
     // the window of b with the most energy (both sides: a lag-shifted)
     let start = {
         let hop = (w / 4).max(1);
@@ -559,6 +572,18 @@ mod tests {
             let r = find_offset(&s, &b, sr, &SyncOptions { max_lag: Some(m), ..Default::default() }).unwrap();
             assert!(r.lag.abs() <= m && r.lag_fine.abs() <= m as f64 + 0.5, "max {m}: {r:?}");
         }
+    }
+
+    /// With a 100-sample limit at 48 kHz only 35 coarse lags lie inside it; the confidence was
+    /// their peak over their own RMS, at most √35 ≈ 5.9, so even identical recordings were never
+    /// `reliable()`.
+    #[test]
+    fn a_narrow_lag_limit_can_still_be_reliable() {
+        let sr = 48_000;
+        let s = speechy(sr as f64, 10.0, 5);
+        let r = find_offset(&s, &s, sr, &SyncOptions { max_lag: Some(100), ..Default::default() }).unwrap();
+        assert_eq!(r.lag, 0);
+        assert!(r.reliable(), "{r:?}");
     }
 
     /// A coarse budget that asks for more than [`MAX_DECIMATION`] still scales the coarse lag by

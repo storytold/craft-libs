@@ -93,7 +93,19 @@ impl Wsola {
             }
             d += 2;
         }
-        let Some((coarse, _)) = best else { return nominal };
+        let Some((coarse, coarse_score)) = best else { return nominal };
+        if coarse_score <= 0.0 {
+            // The coarse pass found no match (for example, the template's energy sits on odd
+            // samples only, which it skips): search every offset at full resolution instead.
+            let mut full = None;
+            for d in 0..=tol {
+                consider(d, 1, &mut full);
+                if d > 0 {
+                    consider(-d, 1, &mut full);
+                }
+            }
+            return nominal.saturating_add(full.map_or(coarse, |(d, _)| d));
+        }
         let mut fine = None;
         for d in [coarse, coarse - 1, coarse + 1] {
             if d.abs() <= tol {
@@ -194,6 +206,17 @@ mod tests {
                 assert!(step < slope * 1.3, "{freq} Hz × {speed}: step {step} vs slope {slope}");
             }
         }
+    }
+
+    /// The template's only nonzero sample is at an odd index, so every coarse score was 0 and the
+    /// search kept the nominal position next to an exact match 101 samples away.
+    #[test]
+    fn a_match_the_coarse_pass_skips_is_still_found() {
+        let w = Wsola::new(48_000);
+        let mut guide = vec![0.0f32; 4_000];
+        guide[359] = 1.0;
+        guide[2_460] = 1.0;
+        assert_eq!(w.align(&guide, 0, 2_000), 2_101);
     }
 
     #[test]

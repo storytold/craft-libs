@@ -19,9 +19,10 @@ pub struct Fft {
 }
 
 impl Fft {
-    /// Plan an FFT of size `n` (must be a power of two ≥ 2).
+    /// Plan an FFT of size `n`. A size that is not a power of two is rounded up to the next one,
+    /// and the size is kept between 2 and [`Fft::MAX_SIZE`].
     pub fn new(n: usize) -> Fft {
-        assert!(n >= 2 && n.is_power_of_two(), "FFT size must be a power of two");
+        let n = n.clamp(2, Self::MAX_SIZE).next_power_of_two();
         let bits = n.trailing_zeros();
         let rev = (0..n as u32).map(|i| i.reverse_bits() >> (32 - bits)).collect();
         let (mut tw_re, mut tw_im) = (Vec::with_capacity(n - 1), Vec::with_capacity(n - 1));
@@ -39,19 +40,32 @@ impl Fft {
         Fft { n, tw_re, tw_im, tw_im_inv, rev }
     }
 
-    /// Forward transform (e^{-iωt}), unscaled.
+    /// Largest size [`Fft::new`] plans (16 M points; the plan then holds 256 MiB).
+    pub const MAX_SIZE: usize = 1 << 24;
+
+    /// The transform size.
+    #[cfg(test)]
+    pub fn size(&self) -> usize {
+        self.n
+    }
+
+    /// Forward transform (e^{-iωt}), unscaled, of the first `size` values of `re` and `im`. When
+    /// either slice is shorter than the size, both are left unchanged.
     pub fn forward(&self, re: &mut [f32], im: &mut [f32]) {
         self.run(re, im, false);
     }
 
-    /// Inverse transform (e^{+iωt}), unscaled (divide by `n` yourself).
+    /// Inverse transform (e^{+iωt}), unscaled (divide by the size yourself). When either slice
+    /// is shorter than the size, both are left unchanged.
     pub fn inverse(&self, re: &mut [f32], im: &mut [f32]) {
         self.run(re, im, true);
     }
 
     fn run(&self, re: &mut [f32], im: &mut [f32], inverse: bool) {
         let n = self.n;
-        assert!(re.len() >= n && im.len() >= n);
+        if re.len() < n || im.len() < n {
+            return;
+        }
         let (re, im) = (&mut re[..n], &mut im[..n]);
         for i in 0..n {
             let j = self.rev[i] as usize;
@@ -120,6 +134,21 @@ mod tests {
             assert!((re[t] / n as f32 - x[t]).abs() < 1e-5);
             assert!((im[t] / n as f32).abs() < 1e-5);
         }
+    }
+
+    /// A size that is not a power of two, or below 2, is rounded up; short slices are left
+    /// unchanged. Both used to panic.
+    #[test]
+    fn odd_sizes_and_short_slices_do_not_panic() {
+        assert_eq!(Fft::new(0).size(), 2);
+        assert_eq!(Fft::new(1).size(), 2);
+        assert_eq!(Fft::new(48).size(), 64);
+        assert_eq!(Fft::new(64).size(), 64);
+        let fft = Fft::new(8);
+        let (mut re, mut im) = (vec![1.0f32; 4], vec![0.0f32; 8]);
+        fft.forward(&mut re, &mut im);
+        fft.inverse(&mut re, &mut im);
+        assert_eq!((re, im), (vec![1.0f32; 4], vec![0.0f32; 8]));
     }
 
     /// The previous kernel (strided reads from one n/2-entry twiddle table), kept as reference.

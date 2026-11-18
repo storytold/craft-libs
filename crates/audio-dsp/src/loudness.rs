@@ -492,6 +492,23 @@ impl LoudnessMeter {
         }
     }
 
+    /// Loudness range of the program as a file measurement: the short-term windows of 1.5 s of
+    /// silence after the audio fed so far are counted too, as EBU Tech 3342 asks for file-based
+    /// measurement, so a program of only a few seconds gets more than one window. The meter
+    /// itself is unchanged: [`LoudnessMeter::loudness_range`] and audio fed afterwards do not see
+    /// the silence.
+    pub fn file_loudness_range(&self) -> f64 {
+        let mut tail = self.clone();
+        let silence = vec![0.0f32; self.sub_len];
+        let mut left = (self.sub_len - self.sub_pos) + 15 * self.sub_len;
+        while left > 0 {
+            let take = left.min(self.sub_len);
+            tail.process(&[&silence[..take]]);
+            left -= take;
+        }
+        tail.loudness_range()
+    }
+
     /// Snapshot of all program measurements.
     pub fn summary(&self) -> LoudnessSummary {
         LoudnessSummary {
@@ -516,12 +533,13 @@ pub struct LoudnessSummary {
     pub true_peak_dbtp: f64,
 }
 
-/// Measure a whole planar program in one call.
+/// Measure a whole planar program in one call. The loudness range is the file measurement of
+/// [`LoudnessMeter::file_loudness_range`].
 pub fn measure(channels: &[&[f32]], sample_rate: f64) -> LoudnessSummary {
     let mut m = LoudnessMeter::new(sample_rate, channels.len());
     m.process(channels);
     m.end_program();
-    m.summary()
+    LoudnessSummary { loudness_range_lu: m.file_loudness_range(), ..m.summary() }
 }
 
 /// Gain (dB) that moves a program measured at `measured_lufs` to `target_lufs`.
@@ -677,6 +695,26 @@ mod tests {
             let m = stereo_measure(&x, sr);
             assert!((m.loudness_range() - expect).abs() < 1.0, "LRA {} expected {expect}", m.loudness_range());
         }
+    }
+
+    /// A 3 s program gives one short-term window, so its loudness range read 0 however much the
+    /// level changed. The file measurement counts the windows of 1.5 s of silence after it.
+    #[test]
+    fn a_short_program_has_a_file_loudness_range() {
+        let sr = 48000.0;
+        let x = segments(1000.0, sr, &[(1.5, -20.0), (1.5, -30.0)]);
+        let s = measure(&[&x, &x], sr);
+        assert!(s.loudness_range_lu > 1.0, "LRA {}", s.loudness_range_lu);
+        // The live reading and later audio do not see the silence.
+        let mut m = LoudnessMeter::new(sr, 2);
+        m.process(&[&x, &x]);
+        let before = m.loudness_range();
+        assert_eq!(before, 0.0);
+        assert!((m.file_loudness_range() - s.loudness_range_lu).abs() < 1e-12);
+        assert_eq!(m.loudness_range(), before);
+        // A steady program keeps a file range near 0.
+        let y = segments(1000.0, sr, &[(30.0, -20.0)]);
+        assert!(measure(&[&y, &y], sr).loudness_range_lu < 1.0);
     }
 
     #[test]

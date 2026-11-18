@@ -142,10 +142,10 @@ impl ClickRemover {
         let valid = &mut s.sorted[p..];
         let mid = valid.len() / 2;
         valid.select_nth_unstable_by(mid, |x, y| x.total_cmp(y));
-        let sigma = valid[mid] / 0.6745;
-        if sigma <= 1e-9 {
-            return 0;
-        }
+        // A background the predictor matches exactly (digital silence) has a median residual of
+        // 0; the floor of 1e-6 (−120 dBFS) still lets a click in it stand out. An all-zero span
+        // never gets here: `lpc` turns it away, so it stays exact silence.
+        let sigma = (valid[mid] / 0.6745).max(1e-6);
         let thr = k * sigma;
         s.marks.iter_mut().for_each(|m| *m = false);
         let mut n = CONTEXT;

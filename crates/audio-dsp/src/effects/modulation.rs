@@ -226,7 +226,7 @@ impl AudioEffect for Flanger {
                 let y = line.read(d0 + (d1 - d0) * shape(p));
                 let wet = if special {
                     let y2 = line.read(d0 + (d1 - d0) * shape(wrap_phase(p + 0.5)));
-                    0.5 * (y - y2) + 0.5 * y
+                    0.5 * (y - y2)
                 } else {
                     y
                 };
@@ -306,6 +306,19 @@ impl Phaser {
 
 impl AudioEffect for Phaser {
     param_plumbing!("phaser");
+    /// The all-pass ring of the lowest frequency the sweep reaches: each stage's pole has a time
+    /// constant τ, the cascade of `stages` poles falls 60 dB within (6.9 + 2·stages)·τ, and each
+    /// pass around the feedback loop repeats that ring at the feedback gain.
+    fn tail_samples(&self) -> usize {
+        let stages = ((self.pv.v("stages").round() as usize / 2) * 2).clamp(2, MAX_STAGES) as f64;
+        let lowest = self.pv.v("upper_freq") * 2f32.powf(-6.0 * self.pv.v("depth") / 100.0);
+        let pole = AllPass1::coef(lowest, self.sr).abs().min(1.0 - 1e-12);
+        // Each stage delays by at least one sample, also when its pole is at 0.
+        let tau = (-1.0 / pole.ln()).max(1.0);
+        let fb = (0.9 * self.pv.v("feedback").abs() / 100.0) as f64;
+        let repeats = if fb > 0.0 { (0.001f64.ln() / fb.ln()).ceil() + 1.0 } else { 1.0 };
+        super::util::tail_samples(((6.9 + 2.0 * stages) * tau * repeats / self.sr as f64) as f32, self.sr)
+    }
     fn reset(&mut self) {
         self.ap.iter_mut().for_each(|a| a.iter_mut().for_each(AllPass1::reset));
         self.fbs.iter_mut().for_each(|v| *v = 0.0);

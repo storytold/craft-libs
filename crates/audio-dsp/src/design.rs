@@ -95,9 +95,18 @@ impl Mul for C {
 
 impl Div for C {
     type Output = C;
+    /// Smith's algorithm: the divisor is scaled by its larger component, so no intermediate
+    /// squares it and a divisor above about 1e154 does not overflow to infinity.
     fn div(self, o: C) -> C {
-        let d = o.re * o.re + o.im * o.im;
-        C::new((self.re * o.re + self.im * o.im) / d, (self.im * o.re - self.re * o.im) / d)
+        if o.re.abs() >= o.im.abs() {
+            let r = o.im / o.re;
+            let d = o.re + o.im * r;
+            C::new((self.re + self.im * r) / d, (self.im - self.re * r) / d)
+        } else {
+            let r = o.re / o.im;
+            let d = o.re * r + o.im;
+            C::new((self.re * r + self.im) / d, (self.im * r - self.re) / d)
+        }
     }
 }
 
@@ -335,19 +344,58 @@ fn asne(w: C, k: f64) -> C {
     C::real(1.0).sub(acde(w, k))
 }
 
+/// Arithmetic-geometric mean of `a` and `b` (both ≥ 0).
+fn agm(a: f64, b: f64) -> f64 {
+    let (mut a, mut b) = (a, b);
+    for _ in 0..64 {
+        if (a - b).abs() <= 1e-15 * a {
+            break;
+        }
+        (a, b) = (0.5 * (a + b), (a * b).sqrt());
+    }
+    a
+}
+
+/// Selectivity modulus `k` that the degree equation gives for order `n` and discrimination
+/// modulus `k1` (Orfanidis, "Lecture Notes on Elliptic Filter Design", 2006, `ellipdeg`).
+/// Below `k1` = 1e-6, `1 − k1²` rounds toward 1 and the product form below gives `k = 0`, so
+/// `k` comes from the nomes instead: q = q1^(1/N), with q1 = exp(−π·K′(k1)/K(k1)).
+fn selectivity(n: usize, k1: f64) -> f64 {
+    if k1 < 1e-6 { selectivity_from_nome(n, k1) } else { selectivity_from_product(n, k1) }
+}
+
+fn selectivity_from_nome(n: usize, k1: f64) -> f64 {
+    let kk = PI / (2.0 * agm(1.0, (1.0 - k1 * k1).sqrt()));
+    let kkp = PI / (2.0 * agm(1.0, k1));
+    let q = (-PI * kkp / (kk * n as f64)).exp();
+    // k = 4·√q · (Σ_{m≥0} q^(m(m+1)))² / (1 + 2·Σ_{m≥1} q^(m²))²
+    let (mut num, mut den) = (0.0f64, 1.0f64);
+    for m in 0..16i32 {
+        num += q.powi(m * (m + 1));
+        if m > 0 {
+            den += 2.0 * q.powi(m * m);
+        }
+    }
+    (4.0 * q.sqrt() * num * num / (den * den)).min(1.0)
+}
+
+fn selectivity_from_product(n: usize, k1: f64) -> f64 {
+    let k1p = (1.0 - k1 * k1).sqrt();
+    // Degree equation: k' = k1'^N · Π sn⁴(u_i K', k1').
+    let mut kp = k1p.powi(n as i32);
+    for i in 1..=n / 2 {
+        let ui = (2 * i - 1) as f64 / n as f64;
+        kp *= sne(C::real(ui), k1p).re.powi(4);
+    }
+    (1.0 - kp * kp).max(0.0).sqrt()
+}
+
 fn elliptic(n: usize, rp: f64, rs: f64) -> Zpk {
     let ep = (10f64.powf(rp / 10.0) - 1.0).sqrt();
     let es = (10f64.powf(rs / 10.0) - 1.0).sqrt();
     let k1 = ep / es;
-    let k1p = (1.0 - k1 * k1).sqrt();
     let l = n / 2;
-    // Degree equation: k' = k1'^N · Π sn⁴(u_i K', k1').
-    let mut kp = k1p.powi(n as i32);
-    for i in 1..=l {
-        let ui = (2 * i - 1) as f64 / n as f64;
-        kp *= sne(C::real(ui), k1p).re.powi(4);
-    }
-    let k = (1.0 - kp * kp).max(0.0).sqrt();
+    let k = selectivity(n, k1);
     // v0 = −j·asn(j/εp, k1) / N   (normalized).
     let a = asne(C::new(0.0, 1.0 / ep), k1);
     let v0 = C::new(a.im, -a.re).scale(1.0 / n as f64); // −j·a/N
@@ -759,8 +807,41 @@ mod tests {
         // sn(K, k) = 1; cd(0, k) = 1
         assert!((sne(C::real(1.0), 0.7).re - 1.0).abs() < 1e-9);
         assert!((cde(C::real(0.0), 0.7).re - 1.0).abs() < 1e-9);
+        // A divisor whose squared components overflow still divides.
+        let q = C::new(3e200, 4e200).div(C::new(6e200, -8e200));
+        assert!((q.re + 0.14).abs() < 1e-12 && (q.im - 0.48).abs() < 1e-12, "{q:?}");
         let u = asne(C::real(0.5), 0.7);
         assert!((sne(u, 0.7).re - 0.5).abs() < 1e-9);
+    }
+
+    /// At 1.536 MHz the 24-pole band-pass's bilinear denominator exceeds 1e155, whose square
+    /// overflowed: the gain came out 0 and the filter silent.
+    #[test]
+    fn a_high_order_band_pass_at_a_high_rate_keeps_its_gain() {
+        let sr = 1_536_000.0;
+        let s = design(&spec(Family::Butterworth, Band::BandPass, MAX_ORDER, 1000.0, 2000.0), sr);
+        let center = s.magnitude_db(1414.2, sr);
+        assert!(center.is_finite() && center.abs() < 0.5, "center {center} dB");
+        assert!(s.magnitude_db(100.0, sr) < -100.0, "{}", s.magnitude_db(100.0, sr));
+    }
+
+    /// With 0.01 dB ripple and 150 dB attenuation, 1 − k1² rounds to 1; the degree equation then
+    /// gave a selectivity of 0 and every coefficient came out non-finite.
+    #[test]
+    fn elliptic_at_the_attenuation_limits_is_finite() {
+        for n in 1..=MAX_ORDER {
+            let s = design(&Spec { ripple_db: 0.01, stop_db: 150.0, ..spec(Family::Elliptic, Band::LowPass, n, 1000.0, 0.0) }, SR);
+            assert!(s.as_slice().iter().all(|c| [c.b0, c.b1, c.b2, c.a1, c.a2].iter().all(|v| v.is_finite())), "n={n}");
+            let pass = s.magnitude_db(300.0, SR);
+            assert!(pass.is_finite() && pass > -0.02 && pass < 1e-6, "n={n}: {pass}");
+        }
+        // The nome form agrees with the degree equation where both are accurate.
+        for n in [2, 5, 8, 12] {
+            for k1 in [1e-5, 1e-4, 1e-3] {
+                let (a, b) = (selectivity_from_nome(n, k1), selectivity_from_product(n, k1));
+                assert!(((a - b) / b).abs() < 1e-6, "n={n} k1={k1}: {a} vs {b}");
+            }
+        }
     }
 
     #[test]

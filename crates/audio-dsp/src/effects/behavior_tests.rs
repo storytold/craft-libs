@@ -144,8 +144,10 @@ fn every_effect_is_deterministic_and_latency_is_constant() {
 #[test]
 fn latency_is_where_the_impulse_lands() {
     // Effects with latency: an impulse comes out exactly `latency` samples later at neutral
-    // settings (FFT filter / convolution / click remover / existing STFT effects).
-    for (id, p) in [("fft_filter", vec![]), ("convolution_reverb", vec![("mix", 0.0)]), ("click_remover", vec![("threshold", 100.0)])] {
+    // settings (FFT filter / convolution / existing STFT effects). The click remover repairs a
+    // lone impulse in silence as a click, so its latency is checked on noise by
+    // `neutral_settings_are_delayed_identity`.
+    for (id, p) in [("fft_filter", vec![]), ("convolution_reverb", vec![("mix", 0.0)])] {
         let mut e = fx(id, &p);
         let lat = e.latency();
         assert!(lat > 0, "{id}");
@@ -210,6 +212,22 @@ fn scientific_filter_matches_its_design() {
             }
         }
     }
+}
+
+/// Lowering the order left the dropped sections holding the earlier audio; raising it again
+/// played that audio back as a burst after a second of silence.
+#[test]
+fn scientific_filter_order_changes_start_new_sections_clean() {
+    let mut e = fx("scientific_filter", &[("type", 1.0), ("order", 8.0)]);
+    let x = noise(21, SR as usize / 2, 0.5);
+    run(e.as_mut(), &x, &x);
+    assert!(e.set_param("order", 2.0));
+    let quiet = vec![0.0f32; SR as usize];
+    run(e.as_mut(), &quiet, &quiet);
+    assert!(e.set_param("order", 8.0));
+    let (y, _) = run(e.as_mut(), &quiet, &quiet);
+    let peak = y.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+    assert!(peak < 1e-6, "burst of {peak} after the order rose");
 }
 
 #[test]
@@ -305,6 +323,33 @@ fn flanger_static_comb_notch() {
     let notch = SR as f64 / (2.0 * d);
     assert!(tone_db(e.as_mut(), notch, 0.3) < -30.0);
     assert!(tone_db(e.as_mut(), 2.0 * notch, 0.3).abs() < 0.2);
+}
+
+/// Special Effects subtracts the opposite sweep: with equal sweep ends both reads match and the
+/// wet signal cancels. It used to keep half of the normal sweep.
+#[test]
+fn flanger_special_mode_subtracts_the_opposite_sweep() {
+    let mut e = fx("flanger", &[("initial_delay", 2.0), ("final_delay", 2.0), ("feedback", 0.0), ("mix", 100.0), ("special", 1.0)]);
+    let x = noise(12, SR as usize / 4, 0.5);
+    let (y, _) = run(e.as_mut(), &x, &x);
+    let peak = y.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+    assert!(peak < 1e-6, "{peak}");
+}
+
+/// The phaser reported no tail, so an offline render stopped while its all-pass chain still rang.
+#[test]
+fn phaser_tail_covers_its_ring() {
+    for (fb, upper, depth) in [(0.0, 2500.0, 70.0), (60.0, 2500.0, 70.0), (-90.0, 2500.0, 70.0), (90.0, 12000.0, 0.0)] {
+        let mut e = fx("phaser", &[("mix", 100.0), ("feedback", fb), ("stages", 12.0), ("upper_freq", upper), ("depth", depth)]);
+        let tail = e.tail_samples();
+        assert!(tail > 0, "feedback {fb}");
+        let mut x = vec![0.0f32; tail + 4800];
+        x[0] = 1.0;
+        let (y, _) = run(e.as_mut(), &x, &x);
+        let peak = y.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        let after = y[tail..].iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        assert!(after < 1e-3 * peak, "feedback {fb}: {after} after a tail of {tail} (peak {peak})");
+    }
 }
 
 #[test]
@@ -668,6 +713,23 @@ fn click_remover_keeps_a_non_finite_sample_as_silence() {
     assert!(y.iter().all(|v| v.is_finite()), "a sample that is not finite came out");
     let click = (y[5100 + lat] - clean[5100]).abs();
     assert!(click < 0.1, "the click next to the NaN was left at {click}");
+}
+
+/// In digital silence the residual's median is 0, and a zero σ skipped the repair: the click
+/// came out unchanged. All-zero input still comes out as exact silence.
+#[test]
+fn click_remover_repairs_a_click_in_silence() {
+    let n = SR as usize / 2;
+    let mut x = vec![0.0f32; n];
+    x[6000] = 0.8;
+    let mut e = fx("click_remover", &[]);
+    let lat = e.latency();
+    let (y, _) = run(e.as_mut(), &x, &x);
+    let peak = y.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+    assert!(peak < 0.1, "the click came out at {peak} (sample {})", 6000 + lat);
+    let zero = vec![0.0f32; n];
+    let (y, _) = run(e.as_mut(), &zero, &zero);
+    assert!(y.iter().all(|v| v.to_bits() == 0), "silence did not stay exact");
 }
 
 #[test]

@@ -59,9 +59,13 @@ pub fn envelope_db(channels: &[&[f32]], sample_rate: f32, hop_s: f32, window_s: 
 /// `bridge_s` are merged first, then regions shorter than `min_on_s` are dropped. A frame `k`
 /// covers `[k·hop, (k+1)·hop)`. For an envelope from [`envelope_db`], pass
 /// [`envelope_hop_s`] as `hop_s`.
+///
+/// `hop_s`, `min_on_s` and `bridge_s` are each read as the shortest decimal that gives the same
+/// `f32` (0.01 is exactly 0.01 s), and every time is a whole number of hops computed in `f64`, so
+/// a duration that equals a limit compares as equal and the times do not drift over a long
+/// envelope.
 pub fn activity(env_db: &[f32], hop_s: f32, threshold_db: f32, min_on_s: f32, bridge_s: f32) -> Vec<(f64, f64)> {
-    // the f32 hop rounded to whole 10 ns, so 0.01 means exactly 0.01 s
-    let hop = (hop_s as f64 * 1e8).round() / 1e8;
+    let (hop, min_on_s, bridge_s) = (decimal(hop_s), decimal(min_on_s), decimal(bridge_s));
     let mut raw: Vec<(f64, f64)> = Vec::new();
     let mut start: Option<usize> = None;
     for (k, &v) in env_db.iter().enumerate() {
@@ -80,12 +84,18 @@ pub fn activity(env_db: &[f32], hop_s: f32, threshold_db: f32, min_on_s: f32, br
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for r in raw {
         match merged.last_mut() {
-            Some(last) if r.0 - last.1 < bridge_s as f64 - 1e-9 => last.1 = r.1,
+            Some(last) if r.0 - last.1 < bridge_s - 1e-9 => last.1 = r.1,
             _ => merged.push(r),
         }
     }
-    merged.retain(|(a, b)| b - a >= min_on_s as f64 - 1e-9);
+    merged.retain(|(a, b)| b - a >= min_on_s - 1e-9);
     merged
+}
+
+/// `v` as the shortest decimal that rounds to it, in `f64` (`0.01f32` becomes `0.01`, not
+/// `0.009999999776`).
+fn decimal(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(f64::from(v))
 }
 
 /// Ducking sensitivity (0…10) → detection threshold in dBFS:
@@ -285,6 +295,29 @@ mod tests {
         y[200] = f32::INFINITY;
         let e = envelope_db(&[&y], 48_000.0, 0.01, 0.02);
         assert!(e.iter().skip(2).all(|v| (v - 20.0 * 0.5f32.log10()).abs() < 0.1), "{e:?}");
+    }
+
+    /// A region of exactly `min_on_s` is kept and a gap of exactly `bridge_s` is not bridged: both
+    /// limits are strict, and the f32 limits used to compare a little above their decimals.
+    #[test]
+    fn durations_equal_to_the_limits_compare_as_equal() {
+        let on = |frames: &[bool]| frames.iter().map(|&a| if a { 0.0 } else { FLOOR_DB }).collect::<Vec<f32>>();
+        let ten = on(&[[false; 5].as_slice(), &[true; 10], &[false; 5]].concat());
+        assert_eq!(activity(&ten, 0.01, -40.0, 0.1, 0.0), vec![(0.05, 0.15)]);
+        let gap = on(&[[true; 10].as_slice(), &[false; 20], &[true; 10]].concat());
+        assert_eq!(activity(&gap, 0.01, -40.0, 0.0, 0.2), vec![(0.0, 0.1), (0.3, 0.4)]);
+        assert_eq!(activity(&gap, 0.01, -40.0, 0.0, 0.21), vec![(0.0, 0.4)]);
+    }
+
+    /// At 44.1 kHz a one-sample hop rounded to 10 ns was 22.68 µs, so the end of a 60 s envelope
+    /// landed at 60.011 s.
+    #[test]
+    fn a_one_sample_hop_does_not_drift() {
+        let frames = 60 * 44_100;
+        let hop = envelope_hop_s(44_100.0, 0.0, frames);
+        let r = activity(&vec![0.0f32; frames], hop, -40.0, 0.0, 0.0);
+        assert_eq!(r.len(), 1);
+        assert!(r[0].0 == 0.0 && (r[0].1 - 60.0).abs() < 1e-5, "{r:?}");
     }
 
     #[test]
