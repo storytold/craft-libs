@@ -174,3 +174,59 @@ fn pixel_aspect_lists_the_custom_entries_and_shows_an_unknown_id_as_square() {
     fixture.click(&row).idle(10);
     assert!(shows(&fixture, "DVCPRO HD 1080 (1.5)") && shows(&fixture, "Mine"), "the built-in ratios, then the app's");
 }
+
+/// The Color Profile lists of a two-mode app: RGB with one other profile, CMYK with none.
+fn two_mode_profiles() -> Vec<craft_ui::patterns::form_dialogs::ColorProfiles> {
+    use craft_ui::patterns::form_dialogs::ColorProfiles;
+    vec![ColorProfiles::new(ColorMode::Rgb, "sRGB", vec!["display-p3".to_owned()]), ColorProfiles::new(ColorMode::Cmyk, "Coated", Vec::new())]
+}
+
+/// The painted texts among `texts`, top to bottom.
+fn top_to_bottom(fixture: &Fixture, texts: &[&str]) -> Vec<String> {
+    let mut found: Vec<_> = fixture.texts().iter().filter(|painted| texts.contains(&painted.text.as_str())).collect();
+    found.sort_by(|a, b| a.rect.top().total_cmp(&b.rect.top()));
+    found.dedup_by(|a, b| a.text == b.text);
+    found.into_iter().map(|painted| painted.text.clone()).collect()
+}
+
+#[trial]
+fn unmanaged_profile_lists_dont_color_manage_second_and_keeps_it_across_modes() {
+    let held = Rc::new(RefCell::new(DocumentOptions::default()));
+    let shared = held.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut options = shared.borrow().clone();
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).profiles(two_mode_profiles()).unmanaged_profile("none").show(ui);
+        *shared.borrow_mut() = options;
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let row = fixture.by_label("Color Profile").expect("the Color Profile row");
+    fixture.click(&row).idle(10);
+    assert_eq!(
+        top_to_bottom(&fixture, &["Working: sRGB", "Don't Color Manage", "display-p3"]),
+        ["Working: sRGB", "Don't Color Manage", "display-p3"]
+    );
+    let entry = fixture.by_label("Don't Color Manage").expect("the entry");
+    fixture.click(&entry).idle(10);
+    assert_eq!(held.borrow().profile.as_deref(), Some("none"), "the entry sets the app's id");
+    // CMYK has no other profile, and the entry stays picked.
+    let mode = fixture.by_label("Color Mode").expect("the Color Mode row");
+    fixture.click(&mode).idle(10);
+    let cmyk = fixture.by_label("CMYK Color").expect("the CMYK entry");
+    fixture.click(&cmyk).idle(10);
+    assert_eq!(held.borrow().color_mode, ColorMode::Cmyk);
+    assert_eq!(held.borrow().profile.as_deref(), Some("none"), "a mode change keeps Don't Color Manage");
+    assert!(shows(&fixture, "Don't Color Manage"), "the row shows it");
+}
+
+#[trial]
+fn without_unmanaged_profile_there_is_no_dont_color_manage() {
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).profiles(two_mode_profiles()).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let row = fixture.by_label("Color Profile").expect("the Color Profile row");
+    fixture.click(&row).idle(10);
+    assert!(shows(&fixture, "display-p3"), "the list is open");
+    assert!(!shows(&fixture, "Don't Color Manage"));
+}

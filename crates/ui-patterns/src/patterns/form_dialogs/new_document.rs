@@ -78,6 +78,8 @@ craft_ui::words! {
         /// `{name}` is the working profile's name.
         working_profile: template "newDocument.workingProfile" = "Working: {name}";
         working: "newDocument.working" = "Working";
+        /// The Color Profile entry of [`NewDocumentDialog::unmanaged_profile`]: no profile is embedded.
+        dont_color_manage: "newDocument.dontColorManage" = "Don't Color Manage";
         background: "newDocument.background" = "Background Contents";
         white: "newDocument.white" = "White";
         black: "newDocument.black" = "Black";
@@ -140,6 +142,7 @@ struct Setup {
     profiles: Vec<ColorProfiles>,
     app_name: Option<Label>,
     custom_pixel_aspects: Vec<(String, String)>,
+    unmanaged_profile: Option<String>,
 }
 
 /// What the columns read besides the session: the setup, the remembered lists, the words and the units.
@@ -544,6 +547,10 @@ pub struct NewDocumentDialog<'a> {
     /// The colour profiles each mode offers.
     #[prop]
     profiles: Vec<ColorProfiles>,
+    /// Lists "Don't Color Manage" second under Color Profile, right after the working space, in every mode: picking it
+    /// sets the profile to this id (the app's name for an untagged document). A mode change keeps it.
+    #[prop(into)]
+    unmanaged_profile: Option<String>,
     /// The app's own pixel aspect ratios as `(id, name)`, listed after the built-in ones ([`PIXEL_ASPECTS`]); the
     /// names are the user's and are not translated.
     #[prop]
@@ -590,6 +597,7 @@ impl<'a> NewDocumentDialog<'a> {
             print_resolution: 300.0,
             screen_resolution: 72.0,
             profiles: Vec::new(),
+            unmanaged_profile: None,
             custom_pixel_aspects: Vec::new(),
             saved: None,
             recent: None,
@@ -614,6 +622,7 @@ impl<'a> NewDocumentDialog<'a> {
             print_resolution,
             screen_resolution,
             profiles,
+            unmanaged_profile,
             custom_pixel_aspects,
             mut saved,
             recent: mut recent_bound,
@@ -647,6 +656,7 @@ impl<'a> NewDocumentDialog<'a> {
             profiles,
             app_name,
             custom_pixel_aspects,
+            unmanaged_profile,
         };
         let untitled = words.untitled.as_str().to_owned();
         let shared = Shared {
