@@ -15,6 +15,7 @@ use craft_behavior::Mixed;
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 use craft_quit::{CloseAnswer, CloseScope};
+use craft_theme::variant::Tone;
 use egui::{Context, Response, Ui};
 use serde_json::{Value, json};
 
@@ -66,7 +67,6 @@ pub struct UnsavedChangesDialog {
     /// What a programmatic OK answers; the accepting answer's when `None`.
     chosen: Option<CloseAnswer>,
     /// Why the last save failed, shown under the message.
-    #[allow(dead_code)] // P3(shell-w3): sh.K10
     reason: Option<String>,
 }
 
@@ -87,9 +87,9 @@ impl UnsavedChangesDialog {
 
     /// Shows why the last save failed, in the bad tone under the message.
     #[must_use]
-    pub fn reason(self, reason: impl Into<String>) -> Self {
-        let _ = reason.into();
-        todo!("sh.K10")
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
     }
 
     /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An
@@ -165,6 +165,9 @@ impl UnsavedChangesDialog {
         let answers: Vec<CloseAnswer> = replies.iter().map(|(answer, _)| *answer).collect();
         let replies: Vec<Reply> = replies.into_iter().map(|(_, reply)| reply).collect();
         let mut prompt = Prompt::new(words.unsaved_title.clone(), message).answers(buttons(&env, replies));
+        if let Some(reason) = &self.reason {
+            prompt = prompt.tone(Tone::Bad, reason.clone());
+        }
         let mut ticked = hosted && self.apply_to_all;
         if self.offers_apply_to_all() {
             let label = words.unsaved_apply_to_all.clone();
@@ -216,6 +219,9 @@ impl StackDialog for UnsavedChangesDialog {
         let mut fields = json!({ "choice": answer_name(self.chosen()) });
         if self.offers_apply_to_all() {
             fields["applyToAll"] = Value::Bool(self.apply_to_all);
+        }
+        if let Some(reason) = &self.reason {
+            fields["reason"] = Value::String(reason.clone());
         }
         Some(fields)
     }
