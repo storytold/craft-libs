@@ -77,6 +77,14 @@ fn a_double_click_on_the_empty_room_opens_and_one_on_a_card_opens_only_its_file(
     assert_eq!(opens(&log), 0, "a double click on a rail link opens no file: {:?}", log.borrow());
 }
 
+/// The row of the recent file named `file`: a list row whose name starts with the file's name and carries its folder.
+fn recent_row(fixture: &Fixture, file: &str) -> Option<Target> {
+    [Role::LIST_ITEM, Role::LIST_BOX_OPTION]
+        .into_iter()
+        .flat_map(|role| fixture.by_role(role))
+        .find(|row| fixture.tree().name_of(row.node).is_some_and(|name| name.starts_with(file)))
+}
+
 /// A recent row opens its file on a click, shows its remove part on hover and reports that file's removal, and the
 /// row's menu clears the list.
 #[trial]
@@ -93,16 +101,16 @@ fn a_recent_row_names_its_full_path_and_reveals_remove_on_hover_or_focus() {
     log.borrow_mut().clear();
 
     let poster = PathBuf::from("/tmp/work/Poster.psd");
-    let row = fixture.by_label("Poster.psd").expect("the row shows");
-    let description = fixture.tree().description_of(row.node).map(str::to_owned);
-    assert!(description.is_some_and(|text| text.contains("/tmp/work")), "the row's description names the file's folder");
+    let row = recent_row(&fixture, "Poster.psd").expect("the row shows");
+    let name = fixture.tree().name_of(row.node).map(str::to_owned);
+    assert!(name.is_some_and(|text| text.contains("/tmp/work")), "the row's name carries the file's folder");
     fixture.click(&row).idle(2);
     assert!(log.borrow().contains(&StartAction::OpenRecent(poster.clone())), "a click opens the row's file: {:?}", log.borrow());
 
     // Focus stays on the Flyer row after its click; Enter opens it again, and the pointer far away leaves the remove
     // part revealed by focus alone.
     log.borrow_mut().clear();
-    let flyer = fixture.by_label("Flyer.psd").expect("the second row shows");
+    let flyer = recent_row(&fixture, "Flyer.psd").expect("the second row shows");
     fixture.click(&flyer).idle(2);
     log.borrow_mut().clear();
     fixture.frame(vec![moved(egui::pos2(1.0, 1.0))]);
@@ -126,7 +134,7 @@ fn a_recent_row_names_its_full_path_and_reveals_remove_on_hover_or_focus() {
     assert!(log.borrow().contains(&StartAction::RemoveRecent(poster)), "the remove part removes that row's file: {:?}", log.borrow());
 
     log.borrow_mut().clear();
-    let at = fixture.by_label("Flyer.psd").expect("the second row shows").center();
+    let at = recent_row(&fixture, "Flyer.psd").expect("the second row shows").center();
     fixture.frame(vec![moved(at)]);
     fixture.frame(vec![secondary(at, true)]);
     fixture.frame(vec![secondary(at, false)]);

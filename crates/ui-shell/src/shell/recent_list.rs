@@ -28,6 +28,7 @@ use std::path::PathBuf;
 /// The recent files as rows, with the commands of a recent file and its context menu. The files arrive in the order
 /// the app wants them shown; the list does not sort.
 #[must_use = "show the list with `show`"]
+#[derive(crate::contract::Pattern)]
 pub struct RecentList<'a> {
     recent: &'a [RecentFile],
     max_recent: usize,
