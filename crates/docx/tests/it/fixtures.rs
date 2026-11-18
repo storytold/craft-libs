@@ -2905,6 +2905,12 @@ fn connector_presets_and_adjust_values_are_read_and_saved() {
     ]
     .iter()
     .map(|sppr| anchored_wsp("Connector", 2540000, 1270000, sppr, "", "<wps:cNvCnPr/>"))
+    .chain([
+        // A frame 0.1 pt (1270 EMU) wide, whose leg is 15 pt away, as Word routes one (review),
+        // and the smallest value an i32 holds.
+        anchored_wsp("Connector", 1270, 1270000, &geom("bentConnector3", &gd(1, 15_000_000)), "", "<wps:cNvCnPr/>"),
+        anchored_wsp("Connector", 1270, 1270000, &geom("bentConnector3", &gd(1, i64::from(i32::MIN))), "", "<wps:cNvCnPr/>"),
+    ])
     .collect::<String>();
     let geoms = |d: &Document| -> Vec<(ShapeKind, Option<(u8, Vec<i32>)>)> {
         paras(d)[0]
@@ -2930,6 +2936,8 @@ fn connector_presets_and_adjust_values_are_read_and_saved() {
         (elbow, Some((4, vec![i32::MAX, 50000]))),
         // a leg far outside the frame, as Word routes one in a frame a fraction of a point wide
         (elbow, Some((3, vec![15_000_000]))),
+        (elbow, Some((3, vec![15_000_000]))),
+        (elbow, Some((3, vec![i32::MIN]))),
     ];
     let d = read_body(&format!("<w:p>{body}</w:p>"));
     assert_eq!(geoms(&d), expected);
@@ -2944,7 +2952,9 @@ fn connector_presets_and_adjust_values_are_read_and_saved() {
     assert!(xml.contains(r#"<a:prstGeom prst="bentConnector2"><a:avLst/></a:prstGeom>"#), "{xml}");
     // The two default elbows are written with no guides, not with adj1 50000 (review).
     assert_eq!(xml.matches(r#"<a:prstGeom prst="bentConnector3"><a:avLst/></a:prstGeom>"#).count(), 2, "{xml}");
-    assert!(xml.contains(r#"<a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 15000000"/></a:avLst></a:prstGeom>"#), "{xml}");
+    let far = r#"<a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 15000000"/></a:avLst></a:prstGeom>"#;
+    assert_eq!(xml.matches(far).count(), 2, "the 200 pt and the 0.1 pt frames: {xml}");
+    assert!(xml.contains(r#"<a:gd name="adj1" fmla="val -2147483648"/>"#), "{xml}");
     assert_eq!(geoms(&craft_docx::read(&bytes).unwrap()), expected);
     // Geometry from a document's JSON skips ConnectorGeom::new; the writer normalizes it, so a
     // preset that takes no adjust values gets none, and an out-of-range preset its nearest
