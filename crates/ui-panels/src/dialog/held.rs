@@ -94,7 +94,10 @@ impl<T> HeldAnswer<T> {
 
     /// Takes back the held OK without a refusal: nothing is held, OK is enabled again, and the values stay.
     pub fn withdraw(&mut self) {
-        todo!("L-177")
+        self.filed = None;
+        self.untaken = false;
+        self.accepted = false;
+        self.refused = None;
     }
 
     /// Ends the refusal shown so far (the values it refused changed).

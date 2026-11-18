@@ -1,17 +1,19 @@
-//! The print dialog's preview: the image box drag.
+//! The print dialog: the image box drag, the held Print and a sheet of pages.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::mpsc::channel;
 
 use craft_behavior::EditEvent;
-use craft_print::ui::{HostedPrint, PrintDialog, PrintSheet, Printer, Settings, State};
+use craft_print::ui::{Destination, HostedPrint, PrintDialog, PrintFinish, PrintLayout, PrintSheet, Printer, Settings, SheetPage, State};
 use craft_ui::contract::Bind;
-use craft_ui::dialog::StackDialog as _;
+use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog as _, dialog_id};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue};
 use craft_ui::primitives::TextureCache;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
-use egui::{Color32, ColorImage, Pos2, Rect, Ui, Vec2, pos2, vec2};
+use egui::{Color32, ColorImage, Pos2, Rect, Shape, TextureId, Ui, Vec2, pos2, vec2};
 
 /// The image box's size in paper points.
 const IMAGE_SIZE: Vec2 = Vec2::new(200.0, 300.0);
@@ -123,4 +125,173 @@ fn the_json_form_adds_to_the_listing() {
     let listed = dialog.json_fields().expect("a listing");
     assert_eq!(listed["paper"], serde_json::json!([432.0, 792.0]));
     assert!(listed.get("copies").is_some(), "the settings keys stay");
+}
+
+/// A held print dialog over the printer "Office", in a `DialogHost` run every pass. While `twice` is on, egui runs each
+/// frame twice and gives the frame's input to its first pass only.
+fn held_print(twice: &Rc<Cell<bool>>) -> (Fixture, Rc<RefCell<DialogHost>>) {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let (shown, again) = (Rc::clone(&host), Rc::clone(twice));
+    let mut fixture = Fixture::new(move |ui| {
+        shown.borrow_mut().run(ui);
+        if again.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the frame runs twice");
+        }
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let mut state = State::default();
+    state.settings.destination = Destination::Printer("Office".into());
+    let mut dialog = HostedPrint::new(state, DialogFields::default(), Vec::new()).held_ok();
+    let picture = SizedTexture::new(TextureId::default(), IMAGE_SIZE);
+    dialog.set_sheet(PrintSheet::new(vec2(612.0, 792.0), Rect::from_min_size(IMAGE_AT, IMAGE_SIZE), picture, "200 × 300 pt".into()));
+    let (send, printers) = channel();
+    send.send(vec![Printer::new("Office")]).expect("the list is sent");
+    assert!(dialog.listen(printers), "no discovery runs before the dialog opens");
+    host.borrow_mut().open(dialog);
+    fixture.idle(10);
+    (fixture, host)
+}
+
+/// `act` on the open `HostedPrint`; `None` when none is open.
+fn on_print<T>(host: &Rc<RefCell<DialogHost>>, act: impl FnOnce(&mut HostedPrint) -> T) -> Option<T> {
+    host.borrow_mut().get_mut::<HostedPrint>().map(act)
+}
+
+/// Whether the Print button is disabled.
+fn print_disabled(fixture: &Fixture) -> bool {
+    let print = fixture.by_label("Print").expect("the Print button");
+    fixture.tree().is_disabled_key(print.node)
+}
+
+/// Why the app refuses the held Print.
+const REFUSED: &str = "The printer cannot take this paper size.";
+
+/// Print on a held dialog files its answer once, in a frame that runs twice too, and waits disabled; the app's refusal
+/// shows under the rows with Print enabled again until a value changes; an accepted Print closes the dialog with the
+/// held answer.
+#[trial]
+fn a_refused_print_keeps_a_held_dialog_open_until_a_value_changes() {
+    let twice = Rc::new(Cell::new(false));
+    let (mut fixture, host) = held_print(&twice);
+    let id = dialog_id("print");
+    let print = fixture.by_label("Print").expect("the Print button");
+    twice.set(true);
+    fixture.click(&print);
+    assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+    twice.set(false);
+    fixture.idle(4);
+    let filed = on_print(&host, HostedPrint::take_ok).flatten().expect("Print files the held answer");
+    assert_eq!(filed.settings.destination, Destination::Printer("Office".into()));
+    assert!(on_print(&host, HostedPrint::take_ok).flatten().is_none(), "the answer is filed once");
+    assert!(host.borrow().is_open::<HostedPrint>(), "a held Print keeps the dialog open");
+    assert!(print_disabled(&fixture), "Print waits disabled for the app's answer");
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Waiting));
+
+    on_print(&host, |dialog| dialog.answer_ok(Err(Label::from(REFUSED))));
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Refused(Label::from(REFUSED))));
+    fixture.idle(4);
+    assert!(host.borrow().is_open::<HostedPrint>(), "a refusal keeps the dialog open");
+    assert!(fixture.by_label(REFUSED).is_some(), "the refusal shows under the rows");
+    assert!(!print_disabled(&fixture), "a refusal enables Print again");
+    let grayscale = fixture.by_label("Grayscale").expect("the Grayscale check box");
+    fixture.click(&grayscale).idle(4);
+    assert!(fixture.by_label(REFUSED).is_none(), "a changed value ends the refusal");
+    assert_eq!(host.borrow().held_state(id), None, "nothing is held once the refusal ended");
+
+    let print = fixture.by_label("Print").expect("the Print button");
+    fixture.click(&print).idle(4);
+    let filed = on_print(&host, HostedPrint::take_ok).flatten().expect("Print files again");
+    assert!(filed.settings.grayscale, "the held answer has the changed value");
+    on_print(&host, |dialog| dialog.answer_ok(Ok(())));
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Accepted), "the accepted Print closes at the next pass");
+    fixture.idle(4);
+    let answered = host.borrow_mut().take::<HostedPrint>().and_then(DialogResult::ok).expect("the accepted Print closes the dialog");
+    assert_eq!(answered.finish, PrintFinish::Print);
+    assert!(answered.settings.grayscale, "the dialog closes with the held answer");
+}
+
+/// Taking back a held Print, as the app does when its Save as PDF picker is cancelled, enables Print again with the
+/// values kept and no refusal, and the next Print files again.
+#[trial]
+fn a_withdrawn_print_enables_print_again_with_the_values_kept() {
+    let twice = Rc::new(Cell::new(false));
+    let (mut fixture, host) = held_print(&twice);
+    let grayscale = fixture.by_label("Grayscale").expect("the Grayscale check box");
+    fixture.click(&grayscale).idle(4);
+    let print = fixture.by_label("Print").expect("the Print button");
+    fixture.click(&print).idle(4);
+    assert!(on_print(&host, HostedPrint::take_ok).flatten().is_some(), "Print files the held answer");
+    assert!(print_disabled(&fixture), "Print waits disabled for the app's answer");
+
+    on_print(&host, HostedPrint::release_ok);
+    assert_eq!(host.borrow().held_state(dialog_id("print")), None, "nothing is held and no refusal stands");
+    fixture.idle(4);
+    assert!(host.borrow().is_open::<HostedPrint>(), "the dialog stays open");
+    assert!(!print_disabled(&fixture), "Print is enabled again");
+    assert_eq!(on_print(&host, |dialog| dialog.state().settings.grayscale), Some(true), "the values stay");
+    let print = fixture.by_label("Print").expect("the Print button");
+    fixture.click(&print).idle(4);
+    assert!(on_print(&host, HostedPrint::take_ok).flatten().is_some(), "the next Print files again");
+}
+
+/// Letter paper in points.
+const LETTER: Vec2 = Vec2::new(612.0, 792.0);
+
+/// A sheet of two pages: a picture turned a quarter counter-clockwise, and a page with no picture yet that hangs over
+/// the paper's right edge. The turned page's picture keeps its top edge up the cell's left side, the stand-in shows its
+/// number, and both are cut at the paper's edge.
+#[trial]
+fn a_sheet_of_pages_places_each_page_inside_the_paper() {
+    // The cell x 72..312, y 72..432: the picture's top-left is the cell's bottom-left, its top-right the cell's top-left.
+    let turned = [pos2(72.0, 432.0), pos2(72.0, 72.0), pos2(312.0, 72.0), pos2(312.0, 432.0)];
+    // x 400..700 on paper 612 wide; the centre (550, 600) stays on the paper.
+    let overhanging = [pos2(400.0, 500.0), pos2(700.0, 500.0), pos2(700.0, 700.0), pos2(400.0, 700.0)];
+    let made = Rc::new(Cell::new(None::<TextureId>));
+    let seen = Rc::clone(&made);
+    let mut settings = Settings::default();
+    let mut fields = DialogFields::default();
+    let printers = vec![Printer::new("Office")];
+    let mut fixture = Fixture::new(move |ui| {
+        let texture = picture(ui).id;
+        seen.set(Some(texture));
+        let whole = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+        let pages = vec![SheetPage::new(turned, "1").picture(texture, whole), SheetPage::new(overhanging, "2")];
+        let sheet = PrintSheet::pages(LETTER, pages, "Letter, 2 pages".into());
+        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture.settle();
+    assert!(fixture.by_label("Image box").is_none(), "a sheet of pages has no image box to drag");
+    let room = fixture.by_label("Print preview image").expect("the preview is in the access tree").rect;
+    let scale = (room.width() / LETTER.x).min(room.height() / LETTER.y);
+    let origin = room.center() - LETTER * scale / 2.0;
+    let screen = |at: Pos2| origin + at.to_vec2() * scale;
+    let paper = Rect::from_min_size(origin, LETTER * scale);
+
+    let shapes = fixture.frame_shapes();
+    let texture = made.get().expect("the page picture was made");
+    let quad = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.clone()),
+            _ => None,
+        })
+        .expect("the first page is painted as a textured quad");
+    let corners: Vec<Pos2> = quad.vertices.iter().map(|vertex| vertex.pos).collect();
+    let expected: Vec<Pos2> = turned.iter().map(|corner| screen(*corner)).collect();
+    assert_eq!(corners.len(), 4, "one quad: {corners:?}");
+    assert!(corners.iter().zip(&expected).all(|(at, want)| (*at - *want).length() < 0.01), "the quad's corners {corners:?} are {expected:?}");
+    let uvs: Vec<Pos2> = quad.vertices.iter().map(|vertex| vertex.uv).collect();
+    assert_eq!(uvs, vec![pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)], "the picture's corners pair with the page's in order");
+
+    let reach = screen(pos2(700.0, 700.0));
+    let stand_in = shapes.iter().any(|shape| match shape {
+        Shape::Mesh(mesh) => mesh.texture_id != texture && mesh.vertices.iter().any(|vertex| (vertex.pos - reach).length() < 0.5),
+        _ => false,
+    });
+    assert!(stand_in, "the page with no picture is painted as a stand-in");
+    let number = fixture.texts().iter().find(|run| run.text == "2").expect("the stand-in shows its number");
+    assert!((number.rect.center() - screen(pos2(550.0, 600.0))).length() < 1.0, "the number is centred on the page: {:?}", number.rect);
+    assert!(paper.expand(0.5).contains_rect(number.clip), "the page is cut at the paper's edge: clip {:?}, paper {paper:?}", number.clip);
+    assert!(!number.clip.contains(reach), "the overhang past the paper is not shown");
 }

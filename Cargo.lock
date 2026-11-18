@@ -3446,6 +3446,7 @@ name = "craft-print"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-theme",
  "craft-ui",
  "craft-winprint-gdi",
  "egui",

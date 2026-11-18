@@ -16,12 +16,14 @@ harness = false
 [features]
 default = []
 # The printer and job settings widgets (`craft_print::ui`).
-ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui", "dep:serde_json"]
+ui = ["dep:craft-behavior", "dep:craft-theme", "dep:craft-ui", "dep:egui", "dep:serde_json"]
 # The stories and the integration binary of the print panel.
 screen-testing = ["ui", "craft-ui/testing"]
 
 [dependencies]
 craft-behavior = { workspace = true, optional = true }
+# `Tone` for the dialog's refusal notice; craft-ui does not re-export it.
+craft-theme = { workspace = true, optional = true }
 craft-ui = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }

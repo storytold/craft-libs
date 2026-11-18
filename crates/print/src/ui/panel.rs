@@ -1,10 +1,10 @@
-//! `PrintPanel`: the printer, copies, two-sided and grayscale choices of one print job.
+//! `PrintPanel`: the destination, copies, collate, grayscale and two-sided choices of one print job.
 
 use super::{Destination, Duplex, Printer, Settings, shown_names};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
-use craft_ui::display::Text;
+use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -74,9 +74,10 @@ pub struct PrintPanelOutput {
     pub response: Response,
     /// The Refresh button was pressed this pass: the caller starts printer discovery again.
     pub refresh: bool,
-    /// A printer was chosen this pass: its name. The caller takes the paper from the new printer's driver.
+    /// A destination was chosen this pass: the printer, or Save as PDF. The caller takes the paper from the new
+    /// printer's driver.
     pub printer_chosen: Option<Destination>,
-    /// Print Settings… was pressed this pass: the caller opens the driver's own dialog.
+    /// Print Settings… or Properties… was pressed this pass: the caller opens the driver's own dialog.
     pub settings_clicked: bool,
     /// Portrait (`false`) or Landscape (`true`) was pressed this pass: the caller turns the driver settings.
     pub turned: Option<bool>,
@@ -90,14 +91,18 @@ impl Outcome for PrintPanelOutput {
     }
 }
 
-/// The printer choice with a Refresh button, the number of copies, the two-sided mode and the grayscale option of one
-/// print job, over the job's [`Settings`].
+/// The destination choice with a Refresh button, the number of copies, collation, the grayscale option and the
+/// two-sided mode of one print job, over the job's [`Settings`].
 ///
-/// - The printer list shows each printer's label, or its name, and edits the printer's name.
+/// - The list shows each printer's label, or its name, the default marked, and edits [`Settings::destination`]; with
+///   `Destinations::PrintersAndFile`, Save as PDF follows the printers.
 /// - Refresh is disabled while printers are being found, and the whole panel while a job runs.
-/// - Copies step with the arrow keys, by ten with Shift.
-/// - With `driver`, Print Settings… and Portrait/Landscape press into the output; the page line shows `page` and
-///   `page_error`, which the caller keeps.
+/// - Copies, Collate and Grayscale share one row. Copies step with the arrow keys, by ten with Shift.
+/// - While the chosen printer has its own dialog ([`Printer::own_dialog`]), Copies, Collate, Grayscale and Two-sided
+///   are disabled and its note shows under them.
+/// - `DriverControls::Properties` puts Properties… after Refresh; `DriverControls::Page` shows Print Settings…,
+///   Portrait/Landscape and the page line with `page` and `page_error`, which the caller keeps. Their presses go into
+///   the output.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct PrintPanel<'a> {
@@ -109,8 +114,8 @@ pub struct PrintPanel<'a> {
     /// A job is running: the panel is disabled.
     #[prop]
     busy: bool,
-    /// The driver controls (Print Settings…, Portrait and Landscape, the page line) are shown: the caller can ask a
-    /// printer driver for its page.
+    /// Which printer-driver controls are shown: Properties…, or Print Settings… with Portrait and Landscape and the page
+    /// line, for a caller that can ask a printer driver for its page.
     #[prop]
     driver: DriverControls,
     /// Which destinations the list offers.
@@ -146,12 +151,21 @@ impl<'a> PrintPanel<'a> {
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
         let PrintPanel { settings, printers, discovering, busy, driver, destinations, duplex_by_layout, page, page_error } = self;
-        let _ = (destinations, duplex_by_layout); // P3(pdf-print-ocr-w1): PO-P4
-        let driver = driver == DriverControls::Page; // P3(pdf-print-ocr-w1): PO-P4
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
-        let queues: Vec<Entry<String>> =
-            printers.iter().zip(shown_names(printers)).map(|(printer, shown)| Entry::new(printer.name.clone(), shown)).collect();
+        let mut queues: Vec<Entry<Destination>> = printers
+            .iter()
+            .zip(shown_names(printers))
+            .map(|(printer, shown)| {
+                let shown = if printer.default { format!("{shown} {}", words.default_mark.as_str()) } else { shown };
+                Entry::new(Destination::Printer(printer.name.clone()), shown)
+            })
+            .collect();
+        if destinations == Destinations::PrintersAndFile {
+            queues.push(Entry::separator());
+            queues.push(Entry::new(Destination::File, words.save_as_pdf.clone()));
+        }
+        let placeholder = if discovering && printers.is_empty() { &words.finding } else { &words.select_printer };
         let duplexes: [Entry<Option<Duplex>>; 4] = [
             Entry::new(None, words.printer_default.clone()),
             Entry::new(Some(Duplex::Off), words.one_sided.clone()),
@@ -168,33 +182,62 @@ impl<'a> PrintPanel<'a> {
             let mut now = before.clone();
             Field::new(words.printer.clone()).id_salt("printer").show(ui, |ui, _| {
                 Row::new().show(ui, |ui, _| {
-                    let picked = Select::new(words.printer.clone(), Bind::given(now.printer.clone()), &queues)
-                        .placeholder(words.select_printer.clone())
+                    let picked = Select::new(words.printer.clone(), Bind::given(now.destination.clone()), &queues)
+                        .placeholder(placeholder.clone())
                         .id_salt("queue")
                         .show(ui);
-                    if let Some(name) = picked.value() {
-                        if *name != now.printer {
-                            printer_chosen = Some(Destination::Printer(name.clone())); // P3(pdf-print-ocr-w1): PO-P4
+                    if let Some(destination) = picked.value() {
+                        if *destination != now.destination {
+                            printer_chosen = Some(destination.clone());
                         }
-                        now.printer.clone_from(name);
+                        now.destination.clone_from(destination);
                     }
                     let button = Button::new(words.refresh.clone()).enabled(!discovering).id_salt("refresh").show(ui);
                     refresh |= clicked(&button);
+                    if driver == DriverControls::Properties {
+                        let queue = matches!(&now.destination, Destination::Printer(name) if !name.is_empty());
+                        let button = Button::new(words.properties.clone()).enabled(queue).id_salt("properties").show(ui);
+                        settings_clicked |= clicked(&button);
+                    }
                 });
             });
+            // The chosen printer's own dialog decides the job controls: they show the settings, disabled, with its note.
+            let own_dialog = match &now.destination {
+                Destination::Printer(name) => {
+                    printers.iter().find(|printer| printer.name == *name).and_then(|printer| printer.own_dialog.clone())
+                }
+                Destination::File => None,
+            };
+            let free = own_dialog.is_none();
             Field::new(words.copies.clone()).id_salt("copies").show(ui, |ui, _| {
-                if let Some(copies) = copies_field(&words.copies, now.copies).show(ui).value().copied().flatten() {
-                    now.copies = (copies.round() as u32).clamp(1, MOST_COPIES);
-                }
+                Row::new().show(ui, |ui, _| {
+                    if let Some(copies) = copies_field(&words.copies, now.copies).enabled(free).show(ui).value().copied().flatten() {
+                        now.copies = (copies.round() as u32).clamp(1, MOST_COPIES);
+                    }
+                    let collate = Checkbox::new(Bind::given(now.collate)).label(words.collate.clone()).enabled(free).id_salt("collate").show(ui);
+                    if let Some(on) = collate.value().copied() {
+                        now.collate = on;
+                    }
+                    let grayscale =
+                        Checkbox::new(Bind::given(now.grayscale)).label(words.grayscale.clone()).enabled(free).id_salt("grayscale").show(ui);
+                    if let Some(on) = grayscale.value().copied() {
+                        now.grayscale = on;
+                    }
+                });
             });
-            Field::new(words.duplex.clone()).id_salt("duplex").show(ui, |ui, _| {
-                if let Some(duplex) =
-                    Select::new(words.duplex.clone(), Bind::given(now.duplex), &duplexes).id_salt("duplex").show(ui).value().copied()
-                {
-                    now.duplex = duplex;
-                }
-            });
-            if driver {
+            if !duplex_by_layout {
+                Field::new(words.duplex.clone()).id_salt("duplex").show(ui, |ui, _| {
+                    let picked =
+                        Select::new(words.duplex.clone(), Bind::given(now.duplex), &duplexes).enabled(free).id_salt("duplex").show(ui);
+                    if let Some(duplex) = picked.value().copied() {
+                        now.duplex = duplex;
+                    }
+                });
+            }
+            if let Some(note) = own_dialog {
+                Text::new(note).shade(Shade::Muted).show(ui);
+            }
+            if driver == DriverControls::Page {
                 Field::new(words.print_settings.clone()).id_salt("driver").show(ui, |ui, _| {
                     let button = Button::new(words.print_settings.clone()).id_salt("print-settings").show(ui);
                     settings_clicked |= clicked(&button);
@@ -219,13 +262,6 @@ impl<'a> PrintPanel<'a> {
                     }
                 });
             }
-            Field::new(words.grayscale.clone()).id_salt("grayscale").show(ui, |ui, _| {
-                if let Some(on) =
-                    Checkbox::new(Bind::given(now.grayscale)).label(words.grayscale.clone()).id_salt("grayscale").show(ui).value().copied()
-                {
-                    now.grayscale = on;
-                }
-            });
             (now != before).then_some((before, now))
         });
         // Once per pass, after the real run: the edit the body decided is written.
