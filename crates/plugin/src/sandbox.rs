@@ -16,7 +16,7 @@
 //! | Import | Signature | Does |
 //! |---|---|---|
 //! | `call` | `(cmd_ptr, cmd_len, params_ptr, params_len) -> i32` | Runs a command with JSON params. 0: ok, the reply holds the result JSON; 1: refused or failed, the reply holds the message. |
-//! | `selection` | `() -> i32` | The reply becomes the selected layer ids (a JSON array); returns its length. |
+//! | `selection` | `() -> i32` | The reply becomes the app's selection, as JSON in the shape the app documents (see [`Host::selection`]); returns its length. |
 //! | `reply_len` | `() -> i32` | Length of the reply. |
 //! | `reply_read` | `(ptr, len) -> i32` | Copies up to `len` bytes of the reply to `ptr`; returns the count. |
 //! | `log` | `(ptr, len)` | A line for the run's log. |
@@ -135,7 +135,10 @@ pub enum PluginError {
 pub trait Host {
     /// Run `command` with `params` (JSON text): the result JSON, or why it was refused or failed.
     fn call(&mut self, command: &str, params: &str) -> Result<String, String>;
-    /// The selected layer ids as a JSON array.
+    /// The app's own selection, as JSON in a shape the app documents: layer or node ids (FigCraft),
+    /// object handles (CADCraft), A1 ranges (GridCraft), clip ids… An app with no selection
+    /// returns `[]`. Each app documents its shape in its `docs/plugins.md` and puts the same JSON
+    /// in the input's `selection`. The sandbox passes it through unread.
     fn selection(&mut self) -> String;
     /// A message for the user.
     fn notify(&mut self, message: &str);

@@ -110,6 +110,12 @@ once per run or panel callback. The input is `{"api", "command", "params", "sele
 an `Err`, and the app rolls the document back.
 
 ## Permissions
+"The selection" (`Host::selection` and the input's `selection`) is the app's own selection, as
+JSON in a shape the app documents: layer or node ids in FigCraft, object handles in CADCraft, A1
+ranges in GridCraft, clip ids in FilmCraft. An app with no selection returns `[]`. The crate passes
+it through unread; each app documents its shape in its `docs/plugins.md`, so plug-ins written for
+several apps know what each hands them.
+
 
 Inside `Host::call`, before running anything:
 
