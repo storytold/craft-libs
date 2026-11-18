@@ -62,6 +62,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cap_std::fs::{Dir, OpenOptions};
@@ -336,26 +337,45 @@ fn read(root: &Path, entry: &Entry) -> Result<(Entry, Vec<u8>), Fault> {
 /// so a hard link sharing the target's inode keeps its own, unmodified copy:
 /// the rename replaces `entry.id`'s directory entry, and never reaches
 /// through to any other name pointing at the same inode.
+///
+/// The etag is checked once before any bytes are written, and again under
+/// [`WRITE_LOCK`] just before the rename. Two saves made from the same etag
+/// at once otherwise both pass the check before either renames, both report
+/// success, and the later rename replaces the first save without a
+/// [`Fault::Conflict`].
 fn write(root: &Path, entry: &Entry, bytes: &[u8]) -> Result<Entry, Fault> {
     let rel = relative(&entry.id)?;
     let dir = open_root(root)?;
-    match dir.symlink_metadata(&rel) {
-        Ok(meta) if meta.is_symlink() => return Err(Fault::Refused("that path is a link, not a plain file".to_owned())),
-        Ok(meta) => {
-            if Some(etag_of(&meta)) != entry.etag {
-                return Err(Fault::Conflict);
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_fault(&error)),
-    }
+    check_unchanged(&dir, &rel, entry)?;
     if let Some(parent) = rel.parent() {
         dir.create_dir_all(parent).map_err(|error| io_fault(&error))?;
     }
-    write_replacing(&dir, &rel, bytes)?;
-    let meta = dir.metadata(&rel).map_err(|error| io_fault(&error))?;
+    let meta = write_replacing(&dir, &rel, bytes, || check_unchanged(&dir, &rel, entry))?;
     Ok(Entry { size: Some(meta.len()), etag: Some(etag_of(&meta)), ..entry.clone() })
 }
+
+/// Refuses a link at `rel`, and a file whose etag is no longer `entry.etag`.
+/// A file that does not exist passes.
+fn check_unchanged(dir: &Dir, rel: &Path, entry: &Entry) -> Result<(), Fault> {
+    match dir.symlink_metadata(rel) {
+        Ok(meta) if meta.is_symlink() => Err(Fault::Refused("that path is a link, not a plain file".to_owned())),
+        Ok(meta) if Some(etag_of(&meta)) != entry.etag => Err(Fault::Conflict),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_fault(&error)),
+    }
+}
+
+/// Held by [`write_replacing`] from its last check until the rename is done
+/// and the new file's metadata is read, and by [`create_in_place`] from the
+/// moment it creates its file until the file is complete or removed. No other
+/// save in this process can change the file between a save's check and its
+/// rename, a save cannot replace a file that `create_in_place` is still
+/// writing, and `create_in_place` cannot remove a replacement when its own
+/// write fails. The temporary file is written and synced before the lock is
+/// taken, so a slow save does not hold up the others. Another process writing
+/// the same folder is not covered.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// The next in a run of sibling temporary names, unique within this process.
 /// Not meant to resist a second process picking the same name; the create
@@ -438,7 +458,11 @@ fn open_temp(dir: &Dir, rel: &Path) -> Result<(PathBuf, cap_std::fs::File), Faul
 /// be a hard link to a file outside `root`, the outside copy would be
 /// corrupted along with it. A rename only ever replaces `rel`'s own
 /// directory entry.
-fn write_replacing(dir: &Dir, rel: &Path, bytes: &[u8]) -> Result<(), Fault> {
+///
+/// `check` runs under [`WRITE_LOCK`] right before the rename; when it fails,
+/// the temporary file is removed and `rel` is left as it was. Returns the
+/// metadata of the file just published.
+fn write_replacing(dir: &Dir, rel: &Path, bytes: &[u8], check: impl FnOnce() -> Result<(), Fault>) -> Result<cap_std::fs::Metadata, Fault> {
     let (temp_rel, mut handle) = open_temp(dir, rel)?;
     let written = handle.write_all(bytes).map_err(|error| io_fault(&error)).and_then(|()| handle.sync_all().map_err(|error| io_fault(&error)));
     drop(handle);
@@ -446,24 +470,20 @@ fn write_replacing(dir: &Dir, rel: &Path, bytes: &[u8]) -> Result<(), Fault> {
         let _ = dir.remove_file(&temp_rel);
         return Err(fault);
     }
-    let renamed = {
-        let _publishing = WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        dir.rename(&temp_rel, dir, rel)
+    let published = {
+        let _serialized = WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        check().and_then(|()| {
+            #[cfg(test)]
+            tests::after_check();
+            dir.rename(&temp_rel, dir, rel).map_err(|error| io_fault(&error))?;
+            dir.metadata(rel).map_err(|error| io_fault(&error))
+        })
     };
-    if let Err(error) = renamed {
+    if published.is_err() {
         let _ = dir.remove_file(&temp_rel);
-        return Err(io_fault(&error));
     }
-    Ok(())
+    published
 }
-
-/// Held by [`write_replacing`] around its rename, and by [`create_in_place`]
-/// from the moment it creates its file until the file is complete or removed.
-/// A save within this process therefore cannot replace a file that
-/// `create_in_place` is still writing, and `create_in_place` cannot remove a
-/// replacement when its own write fails. Another process writing the same
-/// folder is not covered.
-static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, Fault> {
     // `name` is never a path: it is one `Job::Create` field that names the
@@ -595,6 +615,69 @@ fn write_new(handle: &mut cap_std::fs::File, bytes: &[u8]) -> Result<(), Fault> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+
+    /// Run once by the next [`write`] to pass its etag check, then cleared.
+    type Hook = Box<dyn FnOnce() + Send>;
+    static AFTER_CHECK: Mutex<Option<Hook>> = Mutex::new(None);
+
+    pub(super) fn after_check() {
+        let hook = AFTER_CHECK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    fn entry_for(id: &str) -> Entry {
+        Entry {
+            room: format!("local:{id}"),
+            name: id.trim_start_matches('/').to_owned(),
+            kind: EntryKind::File,
+            size: None,
+            modified: None,
+            mime: None,
+            etag: None,
+            writable: true,
+            shared_by: None,
+            path: id.to_owned(),
+            id: id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn two_saves_from_one_etag_cannot_both_pass_the_check() {
+        let _serial = TEMP_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Note.txt"), b"original").unwrap();
+        let (read_entry, _) = read(root.path(), &entry_for("/Note.txt")).unwrap();
+
+        let (checked_tx, checked_rx) = mpsc::channel::<()>();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        *AFTER_CHECK.lock().unwrap() = Some(Box::new(move || {
+            checked_tx.send(()).unwrap();
+            go_rx.recv().unwrap();
+        }));
+
+        let first = {
+            let (root, entry) = (root.path().to_owned(), read_entry.clone());
+            std::thread::spawn(move || write(&root, &entry, b"first save"))
+        };
+        checked_rx.recv().unwrap();
+        // The first save has passed its check and not yet renamed. A second
+        // save must not be able to reach its own check in between.
+        assert!(WRITE_LOCK.try_lock().is_err(), "the check and the rename must run under one lock");
+        let second = {
+            let (root, entry) = (root.path().to_owned(), read_entry.clone());
+            std::thread::spawn(move || write(&root, &entry, b"second save"))
+        };
+        go_tx.send(()).unwrap();
+
+        assert!(first.join().unwrap().is_ok());
+        assert!(matches!(second.join().unwrap(), Err(Fault::Conflict)), "the second save started from a stale etag");
+        assert_eq!(std::fs::read(root.path().join("Note.txt")).unwrap(), b"first save");
+        let left: Vec<_> = std::fs::read_dir(root.path()).unwrap().map(|item| item.unwrap().file_name()).collect();
+        assert_eq!(left, ["Note.txt"], "the refused save's temporary file is removed");
+    }
 
     thread_local! {
         /// When set to n, the nth [`write_new`] call on this thread from now
@@ -634,7 +717,7 @@ mod tests {
                 // still there. It must not land before that file is removed.
                 *seen_saver.borrow_mut() = Some(std::thread::spawn(move || {
                     let dir = open_root(&path).unwrap();
-                    write_replacing(&dir, Path::new("Minutes.txt"), b"saved meanwhile")
+                    write_replacing(&dir, Path::new("Minutes.txt"), b"saved meanwhile", || Ok(()))
                 }));
             }));
         });
