@@ -42,18 +42,19 @@ fn rig(points: &[[f32; 2]]) -> Rig {
 struct Setup {
     room: Vec2,
     input_sliders: bool,
+    plot_height: Option<f32>,
     pencil: bool,
 }
 
 impl Default for Setup {
     fn default() -> Self {
-        Setup { room: room(), input_sliders: false, pencil: false }
+        Setup { room: room(), input_sliders: false, plot_height: None, pencil: false }
     }
 }
 
 /// The setup of the Curves adjustment: input sliders, in a room of `room`.
 fn sliders_in(room: Vec2) -> Setup {
-    Setup { room, input_sliders: true, pencil: false }
+    Setup { room, input_sliders: true, plot_height: None, pencil: false }
 }
 
 fn rig_with(points: &[[f32; 2]], setup: Setup) -> Rig {
@@ -68,6 +69,9 @@ fn rig_with(points: &[[f32; 2]], setup: Setup) -> Rig {
         let mut editor = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get());
         if setup.input_sliders {
             editor = editor.input_sliders();
+        }
+        if let Some(height) = setup.plot_height {
+            editor = editor.plot_height(height);
         }
         if setup.pencil {
             editor = editor.pencil();
@@ -257,4 +261,78 @@ fn pencil_mode_shows_no_input_sliders() {
     let rig = rig_with(&IDENTITY, Setup { pencil: true, ..sliders_in(room()) });
     assert!(rig.fixture.by_label(BLACK_SLIDER).is_none());
     assert!(rig.fixture.by_label(WHITE_SLIDER).is_none());
+}
+
+/// A graph wider or taller than square (its plot height set, its width the room's) maps levels on each axis on its
+/// own: a press adds a point at the levels under it, a press within the pick radius of a point takes that point, and
+/// the sliders sit under the end points and map along the plot's width.
+#[trial]
+fn a_graph_that_is_not_square_maps_each_axis_on_its_own() {
+    let unit = style::tokens(Mode::Light, Contrast::Standard).size.plot.width;
+    let reach = style::tokens(Mode::Light, Contrast::Standard).size.hit.target / 2.0;
+    for (name, room, plot) in [("wide", Vec2::new(unit * 4.0, unit * 3.0), unit * 0.9), ("tall", Vec2::new(unit * 1.2, unit * 5.0), unit * 3.0)] {
+        let mut rig = rig_with(&THREE, Setup { plot_height: Some(plot), ..sliders_in(room) });
+        let (w, h) = (rig.scale.x * 255.0, -rig.scale.y * 255.0);
+        let ratio = w / h;
+        match name {
+            "wide" => assert!(ratio > 1.5, "{name}: the plot is wider than tall, {w}×{h}"),
+            _ => assert!(ratio < 0.67, "{name}: the plot is taller than wide, {w}×{h}"),
+        }
+        for (end, q) in [(BLACK_SLIDER, THREE[0]), (WHITE_SLIDER, THREE[2])] {
+            let x = rig.slider(end).x;
+            assert!((x - rig.at(q).x).abs() < 0.5, "{name}: the {end} slider at x {x} sits under its point at {:?}", rig.at(q));
+        }
+        // Inside the reach of the middle point, on the diagonal: the press takes that point and moves it.
+        let near = rig.at(THREE[1]) + vec2(reach * 0.6, -reach * 0.6);
+        rig.fixture.frame(vec![moved(near)]);
+        rig.fixture.frame(vec![press(near)]);
+        rig.fixture.frame(vec![moved(near + vec2(0.0, -20.0))]);
+        rig.fixture.frame(vec![release(near + vec2(0.0, -20.0))]);
+        rig.fixture.idle(1);
+        assert_eq!(rig.points().len(), 3, "{name}: the press took the middle point, no new one");
+        assert_eq!(rig.selected.get(), Some(1), "{name}");
+        // Far from every point: a new point at exactly the levels under the press.
+        rig.press_at([200.0, 60.0]);
+        rig.release_at([200.0, 60.0]);
+        assert!(rig.points().contains(&[200.0, 60.0]), "{name}: {:?}", rig.points());
+        rig.drag_slider(BLACK_SLIDER, 30.0);
+        assert_eq!(rig.points()[0][0], 30.0, "{name}: the black slider maps along the plot's width");
+    }
+}
+
+/// A Curves panel sized to its room: the graph takes the height the room leaves under the panel's other rows and the
+/// host's reserve, so a taller room makes a taller graph; a room too short for the least plot keeps the rows under the
+/// graph inside the panel and the text after it below them (the room scrolls instead).
+#[trial]
+fn a_panel_sized_to_its_room_follows_its_height_and_never_overlaps() {
+    use craft_imaging::ui::adjust::{CurvesPanel, ToneChannels, ToneCurves, ToneSpace};
+    const AFTER: &str = "Below the panel";
+    let channels = ToneChannels::of(ToneSpace::Rgb, false);
+    let mut heights = Vec::new();
+    for room in [120.0, 700.0, 900.0] {
+        let curves = Rc::new(RefCell::new(ToneCurves::identity(&channels)));
+        let (shared, list) = (curves.clone(), channels.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let mut value = shared.borrow().clone();
+            let _ = CurvesPanel::new("Curves", Bind::bound(&mut value), list.clone()).fill_height(40.0).show(ui);
+            craft_ui::contract::Show::show(craft_ui::display::Text::new(AFTER), ui);
+        });
+        fixture.room(Vec2::new(360.0, room));
+        fixture.settle();
+        let top = fixture.by_label("Point 2 of 2").expect("the white end point").center().y;
+        let bottom = fixture.by_label("Point 1 of 2").expect("the black end point").center().y;
+        let input = fixture.by_label("Input").expect("the Input field").rect;
+        let after = fixture.texts().iter().find(|text| text.text == AFTER).expect("the text after the panel").rect;
+        assert!(input.top() > bottom, "{room}: the fields sit under the graph");
+        assert!(after.top() >= input.bottom(), "{room}: what follows sits under the panel: {after:?}, fields {input:?}");
+        if room > 500.0 {
+            assert!(
+                (after.bottom() - (room - 40.0)).abs() < 41.0,
+                "{room}: the panel fills the room less the reserve, the text ends at {}",
+                after.bottom()
+            );
+        }
+        heights.push(bottom - top);
+    }
+    assert!(heights[1] > heights[0] && heights[2] > heights[1] + 150.0, "the graph grows with the room: {heights:?}");
 }

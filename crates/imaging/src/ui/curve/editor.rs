@@ -122,6 +122,10 @@ pub struct CurveEditor<'a> {
     /// keeps 4 levels from its neighbour's input. Points mode only.
     #[prop(flag)]
     input_sliders: bool,
+    /// The height of the graph's plot, set by a host that sizes it to its panel: the graph takes the editor's width
+    /// and this height (down to the least plot height) instead of a square.
+    #[prop]
+    plot_height: Option<f32>,
     /// Whether the Input and Output fields show.
     #[prop]
     fields: bool,
@@ -164,6 +168,7 @@ impl<'a> CurveEditor<'a> {
             sampler: None,
             bars: true,
             input_sliders: false,
+            plot_height: None,
             fields: true,
             percent: false,
             hint: None,
@@ -194,6 +199,7 @@ impl<'a> CurveEditor<'a> {
             mut sampler,
             bars,
             input_sliders,
+            plot_height,
             fields,
             percent,
             hint,
@@ -208,7 +214,10 @@ impl<'a> CurveEditor<'a> {
         let rules = CurveRules { levels: levels as f32, max_points: max_points.max(2) };
         let mut out: Option<(EditResponse<Curve>, Option<usize>)> = None;
         let name = label.clone();
-        let shown = Stack::new().label(label).show(ui, |ui, root| {
+        let stack = Stack::new().label(label);
+        // A graph whose height is set takes the width the editor's room has: the editor passes it on.
+        let stack = if plot_height.is_some() { stack.sizing(Sizing::FillWidth) } else { stack };
+        let shown = stack.show(ui, |ui, root| {
             let memory = root.memory::<Memory>();
             let cleared = memory.channel.is_some_and(|seen| seen != channel);
             if cleared {
@@ -241,6 +250,9 @@ impl<'a> CurveEditor<'a> {
             }
             if input_sliders {
                 graph = graph.input_sliders();
+            }
+            if let Some(height) = plot_height {
+                graph = graph.plot_height(height).sizing(Sizing::FillWidth);
             }
             if corners {
                 graph = graph.corners();

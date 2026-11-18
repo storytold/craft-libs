@@ -270,6 +270,8 @@ pub struct CurveGraphStyle {
     /// The least and the greatest side of the graph, tone bars included; between them it takes the room it is given.
     least: f32,
     most: f32,
+    /// The least height of a plot whose height the host sets.
+    least_plot: f32,
     /// Thickness of the tone bars and the gap between them and the plot.
     bar: f32,
     bar_gap: f32,
@@ -403,6 +405,10 @@ pub struct CurveGraph<'a> {
     /// A black and a white slider under the plot move the end points' inputs; their outputs stay.
     #[prop(flag)]
     input_sliders: bool,
+    /// The height of the plot, set by a host that sizes the graph to its panel: the graph then takes the width of
+    /// its room and this height, wider or taller than square. Without it the graph is a square.
+    #[prop]
+    plot_height: Option<f32>,
     /// Pencil mode: a drag draws one output per input level.
     #[prop(flag)]
     pencil: bool,
@@ -438,6 +444,7 @@ impl<'a> CurveGraph<'a> {
             sampler: None,
             bars: true,
             input_sliders: false,
+            plot_height: None,
             pencil: false,
             corners: false,
             percent: false,
@@ -579,6 +586,7 @@ impl Component for CurveGraph<'_> {
             look: PlotLook::new(cx),
             least,
             most: (tokens.size.plot.width * MOST_IN_PLOTS).max(least),
+            least_plot: tokens.size.plot.height,
             bar: tokens.size.icon.sm,
             bar_gap: tokens.space.gap.inline,
             slider_row: cx.control().icon,
@@ -596,6 +604,11 @@ impl Component for CurveGraph<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let (row, _) = sliders_room(cx.style, self.shows_sliders(cx.value()));
+        if let Some(height) = self.plot_height {
+            let edge = if self.bars { cx.style.bar + cx.style.bar_gap } else { 0.0 };
+            let height = if height.is_finite() { height.max(cx.style.least_plot) } else { cx.style.least_plot };
+            return Vec2::new(cx.picture_width(cx.style.least, f32::INFINITY), height + edge + row);
+        }
         let side = cx.picture_width(cx.style.least, cx.style.most);
         Vec2::new(side, side + row)
     }

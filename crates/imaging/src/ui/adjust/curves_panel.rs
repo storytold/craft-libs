@@ -14,7 +14,7 @@ use craft_theme::Srgba;
 use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::contract::{
     Bind, CanvasGesture, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _,
-    ShowContainer as _, clicked,
+    ShowContainer as _, Sizing, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -137,6 +137,46 @@ struct Shown {
 
 type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
 
+/// The plot height of a panel sized with [`CurvesPanel::fill_height`], from the visible room and what the panel showed
+/// besides its plot in the last real pass (kept under the parent's id).
+struct Fit {
+    id: Id,
+    /// The plot height asked for, down to the least; none without `fill_height`.
+    plot: Option<f32>,
+    /// Where the panel starts.
+    top: f32,
+}
+
+impl Fit {
+    fn read(ui: &Ui, reserve: Option<f32>) -> Self {
+        let id = ui.scope_id().with("curves-panel-fit");
+        let top = ui.cursor().top();
+        let plot = reserve.map(|reserve| {
+            let least = Env::of(ui).tokens.tokens().size.plot.height;
+            let rest = ui.ctx().data(|d| d.get_temp::<f32>(id));
+            let room = ui.clip_rect().bottom() - top - reserve.max(0.0);
+            match rest {
+                Some(rest) if room.is_finite() => (room - rest).max(least),
+                _ => least,
+            }
+        });
+        Fit { id, plot, top }
+    }
+
+    /// Keeps what the panel shown at `response` took besides its plot, for the next pass. A measuring run's sizes are
+    /// not the panel's.
+    fn keep(&self, ui: &Ui, response: &Response) {
+        let Some(plot) = self.plot else { return };
+        if craft_ui::runtime::measure::active(ui.ctx()) {
+            return;
+        }
+        let rest = response.rect.bottom() - self.top - plot;
+        if rest.is_finite() {
+            ui.ctx().data_mut(|d| d.insert_temp(self.id, rest.max(0.0)));
+        }
+    }
+}
+
 /// The Curves adjustment: Image › Adjustments › Curves and a Curves layer's Properties panel.
 ///
 /// Top to bottom (PhotoCraft's order):
@@ -191,6 +231,12 @@ pub struct CurvesPanel<'a> {
     /// Whether the whole panel takes input.
     #[prop]
     enabled: bool,
+    /// Sizes the graph to the panel the Curves panel shows in: the graph takes the width, and the height the visible
+    /// room leaves under the panel's top once its other rows and `reserve` (the host's controls under the panel) are
+    /// counted, so it is wider or taller than square as the panel is resized. Down to the least plot height; a panel
+    /// too short for that scrolls. Without it the graph is a square.
+    #[prop]
+    fill_height: Option<f32>,
 }
 
 impl<'a> CurvesPanel<'a> {
@@ -210,6 +256,7 @@ impl<'a> CurvesPanel<'a> {
             context: AdjustContext::dialog(true),
             select: None,
             enabled: true,
+            fill_height: None,
         }
     }
 
@@ -300,6 +347,7 @@ impl<'a> CurvesPanel<'a> {
             context,
             select,
             enabled,
+            fill_height,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<AdjustWords>();
@@ -310,7 +358,9 @@ impl<'a> CurvesPanel<'a> {
         let (mut edit, mut mode, mut picker) = (EditEvents::new(), None, None);
         let mut selected = None;
         let mut shown_channel = 0;
+        let fit = Fit::read(ui, fill_height);
         let stack = Stack::new().label(label).enabled(enabled);
+        let stack = if fit.plot.is_some() { stack.sizing(Sizing::FillWidth) } else { stack };
         // Alt+2…Alt+6 pick the Channel select's entry in a dialog; Properties has no such keys.
         let stack = if context.is_dialog() { stack.command_scope(ToneChannelCommands::SCOPE) } else { stack };
         let group = stack.show(ui, |ui, cx| {
@@ -399,6 +449,9 @@ impl<'a> CurvesPanel<'a> {
             if pencil {
                 editor = editor.pencil();
             }
+            if let Some(height) = fit.plot {
+                editor = editor.plot_height(height);
+            }
             if let Some(data) = &data {
                 editor = editor.histogram(data);
             }
@@ -429,6 +482,7 @@ impl<'a> CurvesPanel<'a> {
             let kept_channel = if channel_bind.is_some() { stored } else { shown_channel };
             *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None } };
         });
+        fit.keep(ui, &group.output);
         CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected }
     }
 }
