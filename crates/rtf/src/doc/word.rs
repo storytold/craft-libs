@@ -1,4 +1,4 @@
-use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, MAX_OLD_WORDS, RevSt, St};
+use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, ListLevel, MAX_OLD_WORDS, RevSt, St};
 use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
 
@@ -306,6 +306,7 @@ impl Reader {
             "keywords" if self.in_info() => Some(Dest::Info(4)),
             "doccomm" if self.in_info() => Some(Dest::Info(5)),
             "listtable" => Some(Dest::ListTable),
+            "leveltext" if self.st.dest == Dest::ListTable => Some(Dest::LevelText),
             "revtbl" => Some(Dest::RevTbl),
             "oldcprops" => Some(Dest::OldProps(false)),
             "oldpprops" => Some(Dest::OldProps(true)),
@@ -458,7 +459,9 @@ impl Reader {
                 true
             }
             Dest::RevTbl if !matches!(word, "u" | "uc") => true,
-            Dest::RevTbl => false,
+            // A level text's characters: `\u` goes on to be read as one, other words are ignored.
+            Dest::LevelText if !matches!(word, "u" | "uc") => true,
+            Dest::RevTbl | Dest::LevelText => false,
             Dest::Pict => {
                 self.picture_word(word, value);
                 true
@@ -528,10 +531,17 @@ impl Reader {
                 self.list_cur.clear();
                 self.list_cur_id = 0;
             }
-            "listlevel" if self.list_cur.len() < 9 => self.list_cur.push(true),
+            "listlevel" if self.list_cur.len() < 9 => self.list_cur.push(ListLevel::default()),
             "levelnfc" | "levelnfcn" => {
                 if let Some(level) = self.list_cur.last_mut() {
-                    *level = !matches!(value, 23 | 255);
+                    level.ordered = !matches!(value, 23 | 255);
+                    level.format = ListLevel::format_of(value);
+                }
+            }
+            "levelstartat" => {
+                if let Some(level) = self.list_cur.last_mut() {
+                    // Word keeps a level's start number to 0..=32767.
+                    level.start = value.clamp(0, 32_767) as u32;
                 }
             }
             "listid" => {
