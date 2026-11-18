@@ -447,18 +447,7 @@ impl SecurityHandler {
             Method::Aes128 | Method::Aes256 => {
                 let key = self.object_key(method, num, generation);
                 if encrypt {
-                    // Deterministic IV derived from the key, object and content: saves are
-                    // reproducible and no IV repeats for different plaintexts.
-                    let mut h = Sha256::new();
-                    h.update(&key);
-                    h.update(num.to_le_bytes());
-                    h.update(generation.to_le_bytes());
-                    h.update(data);
-                    let digest = h.finalize();
-                    let mut iv = [0u8; 16];
-                    for (d, s) in iv.iter_mut().zip(digest.iter()) {
-                        *d = *s;
-                    }
+                    let iv = initialization_vector(&key, num, generation, data);
                     let mut out = iv.to_vec();
                     out.extend(aes_cbc_encrypt(&key, &iv, data, true));
                     out
@@ -492,6 +481,28 @@ impl SecurityHandler {
     pub fn encrypts_strings(&self) -> bool {
         self.method(None) != Method::Identity
     }
+}
+
+/// The initialization vector for one AES string or stream: 16 random bytes from the operating
+/// system (in a browser, from Web Crypto), as ISO 32000-2 asks (7.6.3). An object saved again
+/// under the same file key is then stored as different bytes, so two copies of a file don't show
+/// which objects are the same. Should the random source fail, the vector is derived from the
+/// key, the object and its content: unknown without the key, and repeated only for an object
+/// that did not change.
+fn initialization_vector(key: &[u8], num: u32, generation: u16, data: &[u8]) -> [u8; 16] {
+    let mut iv = [0u8; 16];
+    if getrandom::fill(&mut iv).is_ok() {
+        return iv;
+    }
+    let mut h = Sha256::new();
+    h.update(key);
+    h.update(num.to_le_bytes());
+    h.update(generation.to_le_bytes());
+    h.update(data);
+    for (d, s) in iv.iter_mut().zip(h.finalize().iter()) {
+        *d = *s;
+    }
+    iv
 }
 
 /// The name of a crypt filter `d`'s strings, streams or embedded files use (`/StrF`, `/StmF`,
@@ -840,8 +851,8 @@ pub struct NewEncryption<'a> {
     pub owner_password: &'a str,
     pub permissions: i32,
     pub encrypt_metadata: bool,
-    /// 32 bytes of entropy for keys and salts (the caller supplies randomness, so this crate
-    /// needs no OS access and tests are deterministic).
+    /// 32 bytes of entropy for keys and salts (the caller supplies it, so tests can pin the
+    /// keys). AES initialization vectors don't come from it: each is new and random.
     pub seed: [u8; 32],
 }
 
