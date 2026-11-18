@@ -1571,7 +1571,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-agents"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=35e0352666a117407d62230a6c6c2366f3e21a3b#35e0352666a117407d62230a6c6c2366f3e21a3b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=d94a3593adcff504eaaad9e5aee4c84fd2f07a72#d94a3593adcff504eaaad9e5aee4c84fd2f07a72"
 dependencies = [
  "dirs",
  "serde",
