@@ -118,7 +118,11 @@ pub fn write<'a>(source: &[u8], resources: impl IntoIterator<Item = (&'a str, &'
         if bytes.len() as u64 > limits.max_entry_bytes || total > limits.max_total_bytes || seen.len() as u64 + 2 > limits.max_entries {
             return Err(Error::Invalid(format!("archive limits exceeded at `{name}`")));
         }
-        let compression = if name.ends_with(".svg") { Compression::Deflated } else { Compression::Stored };
+        let extension = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
+        let compression = match extension.as_deref() {
+            Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "exr" | "woff" | "woff2") => Compression::Stored,
+            _ => Compression::Deflated,
+        };
         writer.add(name, bytes, compression)?;
     }
     Ok(writer.finish()?)
@@ -145,6 +149,14 @@ mod tests {
         ] {
             assert!(Material::open(&bytes, limits).is_err());
         }
+    }
+
+    #[test]
+    fn compresses_unencoded_source_assets() {
+        let bytes = write(b"<package/>", [("resources/shape.svg", b"<svg/>".as_slice()), ("resources/font.ttf", b"font".as_slice())]).unwrap();
+        let mut archive = Archive::open(&bytes, craft_zip::Limits { max_entries: 4, max_total_bytes: 128 }).unwrap();
+        assert_eq!(archive.is_stored("resources/shape.svg"), Some(false));
+        assert_eq!(archive.is_stored("resources/font.ttf"), Some(false));
     }
 
     #[test]
