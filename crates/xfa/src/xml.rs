@@ -194,6 +194,10 @@ impl Document {
         // quick-xml excludes a leading UTF-8 BOM from its buffer positions.
         // Parse it explicitly so every stored range still addresses the original input.
         let input = text.strip_prefix('\u{feff}').unwrap_or(text);
+        // A second U+FEFF is content outside the root, not another encoding marker.
+        if input.starts_with('\u{feff}') {
+            return Err("multiple leading XML byte-order marks".to_string());
+        }
         let source_offset = text.len() - input.len();
         let mut events = opts.events(input.as_bytes());
         let mut nodes: Vec<NodeData> = Vec::new();
@@ -431,6 +435,15 @@ mod tests {
                 assert_eq!(input.get(child.range()), Some(child_xml));
                 assert_eq!(root.range(), prefix.len()..input.len());
                 assert_eq!(child.range(), prefix.len() + 3..prefix.len() + 3 + child_xml.len());
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_leading_bom_is_rejected_before_event_parsing() {
+        for prefix in ["\u{feff}\u{feff}", "\u{feff}\u{feff}\u{feff}"] {
+            for body in ["<r><é/></r>", "<?xml version='1.0'?><r><é>text</é></r>"] {
+                assert!(Document::parse(&format!("{prefix}{body}")).is_err());
             }
         }
     }
