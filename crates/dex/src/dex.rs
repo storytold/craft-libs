@@ -691,7 +691,7 @@ pub struct Reference {
 const MAX_REFERENCE_BYTES: usize = 64 << 20;
 
 /// Every instruction that refers to class `desc` (optionally only its methods named `method`).
-/// Returns a truncated prefix when the count or aggregate caller/target byte budget is exhausted.
+/// Reports truncation when instruction decoding is incomplete or a count/retained-byte limit is reached.
 pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -> (Vec<Reference>, bool) {
     references_with_byte_limit(dex, desc, method, max, MAX_REFERENCE_BYTES)
 }
@@ -699,11 +699,13 @@ pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -
 fn references_with_byte_limit(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize, max_bytes: usize) -> (Vec<Reference>, bool) {
     let mut bytes_left = max_bytes;
     let mut out = Vec::new();
+    let mut decoded = true;
     for c in &dex.classes {
         let cd = dex.class_data(c);
         for m in cd.direct_methods.iter().chain(&cd.virtual_methods) {
             let Some(code) = dex.code(m.code_off) else { continue };
-            let (insns, _) = crate::dex_ops::decode(&code.insns, 200_000);
+            let (insns, complete) = crate::dex_ops::decode(&code.insns, 200_000);
+            decoded &= complete;
             for i in &insns {
                 let Some(idx) = i.index else { continue };
                 let hit = match i.index_kind {
@@ -735,13 +737,58 @@ fn references_with_byte_limit(dex: &Dex<'_>, desc: &str, method: Option<&str>, m
             }
         }
     }
-    (out, false)
+    (out, !decoded)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::android as fx;
+
+    #[test]
+    fn reference_queries_preserve_incomplete_decode_across_methods() {
+        for incomplete in [false, true] {
+            let mut builder = fx::DexBuilder::default();
+            let class = builder.ty("LTest;");
+            let first = builder.method("LTest;", "first", "V", &[]);
+            let second = builder.method("LTest;", "second", "V", &[]);
+            let mut first_code = vec![0x0071, second as u16, 0];
+            if incomplete {
+                first_code.push(0x0071); // truncated invoke-static
+            }
+            let code = |insns| Some(fx::CodeSpec { insns, ..Default::default() });
+            builder.classes.push(fx::ClassSpec {
+                class,
+                direct: vec![
+                    fx::MethodSpec { method: first, access: 0, code: code(first_code) },
+                    fx::MethodSpec { method: second, access: 0, code: code(vec![0x000e]) },
+                ],
+                ..Default::default()
+            });
+            let data = builder.build();
+            let dex = parse(&data).unwrap();
+            let (found, truncated) = references(&dex, "LTest;", Some("second"), 10);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].caller, "LTest;->first()V");
+            assert_eq!(found[0].target, "LTest;->second()V");
+            assert_eq!(truncated, incomplete);
+            let (absent, truncated) = references(&dex, "LAbsent;", None, 10);
+            assert!(absent.is_empty());
+            assert_eq!(truncated, incomplete);
+        }
+    }
+
+    #[test]
+    fn fixture_strings_round_trip_utf16_surrogate_pairs() {
+        let mut builder = fx::DexBuilder::default();
+        let text = "A\0é😀";
+        let index = builder.string(text);
+        let data = builder.build();
+        let dex = parse(&data).unwrap();
+        assert_eq!(dex.string(index), text);
+        let offset = Reader::new(&data).u32_le(0x70).unwrap() as usize;
+        assert_eq!(&data[offset..offset + 13], &[5, 0x41, 0xc0, 0x80, 0xc3, 0xa9, 0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80, 0]);
+    }
 
     #[test]
     fn parses_fixture() {
