@@ -57,6 +57,9 @@ fn paint_frame(draw: &Draw<'_>, cx: &Cx<'_, CropOverlay<'_>>, scene: &Scene<'_, 
         let corners = [area.left_top(), area.right_top(), area.right_bottom(), area.left_bottom()];
         super::paint_outside(draw, corners, &q, DataColor::new(fill));
     }
+    if let Some(cut) = overlay.cut_area(view) {
+        draw.stroke(&PaintShape::Polygon(cut.to_vec()), StrokeWidth::Thin, style.guide);
+    }
     let line = if scene.refused { style.invalid } else { style.line };
     if scene.started {
         draw.stroke(&PaintShape::Polygon(q.to_vec()), StrokeWidth::Thin, line);
