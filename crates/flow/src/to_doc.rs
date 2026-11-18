@@ -159,6 +159,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         out.numbering = Some(NumRef { num, level: li.level.min(8) });
     }
     out.align = p.align;
+    if p.rtl {
+        out.bidi = Some(true);
+    }
     let sp = p.spacing;
     out.space_before = sp.before;
     out.space_after = sp.after;
@@ -838,7 +841,8 @@ impl<'a> Builder<'a> {
             tb.props.style = None;
         }
         if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0) {
-            tb.grid = t.widths.iter().map(|w| w.clamp(6.0, 1584.0)).collect();
+            // Narrow columns stay as they are: raising them would widen the table past its source.
+            tb.grid = t.widths.iter().map(|w| w.min(1584.0)).collect();
         }
         tb.rows.clear();
         if let Some(x) = &t.extra {
@@ -902,6 +906,41 @@ impl<'a> Builder<'a> {
                 row.cells.push(craft_wordmodel::Cell::empty());
             }
             tb.rows.push(row);
+        }
+        let starts: Vec<(usize, usize)> = (0..tb.rows.first().map_or(0, |row| row.cells.len()))
+            .filter(|&ci| tb.rows.first().and_then(|row| row.cells.get(ci)).is_some_and(|c| c.props.vmerge == VMerge::Continue))
+            .map(|ci| (ci, tb.grid_col(0, ci)))
+            .collect();
+        for (ci, g) in starts {
+            let span = tb.rows.first().map_or(1, |r| r.cells[ci].props.span);
+            let more = tb
+                .cell_at_grid(1, g)
+                .filter(|&i| tb.grid_col(1, i) == g)
+                .and_then(|i| tb.rows.get(1)?.cells.get(i))
+                .is_some_and(|c| c.props.vmerge == VMerge::Continue && c.props.span == span);
+            if let Some(cell) = tb.rows.first_mut().and_then(|r| r.cells.get_mut(ci)) {
+                cell.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
+            }
+        }
+        for r in 1..tb.rows.len() {
+            for ci in 0..tb.rows[r].cells.len() {
+                if tb.rows[r].cells[ci].props.vmerge == VMerge::Continue {
+                    let g = tb.grid_col(r, ci);
+                    let span = tb.rows[r].cells[ci].props.span;
+                    let prev_r = r - 1;
+                    if let Some(up_ci) = tb.cell_at_grid(prev_r, g)
+                        && tb.grid_col(prev_r, up_ci) == g
+                        && tb.rows[prev_r].cells[up_ci].props.span == span
+                    {
+                        let up_cell = &mut tb.rows[prev_r].cells[up_ci];
+                        if up_cell.props.vmerge == VMerge::None {
+                            up_cell.props.vmerge = VMerge::Restart;
+                        }
+                    } else {
+                        tb.rows[r].cells[ci].props.vmerge = VMerge::None;
+                    }
+                }
+            }
         }
         // Its markup kept for the writer, by its place among the top's tables.
         if depth == 0 {

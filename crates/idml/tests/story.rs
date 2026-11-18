@@ -69,6 +69,10 @@ fn a_story_reads_as_ranges_and_content() {
     // The body paragraph's character range holds every kind of node.
     let body = paras[1].characters();
     assert_eq!(body.len(), 1);
+    let TextNode::Anchor(destination) = &body[0].children[6] else { panic!() };
+    assert_eq!(destination.name, "HyperlinkTextDestination");
+    assert_eq!(destination.values.self_id(), Some("ud1"));
+    assert_eq!(destination.values.value("Name").as_deref(), Some("here"));
     let kinds: Vec<String> = body[0]
         .children
         .iter()
@@ -77,13 +81,14 @@ fn a_story_reads_as_ranges_and_content() {
             TextNode::Content(_) => "Content".into(),
             TextNode::Table(_) => "Table".into(),
             TextNode::Item(i) => format!("item {}", i.kind.name()),
+            TextNode::Anchor(anchor) => format!("anchor {}", anchor.name),
             TextNode::Other(e) => format!("other {}", e.name),
             n => format!("{n:?}"),
         })
         .collect();
     assert_eq!(
         kinds,
-        ["HyperlinkTextSource", "Change", "Content", "Footnote", "Table", "item Rectangle", "other HyperlinkTextDestination", "Content"]
+        ["HyperlinkTextSource", "Change", "Content", "Footnote", "Table", "item Rectangle", "anchor HyperlinkTextDestination", "Content"]
     );
 }
 

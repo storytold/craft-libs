@@ -78,10 +78,14 @@ fn structures_other_prefixes_and_other_namespaces() {
     assert_eq!(masks.items().first().and_then(|m| m.field("crs:What")).and_then(XmpValue::text), Some("Correction"));
     assert_eq!(s.get("Empty"), Some(&Value::Text(String::new())));
     assert_eq!(s.get("format"), None);
-    // The last value of a repeated name wins.
+    // A repeated name keeps its first value, as `craft_metadata` reads every packet: an empty
+    // repeat must not hide what an earlier description said.
     let second = format!("/><rdf:Description xmlns:crs=\"{CRS_NS}\" crs:Texture=\"2\"/></rdf:RDF>");
     let twice = with("crs:Texture=\"1\"").replace("/></rdf:RDF>", &second);
-    assert_eq!(Settings::parse(twice.as_bytes()).unwrap().text("Texture"), Some("2"));
+    assert_eq!(Settings::parse(twice.as_bytes()).unwrap().text("Texture"), Some("1"));
+    let blank = format!("/><rdf:Description xmlns:crs=\"{CRS_NS}\" crs:Texture=\"\"/></rdf:RDF>");
+    let hiding = with("crs:Texture=\"1\"").replace("/></rdf:RDF>", &blank);
+    assert_eq!(Settings::parse(hiding.as_bytes()).unwrap().text("Texture"), Some("1"), "a blank repeat does not win");
 }
 
 #[test]

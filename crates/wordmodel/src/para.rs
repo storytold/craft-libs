@@ -13,18 +13,20 @@ use crate::props::{CharProps, ParaProps};
 use crate::section::SectionProps;
 use crate::{DocError, Result};
 
+mod file_orders;
 mod float;
 mod inline_kinds;
 mod inline_object;
 mod run;
 
+pub use file_orders::{FileOrderScan, FileOrders};
 pub use float::{AltText, Anchor, Float, FloatAlign, MAX_ALT_TEXT, Wrap, WrapText, cap_alt};
 pub use inline_kinds::{NoteKind, PTabAlign, PTabBase, RubyAlign, ShapeKind, ruby_offset, ruby_raise};
 pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_GROUP_CHILDREN};
 pub use run::{COLUMN_BREAK, LINE_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, Run, SOFT_HYPHEN, next_rev};
 
 /// A paragraph.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Paragraph {
     pub text: String,
     pub runs: Vec<Run>,
@@ -51,6 +53,19 @@ impl PartialEq for Paragraph {
             && self.mark == o.mark
             && self.objects == o.objects
             && self.section == o.section
+    }
+}
+
+impl std::fmt::Debug for Paragraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Paragraph")
+            .field("text", &self.text)
+            .field("runs", &self.runs)
+            .field("props", &self.props)
+            .field("mark", &self.mark)
+            .field("objects", &self.objects)
+            .field("section", &self.section)
+            .finish_non_exhaustive()
     }
 }
 
@@ -281,6 +296,37 @@ impl Paragraph {
         self.insert_run(off, OBJ.len_utf8(), props.clone());
         self.touch();
         Ok(())
+    }
+
+    /// Append plain text (U+FFFC is dropped) with `props`. Returns the appended length. The same as
+    /// [`Self::insert_text`] at [`Self::len`], but it doesn't walk the runs or the text, so building
+    /// a paragraph of `n` pieces this way is linear rather than quadratic in `n`.
+    pub fn push_text(&mut self, s: &str, props: &CharProps) -> usize {
+        let clean: std::borrow::Cow<str> = if s.contains(OBJ) { s.chars().filter(|c| *c != OBJ).collect::<String>().into() } else { s.into() };
+        if clean.is_empty() {
+            return 0;
+        }
+        self.text.push_str(&clean);
+        self.push_run(clean.len(), props);
+        self.touch();
+        clean.len()
+    }
+
+    /// Append an object with `props`: [`Self::insert_object`] at [`Self::len`], without counting
+    /// the objects already there.
+    pub fn push_object(&mut self, obj: InlineObject, props: &CharProps) {
+        self.text.push(OBJ);
+        self.objects.push(obj);
+        self.push_run(OBJ.len_utf8(), props);
+        self.touch();
+    }
+
+    /// Extend the last run by `len` when it has `props`, or start a new one.
+    fn push_run(&mut self, len: usize, props: &CharProps) {
+        match self.runs.last_mut() {
+            Some(last) if last.props == *props => last.len += len,
+            _ => self.runs.push(Run { len, props: props.clone() }),
+        }
     }
 
     fn insert_run(&mut self, off: usize, len: usize, props: CharProps) {
