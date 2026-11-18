@@ -123,6 +123,23 @@ mod session_io_tests {
     }
 
     #[test]
+    fn rejects_an_oversized_input_path_without_truncating_its_assignment() {
+        let mut session = Session::default();
+        let id = session.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        for size in [MAX_NAME_CHARS, MAX_NAME_CHARS + 1] {
+            let name = "琴".repeat(size);
+            session.inputs = vec![InputPath { name: name.clone(), first_channel: 0, format: ChannelFormat::Mono }];
+            session.track_mut(id).unwrap().mixer.input = Route::Input(name);
+            let json = session.to_json().unwrap();
+            if size == MAX_NAME_CHARS {
+                assert_eq!(Session::from_json(&json).unwrap(), session);
+            } else {
+                assert!(matches!(Session::from_json(&json), Err(SessionError::Invalid(message)) if message.contains("input path name")));
+            }
+        }
+    }
+
+    #[test]
     fn bounded_writer_matches_canonical_session_json_and_refuses_one_byte_under() {
         let session = Session::default();
         let canonical = session.to_json().unwrap();

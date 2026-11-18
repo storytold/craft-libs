@@ -872,7 +872,6 @@ impl Session {
         }
         self.busses.iter_mut().for_each(|b| truncate_chars(&mut b.name, MAX_NAME_CHARS));
         self.outputs.iter_mut().for_each(|o| truncate_chars(&mut o.name, MAX_NAME_CHARS));
-        self.inputs.iter_mut().for_each(|input| truncate_chars(&mut input.name, MAX_NAME_CHARS));
         self.groups.iter_mut().for_each(|g| truncate_chars(&mut g.name, MAX_NAME_CHARS));
         self.sources.iter_mut().for_each(|s| truncate_chars(&mut s.name, MAX_NAME_CHARS));
         // A room tone must play part of a source the session still lists.
@@ -898,6 +897,10 @@ impl Session {
     /// existing id, which `sanitize` folds into `next_id` -- makes every later allocation return
     /// `u64::MAX` and repeat itself.
     fn validate(&self) -> Result<(), SessionError> {
+        // Input names are routing keys. Truncating them can orphan or alias assignments.
+        if self.inputs.iter().any(|input| input.name.chars().nth(MAX_NAME_CHARS).is_some()) {
+            return Err(SessionError::Invalid(format!("an input path name exceeds {MAX_NAME_CHARS} characters")));
+        }
         if self.next_id == u64::MAX {
             return Err(SessionError::Invalid("the session id space is exhausted".into()));
         }
