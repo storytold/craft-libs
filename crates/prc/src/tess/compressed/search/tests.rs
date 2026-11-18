@@ -246,3 +246,41 @@ fn a_refused_reading_is_not_answered_by_the_turned_one() {
     assert!(then_turned((Search::NoFit, true), turned).is_some());
     assert!(searched.get());
 }
+
+/// A search whose budget runs out before any fit, with combinations left, is exhausted, not a
+/// no-fit, and the turned reading is not searched after it. The same search given room to
+/// finish settles one way or the other.
+#[test]
+fn a_search_cut_short_before_any_fit_is_exhausted() {
+    let tri0 = [0, 0, 0, 4, 0, 0, 2, 4, 0];
+    let pts = [&tri0[..], &[-4, 0, 0, 3, 3, 3, -1, 0, 0]].concat();
+    let status = [1, 3, 2, 1, 2];
+    let mut is_ref = vec![false; 7];
+    is_ref[5] = true;
+    let steps = Cell::new(u64::MAX);
+    let a = Arrays {
+        tolerance: 0.5,
+        origin: [10.0, 0.0, 0.0],
+        points: &pts,
+        edge_status: &status,
+        triangles: status.len(),
+        is_reference: &is_ref,
+        references: &[0],
+        normals: Some(NormalArrays { bits: 10, binary: &[false; 4], angles: &[837, 402], planar: &[true], face_of: &[0; 5] }),
+        ortho_turned: false,
+        limit: usize::MAX,
+        steps: &steps,
+    };
+    let n = a.normals.as_ref().unwrap();
+    assert!(matches!(fresh(&a, n, &[]), Outcome::Failed(c) if !c.is_empty()));
+    let plan = |budget| Plan { turns: true, depth: 2, budget };
+    assert!(matches!(search_reading(&a, n, plan(1)).0, Search::Exhausted));
+    assert!(!matches!(search_reading(&a, n, plan(STEP_BUDGET)).0, Search::Exhausted));
+    let searched = Cell::new(false);
+    let turned = || {
+        searched.set(true);
+        Search::NoFit
+    };
+    assert!(then_turned((Search::Exhausted, true), turned).is_none());
+    assert!(!searched.get());
+}

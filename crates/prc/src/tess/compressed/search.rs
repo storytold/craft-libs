@@ -83,9 +83,9 @@ enum Outcome {
 }
 
 /// [`searched_reading`] on `a`, then on `turned`, the same arrays read with
-/// [`Arrays::ortho_turned`] flipped. The second search runs only when the first found no fit
-/// at all and one of its walks met an apex the flip moves: otherwise it would repeat the
-/// first step for step, or a refused first reading would be answered by a guess.
+/// [`Arrays::ortho_turned`] flipped. The second search runs only when the first searched every
+/// combination, found no fit, and met an apex the flip moves: otherwise it would repeat the
+/// first step for step, or a refused or exhausted first reading would be answered by a guess.
 pub(super) fn unique_fit_either(a: &Arrays<'_>, turned: &Arrays<'_>) -> Option<Rebuilt> {
     then_turned(searched_reading(a), || searched_reading(turned).0)
 }
@@ -95,7 +95,7 @@ fn then_turned(first: (Search, bool), turned: impl FnOnce() -> Search) -> Option
     match first {
         (Search::Unique(m), _) => Some(*m),
         (Search::NoFit, true) => turned().unique(),
-        (Search::NoFit, false) | (Search::Refused, _) => None,
+        (Search::NoFit, false) | (Search::Refused | Search::Exhausted, _) => None,
     }
 }
 
@@ -113,8 +113,12 @@ pub(super) fn unique_fit_reading(a: &Arrays<'_>) -> (Option<Rebuilt>, bool) {
 /// tall whose decoded decision is noise; a turn candidate is an apex whose frame is
 /// degenerate, whose turn rests on a rounding residue. A fit consumes every array and stored
 /// normal exactly and keeps every planar face flat. It is unique only if it is the single
-/// such geometry found within [`STEP_BUDGET`] and the stream's search steps: two, or a search
-/// cut short after a fit, would make it a guess, and are refused. Each of [`STAGES`] runs only when the one before found no fit at all.
+/// such geometry among the combinations searched within [`STEP_BUDGET`] and the stream's
+/// search steps: two, or a search cut short after a fit, would make it a guess, and are
+/// refused. Combinations grow only from failed walks, so a fit's own extensions are not
+/// tried, and a geometry reached only through them is not ruled out. A search cut short
+/// before any fit is exhausted, not a no-fit, and ends the reading. Each of [`STAGES`] runs
+/// only when the one before searched all its combinations and found no fit.
 fn searched_reading(a: &Arrays<'_>) -> (Search, bool) {
     let Some(n) = a.normals.as_ref() else {
         return (Search::NoFit, false);
@@ -149,9 +153,13 @@ struct Plan {
 
 /// What one search came to.
 enum Search {
+    /// The one geometry among the combinations searched.
     Unique(Box<Rebuilt>),
     /// Two geometries fit, or the steps ran out after a fit.
     Refused,
+    /// The steps ran out before any fit, with combinations left to try.
+    Exhausted,
+    /// Every combination was tried and none fit.
     NoFit,
 }
 
@@ -159,7 +167,7 @@ impl Search {
     fn unique(self) -> Option<Rebuilt> {
         match self {
             Search::Unique(m) => Some(*m),
-            Search::Refused | Search::NoFit => None,
+            Search::Refused | Search::Exhausted | Search::NoFit => None,
         }
     }
 }
@@ -172,9 +180,7 @@ fn search_reading(a: &Arrays<'_>, n: &NormalArrays<'_>, plan: Plan) -> (Search, 
     let mut stack = vec![Vec::new()];
     let mut found: Option<Rebuilt> = None;
     while walker.spent < plan.budget && a.steps.get() > 0 {
-        let Some(flips) = stack.pop() else {
-            return (found.map_or(Search::NoFit, |m| Search::Unique(Box::new(m))), walker.w.reads_turned);
-        };
+        let Some(flips) = stack.pop() else { break };
         match walker.attempt(a, &flips) {
             Outcome::Fit(m) => match &found {
                 Some(f) if f.triangles != m.triangles || f.positions != m.positions => {
@@ -192,7 +198,14 @@ fn search_reading(a: &Arrays<'_>, n: &NormalArrays<'_>, plan: Plan) -> (Search, 
             Outcome::Failed(_) | Outcome::Dead => {}
         }
     }
-    (if found.is_some() { Search::Refused } else { Search::NoFit }, walker.w.reads_turned)
+    let complete = stack.is_empty() && a.steps.get() > 0;
+    let search = match found {
+        Some(m) if complete => Search::Unique(Box::new(m)),
+        Some(_) => Search::Refused,
+        None if complete => Search::NoFit,
+        None => Search::Exhausted,
+    };
+    (search, walker.w.reads_turned)
 }
 
 /// What one completed step of a walk offers the search.
