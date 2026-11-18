@@ -18,29 +18,37 @@ back on failure, and its menus, dialogs and Plug-ins window.
   sizes, counts, nesting and string lengths are bounded before anything is allocated or kept.
 - No network I/O in the core. Catalogs and GitHub are pure functions over bytes; `fetch` runs
   them over a `Fetch` trait the app implements. The optional `http` feature implements `Fetch`
-  for [`craft-update`](../update)'s `Http` (native only).
-- No app code: an app is an id string, an API range and a list of kinds (`AppInfo`), a `Host`
+  for [`craft-update`](../update)'s `Http` (native only; on wasm32 the feature does nothing, so an
+  app may enable it for every target). That impl is for the craft-update of the same craft-libs
+  revision: an app whose own craft-update comes from another revision has two copies and
+  implements `Fetch` on its client itself until it pins one revision for both, when the
+  impl applies as it is.
+- No app code: an app is an id string, API ranges and a list of kinds (`AppInfo`), a `Host`
   implementation and a `Policy`. It depends on `wasmi`, `serde`, `serde_json`, `sha2`,
   `thiserror` and, in native builds, [`craft-atomic`](../atomic).
 
 ## Platforms
 
-The sandbox, manifest, permissions, bundle, catalog and GitHub modules build everywhere,
-`wasm32-unknown-unknown` included (wasmi is an interpreter, no JIT). `store` is native only: the
-web builds keep plug-ins in browser storage.
+The sandbox, manifest, permissions, bundle, source, catalog, GitHub and fetch modules build
+everywhere, `wasm32-unknown-unknown` included (wasmi is an interpreter, no JIT;
+`cargo check -p craft-plugin --target wasm32-unknown-unknown` checks it). `store` is native only:
+the web builds keep plug-ins in browser storage, and record where each came from with the same
+`Source` and `SourceRecord` (`craft_plugin::Source`, from the `source` module) that the native
+store writes as `source.json`.
 
 ## Modules
 
 | Module | What it holds |
 |---|---|
-| (root) | The sandbox: `Instance`, `run`, `check_module`, `Host`, `Limits`, `RunOutput`, `UiChange`, `PluginError`; the ABI names `IMPORT_MODULE` (`craft`), `LEGACY_IMPORT_MODULE` (`figcraft`), `ENTRY` (`craft_run`), `LEGACY_ENTRY` (`figcraft_run`). `AppInfo` and `Target`. |
+| (root) | The sandbox: `Instance`, `run`, `check_module`, `Host`, `Limits`, `RunOutput`, `UiChange`, `PluginError`; the ABI names `IMPORT_MODULE` (`craft`), `LEGACY_IMPORT_MODULE` (`figcraft`), `ENTRY` (`craft_run`), `LEGACY_ENTRY` (`figcraft_run`). `AppInfo` (`api_for`), `KindApi` and `Target`. |
 | `manifest` | `Manifest` (`parse`, `from_value`, `command`, `target`), `AppTarget`, `Permissions`, `Access`, `PluginCommand`, `Param`, `ParamKind`, `Panel`; `MANIFEST_FILE`, `LEGACY_MANIFEST_FILE`, `KIND_COMMAND`, `API_VERSION` (6). |
 | `permissions` | `check_call`, `check_read_only`, `Policy`, `ALWAYS_DENIED`, `pattern_matches`, `changed`. |
 | `bundle` | `Bundle` (`encode`, `decode`, `check`, `check_with`), `open`, `open_with`, `sha256_hex`, `parse_version`, `compare_versions`, `newer`; `BUNDLE_EXTENSION`, `MAX_BUNDLE_BYTES`. |
 | `catalog` | `parse_catalog`, `Catalog`, `Package` (`latest_for`, `release`, `check_manifest`), `Release` (`target`), `check_url`, `check_redirect`, `file_url_path`, `HOSTS`. |
 | `github` | `parse_repo_spec`, `RepoRef` (`releases_api_url`), `parse_release`, `Release` (`bundle_asset`, `sums_asset`), `parse_sha256sums`, `plan_download`, `RepoDownload`, `verify_sha256`. |
-| `fetch` | `Fetch`, `fetch_catalog`, `download_release`, `resolve_repo`, `download_repo`. |
-| `store` | `Store` (`install`, `install_with`, `load`, `list`, `remove`), `Source`, `SourceRecord`, `Installed`, `plugins_dir`, `folder_name`. |
+| `fetch` | `Fetch` (`get`, `read_local`), `fetch_catalog`, `download_release`, `resolve_repo`, `download_repo`, `read_location`, `read_local_file`, `follow_redirects`, `MAX_REDIRECTS`. |
+| `source` | `Source` (`File`, `Catalog`, `Github`, `Other`; `check`), `SourceRecord`: on every target. |
+| `store` | `Store` (`install_for`, `install_with_for`, `load_for`, `list_for`; `install`, `install_with`, `load`, `list`, `remove`), `Listing`, `Installed`, `Problem`, `plugins_dir`, `folder_name`; `Source` and `SourceRecord` again. |
 | `widget` | FigCraft's widget descriptions (`WidgetRender`), which share the ABI. |
 
 ## The manifest
@@ -65,20 +73,33 @@ web builds keep plug-ins in browser storage.
 }
 ```
 
-`kind` defaults to `command`. `apps.<id>.api` is compared with the API range the app reports
-(for command plug-ins, the command ABI, `1..=API_VERSION`). A manifest without `apps` is a legacy
-one: an app that sets `AppInfo::accept_legacy` (FigCraft) runs it by its top-level `api`; others
-refuse it. Unknown fields are ignored, so manifests written for later versions still read.
+`kind` defaults to `command`. `apps.<id>.api` is compared with the API range the app reports for
+that kind (`AppInfo::api_for`): `AppInfo::api` for command plug-ins (the command ABI,
+`1..=API_VERSION`) and for every kind `AppInfo::kind_api` doesn't list; an app's own kinds with
+their own ABI (PhotoCraft's filters, EffectCraft's effects) list it there, so one `AppInfo`
+describes the whole app. A manifest without `apps` is a legacy one: an app that sets
+`AppInfo::accept_legacy` (FigCraft) runs it by its top-level `api`; others refuse it. Unknown
+fields are ignored, so manifests written for later versions still read.
 
 ```rust,ignore
-use craft_plugin::{API_VERSION, AppInfo, Manifest};
+use craft_plugin::{API_VERSION, AppInfo, KIND_COMMAND, KindApi, Manifest};
 
-const APP: AppInfo<'static> =
-    AppInfo { id: "designcraft", version: env!("CARGO_PKG_VERSION"), api: 1..=API_VERSION, kinds: &["command"], accept_legacy: false };
+const APP: AppInfo<'static> = AppInfo {
+    id: "photocraft",
+    version: env!("CARGO_PKG_VERSION"),
+    api: 1..=API_VERSION,                 // command plug-ins
+    kinds: &[KIND_COMMAND, "filter"],
+    accept_legacy: false,
+    kind_api: &[KindApi { kind: "filter", api: 1..=1 }], // `[]` when every kind uses `api`
+};
 
 let manifest = Manifest::parse(&text)?;
 let target = manifest.target(&APP)?; // Err: a sentence to show
 ```
+
+The store's `install_for`, `load_for` and `list_for` call `target` themselves; call it directly
+for a manifest that isn't installed yet (an install confirmation, a catalog's release with
+`Release::target` or `Package::latest_for`).
 
 ## Running a plug-in
 
@@ -118,7 +139,7 @@ the same way. Parameters that name a file (`path`) are the app's to refuse.
 Three sources, the same checks:
 
 ```rust,ignore
-use craft_plugin::{bundle, catalog, fetch, github, store::{Source, Store, plugins_dir}};
+use craft_plugin::{Source, bundle, catalog, fetch, github, store::{Store, plugins_dir}};
 
 let store = Store::new(plugins_dir(&settings_dir));
 
@@ -129,9 +150,9 @@ let release = package.latest_for(&APP).ok_or("no release for this app")?;
 let bytes = fetch::download_release(&mut http, url, package, release)?; // size and SHA-256 pinned
 let (_, manifest) = bundle::open(&bytes)?;
 package.check_manifest(release, &manifest)?;
-manifest.target(&APP)?;
+manifest.target(&APP)?; // before the confirmation; install_for checks it again
 // … show the confirmation (permissions, kind, source, SHA-256), then:
-store.install(&bytes, Source::Catalog { catalog: url.into(), package: package.id.clone() })?;
+store.install_for(&APP, &bytes, Source::Catalog { catalog: url.into(), package: package.id.clone() })?;
 
 // A repository: owner/repo or owner/repo@tag.
 let repo = github::parse_repo_spec(typed)?;
@@ -139,10 +160,22 @@ let plan = fetch::resolve_repo(&mut http, &repo)?; // the API answer and SHA256S
 let bytes = fetch::download_repo(&mut http, &plan)?;
 let (_, manifest) = bundle::open(&bytes)?;
 // … confirmation, saying "not in any catalog you use" when it isn't, then:
-store.install(&bytes, Source::Github { repo: plan.repo.slug(), tag: plan.repo.tag.clone().unwrap_or_default(), asset: plan.asset })?;
+store.install_for(&APP, &bytes, Source::Github { repo: plan.repo.slug(), tag: plan.repo.tag.clone().unwrap_or_default(), asset: plan.asset })?;
+
+// The Plug-ins window: what this app runs, what it doesn't (and why), and damaged folders.
+let listing = store.list_for(&APP);
 ```
 
-Nothing is written before `Store::install`. Downloads are `https://` on GitHub's hosts only
+Nothing is written before `Store::install_for`, and it refuses a plug-in `Manifest::target` refuses
+for the app (another app's, a newer API, a newer `minApp`) before writing. `list_for` sorts what is
+installed into `runnable` (with its `Target`), `not_runnable` (with the reason: show them, so they
+can be removed) and `problems`; `load_for` loads one plug-in the app runs. `install`, `install_with`,
+`load` and `list` don't look at the app and stay for tools that manage the store as files.
+
+A source of the app's own (FigCraft's team server) is `Source::Other { kind, location }`: `kind` is
+1–32 lower-case letters, digits and `-` (`figcraft-server`), `location` is plain text. It is
+recorded as `{"type": "other", "kind": …, "location": …}`; `source.json` files written before it
+existed read as they are. Downloads are `https://` on GitHub's hosts only
 (`catalog::HOSTS`); a release URL must be an asset of the package's `repo`; a local (`file://`)
 catalog may name local files. A repository release must publish its bundle's SHA-256 in
 `SHA256SUMS` (or GitHub's own asset digest); when both exist they must agree. On an update, show
@@ -152,8 +185,44 @@ The store keeps `<root>/<first 32 hex digits of SHA-256(lower-case id)>/` with t
 `<sha256>.craftplugin` and `source.json`. No name on disk comes from a plug-in. `load` and `list`
 check each record against its folder and bundle; `list` reports damaged folders separately.
 
-An app's own kinds use `bundle::open_with`, `Bundle::check_with` and `Store::install_with` with
-their own module check.
+An app's own kinds use `bundle::open_with`, `Bundle::check_with` and `Store::install_with_for` with
+their own module check (it gets the manifest, so one check can tell the kinds apart).
+
+### Local catalogs and files
+
+A `file://` catalog (an author testing an entry) and the local files it names are read through
+`Fetch::read_local`. Its default reads the disk (`fetch::read_local_file`); an app that confines
+file access (MCP automation roots) overrides it, checks the path and then calls `read_local_file`,
+or refuses local catalogs:
+
+```rust,ignore
+impl craft_plugin::Fetch for AppFetch {
+    fn get(&mut self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> { self.http.get(url, max) }
+    fn read_local(&mut self, path: &std::path::Path, max: usize) -> Result<Vec<u8>, String> {
+        file_access::allow(path, Access::Read).map_err(|e| e.to_string())?;
+        craft_plugin::fetch::read_local_file(path, max)
+    }
+}
+```
+
+### Redirects
+
+Every redirect should stay `https://` on `catalog::HOSTS` (`catalog::check_redirect`). A client
+that can see a redirect before following it walks them with `fetch::follow_redirects` and GETs
+where they end; the `http` feature's client does, with a HEAD request per hop
+(`Http::redirect_target`). What it doesn't check: the GitHub API's own redirects (a renamed
+repository; its answer is only read as release JSON, whose URLs are checked, and the token is
+never sent on a redirect), and a server on GitHub's hosts that answers the final GET with another
+redirect than it gave the HEAD (followed on HTTPS only). Bundles are pinned by SHA-256 and size
+whatever served them.
+
+### Threads
+
+`fetch` blocks until its requests finish, and has no progress or cancelling of its own. Run the
+whole install (fetch, download, `bundle::open`) on a worker thread and send the result back to
+the UI, which shows the confirmation and then calls `install_for` (a quick local write). To
+cancel, make the app's `Fetch` return an error once the person cancels; to show progress, report
+it from `Fetch::get`.
 
 ## Writing a plug-in
 
