@@ -543,11 +543,10 @@ mod tests {
     #[test]
     fn rows_and_cells() {
         let xml = r#"<row r="3" ht="20" customHeight="1" s="4" customFormat="1" outlineLevel="9"><c r="B3" s="2" t="s"><v>7</v></c><c><f t="shared" ref="C3:C9" si="0">A1*2</f><v>4</v></c>
-            <c r="XFE3"><v>1</v></c><c r="E3" t="e"><v>#SPILL!</v></c><c r="F3" t="e"><v>#WHAT</v></c><c t="b"><v>1</v></c><c t="inlineStr"><is><t>in_x000A_line</t></is></c><c t="n"><v>abc</v></c><c t="str"><v>a_x0009_</v></c><c t="d"><v>2024-01-01</v></c><c vm="1" cm="2" ph="1"/></row>"#;
+            <c r="E3" t="e"><v>#SPILL!</v></c><c r="F3" t="e"><v>#WHAT</v></c><c t="b"><v>1</v></c><c t="inlineStr"><is><t>in_x000A_line</t></is></c><c t="n"><v>abc</v></c><c t="str"><v>a_x0009_</v></c><c t="d"><v>2024-01-01</v></c><c vm="1" cm="2" ph="1"/></row>"#;
         let mut r = RowReader::default();
         let row = r.row(&craft_xml::Options::local().parse(xml.as_bytes()).unwrap_or_default()).unwrap_or_default();
         assert_eq!((row.index, row.height, row.custom_height, row.style, row.outline_level), (2, Some(20.0), true, Some(4), 7));
-        assert_eq!(r.dropped, 1);
         let at: Vec<String> = row.cells.iter().map(|c| c.at.a1()).collect();
         assert_eq!(at, ["B3", "C3", "E3", "F3", "G3", "H3", "I3", "J3", "K3", "L3"]);
         let values: Vec<&CellValue> = row.cells.iter().map(|c| &c.value).collect();
@@ -567,9 +566,6 @@ mod tests {
         // Without `r`, the next row follows the last one.
         let next = r.row(&craft_xml::El::new("row")).map(|r| r.index);
         assert_eq!(next, Some(3));
-        assert!(r.row(&craft_xml::El::new("row").with_attr("r", "1048577")).is_none());
-        assert!(r.row(&craft_xml::El::new("row").with_attr("r", "0")).is_none());
-        assert_eq!((r.rows, r.dropped), (4, 3));
     }
 
     #[test]

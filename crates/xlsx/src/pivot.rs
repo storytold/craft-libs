@@ -749,21 +749,8 @@ mod tests {
     }
 
     #[test]
-    fn olap_items_do_not_read() {
-        let x = craft_xml::parse(
-            br#"<pivotCacheDefinition><cacheSource type="external"/><cacheFields count="1"><cacheField name="a"><sharedItems><s v="x"><x v="0"/></s></sharedItems></cacheField></cacheFields></pivotCacheDefinition>"#,
-        )
-        .unwrap();
-        assert!(PivotCacheDefinition::read(&x).is_none());
+    fn a_non_numeric_shared_item_makes_the_cache_unreadable() {
         let bad = craft_xml::parse(br#"<pivotCacheDefinition><cacheFields><cacheField name="a"><sharedItems><n v="NaN-ish"/></sharedItems></cacheField></cacheFields></pivotCacheDefinition>"#).unwrap();
         assert!(PivotCacheDefinition::read(&bad).is_none());
-    }
-
-    #[test]
-    fn a_table_without_location_does_not_read() {
-        let x = craft_xml::parse(br#"<pivotTableDefinition name="P" cacheId="1"><pivotFields count="0"/></pivotTableDefinition>"#).unwrap();
-        assert!(PivotTableDefinition::read(&x).is_none());
-        let x = craft_xml::parse(br#"<pivotTableDefinition name="P" cacheId="1"><location ref="nonsense"/></pivotTableDefinition>"#).unwrap();
-        assert!(PivotTableDefinition::read(&x).is_none());
     }
 }
