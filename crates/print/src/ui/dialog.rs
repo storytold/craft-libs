@@ -490,10 +490,6 @@ impl Component for PrintPreview<'_> {
             painter.surface(cx.rect, SurfaceKind::Well, Corners::None);
             let shown = cx.env.resolve(message);
             let run = TextRun::new(shown.as_str()).color(style.ink);
-            painter.with_draw(|draw| {
-                let layout = draw.layout(&run, cx.rect.width());
-                eprintln!("DIAG suite::craft_print::ui::dialog::PrintPreview<'_>::reads: rect {:?} text {:?}", cx.rect, layout.size());
-            });
             centred_text(&painter, &run, cx.rect.center(), cx.rect.width());
             return;
         }

@@ -111,9 +111,7 @@ enum Pick {
 
 /// The cell of `swatches` whose colour is `color`, compared in 8 bits: the first when several are.
 fn cell_of(swatches: &[(Label, Srgba)], color: Option<Srgba>) -> Selection<usize> {
-    color
-        .and_then(|color| swatches.iter().position(|(_, c)| c.to_rgba() == color.to_rgba()))
-        .map_or_else(Selection::default, Selection::single)
+    color.and_then(|color| swatches.iter().position(|(_, c)| c.to_rgba() == color.to_rgba())).map_or_else(Selection::default, Selection::single)
 }
 
 impl<'a> SwatchPalette<'a> {
@@ -159,19 +157,17 @@ impl<'a> SwatchPalette<'a> {
             let mut pick = None;
             if !swatches.is_empty() || other.is_some() {
                 // Every click activates, so a click on the swatch already selected, which changes no selection, still picks.
-                let mut table = SwatchTable::new(label.clone(), swatches)
-                    .tips(true)
-                    .wells(true)
-                    .activate(ActivateOn::Click)
-                    .selection(Bind::bound(&mut current));
+                let mut table =
+                    SwatchTable::new(label.clone(), swatches).tips(true).wells(true).activate(ActivateOn::Click).selection(Bind::bound(&mut current));
                 if let Some((_, other_label)) = &other {
                     table = table.trailing(other_label.clone(), IconId::new("plus"));
                 }
                 let table = table.show_all(ui);
-                // The Other… cell is keyed `swatches.len()`, past the swatches.
+                // The Other… cell is keyed `swatches.len()`, past the swatches. A click selects on its press and activates
+                // on its release, so only the activation files the request: one request for one click.
                 pick = table.selected.or(table.open).and_then(|at| match swatches.get(at) {
                     Some((_, picked)) => Some(Pick::Color(*picked)),
-                    None => (other.is_some() && at == swatches.len()).then_some(Pick::Other),
+                    None => (other.is_some() && table.open == Some(at) && at == swatches.len()).then_some(Pick::Other),
                 });
             }
             if let Some((caption, _)) = &recent {
