@@ -132,6 +132,20 @@ fn supported_grid(w: usize, h: usize) -> bool {
             .is_some_and(|bytes| bytes <= isize::MAX as usize)
 }
 
+/// Reserve the already counted source centres exactly, then retain row-major order.
+fn source_centres(w: usize, valid: &[bool], count: usize, check: &impl Fn() -> Result<(), Cancelled>) -> Result<Vec<(i32, i32)>, Cancelled> {
+    let mut centres = Vec::with_capacity(count);
+    for (i, &is_valid) in valid.iter().enumerate() {
+        if i % (w * 32) == 0 {
+            check()?;
+        }
+        if is_valid {
+            centres.push(((i % w) as i32, (i / w) as i32));
+        }
+    }
+    Ok(centres)
+}
+
 /// Summed-area table of a boolean grid (`(w+1) × (h+1)`).
 fn integral(w: usize, h: usize, m: &[bool]) -> Vec<u32> {
     let mut s = vec![0u32; (w + 1) * (h + 1)];
@@ -488,17 +502,7 @@ pub fn complete_with(
             nnf.clear();
             continue;
         }
-        // Count first and reserve exactly, avoiding both geometric capacity overflow and
-        // allocating coordinates for pixels that cannot be source centres.
-        let mut valid_list = Vec::with_capacity(valid_count);
-        for (i, &is_valid) in valid.iter().enumerate() {
-            if i % (lw * 32) == 0 {
-                check()?;
-            }
-            if is_valid {
-                valid_list.push(((i % lw) as i32, (i / lw) as i32));
-            }
-        }
+        let valid_list = source_centres(lw, &valid, valid_count, &check)?;
         let mut solver = Solver { w: lw, h: lh, ch, r: ri, img: &mut limg, hole: &lhole, valid, valid_list, targets, ctl: cancelled };
         // NNF init: upsampled from the coarser level where possible, random otherwise.
         let mut rng = Rng::new(p.seed ^ (li as u64) << 20);

@@ -49,7 +49,7 @@ mod tests {
         let img: Vec<f32> = (0..256).map(|i| if i % 16 < 8 { -f32::MAX } else { f32::MAX }).collect();
         let out = membrane_fill(16, 16, 1, &img, &hole);
         for ((&actual, &original), &unknown) in out.iter().zip(&img).zip(&hole) {
-            assert!(actual.is_finite() && actual >= -f32::MAX && actual <= f32::MAX);
+            assert!(actual.is_finite() && (-f32::MAX..=f32::MAX).contains(&actual));
             if !unknown {
                 assert_eq!(actual.to_bits(), original.to_bits());
             }
