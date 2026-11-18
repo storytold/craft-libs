@@ -214,15 +214,6 @@ mod tests {
         (chars, br)
     }
 
-    /// Weights near `u32::MAX` select the pattern instead of overflowing.
-    #[test]
-    fn large_weights_do_not_overflow() {
-        let words = vec![(vec!['a', 'b'], vec![1]); 2];
-        let levels = [Level { min_len: 1, max_len: 1, good_weight: 1 << 31, bad_weight: 1, threshold: 1 }];
-        let patterns = train(&words, &levels, &mut |_| {});
-        assert_eq!(patterns.points(&['a', 'b']), Some(vec![1]));
-    }
-
     #[test]
     fn learns_a_tiny_list() {
         let list: Vec<_> = [

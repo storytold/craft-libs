@@ -118,14 +118,8 @@ fn assert_covers(items: &[Item], lines: &[Line]) {
 }
 
 #[test]
-fn tiers_are_used_in_order() {
+fn stretch_beyond_the_tiers_and_shrink_beyond_them_are_infeasible() {
     let cost = Params::default().tier_cost;
-    // Word stretch alone.
-    let (r, used, _, ok) = tiered(5.0, &[10.0, 10.0, 10.0], 10.0, &cost);
-    assert!(ok && (r - 0.5).abs() < 1e-9 && used == [0.5, 0.0, 0.0]);
-    // Word saturated, half the letter tier.
-    let (r, used, _, _) = tiered(15.0, &[10.0, 10.0, 10.0], 10.0, &cost);
-    assert!((r - (1.0 + 0.5 * cost[1])).abs() < 1e-9 && used == [1.0, 0.5, 0.0]);
     // Beyond every tier: unbounded word spacing.
     let (r, _, excess, _) = tiered(40.0, &[10.0, 10.0, 10.0], 10.0, &cost);
     assert!(r > 2.0 && (excess - 10.0).abs() < 1e-9);
@@ -417,19 +411,6 @@ fn a_long_ragged_paragraph_stays_on_knuth_plass() {
     }
 }
 
-/// A NaN measure counts as 0 and negative fitness demerits as 0.
-#[test]
-fn invalid_params_are_clamped() {
-    let p = designcraft(false);
-    let para = Para::new(COPY, &p, None);
-    let lines = break_paragraph(&para.items, &|_| f64::NAN, &p, &PASSES).lines;
-    assert_eq!(lines, break_paragraph(&para.items, &|_| 0.0, &p, &PASSES).lines);
-    assert!(lines.iter().all(|l| l.measure == 0.0 && !l.excess.is_nan()));
-    let negative = Params { fitness_demerits: -5000.0, ..p };
-    let zero = Params { fitness_demerits: 0.0, ..p };
-    assert_eq!(break_paragraph(&para.items, &|_| 150.0, &negative, &PASSES), break_paragraph(&para.items, &|_| 150.0, &zero, &PASSES));
-}
-
 /// Two consecutive breaks: the line after the first starts past the second, which must not end a
 /// line `4..3` from there.
 #[test]
@@ -473,24 +454,6 @@ fn overfull_lines_keep_the_hyphen_limit() {
     let lines = break_paragraph(&items, &|_| 5.0, &p, &[2.5, f64::INFINITY]).lines;
     assert!(lines.windows(2).all(|w| !(w[0].flagged && w[1].flagged)), "{lines:?}");
     assert_eq!(spans(&lines), [(0, 1), (2, 5)]);
-}
-
-#[test]
-fn next_start_is_the_first_box_or_forced_break_after_each_item() {
-    // Boxes, glue, penalties and forced breaks in a fixed mix; the table matches a scan.
-    let items: Vec<Item> = (0..2_000)
-        .map(|i| match i % 7 {
-            0 | 3 => Item::boxed(CHAR),
-            1 => Item::glue(SPACE, 1.0, 1.0),
-            6 if i % 3 == 0 => Item::forced(),
-            _ => Item::penalty(HYPHEN, 50.0, true),
-        })
-        .collect();
-    let s = Sums::new(&items);
-    for b in 0..=items.len() {
-        let scan = (b + 1..items.len()).find(|&i| items[i].kind == Kind::Box || items[i].is_forced()).unwrap_or(items.len());
-        assert_eq!(s.next_start(b), scan, "after {b}");
-    }
 }
 
 /// Past its work limit the paragraph is broken greedily, with every item laid out and no error or

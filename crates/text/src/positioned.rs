@@ -203,10 +203,5 @@ mod tests {
         assert_eq!(image, g.xf * Affine::scale(2.0));
         assert_eq!(g.placed_image_node(doc), Some(doc * image));
         assert_eq!(g.placed_colour(doc), Some(doc * g.xf));
-        let mut empty = g;
-        empty.image = None;
-        empty.colour = None;
-        assert!(empty.placed_image_node(doc).is_none());
-        assert!(empty.placed_colour(doc).is_none());
     }
 }

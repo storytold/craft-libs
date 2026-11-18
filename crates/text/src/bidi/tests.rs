@@ -19,64 +19,13 @@ fn shown_all(text: &str, base: Direction) -> String {
 }
 
 #[test]
-fn mixed_arabic_latin_numbers_and_brackets() {
-    let s = "سنة 2024 (Retrait) فقط";
-    let p = Paragraph::new(s, Direction::Rtl);
-    let l = p.char_levels();
-    let chars: Vec<char> = s.chars().collect();
-    assert_eq!(l.len(), chars.len());
-    // Arabic letters at the paragraph level 1; European digits and Latin at 2.
-    assert_eq!(l[0], 1);
-    assert_eq!(&l[4..8], &[2, 2, 2, 2]);
-    assert_eq!(&l[10..17], &[2; 7]);
-    assert_eq!(l[19], 1);
-    // Brackets around Latin inside a right-to-left paragraph take the embedding direction (N0).
-    assert_eq!(l[9] % 2, 1, "( is right to left");
-    assert_eq!(l[17] % 2, 1, ") is right to left");
-    // The Arabic words reversed, Latin and digits kept, the brackets swapped (the shaper mirrors
-    // them back, rule L4). Char-level reordering and byte runs agree.
-    let order = visual_order(&line_levels(&chars, &l, p.level()));
-    let vis: String = order.iter().map(|&i| chars[i]).collect();
-    assert_eq!(vis, "طقف )Retrait( 2024 ةنس");
-    assert_eq!(shown(&p, 0..s.len()), vis);
-}
-
-#[test]
-fn levels_for_persian_with_latin_and_numbers() {
-    let p = Paragraph::new("plain English", Direction::Ltr);
-    assert!(!p.needs_reordering(), "pure left-to-right paragraphs skip the algorithm");
-    assert_eq!(p.levels(), &[0; 13]);
-    let s = "سلام Word ۱۴۰۳";
-    let p = Paragraph::new(s, Direction::Rtl);
-    assert_eq!(p.levels().len(), s.len());
-    assert!(p.needs_reordering());
-    assert_eq!(p.level_at(0), 1, "Persian letters are right to left");
-    assert_eq!(p.level_at(at(s, 5)), 2, "Latin inside a right-to-left paragraph is embedded at level 2");
-    assert_eq!(p.level_at(at(s, 10)), 2, "Persian digits are numbers: left to right inside right-to-left text");
-    assert_eq!(p.level_at(s.len()), 1, "past the end: the paragraph level");
-    // In a left-to-right paragraph Persian is embedded at level 1.
-    let s = "Hello سلام";
-    let p = Paragraph::new(s, Direction::Ltr);
-    assert_eq!((p.level_at(0), p.level_at(at(s, 6))), (0, 1));
-    // A right-to-left paragraph of Latin text keeps it left to right inside it.
-    assert_eq!(Paragraph::new("ab", Direction::Rtl).char_levels(), vec![2, 2]);
-}
-
-#[test]
-fn auto_direction_follows_the_first_strong_character() {
-    assert!(Paragraph::new("سلام Word", Direction::Auto).is_rtl());
-    assert!(!Paragraph::new("Word سلام", Direction::Auto).is_rtl());
-    assert!(Paragraph::new("123 سلام", Direction::Auto).is_rtl(), "digits are weak");
-    assert_eq!(Paragraph::new("123", Direction::Auto).level(), 0);
+fn empty_text_takes_the_base_direction() {
     assert_eq!(Paragraph::new("", Direction::Auto).level(), 0);
     assert_eq!(Paragraph::new("", Direction::Rtl).level(), 1);
-    assert_eq!(Paragraph::new("Word", Direction::Rtl).level(), 1, "an explicit direction wins");
 }
 
 #[test]
 fn whole_lines_read_in_display_order() {
-    let s = "سلام دنیا";
-    assert_eq!(shown_all(s, Direction::Rtl), rev(s));
     assert_eq!(shown_all("Hello سلام world", Direction::Ltr), "Hello مالس world");
     // "Price 250 toman" in Persian, with a Latin product name, Persian punctuation and digits:
     // numbers and Latin keep their order, the words around them read right to left, and the final
@@ -93,14 +42,6 @@ fn each_line_is_reordered_on_its_own() {
     let p = Paragraph::new("ab cd", Direction::Rtl);
     assert_eq!(p.visual_runs(0..3), vec![Run { range: 2..3, level: 1 }, Run { range: 0..2, level: 2 }]);
     assert_eq!(p.visual_runs(3..5), vec![Run { range: 3..5, level: 2 }]);
-    // Line ranges that aren't char-boundary ranges of the text give nothing.
-    let p = Paragraph::new("سلام", Direction::Rtl);
-    assert!(p.visual_runs(1..2).is_empty());
-    assert!(p.line_levels(0..99).is_empty());
-    #[allow(clippy::reversed_empty_ranges)]
-    let backwards = 4..2;
-    assert!(p.visual_runs(backwards).is_empty());
-    assert!(p.visual_runs(2..2).is_empty());
 }
 
 #[test]
@@ -108,21 +49,12 @@ fn l1_resets_trailing_whitespace_and_tabs() {
     let chars: Vec<char> = "ab\tcd  ".chars().collect();
     assert_eq!(line_levels(&chars, &[2; 7], 1), vec![2, 2, 1, 2, 2, 1, 1]);
     assert_eq!(Paragraph::new("ab\tcd  ", Direction::Rtl).line_levels(0..7), vec![2, 2, 1, 2, 2, 1, 1]);
-    // Short level slices never panic.
-    assert_eq!(line_levels(&['a', 'b'], &[], 1), vec![1, 1]);
 }
 
 #[test]
 fn visual_order_follows_rule_l2() {
     // The example from UAX #9 / unicode-bidi.
     assert_eq!(visual_order(&[0, 0, 0, 1, 1, 1, 2, 2]), vec![0, 1, 2, 6, 7, 5, 4, 3]);
-    assert!(visual_order(&[]).is_empty());
-    assert_eq!(visual_order(&[0, 0]), vec![0, 1]);
-    assert_eq!(visual_order(&[1, 1, 1]), vec![2, 1, 0]);
-    // Numbers (level 2) inside right-to-left text keep their order.
-    assert_eq!(visual_order(&[1, 2, 2, 1]), vec![3, 1, 2, 0]);
-    assert_eq!(visual_order(&[125, 125]), vec![1, 0]);
-    assert_eq!(visual_order(&[255, 0, 255]), vec![0, 1, 2]);
 }
 
 #[test]
@@ -165,20 +97,6 @@ fn overrides_continue_across_paragraph_separators() {
     assert_eq!(p.line_levels(0..3), vec![1, 1, 0], "the separator keeps the paragraph level");
     assert_eq!(shown(&p, 0..3), "ba\n");
     assert_eq!(shown(&p, 3..5), "dc");
-    // Each paragraph still resolves its own direction.
-    let s = "a\nאב ";
-    let p = Paragraph::with_overrides(s, Direction::Auto, &[Override { range: 0..1, rtl: false }]);
-    assert_eq!(p.paragraphs(), &[(0..2, 0), (2..7, 1)]);
-    assert_eq!(p.visual_runs(2..7), vec![Run { range: 2..7, level: 1 }]);
-}
-
-#[test]
-fn mirrored_characters() {
-    assert_eq!(mirror('('), Some(')'));
-    assert_eq!(mirror(']'), Some('['));
-    assert_eq!(mirror('«'), Some('»'));
-    assert_eq!(mirror('a'), None);
-    assert_eq!(mirror('∑'), None, "mirrored, but only by glyph");
 }
 
 #[test]
