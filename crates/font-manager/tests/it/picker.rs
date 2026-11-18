@@ -40,6 +40,8 @@ struct Seen {
     /// The family the open list proposes as a live preview, as the last pass reported it.
     preview: Option<String>,
     actions: Vec<usize>,
+    /// The id of the shown picker, as the last pass reported it.
+    id: Option<egui::Id>,
 }
 
 fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>>) {
@@ -217,6 +219,7 @@ fn plain_rig(
             picker = picker.shown_as(face);
         }
         let out = picker.show(ui);
+        seen.id = Some(out.edit.response.id);
         if let Some(family) = out.picked {
             seen.picks.push((family, out.picked_style));
         }
@@ -264,7 +267,7 @@ fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_n
     let note = note.as_str();
     let (mut fx, seen) = plain_rig(catalog_of(&[INTER_REGULAR]), "Gotham", &[], vec![Label::from("Add Font…")], Some("Inter"));
     // The note is the tooltip of the field's warning mark, so it shows once the pointer rests on the mark.
-    let picker = fx.root_id().expect("the picker");
+    let picker = seen.borrow().id.expect("the picker");
     let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
     assert!(!present(&fx, note), "the note waits for a rest on the mark");
     fx.frame(vec![moved(mark.center())]);
@@ -279,8 +282,8 @@ fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_n
     assert_eq!(seen.borrow().family, "Gotham", "an action leaves the family");
     assert!(seen.borrow().picks.is_empty(), "and picks nothing");
 
-    let (fx, _) = plain_rig(catalog_of(&[INTER_REGULAR]), "Inter", &[], vec![Label::from("Add Font…")], Some("Inter"));
-    let picker = fx.root_id().expect("the picker");
+    let (fx, seen) = plain_rig(catalog_of(&[INTER_REGULAR]), "Inter", &[], vec![Label::from("Add Font…")], Some("Inter"));
+    let picker = seen.borrow().id.expect("the picker");
     assert!(fx.part_rect(picker, PartKey::new("missing")).is_none(), "an installed family has no mark");
 }
 
