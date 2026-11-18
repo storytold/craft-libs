@@ -51,9 +51,15 @@ pub struct Header {
 }
 
 impl Header {
-    /// Bytes of one frame (one sample of every channel).
+    /// Bytes of one frame (one sample of every channel), or 0 if `channels` or `bits` overflow.
     pub fn frame_bytes(&self) -> usize {
-        self.channels / 2 * ((self.bits as usize + 4) * 2 / 8)
+        let pair_bytes = match self.bits {
+            16 => 5,
+            20 => 6,
+            24 => 7,
+            b => ((b as usize).saturating_add(4) * 2) / 8,
+        };
+        (self.channels / 2).checked_mul(pair_bytes).unwrap_or(0)
     }
 }
 
@@ -230,5 +236,11 @@ mod tests {
         assert!(decode(&[0, 5, 0, 0x30, 0, 0, 0, 0, 0]).is_err());
         assert!(decode(&[0, 5, 0, 0, 0, 0]).is_err());
         assert!(decode(&[0, 4, 0, 0, 0, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn header_frame_bytes_overflow_does_not_panic() {
+        let h = Header { channels: usize::MAX, channel_id: 0, bits: 24, alignment: 0, audio_bytes: 0 };
+        assert_eq!(h.frame_bytes(), 0);
     }
 }
