@@ -153,13 +153,15 @@ enum Hold {
 }
 
 /// One step of injected input: a frame of events, how long the step stays in flight after its pass (a hover that
-/// rests before the reply), the pen's reading its pass reads, and the key it holds or lets go of with no event.
+/// rests before the reply), the pen's reading its pass reads, the key it holds or lets go of with no event, and the
+/// request that queued it ([`last_request`]).
 #[derive(Clone, Debug, Default)]
 struct Step {
     events: Frame,
     rest: f64,
     pen: Option<PointerSample>,
     hold: Option<Hold>,
+    request: u64,
 }
 
 impl From<Frame> for Step {
@@ -278,6 +280,8 @@ struct Injected {
     withdrawn: bool,
     /// The Caps Lock state injected input sets in place of the platform's.
     caps_lock: Option<bool>,
+    /// The number of the latest request queued: each request gets the next one, also one that queues no step.
+    requests: u64,
 }
 
 impl Injected {
@@ -411,12 +415,15 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
     follow
 }
 
-/// Queues the steps `request` writes from what `viewport` holds once its queue has run, and asks for a pass of it.
+/// Queues the steps `request` writes from what `viewport` holds once its queue has run, marked with the request's
+/// number, and asks for a pass of it.
 fn queue(ctx: &Context, viewport: ViewportId, request: impl FnOnce(&mut Request)) {
     Service::<Injected>::run(ctx, |injected| {
         let mut writing = Request::new(injected.projected(viewport));
         request(&mut writing);
-        injected.lane(viewport).queue.extend(writing.steps);
+        injected.requests = injected.requests.wrapping_add(1);
+        let number = injected.requests;
+        injected.lane(viewport).queue.extend(writing.steps.into_iter().map(|step| Step { request: number, ..step }));
     });
     repaint::request_of(ctx, viewport);
 }
@@ -675,6 +682,17 @@ fn with_running<R>(ctx: &Context, f: impl FnOnce(Option<&Step>) -> R) -> R {
 /// Whether the running pass's input carries an injected step: the pass acts for an automation client.
 pub(crate) fn in_pass(ctx: &Context) -> bool {
     with_running(ctx, |step| step.is_some())
+}
+
+/// The number of the request whose step the running pass's input carries, when it carries one ([`last_request`]).
+pub(crate) fn running_request(ctx: &Context) -> Option<u64> {
+    with_running(ctx, |step| step.map(|step| step.request))
+}
+
+/// The number of the latest request queued: a request queued after it gets a higher one. Requests are numbered in
+/// the order they are queued, across viewports; a request that queues no step still takes its number.
+pub(crate) fn last_request(ctx: &Context) -> u64 {
+    Service::<Injected>::run(ctx, |injected| injected.requests)
 }
 
 /// The pen's reading the running pass's injected step carries: the pass reads it in place of the tablet's.

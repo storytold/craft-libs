@@ -124,6 +124,15 @@ pub enum Reply {
     },
     /// Synthetic input was queued: reply once the app has processed all of it.
     AfterInput,
+    /// Synthetic input was queued as the window host's request `request`
+    /// ([`WindowHost::injected_last_request`] right after queuing it): reply once the app has
+    /// processed all of it, with the refusals that request's own input caused
+    /// ([`ControlChannel::input_refused`]).
+    #[non_exhaustive]
+    AfterInputRequest {
+        /// The window host's number for the request.
+        request: u64,
+    },
     /// A command started a background job and the caller waits: reply with its result when it
     /// has been applied, or with its error or `cancelled`.
     AfterJob(JobId),
@@ -134,6 +143,11 @@ impl Reply {
     /// when `None`.
     pub fn screenshot(token: u64, path: Option<String>, viewport: egui::ViewportId) -> Self {
         Self::Screenshot { token, path, viewport }
+    }
+
+    /// [`Reply::AfterInputRequest`] for the window host's request `request`.
+    pub fn after_input_request(request: u64) -> Self {
+        Self::AfterInputRequest { request }
     }
 
     /// `Done` with the [`result_reply`] of a method's result.
@@ -151,6 +165,38 @@ pub fn result_reply(r: Result<Value, String>) -> ControlResponse {
     }
 }
 
+/// At most this many refusals are kept for one input request's reply; it says `"truncated": true`
+/// when more were reported.
+pub const MAX_INPUT_REFUSALS: usize = 64;
+
+/// The reply for input that was processed with `refusals` (none: `{"ok": true, "result": null}`),
+/// else `{"ok": false, "error": <first>, "errors": [...]}`, with `"truncated": true` when
+/// [`MAX_INPUT_REFUSALS`] dropped some.
+pub fn input_reply(refusals: &[String], truncated: bool) -> ControlResponse {
+    match refusals.first() {
+        None => json!({"ok": true, "result": null}),
+        Some(first) if truncated => json!({"ok": false, "error": first, "errors": refusals, "truncated": true}),
+        Some(first) => json!({"ok": false, "error": first, "errors": refusals}),
+    }
+}
+
+/// A reply waiting on synthetic input, and the refusals its request's input caused.
+struct InputWaiter {
+    reply: Sender<ControlResponse>,
+    /// The window host's number for its request; `None` for [`Reply::AfterInput`], which collects
+    /// no refusals.
+    request: Option<u64>,
+    refusals: Vec<String>,
+    truncated: bool,
+}
+
+impl InputWaiter {
+    /// Its reply once its input was processed.
+    fn processed(&self) -> ControlResponse {
+        input_reply(&self.refusals, self.truncated)
+    }
+}
+
 /// The requests waiting for the app, and the replies waiting on input, jobs and screenshots.
 ///
 /// Per frame: `while let Some(req) = channel.next_request() { let outcome = app.handle(&req); channel.settle(ctx, req, outcome, document); }`
@@ -160,7 +206,10 @@ pub fn result_reply(r: Result<Value, String>) -> ControlResponse {
 #[non_exhaustive]
 pub struct ControlChannel {
     rx: Receiver<ControlRequest>,
-    input_waiters: Vec<Sender<ControlResponse>>,
+    input_waiters: Vec<InputWaiter>,
+    /// The highest request number seen in a pass ([`WindowHost::injected_running_request`]): the
+    /// input of every request numbered below it has run.
+    ran: Option<u64>,
     job_waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// The screenshot queue; the app calls its `issue` and `drain` from its UI and logic phases.
     pub captures: Captures,
@@ -169,7 +218,7 @@ pub struct ControlChannel {
 impl ControlChannel {
     /// Attach a transport's receiver (TCP, stdin, tests).
     pub fn new(rx: Receiver<ControlRequest>) -> Self {
-        Self { rx, input_waiters: Vec::new(), job_waiters: Vec::new(), captures: Captures::default() }
+        Self { rx, input_waiters: Vec::new(), ran: None, job_waiters: Vec::new(), captures: Captures::default() }
     }
 
     /// The next request to run, claimed through [`Dispatch::start`]. Expired or abandoned
@@ -195,7 +244,10 @@ impl ControlChannel {
             Reply::Done(v) => {
                 let _ = reply.send(v);
             }
-            Reply::AfterInput => self.input_waiters.push(reply),
+            Reply::AfterInput => self.input_waiters.push(InputWaiter { reply, request: None, refusals: Vec::new(), truncated: false }),
+            Reply::AfterInputRequest { request } => {
+                self.input_waiters.push(InputWaiter { reply, request: Some(request), refusals: Vec::new(), truncated: false });
+            }
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
             Reply::Screenshot { token, path, viewport } => {
                 if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
@@ -205,22 +257,53 @@ impl ControlChannel {
         }
     }
 
-    /// The pass that consumed the injected input ended: reply
-    /// `{"ok": true, "result": null}` to every [`Reply::AfterInput`] waiter. Call it only after a
-    /// pass that reached the end of the UI with the injected queue empty; an early-returning pass
-    /// keeps the waiters.
+    /// Something injected input asked for was refused (a disabled command, a dialog's refused
+    /// OK) in a pass that carries request `request`'s step
+    /// ([`WindowHost::injected_running_request`]): `error` goes to that request's
+    /// [`Reply::AfterInputRequest`] reply. A blank error is ignored; past [`MAX_INPUT_REFUSALS`]
+    /// the reply is marked truncated. True when a waiter took it.
+    pub fn input_refused(&mut self, request: u64, error: &str) -> bool {
+        self.note_ran(request);
+        let error = error.trim();
+        let Some(waiter) = self.input_waiters.iter_mut().find(|waiter| waiter.request == Some(request)) else { return false };
+        if error.is_empty() {
+            return false;
+        }
+        if waiter.refusals.len() >= MAX_INPUT_REFUSALS {
+            waiter.truncated = true;
+        } else {
+            waiter.refusals.push(error.to_owned());
+        }
+        true
+    }
+
+    /// Request `request`'s step is running: every request numbered below it has run.
+    fn note_ran(&mut self, request: u64) {
+        self.ran = Some(self.ran.map_or(request, |ran| ran.max(request)));
+    }
+
+    /// The pass that consumed the injected input ended: reply to every input waiter,
+    /// `{"ok": true, "result": null}` or its refusals ([`input_reply`]). Call it only after a pass
+    /// that reached the end of the UI with the injected queue empty; an early-returning pass keeps
+    /// the waiters.
     pub fn input_processed(&mut self) {
         for waiter in self.input_waiters.drain(..) {
-            let _ = waiter.send(json!({"ok": true, "result": null}));
+            let _ = waiter.reply.send(waiter.processed());
         }
     }
 
     /// The injected input was dropped (the window lost it, a modal took over): reply
-    /// `{"ok": false, "error": "input cancelled: {reason}"}` to every [`Reply::AfterInput`]
-    /// waiter.
+    /// `{"ok": false, "error": "input cancelled: {reason}"}` to every input waiter, except a
+    /// [`Reply::AfterInputRequest`] whose input had already run (a later request's step was seen
+    /// running), which gets its own reply as [`Self::input_processed`] gives it.
     pub fn input_cancelled(&mut self, reason: &str) {
+        let ran = self.ran;
         for waiter in self.input_waiters.drain(..) {
-            let _ = waiter.send(json!({"ok": false, "error": format!("input cancelled: {reason}")}));
+            let reply = match (waiter.request, ran) {
+                (Some(request), Some(ran)) if request < ran => waiter.processed(),
+                _ => json!({"ok": false, "error": format!("input cancelled: {reason}")}),
+            };
+            let _ = waiter.reply.send(reply);
         }
     }
 
@@ -229,6 +312,9 @@ impl ControlChannel {
     /// once nothing is queued or in flight. Call it once per pass, after the pass that consumed the
     /// input.
     pub fn poll_input(&mut self, host: &WindowHost) {
+        if let Some(request) = host.injected_running_request() {
+            self.note_ran(request);
+        }
         if host.take_injected_withdrawn() {
             self.input_cancelled(TARGET_CHANGED);
         } else if host.injected_idle() {

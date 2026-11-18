@@ -186,6 +186,21 @@ impl WindowHost {
         injected::in_pass(&self.ctx)
     }
 
+    /// The number of the latest injected request: each `inject_*` call is one request and takes the next number,
+    /// also when it adds no step (a move to where the pointer already is). A call refused before queuing (a
+    /// non-finite point) and [`set_caps_lock`](Self::set_caps_lock) take none. Read it right after queuing a request
+    /// to know that request's number.
+    pub fn injected_last_request(&self) -> u64 {
+        injected::last_request(&self.ctx)
+    }
+
+    /// The number ([`injected_last_request`](Self::injected_last_request)) of the request whose step the running
+    /// pass's input carries, when it carries one: what that pass triggers, such as a refused command, was that
+    /// request's doing.
+    pub fn injected_running_request(&self) -> Option<u64> {
+        injected::running_request(&self.ctx)
+    }
+
     /// Adds `equivalent` to the next input of `viewport`: a key equivalent the platform's menu took from the window
     /// reaches the application as the key press the user made.
     pub fn key_equivalent(&self, viewport: ViewportId, equivalent: KeyEquivalent) {
