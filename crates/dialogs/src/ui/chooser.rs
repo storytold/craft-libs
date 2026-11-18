@@ -16,7 +16,7 @@ use craft_browse::places::{Entries, Entry, FolderCache, StandardFolder, folder_w
 use craft_host::{FileFilter, PickKind, PickRequest};
 use craft_ui::bars::{BreadcrumbBar, path_crumbs};
 use craft_ui::contract::{
-    Bind, CollectionEvent, Entry as Choice, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+    Bind, CollectionEvent, Entry as Choice, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft_ui::dialog::{
     ChildDialog, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, PromptChoice, StackDialog, StandardPrompt, dialog_id,
@@ -40,6 +40,9 @@ use crate::Answer;
 /// At most this many entries of a folder are read, so a huge folder cannot stall the listing job.
 // ui-egui: crates/ui-egui/src/file_browser.rs:22 (`MAX_SCANNED`).
 const SCANNED: usize = 100_000;
+
+/// The rows the list shows before it scrolls: the list owns its scroll, so the dialog's body does not scroll along it.
+const LIST_ROWS: u16 = 12;
 
 /// At most this many entries are shown; a bigger folder shows the first ones and says so.
 // ui-egui: crates/ui-egui/src/file_browser.rs:20 (`MAX_LISTED`).
@@ -418,6 +421,8 @@ impl FileChooser {
             Field::new(words.location.clone()).id_salt("location").show(ui, |ui, _| {
                 seen.location_submitted = TextField::new(words.location.clone(), Bind::bound(&mut *location)).show(ui).submitted;
             });
+            // PLAN: `fair_widths` in ui-widgets `bars/breadcrumb.rs:143` floors a crumb's natural width, so a crumb with a
+            // fractional width reads as cut (`width < full`) and elides with room to spare; owner: the ui-widgets set.
             seen.crumb = BreadcrumbBar::new(words.path.clone(), &crumbs).show(ui).picked;
             match &view {
                 View::Wait | View::Loading => {
@@ -435,7 +440,7 @@ impl FileChooser {
                     let events = List::new(words.entries.clone())
                         .select(select)
                         .type_ahead(true)
-                        .sizing(Sizing::Fill)
+                        .max_rows(LIST_ROWS)
                         .selection(Bind::given(selection_shown.clone()))
                         .show_items(ui, &source, &mut |path, _| {
                             let entry = entries.iter().find(|entry| entry.path == *path);
