@@ -238,16 +238,18 @@ impl<'a> CommandPalette<'a> {
                 let _ = open.reborrow().write(cx, &EditEvent::set(Mixed::Same(false), true, name, None));
                 is_open = true;
             }
+            // The closed-to-open transition, whichever route made it: the field takes the key focus in this pass.
+            let was_open = std::mem::replace(&mut cx.memory::<WasOpen>().0, is_open);
+            let opening = is_open && !was_open;
             if !is_open {
                 return;
             }
             // The container exists only while the palette is open, so its memory starts empty at each opening.
             Row::new().show(ui, |ui, inner| {
-                if inner.appeared() {
+                if opening {
                     focus::request(&ctx, FocusTarget::Id(field_id));
                 }
                 let session = inner.memory::<Session>();
-                eprintln!("DIAG escape_and_a_press_outside_close_the_in_place_face_and_the_fallback_row_carries_the_query: query={:?}", session.query);
                 let field = TextField::search(words.palette_search.clone(), Bind::bound(&mut session.query))
                     .placeholder(face_hint.clone())
                     .id(field_id)
@@ -274,6 +276,10 @@ impl<'a> CommandPalette<'a> {
         PaletteOutput { response: shown.output, picked: chosen.picked, closed, fallback: chosen.fallback }
     }
 }
+
+/// Whether the in-place face was open in the pass before, so the pass that opens it is known.
+#[derive(Clone, Default)]
+struct WasOpen(bool);
 
 /// What a pass of the list chose.
 #[derive(Default)]
