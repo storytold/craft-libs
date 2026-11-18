@@ -8,5 +8,6 @@ mod agents;
 mod control;
 mod dialogs;
 mod dock;
+mod files;
 mod screenshot;
 mod synthetic;

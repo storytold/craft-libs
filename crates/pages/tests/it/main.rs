@@ -3,6 +3,7 @@
 mod range;
 mod setup;
 mod size_picker;
+mod sync_views;
 
 mod text_select;
 mod text_tables;
