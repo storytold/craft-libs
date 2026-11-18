@@ -99,7 +99,8 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
             let parent_id = crate::portal::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
             let request = crate::portal::SaveRequest::new(&d, parent_id);
             Box::pin(async move {
-                match crate::portal::save_as(request) {
+                // P3(platform-w4): pf.C-F4
+                match crate::portal::save_as(request, &crate::portal::Cancel::default()) {
                     Ok(Some(path)) => Answer::Paths(vec![path]),
                     Ok(None) => Answer::Cancelled,
                     Err(e) => {

@@ -579,6 +579,7 @@ impl CommentsPanel<'_> {
 fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
     match event {
         CardEvent::Mark { thread, marked } => edits.push(CommentEdit::Mark { thread, marked }),
+        CardEvent::Resolve { .. } => todo!("cv.K43"),
         CardEvent::EditText(text) => {
             if let Some((_, _, draft)) = state.editing.as_mut() {
                 *draft = text;

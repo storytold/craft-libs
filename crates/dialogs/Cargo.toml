@@ -22,6 +22,7 @@ craft-host = { workspace = true }
 craft-i18n = { workspace = true }
 craft-platform = { workspace = true }
 craft-behavior = { workspace = true, optional = true }
+craft-browse = { workspace = true, optional = true }
 craft-ui = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 raw-window-handle = "0.6.2"
@@ -47,7 +48,7 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [features]
 default = []
 # `craft_dialogs::ui`: `PathField` and the other egui parts of the file service.
-ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
+ui = ["dep:craft-behavior", "dep:craft-browse", "dep:craft-ui", "dep:egui"]
 # The stories and the integration binary of the file service's UI parts.
 screen-testing = ["ui", "craft-ui/testing"]
 

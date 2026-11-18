@@ -7,6 +7,7 @@
 mod bars;
 mod detail;
 mod header;
+mod lists;
 #[cfg(feature = "screen-testing")]
 mod stories;
 mod table;

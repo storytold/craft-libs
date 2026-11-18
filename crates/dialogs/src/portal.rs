@@ -12,6 +12,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use raw_window_handle::RawWindowHandle;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
@@ -69,6 +72,46 @@ fn normal(ext: &str) -> String {
     ext.trim_start_matches('.').to_ascii_lowercase()
 }
 
+/// A flag that cancels a portal Save in flight.
+#[derive(Clone, Debug, Default)]
+#[allow(dead_code)] // P3(platform-w4): pf.C-F4
+pub(crate) struct Cancel(Arc<AtomicBool>);
+
+#[allow(dead_code)] // P3(platform-w4): pf.C-F4
+impl Cancel {
+    /// Asks the Save to stop.
+    pub(crate) fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether [`cancel`](Self::cancel) was called.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// What a portal response means for a Save.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // P3(platform-w4): pf.C-F4
+pub(crate) enum Decision {
+    /// The user saved; the path is absent when the portal named none.
+    Saved(Option<PathBuf>),
+    /// The user cancelled, or the Save was cancelled.
+    Cancelled,
+    /// The answer came too quickly to be the user's: ask again.
+    Retry,
+    /// No portal answered; the text says why.
+    Unavailable(String),
+}
+
+/// Reads one portal response into a [`Decision`]: the response `code`, how long the dialog was
+/// open, whether a cancel was queued, whether the backend vanished, and the `results`.
+#[allow(dead_code)] // P3(platform-w4): pf.C-F4
+pub(crate) fn classify(code: u32, elapsed: Duration, cancel_queued: bool, backend_gone: bool, results: &HashMap<String, OwnedValue>) -> Decision {
+    let _ = (code, elapsed, cancel_queued, backend_gone, results);
+    todo!("pf.C-F4")
+}
+
 /// The portal's parent window identifier for `window`: `x11:<xid>` on X11, empty elsewhere.
 // pc: apps/photocraft/src/portal_save.rs:47 parent_id
 pub(crate) fn parent_id(window: Option<RawWindowHandle>) -> String {
@@ -82,7 +125,8 @@ pub(crate) fn parent_id(window: Option<RawWindowHandle>) -> String {
 /// Shows the portal's Save dialog and waits for it. `Ok(None)` is Cancel; `Err` means the portal
 /// couldn't show it (no portal, no FileChooser), so the caller falls back to rfd.
 // pc: apps/photocraft/src/portal_save.rs:58 save_file
-fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest) -> Result<Option<Saved>, String> {
+fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest, cancel: &Cancel) -> Result<Option<Saved>, String> {
+    let _ = cancel; // P3(platform-w4): pf.C-F4
     use futures_lite::StreamExt;
     use zbus::blocking::Proxy;
     let unique = conn.unique_name().ok_or("Portal connection has no unique name")?.as_str().trim_start_matches(':').replace('.', "_");
@@ -239,10 +283,10 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
 /// name, so the portal asks before replacing it (it asked only about the typed name). Connects to
 /// the session bus; `Err` when the portal can't be reached, and the caller shows rfd's dialog.
 // pc: apps/photocraft/src/portal_save.rs:174 save_as, services.rs:244-280
-pub(crate) fn save_as(mut req: SaveRequest) -> Result<Option<PathBuf>, String> {
+pub(crate) fn save_as(mut req: SaveRequest, cancel: &Cancel) -> Result<Option<PathBuf>, String> {
     let conn = zbus::blocking::connection::Builder::session().and_then(|b| b.build()).map_err(|e| e.to_string())?;
     loop {
-        let Some(saved) = save_file(&conn, &req)? else { return Ok(None) };
+        let Some(saved) = save_file(&conn, &req, cancel)? else { return Ok(None) };
         let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|f| f.name == label));
         // A typed extension is the user's own: `with_chosen_type` keeps one it recognises.
         let exts: &[String] = match chosen_type(&req.filters, picked) {

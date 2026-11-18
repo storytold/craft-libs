@@ -21,6 +21,12 @@ pub struct ControlClient {
 }
 
 impl ControlClient {
+    /// True after a transport failure closed the connection; an error reply leaves it false. A
+    /// caller tells a lost connection from a refused request and never replays a mutation.
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
     /// Connect (read timeout [`CALL_TIMEOUT`]), send
     /// `{"id": 1, "method": "auth", "params": {"token": token}}` and read one reply line; `Err` with
     /// the reply's `error` text when it isn't `ok`, or the I/O error's message.

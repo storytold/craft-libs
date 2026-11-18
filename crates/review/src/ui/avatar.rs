@@ -17,21 +17,21 @@ pub fn paint_avatar(ui: &PaintUi<'_>, rect: Rect, name: &str, fill: DataColor) {
     let draw = ui.draw();
     draw.data_fill(&circle(rect), fill);
     let ink = ui.with_style(Variant::SECONDARY, |cx| cx.ink_on(fill));
-    paint_initials(&draw, rect, name, ink);
+    paint_initials(&draw, rect, initials(name), ink);
 }
 
 /// Paints a round face in a theme colour `fill` with the initials of `name` in `ink`.
 pub(super) fn paint_face(draw: &Draw<'_>, rect: Rect, name: &str, fill: StyleColor, ink: StyleColor) {
     draw.fill(&circle(rect), fill);
-    paint_initials(draw, rect, name, ink);
+    paint_initials(draw, rect, initials(name), ink);
 }
 
 fn circle(rect: Rect) -> PaintShape {
     PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0)
 }
 
-fn paint_initials(draw: &Draw<'_>, rect: Rect, name: &str, ink: StyleColor) {
-    let run = TextRun::new(initials(name)).role(TypeRole::Caption).color(ink);
+fn paint_initials(draw: &Draw<'_>, rect: Rect, letters: String, ink: StyleColor) {
+    let run = TextRun::new(letters).role(TypeRole::Caption).color(ink);
     let size = draw.layout(&run, f32::INFINITY).size();
     let size = Vec2::new(size.x.min(rect.width()), size.y);
     draw.text(Rect::from_center_size(rect.center(), size), &run);
@@ -85,12 +85,16 @@ pub struct Avatar {
     /// The avatar is a button that reports a press.
     #[prop]
     pressable: bool,
+    /// The letters shown, cut to two, in place of the initials of the name; the name stays the accessible name.
+    #[prop(into)]
+    #[allow(dead_code)] // P3(chrome-w2): ch.C8
+    initials: Option<String>,
 }
 
 impl Avatar {
     /// An avatar of the person `name`.
     pub fn new(name: impl Into<String>) -> Self {
-        Avatar { common: Common::new(), fill: None, pressable: false }.label(name.into())
+        Avatar { common: Common::new(), fill: None, pressable: false, initials: None }.label(name.into())
     }
 }
 

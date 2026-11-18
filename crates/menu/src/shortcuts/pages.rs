@@ -126,6 +126,10 @@ pub struct DialogSnapshot {
     pub set: Option<String>,
     /// Whether there is an edit to undo.
     pub can_undo: bool,
+    /// The chord in the New Shortcut field, as canonical text, while there is one.
+    pub pressed: Option<String>,
+    /// The commands that hold the pressed chord now.
+    pub holders: Vec<CommandRef>,
 }
 
 impl DialogState {
@@ -149,6 +153,9 @@ impl DialogState {
             }),
             set: self.set.clone(),
             can_undo: self.can_undo(),
+            // P3(dialogs-w11): dg.F29
+            pressed: None,
+            holders: Vec::new(),
         })
     }
 }

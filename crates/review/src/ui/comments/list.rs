@@ -78,6 +78,9 @@ pub(crate) enum CardEvent {
     /// A "..." button was pressed: the menu of message `index` hangs from `anchor`.
     /// The checkmark button was pressed.
     Mark { thread: ThreadId, marked: bool },
+    /// The Resolve (`resolved`) or Reopen button of a balloon card was pressed.
+    #[allow(dead_code)] // P3(canvas-w7): cv.K43
+    Resolve { thread: ThreadId, resolved: bool },
     /// The inline editor's text changed.
     EditText(String),
     /// The inline editor's Post.

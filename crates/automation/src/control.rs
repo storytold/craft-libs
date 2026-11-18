@@ -14,7 +14,7 @@
 //! two happened, once, between the UI thread and the transport.
 
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
+use web_time::Instant;
 
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
@@ -127,9 +127,17 @@ pub enum Reply {
     /// A command started a background job and the caller waits: reply with its result when it
     /// has been applied, or with its error or `cancelled`.
     AfterJob(JobId),
+    /// A `ui.accessTree`: hold the reply until the window's settled access tree can be read
+    /// ([`ControlChannel::poll_access_trees`]).
+    AccessTree,
 }
 
 impl Reply {
+    /// A `ui.accessTree` reply: held until the window's settled access tree is available.
+    pub fn access_tree() -> Reply {
+        todo!("ch.C19b")
+    }
+
     /// A `ui.screenshot` reply for `token` of `viewport`, writing the PNG to `path` or inlining it
     /// when `None`.
     pub fn screenshot(token: u64, path: Option<String>, viewport: egui::ViewportId) -> Self {
@@ -197,6 +205,7 @@ impl ControlChannel {
             }
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
+            Reply::AccessTree => todo!("ch.C19b"),
             Reply::Screenshot { token, path, viewport } => {
                 if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
@@ -234,6 +243,14 @@ impl ControlChannel {
         } else if host.injected_idle() {
             self.input_processed();
         }
+    }
+
+    /// Answers the held `ui.accessTree` requests from the window host's settled access tree; a
+    /// request stays held while the host has none. Runs in the logic phase of every pass, as
+    /// [`poll_input`](Self::poll_input) does.
+    pub fn poll_access_trees(&mut self, ctx: &egui::Context) {
+        let _ = ctx;
+        todo!("ch.C19b")
     }
 
     /// Drops the host's queued input and the step in flight, and fails every

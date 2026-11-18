@@ -257,6 +257,18 @@ impl Format {
     }
 }
 
+/// How the dialog arranges its body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Layout {
+    /// The table of the catalog beside the detail pane.
+    #[default]
+    Table,
+    /// Word's Customize Keyboard: a Categories list beside a Commands list, then the command's keys,
+    /// the New Shortcut recorder, the holder line and the Assign and Remove buttons.
+    CommandLists,
+}
+
 /// A rule an app adds for which bindings a command may get; `Err` carries the message shown.
 pub type Accept = Box<dyn Fn(&CommandDef, &Binding) -> Result<(), String>>;
 
@@ -304,6 +316,9 @@ pub struct Options {
     pub summary: bool,
     /// The app's extra rule for which bindings a command may get.
     pub accept: Option<Accept>,
+    /// [`Layout::Table`]: how the body is arranged. The keymap, the `accept` rule, the conflict mode
+    /// and undo are the same in every layout.
+    pub layout: Layout,
 }
 
 impl Default for Options {
@@ -327,6 +342,7 @@ impl Default for Options {
             export_formats: Vec::new(),
             summary: true,
             accept: None,
+            layout: Layout::Table,
         }
     }
 }
@@ -381,6 +397,15 @@ impl<'a> ShortcutsDialog<'a> {
     pub fn sets(mut self, profiles: &'a mut Profiles, builtins: &'a Builtins<'a>) -> Self {
         self.sets = Some((profiles, builtins));
         self
+    }
+
+    /// Sets the value `field` names in `state`, as the user editing that control would
+    /// (`search`, `area`, `command`, `pressed`, and `assign` or `remove` to press the button), for
+    /// automation. It builds the words `Env` that [`DialogState::set_field`] needs. `Err` says why
+    /// the field was refused.
+    pub fn set_json_field(self, ui: &Ui, state: &mut DialogState, field: &str, value: &serde_json::Value) -> Result<(), String> {
+        let _ = (self, ui, state, field, value);
+        todo!("dg.F29")
     }
 
     /// Sets the dialog's [`Options`].

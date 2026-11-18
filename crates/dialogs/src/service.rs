@@ -191,6 +191,9 @@ pub struct FilePanels {
     /// The replace questions [`pump_with`](FilePanels::pump_with) put on the app's dialog host.
     #[cfg(feature = "ui")]
     prompts: Vec<AskedPrompt>,
+    /// Repaint request for the fallback chooser's folder jobs.
+    #[allow(dead_code)] // P3(platform-w4): sh.K15
+    wake: Wake,
 }
 
 struct Inner {
@@ -219,6 +222,7 @@ impl FileService {
             inner: inner.clone(),
             requests,
             dialogs: Dialogs::new(wake.clone()),
+            wake: wake.clone(),
             extension_policy: ExtensionPolicy::default(),
             replace_guard: ReplaceGuard::default(),
             replace_words: ReplaceWords::default(),
@@ -561,6 +565,21 @@ impl Files for FileService {
     // pc: apps/photocraft/src/services.rs:359 write_atomic
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
         craft_atomic::atomic_write(path, bytes).map_err(|e| file_error(e, path))
+    }
+
+    /// Queues a Save pick, then writes `bytes` to the settled path and answers `Paths` or
+    /// `Failed`.
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
+        let _ = (request, bytes);
+        todo!("pf.C-F5")
+    }
+
+    fn can_pick(&self) -> bool {
+        true
+    }
+
+    fn browser_saves(&self) -> bool {
+        false
     }
 
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {

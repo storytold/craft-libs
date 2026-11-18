@@ -7,7 +7,7 @@ use std::sync::Arc;
 use craft_host::queue::{JobQueue, Priority, QueueOptions};
 use craft_host::{Jobs, Wake};
 
-use super::{Directories, Folder, StandardFolder, Volume};
+use super::{Directories, Entry, Folder, StandardFolder, Volume};
 
 /// The standard folders and volumes, from one job.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -25,6 +25,22 @@ pub enum Listing<'a> {
     Loading,
     /// The subfolders. While a new listing of a stale folder runs, the old one stays here.
     Ready(&'a [Folder]),
+    /// The folder couldn't be listed; the system's message.
+    Failed(&'a str),
+}
+
+/// One folder's files and folders as the cache has them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entries<'a> {
+    /// Not listed yet; a job is queued.
+    Loading,
+    /// The entries, and whether the listing stopped at its limit.
+    Ready {
+        /// The files and folders.
+        entries: &'a [Entry],
+        /// The listing stopped at the limit before the folder ended.
+        truncated: bool,
+    },
     /// The folder couldn't be listed; the system's message.
     Failed(&'a str),
 }
@@ -116,6 +132,13 @@ impl FolderCache {
             Some((Ok(folders), _)) => Listing::Ready(folders),
             Some((Err(message), _)) => Listing::Failed(message),
         }
+    }
+
+    /// `folder`'s files and folders up to `limit` entries, listed in a job like
+    /// [`subfolders`](Self::subfolders); the cache keys a listing by folder and limit.
+    pub fn entries(&mut self, folder: &Path, limit: usize) -> Entries<'_> {
+        let _ = (folder, limit);
+        todo!("sh.K17")
     }
 
     /// The hidden folders on the way to `path` ([`Directories::unlisted_ancestors`]); `None` until

@@ -569,6 +569,11 @@ impl StackDialog for UpdateCheckDialog {
         self.id
     }
 
+    /// What the last update came to is a notice that leaves the app usable behind it.
+    fn modeless(&self) -> bool {
+        matches!(self.status, Status::Updated(_))
+    }
+
     /// Answers as pressing the chosen button would. A dialog not yet drawn and not told by
     /// [`with_self_updating`](UpdateCheckDialog::with_self_updating) answers as an install that cannot update itself.
     fn confirm(&mut self, _: &Context) -> Option<CheckChoice> {

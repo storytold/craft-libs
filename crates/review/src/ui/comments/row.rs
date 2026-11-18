@@ -126,6 +126,17 @@ trait Sink {
 /// The "..." button of message `index` of a card: a part of the row that opens the message's menu.
 pub(super) const MORE: PartKey = PartKey::new("more");
 
+/// What a card offers for acting on its thread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CardActions {
+    /// The "..." menu of each message.
+    #[default]
+    Menu,
+    /// Production's balloon buttons on the selected card: Reply, Delete, and Resolve or Reopen.
+    #[allow(dead_code)] // P3(canvas-w7): cv.K43
+    Buttons,
+}
+
 /// A card or a heading of the card collection.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub(crate) struct CommentRow<'r> {
@@ -141,6 +152,9 @@ pub(crate) struct CommentRow<'r> {
     /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
     #[prop]
     focus_reply: bool,
+    /// What the card's buttons are.
+    #[allow(dead_code)] // P3(canvas-w7): cv.K43
+    actions: CardActions,
     words: Option<Arc<CommentsWords>>,
     /// The heights the editor field and the reply field measured, for the paint of the same pass.
     heights: [f32; 2],
@@ -163,6 +177,7 @@ impl<'r> CommentRow<'r> {
             editing: None,
             reply: "",
             focus_reply: false,
+            actions: CardActions::default(),
             words: None,
             heights: [0.0; 2],
             buttons: [Vec2::ZERO; 3],
@@ -188,6 +203,13 @@ impl<'r> CommentRow<'r> {
         self.selected = selected;
         self.editable = editable;
         self.now = now;
+        self
+    }
+
+    /// Picks the card's buttons: [`CardActions::Buttons`] shows production's balloon buttons on the selected card.
+    #[allow(dead_code)] // P3(canvas-w7): cv.K43
+    pub(crate) fn actions(mut self, actions: CardActions) -> Self {
+        self.actions = actions;
         self
     }
 

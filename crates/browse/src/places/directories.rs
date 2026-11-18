@@ -50,6 +50,26 @@ pub struct Folder {
     pub name: String,
 }
 
+/// A file or folder in a [`FolderEntries`] listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// Its path.
+    pub path: PathBuf,
+    /// Its name.
+    pub name: String,
+    /// Whether it is a folder.
+    pub folder: bool,
+}
+
+/// The files and folders of one folder, as [`Directories::entries`] lists them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FolderEntries {
+    /// The entries read, hidden ones left out, in `natural_cmp` order of their names.
+    pub entries: Vec<Entry>,
+    /// The listing stopped at the limit before the folder ended.
+    pub truncated: bool,
+}
+
 /// The folder lookups a places tree needs (owner question 4: a small trait in this crate, with a
 /// system implementation and a fake). Every call can block on a slow or network disk:
 /// [`FolderCache`](super::FolderCache) calls them only in jobs.
@@ -70,6 +90,11 @@ pub trait Directories: Send + Sync {
     /// The hidden folders among `path` and its ancestors, innermost first (LightCraft's
     /// `unlisted_ancestors`); a tree never opens through one.
     fn unlisted_ancestors(&self, path: &Path) -> Vec<PathBuf>;
+
+    /// The files and folders of `folder`, with the hidden rule and the `natural_cmp` order of
+    /// [`subfolders`](Self::subfolders). Stops after `limit` entries read and reports
+    /// `truncated`; checks `cancel` between entries.
+    fn entries(&self, folder: &Path, limit: usize, cancel: &Cancel) -> io::Result<FolderEntries>;
 }
 
 /// [`Directories`] over the file system.
@@ -160,6 +185,11 @@ impl Directories for SystemDirectories {
         }
         out.sort_by(|a, b| craft_platform::open::natural_cmp(&a.name, &b.name));
         Ok(out)
+    }
+
+    fn entries(&self, folder: &Path, limit: usize, cancel: &Cancel) -> io::Result<FolderEntries> {
+        let _ = (folder, limit, cancel);
+        todo!("sh.K17")
     }
 
     fn unlisted_ancestors(&self, path: &Path) -> Vec<PathBuf> {
@@ -297,6 +327,11 @@ impl Directories for FakeDirectories {
             children.get(folder).map(|names| names.iter().map(|n| Folder { path: folder.join(n), name: n.clone() }).collect()).unwrap_or_default();
         out.sort_by(|a, b| craft_platform::open::natural_cmp(&a.name, &b.name));
         Ok(out)
+    }
+
+    fn entries(&self, folder: &Path, limit: usize, cancel: &Cancel) -> io::Result<FolderEntries> {
+        let _ = (folder, limit, cancel);
+        todo!("sh.K17")
     }
 
     fn unlisted_ancestors(&self, path: &Path) -> Vec<PathBuf> {

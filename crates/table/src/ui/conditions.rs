@@ -34,6 +34,9 @@ craft_ui::words! {
         operator: "conditions.operator" = "Operator";
         value: "conditions.value" = "Value";
         and: "conditions.and" = "and";
+        join_and: "conditions.joinAnd" = "And";
+        join_or: "conditions.joinOr" = "Or";
+        join: "conditions.join" = "Join";
         add_rule: "conditions.addRule" = "+ Rule";
         add_group: "conditions.addGroup" = "+ Group";
         add_rule_tip: "conditions.addRuleTip" = "Add a rule (⌥-click: a group)";
@@ -111,6 +114,28 @@ impl ConditionValue {
     }
 }
 
+/// How a rule joins the rule before it in a [`ConditionLayout::Joined`] list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Join {
+    /// Both rules must hold.
+    #[default]
+    And,
+    /// Either rule may hold.
+    Or,
+}
+
+/// How the builder arranges its rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ConditionLayout {
+    /// Groups with a Match row, as the builder always showed them.
+    #[default]
+    Grouped,
+    /// One list of rules, each joined to the one before by And or Or: Word's joined filter rules.
+    Joined,
+}
+
 /// One rule.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -121,12 +146,14 @@ pub struct Condition {
     pub operator: String,
     /// The value the operator compares against.
     pub value: ConditionValue,
+    /// How the rule joins the rule before it; read only in [`ConditionLayout::Joined`].
+    pub join: Join,
 }
 
 impl Condition {
     /// A rule of `field` and `operator` comparing against `value`.
     pub fn new(field: impl Into<String>, operator: impl Into<String>, value: ConditionValue) -> Self {
-        Condition { field: field.into(), operator: operator.into(), value }
+        Condition { field: field.into(), operator: operator.into(), value, join: Join::default() }
     }
 }
 
@@ -210,17 +237,33 @@ pub struct ConditionBuilder<'a> {
     label: Label,
     group: Bind<'a, ConditionGroup>,
     fields: &'a dyn ConditionFields,
+    #[allow(dead_code)] // P3(dialogs-w10): dg.F28
+    layout: ConditionLayout,
+    #[allow(dead_code)] // P3(dialogs-w10): dg.F28
+    max_rules: Option<usize>,
 }
 
 impl<'a> ConditionBuilder<'a> {
     /// A builder named `label` that edits `group`, offering `fields`.
     pub fn new(label: impl Into<Label>, group: Bind<'a, ConditionGroup>, fields: &'a dyn ConditionFields) -> Self {
-        ConditionBuilder { label: label.into(), group, fields }
+        ConditionBuilder { label: label.into(), group, fields, layout: ConditionLayout::default(), max_rules: None }
+    }
+
+    /// How the builder arranges its rules; [`ConditionLayout::Grouped`] by default.
+    pub fn layout(self, layout: ConditionLayout) -> Self {
+        let _ = (self, layout);
+        todo!("dg.F28")
+    }
+
+    /// The most rules the list may hold: at the limit the add buttons are disabled.
+    pub fn max_rules(self, n: usize) -> Self {
+        let _ = (self, n);
+        todo!("dg.F28")
     }
 
     /// Shows the builder across the width offered.
     pub fn show(self, ui: &mut Ui) -> ConditionBuilderOutput {
-        let ConditionBuilder { label, group, fields } = self;
+        let ConditionBuilder { label, group, fields, .. } = self;
         let words = Env::of(ui).words::<ConditionWords>();
         let held = RefCell::new(Held::new(group));
         let changed = Cell::new(false);
@@ -253,7 +296,7 @@ impl Rows<'_> {
         let Some((field, ..)) = self.fields.fields().into_iter().next() else { return Condition::default() };
         let operator = self.fields.operators(&field).into_iter().next().map(|(id, _)| id).unwrap_or_default();
         let value = self.fields.default_value(&field, &operator);
-        Condition { field, operator, value }
+        Condition { field, operator, value, join: Join::default() }
     }
 
     fn new_group(&self) -> ConditionGroup {

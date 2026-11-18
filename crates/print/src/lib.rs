@@ -8,9 +8,13 @@
 #![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Printing in the browser.
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 /// Direct local-CUPS transport, independent of command-line spooler selection.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cups;
+pub mod spool;
 
 #[cfg(any(test, windows))]
 mod progress;
