@@ -903,7 +903,7 @@ fn reduced_decoding_scales_dimensions_and_samples() {
         assert_eq!(dec.components, 3);
         let Samples::U8(samples) = dec.samples else { panic!("expected U8") };
         assert_eq!(samples.len(), (ew * eh * 3) as usize);
-        for px in samples.chunks_exact(3) {
+        for px in samples.as_chunks::<3>().0 {
             assert!((px[0] as i32 - 200).abs() <= 5, "r={}", px[0]);
             assert!((px[1] as i32 - 100).abs() <= 5, "g={}", px[1]);
             assert!((px[2] as i32 - 50).abs() <= 5, "b={}", px[2]);
