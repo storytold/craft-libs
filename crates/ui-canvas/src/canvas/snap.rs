@@ -23,7 +23,7 @@ pub struct Snap {
     whole_pixels: bool,
 }
 
-/// The gesture's snap options in one argument: whether the gesture reads Control itself, and a kind filter.
+/// The gesture's snap options in one argument: whether the gesture reads the suspend key itself, and a kind filter.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct GestureSnap {
@@ -55,7 +55,7 @@ impl Snap {
 
     /// This snap rounding every point it gives to whole document units when `on`: the pixel grid for drawn points and
     /// transform boxes (Preferences > Tools > Snap Vector Tools and Transforms to Pixel Grid, as the app decides it
-    /// applies). The rounding follows the target snap and holds with snapping off or suspended by Control.
+    /// applies). The rounding follows the target snap and holds with snapping off or suspended by its key.
     #[must_use]
     pub fn whole_pixels(mut self, on: bool) -> Self {
         self.whole_pixels = on;
@@ -145,13 +145,11 @@ impl std::fmt::Debug for Snap {
     }
 }
 
-/// Whether the modifiers held now turn snapping off: the Control key (Control without ⌘ on macOS, Ctrl elsewhere)
-/// suspends it while held, Photoshop's rule, unless the gesture reads that key itself (`tool_reads_control`: off macOS
+/// Whether the modifiers held now turn snapping off: the `suspend` key ([`SnapSuspend::is_held`]; Control by default,
+/// Photoshop's rule) suspends it while held, unless the gesture reads that key itself (`gesture_reads_key`: off macOS
 /// Ctrl on a transform box corner distorts). Every snapped drag applies it, whatever its targets are.
 pub fn snap_suspended(mods: Mods, os: Platform, suspend: SnapSuspend, gesture_reads_key: bool) -> bool {
-    let _ = suspend; // P3(canvas-w4): cv.K9
-    let control = if os.is_mac() { mods.ctrl && !mods.cmd } else { mods.cmd };
-    control && !gesture_reads_key
+    suspend.is_held(mods, os) && !gesture_reads_key
 }
 
 /// How far, in document units under `view`, a dragged point still snaps to a target: [`SNAP_PX`] screen points, or

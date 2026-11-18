@@ -100,8 +100,8 @@ pub enum ScaleRule {
     /// A shape or path bounds box: a corner scales by the projection of the drag on the anchor-corner diagonal,
     /// keeping the proportions; an edge stretches its one axis.
     Shape,
-    /// A corner keeps the proportions (⇧ frees them) and an edge stretches its one axis; distinct from
-    /// [`ScaleRule::Shape`] and [`ScaleRule::Proportional`].
+    /// A corner keeps the proportions and ⇧ frees them, as [`ScaleRule::Proportional`]; an edge stretches its one
+    /// axis, as [`ScaleRule::Shape`]. The aspect link plays no part.
     Corners,
 }
 
@@ -274,8 +274,9 @@ impl BoxRules {
 
     /// The modifiers a drag of `part` acts on, from the keys held: ⌘ is dropped on a corner or
     /// edge the content refuses to distort or skew, the legacy scale rule ([`ScaleRule::Free`])
-    /// or an unlinked aspect ratio turns ⇧ over on corners and edges, and the shape rule
-    /// ([`ScaleRule::Shape`]) sets ⇧ by the part alone. Mode keys ([`TransformMode::Distort`],
+    /// or an unlinked aspect ratio turns ⇧ over on corners and edges, the shape rule
+    /// ([`ScaleRule::Shape`]) sets ⇧ by the part alone, and the corners rule ([`ScaleRule::Corners`]) sets ⇧ on
+    /// edges only. Mode keys ([`TransformMode::Distort`],
     /// [`TransformMode::Perspective`]) are not added here: they are part of
     /// [`drag_kind`](Self::drag_kind). [`drag`] acts on these modifiers.
     fn drag_modifiers(&self, part: BoxPart, mods: Mods) -> Mods {
@@ -317,10 +318,13 @@ pub fn drag(start: &BoxState, last: &BoxState, part: BoxPart, from: Point, to: P
     apply_mode_drag(&g, to, rules, mods)
 }
 
-/// The [`ScaleRule::Corners`] rule: a corner keeps the proportions unless ⇧ frees it, an edge stretches its one axis.
-fn corners_mods(part: BoxPart, mods: Mods) -> Mods {
-    let _ = (part, mods);
-    todo!("cv.K34")
+/// The [`ScaleRule::Corners`] rule: a corner keeps the keys as given, so it keeps the proportions and ⇧ frees them;
+/// an edge stretches its one axis whatever ⇧ and the aspect link say. ⌘ gestures are left alone.
+fn corners_mods(part: BoxPart, mut mods: Mods) -> Mods {
+    if !mods.cmd && matches!(part, BoxPart::Edge(_)) {
+        mods.shift = true;
+    }
+    mods
 }
 
 /// The shape bounds box's rule: a corner keeps the proportions along the diagonal and an edge

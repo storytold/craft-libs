@@ -7,11 +7,13 @@
 //! caller converts [`SNAP_PX`] screen points with the zoom. Results carry [`SnapLine`]s the
 //! caller draws.
 //!
-//! Snapping is on when View › Snap is; holding Ctrl while dragging turns it off, except when Ctrl
-//! is the tool's own modifier (the caller reads the keys). Smart guides follow View › Show ›
+//! Snapping is on when View › Snap is; holding the suspend key ([`SnapSuspend`], Ctrl by default)
+//! while dragging turns it off, except when that key is the tool's own modifier (the caller reads
+//! the keys). Smart guides follow View › Show ›
 //! Smart Guides and also snap the Move tool to other layers' edges and centres.
 
 use crate::flow::Axis;
+use craft_keymap::{Mods, Platform};
 use kurbo::{Point, Rect, Vec2};
 
 /// Screen points within which a position snaps (Photoshop).
@@ -189,6 +191,23 @@ pub enum SnapSuspend {
     Alt,
 }
 
+impl SnapSuspend {
+    /// Whether this key is held in `mods` on `os`: Control is the Control key without ⌘ on macOS and Ctrl
+    /// elsewhere (where it is `Mods::cmd`); Alt is Alt (⌥).
+    pub fn is_held(self, mods: Mods, os: Platform) -> bool {
+        match self {
+            SnapSuspend::Control => {
+                if os.is_mac() {
+                    mods.ctrl && !mods.cmd
+                } else {
+                    mods.cmd
+                }
+            }
+            SnapSuspend::Alt => mods.alt,
+        }
+    }
+}
+
 /// How the host snaps a tool's pointer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -218,6 +237,15 @@ pub struct SnapTargets {
 
 /// Distances closer than this are equal.
 const TIE: f64 = 1e-9;
+
+/// Whether `target` reaches a point or box spanning `across` on the other axis: a target with a span (a layer's
+/// edge on its page) only where the two overlap; a target without a span, or a query without an extent, always.
+fn reaches(target: &SnapTarget, across: Option<(f64, f64)>) -> bool {
+    match (target.span, across) {
+        (Some((a, b)), Some((lo, hi))) => lo <= b && a <= hi,
+        _ => true,
+    }
+}
 
 /// The line through `target` reaching the snapped object at `a..b` along the line; a target
 /// without a span stays full height.
@@ -320,9 +348,8 @@ impl SnapTargets {
     /// span catches only a point or box overlapping that span there; without `across`, or for a target without a
     /// span, it is `nearest_of`.
     pub fn nearest_within(&self, along: Axis, value: f64, across: Option<(f64, f64)>, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
-        let _ = across; // P3(canvas-w4): cv.K36
         let mut best: Option<(f64, SnapTarget)> = None;
-        for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind)) {
+        for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind) && reaches(t, across)) {
             let distance = (target.position - value).abs();
             if distance > tolerance {
                 continue;
@@ -355,11 +382,11 @@ impl SnapTargets {
     pub fn snap_point_of(&self, point: Point, tolerance: f64, kinds: SnapKinds) -> (Point, Vec<SnapLine>) {
         let mut out = point;
         let mut lines = Vec::new();
-        if let Some(t) = self.nearest_of(Axis::Y, point.x, tolerance, kinds) {
+        if let Some(t) = self.nearest_within(Axis::Y, point.x, Some((point.y, point.y)), tolerance, kinds) {
             out.x = t.position;
             lines.push(line(&t, point.y, point.y));
         }
-        if let Some(t) = self.nearest_of(Axis::X, point.y, tolerance, kinds) {
+        if let Some(t) = self.nearest_within(Axis::X, point.y, Some((out.x, out.x)), tolerance, kinds) {
             out.y = t.position;
             lines.push(line(&t, out.x, out.x));
         }
@@ -389,7 +416,7 @@ impl SnapTargets {
             let anchors = [lo, hi, (lo + hi) / 2.0];
             let mut best: Option<f64> = None;
             for anchor in anchors {
-                if let Some(t) = self.nearest_of(along, anchor, tolerance, kinds) {
+                if let Some(t) = self.nearest_within(along, anchor, Some(other), tolerance, kinds) {
                     let d = t.position - anchor;
                     if best.is_none_or(|b| d.abs() < b.abs() - TIE) {
                         best = Some(d);
@@ -406,7 +433,7 @@ impl SnapTargets {
                 let hit = self
                     .targets
                     .iter()
-                    .filter(|t| t.along == along && kinds.contains(t.kind) && (t.position - moved).abs() < 1e-6)
+                    .filter(|t| t.along == along && kinds.contains(t.kind) && reaches(t, Some(other)) && (t.position - moved).abs() < 1e-6)
                     .min_by_key(|t| u8::from(t.kind != SnapKind::Guide));
                 if let Some(t) = hit {
                     lines.push(line(t, other.0, other.1));
