@@ -504,7 +504,7 @@ impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
     /// Notes a registration in the records of the settling regions around the running code, so a region that settles
     /// registers its drop spots again when it replays its last run.
     fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
-        crate::runtime::replay::journal(ctx, make);
+        crate::runtime::journal(ctx, make);
     }
 }
 

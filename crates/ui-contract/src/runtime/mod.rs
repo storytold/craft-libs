@@ -27,8 +27,7 @@ pub mod pen;
 pub mod pending;
 pub mod pointer;
 pub(crate) mod reads;
-#[doc(hidden)]
-pub mod replay;
+pub(crate) mod replay;
 pub mod requests;
 pub mod sampler;
 pub mod toast;
@@ -37,3 +36,5 @@ pub mod windows;
 pub mod words;
 
 pub use install::{InstallError, InstallSpec, install};
+#[doc(hidden)]
+pub use replay::journal;

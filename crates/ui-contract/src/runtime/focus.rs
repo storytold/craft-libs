@@ -738,6 +738,11 @@ pub(crate) fn record(ctx: &Context, viewport: ViewportId) -> FocusedRecord {
     with_viewport(ctx, viewport, |state| state.record.clone())
 }
 
+/// The menu bar the last pass of `viewport` registered for the menu-bar keys.
+pub(crate) fn menu_bar(ctx: &Context, viewport: ViewportId) -> Option<Id> {
+    with_viewport(ctx, viewport, |state| state.record.menu_bar)
+}
+
 /// Whether a text field has the keys in `viewport`, as its last end hook recorded: the focused stop types text, or
 /// egui focus is on a text edit the app drew itself.
 pub(crate) fn typing(ctx: &Context, viewport: ViewportId) -> bool {
