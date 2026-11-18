@@ -201,6 +201,8 @@ pub struct DialogState {
     pub(crate) area: AreaId,
     pub(crate) filter: Filter,
     pub(crate) query: String,
+    /// Match Case is ticked ([`Options::match_case`]).
+    pub(crate) match_case: bool,
     pub(crate) collapsed: BTreeSet<String>,
     /// The detail pane's Context: `None` is the command's home scope.
     pub(crate) context: Option<Scope>,
@@ -249,6 +251,7 @@ impl DialogState {
             area: AreaId::All,
             filter: Filter::All,
             query: String::new(),
+            match_case: false,
             collapsed: BTreeSet::new(),
             context: None,
             recording: None,
@@ -366,7 +369,13 @@ impl DialogState {
 
     /// The table's lines for the current view.
     pub(crate) fn lines(&mut self, env: &Env) -> &Built {
-        let view = View { query: &self.query, area: &self.area, filter: self.filter, collapsed: &self.collapsed };
+        let view = View {
+            query: &self.query,
+            match_case: self.match_case && env.options.match_case,
+            area: &self.area,
+            filter: self.filter,
+            collapsed: &self.collapsed,
+        };
         self.rows.get(env.keymap, env.options, env.text, &view)
     }
 
@@ -393,6 +402,10 @@ impl DialogState {
 
     pub(crate) fn set_query(&mut self, query: String) {
         self.query = query;
+    }
+
+    pub(crate) fn set_match_case(&mut self, on: bool) {
+        self.match_case = on;
     }
 
     pub(crate) fn toggle_group(&mut self, name: &str) {
