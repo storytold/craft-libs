@@ -130,6 +130,18 @@ pub(super) fn layer_traps_focus(subject: &Subject) -> Result<(), String> {
         for step in 0..stops + 2 {
             fixture.key(Key::Tab, Modifiers::NONE);
             if !focus_within(&fixture, container.node) {
+                if story.name == "menu_with_companion" {
+                    let tree = fixture.tree();
+                    let focused = tree.focused_key();
+                    eprintln!(
+                        "DIAG layer_traps_focus: focused {:?} role {:?} name {:?}; container {:?} role {:?}; scope trap {traps}",
+                        focused,
+                        tree.role_of(focused),
+                        crate::testing::access::name(tree, focused),
+                        container.node,
+                        tree.role_of(container.node)
+                    );
+                }
                 return Err(format!("{}: Tab number {} moved focus out of the layer", story.name, step + 1));
             }
         }

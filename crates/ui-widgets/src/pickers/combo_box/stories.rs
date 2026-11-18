@@ -68,9 +68,12 @@ fn hover_option(fixture: &mut Fixture) {
 fn combo_box_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
     let shown = ComboBox::new("Font", Bind::bound(data.value("preview_font", "Charter".to_owned())), &options).show(ui);
-    // The field keeps "Charter" while the hovered option is previewed; the story keeps what the preview shows.
-    if shown.preview != Preview::Unchanged {
-        *data.value("previewed", Preview::<String>::Unchanged) = shown.preview.clone();
+    // The field keeps "Charter" while the hovered option is previewed. The preview is no edit, so the story says what
+    // it shows in its readout, not in its data, which a drive reads as a changed value.
+    let output = StoryOutput::from(shown.edit);
+    match shown.preview {
+        Preview::Shows(text) => output.readout(format!("Previewing {text}")),
+        Preview::Ended => output.readout("Preview ended"),
+        _ => output,
     }
-    shown.edit.into()
 }
