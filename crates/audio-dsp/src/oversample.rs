@@ -8,16 +8,13 @@ use std::f64::consts::PI;
 /// Taps per polyphase branch.
 pub const TAPS_PER_PHASE: usize = 16;
 
-/// Oversampling factor giving an effective rate of at least 176.4 kHz (4× at 44.1/48 kHz,
-/// 2× at 88.2/96 kHz, 1× above), as recommended by BS.1770-4 for true-peak metering.
+/// Smallest oversampling factor giving an effective rate of at least 176.4 kHz (4× at 44.1/48 kHz,
+/// 2× at 88.2/96 kHz, 1× from 176.4 kHz, 6× at 32 kHz), as recommended by BS.1770-4 for
+/// true-peak metering. The rate is first replaced as [`crate::sane_sample_rate`] describes, so the
+/// factor is at most 177.
 pub fn true_peak_factor(sample_rate: f64) -> usize {
-    if sample_rate < 88_200.0 {
-        4
-    } else if sample_rate < 176_400.0 {
-        2
-    } else {
-        1
-    }
+    let rate = f64::from(crate::sane_sample_rate(sample_rate as f32));
+    ((176_400.0 / rate).ceil() as usize).max(1)
 }
 
 fn bessel_i0(x: f64) -> f64 {
@@ -129,6 +126,21 @@ fn dot(c: &[f32; TAPS_PER_PHASE], win: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn true_peak_factor_reaches_176_4_khz_at_every_rate() {
+        for (rate, factor) in [(44_100.0, 4), (48_000.0, 4), (88_200.0, 2), (96_000.0, 2), (176_400.0, 1), (192_000.0, 1)] {
+            assert_eq!(true_peak_factor(rate), factor, "{rate} Hz");
+        }
+        for rate in [1_000.0, 8_000.0, 22_050.0, 32_000.0, 44_099.0, 60_000.0, 100_000.0, 1_536_000.0] {
+            let factor = true_peak_factor(rate);
+            assert!(factor as f64 * rate >= 176_400.0, "{rate} Hz: {factor}");
+            assert!((factor - 1) as f64 * rate < 176_400.0, "{rate} Hz: {factor}");
+        }
+        for rate in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(true_peak_factor(rate), 4, "{rate}");
+        }
+    }
 
     #[test]
     fn phases_have_unity_dc_and_interpolate_sines() {

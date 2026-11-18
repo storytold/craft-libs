@@ -110,6 +110,16 @@ mod tests {
     }
 
     #[test]
+    fn noise_shaping_error_stays_bounded_at_full_scale() {
+        let mut d = Dither::new(48_000.0, 1);
+        assert!(d.set_param("noise_shaping", 1.0));
+        let mut x = vec![1.0f32; 48_000];
+        d.process(&mut [&mut x]);
+        assert!(d.err[0].abs() <= 2.0 * d.lsb, "error {} LSB", d.err[0] / d.lsb);
+        assert!(x.iter().all(|v| (1.0 - 2.0 * d.lsb..=1.0 - d.lsb).contains(v)));
+    }
+
+    #[test]
     fn noise_shaping_moves_the_error_up_in_frequency() {
         let run = |shape: bool| {
             let mut d = Dither::new(48_000.0, 1);
