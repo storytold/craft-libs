@@ -156,3 +156,43 @@ fn resample_off() {
     assert!(close(fixed.pixels_per_inch(), 72.0 * 1200.0 / 372.0), "the resolution follows the width");
     assert!(fixed.resolution_changed());
 }
+
+/// PhotoCraft #11722, #15451, #11721: the side typed last is reported, with the value as typed, while the size it made
+/// stands, so a recorded step can keep what the user asked for. A value in pixels or percent stands through a
+/// resolution change, which keeps the pixels; another side, another unit, Resample off or Reset ends it.
+#[trial]
+fn the_side_typed_last_stands_until_the_size_changes_otherwise() {
+    let typed = |size: &LinkedSize| size.typed().map(|t| (t.width, t.value, t.unit));
+    let mut size = document();
+    assert_eq!(typed(&size), None, "nothing typed yet");
+    size.set_width(600.0);
+    assert_eq!(typed(&size), Some((true, 600.0, UnitKind::Pixels)));
+    size.set_resolution(144.0);
+    assert_eq!(typed(&size), Some((true, 600.0, UnitKind::Pixels)), "a resolution change keeps the pixels");
+    size.set_height(200.0);
+    assert_eq!(typed(&size), Some((false, 200.0, UnitKind::Pixels)), "the height typed after it");
+
+    // A percentage is reported as typed, not worked back from the rounded pixels.
+    assert!(size.set_unit(UnitKind::Percent));
+    size.set_width(33.3);
+    assert_eq!(pixels(&size), (400, 267));
+    assert_eq!(typed(&size), Some((true, 33.3, UnitKind::Percent)));
+    assert!(size.set_unit(UnitKind::Pixels));
+    assert_eq!(typed(&size), None, "shown in another unit, the field no longer holds what was typed");
+
+    size.set_width(600.0);
+    size.resampling(false);
+    assert_eq!(typed(&size), None, "Resample off puts back the opening size");
+    size.resampling(true);
+    assert_eq!(typed(&size), None);
+    size.set_width(600.0);
+    size.reset();
+    assert_eq!(typed(&size), None, "Reset");
+
+    // A physical size needs the resolution it was typed at: with Resample on a new resolution moves the pixels.
+    assert!(size.set_unit(UnitKind::Inches));
+    size.set_width(5.0);
+    assert_eq!(typed(&size), Some((true, 5.0, UnitKind::Inches)));
+    size.set_resolution(144.0);
+    assert_eq!(typed(&size), None, "the pixels followed the resolution");
+}

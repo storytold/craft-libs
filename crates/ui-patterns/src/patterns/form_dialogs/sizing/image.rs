@@ -5,6 +5,7 @@ use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use crate::form::Field;
+use crate::patterns::form_dialogs::TypedSide;
 use crate::pickers::Select;
 use crate::runtime::env::{ColumnSize, Label, UnitKind};
 use crate::runtime::overlay::CloseReason;
@@ -33,6 +34,11 @@ pub struct ImageSizeResult {
     /// Whether the resolution differs from the opening one. The opening resolution is held to the dialog's range, so
     /// while this is `false` the app keeps the document's own resolution, which may lie outside it.
     pub resolution_changed: bool,
+    /// The width or height the user typed, while the size it made stands ([`LinkedSize::typed`]): an app that records
+    /// the step keeps that side (or a percentage) rather than both sides of this image's new size.
+    pub typed: Option<TypedSide>,
+    /// Whether Constrain Proportions linked the sides at OK (always, with Resample off).
+    pub linked: bool,
 }
 
 /// What Image Size reports: its response, how it closed and the [`ImageSizeResult`] at OK.
@@ -66,6 +72,8 @@ impl ImageSizeValues {
             resample: self.size.is_resampling().then_some(self.method),
             scale_styles: self.scale_styles,
             resolution_changed: self.size.resolution_changed(),
+            typed: self.size.typed(),
+            linked: self.size.is_linked(),
         }
     }
 
