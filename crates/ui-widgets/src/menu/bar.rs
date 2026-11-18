@@ -13,7 +13,7 @@
 //! one the title takes the first letter no earlier title holds. The mnemonic is underlined while Alt is held.
 //!
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
-//! matches by label, English label or menu path, each as a command row with its path as detail.
+//! matches by label, English label, menu path or command id, each as a command row with its path as detail.
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -21,6 +21,7 @@ mod stories;
 use super::search::{HelpEntry, search_order};
 use super::words::MenuWords;
 use super::{Menu, MenuItem, MenuStep};
+use crate::buttons::Arrangement;
 use crate::buttons::face::{self, FaceLook, FaceSpec};
 use crate::contract::{
     Access, Bind, Common, Component, Cx, Focus as _, MeasureCx, MenuKey, Name, NoValue, Outcome, OverlayUi, Overlays as _, Pad, PaintUi, PartsCx,
@@ -114,7 +115,7 @@ impl Component for TitleFace {
         face::measure(
             cx,
             &FaceSpec {
-                arrangement: crate::buttons::Arrangement::Inline, // P3(ribbon-w2): rb.R6
+                arrangement: Arrangement::Inline,
                 label: cx.resolved.label,
                 role: None,
                 lead: None,
@@ -136,7 +137,7 @@ impl Component for TitleFace {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let spec = FaceSpec {
-            arrangement: crate::buttons::Arrangement::Inline, // P3(ribbon-w2): rb.R6
+            arrangement: Arrangement::Inline,
             label: cx.resolved.label,
             role: None,
             lead: None,
@@ -401,15 +402,14 @@ impl<'a> MenuBar<'a> {
         Self::open_only(cx, slots, declared, slots[to]);
     }
 
-    /// The help search's entries as `[label, English label, path]` texts.
+    /// The help search's entries as `[label, English label, path, command id]` texts.
     fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 4]> {
         entries
             .iter()
             .map(|entry| {
                 let path: Vec<String> = entry.path().iter().map(|label| env.resolve(label).as_str().to_owned()).collect();
                 let english = entry.english().map(|label| env.resolve(label).as_str().to_owned());
-                // P3(dialogs-w9): dg.F26 — the fourth text is the command id.
-                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator), String::new()]
+                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator), entry.command().id.clone()]
             })
             .collect()
     }
@@ -571,7 +571,6 @@ impl Component for MenuBar<'_> {
                                     }
                                 }
                                 query.1 = query.1.saturating_add(1);
-                                // P3(dialogs-w9): dg.F26
                                 let refs: Vec<[&str; 4]> = rows
                                     .iter()
                                     .map(|[label, english, path, id]| [label.as_str(), english.as_str(), path.as_str(), id.as_str()])
