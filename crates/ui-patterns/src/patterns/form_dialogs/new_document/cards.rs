@@ -253,7 +253,7 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
     let preset_card = |preset: &DocumentPreset| {
         let preset = session.orientation.map_or_else(|| preset.clone(), |orientation| preset.turned(orientation));
         let mut settings = preset.options(setup.print_ppi, setup.screen_ppi);
-        if preset.is_print() && !matches!(values.unit, UnitKind::Pixels | UnitKind::Percent) {
+        if preset.in_inches() && !matches!(values.unit, UnitKind::Pixels | UnitKind::Percent) {
             settings.unit = values.unit;
         }
         Card {

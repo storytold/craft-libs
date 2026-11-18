@@ -174,3 +174,93 @@ fn pixel_aspect_lists_the_custom_entries_and_shows_an_unknown_id_as_square() {
     fixture.click(&row).idle(10);
     assert!(shows(&fixture, "DVCPRO HD 1080 (1.5)") && shows(&fixture, "Mine"), "the built-in ratios, then the app's");
 }
+
+/// The names of the standard category `id`, in card order.
+fn standard_names(id: &str) -> Vec<&'static str> {
+    let categories = craft_ui::patterns::form_dialogs::PresetCategory::standard();
+    categories.iter().find(|category| category.id == id).expect("a standard category").presets.iter().map(|preset| preset.name).collect()
+}
+
+/// The standard preset `name` of category `id`.
+fn standard_preset(id: &str, name: &str) -> craft_ui::patterns::form_dialogs::DocumentPreset {
+    let categories = craft_ui::patterns::form_dialogs::PresetCategory::standard();
+    let category = categories.into_iter().find(|category| category.id == id).expect("a standard category");
+    category.presets.into_iter().find(|preset| preset.name == name).expect("a standard preset")
+}
+
+#[trial]
+fn photo_print_and_art_list_the_blank_document_presets() {
+    assert_eq!(
+        standard_names("photo"),
+        [
+            "Default Size",
+            "Landscape, 3 x 2",
+            "Landscape, 6 x 4",
+            "Landscape, 7 x 5",
+            "Landscape, 10 x 8",
+            "Portrait, 2 x 3",
+            "Portrait, 4 x 6",
+            "Portrait, 5 x 7",
+            "Portrait, 8 x 10"
+        ]
+    );
+    assert_eq!(standard_names("print"), ["Letter", "Legal", "Tabloid", "A4", "A6", "A5", "A3", "B5", "B4", "B3", "C4", "C5", "C6", "DL"]);
+    assert_eq!(standard_names("art"), ["1000 pixel grid", "2000 pixel grid", "Poster", "Postcard", "1080p", "720p"]);
+    // ISO 216 / ISO 269 sizes in millimetres, at 300 ppi.
+    let mm = |side: f64| (side / 25.4 * 300.0).round() as u32;
+    for (name, width, height) in [
+        ("A3", 297.0, 420.0),
+        ("A4", 210.0, 297.0),
+        ("A5", 148.0, 210.0),
+        ("A6", 105.0, 148.0),
+        ("B3", 353.0, 500.0),
+        ("B4", 250.0, 353.0),
+        ("B5", 176.0, 250.0),
+        ("C4", 229.0, 324.0),
+        ("C5", 162.0, 229.0),
+        ("C6", 114.0, 162.0),
+        ("DL", 110.0, 220.0),
+    ] {
+        let preset = standard_preset("print", name);
+        assert_eq!((preset.width, preset.height, preset.pixels_per_inch), (mm(width), mm(height), 300.0), "{name}");
+    }
+    let photo = standard_preset("photo", "Portrait, 8 x 10");
+    assert_eq!((photo.width, photo.height), (2400, 3000));
+    let postcard = standard_preset("art", "Postcard");
+    assert_eq!((postcard.width, postcard.height, postcard.pixels_per_inch), (1200, 1800, 300.0), "4 x 6 in, portrait");
+    let video = standard_preset("art", "720p");
+    assert_eq!((video.width, video.height, video.pixels_per_inch), (1280, 720, 72.0));
+}
+
+#[trial]
+fn the_pixel_grids_keep_their_pixels_at_the_print_resolution() {
+    use craft_ui::runtime::env::UnitKind;
+    let grid = standard_preset("art", "1000 pixel grid");
+    assert!(grid.is_print() && !grid.in_inches());
+    for (print, screen) in [(300.0, 72.0), (200.0, 96.0)] {
+        let options = grid.options(print, screen);
+        assert_eq!(
+            (options.size.width, options.size.height, options.pixels_per_inch, options.unit),
+            (1000, 1000, print, UnitKind::Pixels),
+            "{print} ppi"
+        );
+    }
+    // A print preset keeps its inches at the print resolution; a screen preset its pixels at the screen resolution.
+    let postcard = standard_preset("art", "Postcard").options(200.0, 96.0);
+    assert_eq!((postcard.size.width, postcard.size.height, postcard.pixels_per_inch, postcard.unit), (800, 1200, 200.0, UnitKind::Inches));
+    let video = standard_preset("art", "720p").options(200.0, 96.0);
+    assert_eq!((video.size.width, video.size.height, video.pixels_per_inch, video.unit), (1280, 720, 96.0, UnitKind::Pixels));
+}
+
+#[trial]
+fn the_art_tab_shows_the_grids_in_pixels_and_the_postcard_in_inches() {
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let art = fixture.by_label("Art & Illustration").expect("the Art & Illustration tab");
+    fixture.click(&art).idle(10);
+    assert!(shows(&fixture, "1000 × 1000 px @ 300 ppi"), "the grid's card is in pixels");
+    assert!(shows(&fixture, "4 × 6 in @ 300 ppi"), "the postcard's card is in inches");
+}
