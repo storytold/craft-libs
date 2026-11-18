@@ -42,9 +42,14 @@ fn list_row_text_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 /// A search result: the match in the label reads in the highlight look.
+///
+/// The excerpt neither starts nor ends with a neutral character such as "…": in a right-to-left paragraph a neutral
+/// at the paragraph's edge next to left-to-right text takes the paragraph's direction (UAX #9 N1/N2), so it is shaped
+/// apart from the letter beside it and the run's width changes by direction, which the suite's right-to-left case
+/// rejects.
 #[story(ListRow<'static>, covers = [], drive = Drive::Never)]
 fn list_row_match_highlight(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let spans = vec![Span::new("…the light over the "), Span::new("harbour").highlight(), Span::new(" turned grey…")];
+    let spans = vec![Span::new("the light over the "), Span::new("harbour").highlight(), Span::new(" turned grey")];
     let joined: String = spans.iter().map(|span| span.text.as_ref()).collect();
     show_as_only_item(ui, ListRow::new(joined).label_spans(spans).detail("Page 4")).into()
 }
