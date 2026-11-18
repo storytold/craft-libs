@@ -14,30 +14,35 @@ use egui::{Pos2, Ui, Vec2};
 /// Pages in the story document: enough to scroll.
 const PAGES: usize = 6;
 
-fn view(ui: &mut Ui, data: &mut StoryData, change: impl FnOnce(&mut PageViewState)) -> StoryOutput {
+fn view(ui: &mut Ui, data: &mut StoryData, rulers: bool, change: impl FnOnce(&mut PageViewState)) -> StoryOutput {
     let state = data.value("view", {
         let mut state = PageViewState::default();
         change(&mut state);
         state
     });
     let pages = DemoPages::new(PAGES);
-    let out = PageView::new("Pages", &pages, state, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, _| ());
+    let out = PageView::new("Pages", &pages, state, PAPER).options(LayoutOptions::ACROBAT).rulers(rulers).show(ui, |_, _| ());
     out.canvas.response.into()
 }
 
 #[story(PageView<'static>, covers = [], drive = Drive::Never)]
 fn continuous(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    view(ui, data, |_| ())
+    view(ui, data, false, |_| ())
+}
+
+#[story(PageView<'static>, covers = [], drive = Drive::Never)]
+fn with_rulers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    view(ui, data, true, |_| ())
 }
 
 #[story(PageView<'static>, covers = [], drive = Drive::Never)]
 fn spreads(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    view(ui, data, |state| state.display = PageDisplay::TwoUp)
+    view(ui, data, false, |state| state.display = PageDisplay::TwoUp)
 }
 
 #[story(PageView<'static>, covers = [], drive = Drive::Never)]
 fn one_page_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    view(ui, data, |state| state.continuous = false)
+    view(ui, data, false, |state| state.continuous = false)
 }
 
 #[story(PageMetrics, covers = [Default], drive = Drive::Never)]

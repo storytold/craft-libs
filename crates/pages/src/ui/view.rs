@@ -171,14 +171,12 @@ impl PlacedPage {
 
     /// Page point `p` to document coordinates of `view`.
     pub fn to_doc(&self, view: &CanvasView, p: Point) -> Point {
-        let _ = (view, p);
-        todo!("cv.K19")
+        view.to_doc(self.to_screen(p))
     }
 
     /// Document point `d` of `view` to page coordinates.
     pub fn from_doc(&self, view: &CanvasView, d: Point) -> Point {
-        let _ = (view, d);
-        todo!("cv.K19")
+        self.to_page(view.to_screen(d))
     }
 }
 
@@ -201,8 +199,22 @@ pub struct PageBody<'b> {
 impl PageBody<'_> {
     /// The page under document point `d` and the point in its coordinates; the nearest page when `d` is outside all.
     pub fn page_at_doc(&self, d: Point) -> Option<(&PlacedPage, Point)> {
-        let _ = d;
-        todo!("cv.K19")
+        let screen = self.view.to_screen(d);
+        // The squared distance from the point to a page's rectangle; zero inside it. A strictly smaller distance wins,
+        // so a tie goes to the earlier page.
+        let distance = |placed: &PlacedPage| {
+            let dx = (placed.rect.min.x - screen.x).max(0.0).max(screen.x - placed.rect.max.x);
+            let dy = (placed.rect.min.y - screen.y).max(0.0).max(screen.y - placed.rect.max.y);
+            f64::from(dx) * f64::from(dx) + f64::from(dy) * f64::from(dy)
+        };
+        let mut nearest: Option<(&PlacedPage, f64)> = None;
+        for placed in self.pages {
+            let away = distance(placed);
+            if nearest.is_none_or(|(_, best)| away < best) {
+                nearest = Some((placed, away));
+            }
+        }
+        nearest.map(|(placed, _)| (placed, placed.from_doc(&self.view, d)))
     }
 }
 
@@ -272,13 +284,9 @@ pub struct PageView<'a> {
     bodies: Option<&'a [(f64, f64)]>,
     describer: Option<&'a dyn AccessDescriber>,
     paper: DataColor,
-    #[allow(dead_code)] // P3(canvas-w5): cv.K14
     editor: Option<EditorPurpose>,
-    #[allow(dead_code)] // P3(canvas-w5): cv.K18
     snap: Option<Snap>,
-    #[allow(dead_code)] // P3(canvas-w5): cv.K18
     tool_regions: Vec<ToolRegion>,
-    #[allow(dead_code)] // P3(canvas-w5): cv.K20
     rulers: bool,
 }
 
@@ -372,7 +380,8 @@ impl<'a> PageView<'a> {
     }
 
     fn run(self, ui: &mut Ui, rect: Rect, take_room: bool, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
-        let PageView { label, source, state, options, navigation, bodies, describer, paper, .. } = self;
+        let PageView { label, source, state, options, navigation, bodies, describer, paper, editor, snap, tool_regions, rulers } = self;
+
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
         let sizes: Vec<Size> = (0..count).map(|page| source.page_size(page)).collect();
@@ -384,7 +393,13 @@ impl<'a> PageView<'a> {
         let given = frame.view(rect, start.offset, geo.scale / SCREEN_POINTS_PER_POINT);
         let mut navigation = navigation;
         navigation.overscroll = !start.continuous;
-        let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true);
+        let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).tool_regions(tool_regions).show_rulers(rulers);
+        if let Some(purpose) = editor {
+            canvas = canvas.editor(purpose);
+        }
+        if let Some(snap) = snap {
+            canvas = canvas.snap(snap);
+        }
         if start.continuous {
             canvas = canvas.document(frame.document(&geo));
         }
@@ -674,12 +689,21 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
 
     // The scroll bars come before the clamp, so a drag of this pass lands in this pass.
     let document = drawn_frame.document(&drawn);
-    let bars =
-        CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(shown), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
+    let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), offset_range(geo.doc.y0, geo.doc.y1, vh));
+    let bars = CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(shown), DocRect::from_origin_size(Point::ZERO, document));
+    // The tip names the page at the top of the view the thumb moved to: the bars ask for it once they know the move.
+    let format = env.format();
+    let tip = |moved: &CanvasView| {
+        let top = drawn_frame.offset_of(moved.center, vw, vh).1.clamp(ys.0, ys.1);
+        let page = if state.continuous { page_on_line(&geo.layout, top) } else { state.current };
+        let (label, total) = (source.page_label(page), format.integer(count as u64));
+        Label::from(words.page_of.fill(&[("page", label.as_str()), ("count", total.as_str())]))
+    };
+    let bars = if count > 0 { bars.tip(&tip) } else { bars };
+    let bars = bars.show_at(ui, cx.rect);
     if let Some(moved) = bars.view.value() {
         want = drawn_frame.offset_of(moved.center, vw, vh);
     }
-    let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), offset_range(geo.doc.y0, geo.doc.y1, vh));
     let offset = (want.0.clamp(xs.0, xs.1), want.1.clamp(ys.0, ys.1));
     state.offset = offset;
     if state.continuous && count > 0 && !went && mem.offset.is_some_and(|last| last != offset) {

@@ -5,7 +5,8 @@
 //! geometry and the turning. [`ReadingNav`] is the row of page-turn buttons under the columns.
 
 use craft_behavior::{IconId, Metrics, NavMove, PartKey, PressPhase, Sense};
-use craft_ui::buttons::IconButton;
+use craft_ui::buttons::{Button, IconButton};
+use craft_ui::display::Text;
 use craft_ui::contract::{
     Access, Animate as _, Common, Component, Cx, DisabledLook, Focus as _, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _, clicked, spec,
@@ -14,7 +15,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::primitives::textures::{Priority, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side};
 use craft_ui::primitives::{PaintShape, ReadingMeasure};
 use craft_ui::runtime::commands::FireSource;
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleCx, UiTokens};
 use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
@@ -60,6 +61,8 @@ craft_ui::words! {
     pub struct ReadingViewWords {
         previous: "readingView.previous" = "Previous Screen";
         next: "readingView.next" = "Next Screen";
+        /// The position between the page-turn buttons: the screen shown and how many there are.
+        position: template "readingView.position" = "{n} / {m}";
     }
 }
 
@@ -461,10 +464,8 @@ impl Outcome for ReadingNavOutput {
 pub struct ReadingNav<'a> {
     state: &'a mut ReadingState,
     count: usize,
-    #[allow(dead_code)] // P3(canvas-w5): cv.K16
     position: bool,
-    #[allow(dead_code)] // P3(canvas-w5): cv.K16
-    action: Option<craft_ui::runtime::env::Label>,
+    action: Option<Label>,
 }
 
 impl<'a> ReadingNav<'a> {
@@ -489,15 +490,29 @@ impl<'a> ReadingNav<'a> {
 
     /// Shows the row.
     pub fn show(self, ui: &mut Ui) -> ReadingNavOutput {
-        let words = Env::of(ui).words::<ReadingViewWords>();
-        let (column, count) = (self.state.column, self.count);
+        let ReadingNav { state, count, position, action } = self;
+        let env = Env::of(ui);
+        let words = env.words::<ReadingViewWords>();
+        let column = state.column;
+        let position = position.then(|| {
+            let format = env.format();
+            let (at, total) = (format.integer((column + 1).min(count) as u64), format.integer(count as u64));
+            Label::from(words.position.fill(&[("n", at.as_str()), ("m", total.as_str())]))
+        });
         let mut by = 0;
+        let mut acted = false;
         let row = Row::new().show(ui, |ui, _| {
             let previous = IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(column > 0).show(ui);
+            if let Some(position) = &position {
+                Text::new(position.clone()).show(ui);
+            }
             let next = IconButton::new(IconId::new("chevron_right")).label(words.next.clone()).enabled(column + 1 < count).show(ui);
+            if let Some(label) = &action {
+                acted = clicked(&Button::new(label.clone()).show(ui));
+            }
             by = i32::from(clicked(&next)) - i32::from(clicked(&previous));
         });
-        self.state.turn(by, count);
-        ReadingNavOutput { response: row.output, turned: by != 0, action: false }
+        state.turn(by, count);
+        ReadingNavOutput { response: row.output, turned: by != 0, action: acted }
     }
 }
