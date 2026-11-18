@@ -6,7 +6,7 @@ use craft_pages::{DocumentGrid, GridKind, MAX_GRID_COUNT, PageSetup};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::dialog::HeldAnswer;
 use craft_ui::runtime::env::Label;
-use craft_ui::testing::{Fixture, Room, trial};
+use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -52,7 +52,8 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
         PageSetupDialog::new(Bind::bound(setup)).opened(Bind::given(true)).held(held).show(ui);
     });
     // The dialog is taller than the default room: there the grid section lies below the window and cannot be pressed.
-    fixture.in_room(Room::Window).settle();
+    // The dialog's body scrolls; a room tall enough for every section keeps the grid rows in view, so clicks reach them.
+    fixture.room(Vec2::new(1120.0, 1100.0)).settle();
     let disabled = |fixture: &Fixture, label: &str| {
         let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
         fixture.tree().is_disabled_key(field.node)
@@ -61,7 +62,6 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
         let radio = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} radio"));
         fixture.click(&radio).settle();
     };
-    eprintln!("DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: start ok disabled={}", disabled(&fixture, "OK"));
     assert!(disabled(&fixture, "Characters per line") && disabled(&fixture, "Lines per page"), "no grid: both counts disabled");
     pick(&mut fixture, "Line grid only");
     assert!(disabled(&fixture, "Characters per line") && !disabled(&fixture, "Lines per page"), "lines only: just the lines count");
@@ -69,25 +69,10 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
     assert!(!disabled(&fixture, "Characters per line") && !disabled(&fixture, "Lines per page"), "lines and characters: both counts");
 
     let field = fixture.by_label("Characters per line").expect("the characters field");
-    let before = fixture.focused();
     fixture.click(&field).settle();
-    eprintln!(
-        "DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: field rect={:?} role={:?} focus {before:?} -> {:?}",
-        field.rect,
-        fixture.tree().role_of(field.node),
-        fixture.focused()
-    );
-    for spin in fixture.by_role(craft_ui::runtime::access::Role::SPIN_BUTTON) {
-        eprintln!(
-            "DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: spin {:?} name={:?}",
-            spin.rect,
-            fixture.tree().name_of(spin.node)
-        );
-    }
     fixture.key(Key::A, Modifiers::COMMAND).type_text("5000");
     fixture.key(Key::Tab, Modifiers::NONE).settle();
     let ok = fixture.by_label("OK").expect("the OK button");
-    eprintln!("DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: ok rect={:?} disabled={}", ok.rect, fixture.tree().is_disabled_key(ok.node));
     fixture.click(&ok).settle();
     let filed = state.borrow_mut().1.take().expect("OK files the setup in the held answer");
     assert_eq!(filed.grid.map(|grid| grid.chars_per_line), Some(MAX_GRID_COUNT), "a count past the range is held to it");

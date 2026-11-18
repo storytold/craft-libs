@@ -458,11 +458,6 @@ impl Rows<'_> {
                 set(grid, value.round().clamp(1.0, f64::from(MAX_GRID_COUNT)) as u32);
             }
         });
-        eprintln!(
-            "DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: count {key} unparsed={} shown={shown} events={}",
-            field.edit.unparsed,
-            field.edit.events.len()
-        );
         !field.edit.unparsed
     }
 
@@ -605,7 +600,6 @@ impl<'a> PageSetupDialog<'a> {
             if direction {
                 rows.direction(ui, setup);
             }
-            eprintln!("DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: margins={margins} pages={pages} paper={paper} grid={grid}");
             margins && pages && paper && grid
         })
     }

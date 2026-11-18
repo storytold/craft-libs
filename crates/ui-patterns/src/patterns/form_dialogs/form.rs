@@ -571,9 +571,6 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         };
         if let Some(held) = hold.as_deref_mut() {
             let values = work.into_inner();
-            if picked.is_some() || closed.is_some() {
-                eprintln!("DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: picked={picked:?} closed={closed:?} accepts={} measuring={measuring_run} waiting={}", accepts.get(), held.is_waiting());
-            }
             if let (Some((_, refused)), Some(values)) = (held.refusal(), values.as_ref()) {
                 if refused != values {
                     held.clear_refusal();
