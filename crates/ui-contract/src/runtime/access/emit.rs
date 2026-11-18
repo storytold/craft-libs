@@ -330,6 +330,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
             inner_stop: None,
             focusable: own.focusable || crate::runtime::focus::has_reachable_stop(ctx, own.id),
             disabled: !own.enabled,
+            arranged: false,
         },
     );
 }

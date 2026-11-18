@@ -178,6 +178,9 @@ pub(crate) struct ScopeNode {
     pub focusable: bool,
     /// The control is disabled: a label that names only disabled controls is disabled too.
     pub disabled: bool,
+    /// The control reached the scope through a node component that reports no node (an unlabelled row): it is part
+    /// of the field's arrangement, so the label names the field's group and the control keeps its own name.
+    pub arranged: bool,
 }
 
 /// What a control tells its label scope about its reset (10.2).
@@ -276,7 +279,7 @@ pub(crate) fn leave(ctx: &Context, id: Id) {
         let Some(scope) = stack.0.last_mut() else { return };
         let Some(at) = scope.open.iter().rposition(|open| open.id == id) else { return };
         let held: Vec<ScopeNode> = scope.open.drain(at..).flat_map(|open| open.held).collect();
-        held.into_iter().for_each(|node| scope.hold(node));
+        held.into_iter().for_each(|node| scope.hold(ScopeNode { arranged: true, ..node }));
     });
 }
 
@@ -500,19 +503,22 @@ pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNod
         return Vec::new();
     }
     let mut patches = vec![LabelPatch::Label { id: label.id, text: label.text.clone(), disabled: nodes.iter().all(|node| node.disabled) }];
-    match nodes {
-        [only] if label.role == FieldLabelRole::Describes || only.keeps_name => {
+    // The label is about one control only when that control sits directly in the scope. One in an unlabelled row is
+    // part of the field's arrangement: the label names the group, as for several controls, and the control keeps the
+    // name its own content gives it (a link's file name, a command button's words).
+    let single = match nodes {
+        [only] if !only.arranged => Some(only),
+        _ => None,
+    };
+    match single {
+        Some(only) if label.role == FieldLabelRole::Describes || only.keeps_name => {
             patches.push(LabelPatch::DescribedBy { node: only.id, label: label.id });
         }
-        [only] => patches.push(LabelPatch::LabelledBy { node: only.id, label: label.id, text: label.text.clone() }),
-        _ => patches.push(LabelPatch::GroupLabelledBy { container, label: label.id }),
+        Some(only) => patches.push(LabelPatch::LabelledBy { node: only.id, label: label.id, text: label.text.clone() }),
+        None => patches.push(LabelPatch::GroupLabelledBy { container, label: label.id }),
     }
     if let Some(text) = &label.detail {
-        let node = match nodes {
-            [only] => only.id,
-            _ => container,
-        };
-        patches.push(LabelPatch::Detail { node, text: text.clone() });
+        patches.push(LabelPatch::Detail { node: single.map_or(container, |only| only.id), text: text.clone() });
     }
     patches
 }
