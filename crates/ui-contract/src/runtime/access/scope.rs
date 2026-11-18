@@ -576,6 +576,14 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
             }
             // A click on a label, as on any form label, moves focus to its one control. A node that takes no focus
             // beside it (the unit text after a number field) is not a control the click could mean.
+            if label.activated || label.text == "Unit after" {
+                eprintln!(
+                    "DIAG rf-number finish: label {:?} activated {} nodes {:?}",
+                    label.text,
+                    label.activated,
+                    scope.nodes.iter().map(|node| (node.id, node.focusable, node.inner_stop.is_some(), node.disabled)).collect::<Vec<_>>()
+                );
+            }
             let mut controls = scope.nodes.iter().filter(|node| node.focusable || node.inner_stop.is_some());
             if let (true, Some(only), None) = (label.activated, controls.next(), controls.next())
                 && !only.disabled

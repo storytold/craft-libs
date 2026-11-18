@@ -291,6 +291,9 @@ impl Component for LabelLeaf {
         self.double_click = self.resettable && cx.press().double_pressed();
         self.dot_click = self.slot > 0.0 && self.differs && cx.part(DOT).press.phase.is_click();
         self.activated = cx.activation().is_some();
+        if self.activated {
+            eprintln!("DIAG rf-number leaf: activated, claimed {}", self.claimed);
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
