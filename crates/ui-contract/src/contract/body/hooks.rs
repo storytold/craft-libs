@@ -800,7 +800,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if !real && is_open && props.end.is_some() {
             let mut end_cx = BodyCx::new(body_id, line_env.view(), resolved, regions.end, &mut *cx.core.memory, &mut open, gate.as_mut())
                 .with_field_message(field_message.clone())
-                .with_owner(owner);
+                .with_owner(owner)
+                .with_exiting(self.exiting);
             close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, regions.end, None));
         }
         let beside =
@@ -1057,7 +1058,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             if real && props.end.is_some() {
                 let mut end_cx = BodyCx::new(body_id, line_env.view(), resolved, regions.end, &mut *cx.core.memory, &mut open, gate.as_mut())
                     .with_field_message(field_message.clone())
-                    .with_owner(owner);
+                    .with_owner(owner)
+                    .with_exiting(self.exiting);
                 // The end region shares the body's line, above a scroll bar under the body: its children sit on the
                 // members' line, from the body's top (a label may stand above the body).
                 let mut end = regions.end;

@@ -28,6 +28,7 @@ pub struct BodyCx<'a> {
     gate: Option<&'a mut bool>,
     gate_mixed: bool,
     close: Option<CloseReason>,
+    exiting: bool,
     field_message: Option<(Message, craft_theme::variant::Tone)>,
     owner: Option<BodyOwner<'a>>,
 }
@@ -43,7 +44,7 @@ impl<'a> BodyCx<'a> {
         gate: Option<&'a mut bool>,
     ) -> Self {
         memory.claim(id);
-        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed: false, close: None, field_message: None, owner: None }
+        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed: false, close: None, exiting: false, field_message: None, owner: None }
     }
 
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set: the opener
@@ -59,6 +60,17 @@ impl<'a> BodyCx<'a> {
             return None;
         }
         self.env.host()?.files().take_answer(ticket)
+    }
+
+    pub(crate) fn with_exiting(mut self, exiting: bool) -> Self {
+        self.exiting = exiting;
+        self
+    }
+
+    /// Whether the container has closed and its body only stays on screen while it fades out. `is_open` reads true
+    /// then; a region that belongs to the open container (a companion layer) is not shown.
+    pub fn is_exiting(&self) -> bool {
+        self.exiting
     }
 
     pub(crate) fn with_gate_mixed(mut self, mixed: bool) -> Self {
