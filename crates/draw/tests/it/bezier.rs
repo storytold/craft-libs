@@ -74,6 +74,30 @@ fn edit_subpath_insert_at_splits_a_curve_without_changing_it() {
 // MoveAnchors, MoveHandle (smooth and alone), BendSegment (straight and curved), Convert give PhotoCraft's kernel
 // results; a wrong key or index changes nothing and returns false.
 #[trial]
+fn path_edit_pull_anchor_inserts_and_pulls_out_the_handles() {
+    let straight = || ops_path(EditSubpath::new(vec![Knot::corner(p(0.0, 0.0)), Knot::corner(p(100.0, 0.0))], false));
+    let mut path = straight();
+    assert!(PathEdit::pull_anchor(7, kr(0), 0.5, p(50.0, 30.0), None).apply(&mut path));
+    let k = path.subpaths[0].knots[1];
+    assert!(near(k.anchor, p(50.0, 0.0)) && near(k.out_ctrl, p(50.0, 30.0)) && near(k.in_ctrl, p(50.0, -30.0)) && k.smooth, "{k:?}");
+    let mut path = straight();
+    assert!(PathEdit::pull_anchor(7, kr(0), 0.5, p(50.0, 30.0), Some(p(80.0, 0.0))).apply(&mut path));
+    let k = path.subpaths[0].knots[1];
+    assert!(near(k.in_ctrl, p(80.0, 0.0)) && !k.smooth, "{k:?}");
+    for bad in [
+        PathEdit::pull_anchor(7, kr(0), 0.5, p(f64::NAN, 0.0), None),
+        PathEdit::pull_anchor(7, kr(0), 0.5, p(1.0, 1.0), Some(p(0.0, f64::INFINITY))),
+        PathEdit::pull_anchor(7, kr(0), 1.5, p(1.0, 1.0), None),
+        PathEdit::pull_anchor(7, kr(4), 0.5, p(1.0, 1.0), None),
+        PathEdit::pull_anchor(7, KnotRef::new(3, 0), 0.5, p(1.0, 1.0), None),
+    ] {
+        let mut path = straight();
+        assert!(!bad.apply(&mut path), "{bad:?}");
+        assert_eq!(path, straight());
+    }
+}
+
+#[trial]
 fn path_edit_apply_matches_the_kernel_for_every_existing_edit() {
     let base = || {
         ops_path(EditSubpath::new(
@@ -417,12 +441,13 @@ fn cmd_or_ctrl_with_page_down_on_a_focused_anchor_scrolls_the_canvas_and_picks_n
     assert_eq!(h.state.borrow().selection, picked, "the page key picks no part");
 }
 
-// Add Anchor on a segment: a press, a drag and a release are one gesture that inserts the anchor and moves it, with the
-// new anchor selected; a click inserts it where the segment was pressed and moves nothing.
+// The Pen's Auto Add/Delete on a segment: a press, a drag and a release are one gesture that inserts the anchor and
+// moves it, with the new anchor selected. Add Anchor's click inserts it where the segment was pressed and moves
+// nothing (its drag pulls out handles: `an_add_anchor_drag_pulls_out_the_new_anchors_handles`).
 #[trial]
 fn an_add_anchor_drag_inserts_and_moves_the_new_anchor_in_one_gesture() {
     let mut h = two_paths();
-    h.update(|st| st.tool = BezierTool::AddAnchor);
+    h.update(|st| st.tool = BezierTool::AutoAddDelete);
     let on = h.screen(p(110.0, 60.0));
     h.drag(on, vec2(0.0, FAR));
     {
@@ -451,6 +476,73 @@ fn an_add_anchor_drag_inserts_and_moves_the_new_anchor_in_one_gesture() {
     assert!(matches!(st.changes.last(), Some(PathEdit::InsertAnchor { by, .. }) if *by == Vec2::ZERO), "{:?}", st.changes);
     assert_eq!(st.paths[0].subpaths[0].knots.len(), 5);
     assert_eq!(st.selection, sel(1, &[(0, 1)]));
+}
+
+// Add Anchor's drag from a segment inserts the anchor where the segment was pressed and pulls out its handles, as the
+// reference application does (PhotoCraft #12707): the out handle follows the pointer and the in handle mirrors it, in
+// one gesture, the new anchor selected and smooth; ⇧ turns the handle to the nearest 45°, an axis keeping the
+// drag's offset along it and a diagonal the shorter offset; ⌥ pressed during the drag breaks the pair, so only the
+// out handle follows from then on.
+#[trial]
+fn an_add_anchor_drag_pulls_out_the_new_anchors_handles() {
+    let add_anchor = || {
+        let mut h = two_paths();
+        h.update(|st| st.tool = BezierTool::AddAnchor);
+        h
+    };
+    let close = |a: Vec2, b: Vec2| (a - b).hypot() < 1e-6;
+    let on = p(110.0, 60.0);
+
+    let mut h = add_anchor();
+    let at = h.screen(on);
+    h.drag(at, vec2(0.0, 60.0));
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1, "{:?}", st.seen);
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+        assert!(
+            matches!(st.changes.last(), Some(PathEdit::PullAnchor { path: 1, segment, in_ctrl: None, .. }) if *segment == kr(0)),
+            "{:?}",
+            st.changes
+        );
+        let knots = &st.paths[0].subpaths[0].knots;
+        assert_eq!(knots.len(), 5);
+        let k = knots[1];
+        assert!(k.anchor.distance(on) < 1e-3, "the anchor stays where the segment was pressed: {k:?}");
+        assert!(close(k.out_ctrl - k.anchor, Vec2::new(0.0, 60.0)) && close(k.in_ctrl - k.anchor, Vec2::new(0.0, -60.0)), "{k:?}");
+        assert!(k.smooth);
+        assert_eq!(st.selection, sel(1, &[(0, 1)]));
+    }
+
+    // ⇧: the measured drags.
+    for (by, out) in [((30.0, 80.0), (0.0, 80.0)), ((70.0, 40.0), (40.0, 40.0)), ((-50.0, -60.0), (-50.0, -50.0)), ((60.0, -20.0), (60.0, 0.0))] {
+        let mut h = add_anchor();
+        let at = h.screen(on);
+        h.fixture.hold(egui::Modifiers::SHIFT);
+        h.drag(at, vec2(by.0, by.1));
+        h.fixture.hold(egui::Modifiers::NONE);
+        let st = h.state.borrow();
+        let k = st.paths[0].subpaths[0].knots[1];
+        let out = Vec2::new(out.0, out.1);
+        assert!(close(k.out_ctrl - k.anchor, out) && close(k.in_ctrl - k.anchor, -out), "{by:?}: {k:?}");
+    }
+
+    // ⌥ during the drag: the in handle stays where the pair had it, the out handle follows on.
+    let mut h = add_anchor();
+    let at = h.screen(on);
+    h.press_at(at);
+    h.move_to(at + vec2(-30.0, 0.0));
+    h.move_to(at + vec2(-60.0, 0.0));
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.move_to(at + vec2(-60.0, 20.0));
+    h.move_to(at + vec2(-60.0, 40.0));
+    h.release_at(at + vec2(-60.0, 40.0));
+    h.fixture.hold(egui::Modifiers::NONE);
+    let st = h.state.borrow();
+    let k = st.paths[0].subpaths[0].knots[1];
+    assert!(close(k.out_ctrl - k.anchor, Vec2::new(-60.0, 40.0)) && close(k.in_ctrl - k.anchor, Vec2::new(60.0, 0.0)), "{k:?}");
+    assert!(!k.smooth, "a broken pair is a corner");
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1, "{:?}", st.seen);
 }
 
 // Convert on a segment: a drag on a straight one bends it when nothing of the path is selected and moves the path when
