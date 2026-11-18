@@ -120,7 +120,7 @@ craft-jpeg = { path = "crates/jpeg" }
 craft-control-protocol = { path = "crates/control-protocol" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
 craft-mcp = { path = "crates/mcp" }
-craft-jxl = { path = "crates/jxl" }
+craft-jxl = { path = "crates/jxl", default-features = false }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }

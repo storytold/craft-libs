@@ -139,7 +139,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
-        Format::Jxl => Err(CodecError::unsupported(format, "JPEG XL reading is not yet available; export is supported")),
+        Format::Jxl => jxl::decode(bytes, l),
         #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
         Format::Avif => codecs::avif_decode::decode(bytes, l, opts.keep_orientation),
         #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]

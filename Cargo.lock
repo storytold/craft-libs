@@ -2243,6 +2243,7 @@ dependencies = [
  "craft-dds",
  "craft-heif",
  "craft-jpeg",
+ "craft-jxl",
  "craft-media-testkit",
  "craft-metadata",
  "craft-tiff",
