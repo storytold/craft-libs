@@ -5,6 +5,7 @@ use super::items::FIRST;
 use super::{RulerValues, TabAlign, TabLeader, TabStop, TextRuler};
 use crate::ui::length::DocUnit;
 use craft_behavior::Mixed;
+use craft_ui::canvas::Rulers;
 use craft_ui::contract::{Bind, Show as _, Validity};
 use craft_ui::runtime::env::{Message, UnitKind};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
@@ -72,6 +73,41 @@ fn indent_too_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn tabs_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = data.value("values", RulerValues { stops: sample_stops(), ..RulerValues::default() });
     TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).picked_stop(PICKED).show(ui).into()
+}
+
+/// The page's width, points: 8.5 in.
+const PAGE: f32 = 612.0;
+/// The page's left margin, points: the ruler's zero.
+const PAGE_MARGIN: f32 = 72.0;
+
+/// Two gaps in the text width, between three columns.
+const TWO_GAPS: [(f32, f32); 2] = [(144.0, 162.0), (306.0, 324.0)];
+/// Three gaps in the text width, between four columns.
+const THREE_GAPS: [(f32, f32); 3] = [(108.0, 126.0), (225.0, 243.0), (342.0, 360.0)];
+
+#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
+fn page_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let values = data.value("values", word());
+    let (strip, _) = Rulers::strips(ui, craft_ui::testing::stage(ui));
+    TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN)
+        .unit(inches())
+        .origin(strip.min.x + PAGE_MARGIN)
+        .extent(egui::Rangef::new(strip.min.x, strip.min.x + PAGE))
+        .scale(1.0)
+        .show_at(ui, strip)
+        .into()
+}
+
+#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
+fn two_column_gaps(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let values = data.value("values", RulerValues::default());
+    TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).gaps(&TWO_GAPS).show(ui).into()
+}
+
+#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
+fn three_column_gaps(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let values = data.value("values", RulerValues::default());
+    TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).gaps(&THREE_GAPS).show(ui).into()
 }
 
 #[story(TextRuler<'static>, covers = [], drive = Drive::Never)]

@@ -31,8 +31,11 @@ mod run;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
+/// The ruler's number writing and snap step, which the page rulers share so every ruler counts one unit alike.
+pub use run::{nudge_size, ruler_text, snap_step};
+
 use geometry::{Geometry, Shapes};
-use items::{COLUMN, Item, SELECTOR, STRIP};
+use items::{COLUMN, GAP, GAP_RANK, Item, MARKER_RANK, SELECTOR, STRIP, gap_part};
 
 craft_ui::words! {
     /// The ruler's AccessKit names and readout (Word's).
@@ -356,11 +359,12 @@ pub struct TextRuler<'a> {
     /// The column gaps as (start, end) points from the column's start edge, painted and dragged by their edges.
     #[prop]
     gaps: &'a [(f32, f32)],
-    /// Where the ruler's zero sits, points from the strip's start edge: a page-wide ruler is measured from the page's
-    /// text origin.
+    /// The screen x where the ruler's zero sits: a page-wide ruler is measured from the page's text origin. Unset, zero
+    /// is the strip's start edge. Given against the screen so the corner square, which only the ruler places, does not
+    /// enter the caller's arithmetic.
     #[prop]
-    origin: f32,
-    /// The part of the strip the ruler covers, points from the strip's start edge; the ruler is cut to it.
+    origin: Option<f32>,
+    /// The screen x range the ruler covers (the page's); the ruler is cut to it. Unset, the whole strip.
     #[prop]
     extent: Option<egui::Rangef>,
     /// The unit the markers' values and the ticks show.
@@ -392,7 +396,7 @@ impl<'a> TextRuler<'a> {
             width: if width.is_finite() { width.max(0.0) } else { 0.0 },
             columns: &[],
             gaps: &[],
-            origin: 0.0,
+            origin: None,
             extent: None,
             unit: DocUnit::points(),
             kind: None,
@@ -406,7 +410,7 @@ impl<'a> TextRuler<'a> {
 
     /// The corner square, the strip and the markers' sizes inside `rect`.
     fn layout(&self, rect: Rect, style: &TextRulerStyle, interface_rtl: bool) -> Layout {
-        let corner_width = if self.kind.is_some() { style.thickness.min(rect.width()) } else { 0.0 };
+        let corner_width = if self.kind.is_some() { rect.height().min(rect.width()) } else { 0.0 };
         let (corner, strip) = if interface_rtl {
             (
                 Rect::from_min_max(egui::pos2(rect.max.x - corner_width, rect.min.y), rect.max),
@@ -420,8 +424,22 @@ impl<'a> TextRuler<'a> {
         };
         let fit = if self.width > 0.0 { strip.width() / self.width } else { 1.0 };
         let scale = self.scale.filter(|scale| scale.is_finite() && *scale > 0.0).unwrap_or(fit).max(f32::EPSILON);
+        let right_to_left = self.right_to_left.unwrap_or(interface_rtl);
+        let from_start = |x: f32| if right_to_left { (strip.max.x - x) / scale } else { (x - strip.min.x) / scale };
+        let origin = self.origin.filter(|x| x.is_finite()).map_or(0.0, from_start);
+        let extent = self.extent.map(|extent| {
+            let (a, b) = (from_start(extent.min), from_start(extent.max));
+            egui::Rangef::new(a.min(b), a.max(b))
+        });
         Layout {
-            g: Geometry { strip, scale, right_to_left: self.right_to_left.unwrap_or(interface_rtl), width: self.width },
+            g: Geometry {
+                strip,
+                scale,
+                right_to_left,
+                width: self.width,
+                origin,
+                extent,
+            },
             shapes: Shapes { width: style.marker_width, column: style.column_width, tip: style.marker_height, stem: style.stem, foot: style.foot },
             corner,
         }
@@ -508,7 +526,8 @@ impl Component for TextRuler<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let layout = self.layout(rect, cx.style, cx.flow.is_rtl());
         let values = cx.value().cloned().unwrap_or_default();
-        let handle = HitPriority::new(HitLevel::Handle, 0);
+        let handle = HitPriority::new(HitLevel::Handle, MARKER_RANK);
+        let below = HitPriority::new(HitLevel::Handle, GAP_RANK);
         cx.part(STRIP, layout.g.strip).sense(Sense::CLICK | Sense::DRAG).pointer_only("the Tabs dialog sets a stop by number");
         for item in Item::all(&values) {
             let part = cx
@@ -534,6 +553,15 @@ impl Component for TextRuler<'_> {
                 .nudges()
                 .focus_shape(FocusShape::Rect)
                 .value_part();
+        }
+        for (index, gap) in self.gaps.iter().enumerate() {
+            for edge in [GapEdge::End, GapEdge::Start] {
+                cx.part(GAP.at(gap_part(index, edge)), layout.shapes.gap_edge(&layout.g, *gap, edge))
+                    .sense(Sense::DRAG)
+                    .priority(below)
+                    .cursor(craft_behavior::CursorIcon::ResizeHorizontal)
+                    .pointer_only("the page's column settings set a gap by number");
+            }
         }
         cx.roving(Roving::new(NavShape::Flat).page(Some(1)).home_end(false));
         if self.kind.is_some() {

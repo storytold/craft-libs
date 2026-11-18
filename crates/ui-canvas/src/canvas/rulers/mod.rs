@@ -238,6 +238,15 @@ impl<'a> Rulers<'a> {
         Self::content_rect_of(full, thickness(cx.tokens))
     }
 
+    /// The top and the left strip inside the canvas's rect `full`, each as thick as the canvas's own rulers, for a ruler
+    /// of another component (a text ruler, a page ruler) that lies along them.
+    pub fn strips(ui: &egui::Ui, full: Rect) -> (Rect, Rect) {
+        let env = crate::runtime::env::Env::of(ui);
+        let cx = StyleCx::of_env(ui.ctx(), &env);
+        let (top, left, _) = strips(full, thickness(cx.tokens));
+        (top, left)
+    }
+
     /// The ticks of one ruler over `values` (ruler units from the zero point): the one tick rule of every ruler, so a
     /// text ruler or a page view's ruler shows the same ticks as the canvas's. One labelled step beyond each end is
     /// included. `zoom` is screen points per document unit along the axis. Empty when the units are unusable.

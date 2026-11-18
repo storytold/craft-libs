@@ -83,8 +83,7 @@ pub enum TickRule<'a> {
 impl TickRule<'static> {
     /// The rule for a ruler counting `kind`: Word's sixteenths for inches, `Metric` otherwise.
     pub fn of_unit(kind: UnitKind) -> TickRule<'static> {
-        let _ = kind;
-        todo!("cv.K12")
+        if kind == UnitKind::Inches { TickRule::Inches(&INCH_SIXTEENTHS) } else { TickRule::Metric }
     }
 }
 
