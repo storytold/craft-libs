@@ -178,13 +178,19 @@ fn a_held_keys_scope_takes_its_keys_before_the_window() {
 }
 
 /// What one frame of the Focus trial's shell laid out: the body, the screen bar and the drop-down slot when shown.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 struct Laid {
     body: Rect,
     screen: Option<Rect>,
     drops: Option<Rect>,
     revealed: bool,
     dropped: bool,
+}
+
+impl Default for Laid {
+    fn default() -> Self {
+        Self { body: Rect::NOTHING, screen: None, drops: None, revealed: false }
+    }
 }
 
 /// One frame with `events` of a document shell with a screen bar and a drop-down slot, its mode bound to `mode` and

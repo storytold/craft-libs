@@ -132,10 +132,16 @@ fn the_window_title_is_sent_once_per_change() {
 }
 
 /// What the action-title trial saw: the passes that reported an activation, and the bar's rect.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct TitleSeen {
     activations: usize,
     bar: Rect,
+}
+
+impl Default for TitleSeen {
+    fn default() -> Self {
+        Self { activations: 0, bar: Rect::NOTHING }
+    }
 }
 
 /// A settled title bar whose title `title` is an action; what each pass reported.
