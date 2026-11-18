@@ -92,7 +92,7 @@ fn a_settled_bar_keeps_its_caption_record() {
     let windows = Windows::new();
     let host = WindowHost::of(&windows.ctx);
     let ran = Cell::new(false);
-    let mut frame = || {
+    let frame = || {
         ran.set(false);
         windows.frame(vec![], vec![], |ui| {
             Lazy::new("bar", 0.0).settles(true).content(1).show(ui, |ui| {
@@ -103,7 +103,7 @@ fn a_settled_bar_keeps_its_caption_record() {
         ran.get()
     };
     assert!(frame(), "the bar runs in its first frame");
-    let settled = (0..4).map(|_| frame()).last();
+    let settled = (0..4).map(|_| frame()).next_back();
     assert_eq!(settled, Some(false), "the bar settles");
     let regions = host.caption_regions(ViewportId::ROOT).expect("the settled bar keeps its parts");
     assert_eq!(regions.buttons.len() + regions.edges.len() + regions.moves.len(), 3, "every part stays: {regions:?}");

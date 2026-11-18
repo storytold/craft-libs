@@ -446,7 +446,7 @@ fn a_settled_child_runs_when_the_theme_or_density_changes() {
         });
     });
     fixture.settle();
-    let mut frame = |fixture: &mut Fixture| {
+    let frame = |fixture: &mut Fixture| {
         runs.set(0);
         fixture.frame(Vec::new());
         runs.get()
@@ -471,7 +471,7 @@ fn a_settled_child_runs_when_the_language_changes() {
         });
     });
     fixture.settle();
-    let mut frame = |fixture: &mut Fixture| {
+    let frame = |fixture: &mut Fixture| {
         runs.set(0);
         fixture.frame(Vec::new());
         runs.get()

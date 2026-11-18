@@ -119,9 +119,9 @@ pub(in crate::docking) fn settled_bar(ui: &mut Ui, band: Rect, content: Option<u
     if !band.is_positive() {
         return BarRecord::default();
     }
-    ui.scope_builder(UiBuilder::new().max_rect(band).id_salt("column bar"), |ui| {
+    ui.scope_builder(UiBuilder::new().max_rect(band), |ui| {
         // Keyed by the scope's id, under its column's: unique among the bars of a scroll area's columns.
-        let lazy = Lazy::new(ui.id(), 0.0).settles(content.is_some());
+        let lazy = Lazy::new(ui.scope_id(), 0.0).settles(content.is_some());
         let lazy = match content {
             Some(version) => lazy.content(version),
             None => lazy,

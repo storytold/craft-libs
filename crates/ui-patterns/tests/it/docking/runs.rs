@@ -274,7 +274,7 @@ impl DockPanels<usize> for Noted {
     }
 
     fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        self.ids.borrow_mut().push((*panel, ui.id()));
+        self.ids.borrow_mut().push((*panel, ui.scope_id()));
     }
 }
 
