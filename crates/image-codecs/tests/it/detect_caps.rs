@@ -371,6 +371,32 @@ fn a_restart_interval_before_the_frame_header_is_jpeg_ls() {
 }
 
 #[test]
+fn the_restart_interval_in_effect_at_the_scan_decides_decoding() {
+    // The 5x3 file's frame header ends at byte 15, where its scan header starts.
+    let (img, plain) = jpeg_ls_file();
+    assert_eq!(plain[2..4], [0xFF, 0xF7]);
+    assert_eq!(plain[15..17], [0xFF, 0xDA]);
+    let with_dri = |intervals: &[u16]| {
+        let mut bytes = plain[..15].to_vec();
+        for interval in intervals {
+            bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4]);
+            bytes.extend_from_slice(&interval.to_be_bytes());
+        }
+        bytes.extend_from_slice(&plain[15..]);
+        bytes
+    };
+    // A later interval of 0 turns restarts off again.
+    assert_eq!(decode(&with_dri(&[1, 0])).unwrap().data(), img.data());
+    // An interval of at least the scan's 3 lines puts the whole scan in one interval, so the scan
+    // has no restart marker.
+    assert_eq!(decode(&with_dri(&[3])).unwrap().data(), img.data());
+    assert_eq!(decode(&with_dri(&[u16::MAX])).unwrap().data(), img.data());
+    // A shorter interval needs restart markers in the scan.
+    assert!(matches!(decode(&with_dri(&[2])), Err(CodecError::Unsupported { .. })));
+    assert!(matches!(decode(&with_dri(&[0, 2])), Err(CodecError::Unsupported { .. })));
+}
+
+#[test]
 fn a_stuffed_zero_where_a_marker_should_be_is_jpeg() {
     // `FF 00` is not a marker, so the walk ends there without asking for a length field.
     assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0x00]), Detection::Format(Format::Jpeg));

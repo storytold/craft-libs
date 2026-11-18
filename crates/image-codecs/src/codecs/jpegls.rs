@@ -657,6 +657,7 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let mut preset = [0i32; 5];
     let mut planes: Vec<Vec<u16>> = Vec::new();
     let mut scans_done = 0;
+    let mut restart_interval = 0usize;
     loop {
         // Find the next marker.
         while b.get(pos) != Some(&0xFF) {
@@ -707,18 +708,21 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                     return Err(CodecError::unsupported(F, "mapping tables and colour transforms (LSE)"));
                 }
             }
-            // DRI: a 2-, 3- or 4-byte interval (T.87 C.2.5). An interval of 0 turns restart
-            // markers off.
+            // DRI: a 2-, 3- or 4-byte interval in lines (T.87 C.2.5). An interval of 0 turns
+            // restart markers off. The interval in effect at each scan header applies to that scan.
             0xDD => {
                 if !(2..=4).contains(&seg.len()) {
                     return Err(bad("bad restart interval segment"));
                 }
-                if seg.iter().any(|&v| v != 0) {
-                    return Err(CodecError::unsupported(F, "a restart interval"));
-                }
+                restart_interval = seg.iter().fold(0, |ri, &v| (ri << 8) | usize::from(v));
             }
             0xDA => {
                 let f = frame.as_ref().ok_or_else(|| bad("a scan before the frame header"))?;
+                // A scan of one component has restart markers only when the interval is shorter
+                // than the frame's height.
+                if restart_interval != 0 && restart_interval < f.height {
+                    return Err(CodecError::unsupported(F, "a restart interval"));
+                }
                 let ns = usize::from(*seg.first().ok_or_else(|| bad("empty scan header"))?);
                 if seg.len() < 1 + 2 * ns + 3 || ns != 1 {
                     return Err(CodecError::unsupported(F, "interleaved scans (ILV 1 and 2)"));
