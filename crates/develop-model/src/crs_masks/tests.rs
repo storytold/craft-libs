@@ -302,3 +302,39 @@ fn an_xmp_preset_keeps_its_masks() {
     assert_ne!(masks_only, PACKET);
     assert!(crate::crs::preset_from_xmp(&masks_only, "f").is_some_and(|p| p.settings.get("masks").is_some()));
 }
+
+/// A range with a number that is not one cannot be read: that mask is reported, the rest of the packet applies.
+#[test]
+fn a_range_that_is_not_four_numbers_is_skipped_not_fatal() {
+    for bad in ["0.4 NaN 0.8 0.9", "0.4 inf 0.8 0.9", "0.4 0.5 0.8", "0.4 0.5 x 0.9", "0.4 0.5 0.8 0.9 1"] {
+        let packet = PACKET.replace("0.4 0.5 0.8 0.9", bad);
+        assert_ne!(packet, PACKET);
+        let d = craft_metadata::parse_xmp(&packet).unwrap();
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+        let s = DevelopSettings::default().merged(&partial).unwrap_or_else(|e| panic!("{bad}: {e}"));
+        assert_eq!(s.light.exposure, 0.2, "{bad}");
+        assert!(unmapped.iter().any(|u| u == "Mask: luminance range"), "{bad}: {unmapped:?}");
+    }
+}
+
+/// A photo's own packet whose masks are all switched off says the photo has none; a preset says nothing about them.
+#[test]
+fn a_sidecar_with_only_inactive_masks_clears_the_photo_s() {
+    let (head, rest) = PACKET.split_once("<crs:MaskGroupBasedCorrections>").unwrap();
+    let (_, tail) = rest.rsplit_once("</crs:PaintBasedCorrections>").unwrap();
+    let off = r#"<crs:MaskGroupBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionActive="false" crs:LocalExposure2012="1">
+   <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Image" crs:MaskSubType="2"/></rdf:Seq></crs:CorrectionMasks>
+  </rdf:Description></rdf:li></rdf:Seq></crs:MaskGroupBasedCorrections>"#;
+    let d = craft_metadata::parse_xmp(&format!("{head}{off}{tail}")).unwrap();
+    let report = |target| crate::crs::to_partial_report(&d.properties, Some(&d.values), target, 1.5).0;
+    let (mut photo, _) = settings();
+    assert!(!photo.masks.is_empty());
+    assert!(report(crate::crs::Target::Any).get("masks").is_none(), "a preset adds masks, it does not clear them");
+    let partial = report(crate::crs::Target::RawAbsolute);
+    assert_eq!(partial["masks"], serde_json::json!([]));
+    photo = photo.merged(&partial).unwrap();
+    assert!(photo.masks.is_empty());
+    // no container at all: the photo's masks are not the packet's to say
+    let none = craft_metadata::parse_xmp(&format!("{head}{tail}")).unwrap();
+    assert!(crate::crs::to_partial_report(&none.properties, Some(&none.values), crate::crs::Target::RawAbsolute, 1.5).0.get("masks").is_none());
+}

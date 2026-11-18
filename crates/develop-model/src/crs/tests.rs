@@ -278,6 +278,17 @@ fn channel_curves_need_the_master_and_all_channel_curves() {
     // Lightroom applies red / green / blue curves only when the master and all three are present
     let seq = |name: &str, pts: &str| format!("<crs:{name}><rdf:Seq>{pts}</rdf:Seq></crs:{name}>");
     let identity = "<rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li>";
+    // the older single curve, straight: "no curve" is stated, so it replaces a curve the photo has
+    let legacy = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">{}</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+        seq("ToneCurve", identity)
+    );
+    let straight = to_partial(&props(&legacy), Target::RawAbsolute);
+    assert_eq!(straight.pointer("/curve/master"), Some(&serde_json::json!([])), "{straight}");
+    let mut curved = crate::DevelopSettings::default();
+    curved.curve.master = vec![craft_geom::Point::new(0.0, 0.0), craft_geom::Point::new(0.3, 0.5), craft_geom::Point::new(1.0, 1.0)];
+    assert!(curved.merged(&straight).unwrap().curve.master.is_empty());
     let bent = "<rdf:li>0, 0</rdf:li><rdf:li>64, 40</rdf:li><rdf:li>255, 255</rdf:li>";
     let packet = |curves: &[String]| {
         format!(

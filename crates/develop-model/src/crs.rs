@@ -306,8 +306,9 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "ParametricMidtoneSplit", "curve.split_mid");
     n(o, "ParametricHighlightSplit", "curve.split_highlights");
     n(o, "CurveRefineSaturation", "curve.refine_saturation");
-    if let Some(c) = curve(props, "crs:ToneCurve").filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
-        // the older single curve, used when no 2012 curve is present
+    if let Some(c) = curve(props, "crs:ToneCurve") {
+        // the older single curve, used when no 2012 curve is present; a straight one says "no curve", which has to
+        // be said for it to replace a curve the photo has
         if !props.contains_key("crs:ToneCurvePV2012") {
             put(o, "curve.master", c);
         }
@@ -457,18 +458,23 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     let mut mask_skips = SKIPPED.with(|r| r.borrow_mut().take()).unwrap_or_default();
     if let Some(values) = values {
         let (masks, skipped) = crate::crs_masks::masks(values, aspect);
-        if !masks.is_empty() {
+        let has_masks = values.keys().any(|k| crate::crs_masks::CONTAINERS.contains(&k.as_str()));
+        // A photo's own packet holds the whole edit: masks it lists but has switched off mean "none", which has to
+        // be stated to replace the photo's. A preset's masks are added to the photo's, so it states nothing; and
+        // where a mask could not be carried over, the photo's are left alone.
+        if !masks.is_empty() || (has_masks && skipped.is_empty() && target != Target::Any) {
             put(&mut out, "masks", Value::Array(masks));
         }
-        if values.keys().any(|k| crate::crs_masks::CONTAINERS.contains(&k.as_str())) {
+        if has_masks {
             read.extend(crate::crs_masks::CONTAINERS.iter().map(|c| c.to_string()));
             mask_skips.extend(skipped.into_iter().map(|k| format!("Mask: {k}")));
         }
         let (spots, skipped) = crate::crs_masks::spots(values, aspect);
-        if !spots.is_empty() {
+        let has_spots = values.keys().any(|k| crate::crs_masks::SPOT_CONTAINERS.contains(&k.as_str()));
+        if !spots.is_empty() || (has_spots && skipped.is_empty() && target != Target::Any) {
             put(&mut out, "spots", Value::Array(spots));
         }
-        if values.keys().any(|k| crate::crs_masks::SPOT_CONTAINERS.contains(&k.as_str())) {
+        if has_spots {
             read.extend(crate::crs_masks::SPOT_CONTAINERS.iter().map(|c| c.to_string()));
             mask_skips.extend(skipped.into_iter().map(|k| format!("Spot: {k}")));
         }

@@ -150,7 +150,7 @@ We read these fields; we never write them. Only fields in the packet are applied
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
 `crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Process-version 2012+ field
 names are read (e.g. `Exposure2012`). A packet with none of them has its older (process version 2010) fields, such as
-`Exposure`, `Contrast` and `FillLight`, approximated with today's sliders; beside 2012 fields the older ones are ignored. `crs:ProcessVersion` itself numbers the other
+`Exposure`, `Contrast` and `FillLight`, approximated with today's sliders; beside any field whose name ends in `2012` those older sliders are ignored. The older `ToneCurve` is separate: it is read whenever the packet has no `ToneCurvePV2012`. `crs:ProcessVersion` itself numbers the other
 application's renderer and is ignored: the photo keeps LightCraft's own process, the latest for a newly imported photo
 ([process-versions.md](process-versions.md)).
 
