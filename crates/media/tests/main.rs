@@ -22,5 +22,7 @@ mod oracle_mux;
 mod oracle_mxf;
 #[cfg(feature = "ogg")]
 mod oracle_ogg;
+#[cfg(feature = "vmd")]
+mod oracle_vmd;
 #[cfg(feature = "isobmff")]
 mod roundtrip;

@@ -33,3 +33,9 @@ jobs:
         run: cargo doc --workspace --no-deps --locked --keep-going
         env:
           RUSTDOCFLAGS: -D warnings
+      # The crates whose features add public items document with every feature too; the
+      # per-crate workflows document the media, audio and video crates.
+      - name: Docs with all features
+        run: cargo doc -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell -p craft-doc -p craft-pdf --all-features --no-deps --locked --keep-going
+        env:
+          RUSTDOCFLAGS: -D warnings
