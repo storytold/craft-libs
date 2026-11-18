@@ -16,16 +16,16 @@ pub use codec::DateCodec;
 pub use popover::{CalendarPopover, CalendarPopoverStyle};
 
 use super::words::PickerWords;
-use crate::buttons::{IconButton, Link};
-use crate::choice::Segmented;
+use crate::buttons::IconButton;
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, Input, MeasureCx, Overlay, OverlayUi, Overlays as _, PaintUi,
-    PartsCx, Props as _, Remember as _, Role, Show as _, WordSetCx as _, clicked,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Props as _, Remember as _, Role, WordSetCx as _,
 };
 use crate::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use crate::runtime::env::Label;
 use crate::text::{Adornment, FieldStyle, place, reserve};
-use craft_behavior::{CancelReason, GesturePhase, HitLevel, HitPriority, IconId, PartKey, Sense};
+use craft_behavior::{CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Mixed, PartKey, Sense};
+use popover::{CalendarAt, calendar_body};
 use craft_i18n::{CalendarDate, DateFormat};
 use egui::{Rect, Vec2};
 use std::sync::Arc;
@@ -41,6 +41,11 @@ const LAST_YEAR: i32 = 9999;
 
 fn text_key() -> TextKey<Option<PickedDate>> {
     TextKey::new(TEXT)
+}
+
+/// The precisions a calendar offers: every one when it names none.
+fn offered(precisions: &[DatePrecision]) -> &[DatePrecision] {
+    if precisions.is_empty() { &DatePrecision::ALL } else { precisions }
 }
 
 /// How much of a date a value names.
@@ -181,12 +186,6 @@ impl PickedDate {
 #[derive(Clone, Default)]
 struct Previewing(bool);
 
-/// What the calendar's body reported this pass.
-struct Chosen {
-    hovered: Option<PickedDate>,
-    pick: Option<Option<PickedDate>>,
-}
-
 /// A text field for a date with a calendar popover. Typing a date commits on Enter or focus loss: ISO (`2026`,
 /// `2026-08`, `2026-08-14`) or, at day precision, the region's short date. The calendar button and Alt+Down open the
 /// popover on the value's page. Arrows move the active day, Page Up and Page Down page by month (by year on a month
@@ -223,7 +222,7 @@ impl<'a> DatePicker<'a> {
     }
 
     fn offered(&self) -> &'a [DatePrecision] {
-        if self.precisions.is_empty() { &DatePrecision::ALL } else { self.precisions }
+        offered(self.precisions)
     }
 
     fn codec(&self, dates: Arc<DateFormat>, mixed: bool) -> DateCodec {
@@ -300,65 +299,27 @@ impl Component for DatePicker<'_> {
         let dates = cx.env.dates();
         let words = cx.words::<PickerWords>();
         let current = cx.value().copied().flatten();
-        let precisions = self.offered();
-        let (min, max) = (self.min, self.max);
+        // The page follows the value the hover preview began from: a day this picker proposes under the pointer is
+        // not a value set from outside.
+        let settled = match cx.gesture_before() {
+            Some(Mixed::Same(before)) => before,
+            Some(_) => None,
+            None => current,
+        };
         let today = self.today.or_else(|| cx.env.today().and_then(PickedDate::from_calendar_date));
         let name = cx.label();
-        let chosen = ui.show(popup, Overlay::popover(), |ui, body| {
-            let mut view = (*body.memory::<Option<CalendarView>>()).unwrap_or_else(|| CalendarView::open(current, today, precisions, &dates));
-            if precisions.len() > 1 {
-                let entries: Vec<Entry<DatePrecision>> = precisions
-                    .iter()
-                    .map(|precision| {
-                        let label = match precision {
-                            DatePrecision::Year => &words.date_year,
-                            DatePrecision::Month => &words.date_month,
-                            _ => &words.date_day,
-                        };
-                        Entry::new(*precision, label.clone())
-                    })
-                    .collect();
-                let mut precision = view.precision;
-                Segmented::new(words.date_precision.clone(), Bind::bound(&mut precision), &entries).show(ui);
-                if precision != view.precision {
-                    view = view.switched(precision, &dates);
-                    view = view.landed(current, today, &dates);
-                }
-            }
-            let mut calendar = Calendar::new(name.clone(), view, current);
-            if let Some(min) = min {
-                calendar = calendar.min(min);
-            }
-            if let Some(max) = max {
-                calendar = calendar.max(max);
-            }
-            if let Some(today) = today {
-                calendar = calendar.today(today);
-            }
-            let page = calendar.show(ui);
-            if let Some(next) = page.moved {
-                view = next;
-            }
-            let mut pick = page.picked.map(Some);
-            ui.horizontal(|ui| {
-                let at_precision = today.map(|today| match view.precision {
-                    DatePrecision::Day => today,
-                    DatePrecision::Month => PickedDate::month(today.year, today.month.unwrap_or(1)),
-                    _ => PickedDate::year(today.year),
-                });
-                if let Some(today) = at_precision {
-                    let allowed = today.in_bounds(min.as_ref(), max.as_ref());
-                    if clicked(&Link::new(words.date_today.clone()).enabled(allowed).show(ui)) {
-                        pick = Some(Some(today));
-                    }
-                }
-                if clicked(&Link::new(words.date_clear.clone()).enabled(current.is_some()).show(ui)) {
-                    pick = Some(None);
-                }
-            });
-            *body.memory::<Option<CalendarView>>() = Some(view);
-            Chosen { hovered: page.hovered, pick }
-        });
+        let at = CalendarAt {
+            current,
+            settled,
+            precisions: self.offered(),
+            min: self.min,
+            max: self.max,
+            today,
+            dates: &dates,
+            words: &words,
+            name: &name,
+        };
+        let chosen = ui.show(popup, Overlay::popover(), |ui, body| calendar_body(ui, body, at));
         let Some(chosen) = chosen else { return };
         match chosen.pick {
             Some(date) => {

@@ -2,11 +2,21 @@
 
 use craft_behavior::NavMove;
 use craft_i18n::DateFormat;
-use craft_ui::pickers::{CalendarView, DatePrecision, PickedDate};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::pickers::{CalendarPopover, CalendarView, DatePicker, DatePrecision, PickedDate};
+use craft_ui::runtime::env::Env;
+use craft_ui::testing::Fixture;
+use egui::{Key, Modifiers, Ui};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 const YEAR: i32 = 2026;
 const JANUARY: u8 = 1;
 const FEBRUARY: u8 = 2;
+const AUGUST: u8 = 8;
+const SEPTEMBER: u8 = 9;
+const OCTOBER: u8 = 10;
 /// February 2026 has 28 days and starts on a Sunday.
 const FEBRUARY_DAYS: u8 = 28;
 const LAST_JANUARY_DAY: u8 = 31;
@@ -45,4 +55,60 @@ fn the_calendar_crosses_months_past_the_grids_ends_and_pages() {
     assert_eq!((next.month, i32::from(FEBRUARY_DAYS)), (FEBRUARY, next.active));
     assert_eq!(next.crossed(NavMove::PageUp, next.active, &dates).month, JANUARY);
     assert_eq!(view.crossed(NavMove::Start, 1, &dates), view, "Home is the grid's");
+}
+
+/// The page titles of August, September and October in the fixture's calendar.
+fn record_titles(ui: &mut Ui, titles: &RefCell<Vec<String>>) {
+    let dates = Env::of(ui).dates();
+    *titles.borrow_mut() = [AUGUST, SEPTEMBER, OCTOBER].iter().map(|month| dates.local_year_month(YEAR, *month)).collect();
+}
+
+/// An open calendar on an August value: Next pages to September and the page stays there while the value does; an
+/// October value set from outside moves it to October.
+fn follows(fixture: &mut Fixture, value: &Cell<Option<PickedDate>>, titles: &RefCell<Vec<String>>, what: &str) {
+    let shows = |fixture: &Fixture, month: usize| fixture.by_label(&titles.borrow()[month]).is_some();
+    assert!(shows(fixture, 0), "{what} opens on the value's month");
+    let next = fixture.by_label("Next").expect("the calendar's next button is shown");
+    fixture.click(&next).idle(4);
+    assert!(shows(fixture, 1) && !shows(fixture, 0), "{what} pages to the next month");
+    fixture.idle(4);
+    assert!(shows(fixture, 1), "{what} keeps the arrows' month while the value stays");
+    value.set(Some(PickedDate::day(YEAR, OCTOBER, 3)));
+    fixture.idle(4);
+    assert!(shows(fixture, 2) && !shows(fixture, 1), "{what} moves to the month of a value set from outside");
+}
+
+/// A value set from outside while the calendar is open moves its page; the arrows' month stays otherwise.
+#[craft_ui::testing::trial]
+fn the_calendar_popover_follows_a_value_set_while_it_is_open() {
+    let value = Rc::new(Cell::new(Some(PickedDate::day(YEAR, AUGUST, 14))));
+    let titles = Rc::new(RefCell::new(Vec::new()));
+    let (shown, named) = (value.clone(), titles.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        record_titles(ui, &named);
+        let opener = Button::new("Due").show(ui);
+        let mut open = true;
+        let mut now = shown.get();
+        CalendarPopover::new("Due date", Bind::bound(&mut open), Bind::bound(&mut now))
+            .precisions(&[DatePrecision::Day])
+            .opened_by(&opener)
+            .show(ui, |_, _| {});
+        shown.set(now);
+    });
+    fixture.idle(10);
+    follows(&mut fixture, &value, &titles, "the calendar popover");
+
+    let value = Rc::new(Cell::new(Some(PickedDate::day(YEAR, AUGUST, 14))));
+    let (shown, named) = (value.clone(), titles.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        record_titles(ui, &named);
+        let mut now = shown.get();
+        DatePicker::new("From", Bind::bound(&mut now)).precisions(&[DatePrecision::Day]).show(ui);
+        shown.set(now);
+    });
+    fixture.idle(10);
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.idle(4);
+    follows(&mut fixture, &value, &titles, "the date picker's calendar");
 }
