@@ -66,7 +66,7 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
         }
     }
     let reset = cx.core.intents.take_reset();
-    let double = double_click(&cx.core).filter(|_| !matches!(C::INPUT, Input::Text | Input::Editor));
+    let double = double_click(cx.core).filter(|_| !matches!(C::INPUT, Input::Text | Input::Editor));
     if reset.is_some() || double.is_some() {
         let part = match reset {
             Some(whole) => cx.core.active.filter(|_| !whole),

@@ -171,7 +171,7 @@ impl DockSizes {
         columns
             .iter()
             .zip(current.iter().zip(widths))
-            .filter(|(column, ((width, _), scaled))| !fixed(*column) && (scaled - width).abs() >= 0.01)
+            .filter(|(column, ((width, _), scaled))| !fixed(column) && (scaled - width).abs() >= 0.01)
             .filter_map(|(column, (_, width))| {
                 let panel = column.groups.iter().find_map(|group| group.panels.first())?.clone();
                 Some(if column.iconic { Action::resize_iconic(panel, Some(width)) } else { Action::resize_column(panel, width) })
@@ -422,43 +422,6 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
         ))
     }
 
-    /// Registers `spot` over `rect` for the dock `dock` in the running pass of this viewport. Group and column
-    /// rendering call it; it does nothing outside a pass. A floating window registers on its own egui layer, and
-    /// the drag session orders the layers, so no registry orders them.
-    pub fn register(ctx: &Context, dock: Id, spot: DockSpot<P>, rect: Rect) {
-        Self::register_in(ctx, dock, spot, rect, rect);
-    }
-
-    /// Registers `spot` taking drops over `hit`, with its mark drawn against `applies`: the group's rect for a side
-    /// zone of a group, the boundary between two tabs for a tab insertion.
-    pub fn register_in(ctx: &Context, dock: Id, spot: DockSpot<P>, hit: Rect, applies: Rect) {
-        if !crate::runtime::measure::effect(ctx, "dock::register_target") {
-            return;
-        }
-        Self::with_dock(ctx, dock, |targets| targets.add(spot, hit, applies, hit));
-    }
-
-    /// Registers a band `spot` (an edge, seam, column edge or new dock) over `band`, whose drop line is `line`: over a
-    /// tab strip the band takes the drop only within `reach` of the line (`DockSizes::strip_reach`), and the rest of
-    /// the strip joins its group.
-    pub fn register_band(ctx: &Context, dock: Id, spot: DockSpot<P>, band: Rect, line: Rect, reach: f32) {
-        if !crate::runtime::measure::effect(ctx, "dock::register_target") {
-            return;
-        }
-        let near = line.expand(reach).intersect(band);
-        Self::with_dock(ctx, dock, |targets| targets.add(spot, band, band, near));
-    }
-
-    /// Registers `room`, the rect the dock `dock` lays its panels out in this pass: the docked tree's rect for a dock
-    /// area, the column's rect for a floating window. A drop's mark lays the panels out in it as they land
-    /// ([`placed_rect`](super::placed_rect)).
-    pub fn register_room(ctx: &Context, dock: Id, room: Rect) {
-        if !crate::runtime::measure::effect(ctx, "dock::register_room") {
-            return;
-        }
-        Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
-    }
-
     /// Runs `f` on the registry of `dock` in the running pass, made empty the first time.
     fn with_dock(ctx: &Context, dock: Id, f: impl FnOnce(&mut DockTargets<P>)) {
         Self::with_pass(ctx, |pass| {
@@ -487,6 +450,61 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     /// registration order.
     pub fn resolve(ctx: &Context, dock: Id, at: Pos2) -> Option<(DockSpot<P>, Rect)> {
         Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.at(at))).flatten()
+    }
+}
+
+/// The registrations of a pass. A settled region's run record keeps each one to make it again, so the panel type is `Sync`.
+impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
+    /// Registers `spot` over `rect` for the dock `dock` in the running pass of this viewport. Group and column
+    /// rendering call it; it does nothing outside a pass. A floating window registers on its own egui layer, and
+    /// the drag session orders the layers, so no registry orders them.
+    pub fn register(ctx: &Context, dock: Id, spot: DockSpot<P>, rect: Rect) {
+        Self::register_in(ctx, dock, spot, rect, rect);
+    }
+
+    /// Registers `spot` taking drops over `hit`, with its mark drawn against `applies`: the group's rect for a side
+    /// zone of a group, the boundary between two tabs for a tab insertion.
+    pub fn register_in(ctx: &Context, dock: Id, spot: DockSpot<P>, hit: Rect, applies: Rect) {
+        if !crate::runtime::measure::effect(ctx, "dock::register_target") {
+            return;
+        }
+        Self::journal(ctx, || {
+            let spot = spot.clone();
+            move |ctx: &Context| Self::register_in(ctx, dock, spot.clone(), hit, applies)
+        });
+        Self::with_dock(ctx, dock, |targets| targets.add(spot, hit, applies, hit));
+    }
+
+    /// Registers a band `spot` (an edge, seam, column edge or new dock) over `band`, whose drop line is `line`: over a
+    /// tab strip the band takes the drop only within `reach` of the line (`DockSizes::strip_reach`), and the rest of
+    /// the strip joins its group.
+    pub fn register_band(ctx: &Context, dock: Id, spot: DockSpot<P>, band: Rect, line: Rect, reach: f32) {
+        if !crate::runtime::measure::effect(ctx, "dock::register_target") {
+            return;
+        }
+        Self::journal(ctx, || {
+            let spot = spot.clone();
+            move |ctx: &Context| Self::register_band(ctx, dock, spot.clone(), band, line, reach)
+        });
+        let near = line.expand(reach).intersect(band);
+        Self::with_dock(ctx, dock, |targets| targets.add(spot, band, band, near));
+    }
+
+    /// Registers `room`, the rect the dock `dock` lays its panels out in this pass: the docked tree's rect for a dock
+    /// area, the column's rect for a floating window. A drop's mark lays the panels out in it as they land
+    /// ([`placed_rect`](super::placed_rect)).
+    pub fn register_room(ctx: &Context, dock: Id, room: Rect) {
+        if !crate::runtime::measure::effect(ctx, "dock::register_room") {
+            return;
+        }
+        Self::journal(ctx, || move |ctx: &Context| Self::register_room(ctx, dock, room));
+        Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
+    }
+
+    /// Notes a registration in the records of the settling regions around the running code, so a region that settles
+    /// registers its drop spots again when it replays its last run.
+    fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
+        crate::runtime::journal(ctx, make);
     }
 }
 

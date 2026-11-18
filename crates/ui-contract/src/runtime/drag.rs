@@ -28,8 +28,11 @@ pub enum DragPreview {
     None,
     /// A badge with a short text ("3 files").
     Badge(Label),
-    /// A frame-sized outline centred on the pointer, with an optional label inside its top corner: the ghost of a
-    /// panel or window being moved.
+    /// Nothing beside the pointer: the payload's name shows inside the area of a region mark, as a panel or group
+    /// being moved names the place it would take. With no mark, nothing shows.
+    Named(Label),
+    /// An outline of `size` centred on the pointer, with an optional label inside its top corner: the ghost of a part
+    /// dragged out of a row (a thumbnail).
     #[non_exhaustive]
     Frame {
         /// The size of the frame, in points.

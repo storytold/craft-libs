@@ -145,11 +145,3 @@ pub(crate) fn fade(ctx: &Context, output: &FloatingGroupOutput) {
     let highlighted = drag::moves(ctx, viewport) && drag::mark(ctx).is_some();
     host.act(viewport, WindowAction::SetOpacity(if highlighted { craft_theme::Opacity::MOVING } else { 1.0 }));
 }
-
-/// Tells the window host that the native window of the group `id` is dragged by its title row from the app (the group
-/// docks its window), so the Windows hit test leaves that row to the app.
-pub(crate) fn keeps_app_drag(ctx: &Context, id: egui::Id) {
-    if let Some(viewport) = WindowHost::of(ctx).viewport_of(id) {
-        crate::runtime::windows::keeps_app_drag(ctx, viewport);
-    }
-}

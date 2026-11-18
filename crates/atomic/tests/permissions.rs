@@ -6,11 +6,16 @@ use craft_atomic::{NewFilePermissions, WriteOptions, atomic_write, write_new};
 use std::fs::{self, File, Permissions};
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(target_os = "linux")]
 struct TempDir(PathBuf);
+#[cfg(target_os = "linux")]
 impl TempDir {
     fn new() -> io::Result<Self> {
         static N: AtomicU64 = AtomicU64::new(0);
@@ -19,6 +24,7 @@ impl TempDir {
         Ok(Self(path))
     }
 }
+#[cfg(target_os = "linux")]
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -29,6 +35,7 @@ fn mode(path: &Path) -> io::Result<u32> {
     Ok(fs::metadata(path)?.permissions().mode() & 0o777)
 }
 
+#[cfg(target_os = "linux")]
 /// Set umask only in a separate shell process; changing it in a parallel test process races.
 fn child(dir: &Path, mask: &str, expected: &str, check_acl: bool) -> io::Result<()> {
     let output = Command::new("sh")

@@ -1,14 +1,14 @@
 //! The ghost layer's content (8.4, 8.5): the running drag's preview beside the pointer, the mark of the drop target that
-//! would take the payload, and the painted pointer the cursor service settled on, which goes to the window as its
-//! cursor image instead where the window takes one. They come from the drag session's data and the cursor record; the
-//! layer takes no input.
+//! would take the payload (with the payload's name inside a region mark, for a drag that names it), and the painted
+//! pointer the cursor service settled on, which goes to the window as its cursor image instead where the window takes
+//! one. They come from the drag session's data and the cursor record; the layer takes no input.
 
 use crate::primitives::pointer_art::{self as pointers, Art};
 
 use crate::primitives::{Draw, DrawEnv, IconSet, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
-use crate::runtime::env::Env;
+use crate::runtime::env::{Env, Label};
 use crate::runtime::{cursor, pointer};
 use crate::style::{Corners, Ink, RuleWidth, SurfaceKind, rule_look};
 use craft_behavior::Flow;
@@ -116,6 +116,9 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
 fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, draw: &Draw<'_>, session: &drag::Ghost) {
     if let Some(mark) = session.mark {
         paint_mark(painter, env, mark);
+        if let (DropMark::Region { area, .. }, DragPreview::Named(name)) = (mark, &session.preview) {
+            paint_region_name(draw, env, area, name);
+        }
     }
     let Some(at) = pointer::frame(ctx).pos else { return };
     match &session.preview {
@@ -137,6 +140,22 @@ fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, draw: &Draw<'_>
         }
         _ => {}
     }
+}
+
+/// The payload's name inside the region `area` a drop would take: at the reading start of its top, inside the mark's
+/// band, on one line elided to the area's width. A region too small for the line shows no name.
+fn paint_region_name(draw: &Draw<'_>, env: &Env, area: Rect, name: &Label) {
+    let name = env.view().resolve(name);
+    let inner = area.shrink(env.tokens.space.pad.control);
+    if inner.width() <= 0.0 {
+        return;
+    }
+    let layout = draw.layout(&TextRun::new(name.as_str()).elide(), inner.width());
+    if layout.size().y > inner.height() {
+        return;
+    }
+    let (at, _) = Flow::new(inner, env.direction.is_rtl()).take_start(layout.size().x.min(inner.width()));
+    draw.galley(at.min, &layout);
 }
 
 fn paint_drag_badge(draw: &Draw<'_>, env: &Env, at: Pos2, text: &str) {

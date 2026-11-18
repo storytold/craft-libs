@@ -270,9 +270,11 @@ fn a_palette_drops_its_level_while_the_app_is_inactive() {
     for _ in 0..2 {
         assert_eq!(frame(false, true), on_top, "focus moved to the palette's window: the app stays active in every frame");
     }
-    // Focus leaves the palette's window, which the main window's input still lists as focused.
+    // Focus leaves the palette's window, which the main window's input still lists as focused. Windows puts an
+    // inactive app's palette at the bottom, since `Normal` there stands in front of other apps' windows.
+    let inactive = Some(if cfg!(windows) { egui::WindowLevel::AlwaysOnBottom } else { egui::WindowLevel::Normal });
     frame(false, false);
-    assert_eq!(frame(false, false), Some(egui::WindowLevel::Normal), "the frame after focus left every window");
+    assert_eq!(frame(false, false), inactive, "the frame after focus left every window");
     frame(true, false);
     assert_eq!(frame(true, false), on_top, "the frame after the main window took focus again");
 }
