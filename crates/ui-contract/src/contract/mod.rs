@@ -662,9 +662,10 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         false
     }
 
-    /// Hosts a component in the header cell of `column`, in `rect`. Called only for a column `hosts_header` answers
+    /// Hosts a component in the header cell of `column`, in `rect`, measured and shown under `key` (the column's index
+    /// among the declared columns, so a move or a hide keeps it). Called only for a column `hosts_header` answers
     /// `true` for.
-    fn header_cell(&mut self, _ui: &mut Ui, _column: &ColumnKey, _rect: Rect) {}
+    fn header_cell(&mut self, _ui: &mut PaintUi<'_>, _column: &ColumnKey, _key: HostedKey, _rect: Rect) {}
 
     /// The text the rename field of the item `key` opens with; `None` for the item's own text.
     fn rename_draft(&self, _key: &Self::Key) -> Option<String> {

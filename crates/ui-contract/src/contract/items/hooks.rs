@@ -103,7 +103,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             _ => ColumnLayout::default(),
         });
         self.column_layout_at_read = bound.clone();
-        self.header.read(stage, id, comp.items(), bound);
+        let hosted: Vec<_> = comp.items().columns.iter().map(|spec| spec.key.clone()).filter(|key| comp.hosts_header(key)).collect();
+        self.header.read(stage, id, comp.items(), bound, hosted);
         self.drags = stage.session::<Drags<C::Key>>(sub(id, "drags")).clone();
         self.lead = stage.session::<Lead<C::Key>>(sub(id, "lead")).clone();
         // A collection in a layer starts from `lead_on_open` at every opening of the layer, not only the first.
@@ -475,7 +476,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(scope) = command_scope {
             crate::runtime::commands::register_instance(&ctx, scope, id);
         }
-        self.header.paint(ui, cx, env, id, rtl);
+        self.header.paint(ui, cx, comp, env, id, rtl);
         let len = self.source.len();
         let tree = matches!(layout.nav(), craft_behavior::NavShape::Tree);
         focus::registration::record_tree(&ctx, id, tree);

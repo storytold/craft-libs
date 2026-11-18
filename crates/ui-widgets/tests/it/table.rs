@@ -7,6 +7,7 @@ use craft_host::target::Os;
 use craft_ui::contract::{Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Role, ShowCollection as _};
 use craft_ui::list::ListRow;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable, Table};
+use craft_ui::text::TextField;
 use craft_ui::testing::{Fixture, Room, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Rect};
 use std::cell::{Cell, RefCell};
@@ -233,6 +234,64 @@ fn ctrl_or_cmd_with_an_arrow_moves_the_focused_column() {
         fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
         assert_eq!(events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Moved { .. })).count(), 1, "a plain arrow moves no column");
     }
+}
+
+/// A header cell hosts a text field that edits, its press does not sort and the header label stays its column's name;
+/// a column built with `removable` shows a control that reports its column once when pressed, and none when disabled.
+#[trial]
+fn a_header_field_edits_and_a_header_remove_reports_its_column() {
+    let events = Rc::new(RefCell::new(Vec::<ColumnEvent>::new()));
+    let edits = Rc::new(Cell::new(0_u32));
+    let text = Rc::new(RefCell::new(String::new()));
+    let (seen, counted, held) = (events.clone(), edits.clone(), text.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(10.0)).sortable().removable("Remove Name", true),
+            ColumnSpec::new(SIZE, "Size", ColumnWidth::Controls(6.0)).removable("Remove Size", false),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let mut draft = held.borrow().clone();
+        let out = Table::new("Files", columns)
+            .header_field(NAME, TextField::new("Name title", Bind::bound(&mut draft)), |_| counted.set(counted.get() + 1))
+            .show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+        *held.borrow_mut() = draft;
+        for event in out.events {
+            if let CollectionEvent::Column(column) = event {
+                seen.borrow_mut().push(column);
+            }
+        }
+    });
+    fixture.in_room(Room::Dialog).settle();
+    assert!(fixture.by_label("Name").is_some(), "the column header keeps its name");
+
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let (table, part) = fixture.focused_stop().expect("Tab reaches the header's group");
+    assert!(part.is_some(), "Tab lands on a header part: {part:?}");
+    // The hosted field joins the header's roving group, so an arrow from the header parts reaches it.
+    let mut reached = false;
+    for _ in 0..4 {
+        fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+        if fixture.focused_stop().is_some_and(|(id, _)| id != table) {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "an arrow from the header parts lands on the hosted field");
+
+    let field = fixture.by_label("Name title").expect("the hosted field's node");
+    fixture.click(&field).type_text("x").settle();
+    assert_eq!(text.borrow().as_str(), "x", "typing in the header cell edits the field");
+    assert!(edits.get() > 0, "the field's output reaches the closure");
+    assert!(events.borrow().iter().all(|event| !matches!(event, ColumnEvent::Sort { .. })), "a press on the field does not sort");
+
+    let remove = fixture.by_label("Remove Size").expect("the disabled remove control still shows");
+    fixture.click(&remove).settle();
+    assert!(events.borrow().iter().all(|event| !matches!(event, ColumnEvent::Removed { .. })), "a disabled control reports nothing");
+    let remove = fixture.by_label("Remove Name").expect("the remove control's node");
+    fixture.click(&remove).settle();
+    let removed: Vec<ColumnEvent> = events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Removed { .. })).cloned().collect();
+    assert_eq!(removed, [ColumnEvent::Removed { key: NAME }], "one press reports its column once");
 }
 
 /// A table wider than its room: a fill name column and four numeric columns.

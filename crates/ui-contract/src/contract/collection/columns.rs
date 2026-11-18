@@ -111,9 +111,9 @@ pub struct ColumnRemove {
 impl ColumnSpec {
     /// The column gets a remove control named `name` at its header's end, disabled unless `enabled`.
     #[must_use]
-    pub fn removable(self, name: impl Into<Label>, enabled: bool) -> Self {
-        let _ = (name.into(), enabled);
-        todo!("dg.F22")
+    pub fn removable(mut self, name: impl Into<Label>, enabled: bool) -> Self {
+        self.remove = Some(ColumnRemove { name: name.into(), enabled });
+        self
     }
 
     /// A content column with a header and a width; the other settings off.

@@ -6,8 +6,8 @@ use super::words::TableWords;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
     Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnCommands, ColumnLayout, ColumnRequest, ColumnSpec, Common, Component,
-    ContainerProps, Cx, DropKind, EditResponse, ListDrag, OverlayUi, Overlays as _, Props as _, Role, RowState, SelectMode, Show as _,
-    ShowContainer as _, Sizing, WordSetCx as _,
+    ContainerProps, Cx, DropKind, EditResponse, Hosted, HostedKey, Hosting, ListDrag, OverlayUi, Overlays as _, PaintUi, Props as _, Role, RowState,
+    SelectMode, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::display::Divider;
 use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText};
@@ -78,7 +78,12 @@ pub struct Table<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// dragged rows would go. A refused spot shows no drop mark.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
+    /// The components hosted in header cells, by column; each is shown once, in the pass that draws its cell.
+    header_fields: Vec<(ColumnKey, Option<HeaderField<'a, K>>)>,
 }
+
+/// A component and its output taker, hosted in a header cell.
+type HeaderField<'a, K> = Box<dyn for<'r> Hosted<Table<'r, K>> + 'a>;
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
     /// A table named `label` over `columns`, with multiple selection.
@@ -96,6 +101,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
             can_drag: None,
             drops: Vec::new(),
             accepts: None,
+            header_fields: Vec::new(),
         }
         .label(label)
     }
@@ -103,9 +109,10 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
     /// Hosts `field` in the header cell of `column`, in place of its label; `output` gets what the field returns, once
     /// per pass.
     #[must_use]
-    pub fn header_field<C: crate::contract::Show + 'a>(self, column: ColumnKey, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
-        let _ = (column, field, output);
-        todo!("dg.F22")
+    pub fn header_field<C: crate::contract::Show + 'a>(mut self, column: ColumnKey, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
+        self.header_fields.retain(|(held, _)| *held != column);
+        self.header_fields.push((column, Some(Box::new(Hosting::new(field, output)))));
+        self
     }
 
     /// Takes the drops of `kind` from drags that did not start in the table; kinds given earlier come first.
@@ -241,5 +248,16 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {
         Some(crate::text::rename_field(ui, draft, label, name))
+    }
+
+    fn hosts_header(&self, column: &ColumnKey) -> bool {
+        self.header_fields.iter().any(|(held, _)| held == column)
+    }
+
+    fn header_cell(&mut self, ui: &mut PaintUi<'_>, column: &ColumnKey, key: HostedKey, rect: Rect) {
+        let field = self.header_fields.iter_mut().find(|(held, _)| held == column).and_then(|(_, field)| field.take());
+        if let Some(field) = field {
+            Hosted::show(field, ui, key, rect);
+        }
     }
 }
