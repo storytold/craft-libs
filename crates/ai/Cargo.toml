@@ -1,0 +1,32 @@
+[package]
+name = "craft-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "AI provider abstraction for the Craft suite — BYO API keys and one-click local models"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs = "7"
+sysinfo = "0.39"
+ureq = { version = "3", features = ["json"] }
+sha2 = "0.11"
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+candle-transformers = { version = "0.9", optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+
+[features]
+# Local GGUF inference on candle. Heavy dependency tree; apps opt in.
+local = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
+
+[dev-dependencies]
+tempfile = "3"

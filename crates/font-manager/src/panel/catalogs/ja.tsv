@@ -1,0 +1,113 @@
+# Japanese (ja) catalog for Craft Font Manager's panel.
+# Format: context<TAB>source<TAB>translation; @plural rows list the locale's plural forms.
+# Style and weight names (Regular, Bold, Italic), licence names and product names stay in English.
+	All categories	すべてのカテゴリ
+	All fonts	すべてのフォント
+	All sources	すべての入手元
+	Allow downloads	ダウンロードを許可
+	Alphabet	アルファベット
+	Any language	すべての言語
+	Any script	すべての文字体系
+	Browse	探す
+	Cancel	キャンセル
+	Category	カテゴリ
+	Clear filters	絞り込みを解除
+	Clear search and filters	検索と絞り込みを解除
+	Close	閉じる
+	Couldn't download	ダウンロードできませんでした
+	Couldn't install	インストールできませんでした
+	Couldn't remove	削除できませんでした
+	Designer	デザイナー
+	Display	ディスプレイ
+	Download from Google Fonts?	Google Fonts からダウンロードしますか？
+	Download size	ダウンロードサイズ
+	Download	ダウンロード
+	Downloading	ダウンロード中
+	Downloads are off	ダウンロードはオフです
+	Downloads stay allowed until you turn them off.	ダウンロードは、オフにするまで許可されたままです。
+	Downloads	ダウンロード
+	Every Craft app uses the fonts in the font store. System fonts are added and removed with your system's own font tools.	フォントストアのフォントはすべての Craft アプリで使えます。システムフォントの追加と削除は、システムのフォント管理ツールで行います。
+	Files	ファイル
+	Find a language	言語を検索
+	Font store	フォントストア
+	Fonts that aren't installed show a sample once you preview them. Nothing is downloaded until you allow it.	インストールしていないフォントは、プレビューするとサンプルが表示されます。許可するまで何もダウンロードされません。
+	Fonts you install from Browse go here, for every Craft app.	「探す」からインストールしたフォントがここに表示され、すべての Craft アプリで使えます。
+	From Google Fonts' GitHub repository, only when you install or preview a font.	フォントをインストールまたはプレビューするときにだけ、Google Fonts の GitHub リポジトリからダウンロードします。
+	Handwriting	手書き
+	Hide this note	このお知らせを隠す
+	Install all	すべてインストール
+	Install	インストール
+	Installed on this system	このシステムにインストール済み
+	Installed	インストール済み
+	Installing	インストール中
+	Language	言語
+	Looking for installed fonts…	インストール済みのフォントを探しています…
+	Monospace	等幅
+	Name in English or in the language	英語名またはその言語での名前
+	No fonts match	一致するフォントはありません
+	No installed fonts match	一致するインストール済みフォントはありません
+	Not installed	未インストール
+	Numerals	数字と記号
+	Preview	プレビュー
+	Remove all	すべて削除
+	Remove	削除
+	Removed with your system's font tools	システムのフォントツールで削除します
+	Removing	削除中
+	Retry	再試行
+	Sample text	サンプルテキスト
+	Sample	サンプル
+	Sans serif	サンセリフ
+	Script	文字体系
+	Scripts	文字体系
+	Search fonts by name	フォントを名前で検索
+	Search installed fonts	インストール済みのフォントを検索
+	Search	検索
+	Sentence	文
+	Serif	セリフ
+	Show	表示
+	Size	サイズ
+	Source	入手元
+	Styles	スタイル
+	System fonts are removed with your system's own font tools.	システムフォントは、システムのフォント管理ツールで削除します。
+	System	システム
+	Try another name, or fewer filters.	別の名前を試すか、絞り込みを減らしてください。
+	Try another name.	別の名前を試してください。
+	Designed by {designer}	デザイン: {designer}
+	Install {family}	{family} をインストール
+	Install {style}	{style} をインストール
+	Languages · {n}	言語 · {n}
+	Preview downloads this font ({size}) for this session without installing it.	プレビューでは、このフォント ({size}) をこのセッションの間だけダウンロードし、インストールはしません。
+	Preview {family}	{family} をプレビュー
+	Remove {family}	{family} を削除
+	Remove {style}	{style} を削除
+	The Google Fonts index can't be read: {error}	Google Fonts の一覧を読み込めません: {error}
+	The download setting couldn't be saved: {error}	ダウンロードの設定を保存できませんでした: {error}
+	{list} and {n} more	{list} ほか {n} 言語
+	{percent} %	{percent}%
+	{size} download	ダウンロード {size}
+	{size} px	{size}px
+	Craft Font Manager downloads {family} ({size}) from Google Fonts' GitHub repository through jsDelivr, and checks every file before using it.	Craft Font Manager は {family} ({size}) を Google Fonts の GitHub リポジトリから jsDelivr 経由でダウンロードし、使う前にすべてのファイルを確認します。
+@plural	{n} style|{n} styles	{n} スタイル
+@plural	{n} style installed|{n} styles installed	インストール済み {n} スタイル
+@plural	{n} family|{n} families	{n} ファミリー
+	Licence	ライセンス
+	Try again	もう一度試す
+	Not curated	未審査
+	This family comes from a source you added. Craft doesn't review it.	このファミリーは追加したソースのものです。Craft は審査していません。
+	The font indexes can't be read: {error}	フォントの一覧を読み込めません: {error}
+	{source}: {error}	{source}: {error}
+	This family comes from a source you added ({url}). Craft doesn't review its fonts or their licences.	このファミリーは追加したソース ({url}) のものです。Craft はフォントもライセンスも審査していません。
+	Changed since added	追加後に変更あり
+	The index at this address isn't the one first downloaded from it. Check the source before installing from it.	このアドレスの一覧は、最初にダウンロードしたものと異なります。インストールする前にソースを確認してください。
+	Add a source	ソースを追加
+	Add	追加
+	Index address	一覧のアドレス
+	A source you add isn't reviewed: add only indexes you trust. Every font is still checked against its index before it is used.	追加したソースは審査されません。信頼できる一覧だけを追加してください。どのフォントも、使う前に一覧と照合されます。
+	Downloading the sources…	ソースをダウンロードしています…
+	Update sources	ソースを更新
+	Allow downloads to update	更新するにはダウンロードを許可してください
+	Added. It downloads once downloads are allowed.	追加しました。ダウンロードを許可するとダウンロードされます。
+	Remove {source}	{source} を削除
+	The source couldn't be added: {error}	ソースを追加できませんでした: {error}
+	The source couldn't be removed: {error}	ソースを削除できませんでした: {error}
+@plural	{n} font source couldn't be loaded|{n} font sources couldn't be loaded	{n} 件のフォントソースを読み込めませんでした

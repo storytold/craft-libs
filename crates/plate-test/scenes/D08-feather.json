@@ -1,0 +1,81 @@
+{
+  "id": "D08",
+  "title": "Feathered Gold (10 pt soft-mask feather), alone and in a group with cyan",
+  "source": "DesignCraft DC08",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {
+      "type": "rect",
+      "rect": [36, 36, 120, 144],
+      "fill": {"spot": "Gold", "tint": 100},
+      "mask": {
+        "kind": "luminosity",
+        "backdrop": {"gray": 100},
+        "content": [
+          {
+            "type": "image",
+            "rect": [36, 36, 120, 144],
+            "image": {"px": [120, 144], "feather": 10}
+          }
+        ]
+      }
+    },
+    {
+      "type": "group",
+      "objects": [
+        {
+          "type": "rect",
+          "rect": [204, 36, 120, 144],
+          "fill": {"spot": "Gold", "tint": 100},
+          "mask": {
+            "kind": "luminosity",
+            "backdrop": {"gray": 100},
+            "content": [
+              {
+                "type": "image",
+                "rect": [204, 36, 120, 144],
+                "image": {"px": [120, 144], "feather": 10}
+              }
+            ]
+          }
+        },
+        {"type": "rect", "rect": [300, 170, 40, 36], "fill": {"cmyk": [100, 0, 0, 0]}}
+      ]
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [96, 108], "inks": {"Gold": 100}, "tol": 2, "note": "feathered spot, center"},
+      {
+        "at": [38, 108],
+        "inks": {"Gold": [3, 70]},
+        "tol": 10,
+        "note": "2 pt inside the edge: partial spot, no process ink"
+      },
+      {
+        "at": [264, 108],
+        "inks": {"Gold": 100},
+        "tol": 2,
+        "note": "feathered spot in a group, center"
+      },
+      {
+        "at": [206, 108],
+        "inks": {"Gold": [3, 70]},
+        "tol": 10,
+        "note": "2 pt inside the edge: partial spot, no process ink"
+      },
+      {"at": [330, 195], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "smask": true,
+    "ext_g_states": [{"SMask": "Luminosity"}],
+    "color_spaces_include": ["Separation(Gold, alt DeviceCMYK)", "DeviceGray"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

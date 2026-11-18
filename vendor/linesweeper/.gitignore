@@ -1,0 +1,5 @@
+/target
+docs/sweep.pdf
+result
+ignore
+.config/selfci/local.yaml

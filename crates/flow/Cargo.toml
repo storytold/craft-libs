@@ -1,0 +1,17 @@
+[package]
+name = "craft-flow"
+description = "The flow model every text format maps to: paragraphs with a kind, list membership and formatted spans, tables of cells, pictures, notes and fields; converted to and from a craft-wordmodel Document."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-wordmodel = { workspace = true }
+log = "0.4"
+# Picture formats and pixel sizes, read from the headers.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }

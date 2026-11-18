@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 //! Decide who draws the window frame, so every Craft app shows the same titlebar and borders on a
-//! given desktop.
+//! given desktop, and make an app-drawn strip act as the title bar.
 //!
 //! egui apps either let the desktop draw the window frame (the title bar, borders and window
 //! buttons) or turn it off and draw their own. Across the suite this decision had drifted: some
@@ -10,7 +10,11 @@
 //! compositor — so on KDE, say, one app wore KWin's title bar while another wore its own. This
 //! crate makes the decision one place.
 //!
-//! The rule, by platform:
+//! This page describes the first-generation rule ([`Choice::probe`], [`Frame`], [`decorate`]),
+//! which stays for apps that have not moved. The current rule is in [`policy`]: the app's own bar
+//! is the title bar by default, and the user setting "Use system title bar" turns that off.
+//!
+//! The rule of the first-generation API, by platform:
 //!
 //! - **macOS and Windows:** the OS always draws the frame ([`Frame::Desktop`]). (An app that insets
 //!   its content under the traffic lights, or draws its own caption buttons on Windows, still asks
@@ -45,6 +49,113 @@
 //!
 //! The probe opens a short-lived Wayland connection and reads the global registry once; it never
 //! touches the connection winit inherits. Call it once at startup.
+//!
+//! # The app's own title bar
+//!
+//! An app that draws over the title bar (a hidden macOS title bar with a full-size content view,
+//! or [`Frame::App`]) makes its top strip act as one with [`title_bar`]: the strip's empty part
+//! moves the window and follows the system's double-click setting, while the strip's controls and
+//! in-window panels lying over it keep their own clicks and drags. On macOS,
+//! `title_bar::sync_movable` sets AppKit's `movable` flag each frame so a drag that starts on
+//! one of those does not move the window.
+//!
+//! ```ignore
+//! egui::Panel::top("app_bar").show(ui, |ui| {
+//!     craft_window::title_bar::empty_area(ui, ui.max_rect());
+//!     // ... the bar's controls ...
+//! });
+//! // After the UI, once per frame (macOS); `applied` lives in the app state, starting at `None`.
+//! #[cfg(target_os = "macos")]
+//! craft_window::title_bar::sync_movable(ui.ctx(), &mut self.applied);
+//! ```
+//!
+//! # One window per document
+//!
+//! The rest of the crate keeps the bookkeeping for apps that open each document in its own
+//! top-level window. The core has no egui dependency:
+//!
+//! - [`WindowList`]: open windows with the app's per-window data, a [`WindowId`] for each (never
+//!   reused while the process runs), the active window and most-recent order. Menu commands go to
+//!   [`WindowList::active`]; when the active window closes, [`Closed::focus`] names the next one.
+//! - [`cascade`]: where a new window goes, one title bar down and right of the last one, wrapped
+//!   back inside the screen.
+//! - [`WindowMenu`]: the Window menu (macOS) or View › Switch Windows list. Windows on the same
+//!   document are titled "Name:1", "Name:2".
+//!
+//! The `egui` feature adds `Viewports`, which shows each window as an immediate viewport, applies
+//! `decorate` and the cascade to new windows, and reports `WindowEvent`s. Close and quit policy
+//! stay with the app: the driver reports a close request, and a window closes when the app removes
+//! it from the list.
+//!
+//! ```ignore
+//! use craft_window::{Choice, Document, Prefix, Viewports, WindowEvent, WindowList, WindowMenu};
+//!
+//! // At startup: the first document's window is drawn in the root viewport.
+//! let mut windows = WindowList::new();
+//! let mut viewports = Viewports::new(Choice::probe(Prefix::new("GRIDCRAFT")).into_frame());
+//! let first = windows.open(WindowUi::new(doc_id));
+//! viewports.set_root(Some(first));
+//!
+//! // Each frame, in eframe's `App::ui`:
+//! let menu = WindowMenu::new(&windows, |_, w| Document {
+//!     key: w.doc_id,
+//!     name: engine.name(w.doc_id),
+//!     dirty: engine.is_dirty(w.doc_id),
+//! });
+//! let base = egui::ViewportBuilder::default().with_inner_size([1000.0, 700.0]);
+//! let events = viewports.show(
+//!     ui,
+//!     &mut windows,
+//!     |id, _| base.clone().with_title(menu.title(id).unwrap_or_default()),
+//!     |ui, id, window| draw_window(ui, id, window, &mut engine),
+//! );
+//! for event in events {
+//!     match event {
+//!         WindowEvent::Focused(_) => {} // `windows.active()` already follows focus
+//!         WindowEvent::CloseRequested(id) => {
+//!             let in_root = viewports.root() == Some(id);
+//!             if in_root {
+//!                 // Otherwise eframe closes the app with the root window.
+//!                 ui.ctx().send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
+//!             }
+//!             // Prompt if this is the document's last window and it is dirty; then:
+//!             if let Some(closed) = windows.close(id) {
+//!                 let next = closed.focus.or_else(|| windows.active());
+//!                 match next {
+//!                     Some(next) if in_root => viewports.adopt(ui.ctx(), &windows, next),
+//!                     Some(next) => viewports.focus(ui.ctx(), next),
+//!                     None => { /* last window: the platform default (quit, or stay on macOS) */ }
+//!                 }
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! # Window restore
+//!
+//! The `restore` feature (no egui) adds [`restore`]: where a window opens, from the last session's
+//! geometry and the connected monitors, and the `window.json` store beside `config.toml`.
+
+mod desktop;
+mod layout;
+mod list;
+mod menu;
+mod place;
+pub mod policy;
+#[cfg(feature = "egui")]
+pub mod title_bar;
+#[cfg(feature = "egui")]
+mod viewports;
+
+#[cfg(feature = "restore")]
+pub mod restore;
+
+pub use list::{Closed, WindowId, WindowList};
+pub use menu::{Document, MenuEntry, WindowMenu};
+pub use place::{CASCADE_STEP, Rect, cascade, monitor_of};
+#[cfg(feature = "egui")]
+pub use viewports::{Viewports, WindowEvent, child_viewport_id};
 
 /// The environment-variable prefix an app overrides the frame with: `<PREFIX>_TITLEBAR`.
 ///
@@ -72,7 +183,7 @@ impl Prefix {
     }
 }
 
-/// Who draws the window frame.
+/// Who draws the window frame. Superseded by [`policy::Frame`]; kept for apps that have not moved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame {
     /// The desktop draws it: the OS on macOS and Windows, the window manager on X11, the
@@ -100,7 +211,7 @@ impl Frame {
 }
 
 /// How the frame was decided, so an app can log it or offer a "System title bar" preference that
-/// knows the current state.
+/// knows the current state. Superseded by [`policy::Decision`] and [`policy::decide_for`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Choice {
     frame: Frame,
@@ -215,10 +326,15 @@ impl Layout {
         Self { left, right }
     }
 
+    /// The layout with the two sides swapped, for right-to-left UIs.
+    pub fn mirrored(&self) -> Self {
+        Self { left: self.right.clone(), right: self.left.clone() }
+    }
+
     /// Whether the layout has at least one button, so the window can be closed by mouse. A layout
     /// with none (a desktop that named only buttons this crate skips) falls back to the default.
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
-    fn is_usable(&self) -> bool {
+    pub(crate) fn is_usable(&self) -> bool {
         !self.left.is_empty() || !self.right.is_empty()
     }
 }
@@ -249,7 +365,7 @@ fn app_draws_frame() -> bool {
     }
 }
 
-/// Apply a [`Frame`] to an [`egui::ViewportBuilder`]: decorations on for the desktop frame, off for
+/// Apply a [`Frame`] to an [`egui::ViewportBuilder`] (superseded by [`policy::apply`]): decorations on for the desktop frame, off for
 /// the app frame. Call before the window is created. The app still draws its header bar and, for
 /// [`Frame::App`], lays its window buttons out by [`Frame::layout`].
 #[cfg(feature = "egui")]
@@ -279,6 +395,12 @@ mod platform {
     /// acceptable because this is a single, one-shot call, not a repeated one.)
     pub(super) fn wayland_leaves_frame_to_app() -> bool {
         bounded(registry_leaves_frame_to_app).flatten().unwrap_or(false)
+    }
+
+    /// Whether the Wayland compositor offers server-side decorations: `None` when there is no
+    /// answer (no compositor, an inherited socket, a stalled registry), same deadline as above.
+    pub(super) fn wayland_offers_ssd() -> Option<bool> {
+        bounded(registry_leaves_frame_to_app).flatten().map(|leaves| !leaves)
     }
 
     /// Run `f` on a short-lived worker thread with a 500 ms deadline, so a stalled dependency can't
@@ -420,6 +542,12 @@ mod tests {
         let layout = Layout::parse("minimize,maximize,close");
         assert_eq!(layout.left, vec![Button::Minimize, Button::Maximize, Button::Close]);
         assert!(layout.right.is_empty());
+    }
+
+    #[test]
+    fn mirrored_swaps_the_sides() {
+        let layout = Layout::parse("close:minimize,maximize").mirrored();
+        assert_eq!((layout.left, layout.right), (vec![Button::Minimize, Button::Maximize], vec![Button::Close]));
     }
 
     #[test]

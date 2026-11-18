@@ -1,0 +1,83 @@
+{
+  "id": "S11",
+  "title": "K drop shadows (soft mask, Multiply 75%) over Gold and over a CMYK image",
+  "source": "research S11, DesignCraft DC03, DC11",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [20, 36, 140, 144], "fill": {"spot": "Gold", "tint": 100}},
+    {
+      "type": "rect",
+      "rect": [30, 46, 120, 120],
+      "fill": {"cmyk": [0, 0, 0, 100]},
+      "opacity": 0.75,
+      "blend": "multiply",
+      "mask": {
+        "kind": "luminosity",
+        "backdrop": {"gray": 100},
+        "content": [{"type": "image", "rect": [50, 66, 80, 80], "image": {"px": [80, 80], "feather": 10}}]
+      },
+      "note": "mask content is smaller than the K rect: outside it the backdrop (/BC black) hides the shadow"
+    },
+    {
+      "type": "image",
+      "rect": [190, 36, 140, 144],
+      "image": {"px": [140, 144], "split": [{"cmyk": [100, 0, 0, 0]}, {"cmyk": [0, 0, 0, 50]}]}
+    },
+    {
+      "type": "rect",
+      "rect": [210, 46, 120, 120],
+      "fill": {"cmyk": [0, 0, 0, 100]},
+      "opacity": 0.75,
+      "blend": "multiply",
+      "mask": {
+        "kind": "luminosity",
+        "backdrop": {"gray": 100},
+        "content": [{"type": "image", "rect": [230, 66, 80, 80], "image": {"px": [80, 80], "feather": 10}}]
+      },
+      "note": "mask content is smaller than the K rect: outside it the backdrop (/BC black) hides the shadow"
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [30, 50], "inks": {"Gold": 100}, "tol": 2, "note": "spot only"},
+      {
+        "at": [90, 106],
+        "inks": {"Gold": 100, "Black": 75},
+        "tol": 10,
+        "note": "shadow over spot: spot kept, K follows the mask"
+      },
+      {
+        "at": [35, 52],
+        "inks": {"Gold": 100},
+        "tol": 10,
+        "note": "inside the K rect, outside the mask content: /BC hides the shadow"
+      },
+      {
+        "at": [245, 106],
+        "inks": {"Cyan": 100, "Black": 75},
+        "tol": 10,
+        "note": "shadow over the image's C100 half"
+      },
+      {
+        "at": [295, 106],
+        "inks": {"Black": 88},
+        "tol": 10,
+        "note": "shadow (K75 Multiply) over the image's K50 half"
+      },
+      {"at": [205, 50], "inks": {"Cyan": 100}, "tol": 2, "note": "image C100 half"},
+      {"at": [320, 170], "inks": {"Black": 50}, "tol": 2, "note": "image K50 half"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "smask": true,
+    "blend_modes": ["Multiply"],
+    "ext_g_states": [{"SMask": "Luminosity", "BC": true}],
+    "color_spaces_include": ["DeviceCMYK", "Separation(Gold, alt DeviceCMYK)", "DeviceGray"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

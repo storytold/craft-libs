@@ -81,7 +81,7 @@ impl<'a> IconButton<'a> {
         let valid = self.size.is_finite() && self.size.x > 0.0 && self.size.y > 0.0 && self.size.x <= 4096.0 && self.size.y <= 4096.0;
         let (rect, response) =
             ui.allocate_exact_size(if valid { self.size } else { Vec2::ZERO }, if valid { Sense::click() } else { Sense::hover() });
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, valid && ui.is_enabled(), self.selected, self.label));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, valid && ui.is_enabled(), self.selected, self.label));
         if !valid {
             return response;
         }
@@ -120,3 +120,18 @@ fn bounded_stroke(stroke: Stroke, rect: Rect) -> Stroke {
 
 #[cfg(test)]
 mod tests;
+
+/// A downward triangle at the right-hand end of a control.
+///
+/// Painted rather than typed. The chevron character is absent from the default
+/// font set, where it renders as a missing-glyph box. A caller leaves room for
+/// it by padding the label, then paints it over the response.
+pub fn chevron(ui: &Ui, rect: egui::Rect, colour: egui::Color32) {
+    let middle = rect.right_center() - egui::vec2(9.0, 0.0);
+    let half = 3.5;
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![middle + egui::vec2(-half, -half * 0.6), middle + egui::vec2(half, -half * 0.6), middle + egui::vec2(0.0, half * 0.9)],
+        colour,
+        egui::Stroke::NONE,
+    ));
+}

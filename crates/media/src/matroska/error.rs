@@ -16,6 +16,8 @@ pub enum Error {
     NoSuchTrack(usize),
     /// A sample index was out of range.
     NoSuchSample(usize),
+    /// The file describes more than the demuxer's limits allow (frames, tracks).
+    TooLarge(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -27,6 +29,7 @@ impl fmt::Display for Error {
             Error::NotMatroska(s) => write!(f, "not a Matroska/WebM file: {s}"),
             Error::NoSuchTrack(i) => write!(f, "track index {i} out of range"),
             Error::NoSuchSample(i) => write!(f, "sample index {i} out of range"),
+            Error::TooLarge(s) => write!(f, "size limit exceeded: {s}"),
         }
     }
 }

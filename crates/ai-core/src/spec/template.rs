@@ -114,23 +114,40 @@ pub fn value_slots(template: &Value) -> Result<Vec<Slot>, String> {
     Ok(out)
 }
 
+/// Renders one string. Fails past [`MAX_RENDERED_BYTES`](crate::spec::MAX_RENDERED_BYTES).
 pub fn render_text(text: &str, values: &Values<'_>) -> Result<String, String> {
+    let mut left = crate::spec::MAX_RENDERED_BYTES;
+    render_text_within(text, values, &mut left)
+}
+
+/// Renders `text`, taking its length from `left`; a template that repeats a slot cannot outgrow it.
+fn render_text_within(text: &str, values: &Values<'_>, left: &mut usize) -> Result<String, String> {
     let mut out = String::new();
     for piece in pieces(text)? {
-        match piece {
-            Piece::Text(t) => out.push_str(&t),
-            Piece::Slot(slot, name) => out.push_str(values.get(slot).ok_or_else(|| format!("{{{name}}} is not available in this call"))?),
-        }
+        let add = match &piece {
+            Piece::Text(t) => t.as_str(),
+            Piece::Slot(slot, name) => values.get(*slot).ok_or_else(|| format!("{{{name}}} is not available in this call"))?,
+        };
+        *left = left.checked_sub(add.len()).ok_or_else(|| format!("a rendered template is at most {} bytes", crate::spec::MAX_RENDERED_BYTES))?;
+        out.push_str(add);
     }
     Ok(out)
 }
 
-/// Renders every string value of `template`. Keys are never substituted.
+/// Renders every string value of `template`. Keys are never substituted. All strings together
+/// share one [`MAX_RENDERED_BYTES`](crate::spec::MAX_RENDERED_BYTES) budget.
 pub fn render_value(template: &Value, values: &Values<'_>) -> Result<Value, String> {
+    let mut left = crate::spec::MAX_RENDERED_BYTES;
+    render_value_within(template, values, &mut left)
+}
+
+fn render_value_within(template: &Value, values: &Values<'_>, left: &mut usize) -> Result<Value, String> {
     Ok(match template {
-        Value::String(s) => Value::String(render_text(s, values)?),
-        Value::Array(items) => Value::Array(items.iter().map(|i| render_value(i, values)).collect::<Result<_, _>>()?),
-        Value::Object(map) => Value::Object(map.iter().map(|(k, v)| Ok((k.clone(), render_value(v, values)?))).collect::<Result<_, String>>()?),
+        Value::String(s) => Value::String(render_text_within(s, values, left)?),
+        Value::Array(items) => Value::Array(items.iter().map(|i| render_value_within(i, values, left)).collect::<Result<_, _>>()?),
+        Value::Object(map) => {
+            Value::Object(map.iter().map(|(k, v)| Ok((k.clone(), render_value_within(v, values, left)?))).collect::<Result<_, String>>()?)
+        }
         other => other.clone(),
     })
 }

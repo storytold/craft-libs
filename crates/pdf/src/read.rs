@@ -20,6 +20,73 @@ pub enum OpenError {
     BackendPanic,
 }
 
+/// Failure of an open that accepts cooperative cancellation.
+#[derive(Debug, thiserror::Error)]
+pub enum CancellableOpenError {
+    #[error("PDF opening canceled")]
+    Cancelled,
+    #[error(transparent)]
+    Open(#[from] OpenError),
+}
+
+/// Open shared input with cooperative cancellation and explicit caller limits.
+/// The callback runs on this thread. Once it requests cancellation this operation returns
+/// [`CancellableOpenError::Cancelled`]; a loaded PDF does not retain its callback.
+pub fn open_with_options_and_cancel(
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    options: &OpenOptions,
+    cancel: &syntax::Cancellation,
+) -> Result<syntax::Pdf, CancellableOpenError> {
+    guard_cancelled_open(|| read_with_cancel(bytes, password, options, cancel))
+}
+
+fn guard_cancelled_open(read: impl FnOnce() -> Result<syntax::Pdf, CancellableOpenError>) -> Result<syntax::Pdf, CancellableOpenError> {
+    catch_unwind(AssertUnwindSafe(read)).map_err(|_| CancellableOpenError::Open(OpenError::BackendPanic))?
+}
+
+fn read_with_cancel(
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    options: &OpenOptions,
+    cancel: &syntax::Cancellation,
+) -> Result<syntax::Pdf, CancellableOpenError> {
+    if cancel.requested() {
+        return Err(CancellableOpenError::Cancelled);
+    }
+    check_input_size_with(bytes.len(), options)?;
+    let result = syntax::Pdf::new_with_password_limits_and_cancel(bytes, password.unwrap_or(""), options.decode_limits, cancel);
+    result.map_err(|e| match e {
+        syntax::CancellableLoadError::Cancelled => CancellableOpenError::Cancelled,
+        syntax::CancellableLoadError::Load(e) => CancellableOpenError::Open(OpenError::Load(e)),
+    })
+}
+
+/// Copy borrowed input in bounded portions and open it with cooperative cancellation.
+/// The input bound and allocation error retain [`open_slice_with_options`]'s policy.
+pub fn open_slice_with_options_and_cancel(
+    bytes: &[u8],
+    password: Option<&str>,
+    options: &OpenOptions,
+    cancel: &syntax::Cancellation,
+) -> Result<syntax::Pdf, CancellableOpenError> {
+    guard_cancelled_open(|| {
+        if cancel.requested() {
+            return Err(CancellableOpenError::Cancelled);
+        }
+        check_input_size_with(bytes.len(), options)?;
+        let mut owned = Vec::new();
+        owned.try_reserve_exact(bytes.len()).map_err(|_| OpenError::Allocation)?;
+        for chunk in bytes.chunks(64 * 1024) {
+            if cancel.requested() {
+                return Err(CancellableOpenError::Cancelled);
+            }
+            owned.extend_from_slice(chunk);
+        }
+        read_with_cancel(Arc::new(owned), password, options, cancel)
+    })
+}
+
 /// Check the input bound before an application allocates or starts another PDF reader.
 pub fn check_input_size(size: usize) -> Result<(), OpenError> {
     check_input_size_with(size, &OpenOptions::default())

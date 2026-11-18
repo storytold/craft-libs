@@ -280,6 +280,7 @@ mod painting {
                 GlyphDrawMode::Fill => 'F',
                 GlyphDrawMode::Stroke(_) => 'S',
                 GlyphDrawMode::Invisible => 'I',
+                GlyphDrawMode::Clip => 'C',
             };
             self.glyphs.push(GlyphEvent { text, mode, rgba: rgba(paint), origin: glyph_transform * Point::ORIGIN });
         }

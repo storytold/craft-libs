@@ -107,10 +107,10 @@ pub const PIXEL_CROP_RIGHT: u32 = 0x54DD;
 pub const DISPLAY_WIDTH: u32 = 0x54B0;
 pub const DISPLAY_HEIGHT: u32 = 0x54BA;
 pub const DISPLAY_UNIT: u32 = 0x54B2;
-/// Matroska `ColourSpace`.
-pub const COLOR_SPACE: u32 = 0x2E_B524;
-/// Matroska `Colour`.
-pub const COLOR: u32 = 0x55B0;
+/// `ColourSpace`; read into [`VideoInfo::color_space`](crate::matroska::VideoInfo::color_space).
+pub const COLOUR_SPACE: u32 = 0x2E_B524;
+/// `Colour`; read into [`Color`](crate::matroska::Color).
+pub const COLOUR: u32 = 0x55B0;
 pub const PROJECTION: u32 = 0x7670;
 pub const PROJECTION_TYPE: u32 = 0x7671;
 pub const PROJECTION_POSE_YAW: u32 = 0x7673;

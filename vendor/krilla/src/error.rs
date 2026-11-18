@@ -24,6 +24,34 @@ pub type KrillaResult<T> = Result<T, KrillaError>;
 pub enum KrillaError {
     /// A page or surface failed during cleanup; discard the complete document.
     Poisoned,
+    /// [`GroupColorSpace::Cmyk`] with `no_device_cs` needs a `cmyk_profile` for the group
+    /// color space.
+    ///
+    /// [`GroupColorSpace::Cmyk`]: crate::GroupColorSpace::Cmyk
+    MissingGroupCmykProfile,
+    /// A mesh gradient's corner colors are in color spaces that can't be written as one
+    /// (see [`MeshGradient`]), for example RGB with CMYK.
+    ///
+    /// [`MeshGradient`]: crate::paint::MeshGradient
+    MixedMeshColorSpaces(Option<Location>),
+    /// [`Surface::start_optional_content`] was given an [`OcgId`] that this document did
+    /// not create.
+    ///
+    /// [`Surface::start_optional_content`]: crate::surface::Surface::start_optional_content
+    /// [`OcgId`]: crate::optional_content::OcgId
+    UnknownOptionalContentGroup(Option<Location>),
+    /// Optional content marks were not balanced: an end without a start, a mark still open
+    /// when its stream finished, or a mark overlapping a tagged section.
+    UnbalancedOptionalContent(Option<Location>),
+    /// A link annotation has no finite bounding box on its page: its quad points are empty
+    /// or not finite, or its rect doesn't map to finite page coordinates.
+    InvalidAnnotationGeometry(Option<Location>),
+    /// An XYZ destination targets a page the document doesn't have (the index is
+    /// zero-based), or a point that isn't finite on that page.
+    InvalidDestination(usize),
+    /// A page's media, crop, bleed, trim or art box doesn't map to finite PDF coordinates.
+    /// Holds the zero-based page index.
+    InvalidPageBox(usize),
     /// An error while attempting to embed a font.
     Font(Font, String),
     /// A list of validation errors. Can only occur if you set the `validator` in
@@ -62,6 +90,35 @@ impl Display for KrillaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             KrillaError::Poisoned => f.write_str("document contains a failed page or surface"),
+            KrillaError::MissingGroupCmykProfile => {
+                f.write_str("a CMYK group color space with no_device_cs needs a CMYK profile")
+            }
+            KrillaError::MixedMeshColorSpaces(location) => {
+                f.write_str("a mesh gradient mixes color spaces that can't be written as one")?;
+                write_location(f, *location)
+            }
+            KrillaError::UnknownOptionalContentGroup(location) => {
+                f.write_str("an optional content group from another document was used")?;
+                write_location(f, *location)
+            }
+            KrillaError::UnbalancedOptionalContent(location) => {
+                f.write_str("optional content marks are not balanced")?;
+                write_location(f, *location)
+            }
+            KrillaError::InvalidAnnotationGeometry(location) => {
+                f.write_str("a link annotation has no finite bounding box")?;
+                write_location(f, *location)
+            }
+            KrillaError::InvalidDestination(page_index) => write!(
+                f,
+                "a destination on page {} is not in the document or not finite",
+                page_index.saturating_add(1)
+            ),
+            KrillaError::InvalidPageBox(page_index) => write!(
+                f,
+                "a page box on page {} doesn't map to finite coordinates",
+                page_index.saturating_add(1)
+            ),
             KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),
             KrillaError::Validation(errors) => {
                 let count = errors.len();

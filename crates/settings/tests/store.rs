@@ -204,6 +204,14 @@ fn read_only_file_makes_the_save_fail_visibly() {
     let (mut store, _) = open_in(tmp.path());
     store.flush().unwrap();
     std::fs::set_permissions(config_path(tmp.path()), std::fs::Permissions::from_mode(0o400)).unwrap();
+    match std::fs::File::options().write(true).open(config_path(tmp.path())) {
+        Ok(_) => {
+            eprintln!("skipping permission test: environment permits writes into a 0400 file");
+            return;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+        Err(error) => panic!("unexpected file write-probe failure: {error}"),
+    }
     store.update(|p| p.general.language = "fr".into());
     let r = store.tick(Instant::now() + Duration::from_secs(1));
     assert!(matches!(r.status, SaveStatus::Failed(craft_settings::SettingsError::Io(_))), "{r:?}");
@@ -281,4 +289,8 @@ fn backup_follows_a_mode_the_user_chose_for_the_config() {
     store.update(|p| p.general.language = "fr".into());
     store.flush().unwrap();
     assert_eq!(mode(&tmp.path().join("config.toml.bak")), 0o640);
+    // The group bits authorize the config's group, which the backup is in.
+    use std::os::unix::fs::MetadataExt;
+    let gid = |p: &std::path::Path| std::fs::metadata(p).unwrap().gid();
+    assert_eq!(gid(&tmp.path().join("config.toml.bak")), gid(&config_path(tmp.path())));
 }
