@@ -652,6 +652,8 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
                 });
 
                 let raster: &dyn RasterSource = if w.before { source.before() } else { source.after() };
+                // The app's paint of the after picture, reborrowed for each run of the canvas's body.
+                let mut painted = if w.before { None } else { source.paint_after() };
                 let state_settings = w.scope.as_ref().map(|state| state.settings.clone()).unwrap_or_default();
                 let mode = state_settings.clipping_mode(w.diagnostic);
                 let mode = (mode != ClippingMode::None).then_some(mode);
@@ -729,6 +731,10 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
                                 marks.show_at(ui, rect);
                             };
                             let canvas = FullWindowCanvas::new(Bind::bound(&mut view), raster).navigation(navigation).controls(controls);
+                            let canvas = match painted.as_mut() {
+                                Some(paint) => canvas.painted(paint.reborrowed()),
+                                None => canvas,
+                            };
                             let canvas = match checkerboard {
                                 Some(checker) => canvas.checkerboard(checker),
                                 None => canvas,

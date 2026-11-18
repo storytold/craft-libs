@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use craft_ui::canvas::{PixelRect, RasterSource};
+use craft_behavior::CanvasView;
+use craft_ui::canvas::{AppPaint, PixelRect, RasterSource};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::pending::Job;
 
@@ -40,6 +41,14 @@ impl RawPreviewRequest {
 pub trait RawDevelopSource: Send + Sync {
     /// The picture as developed with the settings.
     fn after(&self) -> &dyn RasterSource;
+
+    /// The app's own paint of [`after`](Self::after) this pass, when it keeps the developed picture somewhere the
+    /// canvas can't read (a GPU texture): the canvas then draws it with this paint at `after`'s size. `None` (the
+    /// default) draws `after`'s pixels, so an app can fall back to them for any frame.
+    /// Before draws [`before`](Self::before) either way.
+    fn paint_after(&self) -> Option<AppPaint<'_, CanvasView>> {
+        None
+    }
 
     /// The picture before the settings (Before, Y).
     fn before(&self) -> &dyn RasterSource;

@@ -460,3 +460,90 @@ mod mapped_overlay {
         assert!(part[0].distance(whole[0]) < NEAR && (part[2] - whole[0]).length() < (whole[2] - whole[0]).length() * 0.51);
     }
 }
+
+/// A canvas whose image the app paints itself: the app's paint draws the image in the source's place.
+mod painted_image {
+    use craft_behavior::{CanvasView, PixelSize};
+    use craft_ui::canvas::{AppPaint, PixelRect, RasterSource};
+    use craft_ui::contract::Bind;
+    use craft_ui::dialog::{FullWindowCanvas, FullWindowView};
+    use craft_ui::primitives::{Checker, Revision};
+    use craft_ui::testing::{Fixture, trial};
+    use egui::{Color32, ColorImage, PaintCallback, Shape, Vec2};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// An image smaller than the canvas that counts how often it is read.
+    struct Counted(AtomicUsize);
+
+    impl RasterSource for Counted {
+        fn size(&self) -> PixelSize {
+            PixelSize::new(320, 240)
+        }
+
+        fn revision(&self) -> Revision {
+            Revision::new(1)
+        }
+
+        fn damage(&self, _: Revision) -> Option<PixelRect> {
+            Some(PixelRect::default())
+        }
+
+        fn read(&self, _: PixelRect, _: u32, out: &mut ColorImage) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            out.pixels.fill(Color32::from_gray(0x80));
+        }
+    }
+
+    /// A canvas of `source` with the checkerboard, painted by the app while `painted` is set. The app's paint adds a GPU
+    /// paint callback, as an app showing a GPU texture does, and keeps the views it was given.
+    fn canvas(source: Arc<Counted>, painted: Rc<Cell<bool>>, views: Rc<RefCell<Vec<CanvasView>>>) -> Fixture {
+        let view = Rc::new(RefCell::new(FullWindowView::new()));
+        let callback: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+        let mut fixture = Fixture::new(move |ui| {
+            let mut view = view.borrow_mut();
+            let canvas = FullWindowCanvas::new(Bind::bound(&mut *view), &*source).checkerboard(Checker::new());
+            let canvas = if painted.get() {
+                canvas.painted(AppPaint::new(|painter, at: CanvasView| {
+                    views.borrow_mut().push(at);
+                    painter.painter.add(Shape::Callback(PaintCallback { rect: at.rect, callback: Arc::clone(&callback) }));
+                }))
+            } else {
+                canvas
+            };
+            canvas.show(ui);
+        });
+        fixture.room(Vec2::new(800.0, 600.0));
+        fixture.settle();
+        fixture
+    }
+
+    fn callbacks(shapes: &[Shape]) -> usize {
+        shapes.iter().filter(|shape| matches!(shape, Shape::Callback(_))).count()
+    }
+
+    #[trial]
+    fn a_painted_canvas_draws_the_apps_paint_instead_of_reading_the_source() {
+        let source = Arc::new(Counted(AtomicUsize::new(0)));
+        let painted = Rc::new(Cell::new(true));
+        let views = Rc::new(RefCell::new(Vec::new()));
+        let mut fixture = canvas(Arc::clone(&source), Rc::clone(&painted), Rc::clone(&views));
+        views.borrow_mut().clear();
+        let from_app = fixture.frame_shapes();
+        assert_eq!(callbacks(&from_app), 1, "the app's paint draws the image once a pass");
+        assert_eq!(source.0.load(Ordering::Relaxed), 0, "a painted canvas never reads the source's pixels");
+        let seen = views.borrow().clone();
+        assert!(!seen.is_empty() && seen.iter().all(|view| view.rect.area() > 0.0 && view.zoom > 0.0), "the paint gets the canvas view: {seen:?}");
+
+        painted.set(false);
+        fixture.settle();
+        let from_source = fixture.frame_shapes();
+        assert_eq!(callbacks(&from_source), 0);
+        assert!(source.0.load(Ordering::Relaxed) > 0, "without a paint the canvas reads the source");
+        // The checkerboard and the edge are the display's either way: the source's picture is a textured quad in the
+        // callback's place, with the same shapes under and over it.
+        assert_eq!(from_app.len(), from_source.len(), "the painted picture keeps the checkerboard and the edge");
+    }
+}
