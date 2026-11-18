@@ -2099,6 +2099,25 @@ fn compound_borders_round_trip() {
     assert_eq!(tops(&back), want);
 }
 
+/// storytold/wordcraft#5764: a DOCX cell border of width 0 (`w:sz="0"`, or no `w:sz`) is a line
+/// Word draws without giving it room. RTF has no such border, so it is written at the thinnest
+/// line rather than dropped.
+#[test]
+fn a_width_0_cell_border_exports_as_the_thinnest_line() {
+    let mut d = import(br"{\rtf1\ansi\trowd\clbrdrb\brdrs\cellx2000\pard\intbl a\cell\row}").unwrap();
+    for b in d.body.iter_mut() {
+        if let craft_wordmodel::Block::Table(t) = std::sync::Arc::make_mut(b)
+            && let Some(bd) = t.rows[0].cells[0].props.borders.as_mut()
+            && let Some(bottom) = bd.bottom.as_mut()
+        {
+            bottom.width = 0.0;
+        }
+    }
+    let exported = export(&d);
+    let twips = (craft_wordmodel::props::Border::THINNEST * 20.0).round() as i64;
+    assert!(exported.contains(&format!(r"\clbrdrb\brdrs\brdrw{twips}")), "{exported}");
+}
+
 fn para_aligns(flow: &Flow) -> Vec<(bool, Option<Align>)> {
     flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
 }

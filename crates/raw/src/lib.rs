@@ -97,6 +97,9 @@ mod arw_capture_gains;
 mod arw_lens;
 #[cfg(feature = "arw")]
 mod arw_lens_rm6;
+/// Two-field Coolpix NEFs: field order and the CYGM mosaic.
+#[cfg(feature = "nef")]
+mod coolpix;
 /// Sony lens-record geometry shared by the decoder and development pipelines.
 #[cfg(feature = "arw")]
 pub mod sony {

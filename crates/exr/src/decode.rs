@@ -988,11 +988,76 @@ pub enum Compression {
     #[default]
     Zip16,
     Piz,
+    Pxr24,
+    B44,
+    B44a,
+    Dwaa,
+    Dwab,
+}
+
+/// Sample depth for RGBA OpenEXR writing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleDepth {
+    /// 32-bit IEEE 754 float.
+    Float,
+    /// 16-bit IEEE 754 half float (finite values clamped to ±65 504).
+    Half,
+}
+
+fn to_exr_compression(compression: Compression) -> ExrCompression {
+    match compression {
+        Compression::None => ExrCompression::Uncompressed,
+        Compression::Rle => ExrCompression::RLE,
+        Compression::Zip1 => ExrCompression::ZIP1,
+        Compression::Zip16 => ExrCompression::ZIP16,
+        Compression::Piz => ExrCompression::PIZ,
+        Compression::Pxr24 => ExrCompression::PXR24,
+        Compression::B44 => ExrCompression::B44,
+        Compression::B44a => ExrCompression::B44A,
+        Compression::Dwaa => ExrCompression::DWAA(None),
+        Compression::Dwab => ExrCompression::DWAB(None),
+    }
+}
+
+fn to_exr_chromaticities(chromaticities: Option<[[f32; 2]; 4]>) -> Option<exr::meta::attribute::Chromaticities> {
+    chromaticities.map(|[red, green, blue, white]| exr::meta::attribute::Chromaticities {
+        red: exr::prelude::Vec2(red[0], red[1]),
+        green: exr::prelude::Vec2(green[0], green[1]),
+        blue: exr::prelude::Vec2(blue[0], blue[1]),
+        white: exr::prelude::Vec2(white[0], white[1]),
+    })
 }
 
 /// Writes one scan-line part of `width × height` with these channels (each `width × height`
 /// samples, top row first; the order given does not matter, the file stores them sorted).
 pub fn write(width: u32, height: u32, channels: &[Channel], compression: Compression) -> Result<Vec<u8>> {
+    write_with_chromaticities(width, height, channels, compression, None)
+}
+
+/// Writes one scan-line part of `width × height` with these channels and optional CIE xy
+/// `chromaticities` (`[red, green, blue, white]`), returning the encoded OpenEXR bytes.
+pub fn write_with_chromaticities(
+    width: u32,
+    height: u32,
+    channels: &[Channel],
+    compression: Compression,
+    chromaticities: Option<[[f32; 2]; 4]>,
+) -> Result<Vec<u8>> {
+    let mut out = Cursor::new(Vec::new());
+    write_to(&mut out, width, height, channels, compression, chromaticities)?;
+    Ok(out.into_inner())
+}
+
+/// Writes one scan-line part of `width × height` with these channels and optional CIE xy
+/// `chromaticities` (`[red, green, blue, white]`) to `out`.
+pub fn write_to<W: std::io::Write + std::io::Seek>(
+    out: &mut W,
+    width: u32,
+    height: u32,
+    channels: &[Channel],
+    compression: Compression,
+    chromaticities: Option<[[f32; 2]; 4]>,
+) -> Result<()> {
     let enc = |m: &str| Error::Encode(m.into());
     if width == 0 || height == 0 || channels.is_empty() {
         return Err(enc("empty picture"));
@@ -1011,16 +1076,77 @@ pub fn write(width: u32, height: u32, channels: &[Channel], compression: Compres
         };
         list.push(AnyChannel::new(name, samples));
     }
-    let compression = match compression {
-        Compression::None => ExrCompression::Uncompressed,
-        Compression::Rle => ExrCompression::RLE,
-        Compression::Zip1 => ExrCompression::ZIP1,
-        Compression::Zip16 => ExrCompression::ZIP16,
-        Compression::Piz => ExrCompression::PIZ,
+    let encoding = Encoding {
+        compression: to_exr_compression(compression),
+        blocks: Blocks::ScanLines,
+        line_order: LineOrder::Increasing,
     };
-    let encoding = Encoding { compression, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let layer = Layer::new((width as usize, height as usize), LayerAttributes::default(), encoding, AnyChannels::sort(list.into_iter().collect()));
-    let mut out = Cursor::new(Vec::new());
-    exr::image::Image::from_layer(layer).write().to_buffered(&mut out).map_err(|e| Error::Encode(e.to_string()))?;
-    Ok(out.into_inner())
+    let mut image = exr::image::Image::from_layer(layer);
+    image.attributes.chromaticities = to_exr_chromaticities(chromaticities);
+    image.write().to_buffered(out).map_err(|e| Error::Encode(e.to_string()))
+}
+
+/// Writes `width × height` interleaved RGBA `f32` pixels (`data`, top row first) as one
+/// scan-line OpenEXR part at `depth` (`Float` or `Half`) with `compression` and optional CIE xy
+/// `chromaticities` (`[red, green, blue, white]`). Pixels not covered by `data` are written as
+/// transparent black.
+pub fn write_rgba<W: std::io::Write + std::io::Seek>(
+    out: &mut W,
+    data: &[f32],
+    width: u32,
+    height: u32,
+    depth: SampleDepth,
+    compression: Compression,
+    chromaticities: Option<[[f32; 2]; 4]>,
+) -> Result<()> {
+    let enc = |m: &str| Error::Encode(m.into());
+    if width == 0 || height == 0 {
+        return Err(enc("empty picture"));
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let row = w.checked_mul(4).ok_or_else(|| enc("picture too large"))?;
+    let px = move |p: exr::prelude::Vec2<usize>| -> [f32; 4] {
+        let o = p.y().saturating_mul(row).saturating_add(p.x().saturating_mul(4));
+        match data.get(o..o.saturating_add(4)) {
+            Some(&[r, g, b, a]) => [r, g, b, a],
+            _ => [0.0; 4],
+        }
+    };
+    let encoding = Encoding {
+        compression: to_exr_compression(compression),
+        blocks: Blocks::ScanLines,
+        line_order: LineOrder::Increasing,
+    };
+    let chroma = to_exr_chromaticities(chromaticities);
+    match depth {
+        SampleDepth::Float => {
+            let mut image = exr::image::Image::from_layer(Layer::new(
+                (w, h),
+                LayerAttributes::default(),
+                encoding,
+                exr::prelude::SpecificChannels::rgba(move |p: exr::prelude::Vec2<usize>| {
+                    let [r, g, b, a] = px(p);
+                    (r, g, b, a)
+                }),
+            ));
+            image.attributes.chromaticities = chroma;
+            image.write().to_buffered(out).map_err(|e| Error::Encode(e.to_string()))
+        }
+        SampleDepth::Half => {
+            const HALF_MAX: f32 = 65_504.0;
+            let mut image = exr::image::Image::from_layer(Layer::new(
+                (w, h),
+                LayerAttributes::default(),
+                encoding,
+                exr::prelude::SpecificChannels::rgba(move |p: exr::prelude::Vec2<usize>| {
+                    let [r, g, b, a] = px(p).map(|v| f16::from_f32(v.clamp(-HALF_MAX, HALF_MAX)));
+                    (r, g, b, a)
+                }),
+            ));
+            image.attributes.chromaticities = chroma;
+            image.write().to_buffered(out).map_err(|e| Error::Encode(e.to_string()))
+        }
+    }
 }
