@@ -247,7 +247,7 @@ fn ifd0_without_dimensions_but_with_a_jpeg_is_a_preview_container() {
 /// the header probe; a tile that isn't VC-5 fails with a reason that names the format.
 #[test]
 fn gopro_vc5_dng_decodes() {
-    let gpr = |tile: Vec<u8>, pattern: [u8; 4]| {
+    let gpr_planes = |tile: Vec<u8>, pattern: [u8; 4], planes: Option<[u8; 3]>| {
         let mut ifd = IfdBuilder::new();
         ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
         ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
@@ -260,9 +260,13 @@ fn gopro_vc5_dng_decodes() {
         ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
         ifd.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
         ifd.set(t::WHITE_LEVEL, Value::Short(vec![16383]));
+        if let Some(planes) = planes {
+            ifd.set(t::CFA_PLANE_COLOR, Value::Byte(planes.to_vec()));
+        }
         ifd.set_image(ImageData::Tiles { tile_width: 64, tile_height: 48, tiles: vec![tile] });
         write(&[ifd])
     };
+    let gpr = |tile: Vec<u8>, pattern: [u8; 4]| gpr_planes(tile, pattern, None);
     let bytes = gpr(crate::vc5::synthetic_stream(64, 48, [4000, 8192, 8192, 8192], 0), [0, 1, 1, 2]);
     assert_eq!(probe(&bytes), Some(RawFormat::Dng));
     let img = decode(&bytes).unwrap();
@@ -276,6 +280,12 @@ fn gopro_vc5_dng_decodes() {
     let bytes = gpr(crate::vc5::synthetic_stream(64, 48, [4000, 8192, 8192, 8192], 0), [2, 1, 1, 0]);
     assert!(matches!(decode(&bytes), Err(RawError::Unsupported(why)) if why.contains("GoPro VC-5")));
     assert!(probe_info(&bytes).is_ok(), "the header probe still describes it");
+    // the stream's layout follows the physical colours whatever the plane order; RawImage::cfa is in plane indices
+    let planes = [2, 1, 0];
+    let bytes = gpr_planes(crate::vc5::synthetic_stream(64, 48, [4000, 8192, 8192, 8192], 0), [0, 1, 1, 2], Some(planes));
+    let img = decode(&bytes).unwrap();
+    assert_eq!(img.data, decode(&gpr(crate::vc5::synthetic_stream(64, 48, [4000, 8192, 8192, 8192], 0), [0, 1, 1, 2])).unwrap().data);
+    assert_eq!(img.cfa.map(|c| c.pattern), Some(vec![2, 1, 1, 0]));
 }
 
 /// A LinearRaw DNG in the layout of Lightroom's merges: a `w` × `h` main image (samples 1000) with a default

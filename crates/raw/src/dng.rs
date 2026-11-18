@@ -28,13 +28,9 @@ fn vc5_image(bytes: &[u8], ifd0: &Ifd, ifd: &Ifd, info: &ImageInfo, limits: &Lim
     if w.checked_mul(h).is_none_or(|n| n == 0 || n > limits.samples()) {
         return Err(RawError::Limit("image too large"));
     }
-    let stored_pattern = ifd.bytes(t::CFA_PATTERN_EP).unwrap_or_default();
-    let planes = ifd.bytes(t::CFA_PLANE_COLOR).map(|b| b.to_vec()).unwrap_or_else(|| vec![0, 1, 2]);
-    let pattern: Vec<u8> = stored_pattern
-        .iter()
-        .map(|c| planes.iter().position(|p| p == c).map(|i| i as u8).filter(|&i| i < 3))
-        .collect::<Option<_>>()
-        .ok_or_else(|| RawError::Unsupported(format!("GoPro VC-5 raw with CFA pattern {stored_pattern:?}")))?;
+    // The stream's layout is physical: CFAPattern's colour codes (0 red, 1 green, 2 blue), not the plane indices
+    // CFAPlaneColor maps them to, which `decode_ifd` applies to `RawImage::cfa` as for any DNG.
+    let pattern = ifd.bytes(t::CFA_PATTERN_EP).unwrap_or_default().to_vec();
     if pattern.len() != 4 {
         return Err(RawError::Corrupt("bad GoPro VC-5 CFAPattern".into()));
     }

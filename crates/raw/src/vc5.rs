@@ -190,6 +190,7 @@ fn parse(src: &[u8]) -> Result<Stream> {
     let (mut image_format, mut pattern, mut components_per_sample, mut max_bits) = (None, (0, 0), None, None);
     let (mut channel, mut subband, mut quant, mut lowpass_precision) = (0usize, 0usize, 0i32, 16u32);
     let mut prescale = [0u16; WAVELETS];
+    let mut prescale_tag: Option<u16> = None;
     let mut header_finished = false;
     let mut blocks: Vec<Block> = Vec::new();
     let mut seen = [[false; SUBBANDS]; CHANNELS];
@@ -249,6 +250,12 @@ fn parse(src: &[u8]) -> Result<Stream> {
             TAG_CHANNEL_NUMBER => channel = value as usize,
             TAG_BITS_PER_COMPONENT => {}
             TAG_PRESCALE_SHIFT => {
+                // GoPro writes the same table before every channel. The SDK applies whichever table is current when a
+                // level completes; one table for the whole stream keeps that true without tracking when it changed.
+                if prescale_tag.is_some_and(|earlier| earlier != value) {
+                    return Err(unsupported("prescale table that changes within the stream"));
+                }
+                prescale_tag = Some(value);
                 for (i, p) in prescale.iter_mut().enumerate() {
                     *p = (value >> (14 - 2 * i)) & 3;
                     if *p != 0 && *p != 2 {
@@ -891,6 +898,12 @@ mod tests {
             let result = decode(&bad, 64, 48, Layout::Rggb14);
             assert!(matches!(result, Err(RawError::Unsupported(_))) == unsupported && result.is_err(), "precision {bits}: {result:?}");
         }
+        // the same prescale table before every channel decodes; a table that changes is refused
+        let tables: Vec<usize> = good.windows(4).enumerate().filter(|(_, w)| *w == [0, 109, 0x28, 0]).map(|(i, _)| i).collect();
+        assert_eq!(tables.len(), 4);
+        let mut changed = good.clone();
+        changed[tables[2] + 2] = 0;
+        assert!(matches!(decode(&changed, 64, 48, Layout::Rggb14), Err(RawError::Unsupported(why)) if why.contains("prescale table")));
         // a repeated codeblock (here the first one, at the end of the header) is refused
         let first = good.windows(4).position(|w| w[0] == 0xa0 && w[1] == 0).unwrap();
         let words = u16::from_be_bytes([good[first + 2], good[first + 3]]) as usize;
