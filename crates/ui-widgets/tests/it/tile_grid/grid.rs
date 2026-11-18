@@ -112,6 +112,16 @@ fn a_wheel_zoom_keeps_the_tile_under_the_pointer_in_place() {
     let start = zoom.get();
     fixture.frame(vec![pointer::zoom_wheel(120.0)]).settle();
     assert!(zoom.get() != start, "the wheel zoom moved the bound value from {start}");
+    {
+        let seen = shown.borrow();
+        let mut keys: Vec<usize> = seen.tiles.keys().copied().collect();
+        keys.sort_unstable();
+        eprintln!(
+            "DIAG a_wheel_zoom_keeps_the_tile_under_the_pointer_in_place: key {key} before {before:?} zoom {start} -> {} view {:?} shown {keys:?}",
+            zoom.get(),
+            seen.view
+        );
+    }
     let after = shown.borrow().tile(key);
     assert!((after.top() - before.top()).abs() <= 1.0, "the tile under the pointer keeps its top: {before:?} to {after:?}");
 
