@@ -237,6 +237,12 @@ impl<O> Shape<O> {
         self
     }
 
+    /// The shape's stacking order among shapes of its priority: the higher order wins before the nearest centre.
+    pub const fn stacking(mut self, order: u32) -> Self {
+        self.stacking = order;
+        self
+    }
+
     /// The shape lies in the body layer's space.
     pub const fn local(mut self, local: bool) -> Self {
         self.local = local;
@@ -276,8 +282,8 @@ pub struct Winner<O> {
     pub local: bool,
 }
 
-/// The winner among `shapes` at `point`: stack position first, then level, sub-level, the nearest centre, the last
-/// registered. A press considers only shapes that sense a click or a drag.
+/// The winner among `shapes` at `point`: stack position first, then level, sub-level, stacking order, the nearest
+/// centre, the last registered. A press considers only shapes that sense a click or a drag.
 pub fn resolve<O: Copy>(shapes: &[Shape<O>], point: Pos2, what: ResolveFor) -> Option<Winner<O>> {
     resolve_mapped(shapes, point, what, |_| point)
 }
@@ -292,8 +298,8 @@ pub fn resolve_mapped<O: Copy>(shapes: &[Shape<O>], point: Pos2, what: ResolveFo
         .filter(|(_, shape)| what == ResolveFor::Hover || shape.sense.takes_press())
         .filter(|(_, shape)| shape.hits(at(shape)))
         .max_by(|(ia, a), (ib, b)| {
-            (a.position, a.priority.level, a.priority.sub)
-                .cmp(&(b.position, b.priority.level, b.priority.sub))
+            (a.position, a.priority.level, a.priority.sub, a.stacking)
+                .cmp(&(b.position, b.priority.level, b.priority.sub, b.stacking))
                 .then_with(|| distance(b).partial_cmp(&distance(a)).unwrap_or(Ordering::Equal))
                 .then(ia.cmp(ib))
         })
@@ -332,5 +338,16 @@ mod tests {
         assert_eq!(owner(&near), Some(2));
         let tie = [shape(big(), Sense::CLICK, 1, 0, HitLevel::Body, 0), shape(big(), Sense::CLICK, 2, 0, HitLevel::Body, 0)];
         assert_eq!(owner(&tie), Some(2));
+    }
+
+    #[test]
+    fn stacked_parts_of_one_priority_rank_by_their_order_before_the_nearest_centre() {
+        let at = pos2(50.0, 50.0);
+        let owner = |shapes: &[Shape<u8>]| resolve(shapes, at, ResolveFor::Press).map(|w| w.owner);
+        let near = || shape(rect(40.0, 40.0, 20.0, 20.0), Sense::CLICK, 1, 0, HitLevel::Body, 0);
+        let far = || shape(rect(0.0, 0.0, 200.0, 200.0), Sense::CLICK, 2, 0, HitLevel::Body, 0);
+        assert_eq!(owner(&[far(), near()]), Some(1), "unstacked, the nearer centre wins");
+        assert_eq!(owner(&[far().stacking(1), near()]), Some(2), "the higher stacking order wins though the press is nearer the other's centre");
+        assert_eq!(owner(&[near().stacking(1), far().stacking(1)]), Some(1), "one order: the nearest centre decides");
     }
 }

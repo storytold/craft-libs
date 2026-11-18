@@ -1,14 +1,17 @@
 //! The contextual task bar (N6): hung centred under its anchor's screen bounds, following the anchor until the grip
-//! moves it, reset and pinned from its More menu, and kept inside the canvas area whatever place it is given.
+//! moves it, reset and pinned from its More menu, and kept inside the canvas area whatever place it is given. A fixed
+//! bar neither moves nor has a menu, and an edge bar sits at the canvas view's top edge.
 
+use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
+use craft_behavior::overlay::Align;
 use craft_ui::buttons::Button;
 use craft_ui::canvas_controls::{TaskBar, TaskBarPlace};
 use craft_ui::contract::{Bind, Show as _};
-use craft_ui::testing::canvas_story::on_canvas;
+use craft_ui::testing::canvas_story::{StoryDocument, on_canvas, on_canvas_view};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const SLACK: f32 = 1.5;
@@ -33,8 +36,14 @@ fn frame(by: DocVec) -> Vec<Point> {
     [(120.0, 40.0), (520.0, 40.0), (520.0, 200.0), (120.0, 200.0)].into_iter().map(|(x, y)| Point::new(x, y) + by).collect()
 }
 
-/// A canvas that shows the bar for the scene's anchor and place, with the More menu before a Done button.
-fn fixture(scene: &Rc<RefCell<Scene>>) -> Fixture {
+/// A frame low on the story canvas: below it the canvas has no room for a bar.
+fn low_frame() -> Vec<Point> {
+    [(120.0, 290.0), (520.0, 290.0), (520.0, 390.0), (120.0, 390.0)].into_iter().map(|(x, y)| Point::new(x, y)).collect()
+}
+
+/// A canvas that shows the bar for the scene's anchor and place, with the More menu before a Done button: a movable
+/// bar, or a `fixed` one, which takes no place.
+fn fixture(scene: &Rc<RefCell<Scene>>, fixed: bool) -> Fixture {
     let shared = Rc::clone(scene);
     let mut fixture = Fixture::new(move |ui| {
         let _ = on_canvas(ui, |ui, area, view| {
@@ -42,7 +51,8 @@ fn fixture(scene: &Rc<RefCell<Scene>>) -> Fixture {
             let scene = &mut *held;
             scene.bounds = Rect::from_points(&scene.anchor.iter().map(|point| view.to_screen(*point)).collect::<Vec<_>>());
             scene.area = area;
-            let shown = TaskBar::new("Crop", &scene.anchor, Bind::bound(&mut scene.place)).show(ui, area, |ui, cx| {
+            let bar = if fixed { TaskBar::fixed("Crop", &scene.anchor) } else { TaskBar::new("Crop", &scene.anchor, Bind::bound(&mut scene.place)) };
+            let shown = bar.show(ui, area, |ui, cx| {
                 cx.more_menu(ui);
                 let _ = Button::new("Done").show(ui);
             });
@@ -83,7 +93,7 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
         area: Rect::NOTHING,
         rect: Rect::NOTHING,
     }));
-    let mut fixture = fixture(&scene);
+    let mut fixture = fixture(&scene, false);
     fixture.settle();
     let first = seen(&scene);
     assert!(first.rect.is_positive(), "the bar shows: {:?}", first.rect);
@@ -133,4 +143,64 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     fixture.settle();
     let far = seen(&scene);
     assert!(inside_area(&far), "a place far outside comes back inside {:?}: {:?}", far.area, far.rect);
+}
+
+#[trial]
+fn a_fixed_task_bar_ignores_a_drag_shows_no_more_menu_and_opens_above_with_no_room_below() {
+
+    let scene = Rc::new(RefCell::new(Scene {
+        anchor: low_frame(),
+        place: TaskBarPlace::default(),
+        bounds: Rect::NOTHING,
+        area: Rect::NOTHING,
+        rect: Rect::NOTHING,
+    }));
+    let mut fixture = fixture(&scene, true);
+    fixture.settle();
+    let shown = seen(&scene);
+    assert!(shown.rect.is_positive(), "the bar shows: {:?}", shown.rect);
+    assert!(fixture.by_label("Move bar").is_none(), "a fixed bar has no grip");
+    assert!(fixture.by_label("More options").is_none(), "a fixed bar has no More menu");
+    assert!(shown.rect.bottom() < shown.bounds.top(), "with no room below, the bar hangs above {:?}: {:?}", shown.bounds, shown.rect);
+    assert!(inside_area(&shown), "inside the canvas {:?}: {:?}", shown.area, shown.rect);
+
+    let free = shown.rect.left_center() + Vec2::new(2.0, 0.0);
+    fixture.drag_at(free, Vec2::new(-120.0, -60.0)).settle();
+    let dragged = seen(&scene);
+    assert!((dragged.rect.min - shown.rect.min).length() < SLACK, "a drag moves nothing: {:?} then {:?}", shown.rect, dragged.rect);
+    assert_eq!(dragged.place, TaskBarPlace::default(), "a fixed bar keeps no place");
+
+    // An edge bar takes no anchor: it sits at the view's top edge, at its end, wherever the view scrolls.
+    let centre = Rc::new(Cell::new(StoryDocument::STANDARD.centre()));
+    let reported = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let (view_centre, shown_at) = (Rc::clone(&centre), Rc::clone(&reported));
+    let mut fixture = Fixture::new(move |ui| {
+        let at = view_centre.get();
+        let _ = on_canvas_view(
+            ui,
+            |room, ppp| CanvasView::new(room, at, 1.0 / f64::from(ppp)),
+            Some(&StoryDocument::STANDARD),
+            |ui, area, _| {
+                let bar = TaskBar::at_edge("Find", Align::End).show(ui, area, |ui, _| {
+                    let _ = Button::new("Next").show(ui);
+                });
+                shown_at.set((area, bar.output.rect));
+                bar.output
+            },
+        );
+    });
+    fixture.room(Vec2::new(1120.0, 720.0));
+    fixture.settle();
+    let (area, edge) = reported.get();
+    assert!(edge.is_positive(), "the edge bar shows with no anchor: {edge:?}");
+    assert!(area.expand(SLACK).contains_rect(edge), "inside the canvas {area:?}: {edge:?}");
+    assert!(edge.top() - area.top() < edge.height(), "at the top edge of {area:?}: {edge:?}");
+    assert!(area.right() - edge.right() < edge.left() - area.left(), "nearer the end edge of {area:?}: {edge:?}");
+    centre.set(centre.get() + DocVec::new(80.0, 60.0));
+    fixture.settle();
+    let (_, scrolled) = reported.get();
+    assert!(
+        (scrolled.min - edge.min).length() < SLACK && (scrolled.size() - edge.size()).length() < SLACK,
+        "the edge bar keeps its rect while the view scrolls: {edge:?} then {scrolled:?}"
+    );
 }

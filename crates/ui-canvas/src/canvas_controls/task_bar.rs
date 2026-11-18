@@ -1,4 +1,5 @@
-//! `TaskBar`: the contextual task bar over a canvas, hung below its anchor until the user moves it.
+//! `TaskBar`: the contextual task bar over a canvas: hung below its anchor until the user moves it, fixed beside its
+//! anchor, or fixed at the canvas view's top edge.
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -20,7 +21,7 @@ use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::kurbo::Point;
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{EditEvent, IconId, Metrics, Mixed, Sense};
-use egui::{Pos2, Rect, Response, Ui};
+use egui::{Pos2, Rect, Response, Ui, Vec2};
 use std::sync::Arc;
 
 /// Where the task bar sits: pinned or following its anchor, and where the user moved it. The one owner of the bar's
@@ -50,9 +51,10 @@ impl TaskBarPlace {
     }
 }
 
-/// The contextual task bar: a movable modeless layer hung below the screen bounds of `anchor` while its place is
-/// unset, with a body of members and a More menu (Hide, Reset, Pin). One place, pin and Hide setting for Crop and
-/// Frame.
+/// The contextual task bar: a modeless layer with a body of members.
+///
+/// A movable bar ([`TaskBar::new`]) hangs below the screen bounds of its anchor while its place is unset, with a More
+/// menu (Hide, Reset, Pin). One place, pin and Hide setting for Crop and Frame.
 ///
 /// - Place: centred under the anchor's bounds on screen, a section gap below them, following the anchor each pass.
 ///   Dragged by its grip (any free point of the bar), it stays where it is dropped and keeps its left edge while the
@@ -61,17 +63,30 @@ impl TaskBarPlace {
 ///   back inside, its left and top edges winning where the bar does not fit.
 /// - Menu: Hide bar reports `hide`; Reset bar position clears the place, so the bar follows its anchor again; Pin bar
 ///   position keeps it where it shows.
-/// - Nothing shows outside a canvas, or while the anchor's bounds or `area` is not finite or `area` has no size.
 /// - `place` is the caller's value (`Bind::bound`): the bar reads it before it shows and writes the pass's change
 ///   after.
+///
+/// A fixed bar ([`TaskBar::fixed`]) hangs centred a section gap below its anchor's bounds, above them when there is no
+/// room below, and follows the anchor. An edge bar ([`TaskBar::at_edge`]) hangs at the top edge of `area`, the canvas
+/// view's rect, and takes no anchor. Neither has a grip, a move or a More menu, and neither reports `hide`.
+///
+/// Nothing shows outside a canvas, while `area` is not finite or has no size, or, for an anchored bar, while the
+/// anchor's bounds are not finite.
 #[must_use = "show the task bar with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct TaskBar<'a> {
     label: Label,
-    anchor: &'a [Point],
+    hang: Hang<'a>,
     place: Bind<'a, TaskBarPlace>,
-    #[allow(dead_code)] // P3(pdf-canvas-w3): CV-C15
     kind: TaskBarKind,
+}
+
+/// What a bar hangs from: the screen bounds of document points, or the canvas view's top edge, aligned in reading
+/// direction.
+#[derive(Clone, Copy)]
+enum Hang<'a> {
+    Points(&'a [Point]),
+    Edge(Align),
 }
 
 /// Whether a task bar follows its anchor and moves, or stays where it hangs.
@@ -112,7 +127,7 @@ pub struct TaskBarCx<'a> {
 
 impl TaskBarCx<'_> {
     /// Places the More menu button here, before the members that follow it (the Crop bar puts Cancel and Done after
-    /// it); without the call the button comes after the body.
+    /// it); without the call the button comes after the body. A fixed bar has no More menu: the call places nothing.
     pub fn more_menu(&mut self, ui: &mut Ui) {
         self.menu.place(ui);
     }
@@ -129,14 +144,16 @@ enum MenuPick {
 /// The More button and its menu, placed once per run of the bar's body.
 struct MoreMenu {
     words: Arc<CanvasControlWords>,
+    /// The bar offers the menu: a movable bar does, a fixed one does not.
+    offered: bool,
     placed: bool,
     pick: Option<MenuPick>,
 }
 
 impl MoreMenu {
-    /// Shows the button and its menu here unless this run of the body showed them already.
+    /// Shows the button and its menu here unless the bar offers none or this run of the body showed them already.
     fn place(&mut self, ui: &mut Ui) {
-        if std::mem::replace(&mut self.placed, true) {
+        if !self.offered || std::mem::replace(&mut self.placed, true) {
             return;
         }
         let words = Arc::clone(&self.words);
@@ -161,46 +178,54 @@ impl MoreMenu {
 impl<'a> TaskBar<'a> {
     /// A bar named `label` hung below the screen bounds of `anchor` (document points) until `place` moves it.
     pub fn new(label: impl Into<Label>, anchor: &'a [Point], place: Bind<'a, TaskBarPlace>) -> Self {
-        TaskBar { label: label.into(), anchor, place, kind: TaskBarKind::Movable }
+        TaskBar { label: label.into(), hang: Hang::Points(anchor), place, kind: TaskBarKind::Movable }
     }
 
     /// A fixed bar named `label` hung below the screen bounds of `anchor`, above them when there is no room below.
     pub fn fixed(label: impl Into<Label>, anchor: &'a [Point]) -> Self {
-        let _ = (label, anchor);
-        todo!("CV-C15")
+        TaskBar { label: label.into(), hang: Hang::Points(anchor), place: Bind::given(TaskBarPlace::default()), kind: TaskBarKind::Fixed }
     }
 
     /// A fixed bar at the canvas view's top edge, aligned `edge` in reading direction and inset by the regular pad.
     pub fn at_edge(label: impl Into<Label>, edge: Align) -> Self {
-        let _ = (label, edge);
-        todo!("CV-C15")
+        TaskBar { label: label.into(), hang: Hang::Edge(edge), place: Bind::given(TaskBarPlace::default()), kind: TaskBarKind::Fixed }
     }
 
     /// Whether the bar is movable or fixed.
     pub fn kind(&self) -> TaskBarKind {
-        todo!("CV-C15")
+        self.kind
     }
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, anchor, mut place, .. } = self; // P3(pdf-canvas-w3): CV-C15
+        let TaskBar { label, hang, mut place, kind } = self;
         let env = Env::of(ui);
         let words = env.words::<CanvasControlWords>();
-        // The anchor maps through this pass's view, so the bar follows a scroll or zoom in the same pass.
-        let bounds = canvas_space(&env.view()).map_or(Rect::NOTHING, |space| {
-            anchor.iter().fold(Rect::NOTHING, |mut bounds, point| {
-                bounds.extend_with(space.view.to_screen(*point));
-                bounds
-            })
-        });
-        let shows = bounds.is_finite() && area.is_finite() && area.is_positive();
+        let movable = kind == TaskBarKind::Movable;
+        let room = area.is_finite() && area.is_positive();
+        let hung = match hang {
+            Hang::Points(anchor) => {
+                // The anchor maps through this pass's view, so the bar follows a scroll or zoom in the same pass.
+                let bounds = canvas_space(&env.view()).map_or(Rect::NOTHING, |space| {
+                    anchor.iter().fold(Rect::NOTHING, |mut bounds, point| {
+                        bounds.extend_with(space.view.to_screen(*point));
+                        bounds
+                    })
+                });
+                let gap = env.tokens.space.gap.section;
+                // A fixed bar keeps the gap on both sides of its anchor: it opens above when there is no room below.
+                let rect = if movable { hang_rect(bounds, gap) } else { bounds.expand2(Vec2::new(0.0, gap)) };
+                (room && bounds.is_finite()).then_some((rect, Align::Center))
+            }
+            Hang::Edge(align) => room.then(|| (edge_rect(area, env.tokens.space.pad.regular), align)),
+        };
+        let shows = hung.is_some();
         let held = match place.reborrow().get() {
             Some(Mixed::Same(held)) => held,
             _ => TaskBarPlace::default(),
         };
-        let hang = shows.then(|| hang_rect(bounds, env.tokens.space.gap.section));
-        let layer = TaskBarLayer::new(label, words.task_bar_move.clone(), layer_overlay(&held, hang, area), shows);
-        let mut menu = MoreMenu { words: Arc::clone(&words), placed: false, pick: None };
+        let layer = TaskBarLayer::new(label, words.task_bar_move.clone(), layer_overlay(&held, hung, area, movable), shows, movable);
+        let mut menu = MoreMenu { words: Arc::clone(&words), offered: movable, placed: false, pick: None };
         let mut shown = layer.show(ui, |ui, _| {
             Bar::new(Label::Empty, BarKind::Tool).show(ui, |ui, _| {
                 menu.placed = false;
@@ -211,7 +236,7 @@ impl<'a> TaskBar<'a> {
         });
         let rect = shown.output.response.rect;
         let pick = menu.pick;
-        if shows {
+        if shows && movable {
             let moved = shown.output.moved.filter(|moved| moved.min != rect.min);
             let next = settled(held, rect, area, moved, pick);
             if next != held {
@@ -238,15 +263,21 @@ fn hang_rect(bounds: Rect, gap: f32) -> Rect {
     Rect::from_min_max(bounds.min, Pos2::new(bounds.max.x, bounds.max.y + gap))
 }
 
-/// The layer the bar shows in: hung below `hang` while `held` has no place, at its place once it has one. A move stays
-/// inside `area`. A bar that does not show (`hang` is `None`) gets a closed layer with no place.
-fn layer_overlay(held: &TaskBarPlace, hang: Option<Rect>, area: Rect) -> Overlay {
-    let overlay = Overlay::floating().modeless().movable(true).body_scroll(false);
-    let Some(hang) = hang else { return overlay };
+/// The rect an edge bar hangs below: the top edge of `area`, inset by `pad` on its sides, with no height.
+fn edge_rect(area: Rect, pad: f32) -> Rect {
+    Rect::from_min_max(Pos2::new(area.left() + pad, area.top()), Pos2::new(area.right() - pad, area.top()))
+}
+
+/// The layer the bar shows in: hung below `hang`, aligned as it says, while `held` has no place, at its place once it
+/// has one. Only a `movable` bar moves, and a move stays inside `area`. A bar that does not show (`hang` is `None`)
+/// gets a closed layer with no place.
+fn layer_overlay(held: &TaskBarPlace, hang: Option<(Rect, Align)>, area: Rect, movable: bool) -> Overlay {
+    let overlay = Overlay::floating().modeless().movable(movable).body_scroll(false);
+    let Some((hang, align)) = hang else { return overlay };
     let overlay = overlay.bounds(area);
-    match held.placed_in(area) {
+    match held.placed_in(area).filter(|_| movable) {
         Some(at) => overlay.placed_at(at),
-        None => overlay.place(Place::anchored(Anchor::Rect(hang), Side::Below, Align::Center)),
+        None => overlay.place(Place::anchored(Anchor::Rect(hang), Side::Below, align)),
     }
 }
 
@@ -295,8 +326,9 @@ impl Outcome for TaskBarLayerOutput {
     }
 }
 
-/// The task bar's layer: a floating surface whose line starts with the grip and holds the bar. The move band lies
-/// under the whole line, so the grip and every free point between the members move the layer.
+/// The task bar's layer: a floating surface that holds the bar. A movable bar's line starts with the grip, and the
+/// move band lies under the whole line, so the grip and every free point between the members move the layer; a fixed
+/// bar's layer has no header.
 #[derive(crate::contract::Component)]
 #[component(container, unregistered)]
 struct TaskBarLayer {
@@ -311,13 +343,9 @@ struct TaskBarLayer {
 }
 
 impl TaskBarLayer {
-    fn new(label: Label, grip: Label, overlay: Overlay, open: bool) -> Self {
-        let props = ContainerProps::new()
-            .mount(Mount::Layer(overlay))
-            .surface(SurfaceKind::Floating)
-            .pad(Pad::None)
-            .sizing(Sizing::Content)
-            .header(HeaderRegion::new().band(DragBand::Move).inline(true));
+    fn new(label: Label, grip: Label, overlay: Overlay, open: bool, movable: bool) -> Self {
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).pad(Pad::None).sizing(Sizing::Content);
+        let props = if movable { props.header(HeaderRegion::new().band(DragBand::Move).inline(true)) } else { props };
         TaskBarLayer { common: Common::new(), props, grip, open: Bind::given(open), moved: None }.label(label).id_salt("task-bar")
     }
 }

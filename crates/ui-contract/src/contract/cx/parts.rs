@@ -110,8 +110,8 @@ impl PartBuilder<'_> {
 
     /// The part's stacking order: stacked parts of one priority rank by it before the nearest centre, the higher winning.
     pub fn stacking(self, order: u32) -> Self {
-        let _ = order;
-        todo!("CV-C31")
+        self.decl.stacking = order;
+        self
     }
 
     /// The cursor while the pointer is over the part.

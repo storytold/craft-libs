@@ -474,6 +474,11 @@ struct Open<T> {
     dragging: bool,
     /// Moved past slop on a target that senses no drag: the click is gone and nothing starts.
     abandoned: bool,
+    /// Moved past slop in this pass on a target that clicks and passes its drag (`Sense::PASSES_DRAG`), with the
+    /// pointer at the pass's end: no click and no drag until [`PressMachine::hand_over`] gives the press its new
+    /// target. The next pass abandons a press no shape took.
+
+    passing: Option<Pos2>,
     /// A pass reported the press: later passes within slop report `Held`, not `Down`.
     reported: bool,
     /// A pass reported the drag's start: later passes report `Drag`.
@@ -485,14 +490,14 @@ struct Open<T> {
 }
 
 impl<T> Open<T> {
-    /// A phase before the release is still to be reported.
+    /// A phase before the release is still to be reported, or the press waits for its hand-over.
     fn owes_phase(&self) -> bool {
-        !self.reported || (self.dragging && !self.drag_reported)
+        !self.reported || (self.dragging && !self.drag_reported) || self.passing.is_some()
     }
 
     /// A release now is a click.
     fn clicks(&self) -> bool {
-        !self.dragging && !self.abandoned && self.sense.contains(Sense::CLICK)
+        !self.dragging && !self.abandoned && self.passing.is_none() && self.sense.contains(Sense::CLICK)
     }
 }
 
@@ -541,6 +546,14 @@ impl<T: Copy> PressMachine<T> {
         let mut pos = input.pos;
         let mut released: Option<(T, PressStart, Pos2, bool, bool)> = None;
         let mut cancelled: Option<(T, PressStart, PressCancel)> = None;
+        // A press passed in the last pass that no shape took is abandoned; that pass reported its `Down`.
+        if let Some(open) = &mut self.open
+            && open.passing.is_some()
+        {
+            open.passing = None;
+            open.abandoned = true;
+            open.reported = true;
+        }
         if let Some(open) = self.open
             && let Some((at, click)) = open.released_at
             && !open.owes_phase()
@@ -560,10 +573,13 @@ impl<T: Copy> PressMachine<T> {
                         && open.released_at.is_none()
                         && !open.dragging
                         && !open.abandoned
+                        && open.passing.is_none()
                         && at.distance(open.start.origin) > input.slop
                     {
                         if open.sense.contains(Sense::DRAG) {
                             open.dragging = true;
+                        } else if open.sense.contains(Sense::CLICK | Sense::PASSES_DRAG) {
+                            open.passing = Some(at);
                         } else {
                             open.abandoned = true;
                         }
@@ -610,6 +626,7 @@ impl<T: Copy> PressMachine<T> {
                             start: PressStart::new(at, button, time, clicks),
                             dragging: false,
                             abandoned: false,
+                            passing: None,
                             reported: false,
                             drag_reported: false,
                             released_at: None,
@@ -649,6 +666,9 @@ impl<T: Copy> PressMachine<T> {
             };
         }
         let Some(open) = self.open.as_mut() else { return PressStep::default() };
+        if let Some(at) = &mut open.passing {
+            *at = pos;
+        }
         let phase = if !open.reported {
             PressPhase::Down { start: open.start }
         } else if open.dragging && !open.drag_reported {
@@ -659,16 +679,32 @@ impl<T: Copy> PressMachine<T> {
         } else {
             PressPhase::Held { start: open.start, pos }
         };
-        open.reported = true;
-        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.drag_reported, activated: None, passes: None }
+        // A passing press owes its `Down` to the shape `hand_over` gives it when this pass is its first.
+        if open.passing.is_none() {
+            open.reported = true;
+        }
+        let passes = open.passing.map(|_| open.start);
+        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.drag_reported, activated: None, passes }
     }
 
     /// Makes `target` the open press's target in the pass that reported `passes`, dragging from the same
     /// `PressStart`. It returns the `DragStart` step when an earlier pass reported the press, and the `Down` step
     /// (the `DragStart` follows in the next pass) when the move past slop came in the pass of the press itself.
+    /// `None` when no press passes in this pass or `sense` has no `DRAG`; the next pass abandons the press.
     pub fn hand_over(&mut self, target: T, sense: Sense) -> Option<PressStep<T>> {
-        let _ = (target, sense);
-        todo!("CV-C12")
+        let open = self.open.as_mut().filter(|open| !open.abandoned && sense.contains(Sense::DRAG))?;
+        let at = open.passing.take()?;
+        open.target = target;
+        open.sense = sense;
+        open.dragging = true;
+        let phase = if open.reported {
+            open.drag_reported = true;
+            PressPhase::DragStart { start: open.start, pos: at }
+        } else {
+            open.reported = true;
+            PressPhase::Down { start: open.start }
+        };
+        Some(PressStep { target: Some(target), phase: Some(phase), dragging: open.drag_reported, activated: None, passes: None })
     }
 }
 
@@ -769,5 +805,73 @@ mod tests {
         let far = PointerEvent::Moved { at: pos2(40.0, 0.0), sample: None };
         let passes: [&[PointerEvent]; 5] = [&[press(0.0, 1.0)], &[up, second], &[far, up], &[], &[]];
         assert_eq!(phases(&passes, Sense::CLICK | Sense::DRAG), "D R! D S R");
+    }
+
+    const PASSES: Sense = Sense::CLICK.union(Sense::PASSES_DRAG);
+
+    /// One pass with the button held at its end, over a root whose press winner is target 1 and passes its drag.
+    fn passing_pass(machine: &mut PressMachine<u8>, events: &[PointerEvent]) -> PressStep<u8> {
+        machine.step(PassInput::new(events, SLOP, pos2(0.0, 0.0), true), |_| Some((1, PASSES)))
+    }
+
+    fn moved(x: f32) -> PointerEvent {
+        PointerEvent::Moved { at: pos2(x, 0.0), sample: None }
+    }
+
+    fn up(x: f32) -> PointerEvent {
+        PointerEvent::released(pos2(x, 0.0))
+    }
+
+    #[test]
+    fn a_drag_past_slop_on_a_part_that_passes_it_goes_to_the_shape_below() {
+        let origin = pos2(0.0, 0.0);
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &[up(SLOP / 2.0)]], PASSES), "D R!", "within slop the press is the shape's click");
+
+        // The press was reported in an earlier pass: the shape below drags from the pass of the move.
+        let mut machine = PressMachine::new();
+        let down = passing_pass(&mut machine, &[press(0.0, 1.0)]);
+        assert!(matches!(down.phase, Some(PressPhase::Down { .. })) && down.passes.is_none(), "{down:?}");
+        assert!(machine.hand_over(2, Sense::DRAG).is_none(), "a press within slop passes nothing");
+        let passed = passing_pass(&mut machine, &[moved(40.0)]);
+        assert_eq!(passed.passes.map(|start| start.origin), Some(origin), "{passed:?}");
+        let handed = machine.hand_over(2, Sense::DRAG).expect("the shape below takes the drag");
+        assert_eq!(handed.target, Some(2));
+        assert!(
+            matches!(handed.phase, Some(PressPhase::DragStart { start, pos }) if start.origin == origin && pos == pos2(40.0, 0.0)),
+            "{:?}",
+            handed.phase
+        );
+        let drag = passing_pass(&mut machine, &[moved(60.0)]);
+        assert_eq!(drag.target, Some(2));
+        assert!(matches!(drag.phase, Some(PressPhase::Drag { .. })), "{:?}", drag.phase);
+        let end = passing_pass(&mut machine, &[up(60.0)]);
+        assert_eq!(end.target, Some(2));
+        assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", end.phase);
+        assert_eq!(end.activated, None, "a passed press is no click");
+
+        // The move past slop came in the press's own pass: the shape below gets the Down, its DragStart next pass,
+        // and a release in between waits for it.
+        let mut machine = PressMachine::new();
+        let first = passing_pass(&mut machine, &[press(0.0, 1.0), moved(40.0)]);
+        assert!(matches!(first.phase, Some(PressPhase::Down { .. })) && first.passes.is_some(), "{first:?}");
+        let handed = machine.hand_over(2, Sense::DRAG).expect("the shape below takes the drag");
+        assert_eq!(handed.target, Some(2));
+        assert!(matches!(handed.phase, Some(PressPhase::Down { start }) if start.origin == origin), "{:?}", handed.phase);
+        let start = passing_pass(&mut machine, &[up(40.0)]);
+        assert_eq!(start.target, Some(2));
+        assert!(matches!(start.phase, Some(PressPhase::DragStart { .. })), "{:?}", start.phase);
+        assert!(machine.release_held(), "the release waits for the owed DragStart");
+        let end = passing_pass(&mut machine, &[]);
+        assert_eq!(end.target, Some(2));
+        assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", end.phase);
+
+        // No shape took the passed press: it is abandoned, and its release is no click.
+        let mut machine = PressMachine::new();
+        let _ = passing_pass(&mut machine, &[press(0.0, 1.0)]);
+        assert!(passing_pass(&mut machine, &[moved(40.0)]).passes.is_some());
+        let end = passing_pass(&mut machine, &[up(40.0)]);
+        assert_eq!(end.target, Some(1));
+        assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", end.phase);
+        assert_eq!(end.activated, None);
     }
 }

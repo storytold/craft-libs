@@ -129,7 +129,7 @@ pub(crate) struct PartDecl {
     /// The component holds a press on the part (`PartBuilder::held`).
     pub held: bool,
     /// The named stacking order among parts of one priority (default 0).
-    #[allow(dead_code)] // P3(pdf-canvas-w4): CV-C31
+
     pub stacking: u32,
 }
 
@@ -315,7 +315,7 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
 }
 
 fn own_part_shape(part: &PartDecl, root: Id, position: u32, target: f32) -> Shape<Id> {
-    Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).min_across(target)
+    Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).stacking(part.stacking).min_across(target)
 }
 
 /// The root's own parts but the `over` ones, at position 0.
@@ -340,7 +340,10 @@ fn over_position(count: usize) -> u32 {
 }
 
 fn member_part_shape(member: &MemberDecl, part: &PartDecl, position: u32, target: f32) -> Shape<Id> {
-    Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position).local(member.local).min_across(target)
+    Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position)
+        .stacking(part.stacking)
+        .local(member.local)
+        .min_across(target)
 }
 
 /// The member's root shape and its parts but the `over` ones, at its stack position.
@@ -894,6 +897,22 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
                 (hit, if drag_elsewhere { sense.difference(Sense::DRAG) } else { sense })
             })
         });
+        // A press on a shape that passes its drag (`Sense::PASSES_DRAG`) moved past slop: the drag goes to the shape the
+        // press split gave it at the press (`pointer::press_winners` at the press's origin, with the press's own
+        // targets). When that shape is this root's, the press carries on there from its start; another root's took the
+        // drag at the press, and this press, no click any more, is abandoned.
+        let step = match step.passes {
+            Some(start) => {
+                let root = state.root.map(|root| root.id);
+                let winners = pointer::press_winners(ctx, start.origin, pass_pointer.press_targets);
+                winners
+                    .drag
+                    .filter(|(_, owner)| Some(*owner) == root)
+                    .and_then(|(winner, _)| machine.hand_over(Hit::from(winner), winner.sense))
+                    .unwrap_or(step)
+            }
+            None => step,
+        };
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();
         let open = machine.target();

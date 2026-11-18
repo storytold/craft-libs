@@ -589,7 +589,8 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
 /// their winning shapes' place in the pass's paint order, top first. The top one takes every kind of press its shape
 /// senses. Under a top shape that only drags (a window's resize grip), the click goes to the first root below whose
 /// shape clicks; under one that only clicks (a button), the drag goes to the first root below whose shape drags, when
-/// that root takes no click anywhere.
+/// that root takes no click anywhere. Under a top shape that clicks and passes its drag (`Sense::PASSES_DRAG`), the
+/// drag goes to the next shape under it that drags: its own root's, else the first root's below.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PressWinners {
     pub click: Option<(Winner<Id>, Id)>,
@@ -760,7 +761,24 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
                 top = Some((rank, winner, root));
             }
             if let Some((rank, winner)) = pick(&kept, ResolveFor::Press) {
+                // A shape that passes its drag keeps the click; the root's next shape under it that drags follows it
+                // in the ranking, at its rank: the stable sort in `winners_of` keeps it right after the winner.
+                let passes = winner.sense.contains(craft_behavior::Sense::CLICK | craft_behavior::Sense::PASSES_DRAG)
+                    && !winner.sense.contains(craft_behavior::Sense::DRAG);
+                let below = passes
+                    .then(|| {
+                        let dragging: Vec<usize> = kept
+                            .iter()
+                            .copied()
+                            .filter(|&index| index != winner.index && entry.shapes[index].sense.contains(craft_behavior::Sense::DRAG))
+                            .collect();
+                        pick(&dragging, ResolveFor::Press)
+                    })
+                    .flatten();
                 ranked.push((rank, winner, root, entry.click));
+                if let Some((_, under)) = below {
+                    ranked.push((rank, under, root, entry.click));
+                }
             }
         }
         if foreign {
@@ -775,7 +793,8 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
 }
 
 /// The press winners among `ranked`, each root's topmost shape under a point that takes a press with its rank and
-/// whether the root takes clicks anywhere: by the per-kind rule of [`PressWinners`].
+/// whether the root takes clicks anywhere, and under a top shape that passes its drag the root's next shape that drags:
+/// by the per-kind rule of [`PressWinners`].
 fn winners_of(mut ranked: Vec<((u8, u32), Winner<Id>, Id, bool)>) -> PressWinners {
     ranked.sort_by(|a, b| b.0.cmp(&a.0));
     let mut winners = PressWinners::default();
@@ -798,15 +817,14 @@ fn winners_of(mut ranked: Vec<((u8, u32), Winner<Id>, Id, bool)>) -> PressWinner
                 }
             }
             // Under a top shape that only clicks, the first root below whose shape drags takes the drag, unless the
-            // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it.
+            // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it. Under a top
+            // shape that passes its drag, the next shape that drags takes it, in the same root or one below.
             (true, false) => {
-                if clicks || root_clicks {
-                    break;
-                }
-                if drags {
+                let passes = winners.click.is_some_and(|(top, _)| top.sense.contains(craft_behavior::Sense::PASSES_DRAG));
+                if drags && (passes || !(clicks || root_clicks)) {
                     winners.drag = Some((winner, root));
-                    break;
                 }
+                break;
             }
             (true, true) => break,
         }

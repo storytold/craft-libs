@@ -109,6 +109,21 @@ fn a_drag_reaches_the_tool_as_one_press_drags_and_one_release() {
 }
 
 #[trial]
+fn escape_mid_drag_cancels_the_tool_once_and_its_release_reaches_nothing() {
+    let mut fixture = ToolFixture::new("Document", Recorder::default());
+    let from = fixture.canvas().rect.center();
+    fixture.drag_and_escape_from(from, BY);
+    let tool = fixture.tool();
+    let calls = &tool.calls;
+    assert_eq!(calls.first(), Some(&Call::Press), "the drag starts with the press: {calls:?}");
+    assert_eq!(tool.count(Call::Cancel(CancelReason::Escape)), 1, "Escape cancels the gesture once: {calls:?}");
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Cancel(_))).count(), 1, "one cancel, with its reason: {calls:?}");
+    let cancel = calls.iter().position(|call| matches!(call, Call::Cancel(_))).expect("the tool is cancelled");
+    assert!(calls[cancel + 1..].is_empty(), "no drag or release reaches the tool after the cancel: {calls:?}");
+    assert_eq!(tool.count(Call::Release), 0, "the release after Escape reaches no release: {calls:?}");
+}
+
+#[trial]
 fn a_press_on_a_canvas_control_never_reaches_the_tool_and_one_away_from_it_does() {
     let crop = Rc::new(RefCell::new(craft_behavior::geometry::CropBox::upright(craft_behavior::kurbo::Rect::new(20.0, 20.0, 100.0, 80.0))));
     let shown = Rc::clone(&crop);

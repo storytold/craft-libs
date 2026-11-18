@@ -276,6 +276,20 @@ mod tests {
     }
 
     #[test]
+    fn an_overlay_with_no_room_on_its_side_opens_on_the_other() {
+        let size = Vec2::new(200.0, 80.0);
+        let low = rect(300.0, 540.0, 100.0, 30.0);
+        let placed = place(&PlaceRequest::new(low, size, BOUNDS).side(Side::Below).gap(4.0));
+        assert_eq!(placed.side, Side::Above, "no room below the anchor: {placed:?}");
+        assert!(placed.rect.bottom() <= low.top(), "above the anchor: {placed:?}");
+        assert!(BOUNDS.contains_rect(placed.rect), "{placed:?}");
+        let high = rect(300.0, 100.0, 100.0, 30.0);
+        let placed = place(&PlaceRequest::new(high, size, BOUNDS).side(Side::Below).gap(4.0));
+        assert_eq!(placed.side, Side::Below, "room below: {placed:?}");
+        assert!(placed.rect.top() >= high.bottom(), "below the anchor: {placed:?}");
+    }
+
+    #[test]
     fn an_overlay_at_least_as_wide_as_its_anchor_takes_that_width_below_it_but_not_beside_it() {
         let field = rect(100.0, 100.0, 300.0, 24.0);
         let request = PlaceRequest::new(field, Vec2::new(120.0, 200.0), BOUNDS).min_width(MinWidth::Anchor);
