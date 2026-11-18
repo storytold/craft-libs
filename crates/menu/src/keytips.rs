@@ -28,9 +28,9 @@ pub struct KeytipsStyle {
     /// The room around a badge's letters; its top is also a badge's inset from its control's corner.
     #[style(metrics)]
     metrics: Metrics,
-    /// A badge: the accent fill, with the ring that parts it from the control under it.
-    #[style(surface)]
-    surface: SurfaceLook,
+    /// A badge: the accent fill, with the ring that parts it from the control under it. Not the component's root
+    /// surface, which would fill the whole area the keytips show over.
+    badge: SurfaceLook,
     /// The badge letters.
     #[style(text)]
     text: TextLook,
@@ -374,12 +374,12 @@ impl Component for Keytips<'_> {
     fn style(cx: &StyleCx<'_>, _: KeytipsStyleKey) -> KeytipsStyle {
         let colors = &cx.tokens.color;
         let pad = cx.tokens.space.pad.chip;
-        let surface = SurfaceLook::new(Stateful::new(cx.color(colors.accent.solid)))
+        let badge = SurfaceLook::new(Stateful::new(cx.color(colors.accent.solid)))
             .radius(UiTokens::corner(cx.tokens.shape.radius.sm))
             .border(Stateful::new(cx.color(colors.overlay.halo)), cx.tokens.stroke.thin);
         KeytipsStyle {
             metrics: Metrics::new().padding(Insets::new(pad, pad, pad, pad)),
-            surface,
+            badge,
             text: TextLook::new(TypeRole::Caption, Stateful::new(cx.color(colors.text.on_accent))),
         }
     }
@@ -462,7 +462,7 @@ impl Component for Keytips<'_> {
             let run = TextRun::new(badge.clone()).role(style.text.role).color(color);
             let layout = draw.layout(&run, f32::INFINITY);
             let rect = badge_rect(*control, layout.size(), style.metrics.padding, rtl);
-            draw.surface_look(rect, &style.surface, &at_rest);
+            draw.surface_look(rect, &style.badge, &at_rest);
             draw.galley(rect.center() - layout.size() / 2.0, &layout);
         }
     }
