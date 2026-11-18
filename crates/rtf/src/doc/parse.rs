@@ -23,12 +23,15 @@ struct Parsed {
     /// The last section's properties (the others are on the paragraphs that end them).
     last_section: craft_wordmodel::SectionProps,
     default_font: Option<String>,
+    /// Whether the document enabled separate even/odd headers with `\facingp`.
+    even_odd_headers: bool,
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
     notes: Vec<NoteData>,
     comments: Vec<CommentData>,
 }
 
+/// Parse the body, sections, stories and document-wide header setting.
 /// `marks`: also read footnotes, endnotes and comments (as place markers in the flow's text, for
 /// [`import`] to turn into objects); without it they are skipped.
 fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
@@ -231,6 +234,7 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
     Ok(finalize(r))
 }
 
+/// Finish bounded reader output and retain its document-wide header setting.
 fn finalize(mut r: Reader) -> Parsed {
     // A multibyte run ends here, and so does a note, comment, header or footer left open by a
     // truncated file.
@@ -262,7 +266,16 @@ fn finalize(mut r: Reader) -> Parsed {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers, notes: r.notes, comments: r.comments }
+    Parsed {
+        flow: Flow { blocks, meta: r.meta },
+        page: r.page,
+        last_section,
+        default_font,
+        headers_footers,
+        even_odd_headers: r.even_odd_headers,
+        notes: r.notes,
+        comments: r.comments,
+    }
 }
 
 /// Most grid columns a table gets (the document model's own cap).
@@ -399,8 +412,9 @@ fn nearest_edge(grid: &[i32], x: i32) -> usize {
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last_section, default_font, headers_footers, notes, comments, .. } = parse_full(bytes, true)?;
+    let Parsed { flow, last_section, default_font, headers_footers, even_odd_headers, notes, comments, .. } = parse_full(bytes, true)?;
     let mut doc = model::to_doc_in(&flow, last_section);
+    doc.settings.even_odd_headers = even_odd_headers;
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
     for parts in &headers_footers {
