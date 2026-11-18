@@ -886,9 +886,7 @@ fn reduced_decoding_scales_dimensions_and_samples() {
         rgb.extend_from_slice(&[200, 100, 50]);
     }
     let mut encoded = Vec::new();
-    jpeg_encoder::Encoder::new(&mut encoded, 95)
-        .encode(&rgb, 32, 24, jpeg_encoder::ColorType::Rgb)
-        .unwrap();
+    jpeg_encoder::Encoder::new(&mut encoded, 95).encode(&rgb, 32, 24, jpeg_encoder::ColorType::Rgb).unwrap();
 
     let limits = Limits::default();
     assert!(reduced_estimate(&encoded, &limits, 0).is_err());

@@ -1601,12 +1601,12 @@ fn idct_block_scaled(blk: &[i32; 64], q: &[u16; 64], basis: &[Vec<f32>], max: f3
             r[v][x] = acc;
         }
     }
-    for y in 0..n {
+    for (y, basis_row) in basis.iter().enumerate().take(n) {
         if let Some(row) = out.get_mut(y * stride..y * stride + n) {
             for (x, o) in row.iter_mut().enumerate() {
                 let mut acc = 0.0f32;
                 for v in 0..n {
-                    acc += basis[y][v] * r[v][x];
+                    acc += basis_row[v] * r[v][x];
                 }
                 *o = (acc + shift).clamp(0.0, max);
             }
@@ -1850,11 +1850,7 @@ pub fn reduced_estimate(bytes: &[u8], limits: &Limits, shrink: u8) -> Result<(u3
             let w = (f.width as u32).div_ceil(1 << shrink);
             let h = (f.height as u32).div_ceil(1 << shrink);
             let output_bytes = (w as usize).saturating_mul(h as usize).saturating_mul(f.comps.len().saturating_mul(4).saturating_add(4));
-            let coef_bytes = if f.progressive {
-                f.comps.iter().map(|c| c.bw.saturating_mul(c.bh)).sum::<usize>().saturating_mul(256)
-            } else {
-                0
-            };
+            let coef_bytes = if f.progressive { f.comps.iter().map(|c| c.bw.saturating_mul(c.bh)).sum::<usize>().saturating_mul(256) } else { 0 };
             return Ok((w, h, coef_bytes.saturating_add(output_bytes)));
         }
         i += 2 + len;
