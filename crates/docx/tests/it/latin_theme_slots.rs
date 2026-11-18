@@ -8,6 +8,10 @@ use std::io::{Read, Write};
 const THEME: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="T"><a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/><a:ea typeface="SimSun"/><a:cs typeface="Arial"/><a:font script="Jpan" typeface="MS Mincho"/><a:font script="Hans" typeface="DengXian"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
 
 fn docx(body: &str, styles: &str) -> Vec<u8> {
+    docx_with_theme(body, styles, THEME)
+}
+
+fn docx_with_theme(body: &str, styles: &str, theme: &str) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let doc_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>"#;
     let doc = format!(
@@ -21,7 +25,7 @@ fn docx(body: &str, styles: &str) -> Vec<u8> {
         ("word/document.xml", doc),
         ("word/_rels/document.xml.rels", doc_rels.to_string()),
         ("word/styles.xml", styles),
-        ("word/theme/theme1.xml", THEME.to_string()),
+        ("word/theme/theme1.xml", theme.to_string()),
     ];
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, xml) in &parts {
@@ -124,4 +128,45 @@ fn the_themes_east_asian_and_script_fonts_survive_a_save() {
     }
     let major = theme.split("<a:majorFont>").nth(1).and_then(|m| m.split("</a:majorFont>").next()).unwrap_or_default();
     assert!(major.contains(r#"<a:ea typeface=""/>"#) && !major.contains("a:font "), "the major font keeps its empty faces: {theme}");
+}
+
+/// The minor font's part of a saved theme.
+fn minor_font(out: &[u8]) -> String {
+    let theme = part(out, "word/theme/theme1.xml");
+    theme.split("<a:minorFont>").nth(1).and_then(|m| m.split("</a:minorFont>").next()).unwrap_or_default().to_string()
+}
+
+/// A per-script font for a script called `cs` stays a per-script font: it is not taken for the
+/// theme's `a:cs` face.
+#[test]
+fn a_script_named_cs_is_not_the_cs_face() {
+    let theme = THEME.replace(r#"<a:font script="Jpan""#, r#"<a:font script="cs" typeface="Tahoma"/><a:font script="Jpan""#);
+    let minor = minor_font(&craft_docx::write(&craft_docx::read(&docx_with_theme(BODY, STYLES, &theme)).unwrap()).unwrap());
+    assert!(minor.contains(r#"<a:cs typeface="Arial"/>"#), "{minor}");
+    assert!(minor.contains(r#"<a:font script="cs" typeface="Tahoma"/>"#), "{minor}");
+}
+
+/// The 256 per-script fonts kept are 256 usable ones: empty default faces don't use them up.
+#[test]
+fn empty_default_faces_dont_count_against_the_script_limit() {
+    let scripts: String = (0..256).map(|i| format!(r#"<a:font script="S{i}" typeface="F{i}"/>"#)).collect();
+    let theme = THEME.replace(
+        r#"<a:ea typeface="SimSun"/><a:cs typeface="Arial"/><a:font script="Jpan" typeface="MS Mincho"/><a:font script="Hans" typeface="DengXian"/>"#,
+        &format!(r#"<a:ea typeface=""/><a:cs typeface=""/>{scripts}"#),
+    );
+    let minor = minor_font(&craft_docx::write(&craft_docx::read(&docx_with_theme(BODY, STYLES, &theme)).unwrap()).unwrap());
+    assert!(minor.contains(r#"<a:font script="S255" typeface="F255"/>"#), "{minor}");
+}
+
+/// Latin slots naming different faces: the model has one Latin font, the ASCII one, so only the
+/// slot that still names it is written; the other is left out rather than made to name a face
+/// it didn't.
+#[test]
+fn a_latin_slot_naming_another_face_is_not_written() {
+    let body = r#"<w:p><w:r><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="majorHAnsi"/></w:rPr><w:t>Mixed</w:t></w:r></w:p>"#;
+    let d = craft_docx::read(&docx(body, STYLES)).unwrap();
+    assert_eq!(d.body[0].as_para().unwrap().runs[0].props.font.as_deref(), Some("Verdana"));
+    let doc = rfonts(&part(&craft_docx::write(&d).unwrap(), "word/document.xml"));
+    let run = doc.iter().find(|f| f.contains("Verdana")).unwrap_or_else(|| panic!("{doc:?}"));
+    assert!(run.contains(r#"w:asciiTheme="minorHAnsi""#) && !run.contains("w:hAnsiTheme"), "{run}");
 }

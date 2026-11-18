@@ -231,13 +231,18 @@ impl Reader<'_> {
             let mut kept = String::new();
             for (key, tag) in [("major", "a:majorFont"), ("minor", "a:minorFont")] {
                 let Some(f) = fs.child(tag) else { continue };
-                let faces = ["a:ea", "a:cs"].into_iter().filter_map(|n| Some((&n[2..], f.child(n)?.attr("typeface")?)));
-                let per_script = f.els().filter(|e| e.name == "a:font").filter_map(|e| Some((e.attr("script")?, e.attr("typeface")?)));
-                for (which, face) in faces.chain(per_script).take(256) {
-                    let clean = |v: &str| !v.is_empty() && v.len() < 256 && !v.contains(['\t', '\n', '\r']);
-                    if clean(which) && clean(face) {
-                        kept.push_str(&format!("{key}\t{which}\t{face}\n"));
-                    }
+                let clean = |v: &str| !v.is_empty() && v.len() < 256 && !v.contains(['\t', '\n', '\r']);
+                // The default faces and the per-script ones are told apart by their kind, so an
+                // `a:font script="cs"` is not taken for the `a:cs` face.
+                let faces = ["a:ea", "a:cs"].into_iter().filter_map(|n| Some(("face", &n[2..], f.child(n)?.attr("typeface")?)));
+                let per_script = f
+                    .els()
+                    .filter(|e| e.name == "a:font")
+                    .filter_map(|e| Some(("script", e.attr("script")?, e.attr("typeface")?)))
+                    .filter(|(_, script, face)| clean(script) && clean(face))
+                    .take(256);
+                for (kind, which, face) in faces.filter(|(_, _, face)| clean(face)).chain(per_script) {
+                    kept.push_str(&format!("{key}\t{kind}\t{which}\t{face}\n"));
                 }
             }
             if !kept.is_empty() {
