@@ -19,11 +19,13 @@ pub struct Vector {
 pub struct Codebook {
     /// 256 vectors.
     pub entries: [Vector; 256],
+    /// Whether this codebook represents 12 bpp color vectors (true) or grayscale/paletted (false).
+    pub is_color: bool,
 }
 
 impl Default for Codebook {
     fn default() -> Self {
-        Self { entries: [Vector::default(); 256] }
+        Self { entries: [Vector::default(); 256], is_color: false }
     }
 }
 
@@ -44,6 +46,7 @@ impl Codebook {
                 entry.v = chunk[5] as i8;
             }
         }
+        self.is_color = true;
         Ok(())
     }
 
@@ -75,6 +78,7 @@ impl Codebook {
             }
             mask >>= 1;
         }
+        self.is_color = true;
         Ok(())
     }
 
@@ -88,6 +92,7 @@ impl Codebook {
                 entry.v = 0;
             }
         }
+        self.is_color = false;
         Ok(())
     }
 
@@ -119,6 +124,7 @@ impl Codebook {
             }
             mask >>= 1;
         }
+        self.is_color = false;
         Ok(())
     }
 }

@@ -845,3 +845,80 @@ fn test_grayscale_strip_uses_palette_after_color_frame() {
     // Must be rendered with the configured palette index 1: [10, 20, 230]
     assert_eq!(frame1.pixel_rgb(0, 0).expect("px"), [10, 20, 230]);
 }
+
+#[test]
+fn test_frame_pixel_rgb_overflow_returns_none() {
+    let mut frame = decode_frame(&build_synthetic_v1_keyframe([50, 50, 50, 50], 0, 0)).expect("frame");
+    frame.width = u32::MAX;
+    frame.height = u32::MAX;
+    assert_eq!(frame.pixel_rgb(0, u32::MAX - 1), None);
+}
+
+#[test]
+fn test_inter_frame_without_inheritance_flag_preserves_retained_codebook() {
+    let red = ([72, 72, 72, 72], -37, 91);
+    let mut decoder = Decoder::new();
+
+    // Frame 0: keyframe with red codebook
+    let f0 = frame_of(0, 4, &[strip_with_codebook(0, 4, Some(red))]);
+    let frame0 = decoder.decode(&f0).expect("frame 0");
+    let px0 = frame0.pixel_rgb(0, 0).expect("px");
+    assert!(px0[0] > 200 && px0[2] == 0);
+
+    // Frame 1: inter frame (strip ID 0x1100), flags = 0 (no inheritance flag),
+    // no codebook update, vector chunk 0x31 that updates block (0, 0) with vector 0.
+    let mut inter_body = Vec::new();
+    inter_body.push(0x31); // inter vector
+    // Vector chunk size: 4 header + 4 flag bytes + 1 byte index = 9 bytes
+    inter_body.extend_from_slice(&9u32.to_be_bytes()[1..4]);
+    // 0x31 flags: 1 = updated, 0 = V1 (so prefix bits '10' -> 0x80000000)
+    inter_body.extend_from_slice(&0x8000_0000u32.to_be_bytes());
+    inter_body.push(0); // index 0
+
+    let mut strip = Vec::new();
+    strip.extend_from_slice(&0x1100u16.to_be_bytes()); // inter strip
+    strip.extend_from_slice(&((12 + inter_body.len()) as u16).to_be_bytes());
+    for v in [0u16, 0, 4, 4] {
+        strip.extend_from_slice(&v.to_be_bytes());
+    }
+    strip.extend_from_slice(&inter_body);
+
+    let f1 = frame_of(0, 4, &[strip]); // flags = 0 (can_inherit = false)
+    let frame1 = decoder.decode(&f1).expect("frame 1");
+    // Vector 0 was retained from Frame 0, so updated block (0, 0) must still be red!
+    let px1 = frame1.pixel_rgb(0, 0).expect("px1");
+    assert_eq!(px1, px0);
+}
+
+#[test]
+fn test_discarded_strips_do_not_taint_grayscale_frame_is_color() {
+    let red = ([72, 72, 72, 72], -37, 91);
+    let mut decoder = Decoder::new();
+
+    // Frame 0: two color strips
+    let f0 = frame_of(0, 8, &[strip_with_codebook(0, 4, Some(red)), strip_with_codebook(4, 8, Some(red))]);
+    let frame0 = decoder.decode(&f0).expect("frame 0");
+    assert!(frame0.is_color);
+
+    // Frame 1: one strip, keyframe, grayscale codebook (0x26), inheritance enabled (flags = 1)
+    let mut gray_body = Vec::new();
+    gray_body.push(0x26); // v1 gray full
+    gray_body.extend_from_slice(&8u32.to_be_bytes()[1..4]);
+    gray_body.extend_from_slice(&[50, 50, 50, 50]);
+    gray_body.push(0x32); // v1 vector
+    gray_body.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    gray_body.push(0);
+
+    let mut strip = Vec::new();
+    strip.extend_from_slice(&0x1000u16.to_be_bytes());
+    strip.extend_from_slice(&((12 + gray_body.len()) as u16).to_be_bytes());
+    for v in [0u16, 0, 4, 4] {
+        strip.extend_from_slice(&v.to_be_bytes());
+    }
+    strip.extend_from_slice(&gray_body);
+
+    let f1 = frame_of(1, 4, &[strip]); // flags = 1 (can_inherit = true)
+    let frame1 = decoder.decode(&f1).expect("frame 1");
+    // Frame 1 is entirely grayscale and had only 1 strip; discarded second strip from frame 0 must not make frame1.is_color true!
+    assert!(!frame1.is_color);
+}

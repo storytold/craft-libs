@@ -79,8 +79,10 @@ impl Frame {
         if x >= self.width || y >= self.height {
             return None;
         }
-        let idx = ((y as usize) * (self.width as usize) + (x as usize)) * 3;
-        let slice = self.rgb.get(idx..idx + 3)?;
+        let row_offset = (y as usize).checked_mul(self.width as usize)?;
+        let pixel_offset = row_offset.checked_add(x as usize)?;
+        let idx = pixel_offset.checked_mul(3)?;
+        let slice = self.rgb.get(idx..idx.checked_add(3)?)?;
         Some([slice[0], slice[1], slice[2]])
     }
 }
@@ -178,7 +180,7 @@ impl Decoder {
         frame.key = is_key;
 
         // Stage strip updates in a local copy so decode errors leave decoder state unchanged.
-        let mut strips = if can_inherit {
+        let mut strips = if !is_key || can_inherit {
             let mut s = self.strips.clone();
             if s.len() < num_strips {
                 s.resize_with(num_strips, StripState::default);
@@ -235,35 +237,35 @@ impl Decoder {
                 match chunk_type {
                     0x20 => {
                         strip.v4_codebook.update_full_color(payload)?;
-                        strip.is_color = true;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x21 => {
                         strip.v4_codebook.update_partial_color(payload)?;
-                        strip.is_color = true;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x22 => {
                         strip.v1_codebook.update_full_color(payload)?;
-                        strip.is_color = true;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x23 => {
                         strip.v1_codebook.update_partial_color(payload)?;
-                        strip.is_color = true;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x24 => {
                         strip.v4_codebook.update_full_gray(payload)?;
-                        strip.is_color = false;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x25 => {
                         strip.v4_codebook.update_partial_gray(payload)?;
-                        strip.is_color = false;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x26 => {
                         strip.v1_codebook.update_full_gray(payload)?;
-                        strip.is_color = false;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x27 => {
                         strip.v1_codebook.update_partial_gray(payload)?;
-                        strip.is_color = false;
+                        strip.is_color = strip.v1_codebook.is_color || strip.v4_codebook.is_color;
                     }
                     0x30..=0x32 => {
                         if strip.is_color && frame.u.is_none() {
@@ -280,7 +282,6 @@ impl Decoder {
                             u: frame.u.as_deref_mut(),
                             v: frame.v.as_deref_mut(),
                             palette: self.palette.as_ref(),
-                            is_color: strip.is_color,
                         };
                         decode_vector_chunk(&mut fb, strip, chunk_type, payload, bounds)?;
                     }
@@ -294,9 +295,9 @@ impl Decoder {
             offset = strip_end;
         }
 
-        frame.is_color = (!is_key && frame.is_color) || strips.iter().any(|s| s.is_color);
         // Only this frame's strips count: the next frame's first strip inherits from the last.
         strips.truncate(num_strips);
+        frame.is_color = (!is_key && frame.is_color) || strips.iter().any(|s| s.is_color);
         self.strips = strips;
         self.last_frame = Some(frame.clone());
         Ok(frame)

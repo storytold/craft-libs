@@ -20,13 +20,11 @@ pub struct FrameBuffer<'a> {
     pub v: Option<&'a mut [u8]>,
     /// Optional 256-color palette (768 bytes, 3 bytes per RGB entry).
     pub palette: Option<&'a [u8; 768]>,
-    /// Whether any 12 bpp color codebooks have been used.
-    pub is_color: bool,
 }
 
 impl<'a> FrameBuffer<'a> {
     #[inline]
-    fn put_pixel(&mut self, px: u32, py: u32, y_val: u8, u_val: i8, v_val: i8) {
+    fn put_pixel(&mut self, px: u32, py: u32, y_val: u8, u_val: i8, v_val: i8, is_color: bool) {
         if px >= self.width || py >= self.height {
             return;
         }
@@ -40,7 +38,7 @@ impl<'a> FrameBuffer<'a> {
             *y_out = y_val;
         }
 
-        let (r, g, b) = if self.is_color {
+        let (r, g, b) = if is_color {
             let u_s = u_val as i32;
             let v_s = v_val as i32;
             let y_s = y_val as i32;
@@ -93,31 +91,31 @@ impl<'a> FrameBuffer<'a> {
     }
 
     /// Render a 2×2 quadrant using vector luminance and chrominance.
-    fn render_quadrant(&mut self, qx: u32, qy: u32, y: [u8; 4], u: i8, v: i8) {
-        self.put_pixel(qx, qy, y[0], u, v);
-        self.put_pixel(qx + 1, qy, y[1], u, v);
-        self.put_pixel(qx, qy + 1, y[2], u, v);
-        self.put_pixel(qx + 1, qy + 1, y[3], u, v);
+    fn render_quadrant(&mut self, qx: u32, qy: u32, y: [u8; 4], u: i8, v: i8, is_color: bool) {
+        self.put_pixel(qx, qy, y[0], u, v, is_color);
+        self.put_pixel(qx + 1, qy, y[1], u, v, is_color);
+        self.put_pixel(qx, qy + 1, y[2], u, v, is_color);
+        self.put_pixel(qx + 1, qy + 1, y[3], u, v, is_color);
 
-        if self.is_color {
+        if is_color {
             self.put_chroma(qx / 2, qy / 2, u, v);
         }
     }
 
     /// Render a V4 macroblock (4 distinct 2×2 vectors).
-    fn render_v4(&mut self, bx: u32, by: u32, v0: &Vector, v1: &Vector, v2: &Vector, v3: &Vector) {
-        self.render_quadrant(bx, by, v0.y, v0.u, v0.v);
-        self.render_quadrant(bx + 2, by, v1.y, v1.u, v1.v);
-        self.render_quadrant(bx, by + 2, v2.y, v2.u, v2.v);
-        self.render_quadrant(bx + 2, by + 2, v3.y, v3.u, v3.v);
+    fn render_v4(&mut self, bx: u32, by: u32, vectors: [&Vector; 4], is_color: bool) {
+        self.render_quadrant(bx, by, vectors[0].y, vectors[0].u, vectors[0].v, is_color);
+        self.render_quadrant(bx + 2, by, vectors[1].y, vectors[1].u, vectors[1].v, is_color);
+        self.render_quadrant(bx, by + 2, vectors[2].y, vectors[2].u, vectors[2].v, is_color);
+        self.render_quadrant(bx + 2, by + 2, vectors[3].y, vectors[3].u, vectors[3].v, is_color);
     }
 
     /// Render a V1 macroblock (1 vector upscaled to 4×4).
-    fn render_v1(&mut self, bx: u32, by: u32, v: &Vector) {
-        self.render_quadrant(bx, by, [v.y[0], v.y[0], v.y[0], v.y[0]], v.u, v.v);
-        self.render_quadrant(bx + 2, by, [v.y[1], v.y[1], v.y[1], v.y[1]], v.u, v.v);
-        self.render_quadrant(bx, by + 2, [v.y[2], v.y[2], v.y[2], v.y[2]], v.u, v.v);
-        self.render_quadrant(bx + 2, by + 2, [v.y[3], v.y[3], v.y[3], v.y[3]], v.u, v.v);
+    fn render_v1(&mut self, bx: u32, by: u32, v: &Vector, is_color: bool) {
+        self.render_quadrant(bx, by, [v.y[0], v.y[0], v.y[0], v.y[0]], v.u, v.v, is_color);
+        self.render_quadrant(bx + 2, by, [v.y[1], v.y[1], v.y[1], v.y[1]], v.u, v.v, is_color);
+        self.render_quadrant(bx, by + 2, [v.y[2], v.y[2], v.y[2], v.y[2]], v.u, v.v, is_color);
+        self.render_quadrant(bx + 2, by + 2, [v.y[3], v.y[3], v.y[3], v.y[3]], v.u, v.v, is_color);
     }
 }
 
@@ -176,11 +174,11 @@ pub fn decode_vector_chunk(fb: &mut FrameBuffer<'_>, strip: &StripState, chunk_t
                         let v1 = &strip.v4_codebook.entries[indices[1] as usize];
                         let v2 = &strip.v4_codebook.entries[indices[2] as usize];
                         let v3 = &strip.v4_codebook.entries[indices[3] as usize];
-                        fb.render_v4(x, y, v0, v1, v2, v3);
+                        fb.render_v4(x, y, [v0, v1, v2, v3], strip.v4_codebook.is_color);
                     } else {
                         let idx = reader.read_byte()?;
                         let v = &strip.v1_codebook.entries[idx as usize];
-                        fb.render_v1(x, y, v);
+                        fb.render_v1(x, y, v, strip.v1_codebook.is_color);
                     }
                 }
             }
@@ -198,11 +196,11 @@ pub fn decode_vector_chunk(fb: &mut FrameBuffer<'_>, strip: &StripState, chunk_t
                             let v1 = &strip.v4_codebook.entries[indices[1] as usize];
                             let v2 = &strip.v4_codebook.entries[indices[2] as usize];
                             let v3 = &strip.v4_codebook.entries[indices[3] as usize];
-                            fb.render_v4(x, y, v0, v1, v2, v3);
+                            fb.render_v4(x, y, [v0, v1, v2, v3], strip.v4_codebook.is_color);
                         } else {
                             let idx = reader.read_byte()?;
                             let v = &strip.v1_codebook.entries[idx as usize];
-                            fb.render_v1(x, y, v);
+                            fb.render_v1(x, y, v, strip.v1_codebook.is_color);
                         }
                     }
                 }
@@ -214,7 +212,7 @@ pub fn decode_vector_chunk(fb: &mut FrameBuffer<'_>, strip: &StripState, chunk_t
                 for x in (x0..x1).step_by(4) {
                     let idx = reader.read_byte()?;
                     let v = &strip.v1_codebook.entries[idx as usize];
-                    fb.render_v1(x, y, v);
+                    fb.render_v1(x, y, v, strip.v1_codebook.is_color);
                 }
             }
         }

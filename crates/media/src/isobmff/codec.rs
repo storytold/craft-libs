@@ -1023,7 +1023,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
         v.compressor_name = String::from_utf8_lossy(&name[1..1 + n]).into_owned();
         v.depth = c.u16()?;
         let ctab = c.i16()?;
-        let color_table_bytes = if ctab == 0 { parse_qt_color_table(&mut c) } else { None };
+        let color_table_bytes = if f == b"cvid" && ctab == 0 { parse_qt_color_table(&mut c) } else { None };
         let mut codec = None;
         let mut bitrate = None;
         let mut log_seen = false;
@@ -1229,18 +1229,20 @@ fn descriptor(c: &mut Cur) -> Result<(u8, usize)> {
 }
 
 fn parse_qt_color_table(c: &mut Cur<'_>) -> Option<Vec<u8>> {
-    if c.rest().len() < 8 {
+    let mut probe = c.clone();
+    if probe.rest().len() < 8 {
         return None;
     }
-    let ct_seed = c.u32().ok()?;
-    let ct_flags = c.u16().ok()?;
-    let ct_size = c.u16().ok()?;
+    let ct_seed = probe.u32().ok()?;
+    let ct_flags = probe.u16().ok()?;
+    let ct_size = probe.u16().ok()?;
     let num_entries = (ct_size as usize).checked_add(1)?;
     let payload_len = num_entries.checked_mul(8)?;
-    if c.rest().len() < payload_len {
+    if probe.rest().len() < payload_len {
         return None;
     }
-    let entries = c.bytes(payload_len).ok()?;
+    let entries = probe.bytes(payload_len).ok()?;
+    *c = probe;
     let mut ct = Vec::with_capacity(8 + payload_len);
     ct.extend_from_slice(&ct_seed.to_be_bytes());
     ct.extend_from_slice(&ct_flags.to_be_bytes());
