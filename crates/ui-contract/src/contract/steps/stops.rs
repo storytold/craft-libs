@@ -5,7 +5,7 @@ use crate::contract::Resolved;
 use crate::runtime::egui::memory as store;
 use crate::runtime::focus::{self, Group, Stop};
 use crate::runtime::memory::sub;
-use craft_behavior::{DocKey, KeyRole, PartRef};
+use craft_behavior::{Arrows, DocKey, KeyRole, PartRef};
 use egui::{Context, Id};
 
 /// The parts of last pass's complete set in which this pass's results are read; first-frame parts read idle.
@@ -69,9 +69,22 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     debug_assert!(input.parts.rovings.len() <= 1, "a component declares one roving group; a second would be dropped");
     let row_parts = if input.item { input.row } else { None };
     let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| sub(input.id, "roving"));
+    // A part group that joined the body's roving group: its parts are members of the body group, or it is one member
+    // of it when it moves on the crossing axis.
+    // PLAN: the body group registers after its body ran (`run.rs`, after `update`), so on a menu's first frame this
+    // reads no group and the part group joins flat for that frame; the lead decides where the body group registers.
+    let joined = group.and_then(|parts| focus::registration::part_group(ctx, parts));
+    let nested = match (joined, input.parts.rovings.first()) {
+        (Some(body), Some(roving)) => focus::with(ctx, |state| state.current_group(body)).is_some_and(|body| crosses(roving.arrows, body.roving.arrows)),
+        _ => false,
+    };
     if let (Some(group), Some(roving)) = (group, input.parts.rovings.first()) {
         let arrival = input.parts.decls.iter().rev().find(|(_, extras)| extras.selected && extras.focusable);
         let group = Group::new(group, *roving).rtl(input.rtl);
+        let group = match joined.filter(|_| nested) {
+            Some(body) => group.parent(body),
+            None => group,
+        };
         let arrival = arrival.map(|(decl, _)| (input.id, Some(PartRef { key: decl.key, index: decl.index })));
         focus::register_group(ctx, if let Some(arrival) = arrival { group.selected(arrival) } else { group });
     }
@@ -102,9 +115,8 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
             let stop = own().part(PartRef { key: decl.key, index: decl.index });
             let stop = if extras.nudges { stop.role(input.role.nudge(true)) } else { stop };
             let stop = if extras.default_stop { stop.default_stop() } else { stop };
-            // A part group that joined the body's roving group has its parts registered there.
-            let joined = group.and_then(|parts| focus::registration::part_group(ctx, parts));
-            let stop = if let Some(group) = row_parts.or(joined).or(group).or(input.row) { stop.in_group(group) } else { stop };
+            let flat = joined.filter(|_| !nested);
+            let stop = if let Some(group) = row_parts.or(flat).or(group).or(input.row) { stop.in_group(group) } else { stop };
             if extras.after_header {
                 after_header.push(stop);
             } else {
@@ -113,6 +125,13 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
         }
     }
     after_header
+}
+
+/// Whether a part group moving with `inner` arrows nests in a body group moving with `outer` ones: they take
+/// crossing axes (a row of icons in a vertical menu), so the body steps over the parts as one member and the parts
+/// rove among themselves. Parts on the body's own axis (a toolbar's command strip) are a run of the body's members.
+fn crosses(inner: Arrows, outer: Arrows) -> bool {
+    matches!((inner, outer), (Arrows::Horizontal, Arrows::Vertical) | (Arrows::Vertical, Arrows::Horizontal))
 }
 
 /// Whether the component is a focus stop: an enabled one, or a disabled one whose tooltip has a `disabled_text`, which

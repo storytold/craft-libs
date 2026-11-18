@@ -4,6 +4,8 @@ mod bar;
 
 mod closed;
 
+mod icon_row;
+
 mod native;
 
 mod openers;
