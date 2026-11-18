@@ -177,46 +177,21 @@ impl<'a> MenuTitle<'a> {
 #[non_exhaustive]
 pub struct MenuHelp<'a> {
     menu: usize,
-    entries: HelpEntries<'a>,
-}
-
-/// Where the help search's commands come from: a list the caller built, or a builder the bar runs only while the
-/// Help menu is open.
-#[derive(Clone, Copy)]
-enum HelpEntries<'a> {
-    Listed(&'a [HelpEntry]),
-    Built(&'a dyn Fn() -> Vec<HelpEntry>),
+    entries: &'a dyn Fn() -> Vec<HelpEntry>,
 }
 
 impl std::fmt::Debug for MenuHelp<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let entries = match self.entries {
-            HelpEntries::Listed(entries) => format!("{} listed", entries.len()),
-            HelpEntries::Built(_) => "built when opened".to_string(),
-        };
-        f.debug_struct("MenuHelp").field("menu", &self.menu).field("entries", &entries).finish()
+        f.debug_struct("MenuHelp").field("menu", &self.menu).finish_non_exhaustive()
     }
 }
 
 impl<'a> MenuHelp<'a> {
-    /// A search field at the top of the menu `menu` (its position among the titles) over `entries`.
-    pub fn new(menu: usize, entries: &'a [HelpEntry]) -> Self {
-        MenuHelp { menu, entries: HelpEntries::Listed(entries) }
-    }
-
-    /// A search field at the top of the menu `menu` over the commands `entries` builds. The bar runs it only in a pass
-    /// that shows the Help menu, so an app whose command list is costly to collect (every row of its menus) pays
-    /// nothing while the menu is closed.
-    pub fn built(menu: usize, entries: &'a dyn Fn() -> Vec<HelpEntry>) -> Self {
-        MenuHelp { menu, entries: HelpEntries::Built(entries) }
-    }
-
-    /// The commands, built now for a builder.
-    fn entries(&self) -> std::borrow::Cow<'a, [HelpEntry]> {
-        match self.entries {
-            HelpEntries::Listed(entries) => std::borrow::Cow::Borrowed(entries),
-            HelpEntries::Built(build) => std::borrow::Cow::Owned(build()),
-        }
+    /// A search field at the top of the menu `menu` (its position among the titles) over the commands `entries`
+    /// lists. The bar runs it only in a pass that shows the Help menu, so an app whose command list is costly to
+    /// collect (every row of its menus) pays nothing while the menu is closed.
+    pub fn new(menu: usize, entries: &'a dyn Fn() -> Vec<HelpEntry>) -> Self {
+        MenuHelp { menu, entries }
     }
 }
 
@@ -557,8 +532,8 @@ impl Component for MenuBar<'_> {
         let folder = cx.env.folder();
         let texts = self.texts(&cx.env);
         let help = self.help;
-        // Only a pass that shows the Help menu needs its commands; a builder runs here and nowhere else.
-        let help_entries = help.filter(|help| opened == Some(Open::Title(help.menu))).map(|help| help.entries());
+        // Only a pass that shows the Help menu needs its commands: the entries function runs here and nowhere else.
+        let help_entries = help.filter(|help| opened == Some(Open::Title(help.menu))).map(|help| (help.entries)());
         let help_rows =
             help_entries.as_deref().map(|entries| Self::help_texts(entries, &cx.env, cx.env.words::<CommonWords>().path_separator.as_str()));
         // The search starts empty each time the Help menu opens.

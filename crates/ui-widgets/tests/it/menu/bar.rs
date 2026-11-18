@@ -38,8 +38,7 @@ fn rig(direction: Direction) -> Rig {
                 MenuItem::new("&About").show(ui);
             }),
         ];
-        let help = entries();
-        MenuBar::new("Main menu", titles).help(MenuHelp::new(2, &help)).show(ui);
+        MenuBar::new("Main menu", titles).help(MenuHelp::new(2, &entries)).show(ui);
     });
     // The in-window menu bar and its Alt, F10 and letter keys are PC behaviour: a Mac app's menu bar is native.
     fixture.os(Os::Linux);
@@ -174,7 +173,7 @@ fn built_help_entries_are_collected_only_while_the_help_menu_shows() {
             counted.set(counted.get() + 1);
             entries()
         };
-        MenuBar::new("Main menu", titles).help(MenuHelp::built(1, &build)).show(ui);
+        MenuBar::new("Main menu", titles).help(MenuHelp::new(1, &build)).show(ui);
     });
     fixture.os(Os::Linux);
     fixture.settle();
