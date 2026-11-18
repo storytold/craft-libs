@@ -299,7 +299,8 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
 /// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with a framework
-/// stop focused, its unused Escape, unless it is a text field. A component or a
+/// stop focused, its unused Escape, unless it is a text field; with the document canvas or a canvas control focused,
+/// also the Enter that stop, the canvas's sessions, its tool and every scope around it left. A component or a
 /// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas
 /// session the one that ends it), so an app that hosts the runtime reads them last in its UI to see what no
 /// component took. `rtl` reads horizontal moves in the window's direction.
@@ -322,18 +323,27 @@ fn offer_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents
     let focused = focus::focused_rec(ctx)
         .filter(|rec| rec.stop.keys.owner != OwnerClass::Text || rec.stop.keys.is_document_editor() || focus::is_canvas_member(ctx, rec))
         .map(|rec| rec.stop.id);
+    // Only the document canvas and its controls lend their Enter: another control's Enter is its own.
+    let canvas = focus::focused_rec(ctx).filter(|rec| rec.stop.keys.chrome_key || focus::is_canvas_member(ctx, rec)).map(|rec| rec.stop.id);
     let mut window = intents_of(ctx, None, rtl);
-    // The focused stop's leftover Escape stays in its slot until taken.
-    let lent_cancel =
-        focused.filter(|id| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*id), &Intent::Cancel)).map(|id| {
-            window.items.push((Intent::Cancel, false));
-            (id, window.items.len() - 1)
-        });
+    // The focused stop's leftover Escape is offered as the window's, and so is the leftover Enter of the document
+    // canvas or a canvas control, so the canvas's tool still gets it (a warp point picked by a drag leaves Enter to
+    // the transform that applies it); each stays in that stop's slot until taken.
+    let mut lent = Vec::new();
+    for (stop, intent) in [(focused, Intent::Cancel), (canvas, Intent::Submit)] {
+        if let Some(id) = stop
+            && !window.items.iter().any(|(item, _)| *item == intent)
+            && holds(ctx, Some(id), &intent)
+        {
+            window.items.push((intent.clone(), false));
+            lent.push((id, intent, window.items.len() - 1));
+        }
+    }
     let taken = take(&mut window);
-    if let Some((id, at)) = lent_cancel {
-        let (_, cancel_taken) = window.items.remove(at);
-        if cancel_taken && !crate::runtime::measure::active(ctx) {
-            current(ctx, |stage| take_from(stage, Some(id), &Intent::Cancel));
+    for (id, intent, at) in lent.into_iter().rev() {
+        let (_, lent_taken) = window.items.remove(at);
+        if lent_taken && !crate::runtime::measure::active(ctx) {
+            current(ctx, |stage| take_from(stage, Some(id), &intent));
         }
     }
     if taken {

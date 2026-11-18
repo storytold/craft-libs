@@ -435,3 +435,60 @@ fn cylinder_handles_drag_their_values_and_keep_them_sound() {
     near(h.values(), [100.0, 200.0, 291.0, 80.0, 0.5, 0.5, 0.85], "Shift and an arrow");
     assert_eq!(h.count(Seen::Set), 2);
 }
+
+/// A canvas tool that takes every key the host offers it, so a test sees which reach the tool.
+#[derive(Default)]
+struct KeyTaker {
+    seen: Vec<craft_ui::canvas::ToolKey>,
+}
+
+impl craft_ui::canvas::CanvasTool for KeyTaker {
+    fn press(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) -> craft_ui::canvas::ToolAction {
+        craft_ui::canvas::ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn release(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: craft_behavior::CancelReason, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn key(&mut self, key: &craft_ui::canvas::ToolKey, _: &mut craft_ui::canvas::ToolContext<'_>) -> bool {
+        self.seen.push(key.clone());
+        true
+    }
+
+    fn paint(&self, _: &craft_ui::primitives::Draw<'_>, _: &craft_ui::canvas::ToolContext<'_>) {}
+
+    fn command_form(&self) -> craft_ui::canvas::ToolPath {
+        craft_ui::canvas::ToolPath::Command("the tool's form")
+    }
+}
+
+#[trial]
+fn enter_after_a_point_drag_reaches_the_canvas_tool() {
+    // A transform applies its warp on Enter from its canvas tool: the point a drag left focused takes no Enter of its
+    // own (no split tool is armed), so the canvas's tool still gets it, as it gets the Escape.
+    let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+    let view = Rc::new(Cell::new(None));
+    let (shown_mesh, shown_view) = (Rc::clone(&mesh), Rc::clone(&view));
+    let mut canvas = craft_ui::testing::ToolFixture::with_view(
+        "Document",
+        KeyTaker::default(),
+        |rect| CanvasView::new(rect, Point::new(190.0, 140.0), 1.0),
+        move |ui, body| {
+            if let Some(space) = craft_ui::canvas::canvas_space(&body.env) {
+                shown_view.set(Some(space.view));
+            }
+            WarpGrid::new("Warp", Bind::bound(&mut *shown_mesh.borrow_mut()), RECT).show_at(ui, body.rect);
+        },
+    );
+    canvas.fixture().settle();
+    let corner = view.get().expect("drawn").to_screen(Point::new(RECT.x1, RECT.y1));
+    drag_frames(canvas.fixture(), corner, corner + Vec2::new(-20.0, -15.0));
+    assert_ne!(*mesh.borrow(), WarpMesh::identity(RECT, 1, 1), "the drag moved the corner point");
+    assert!(canvas.fixture().focused_stop().is_some(), "the dragged point has focus");
+    canvas.fixture().key(egui::Key::Enter, Modifiers::NONE).settle();
+    let seen = &canvas.tool().seen;
+    assert!(matches!(seen[..], [craft_ui::canvas::ToolKey::Submit]), "Enter reaches the tool: {seen:?}");
+}
