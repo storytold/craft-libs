@@ -44,7 +44,7 @@ pub mod testing;
 mod wheel;
 
 pub use crate::AreaMode;
-pub use area::{ColorArea, ColorAreaStyle};
+pub use area::{ColorArea, ColorAreaStyle, smooth_mesh};
 pub use channels::finite_values;
 pub use choice::{ChosenColor, ColorChoice, ColorChoiceOutput, ColorChoiceWords, NamedColor};
 pub use disc::{ColorDisc, ColorDiscOutput, ColorDiscStyle, ColorDiscWords, DiscMove};
@@ -73,7 +73,7 @@ pub use picker::{
     ColorConstraint, ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorPickerWords, ColorWarning, ColorWarningChip, ColorWarningChipOutput,
     PickedColor, ScreenPickGesture,
 };
-pub use picker_dialog::{ColorPickerDialog, ColorPickerDialogWords, ColorPickerMemory, ColorPickerResult};
+pub use picker_dialog::{ColorPickerDialog, ColorPickerDialogLayout, ColorPickerDialogWords, ColorPickerMemory, ColorPickerResult, ColorPickerTab};
 pub use popover::{ColorPopover, ColorPopoverOutput};
 pub use profile_prompts::{ProfileAction, ProfileAnswer, ProfileMismatchDialog, ProfileMode, ProfileQuestion, ProfileStatus, ProfileWords};
 pub use ramp::{ColorRamp, ColorRampOutput, ColorRampStyle, ColorRampWords, Gamut, RampKind, RampPick};

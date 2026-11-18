@@ -25,6 +25,7 @@ use craft_ui::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 use egui::{Context, Id, Ui};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::{ColorPicker, ColorPickerLayout, ColorWarning, PickedColor, ScreenPickGesture};
@@ -68,6 +69,29 @@ pub struct ColorPickerResult {
     pub key: String,
     /// The colour, with the model values the user typed while they still give it (CMYK inks, Lab values outside sRGB).
     pub picked: PickedColor,
+}
+
+/// How a [`ColorPickerDialog`] lays out its body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColorPickerDialogLayout {
+    /// Photoshop's Color Picker: the Full picker.
+    #[default]
+    Full,
+    /// Word's Colors dialog: a Standard tab with the honeycomb and a Custom tab with the compact picker.
+    Tabbed,
+}
+
+/// The tab a tabbed [`ColorPickerDialog`] shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum ColorPickerTab {
+    /// The Standard honeycomb and the greys.
+    #[default]
+    Standard,
+    /// The compact picker.
+    Custom,
 }
 
 /// The dialog's title: given by the app, or one of the two the library words.
@@ -128,6 +152,11 @@ pub struct ColorPickerDialog {
     host: Option<Arc<Host>>,
     started: bool,
     open: bool,
+    #[allow(dead_code)] // P3(dialogs-w2): dg.F6
+    layout: ColorPickerDialogLayout,
+    #[allow(dead_code)] // P3(dialogs-w2): dg.F6
+    standard: Option<(Vec<(Label, Srgba)>, Vec<(Label, Srgba)>)>,
+    tab: ColorPickerTab,
 }
 
 impl ColorPickerDialog {
@@ -182,7 +211,31 @@ impl ColorPickerDialog {
             host: None,
             started: false,
             open: true,
+            layout: ColorPickerDialogLayout::default(),
+            standard: None,
+            tab: ColorPickerTab::default(),
         }
+    }
+
+    /// Sets the dialog's layout: Full (Photoshop) or Tabbed (Word's Colors dialog).
+    #[must_use]
+    pub fn layout(mut self, l: ColorPickerDialogLayout) -> ColorPickerDialog {
+        self.layout = l;
+        self
+    }
+
+    /// Sets the Standard tab's honeycomb `cells` and `greys`, each a name and a colour.
+    #[must_use]
+    pub fn standard(mut self, cells: Vec<(Label, Srgba)>, greys: Vec<(Label, Srgba)>) -> ColorPickerDialog {
+        self.standard = Some((cells, greys));
+        self
+    }
+
+    /// Sets the tab a tabbed dialog shows.
+    #[must_use]
+    pub fn tab(mut self, t: ColorPickerTab) -> ColorPickerDialog {
+        self.tab = t;
+        self
     }
 
     /// Fills `{name}` in a given title with `value`, after the title is translated: the title follows a language
@@ -386,7 +439,12 @@ impl StackDialog for ColorPickerDialog {
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.memory)?;
         let color = self.current.map_or(serde_json::Value::Null, |picked| picked.color.to_hex().into());
-        fields.as_object_mut()?.insert("color".to_owned(), color);
+        let tab = serde_json::to_value(self.tab).ok()?;
+        let model = self.current.and_then(|picked| picked.model).map_or(serde_json::Value::Null, |values| values.model.into());
+        let object = fields.as_object_mut()?;
+        object.insert("color".to_owned(), color);
+        object.insert("tab".to_owned(), tab);
+        object.insert("model".to_owned(), model);
         Some(fields)
     }
 

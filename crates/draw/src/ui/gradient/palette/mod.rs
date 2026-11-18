@@ -12,6 +12,8 @@ mod stories;
 
 use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 
+use super::GradientTile;
+
 /// The presets take their content height up to this many small control heights, then scroll.
 const MAX_ROWS: f32 = 6.0;
 
@@ -40,12 +42,21 @@ pub struct GradientItem {
     pub name: String,
     /// The preset's stops.
     pub stops: GradientStops,
+    /// How the preset's cell is drawn: the ramp chip, or a square tile.
+    pub tile: GradientTile,
 }
 
 impl GradientItem {
     /// A preset called `name` with `stops`.
     pub fn new(name: impl Into<String>, stops: GradientStops) -> Self {
-        Self { name: name.into(), stops }
+        Self { name: name.into(), stops, tile: GradientTile::default() }
+    }
+
+    /// Draws the preset's cell as `tile`.
+    #[must_use]
+    pub fn tile(mut self, tile: GradientTile) -> Self {
+        self.tile = tile;
+        self
     }
 }
 

@@ -35,6 +35,10 @@ craft_ui::words! {
     pub struct FontPickerWords {
         search: "fontPicker.search" = "Search fonts";
         recent: "fontPicker.recent" = "Recent";
+        /// The `Plain` picker's heading over the recent families.
+        recently_used: "fontPicker.recentlyUsed" = "Recently Used Fonts";
+        /// The `Plain` picker's heading over every family.
+        all_fonts: "fontPicker.allFonts" = "All Fonts";
         favorites: "fontPicker.favorites" = "Show favorite fonts";
         similar: "fontPicker.similar" = "Show similar fonts";
         variable: "fontPicker.variable" = "Show variable fonts";
@@ -297,6 +301,17 @@ pub fn family_rows(
     rank::list(catalog, &infos(catalog), &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
 }
 
+/// How a [`FontPicker`] lays out its list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FontPickerKind {
+    /// The library picker: stars, recents, filters and the class column.
+    #[default]
+    Library,
+    /// Word's plain font box: recent fonts, actions and all fonts.
+    Plain,
+}
+
 /// What a [`FontPicker`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -314,6 +329,8 @@ pub struct FontPickerOutput {
     /// of the open list (Photoshop previews on hover). It ends when the pointer leaves the rows, the list closes
     /// (Escape, a press outside) or a row is picked. The field's value and text stay.
     pub preview: Preview<String>,
+    /// The index of the action row picked, in the `actions` the host gave.
+    pub action: Option<usize>,
 }
 
 impl Outcome for FontPickerOutput {
@@ -461,6 +478,18 @@ pub struct FontPicker<'a> {
     /// Families the host can fetch but that are not installed, listed with the served mark.
     #[prop]
     served: &'a [String],
+    /// How the list is laid out: the library picker, or Word's plain font box.
+    #[prop]
+    #[allow(dead_code)] // P3(ribbon-w7): rb.R21
+    kind: FontPickerKind,
+    /// Action rows above the families (the `Plain` box), reported through `FontPickerOutput::action`.
+    #[prop]
+    #[allow(dead_code)] // P3(ribbon-w7): rb.R21
+    actions: &'a [Label],
+    /// The face the shown font is displayed in when it is not installed, for the note beside it.
+    #[prop]
+    #[allow(dead_code)] // P3(ribbon-w7): rb.R21
+    shown_as: Option<&'a str>,
 }
 
 impl<'a> FontPicker<'a> {
@@ -478,6 +507,9 @@ impl<'a> FontPicker<'a> {
             preview: Preview::Unchanged,
             preview_text: None,
             served: &[],
+            kind: FontPickerKind::default(),
+            actions: &[],
+            shown_as: None,
         }
         .label(label)
     }
@@ -620,6 +652,6 @@ impl Component for FontPicker<'_> {
             settings.note_recent(family);
             write(&mut bind, &mut cx, settings, "Recent font");
         }
-        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested }
+        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested, action: None }
     }
 }

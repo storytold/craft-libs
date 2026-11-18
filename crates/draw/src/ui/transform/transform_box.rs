@@ -9,8 +9,8 @@ use craft_behavior::geometry::quad::{self, BoxAllow, BoxDrag, BoxPart, BoxRules,
 use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
-    Axis, CancelReason, CanvasView, Cursor, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor,
-    PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
+    Axis, CancelReason, CanvasView, Cursor, CursorIcon, CursorPriority, GesturePhase, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape,
+    PaintedCursor, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasSpace, GestureSnap, Snap, canvas_snap, canvas_space, readout};
@@ -110,6 +110,9 @@ pub enum RotateZone {
         /// The reach outside the sides, in screen points.
         points: f32,
     },
+    /// Only the rotate handle on its stem (Office's rotate handle); Alt is not the pivot key when snapping suspends on
+    /// Alt.
+    Handle,
 }
 
 impl RotateZone {
@@ -124,6 +127,7 @@ impl RotateZone {
         match self {
             RotateZone::Border { points } => border_distance(quad, pointer) <= points,
             RotateZone::Outside | RotateZone::Band => true,
+            RotateZone::Handle => todo!("cv.K37"),
         }
     }
 }
@@ -143,6 +147,40 @@ pub enum TransformReach {
         /// The reach outside the frame, in screen points.
         points: f32,
     },
+}
+
+/// What a line's two end controls are ([`LineLook::ends`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineEnds {
+    /// Each end stands for a handle of the box aligned with the segment.
+    #[default]
+    Box,
+    /// Each end moves as a free point, reported for the host to commit.
+    Free,
+}
+
+/// Which end of a line is dragged ([`LineEndDrag::end`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineEnd {
+    /// The line's start.
+    From,
+    /// The line's end.
+    To,
+}
+
+/// A drag of one end of a line in [`LineEnds::Free`], for the host to commit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LineEndDrag {
+    /// Where the drag stands in this pass.
+    pub phase: GesturePhase,
+    /// The end dragged.
+    pub end: LineEnd,
+    /// Where the end is, in document units.
+    pub at: Point,
+    /// The modifier keys held.
+    pub mods: Mods,
 }
 
 /// The box drawn as a live line's controls ([`TransformBox::line`]), in document units: a square at each end of the
@@ -172,9 +210,16 @@ impl LineLook {
         self
     }
 
+    /// These controls with `ends`: whether the ends are box handles or free points reported for the host to commit.
+    #[must_use]
+    pub fn ends(self, ends: LineEnds) -> Self {
+        let _ = ends;
+        todo!("cv.K38")
+    }
+
     /// Each end that stands for a box handle, with the handle: the corner the end points to, away from the other end
     /// (on a level or upright line, the side). A line of no length has none.
-    fn ends(&self) -> impl Iterator<Item = (BoxPart, Point)> {
+    fn end_parts(&self) -> impl Iterator<Item = (BoxPart, Point)> {
         [(self.from, self.to), (self.to, self.from)].into_iter().filter_map(|(end, other)| Some((end_part(end, other)?, end)))
     }
 }
@@ -454,7 +499,7 @@ impl<'a> TransformBox<'a> {
             return Vec::new();
         }
         if let Some(line) = &self.line {
-            return line.ends().map(|(part, _)| part).filter(|&part| self.rules.allows(part)).collect();
+            return line.end_parts().map(|(part, _)| part).filter(|&part| self.rules.allows(part)).collect();
         }
         let corners = (0..4u8).map(BoxPart::Corner);
         let edges = (0..4u8).map(BoxPart::Edge);
@@ -466,7 +511,7 @@ impl<'a> TransformBox<'a> {
     /// Where `part` is drawn and taken, in document units: a live line's end, else [`handle_point`].
     fn part_point(&self, state: &BoxState, part: BoxPart) -> Option<Point> {
         match &self.line {
-            Some(line) => line.ends().find(|(end_part, _)| *end_part == part).map(|(_, end)| end),
+            Some(line) => line.end_parts().find(|(end_part, _)| *end_part == part).map(|(_, end)| end),
             None => handle_point(state, part),
         }
     }
@@ -499,7 +544,9 @@ impl<'a> TransformBox<'a> {
         let reads_control = mods.cmd && (kind != self.rules.drag_kind(grip.part, Mods { cmd: false, ..mods }) || kind == Some(BoxDrag::Distort));
         let distort_mode = self.rules.effective_mode() == TransformMode::Distort;
         let kinds = if distort_mode { SnapKinds::only(SnapKind::Guide) } else { SnapKinds::ALL };
-        let gesture = GestureSnap::default().reads_control(reads_control).kinds(kinds);
+        let gesture = GestureSnap::default()
+            .reads_suspend_key(reads_control) // P3(canvas-w4): cv.K9
+            .kinds(kinds);
         let grabbed = handle_point(&grip.start, grip.part);
         let (to, mut lines) = match (grip.part, snap, grabbed) {
             (BoxPart::Pivot, _, Some(grabbed)) if !distort_mode => {
@@ -799,7 +846,7 @@ impl TransformBox<'_> {
                 draw.stroke(&square, StrokeWidth::Thin, look.stroke);
             }
         }
-        for (part, end) in line.ends() {
+        for (part, end) in line.end_parts() {
             self.paint_handle(draw, cx, part, view.to_screen(end), false);
         }
         paint_widget(draw, view.to_screen(line.from.midpoint(line.to)), &style.widget);
@@ -1033,6 +1080,7 @@ impl Component for TransformBox<'_> {
                 }
             }
             RotateZone::Band => {}
+            RotateZone::Handle => todo!("cv.K37"),
         }
     }
 
@@ -1101,7 +1149,7 @@ impl Component for TransformBox<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> TransformBoxOutput {
         let Report { apply, discard, hovered, picked, held, snapped } = self.report;
-        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped }
+        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped, line_end: None }
     }
 }
 
@@ -1124,6 +1172,8 @@ pub struct TransformBoxOutput {
     pub held: Option<BoxPart>,
     /// The snap lines of the point being dragged, for the host's one drawing site.
     pub snapped: Vec<craft_behavior::geometry::SnapLine>,
+    /// The drag of a line end, in [`LineEnds::Free`].
+    pub line_end: Option<LineEndDrag>,
 }
 
 impl Outcome for TransformBoxOutput {

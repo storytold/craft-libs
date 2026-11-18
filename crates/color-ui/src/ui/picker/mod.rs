@@ -298,6 +298,9 @@ pub struct ColorPicker<'a> {
     /// Whether the Full layout focuses its hex field when it first shows; on by default.
     #[prop]
     focus_on_open: bool,
+    /// The Compact rows' model, bound by the host.
+    #[allow(dead_code)] // P3(dialogs-w2): dg.F7
+    shown_model: Option<Bind<'a, Option<&'static str>>>,
 }
 
 impl<'a> ColorPicker<'a> {
@@ -319,6 +322,7 @@ impl<'a> ColorPicker<'a> {
             constrain: None,
             sampled: None,
             focus_on_open: true,
+            shown_model: None,
         }
     }
 
@@ -342,6 +346,12 @@ impl<'a> ColorPicker<'a> {
     /// without it.
     pub fn models(mut self, models: impl IntoIterator<Item = &'a dyn ColorModel>) -> Self {
         self.models = Some(models.into_iter().collect());
+        self
+    }
+
+    /// Binds the model the Compact rows show, so the host holds the model switch; the compare swatch shows in Compact.
+    pub fn shown_model(mut self, model: Bind<'a, Option<&'static str>>) -> Self {
+        self.shown_model = Some(model);
         self
     }
 
@@ -377,6 +387,7 @@ impl<'a> ColorPicker<'a> {
             constrain,
             sampled,
             focus_on_open,
+            shown_model: _, // P3(dialogs-w2): dg.F7
         } = self;
         let full = layout == ColorPickerLayout::Full;
         let models: Vec<&'a dyn ColorModel> = models

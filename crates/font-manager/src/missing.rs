@@ -45,6 +45,9 @@ craft_ui::words! {
         installed: "missingFonts.installed" = "Installed";
         missing: "missingFonts.missing" = "Missing";
         warning: template "missingFonts.warning" = "font '{family}' is not installed; text may render using a fallback face";
+        /// The note for a shown font that is not installed, with `{family}` the missing family and `{face}` the face shown
+        /// in its place.
+        shown_as: template "missingFonts.shownAs" = "{family} is not installed; shown as {face}";
         missing_font: template "missingFonts.missingFont" = "{font} ({status})";
         installed_style: template "missingFonts.installedStyle" = "{status} ({style})";
         font_status: template "missingFonts.fontStatus" = "{font}: {status}";

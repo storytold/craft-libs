@@ -10,6 +10,8 @@ use egui::{CornerRadius, Response, Vec2};
 
 use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 
+use super::GradientTile;
+
 #[cfg(feature = "screen-testing")]
 mod stories;
 
@@ -72,13 +74,26 @@ pub struct GradientSwatch<'a> {
     /// Tells AccessKit that a click opens a dialog.
     #[prop(flag)]
     has_popup: bool,
+    /// How the gradient is drawn: the ramp chip, or a square two-dimensional tile.
+    #[prop]
+    #[allow(dead_code)] // P3(chrome-w5): ch.C15
+    tile: GradientTile,
     clicked: bool,
 }
 
 impl<'a> GradientSwatch<'a> {
     /// A swatch of `stops`; `label` names it for a screen reader.
     pub fn new(label: impl Into<craft_ui::runtime::env::Label>, stops: &'a GradientStops) -> Self {
-        GradientSwatch { common: Common::new(), stops, rows: StopRows::Split, sampler: None, has_popup: false, clicked: false }.label(label)
+        GradientSwatch {
+            common: Common::new(),
+            stops,
+            rows: StopRows::Split,
+            sampler: None,
+            has_popup: false,
+            tile: GradientTile::default(),
+            clicked: false,
+        }
+        .label(label)
     }
 }
 
