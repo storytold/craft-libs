@@ -114,18 +114,21 @@ mod tests {
 
     #[test]
     fn spi3d_reserves_the_lattice_only_once_its_rows_are_valid() {
-        // A header-only maximal claim, a short table and a full count of malformed rows.
-        let max = format!("SPILUT 1.0\n3 3\n{MAX_SIDE} {MAX_SIDE} {MAX_SIDE}\n");
-        let short = "SPILUT 1.0\n3 3\n2 2 2\n0 0 0 1 1 1\n".to_owned();
-        let junk = "SPILUT 1.0\n3 3\n2 2 2\n".to_owned() + &"x\n".repeat(8);
-        for bad in [max, short, junk] {
-            let before = reserved();
-            assert!(parse_spi3d(&bad).is_none());
-            assert_eq!(reserved(), before, "{bad}");
-        }
         let mut ok = "SPILUT 1.0\n3 3\n2 2 2\n".to_owned();
         for i in 0..8 {
             ok += &format!("{} {} {} 0 0 0\n", i & 1, (i >> 1) & 1, i >> 2);
+        }
+        // A header-only maximal claim, a short table, a full count of malformed rows, a table
+        // whose last row is bad and one with a valid row too many.
+        let max = format!("SPILUT 1.0\n3 3\n{MAX_SIDE} {MAX_SIDE} {MAX_SIDE}\n");
+        let short = "SPILUT 1.0\n3 3\n2 2 2\n0 0 0 1 1 1\n".to_owned();
+        let junk = "SPILUT 1.0\n3 3\n2 2 2\n".to_owned() + &"x\n".repeat(8);
+        let last_bad = ok.replace("1 1 1 0 0 0", "1 1 2 0 0 0");
+        let extra = ok.clone() + "0 0 0 0 0 0\n";
+        for bad in [max, short, junk, last_bad, extra] {
+            let before = reserved();
+            assert!(parse_spi3d(&bad).is_none());
+            assert_eq!(reserved(), before, "{bad}");
         }
         let before = reserved();
         assert!(parse_spi3d(&ok).is_some());
