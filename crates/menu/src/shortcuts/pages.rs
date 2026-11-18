@@ -130,6 +130,8 @@ pub struct DialogSnapshot {
     pub pressed: Option<String>,
     /// The commands that hold the pressed chord now.
     pub holders: Vec<CommandRef>,
+    /// The selected command's keys as canonical text, as `remove` names them.
+    pub keys: Vec<String>,
 }
 
 impl DialogState {
@@ -153,9 +155,9 @@ impl DialogState {
             }),
             set: self.set.clone(),
             can_undo: self.can_undo(),
-            // P3(dialogs-w11): dg.F29
-            pressed: None,
-            holders: Vec::new(),
+            pressed: self.field.as_ref().map(|f| f.binding.to_string()),
+            holders: self.field.as_ref().map(|f| f.holders.iter().map(|h| h.command.clone()).collect()).unwrap_or_default(),
+            keys: self.selected.as_ref().map(|c| keymap.bindings(c).iter().map(ToString::to_string).collect()).unwrap_or_default(),
         })
     }
 }
