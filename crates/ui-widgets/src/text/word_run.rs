@@ -279,6 +279,10 @@ impl<K: Value + 'static> Component for WordRun<'_, K> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(at) = (0..self.words.len()).find(|&at| cx.part_activated(Self::part(at)).is_some()) else { return };
         let key = self.words[at].key.clone();
+        eprintln!(
+            "DIAG suite::craft_ui_widgets::text::word_run::WordRun<'_, usize>::drives: activated word {at}, value {:?}",
+            cx.value().map(|value| value.is_some())
+        );
         self.picked = Some(key.clone());
         if cx.value().and_then(Option::as_ref) != Some(&key) {
             cx.set(Some(key));

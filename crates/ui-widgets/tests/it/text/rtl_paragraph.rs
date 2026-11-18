@@ -88,6 +88,12 @@ fn wrapped_right_to_left_lines_align_to_the_right_edge() {
         })
         .collect();
     let right = spans.iter().map(|(_, right)| *right).fold(f32::NEG_INFINITY, f32::max);
+    for ((left, end), (top, text, glyphs)) in spans.iter().zip(&rows) {
+        let last = glyphs.last().map(|(chr, x, advance)| (*chr, *x, *advance));
+        eprintln!(
+            "DIAG text::rtl_paragraph::wrapped_right_to_left_lines_align_to_the_right_edge: top {top} span {left}..{end} last glyph {last:?} text {text:?}"
+        );
+    }
     for ((left, end), (_, text, _)) in spans.iter().zip(&rows) {
         assert!((end - right).abs() < 0.5, "{text:?} ends at the right edge {right}: {end}");
         assert!(*left >= -0.5, "{text:?} stays inside the column: {left}");

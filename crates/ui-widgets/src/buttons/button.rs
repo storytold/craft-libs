@@ -77,7 +77,8 @@ impl ButtonStyle {
         let text = &cx.tokens.color.text;
         let (faint, off) = (cx.color(text.faint), cx.color(text.disabled));
         ButtonStyle {
-            surface: cx.field(),
+            // A button carries no value, so it is never invalid: the well without the field's failure edge.
+            surface: cx.text_well(),
             metrics: field.metrics(),
             focus: face::focus(cx),
             text: TextLook::new(TypeRole::Body, Stateful::new(faint).off(States::new(faint, faint, faint, off))),

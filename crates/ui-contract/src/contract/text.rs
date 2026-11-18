@@ -483,6 +483,12 @@ pub(crate) fn run<C: Component>(
             state.end = Some(End::Rewrite { refuses: false });
         }
     }
+    if commit_now {
+        eprintln!(
+            "DIAG text::number::a_window_blur_mid_typing_keeps_the_typed_draft: commit_now step={} was_focused={was_focused} left_for_part={left_for_part} holds_drafts={} end={:?}",
+            step.commit_now, decl.options.holds_drafts, state.end
+        );
+    }
     let resolved = resolve(&mut state, cx.value(), commit_now);
     if resolved.refused {
         crate::runtime::frame::refuse(&ctx);

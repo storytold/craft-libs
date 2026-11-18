@@ -63,6 +63,7 @@ fn swatch_table_trailing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .selection(Bind::bound(data.value("selected", Selection::single(0usize))))
         .wells(true)
         .tips(true)
+        .per_row(6)
         .trailing("Other colour…", IconId::new("plus"))
         .show_all(ui);
     with_readout(data, shown)
