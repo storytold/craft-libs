@@ -186,7 +186,7 @@ impl Intents {
     }
 
     /// Takes the next intent an editor reads as input: typed text, a move, a delete, an edit command, Enter as a
-    /// newline, Tab, and Escape as a cancel. An arrow move the editor's `keep` does not keep stays for the
+    /// newline, Tab and Shift+Tab, and Escape as a cancel. An arrow move the editor's `keep` does not keep stays for the
     /// component's navigation (18.4), and with `KeepKeys::None` so do Home, End and the page keys: the editor is
     /// a part of a grid that navigates until a cell opens.
     pub(crate) fn take_editor_input(&mut self, keep: focus::KeepKeys) -> Option<EditorInput> {
@@ -231,6 +231,7 @@ fn editor_input_of(intent: &Intent) -> Option<EditorInput> {
         Intent::Edit(command) => Some(EditorInput::Edit(*command)),
         Intent::Submit => Some(EditorInput::Newline),
         Intent::Tab => Some(EditorInput::Tab),
+        Intent::BackTab => Some(EditorInput::BackTab),
         Intent::Cancel => Some(EditorInput::Cancel),
         _ => None,
     }
