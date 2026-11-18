@@ -591,3 +591,37 @@ fn stalled_unix_peer_still_fails_within_the_absolute_read_deadline() {
     assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
     assert!(start.elapsed() < Duration::from_secs(3));
 }
+
+#[test]
+fn fleet_discovery_opt_in_preserves_all_257_queues_and_default_limit() {
+    let mut body = vec![1, 1, 0, 0, 0, 0, 0, 1];
+    for index in 0..257 {
+        body.push(4);
+        body.extend(printer_name(&format!("Printer{index}")));
+    }
+    body.push(3);
+    assert!(parse_reply(&body).is_err());
+    assert_eq!(parse_reply_with_limit(&body, 257).unwrap().queues.len(), 257);
+    assert!(parse_reply_with_limit(&body, 256).is_err());
+    for is_class in [false, true] {
+        let server = FakeCups::on_tcp(vec![http_reply(&body)]).unwrap();
+        let queues = queues_at_with_limit(server.endpoint(), is_class, 257).unwrap();
+        assert_eq!(queues.len(), 257);
+        assert_eq!(queues[256].name, "Printer256");
+        assert!(queues.iter().all(|q| q.is_class == is_class));
+        let request = server.request().unwrap();
+        assert!(has(&request, b"requested-attributes"));
+    }
+}
+
+#[test]
+fn fleet_discovery_keeps_absolute_resource_limits() {
+    for limit in [0, MAX_DISCOVERY_QUEUES + 1, usize::MAX] {
+        assert!(queues_at_with_limit(&[], false, limit).is_err());
+    }
+    assert!(parse_reply_with_limit(&vec![0; MAX_BODY + 1], MAX_DISCOVERY_QUEUES).is_err());
+    let mut body = vec![1, 1, 0, 0, 0, 0, 0, 1, 4];
+    body.extend(attr(0x42, &"x".repeat(MAX_NAME + 1), b"value"));
+    body.push(3);
+    assert!(parse_reply_with_limit(&body, MAX_DISCOVERY_QUEUES).is_err());
+}

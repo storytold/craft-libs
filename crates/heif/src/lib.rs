@@ -26,8 +26,9 @@ mod census;
 pub mod items;
 #[cfg(feature = "decode")]
 mod orient;
-/// Lossless synthetic HEIF files for tests, here and in the crates above (feature `testdata`).
-#[cfg(any(test, feature = "testdata"))]
+/// Lossless synthetic HEIF files for tests, here and in the crates above (feature `test-support`,
+/// or its former name `testdata`).
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testdata;
 #[cfg(feature = "decode")]
@@ -703,5 +704,13 @@ mod tests {
         assert!(Error::Unsupported("x").to_string().contains("unsupported"));
         assert!(Error::Limit("x".into()).to_string().contains("limit"));
         assert!(Error::Malformed("x".into()).to_string().contains("malformed"));
+    }
+
+    /// A crate that enables the former feature name `testdata` gets `test-support`, and with it
+    /// `craft_heif::testdata`. Without that, this test does not compile.
+    #[test]
+    #[cfg(feature = "testdata")]
+    fn the_testdata_feature_turns_on_test_support() {
+        const { assert!(cfg!(feature = "test-support"), "feature `testdata` must enable `test-support`") };
     }
 }

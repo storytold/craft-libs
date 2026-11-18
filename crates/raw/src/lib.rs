@@ -93,6 +93,12 @@ mod arw6_testenc;
 mod arw_lens;
 #[cfg(feature = "arw")]
 mod arw_lens_rm6;
+/// Bounded DNG strip and tile sample reader.
+#[cfg(feature = "line-dng")]
+pub mod dng_lines;
+/// Bounded DNG camera and processing metadata.
+#[cfg(feature = "line-dng")]
+pub mod dng_metadata;
 #[allow(dead_code)]
 mod huffman;
 #[cfg(feature = "jxl")]
@@ -116,6 +122,9 @@ mod nef;
 mod nef_lens;
 #[cfg(feature = "nef")]
 mod nefc;
+pub mod opcode_params;
+/// Bounded raw DNG opcode-list envelopes.
+pub mod opcode_raw;
 pub mod opcodes;
 #[cfg(feature = "orf")]
 mod orf;
