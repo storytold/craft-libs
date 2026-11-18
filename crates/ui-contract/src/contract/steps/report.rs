@@ -125,7 +125,10 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     }
     scope::finish(ctx, id, None);
     let carried = scope::carried_name(ctx, id);
-    let Role::Node(role) = role else { return };
+    let Role::Node(role) = role else {
+        scope::leave(ctx, id);
+        return;
+    };
     if !input.node {
         return;
     }
@@ -164,6 +167,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if let Some(owner) = inner_of {
         // Shown as the owner's control: the owner's node is the one node, and stands for this root's key focus.
         access::hide(ctx, id);
+        scope::leave(ctx, id);
         access::fold::offer(ctx, owner, access::fold::Folded { inner: id, value: access.value.clone() });
         if flags.contains(Flags::FOCUSED) {
             access::set_focus(ctx, owner);
