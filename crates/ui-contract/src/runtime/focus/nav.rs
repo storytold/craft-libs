@@ -254,7 +254,26 @@ impl State {
     }
 
     fn entries(&self, scope_root: Option<Id>, all_controls: bool) -> Vec<Entry> {
-        self.last().entries(|rec| self.in_scope(rec.scope, scope_root), all_controls)
+        self.last().entries(|rec| self.reaches(rec.scope, scope_root), all_controls)
+    }
+
+    /// Whether Tab and F6 inside the scope `root` reach a stop of `scope`: it lies inside `root`, and not inside a
+    /// layer opened within `root` that takes no focus, traps nothing and restores nothing (a menu's companion bar).
+    fn reaches(&self, scope: Option<Id>, root: Option<Id>) -> bool {
+        let Some(root) = root else { return true };
+        let mut at = scope;
+        while let Some(id) = at {
+            if id == root {
+                return true;
+            }
+            let Some(rec) = self.last_scopes.get(&id) else { return false };
+            let unreached = rec.entering.is_some() && !rec.policy.trap && !rec.policy.restore && rec.policy.initial == Initial::Keep;
+            if unreached {
+                return false;
+            }
+            at = rec.parent;
+        }
+        false
     }
 
     /// The stops of the running pass that keyboard focus reaches, among those `keep` takes, in Tab order: every member
