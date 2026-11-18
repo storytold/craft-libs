@@ -87,7 +87,7 @@ impl Filter {
     }
 
     /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
-    /// `max_pixels` the most pixels a CCITT or JPEG 2000 image may decode to (the document's
+    /// `max_pixels` the most pixels a CCITT, JBIG2 or JPEG 2000 image may decode to (the document's
     /// [`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels)).
     pub(crate) fn apply(
         &self,
@@ -120,7 +120,7 @@ impl Filter {
             #[cfg(feature = "images")]
             Self::CcittFaxDecode => ccitt::decode(data, params, image_params, limit, max_pixels).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::Jbig2Decode => jbig2::decode(data, params, image_params, limit).ok_or(DecodeFailure::ImageDecode),
+            Self::Jbig2Decode => jbig2::decode(data, params, image_params, limit, max_pixels).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
             Self::JpxDecode => jpx::decode(data, image_params, limit, max_pixels).ok_or(DecodeFailure::ImageDecode),
             #[cfg(not(feature = "images"))]

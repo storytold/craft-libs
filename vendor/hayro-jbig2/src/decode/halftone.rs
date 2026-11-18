@@ -7,16 +7,18 @@ use super::RegionBitmap;
 use super::pattern::PatternDictionary;
 use super::{CombinationOperator, RegionSegmentInfo, Template, parse_region_segment_info};
 use crate::ScratchBuffers;
-use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS, copy_work, decode_work};
+use crate::bitmap::{Bitmap, Limits, MAX_DIMENSION, WORD_BITS, copy_work, decode_work};
 use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
 use crate::gray_scale::{GrayScaleParams, decode_gray_scale_image};
 use crate::reader::Reader;
 
-/// Decode a halftone region segment (7.4.5.2, 6.6).
+/// Decode a halftone region segment (7.4.5.2, 6.6). Craft patch: the region and its grid stay
+/// within `limits`.
 pub(crate) fn decode(
     header: &HalftoneRegionHeader<'_>,
     pattern_dict: &PatternDictionary,
     ctx: &mut ScratchBuffers,
+    limits: Limits,
 ) -> Result<RegionBitmap> {
     let region = &header.region_info;
 
@@ -26,9 +28,10 @@ pub(crate) fn decode(
         region.x_location,
         region.y_location,
         header.flags.initial_pixel_color,
+        limits.max_pixels(),
     )?;
 
-    decode_into(header, pattern_dict, &mut htreg, ctx)?;
+    decode_into(header, pattern_dict, &mut htreg, ctx, limits)?;
 
     Ok(RegionBitmap {
         bitmap: htreg,
@@ -41,6 +44,7 @@ pub(crate) fn decode_into(
     pattern_dict: &PatternDictionary,
     htreg: &mut Bitmap,
     ctx: &mut ScratchBuffers,
+    limits: Limits,
 ) -> Result<()> {
     let skip_bitmap = if header.flags.enable_skip {
         Some(compute_skip_bitmap(header, pattern_dict, htreg)?)
@@ -59,6 +63,7 @@ pub(crate) fn decode_into(
         height: header.grid_position_and_size.height,
         template: header.flags.template,
         skip_mask: skip_bitmap.as_deref(),
+        max_cells: limits.grid_cells(),
     };
     let gi = decode_gray_scale_image(header.data, &gs_params, ctx)?;
 
@@ -91,8 +96,9 @@ fn bits_per_pixel(patterns: &PatternDictionary) -> u32 {
         .map_or(1, |n| n + 1)
 }
 
-/// Parse a halftone region segment header (7.4.5.1).
-pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<'a>> {
+/// Parse a halftone region segment header (7.4.5.1). Craft patch: the grid has at most the cells
+/// of `limits`.
+pub(crate) fn parse<'a>(reader: &mut Reader<'a>, limits: Limits) -> Result<HalftoneRegionHeader<'a>> {
     let region_info = parse_region_segment_info(reader)?;
     let flags_byte = reader.read_byte().ok_or(ParseError::UnexpectedEof)?;
     let mmr = flags_byte & 0x01 != 0;
@@ -115,8 +121,9 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<
     if grid_width > MAX_DIMENSION || grid_height > MAX_DIMENSION {
         bail!(OverflowError::GridDimension);
     }
-    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`).
-    if u64::from(grid_width) * u64::from(grid_height) > crate::bitmap::MAX_GRID_CELLS {
+    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`; Craft patch: the
+    // bound of `limits`).
+    if u64::from(grid_width) * u64::from(grid_height) > limits.grid_cells() {
         bail!(OverflowError::GridDimension);
     }
 

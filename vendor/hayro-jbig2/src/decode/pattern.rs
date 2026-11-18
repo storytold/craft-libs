@@ -12,11 +12,13 @@ use alloc::vec::Vec;
 /// of 32 rows take 2 MiB. A 48-byte dictionary of 65,535 such patterns asked for 539 MB.
 const MAX_SHIFTED_WORDS: u64 = 1 << 22;
 
-/// Decode a pattern dictionary segment (7.4.4.2, 6.7).
+/// Decode a pattern dictionary segment (7.4.4.2, 6.7). Craft patch: its bitmaps have at most
+/// `max_pixels` pixels (see `Limits::max_pixels`).
 pub(crate) fn decode(
     header: &PatternDictionaryHeader<'_>,
     scratch: &mut ScratchBuffers,
     room: u64,
+    max_pixels: u64,
 ) -> Result<PatternDictionary> {
     let pattern_width = header.pattern_width as u32;
     let pattern_height = header.pattern_height as u32;
@@ -32,7 +34,7 @@ pub(crate) fn decode(
         .checked_mul(pattern_width)
         .ok_or(OverflowError::BitmapDimension)?;
 
-    let mut collective_bitmap = Bitmap::new(collective_width, pattern_height)?;
+    let mut collective_bitmap = Bitmap::new(collective_width, pattern_height, max_pixels)?;
 
     // "2) Decode the collective bitmap using a generic region decoding procedure
     // as described in 6.2." (6.7.5)
@@ -89,7 +91,7 @@ pub(crate) fn decode(
         // HDPW × GRAY through HDPW × (GRAY + 1) − 1 be denoted B_P. Set:
         // HDPATS[GRAY] = B_P" (6.7.5)"
         let start_x = gray * pattern_width;
-        let mut pattern = Bitmap::new(pattern_width, pattern_height)?;
+        let mut pattern = Bitmap::new(pattern_width, pattern_height, max_pixels)?;
 
         let src_word_idx = start_x / WORD_BITS;
         let src_bit_offset = start_x % WORD_BITS;
