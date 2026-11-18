@@ -156,6 +156,27 @@ pub(super) fn allocation_sizes(len: usize, factor: u32) -> Result<(usize, usize)
     Ok((working, output))
 }
 
+/// Unity-DC-gain low-pass taps for decimating by `ratio` (cutoff 0.45 / ratio cycles per sample).
+fn decimation_taps(ratio: usize) -> Vec<f32> {
+    let n = 24 * ratio + 1;
+    let mid = (n / 2) as f64;
+    let fc = 0.45 / ratio as f64;
+    let mut taps: Vec<f64> = (0..n)
+        .map(|k| {
+            let x = k as f64 - mid;
+            let sinc = if x == 0.0 { 2.0 * fc } else { (2.0 * std::f64::consts::PI * fc * x).sin() / (std::f64::consts::PI * x) };
+            let t = k as f64 / (n - 1) as f64;
+            let window = 0.42 - 0.5 * (2.0 * std::f64::consts::PI * t).cos() + 0.08 * (4.0 * std::f64::consts::PI * t).cos();
+            sinc * window
+        })
+        .collect();
+    let sum: f64 = taps.iter().sum();
+    for t in &mut taps {
+        *t /= sum;
+    }
+    taps.into_iter().map(|t| t as f32).collect()
+}
+
 /// Decimates 1-bit DSD audio bytes for a single channel to `f32` PCM.
 ///
 /// The default decimation factor is 8 (1 output float per input byte).
@@ -209,16 +230,59 @@ pub fn decimate_channel(channel_bytes: &[u8], bit_order: BitOrder, factor: u32) 
         return Ok(stage1);
     }
 
-    // Secondary downsampling by ratio = factor / 8 (2, 4, or 8).
+    // Secondary decimation by ratio = factor / 8 (2, 4, or 8). A plain average attenuates the band
+    // between the new Nyquist rate and the stage-1 rate too little (about -7.6 dB at 29.4 kHz for
+    // factor 64), so low-pass first: a Blackman-windowed sinc with its cutoff at 90% of the new
+    // Nyquist frequency, evaluated only at the kept samples.
     let ratio = (factor / 8) as usize;
     let out_len = stage1.len() / ratio;
     let mut out = Vec::new();
     out.try_reserve_exact(out_len).map_err(|_| Error::MemoryLimitExceeded)?;
 
-    for chunk in stage1.chunks_exact(ratio) {
-        let sum: f32 = chunk.iter().sum();
-        out.push(sum / ratio as f32);
+    let taps = decimation_taps(ratio);
+    let half = (taps.len() / 2) as isize;
+    let last = stage1.len() as isize - 1;
+    for i in 0..out_len {
+        let center = (i * ratio + ratio / 2) as isize;
+        let mut acc = 0.0_f32;
+        for (k, &w) in taps.iter().enumerate() {
+            let idx = (center + k as isize - half).clamp(0, last);
+            if let Some(&x) = stage1.get(idx as usize) {
+                acc += w * x;
+            }
+        }
+        out.push(acc);
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod decimation_tests {
+    use super::*;
+
+    /// A full-scale 29.4 kHz square wave in DSD64 (six bytes of ones, six of zeros) lies between
+    /// the output Nyquist frequency and the sampling rate of a 44.1 kHz result: it must be
+    /// attenuated well, not folded down at 0.42 of its amplitude.
+    #[test]
+    fn factor_64_attenuates_29_4_khz() {
+        let mut bytes = Vec::new();
+        for _ in 0..2000 {
+            bytes.extend_from_slice(&[0xFF; 6]);
+            bytes.extend_from_slice(&[0x00; 6]);
+        }
+        let out = decimate_channel(&bytes, BitOrder::MsbFirst, 64).unwrap();
+        let mid = &out[out.len() / 4..out.len() * 3 / 4];
+        let peak = mid.iter().fold(0.0_f32, |m, v| m.max(v.abs()));
+        assert!(peak < 0.05, "peak {peak}");
+    }
+
+    #[test]
+    fn decimation_keeps_dc_level() {
+        let bytes = vec![0xFF; 4096];
+        let out = decimate_channel(&bytes, BitOrder::MsbFirst, 64).unwrap();
+        let mid = out[out.len() / 2];
+        assert!((mid - 1.0).abs() < 0.05, "{mid}");
+    }
 }

@@ -81,6 +81,11 @@ fn encoded_sizes_match_actual_bytes_for_odd_and_even_payloads() {
             let data = vec![0x69; len];
             let planes = vec![data.as_slice(); channels];
             for block in [0, 1, 3, 8] {
+                // DSF has channel types for 1 to 6 channels only.
+                if channels > 6 {
+                    assert!(matches!(encode_dsf(2_822_400, &planes, len as u64 * 8, block), Err(Error::Unsupported(_))));
+                    continue;
+                }
                 let dsf = encode_dsf(2_822_400, &planes, len as u64 * 8, block).unwrap();
                 assert_eq!(u64::from_le_bytes(dsf[12..20].try_into().unwrap()), dsf.len() as u64);
                 assert_eq!(read_raw(&dsf).unwrap().channel_bytes, vec![data.clone(); channels]);

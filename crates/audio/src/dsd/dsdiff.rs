@@ -38,6 +38,37 @@ fn channel_id_to_name(id: &[u8; 4]) -> String {
     }
 }
 
+/// The text of a `DITI` or `DIAR` chunk: a four-byte big-endian character count, then that many
+/// bytes. `None` when the count is missing or longer than the chunk.
+fn diin_text(sub_data: &[u8]) -> Option<String> {
+    let count = usize::try_from(u32::from_be_bytes(sub_data.get(..4)?.try_into().ok()?)).ok()?;
+    let text = sub_data.get(4..)?.get(..count)?;
+    Some(String::from_utf8_lossy(text).trim().to_string())
+}
+
+/// The channel identifiers DSDIFF 1.5 defines for a channel count (stereo, 5 and 5.1 channels);
+/// other counts use the generic `C001`, `C002`, ... identifiers.
+fn channel_ids(num_channels: usize) -> Vec<[u8; 4]> {
+    let named: &[&[u8; 4]] = match num_channels {
+        1 => &[b"SLFT"],
+        2 => &[b"SLFT", b"SRGT"],
+        5 => &[b"MLFT", b"MRGT", b"C   ", b"LS  ", b"RS  "],
+        6 => &[b"MLFT", b"MRGT", b"C   ", b"LFE ", b"LS  ", b"RS  "],
+        _ => &[],
+    };
+    if !named.is_empty() {
+        return named.iter().map(|id| **id).collect();
+    }
+    (1..=num_channels)
+        .map(|n| {
+            let s = format!("C{n:03}");
+            let mut id = [b' '; 4];
+            id.copy_from_slice(&s.as_bytes()[..4]);
+            id
+        })
+        .collect()
+}
+
 /// Parses the metadata from a DSDIFF file.
 pub fn parse_dsdiff_header(bytes: &[u8]) -> Result<(Metadata, usize, usize), Error> {
     if bytes.len() < 16 {
@@ -163,9 +194,9 @@ pub fn parse_dsdiff_header(bytes: &[u8]) -> Result<(Metadata, usize, usize), Err
                     diin_pos = diin_pos.saturating_add(sub_size).saturating_add(sub_pad);
 
                     if sub_id == b"DITI" && title.is_none() {
-                        title = Some(String::from_utf8_lossy(sub_data).trim().to_string());
+                        title = diin_text(sub_data);
                     } else if sub_id == b"DIAR" && artist.is_none() {
-                        artist = Some(String::from_utf8_lossy(sub_data).trim().to_string());
+                        artist = diin_text(sub_data);
                     }
                 }
             }
@@ -252,7 +283,9 @@ pub fn write_dsdiff(sample_rate: u32, channels: &[&[u8]], sample_count: u64) -> 
     let bytes_per_ch = usize::try_from(sample_count.div_ceil(8)).map_err(|_| Error::MemoryLimitExceeded)?;
     let data_size = bytes_per_ch.checked_mul(num_channels).ok_or(Error::MemoryLimitExceeded)?;
     // Fixed headers plus four bytes for each channel identifier.
-    let file_size = super::encoded_size(data_size, 110 + 4 * num_channels)?;
+    // An odd-sized chunk payload is followed by a pad byte that its size field does not count.
+    let data_pad = data_size & 1;
+    let file_size = super::encoded_size(data_size + data_pad, 110 + 4 * num_channels)?;
 
     // Build PROP subchunks:
     // 1. 'FS  ' (4 bytes + 12 chunk header)
@@ -267,18 +300,8 @@ pub fn write_dsdiff(sample_rate: u32, channels: &[&[u8]], sample_count: u64) -> 
     chnl_chunk.extend_from_slice(b"CHNL");
     chnl_chunk.extend_from_slice(&(chnl_data_len as u64).to_be_bytes());
     chnl_chunk.extend_from_slice(&(num_channels as u16).to_be_bytes());
-    for c in 0..num_channels {
-        let code = match (num_channels, c) {
-            (1, 0) => b"SLFT",
-            (2, 0) => b"SLFT",
-            (2, 1) => b"SRGT",
-            (_, 0) => b"MLFT",
-            (_, 1) => b"MRGT",
-            (_, 2) => b"C   ",
-            (_, 3) => b"LFE ",
-            _ => b"C   ",
-        };
-        chnl_chunk.extend_from_slice(code);
+    for id in channel_ids(num_channels) {
+        chnl_chunk.extend_from_slice(&id);
     }
     if !chnl_data_len.is_multiple_of(2) {
         chnl_chunk.push(0);
@@ -329,6 +352,9 @@ pub fn write_dsdiff(sample_rate: u32, channels: &[&[u8]], sample_count: u64) -> 
             let byte = ch_data.get(i).copied().unwrap_or(super::filter::SILENCE_MSBF);
             out.push(byte);
         }
+    }
+    if data_pad == 1 {
+        out.push(0);
     }
 
     Ok(out)

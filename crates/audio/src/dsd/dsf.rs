@@ -15,7 +15,7 @@ fn dsf_channel_names(channel_type: u32, channel_count: u16) -> Vec<String> {
         2 => vec!["Left".to_string(), "Right".to_string()],
         3 => vec!["Left".to_string(), "Right".to_string(), "Center".to_string()],
         4 => vec!["FrontLeft".to_string(), "FrontRight".to_string(), "BackLeft".to_string(), "BackRight".to_string()],
-        5 => vec!["FrontLeft".to_string(), "FrontRight".to_string(), "Center".to_string(), "Surround".to_string()],
+        5 => vec!["FrontLeft".to_string(), "FrontRight".to_string(), "Center".to_string(), "LFE".to_string()],
         6 => vec!["FrontLeft".to_string(), "FrontRight".to_string(), "Center".to_string(), "BackLeft".to_string(), "BackRight".to_string()],
         7 => vec![
             "FrontLeft".to_string(),
@@ -53,7 +53,16 @@ fn parse_id3v2(bytes: &[u8], offset: usize) -> (Option<String>, Option<String>) 
         if frame_id[0] == 0 {
             break;
         }
-        let frame_size = u32::from_be_bytes([id3[pos + 4], id3[pos + 5], id3[pos + 6], id3[pos + 7]]) as usize;
+        let raw = [id3[pos + 4], id3[pos + 5], id3[pos + 6], id3[pos + 7]];
+        // ID3v2.4 frame sizes are synchsafe; v2.3 ones are plain big-endian.
+        let frame_size = if id3[3] >= 4 {
+            if raw.iter().any(|b| b & 0x80 != 0) {
+                break;
+            }
+            ((raw[0] as usize) << 21) | ((raw[1] as usize) << 14) | ((raw[2] as usize) << 7) | raw[3] as usize
+        } else {
+            u32::from_be_bytes(raw) as usize
+        };
         pos += 10;
         if frame_size > end.saturating_sub(pos) {
             break;
@@ -78,23 +87,35 @@ fn parse_text_frame(data: &[u8]) -> Option<String> {
     }
     let encoding = data[0];
     let content = &data[1..];
-    match encoding {
-        0 | 3 => {
-            // ISO-8859-1 or UTF-8
-            let s = String::from_utf8_lossy(content).trim_end_matches('\0').trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+    let text = match encoding {
+        // ISO-8859-1: every byte is the code point of the same value.
+        0 => content.iter().map(|&b| char::from(b)).collect::<String>(),
+        3 => String::from_utf8_lossy(content).into_owned(),
+        // UTF-16 with a byte order mark (which is removed); without one, assume big-endian.
+        1 => {
+            let (big_endian, body) = match content {
+                [0xFE, 0xFF, rest @ ..] => (true, rest),
+                [0xFF, 0xFE, rest @ ..] => (false, rest),
+                _ => (true, content),
+            };
+            utf16(body, big_endian)
         }
-        1 | 2 => {
-            // UTF-16 with BOM or UTF-16BE
-            if content.len() < 2 {
-                return None;
-            }
-            let u16s: Vec<u16> = content.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-            let s = String::from_utf16_lossy(&u16s).trim_end_matches('\0').trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
-        }
-        _ => None,
-    }
+        // UTF-16BE without a byte order mark.
+        2 => utf16(content, true),
+        _ => return None,
+    };
+    let s = text.trim_end_matches('\0').trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn utf16(bytes: &[u8], big_endian: bool) -> String {
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| if big_endian { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) })
+        .collect();
+    String::from_utf16_lossy(&units)
 }
 
 /// Parses DSF file metadata, returning the metadata, audio data offset, and block size per channel.
@@ -264,6 +285,10 @@ pub fn parse_dsf(bytes: &[u8]) -> Result<RawAudio, Error> {
     Ok(RawAudio { metadata, bit_order: BitOrder::LsbFirst, channel_bytes })
 }
 
+fn unsupported_channel_layout() -> Result<u32, Error> {
+    Err(Error::Unsupported("DSF has no channel type for this channel count (1 to 6 are supported)"))
+}
+
 /// Encodes 1-bit planar audio channels into a valid Sony DSF file.
 pub fn write_dsf(sample_rate: u32, channels: &[&[u8]], sample_count: u64, block_size: u32) -> Result<Vec<u8>, Error> {
     if channels.is_empty() || channels.len() > MAX_CHANNELS {
@@ -299,7 +324,16 @@ pub fn write_dsf(sample_rate: u32, channels: &[&[u8]], sample_count: u64, block_
     out.extend_from_slice(&52u64.to_le_bytes());
     out.extend_from_slice(&1u32.to_le_bytes()); // format_version = 1
     out.extend_from_slice(&0u32.to_le_bytes()); // format_id = 0 (raw DSD)
-    let channel_type = if num_channels == 1 { 1u32 } else { 2u32 };
+    // DSF channel types: 1 mono, 2 stereo, 3 L R C, 4 quad, 6 five channels, 7 5.1.
+    let channel_type = match num_channels {
+        1 => 1u32,
+        2 => 2,
+        3 => 3,
+        4 => 4,
+        5 => 6,
+        6 => 7,
+        _ => unsupported_channel_layout()?,
+    };
     out.extend_from_slice(&channel_type.to_le_bytes());
     out.extend_from_slice(&(num_channels as u32).to_le_bytes());
     out.extend_from_slice(&sample_rate.to_le_bytes());

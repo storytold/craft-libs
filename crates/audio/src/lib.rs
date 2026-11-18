@@ -2,7 +2,7 @@
 #![warn(missing_docs)]
 // The docs link items of every feature; built with fewer features, those links have no target.
 // CI and docs.rs build the docs with all features, where every link must resolve.
-#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks")), allow(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks", feature = "dsd")), allow(rustdoc::broken_intra_doc_links))]
 //! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
 //! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
 //! `wasm32-unknown-unknown`.

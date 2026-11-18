@@ -183,3 +183,7 @@ required-features = ["lossless-encode", "aac-encode"]
 [[test]]
 name = "dsd_bounds"
 required-features = ["dsd"]
+
+[[test]]
+name = "dsd_metadata"
+required-features = ["dsd"]
