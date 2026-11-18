@@ -144,6 +144,9 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
             }
         }
         WindowAction::SetTitle(title) => {
+            // X11 rejects a title holding a NUL, so the host drops it before the compare: a title that differs only by
+            // NULs is the one already sent.
+            let title: String = title.chars().filter(|c| *c != '\0').collect();
             // `ViewportInfo::title` is empty on X11 and Wayland, so the host remembers what it set itself.
             let fresh = PerViewport::<SentTitle>::with(ctx, viewport, |sent| {
                 let fresh = sent.0.as_deref() != Some(title.as_str());

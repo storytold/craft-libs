@@ -303,6 +303,7 @@ pub struct ItemFacts {
 }
 
 /// The innermost body that owns the scroll of a scope (`Scoped::scroll_owner`).
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScrollOwner {
     pub(crate) id: Id,
@@ -435,7 +436,9 @@ impl Env {
     /// The root env of a frame: the app's values with the pixels per point read back from egui.
     pub(crate) fn from_root(ctx: &Context, root: &RootEnv, host: Option<Arc<Host>>, pixels_per_point: f32) -> Env {
         let resolved = root.resolved(ctx);
-        let inputs = TokenInputs::of(root, resolved);
+        // An id that is not a valid `AppId` names no theme pins, so it resolves as no app.
+        let app = host.as_ref().and_then(|host| craft_theme::AppId::parse(host.app().id).ok());
+        let inputs = TokenInputs::of(root, resolved, app);
         let tokens = tokens_for(ctx, &inputs);
         let motion = MotionPolicy::new(motion_mode(ctx, resolved.motion), tokens.tokens().motion);
         let os = windows::os_of(ctx);

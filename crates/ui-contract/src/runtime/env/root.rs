@@ -205,15 +205,15 @@ impl RootEnv {
     }
 
     /// Sets this frame's wheel speed.
-    pub fn wheel_speed(self, speed: WheelSpeed) -> Self {
-        let _ = speed;
-        todo!("sh.K3")
+    pub fn wheel_speed(mut self, speed: WheelSpeed) -> Self {
+        self.wheel = speed;
+        self
     }
 
     /// Sets the code pages that decode Alt+numpad codes.
-    pub fn alt_code_pages(self, pages: AltCodePages) -> Self {
-        let _ = pages;
-        todo!("sh.K4")
+    pub fn alt_code_pages(mut self, pages: AltCodePages) -> Self {
+        self.alt_codes = pages;
+        self
     }
 }
 

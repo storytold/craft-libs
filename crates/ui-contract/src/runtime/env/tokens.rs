@@ -108,7 +108,8 @@ pub(crate) struct TokenInputs {
 }
 
 impl TokenInputs {
-    pub(super) fn of(root: &RootEnv, resolved: ResolvedRoot) -> Self {
+    /// The inputs of `root` resolved as `resolved`, with the pins of `app` (`None`: no app's pins).
+    pub(super) fn of(root: &RootEnv, resolved: ResolvedRoot, app: Option<AppId>) -> Self {
         TokenInputs {
             sizes: root.sizes.clone(),
             theme: root.theme.clone(),
@@ -117,7 +118,7 @@ impl TokenInputs {
             contrast: resolved.contrast,
             density: root.density,
             text_size: root.text_size,
-            app: None, // P3(shell-w1): sh.K8
+            app,
         }
     }
 

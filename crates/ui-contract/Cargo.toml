@@ -47,6 +47,9 @@ craft-quit = { workspace = true }
 # `appearance::SystemReader`, the OS appearance the root's `System` choices resolve from.
 craft-platform = { workspace = true, features = ["appearance", "clipboard"] }
 craft-i18n = { workspace = true, features = ["collate"] }
+# `alt_code_char`, which the raw-input step decodes Alt+numpad codes with.
+
+craft-codepage = { workspace = true }
 log = "0.4"
 smallvec = { workspace = true }
 inventory = "0.3.25"

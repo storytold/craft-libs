@@ -585,3 +585,32 @@ fn a_floating_panel_opened_from_a_full_window_container_takes_input() {
     fixture.click(&probe).idle(2);
     assert_eq!(seen.borrow().activations, 1, "the click reaches the panel above the full-window container");
 }
+
+/// SG-30: X11 rejects a window title that holds a NUL, so `act` drops every NUL before it compares the title with the
+/// one it sent last: the window gets the title without it, a title sent again (or differing only by NULs) sends no
+/// second command, and a changed title sends one.
+#[trial]
+fn a_title_with_nul_reaches_the_window_without_it() {
+    use craft_ui::runtime::windows::{WindowAction, act};
+    let shell = ShellInfo::default().os(Os::Linux).backend(Backend::X11).caps(Caps::native(Os::Linux));
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)));
+    windows.frame(vec![], vec![], |_| {});
+    // The titles one frame that asks for `title` sends to the main window, over every pass of the frame.
+    let send = |title: &str| -> Vec<String> {
+        let out = windows.frame(vec![], vec![], |ui| {
+            act(ui.ctx(), ViewportId::ROOT, WindowAction::SetTitle(title.to_owned()));
+        });
+        out.commands
+            .iter()
+            .filter_map(|(id, command)| match command {
+                ViewportCommand::Title(sent) if *id == ViewportId::ROOT => Some(sent.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(send("Report\0 draft.docx"), ["Report draft.docx"], "the window gets the title without its NUL");
+    assert!(send("Report\0 draft.docx").is_empty(), "the same title again sends nothing");
+    assert!(send("Report draft.docx").is_empty(), "a title that differs only by NULs is the one already sent");
+    assert_eq!(send("Notes.docx"), ["Notes.docx"], "a changed title is sent");
+    assert_eq!(send("\0Report\0\0 draft.docx\0"), ["Report draft.docx"], "a title changed back is sent again, every NUL dropped");
+}
