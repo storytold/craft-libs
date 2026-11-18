@@ -2,6 +2,7 @@
 //! function, shadings rasterized, tiling patterns past the cell cap drawn, stencil masks traced.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use craft_pdf::interpret::color::{CmykSimulation, ColorSpace};
 use craft_pdf::interpret::pattern::ShadingPattern;
@@ -12,7 +13,7 @@ use super::{FillRule, GradientGeometry, ImageItem, ImageSpace, Item, Paint};
 use crate::ink::{InkColor, InkId, InkSet, Overprint, Process};
 
 /// Most a gradient's piecewise-linear stops may differ from the function, per ink.
-const STOP_TOLERANCE: f32 = 0.5 / 255.0;
+pub(super) const STOP_TOLERANCE: f32 = 0.5 / 255.0;
 
 /// The narrowest interval between gradient stops; a discontinuous function gets a pair of stops
 /// this close.
@@ -269,9 +270,15 @@ pub(super) fn translate(items: &mut [Item], by: Vec2) {
 }
 
 fn translate_paint(paint: &mut Paint, t: Affine) {
-    if let Paint::Gradient { geometry, .. } = paint {
-        match geometry {
+    match paint {
+        Paint::Solid(_) => {}
+        Paint::Gradient { geometry, .. } => match geometry {
             GradientGeometry::Axial { transform, .. } | GradientGeometry::Radial { transform, .. } => *transform = t * *transform,
+        },
+        Paint::Mesh(mesh) => {
+            for patch in &mut Arc::make_mut(mesh).patches {
+                patch.points = patch.points.map(|p| t * p);
+            }
         }
     }
 }
@@ -463,6 +470,8 @@ impl<'a> Canvas<'a> {
                     }
                 }
             }
+            // Meshes in tiling cells are read as images (`pdf::Shared::cells`).
+            Paint::Mesh(_) => {}
         }
     }
 
