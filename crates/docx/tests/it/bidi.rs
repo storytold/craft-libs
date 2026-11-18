@@ -481,3 +481,34 @@ fn a_fields_thai_result_takes_the_complex_script_formatting_only_in_a_complex_sc
         assert_eq!(drawn(&again), (want.0.to_string(), want.1), "a run with {what}: after a save");
     }
 }
+
+/// A tracked formatting change's "before" copy is marked by what it draws itself. Here Normal says
+/// `w:cs` and the run's character style says `w:cs w:val="0"`, which Word doesn't count, so the
+/// run is written `w:cs w:val="0"`; before the change the run had no character style and was
+/// complex script by its paragraph style, so rejecting the change in Word must leave it so.
+#[test]
+fn a_tracked_changes_before_copy_is_marked_by_its_own_formatting() {
+    use craft_wordmodel::props::PropChange;
+    use craft_wordmodel::{Revision, RevisionKind, Style, StyleKind};
+    use std::sync::Arc;
+    let mut d = Document::new();
+    let sheet = Arc::make_mut(&mut d.styles);
+    sheet.default_chr =
+        CharProps { font: Some("Angsana New".into()), font_cs: Some("Tahoma".into()), size: Some(10.0), size_cs: Some(20.0), ..Default::default() };
+    let cs = |on: bool| CharProps { cs: Some(on), ..Default::default() };
+    sheet.upsert(Style { id: "Normal".into(), name: "Normal".into(), kind: StyleKind::Paragraph, chr: cs(true), ..Default::default() });
+    sheet.upsert(Style { id: "CsOff".into(), name: "CsOff".into(), kind: StyleKind::Character, chr: cs(false), ..Default::default() });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    let run = CharProps { style: Some("CsOff".into()), fmt_change: PropChange::boxed(0, CharProps::default()), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("ABC", run))];
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    // The text's run (the paragraph mark's properties come first and have a change of their own).
+    let run = xml.split("<w:r>").find(|r| r.contains(">ABC</w:t>")).unwrap_or_else(|| panic!("no run: {xml}"));
+    let (now, before) = run.split_once("<w:rPrChange").expect("the change is written");
+    assert!(now.contains(r#"<w:cs w:val="0"/>"#), "the run as WordCraft draws it: {now}");
+    assert!(!before.contains(r#"<w:cs w:val="0"/>"#), "the before copy stays complex script: {before}");
+    // Read back, the before copy draws as it did.
+    let r = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    let old = paras(&r)[0].runs[0].props.fmt_change.as_ref().map(|c| c.old.clone()).expect("kept");
+    assert!(r.styles.resolve_char(Some("Normal"), &old).uses_complex('A'));
+}

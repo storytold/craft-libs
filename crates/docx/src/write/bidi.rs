@@ -167,20 +167,29 @@ pub(super) fn complex_script_spans<'a>(
             out.push((range, props));
             continue;
         }
-        let marked = |cs: bool| {
+        // A tracked formatting change's "before" copy, where it doesn't say either, is marked as
+        // WordCraft draws it, by its own character style: rejecting the change in Word then
+        // brings back the look it had, and the change lists the mark only where the look changed.
+        let old = props.fmt_change.as_ref().filter(|ch| ch.old.cs.is_none() && ch.old.rtl.is_none());
+        let old_rc = old.map(|ch| styles.resolve_char_in(para_style, table, &ch.old));
+        let key = |c: char| {
+            let n = need(c);
+            (n, n.and(old_rc.as_ref().map(|r| r.uses_complex(c))))
+        };
+        let marked = |(cs, old_cs): (bool, Option<bool>)| {
             let mut p = props.clone().into_owned();
             p.cs = Some(cs);
-            if let Some(ch) = p.fmt_change.as_mut() {
-                ch.old.cs.get_or_insert(cs);
+            if let (Some(ch), Some(o)) = (p.fmt_change.as_mut(), old_cs) {
+                ch.old.cs = Some(o);
             }
             Cow::Owned(p)
         };
-        let piece = |n: Option<bool>| n.map_or_else(|| props.clone(), marked);
+        let piece = |(n, old_cs): (Option<bool>, Option<bool>)| n.map_or_else(|| props.clone(), |cs| marked((cs, old_cs)));
         let mut start = range.start;
-        let mut cur: Option<Option<bool>> = None;
+        let mut cur: Option<(Option<bool>, Option<bool>)> = None;
         for (i, c) in run.char_indices() {
             let at = range.start.saturating_add(i);
-            let n = need(c);
+            let n = key(c);
             if let Some(was) = cur
                 && was != n
             {
@@ -189,7 +198,7 @@ pub(super) fn complex_script_spans<'a>(
             }
             cur = Some(n);
         }
-        out.push((start..range.end, piece(cur.flatten())));
+        out.push((start..range.end, piece(cur.unwrap_or((None, None)))));
     }
     out
 }
