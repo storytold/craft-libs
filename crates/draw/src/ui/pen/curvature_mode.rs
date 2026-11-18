@@ -7,7 +7,7 @@ use super::tool::{Drag, Kind, PenEnd, PenEvent, PenStyle, paint_anchors, paint_c
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{BezPath, Point};
 use craft_ui::canvas::{ToolAction, ToolContext, ToolPointer};
-use craft_ui::primitives::{Dashes, Draw, StrokeWidth};
+use craft_ui::primitives::{Dashes, Draw};
 use egui::Pos2;
 
 impl PenTool {
@@ -103,7 +103,7 @@ impl PenTool {
             && !draft.closed
         {
             let line = next_segment(draft, self.kept, view, pointer);
-            draw.dashed(&line, Dashes::new(look.dash, look.gap), StrokeWidth::Thin, look.line);
+            draw.dashed(&line, Dashes::new(look.dash, look.gap), look.preview_width, look.line);
         }
         paint_anchors(draw, look, view, draft);
         if let Some(pointer) = pointer
