@@ -498,9 +498,17 @@ fn a_responder_that_copies_the_issuers_name_does_not_answer_for_it() {
     let single = der::seq(&[&cert_id, &revoked, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
     let by_key = der::tlv(tag::ctx(2), &der::octets(&DigestAlg::Sha1.digest(&[&impostor.public_key.key_bits()])));
     // RFC 6960's `[0] EXPLICIT SEQUENCE OF Certificate`, and the certificate directly in `[0]`.
-    for certs in [der::explicit(0, &der::seq(&[&impostor.raw])), der::explicit(0, &impostor.raw)] {
+    for certs in [
+        der::explicit(0, &der::seq(&[&impostor.raw])),
+        der::explicit(0, &impostor.raw),
+        // An unreadable entry must not hide the first readable certificate; later entries
+        // must not replace it. Parsing it still does not authorize the impostor.
+        der::explicit(0, &der::seq(&[&der::seq(&[]), &impostor.raw, &issuer.raw])),
+    ] {
         let forged = OcspResponse::parse(&signed_ocsp(&key, &by_key, Some(&certs), &single, this)).unwrap();
         assert_eq!(forged.check(issuer, issuer, mid_june()), RevocationStatus::Unknown);
+        // Rejection must follow verification policy, not failure to read the embedded certificate.
+        assert_eq!(forged.into_parts().responder_cert.map(|cert| cert.raw), Some(impostor.raw.clone()));
     }
 }
 
@@ -808,5 +816,58 @@ fn verifies_ecdsa_on_p521_and_the_brainpool_curves() {
         // The digest named by the algorithm identifier may be shorter than the curve (SHA-256 on
         // P-521 etc.): that is a different digest, so it must not verify this signature.
         assert!(!key.verify(Scheme::Ecdsa, alg, &digest[..digest.len() / 2], &sig).unwrap(), "{name}: short digest");
+    }
+}
+
+#[test]
+fn parsed_parts_preserve_owned_bytes_and_unverified_fields() {
+    use craft_pkcs7::revocation::{CertStatus, ResponderId};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let cert = craft_pkcs7::x509::Certificate::parse(&id.certificate.raw).unwrap();
+    let raw_pointer = cert.raw.as_ptr();
+    let expected = cert.clone();
+    let parts = cert.into_parts();
+    assert_eq!(parts.raw.as_ptr(), raw_pointer);
+    assert_eq!(parts.raw, expected.raw);
+    assert_eq!(parts.subject, expected.subject);
+    assert_eq!(parts.issuer, expected.issuer);
+    assert_eq!(parts.public_key, expected.public_key);
+    assert_eq!(parts.serial, expected.serial);
+    let der = der::Tlv::parse_all(&parts.raw).unwrap().children().unwrap();
+    assert_eq!(parts.tbs, der[0].raw);
+    assert_eq!(parts.sig_alg, der[1].raw);
+    assert_eq!(parts.signature, der[2].bits().unwrap());
+    let this = mid_june();
+    let bytes = crl(&id, Some((&id.certificate.serial, this)), this, this);
+    let crl = CertificateList::parse(&bytes).unwrap();
+    let revoked_pointer = crl.revoked.as_ptr();
+    let parts = crl.into_parts();
+    assert_eq!(parts.revoked.as_ptr(), revoked_pointer);
+    assert_eq!(parts.revoked, vec![(id.certificate.serial.iter().copied().skip_while(|b| *b == 0).collect(), this)]);
+    assert_eq!(parts.this_update, this);
+    assert_eq!(parts.next_update, Some(this));
+    assert_eq!(parts.issuer_raw, id.certificate.subject.raw);
+    let der = der::Tlv::parse_all(&bytes).unwrap().children().unwrap();
+    assert_eq!(parts.tbs, der[0].raw);
+    assert_eq!(parts.sig_alg, der[1].raw);
+    assert_eq!(parts.signature, der[2].bits().unwrap());
+    for status in [RevocationStatus::Good, RevocationStatus::Unknown, RevocationStatus::Revoked { at: this }] {
+        let response = OcspResponse::parse(&ocsp(&id, status.clone(), this, this)).unwrap();
+        let responses_pointer = response.responses.as_ptr();
+        let parts = response.into_parts();
+        assert_eq!(parts.responses.as_ptr(), responses_pointer);
+        assert!(matches!(&parts.responder_id, ResponderId::ByName(name) if *name == id.certificate.subject.raw));
+        assert!(parts.responder_cert.is_none());
+        let (cert_id, parsed, date, next) = parts.responses.into_iter().next().unwrap().into_parts();
+        assert_eq!(cert_id, craft_pkcs7::revocation::CertId::build(&id.certificate, &id.certificate, DigestAlg::Sha1));
+        assert_eq!((date, next), (this, Some(this)));
+        assert_eq!(
+            parsed,
+            match status {
+                RevocationStatus::Good => CertStatus::Good,
+                RevocationStatus::Unknown => CertStatus::Unknown,
+                RevocationStatus::Revoked { at } => CertStatus::Revoked(at),
+            }
+        );
     }
 }
