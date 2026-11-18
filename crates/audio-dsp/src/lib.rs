@@ -105,9 +105,13 @@ pub struct ParamSpec {
     pub id: &'static str,
     /// Human-readable label.
     pub name: &'static str,
+    /// Lowest value [`ParamSpec::sanitize`] keeps.
     pub min: f32,
+    /// Highest value [`ParamSpec::sanitize`] keeps.
     pub max: f32,
+    /// Value a new effect starts with, and the value NaN is read as.
     pub default: f32,
+    /// Unit the value is in.
     pub unit: Unit,
     /// Hint that the control should be logarithmic (frequencies, times).
     pub log_scale: bool,
@@ -248,15 +252,21 @@ pub trait AudioEffect: Send {
 /// The host's transport at the start of a block, for tempo-synced effects and instruments.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Transport {
+    /// Whether the timeline is playing.
     pub playing: bool,
+    /// Whether the host is recording.
     pub recording: bool,
     /// Quarter notes per minute.
     pub tempo: f64,
+    /// Beats per bar, the upper number of the time signature.
     pub numerator: u32,
+    /// Note value of one beat, the lower number of the time signature (4 for a quarter note).
     pub denominator: u32,
-    /// Timeline position.
+    /// Timeline position of the block's first frame, in samples.
     pub samples: i64,
+    /// The same position in seconds.
     pub seconds: f64,
+    /// The same position in quarter notes.
     pub quarters: f64,
     /// Start of the current bar, in quarter notes, and its number (0 for the first bar).
     pub bar_start: f64,
@@ -265,13 +275,20 @@ pub struct Transport {
 
 /// Note and transport input of an instrument or tempo-synced effect. Every call refers to the
 /// next processed block; `offset` is a frame within it. Calls never allocate.
+///
+/// Callers keep `offset` below the frame count of the next block. The trait does not define what
+/// an implementation does with a larger offset.
 pub trait EventInput {
     /// The transport for the next block.
     fn set_transport(&mut self, transport: &Transport);
+    /// Starts `note`, a MIDI 1.0 key number from 0 to 127 (60 is middle C), at `velocity` from 1
+    /// to 127. Callers send a MIDI note-on with velocity 0 as [`EventInput::note_off`].
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8);
+    /// Releases `note`, a MIDI 1.0 key number from 0 to 127.
     fn note_off(&mut self, offset: usize, note: u8);
     /// Any other MIDI 1.0 channel message (control change, pitch bend, pressure, program change).
     fn midi(&mut self, offset: usize, message: [u8; 3]);
+    /// Releases every sounding note at the start of the next block.
     fn all_notes_off(&mut self);
 }
 

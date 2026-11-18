@@ -31,6 +31,7 @@ impl FilterType {
         FilterType::Notch,
         FilterType::BandPass,
     ];
+    /// The entry of [`FilterType::ALL`] at `i`; an index past the end gives the last entry.
     pub fn from_index(i: usize) -> FilterType {
         Self::ALL[i.min(Self::ALL.len() - 1)]
     }
@@ -39,10 +40,15 @@ impl FilterType {
 /// Normalized biquad coefficients (`a0 == 1`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Coeffs {
+    /// Feed-forward coefficient of the input sample.
     pub b0: f64,
+    /// Feed-forward coefficient of the input one sample back.
     pub b1: f64,
+    /// Feed-forward coefficient of the input two samples back.
     pub b2: f64,
+    /// Feedback coefficient of the output one sample back.
     pub a1: f64,
+    /// Feedback coefficient of the output two samples back.
     pub a2: f64,
 }
 
@@ -128,9 +134,13 @@ pub struct Biquad {
 }
 
 impl Biquad {
+    /// A section with zero state.
     pub const fn new() -> Self {
         Biquad { s1: 0.0, s2: 0.0 }
     }
+    /// Filters one sample `x` through `c` and returns the output sample. A state value whose
+    /// magnitude is below 1e-30 or that is not finite is stored as zero, so a NaN or infinite
+    /// input sample makes that one output non-finite and leaves the state at zero.
     #[inline(always)]
     pub fn tick(&mut self, c: &Coeffs, x: f64) -> f64 {
         let y = c.b0 * x + self.s1;
@@ -138,6 +148,7 @@ impl Biquad {
         self.s2 = flush(c.b2 * x - c.a2 * y);
         y
     }
+    /// Sets the state back to zero.
     pub fn reset(&mut self) {
         *self = Biquad::new();
     }
