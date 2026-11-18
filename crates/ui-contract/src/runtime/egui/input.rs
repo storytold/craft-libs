@@ -679,10 +679,12 @@ pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
     scale_wheel(&mut input.events, wheel);
     let os = crate::runtime::windows::os_of(ctx);
     let macos = os == Os::Mac;
+    // A chord a component claims or a capture holds goes to its owner before Alt-code entry.
+    let claimed = crate::runtime::keys::claims_press(ctx, input);
     let events = &mut input.events;
     PerViewport::<RawState>::with(ctx, input.viewport_id, |state| {
         // On macOS Option+digit types its own characters (¡ ™ £…): there is no Alt code there.
-        state.alt_code_ended = !macos && super::alt_code::fold(&mut state.alt_code, events, pages, os);
+        state.alt_code_ended = !macos && super::alt_code::fold(&mut state.alt_code, events, pages, os, &claimed);
     });
     cap_text(&mut input.events);
     let events = &mut input.events;

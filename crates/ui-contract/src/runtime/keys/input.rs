@@ -133,6 +133,9 @@ impl Strip<'_> {
                         press.text = Some(batch.texts.len());
                     }
                 }
+                if text == "й" {
+                    eprintln!("DIAG an_alt_numpad_code_types_its_character_once: text {text:?} claimed {claimed}");
+                }
                 // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
                 batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts) });
                 batch.egui_texts += 1;
@@ -466,8 +469,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let latin = &input.latin_layout_chars;
     let bound = |chord: &Chord| commands::holder(ctx, chord).is_some();
     let (batch, visible, later) = with(ctx, viewport, |stage| {
-        let mut claims = focused_claims(&record, stage);
-        claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
+        let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
         stage.layout.set_latin(input.keyboard_layout_is_latin);
         let strip = Strip {
@@ -524,6 +526,30 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         stage.batch = batch;
     });
     (trimmed || events.len() != before, later)
+}
+
+/// The chords the key stage takes as claimed (`PressUse::Claimed`): the focused component's (`focused_claims`) and
+/// every capture's.
+fn stage_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
+    let mut claims = focused_claims(record, stage);
+    claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
+    claims
+}
+
+/// Whether the key stage of `input`'s viewport will take a press as a claimed chord (`PressUse::Claimed`), read before
+/// the stage runs in the same hook call: the raw-input step leaves such an Alt+digit to its owner instead of folding it
+/// into an Alt code (`alt_code::fold`).
+pub(crate) fn claims_press(ctx: &Context, input: &RawInput) -> impl Fn(&egui::Event) -> bool + use<> {
+    let viewport = input.viewport_id;
+    let os = crate::runtime::windows::os_of(ctx);
+    let record = focus::record(ctx, viewport);
+    let (claims, mut layout) = with(ctx, viewport, |stage| (stage_claims(&record, stage), stage.layout.clone()));
+    layout.set_latin(input.keyboard_layout_is_latin);
+    let latin = input.latin_layout_chars.clone();
+    move |event: &egui::Event| match raw_input::key_event(event, os, &latin) {
+        KeyEvent::Press { input: pressed, .. } => claims.iter().any(|chord| layout.matches(chord, &pressed, os)),
+        _ => false,
+    }
 }
 
 /// Updates the keys held after `event`: a press adds its key, a release removes it, and the window losing focus

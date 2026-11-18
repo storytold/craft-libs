@@ -39,8 +39,10 @@ struct Echo {
 /// come from: on Windows (a browser on Windows too) the platform composes the code itself and sends its character
 /// after the Alt release. Returns whether an Alt release in `events` ended a hold in which digits were typed (a code,
 /// or one a focus loss dropped), so the key stage does not take it for a lone Alt. The caller does not call it on macOS, where Option+digit types its own characters.
-
-pub(crate) fn fold(entry: &mut AltCodeEntry, events: &mut Vec<Event>, pages: AltCodePages, os: Os) -> bool {
+///
+/// `claimed` tells whether the key stage takes a press as a chord a component claims or a capture holds: such an
+/// Alt+digit is its owner's, as an app's shortcut goes before Alt-code entry, and it ends the entry like any other key.
+pub(crate) fn fold(entry: &mut AltCodeEntry, events: &mut Vec<Event>, pages: AltCodePages, os: Os, claimed: &dyn Fn(&Event) -> bool) -> bool {
     let composes = os == Os::Windows;
     let mut ended = false;
     let mut out = Vec::with_capacity(events.len() + 1);
@@ -49,7 +51,7 @@ pub(crate) fn fold(entry: &mut AltCodeEntry, events: &mut Vec<Event>, pages: Alt
             Event::Key { key, pressed: true, repeat, modifiers, .. } => {
                 entry.swallow_text = false;
                 entry.echo = None;
-                match digit(*key).filter(|_| alt_only(modifiers)) {
+                match digit(*key).filter(|_| alt_only(modifiers) && !claimed(&event)) {
                     Some(d) => {
                         // A held digit's auto-repeat adds nothing, as on Windows.
                         if !*repeat && entry.code.len() < MAX_DIGITS {
@@ -81,7 +83,11 @@ pub(crate) fn fold(entry: &mut AltCodeEntry, events: &mut Vec<Event>, pages: Alt
                         // it replaces ours, which was typed just before with no key or click since; above 255 ours
                         // stays (Windows reduces the code to a byte, Word types the Unicode character).
                         if echo.byte_code && text.chars().count() == 1 {
-                            out.push(Event::Key { key: Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+                            // A whole Backspace tap: its release ends it before the text, so the key stage reads the
+                            // text as typed on its own and not as the text of a press the keymap binds.
+                            for pressed in [true, false] {
+                                out.push(Event::Key { key: Key::Backspace, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+                            }
                             out.push(event);
                         }
                         continue;

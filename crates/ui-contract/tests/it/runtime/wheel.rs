@@ -227,7 +227,17 @@ fn speed_steps(os: Os, speed: WheelSpeed) -> [Took; 4] {
     let rerun = Cell::new(false);
     let mut show = |ui: &mut egui::Ui| {
         register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))).vertical(true).zoom(true));
-        seen.borrow_mut().extend(take_share(ui.ctx(), view));
+        let share = take_share(ui.ctx(), view);
+        if let Some(share) = &share {
+            eprintln!(
+                "DIAG the_users_wheel_speed_scales_each_delta_once_and_leaves_zoom_alone: {os:?} {speed:?} frame {} pass {} zoom {} scroll {:?}",
+                ui.ctx().cumulative_frame_nr(),
+                ui.ctx().current_pass_index(),
+                share.zoom,
+                share.scroll
+            );
+        }
+        seen.borrow_mut().extend(share);
         if rerun.get() && ui.ctx().current_pass_index() == 0 {
             ui.ctx().request_discard("the wheel frame runs twice");
         }
