@@ -1,12 +1,15 @@
 //! [`HyperlinkDialog`] (Insert › Link, Insert Hyperlink): link to a web address, an email address or a place in the
 //! document (a slide, a heading, a bookmark), the text to display, a ScreenTip, and the Highlight click option.
 
-use craft_behavior::{IconId, Selection, keyed};
+use std::borrow::Cow;
+use std::cell::RefCell;
+
+use craft_behavior::{DisplayOrder, IconId, ItemSource, Selection};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Bind, FieldLayout, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SideLabel, Sizing,
 };
-use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
@@ -60,7 +63,8 @@ pub enum LinkTarget {
     },
     /// The top of the document.
     Top,
-    /// A place in the document: the index into the places given to [`HyperlinkDialog::places`].
+    /// A place in the document: an index over the places of every group given to [`HyperlinkDialog::place_groups`],
+    /// in group order; title rows are not counted (`[Headings: Intro, Method] [Bookmarks: fig1]`: fig1 is `Place(2)`).
     Place(usize),
 }
 
@@ -169,7 +173,9 @@ enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Spot {
     Top,
-    /// An index into the dialog's places.
+    /// The title row of the group at this index; a section of the list, never selected.
+    Heading(usize),
+    /// An index over the places of every group, in group order.
     Place(usize),
 }
 
@@ -238,7 +244,7 @@ impl Form {
 struct Given {
     current: CurrentLink,
     text: Option<String>,
-    places: Vec<String>,
+    groups: Vec<LinkPlaceGroup>,
     highlight: bool,
     seed: Form,
 }
@@ -254,7 +260,9 @@ impl Given {
             }),
             Mode::Place => match form.place()? {
                 Spot::Top => Some(LinkTarget::Top),
-                Spot::Place(place) => (place < self.places.len()).then_some(LinkTarget::Place(place)),
+                Spot::Place(place) => (place < self.groups.iter().map(|group| group.places.len()).sum::<usize>()).then_some(LinkTarget::Place(place)),
+                // A title row is a section of the list: it is never the selection.
+                Spot::Heading(_) => None,
             },
         }
     }
@@ -298,8 +306,9 @@ const REMOVE: usize = 2;
 ///
 /// - Link to: the three targets as a radio group at the left; a new link's address starts at `https://`. Address,
 ///   Email address, Subject, Text to display and ScreenTip are text fields.
-/// - Place in This Document lists Top of the Document, then [`places`](Self::places), in a list (one Tab stop, the
-///   list keys, type-ahead). Top is [`LinkTarget::Top`]; `places` holds only the named places.
+/// - Place in This Document lists Top of the Document, then each of the [`place_groups`](Self::place_groups) as a
+///   title row with its places under it, in a list (one Tab stop, the list keys, type-ahead; a title row is not
+///   selectable). Top is [`LinkTarget::Top`]; the groups hold only the named places.
 /// - With [`CurrentLink::Mixed`] or [`CurrentLink::Other`] the fields start empty and OK answers
 ///   [`HyperlinkAnswer::Keep`] until a target differs from the seed.
 /// - Keys: Enter is OK unless a field owns it, Escape is Cancel. Remove Link shows while a link is edited.
@@ -308,8 +317,10 @@ pub struct HyperlinkDialog {
     given: Given,
     form: Form,
     open: bool,
-    #[allow(dead_code)] // P3(dialogs-w4): dg.F24
     parts: HyperlinkParts,
+    /// OK files its answer for the app instead of closing ([`held_ok`](Self::held_ok)).
+    hold: bool,
+    held: HeldAnswer<HyperlinkAnswer>,
 }
 
 /// One place in the document a link may go to.
@@ -325,8 +336,7 @@ pub struct LinkPlace {
 impl LinkPlace {
     /// A place named `name` at nesting `level`.
     pub fn new(name: impl Into<String>, level: u8) -> Self {
-        let _ = (name.into(), level);
-        todo!("dg.F24")
+        LinkPlace { name: name.into(), level }
     }
 }
 
@@ -343,8 +353,7 @@ pub struct LinkPlaceGroup {
 impl LinkPlaceGroup {
     /// A group of `places` under `title`.
     pub fn new(title: impl Into<Label>, places: Vec<LinkPlace>) -> Self {
-        let _ = (title.into(), places);
-        todo!("dg.F24")
+        LinkPlaceGroup { title: title.into(), places }
     }
 }
 
@@ -365,27 +374,21 @@ impl HyperlinkDialog {
     pub fn new(current: CurrentLink, text: Option<String>) -> Self {
         let form = Form::of(&current, text.as_deref());
         HyperlinkDialog {
-            given: Given { current, text, places: Vec::new(), highlight: false, seed: form.clone() },
+            given: Given { current, text, groups: Vec::new(), highlight: false, seed: form.clone() },
             form,
             open: true,
             parts: HyperlinkParts::default(),
+            hold: false,
+            held: HeldAnswer::new(),
         }
     }
 
-    /// The places in the document a link may go to, after Top of the Document (which the dialog always lists, as
-    /// [`LinkTarget::Top`]).
+    /// The places in the document a link may go to, in groups under a heading each, after Top of the Document (which
+    /// the dialog always lists, as [`LinkTarget::Top`]). [`LinkTarget::Place`] indexes the places in group order.
     #[must_use]
-    pub fn places(mut self, places: Vec<String>) -> Self {
-        self.given.places = places;
+    pub fn place_groups(mut self, groups: Vec<LinkPlaceGroup>) -> Self {
+        self.given.groups = groups;
         self
-    }
-
-    /// The places in the document a link may go to, in groups under a heading each, after Top of the Document.
-    /// [`LinkTarget::Place`] indexes the places in group order.
-    #[must_use]
-    pub fn place_groups(self, groups: Vec<LinkPlaceGroup>) -> Self {
-        let _ = groups;
-        todo!("dg.F24")
     }
 
     /// Which parts of the dialog show.
@@ -404,41 +407,63 @@ impl HyperlinkDialog {
 
     /// Shows the dialog.
     pub fn show(&mut self, ui: &mut Ui) -> HyperlinkOutput {
-        let HyperlinkDialog { given, form, open, .. } = self;
+        let HyperlinkDialog { given, form, open, parts, hold, held } = self;
         let env = Env::of(ui);
         let words = env.words::<HyperlinkWords>();
         let common = env.words::<CommonWords>();
         let editing = matches!(given.current, CurrentLink::One(_));
         let title = if editing { words.edit_title.clone() } else { words.title.clone() };
-        let valid = std::cell::Cell::new(given.answer(form).is_some());
-        let mut buttons =
-            vec![FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
+        let waiting = held.is_waiting();
+        let refused = held.refusal().map(|(reason, answer)| (reason.clone(), answer.clone()));
+        // What OK would answer with the fields as the body left them; `None` while they name no target.
+        let current = RefCell::new(given.answer(form));
+        let mut buttons = vec![
+            FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(*hold),
+            FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
+        ];
         if editing {
             buttons.push(FooterButton::new(words.remove.clone(), DialogRole::Destructive));
         }
-        let dialog = Dialog::new(title).side_buttons(true).buttons(buttons).initial_focus(Initial::Default).opened(Bind::bound(open)).settle_buttons(
-            |_, buttons| {
+        let dialog = Dialog::new(title)
+            .side_buttons(true)
+            .buttons(buttons)
+            .initial_focus(Initial::Default)
+            .opened(Bind::bound(open))
+            .refusal(|| refused.filter(|(_, answer)| current.borrow().as_ref() == Some(answer)).map(|(reason, _)| reason))
+            .settle_buttons(|_, buttons| {
                 if let Some(accept) = buttons.get_mut(OK) {
-                    accept.set_enabled(valid.get());
+                    accept.set_enabled(current.borrow().is_some() && !waiting);
                 }
-            },
-        );
+            });
         let given_ref = &*given;
+        let parts = *parts;
         let shown = dialog.show(ui, |ui, _| {
-            body(ui, given_ref, form, &words);
-            valid.set(given_ref.answer(form).is_some());
+            body(ui, given_ref, form, &words, parts);
+            *current.borrow_mut() = given_ref.answer(form);
         });
         let DialogOutput { response, closed, picked, .. } = shown.output;
-        let answer = match (closed, picked) {
-            (Some(CloseReason::Activated | CloseReason::Enter), Some(REMOVE)) if editing => Some(HyperlinkAnswer::Remove),
-            (Some(CloseReason::Activated | CloseReason::Enter), Some(OK)) => given.answer(form),
+        // A refusal ends with the edit that changes the refused answer.
+        if held.refusal().is_some_and(|(_, refused)| current.borrow().as_ref() != Some(refused)) {
+            held.clear_refusal();
+        }
+        let confirmed = matches!(closed, Some(CloseReason::Activated | CloseReason::Enter));
+        let answer = match picked {
+            Some(REMOVE) if editing && confirmed => Some(HyperlinkAnswer::Remove),
+            Some(OK) if confirmed && !*hold => given.answer(form),
             _ => None,
         };
+        if *hold
+            && picked == Some(OK)
+            && !waiting
+            && let Some(filed) = given.answer(form)
+        {
+            held.file(filed);
+        }
         HyperlinkOutput { response, closed, answer }
     }
 }
 
-fn body(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWords) {
+fn body(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWords, parts: HyperlinkParts) {
     Row::new().show(ui, |ui, _| {
         RadioGroup::new(words.link_to.clone(), Bind::bound(&mut form.mode)).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, cx| {
@@ -463,7 +488,9 @@ fn body(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWords) {
                     }
                     Mode::Place => place_list(ui, given, form, words),
                 }
-                text_field(ui, "tip", &words.screen_tip, &mut form.tooltip, false);
+                if parts != HyperlinkParts::NoScreenTip {
+                    text_field(ui, "tip", &words.screen_tip, &mut form.tooltip, false);
+                }
             });
             if given.highlight {
                 Checkbox::new(Bind::bound(&mut form.highlight_click)).label(words.highlight_click.clone()).show(ui);
@@ -480,10 +507,56 @@ fn text_field(ui: &mut Ui, salt: &'static str, label: &Label, value: &mut String
     });
 }
 
+/// The rows of the places list: Top of the Document, then each group's title row and its places. A place's index
+/// counts places only, across the groups in order, so it is the one [`LinkTarget::Place`] carries.
+struct PlaceSpots<'a> {
+    spots: Vec<Spot>,
+    places: Vec<&'a LinkPlace>,
+    top: &'a str,
+}
+
+impl<'a> PlaceSpots<'a> {
+    fn new(given: &'a Given, words: &'a HyperlinkWords) -> Self {
+        let mut spots = vec![Spot::Top];
+        let mut places = Vec::new();
+        for (at, group) in given.groups.iter().enumerate() {
+            spots.push(Spot::Heading(at));
+            for place in &group.places {
+                spots.push(Spot::Place(places.len()));
+                places.push(place);
+            }
+        }
+        PlaceSpots { spots, places, top: words.top_of_document.as_str() }
+    }
+}
+
+impl DisplayOrder<Spot> for PlaceSpots<'_> {
+    fn len(&self) -> usize {
+        self.spots.len()
+    }
+
+    fn key(&self, at: usize) -> Spot {
+        self.spots.get(at).copied().unwrap_or(Spot::Top)
+    }
+
+    fn is_section(&self, at: usize) -> bool {
+        matches!(self.spots.get(at), Some(Spot::Heading(_)))
+    }
+
+    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
+        match self.spots.get(at)? {
+            Spot::Top => Some(Cow::Borrowed(self.top)),
+            Spot::Place(place) => self.places.get(*place).map(|place| Cow::Borrowed(place.name.as_str())),
+            Spot::Heading(_) => None,
+        }
+    }
+}
+
+impl ItemSource<Spot> for PlaceSpots<'_> {}
+
 fn place_list(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWords) {
     Text::new(words.select_place.clone()).show(ui);
-    let spots: Vec<Spot> = std::iter::once(Spot::Top).chain((0..given.places.len()).map(Spot::Place)).collect();
-    let source = keyed(&spots, |spot: &Spot| *spot);
+    let source = PlaceSpots::new(given, words);
     List::new(words.select_place.clone())
         .select(SelectMode::Single)
         .type_ahead(true)
@@ -492,26 +565,33 @@ fn place_list(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWord
         .selection(Bind::bound(&mut form.place))
         .show_items(ui, &source, &mut |spot, _| match spot {
             Spot::Top => ListRow::new(words.top_of_document.clone()),
-            Spot::Place(place) => ListRow::new(given.places[*place].clone()),
+            // The spots are built from `given.groups`, so each index names an entry.
+            Spot::Heading(group) => ListRow::new(given.groups[*group].title.clone()).heading(),
+            // A place sits one step under its group's title row, and `level` steps more.
+            Spot::Place(place) => {
+                let place = source.places[*place];
+                ListRow::new(place.name.clone()).depth(usize::from(place.level) + 1)
+            }
         });
 }
 
 impl HyperlinkDialog {
-    /// OK files its answer for the app to accept or refuse before the dialog closes.
+    /// OK files its answer for the app to accept or refuse before the dialog closes. The dialog runs on the dialog
+    /// stack, which finishes it once the app accepted the answer.
     #[must_use]
-    pub fn held_ok(self) -> Self {
-        todo!("dg.F12")
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
     }
 
     /// The answer OK filed, once, for the app to judge.
     pub fn take_ok(&mut self) -> Option<HyperlinkAnswer> {
-        todo!("dg.F12")
+        self.held.take()
     }
 
     /// The app's answer to the filed answer: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        let _ = answer;
-        todo!("dg.F12")
+        self.held.answer(answer);
     }
 }
 
@@ -523,12 +603,32 @@ impl StackDialog for HyperlinkDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<HyperlinkAnswer>> {
+        if let Some(answer) = self.held.finish() {
+            return Some(DialogResult::Ok(answer));
+        }
         let shown = HyperlinkDialog::show(self, ui);
         shown.closed?;
         Some(shown.answer.map_or(DialogResult::Cancel, DialogResult::Ok))
     }
 
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
+    }
+
+    /// Answers OK as the button does. A held dialog files the answer for the app and answers none; once the app
+    /// accepted it, this answers it.
     fn confirm(&mut self, _: &Context) -> Option<HyperlinkAnswer> {
-        self.given.answer(&self.form)
+        if self.held.is_accepted() {
+            return self.held.finish();
+        }
+        if self.held.is_waiting() {
+            return None;
+        }
+        let answer = self.given.answer(&self.form)?;
+        if self.hold {
+            self.held.file(answer);
+            return None;
+        }
+        Some(answer)
     }
 }
