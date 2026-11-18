@@ -11,6 +11,8 @@
 //! - [`permissions`]: the allowlist, the refused list every app shares and the app's own.
 //! - [`bundle`]: the `.craftplugin` file, its SHA-256 and version comparison.
 //! - [`source`]: where an installed plug-in came from ([`Source`]) and its record, on every target.
+//! - [`reviewed`]: a bundle checked for the app and held until the person agrees ([`Reviewed`]),
+//!   plain data a worker thread hands to the UI.
 //! - [`store`] (native builds): the per-user `Plug-ins` folder. Apps install and list through
 //!   `Store::install_for` and `Store::list_for`, which check the target for them.
 //! - [`catalog`] and [`github`]: catalogs (`index.json`) and installing from a repository's
@@ -27,6 +29,7 @@ pub mod fetch;
 pub mod github;
 pub mod manifest;
 pub mod permissions;
+pub mod reviewed;
 pub mod sandbox;
 pub mod source;
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,6 +45,7 @@ pub use manifest::{
     Permissions, PluginCommand,
 };
 pub use permissions::{ALWAYS_DENIED, Policy, check_call, check_read_only};
+pub use reviewed::Reviewed;
 pub use sandbox::{
     ENTRY, Host, IMPORT_MODULE, IMPORT_MODULES, Instance, LEGACY_ENTRY, LEGACY_IMPORT_MODULE, Limits, PluginError, RunOutput, UiChange, check_module,
     run,
@@ -64,6 +68,8 @@ mod github_tests;
 mod manifest_tests;
 #[cfg(test)]
 mod permissions_tests;
+#[cfg(test)]
+mod reviewed_tests;
 #[cfg(test)]
 mod save_file_tests;
 #[cfg(test)]

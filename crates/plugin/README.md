@@ -48,7 +48,8 @@ store writes as `source.json`.
 | `github` | `parse_repo_spec`, `RepoRef` (`releases_api_url`), `parse_release`, `Release` (`bundle_asset`, `sums_asset`), `parse_sha256sums`, `plan_download`, `RepoDownload`, `verify_sha256`. |
 | `fetch` | `Fetch` (`get`, `read_local`), `fetch_catalog`, `download_release`, `resolve_repo`, `download_repo`, `read_location`, `read_local_file`, `follow_redirects`, `MAX_REDIRECTS`. |
 | `source` | `Source` (`File`, `Catalog`, `Github`, `Other`; `check`), `SourceRecord`: on every target. |
-| `store` | `Store` (`install_for`, `install_with_for`, `load_for`, `list_for`; `install`, `install_with`, `load`, `list`, `remove`), `Listing`, `Installed`, `Problem`, `plugins_dir`, `folder_name`; `Source` and `SourceRecord` again. |
+| `reviewed` | `Reviewed` (`new`, `new_with`, `check_sha256`): a bundle checked for the app and held, without a session, until the person agrees; on every target. |
+| `store` | `Store` (`install_for`, `install_with_for`, `install_reviewed_for`, `install_reviewed_with_for`, `load_for`, `list_for`; `install`, `install_with`, `load`, `list`, `remove`), `Listing`, `Installed`, `Problem`, `plugins_dir`, `folder_name`; `Source` and `SourceRecord` again. |
 | `widget` | FigCraft's widget descriptions (`WidgetRender`), which share the ABI. |
 
 ## The manifest
@@ -109,13 +110,13 @@ once per run or panel callback. The input is `{"api", "command", "params", "sele
 `event` and `values` from a panel). A trap, a refusal, a non-zero status or an exhausted budget is
 an `Err`, and the app rolls the document back.
 
-## Permissions
 "The selection" (`Host::selection` and the input's `selection`) is the app's own selection, as
 JSON in a shape the app documents: layer or node ids in FigCraft, object handles in CADCraft, A1
 ranges in GridCraft, clip ids in FilmCraft. An app with no selection returns `[]`. The crate passes
 it through unread; each app documents its shape in its `docs/plugins.md`, so plug-ins written for
 several apps know what each hands them.
 
+## Permissions
 
 Inside `Host::call`, before running anything:
 
@@ -124,9 +125,9 @@ use craft_plugin::{Policy, check_call, check_read_only};
 
 // Once: the app's own refused commands, and exceptions to them.
 let policy = Policy::new(&["doc.*", "version.*", "collab.*", "command.batch"], &["doc.list", "version.list"]);
-
 // An allowlist app refuses everything and lists what it allows, families included.
 let allowlist = Policy::new(&["*"], &["select.*", "shape.*", "doc.list"]);
+
 check_call(manifest, &policy, command)?; // ALWAYS_DENIED, the app's list, the manifest's allowlist
 check_read_only(manifest, command, registry_says_it_edits(command))?;
 ```
@@ -189,6 +190,9 @@ let (_, manifest) = bundle::open(&bytes)?;
 // … confirmation, saying "not in any catalog you use" when it isn't, then:
 store.install_for(&APP, &bytes, Source::Github { repo: plan.repo.slug(), tag: plan.repo.tag.clone().unwrap_or_default(), asset: plan.asset })?;
 
+// Or, on a worker thread, hold the checked bundle without a session (see below).
+let reviewed = craft_plugin::Reviewed::new(&APP, bytes, source)?;
+
 // The Plug-ins window: what this app runs, what it doesn't (and why), and damaged folders.
 let listing = store.list_for(&APP);
 ```
@@ -214,6 +218,27 @@ check each record against its folder and bundle; `list` reports damaged folders 
 
 An app's own kinds use `bundle::open_with`, `Bundle::check_with` and `Store::install_with_for` with
 their own module check (it gets the manifest, so one check can tell the kinds apart).
+
+### Holding a reviewed bundle
+
+A worker thread that downloads and checks a bundle hands the UI a `Reviewed { bytes, sha256,
+manifest, source, target }`: plain data (`Send`), no session or store in it. `Reviewed::new(&APP,
+bytes, source)` checks what `install_for` would (the source, the bundle and its module, the app's
+target) without writing; `Reviewed::new_with` takes an app's module check for its own kinds. The UI
+shows the confirmation from it and holds it keyed by `reviewed.sha256`. When the person agrees,
+`store.install_reviewed_for(&APP, reviewed, &agreed_sha256)` refuses it unless its bytes hash to the
+SHA-256 that was agreed to (and to `reviewed.sha256`), then installs exactly as `install_for` does,
+checking everything again. Adopting it is optional: an app's own hold that ends in `install_for`
+stays correct.
+
+```rust,ignore
+// Worker:
+let bytes = fetch::download_repo(&mut http, &plan)?;
+tx.send(craft_plugin::Reviewed::new(&APP, bytes, source))?;
+// UI, once the person agrees to `agreed`:
+let reviewed = held.remove(&agreed).ok_or("nothing held")?;
+store.install_reviewed_for(&APP, reviewed, &agreed)?;
+```
 
 ### Local catalogs and files
 
@@ -259,8 +284,9 @@ on HTTPS only). Bundles are pinned by SHA-256 and size whatever served them.
 ### Threads
 
 `fetch` blocks until its requests finish, and has no progress or cancelling of its own. Run the
-whole install (fetch, download, `bundle::open`) on a worker thread and send the result back to
-the UI, which shows the confirmation and then calls `install_for` (a quick local write). To
+whole install (fetch, download, `bundle::open`, or `Reviewed::new` for all of it) on a worker
+thread and send the result back to the UI, which shows the confirmation and then calls
+`install_for` or `install_reviewed_for` (a quick local write). To
 cancel, make the app's `Fetch` return an error once the person cancels; to show progress, report
 it from `Fetch::get`.
 

@@ -17,7 +17,8 @@
 //!
 //! An app installs with [`Store::install_for`] (or [`Store::install_with_for`] for its own kinds)
 //! and lists with [`Store::list_for`]: both check [`Manifest::target`] against the app, so another
-//! app's plug-in is never written and one the app no longer runs is listed apart.
+//! app's plug-in is never written and one the app no longer runs is listed apart. A bundle a worker
+//! thread checked and held as a [`Reviewed`] installs with [`Store::install_reviewed_for`].
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,7 @@ use sha2::{Digest, Sha256};
 use crate::bundle::{BUNDLE_EXTENSION, Bundle, MAX_BUNDLE_BYTES, ModuleCheck, check_command_module, open_with, sha256_hex};
 use crate::github::is_hex64;
 use crate::manifest::Manifest;
+use crate::reviewed::Reviewed;
 /// [`Source`] and [`SourceRecord`] live in [`crate::source`] (every target); named here too.
 pub use crate::source::{Source, SourceRecord};
 use crate::target::{AppInfo, Target};
@@ -129,6 +131,27 @@ impl Store {
         )?;
         let target = target.ok_or_else(|| "the plug-in's target wasn't checked".to_string())?;
         Ok((installed, target))
+    }
+
+    /// Install a bundle [`Reviewed::new`] checked (a worker thread's download, held until the
+    /// person agreed), refusing it unless its bytes hash to `expected_sha256`: the SHA-256 the
+    /// confirmation showed and the person agreed to ([`Reviewed::check_sha256`]). Then exactly
+    /// [`Store::install_for`]: the source, bundle and target are checked again before writing.
+    pub fn install_reviewed_for(&self, app: &AppInfo<'_>, reviewed: Reviewed, expected_sha256: &str) -> Result<(Installed, Target), String> {
+        self.install_reviewed_with_for(app, reviewed, expected_sha256, &check_command_module)
+    }
+
+    /// [`Store::install_reviewed_for`] for an app that runs its own kinds (pass the module check
+    /// given to [`Reviewed::new_with`]).
+    pub fn install_reviewed_with_for(
+        &self,
+        app: &AppInfo<'_>,
+        reviewed: Reviewed,
+        expected_sha256: &str,
+        check_module: &ModuleCheck,
+    ) -> Result<(Installed, Target), String> {
+        reviewed.check_sha256(expected_sha256)?;
+        self.install_with_for(app, &reviewed.bytes, reviewed.source, check_module)
     }
 
     /// Install a command plug-in's bundle without asking whether it was written for the app:
