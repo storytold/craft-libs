@@ -11,6 +11,9 @@ fn private_dir_is_owner_only_and_removed_on_drop() {
     let path = dir.path().to_path_buf();
     assert!(is_private_dir(&std::fs::symlink_metadata(&path).unwrap()));
     let (file_path, _file) = dir.create("a.txt").unwrap();
+    assert_eq!(file_path.file_name(), Some(std::ffi::OsStr::new("a.txt")), "the created path is the plain name, as asked");
+    assert_eq!(file_path.parent(), Some(path.as_path()), "the file is created inside the private folder");
+    assert!(std::fs::symlink_metadata(&file_path).is_ok(), "the file exists on disk on every platform");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

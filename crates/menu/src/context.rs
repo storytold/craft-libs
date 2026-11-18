@@ -26,7 +26,7 @@ use crate::model::{Builtin, Item, ItemKind, Node};
 /// AppKit's own items ([`Node::Standard`]) are left out. The chord of a row without a binding is the item's own
 /// shortcut, written for the shell's operating system.
 pub fn rows(ui: &mut Ui, nodes: &[Node]) {
-    Rows::new(Target::current()).show(ui, nodes);
+    Rows::new(Target::of_shell(Env::of(ui).view().shell())).show(ui, nodes);
 }
 
 /// How the rows of a menu are written: the target that names the shortcuts, the app's English labels and its

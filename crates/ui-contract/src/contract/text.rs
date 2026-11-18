@@ -420,7 +420,7 @@ pub(crate) fn run<C: Component>(
     let read_only = cx.core.resolved.read_only || !enabled;
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
-    let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
+    let held = cx.popup(EDIT_MENU).is_open_in(cx.core);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
     if std::mem::take(&mut state.select_all) {
         let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();

@@ -25,6 +25,12 @@ pub(super) fn footer_in_end(props: &ContainerProps) -> bool {
     props.end.is_some() && props.footer.is_some_and(|footer| footer.place.in_end())
 }
 
+/// Whether the body places the footer (`FooterPlace::Body`): the footer takes no band, and its size is inside the
+/// body's.
+pub(super) fn footer_in_body(props: &ContainerProps) -> bool {
+    props.footer.is_some_and(|footer| footer.place == FooterPlace::Body)
+}
+
 /// Whether the end region takes the full height under the header: it asks to, or the footer sits in it.
 pub(super) fn end_full_height(props: &ContainerProps) -> bool {
     props.end.is_some_and(|end| end.full_height) || footer_in_end(props)
@@ -354,7 +360,7 @@ impl<'b> BodyHooks<'b> {
         let inline = props.header.is_some_and(|header| header.inline);
         let (in_end, full) = (footer_in_end(props), end_full_height(props));
         let header_h = if props.header.is_some() { sizes.header.unwrap_or(Vec2::ZERO).y } else { 0.0 };
-        let footer_h = if props.footer.is_some() { sizes.footer.y } else { 0.0 };
+        let footer_h = if props.footer.is_some() && !footer_in_body(props) { sizes.footer.y } else { 0.0 };
         // A footer in the end region takes no band across the container: it stacks with the end region's content.
         let across_h = if in_end { 0.0 } else { footer_h };
         let end_h = sizes.end.map_or(0.0, |end| end.y) + if in_end { footer_h } else { 0.0 };
@@ -566,20 +572,26 @@ pub(super) fn shared_labels<R>(
     body: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     match columns {
-        LabelColumns::Own => {
-            let (result, scoped) = ColumnGroup::scope_measured(ui, sub(id, "labels"), seed, |ui, group| {
-                group.offer(room);
-                body(ui)
-            });
-            (found.extent, found.unsettled) = (scoped.extent, scoped.unsettled);
-            result
-        }
-        LabelColumns::Through { sized } => {
-            let (result, reached) = ColumnGroup::through(ui, sub(id, "through"), room, sized, body);
-            found.reached = reached;
-            result
-        }
+        LabelColumns::Own => own_labels(ui, id, (room, seed), found, body),
+        LabelColumns::Through { sized } => through_labels(ui, id, (room, sized), found, body),
         LabelColumns::Field => ColumnGroup::field(ui, body),
         LabelColumns::Apart => ColumnGroup::barrier(ui, body),
     }
+}
+
+/// The body's rows in a label group of their own, offered `room` and opened at the `seed` widths.
+fn own_labels<R>(ui: &mut Ui, id: Id, (room, seed): (f32, Option<Columns>), found: &mut LabelsFound, body: impl FnOnce(&mut Ui) -> R) -> R {
+    let (result, scoped) = ColumnGroup::scope_measured(ui, sub(id, "labels"), seed, |ui, group| {
+        group.offer(room);
+        body(ui)
+    });
+    (found.extent, found.unsettled) = (scoped.extent, scoped.unsettled);
+    result
+}
+
+/// The body's rows in the label group around the container.
+fn through_labels<R>(ui: &mut Ui, id: Id, (room, sized): (f32, bool), found: &mut LabelsFound, body: impl FnOnce(&mut Ui) -> R) -> R {
+    let (result, reached) = ColumnGroup::through(ui, sub(id, "through"), room, sized, body);
+    found.reached = reached;
+    result
 }

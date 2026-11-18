@@ -63,7 +63,8 @@ impl Lazy {
     /// - the pointer is over it or was in its last run, a press started on it, or it holds focus or held it;
     /// - an animation in it is not at its end, something in it asked for a repaint, or a wake time it asked for came;
     /// - a bound value it read was written;
-    /// - its place, room, clip or scale differs from its last run;
+    /// - its place, room, clip or scale differs from its last run, or its environment does: the theme, density, language
+    ///   or the window's active state;
     /// - its [`content`](Self::content) version differs from its last run;
     /// - the app asked for a repaint outside every settling child (`frame::request_repaint`), or a given value was
     ///   edited: the framework cannot see which children show that app data, so every child runs then;
@@ -126,7 +127,14 @@ impl Lazy {
             }
         }
         let layout = *ui.layout();
-        let place = Place { room: available, clip: ui.clip_rect(), layer: ui.layer_id(), layout, pixels_per_point: ctx.pixels_per_point() };
+        let place = Place {
+            room: available,
+            clip: ui.clip_rect(),
+            layer: ui.layer_id(),
+            layout,
+            pixels_per_point: ctx.pixels_per_point(),
+            env: Env::of(ui).key,
+        };
         if self.settles
             && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), self.content)
         {
