@@ -630,9 +630,12 @@ impl Cells<'_> {
             .into_iter()
             .map(|choice| {
                 let label = match choice {
-                    Interpolation::Bicubic => &words.bicubic,
+                    Interpolation::NearestNeighbor => &words.nearest_neighbor,
                     Interpolation::Bilinear => &words.bilinear,
-                    _ => &words.nearest_neighbor,
+                    Interpolation::BicubicSmoother => &words.bicubic_smoother,
+                    Interpolation::BicubicSharper => &words.bicubic_sharper,
+                    Interpolation::BicubicAutomatic => &words.bicubic_automatic,
+                    _ => &words.bicubic,
                 };
                 Entry::new(choice, label.clone())
             })

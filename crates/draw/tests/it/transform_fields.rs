@@ -327,3 +327,53 @@ fn the_position_first_link_stands_between_the_width_and_height_rows() {
         assert!((link.center().y - middle).abs() <= 1.0, "the link is centred across the two rows: {dump}");
     }
 }
+
+/// The bar's Interpolation select shows each of the six methods by its name.
+#[trial]
+fn the_interpolation_select_names_each_of_the_six_methods() {
+    use craft_draw::ui::transform::Interpolation;
+    let names = ["Nearest Neighbor", "Bilinear", "Bicubic", "Bicubic Smoother", "Bicubic Sharper", "Bicubic Automatic"];
+    for (choice, name) in Interpolation::ALL.into_iter().zip(names) {
+        let mut row = TransformRow::new(BoxState::from_rect(START), 0.0);
+        let (mut linked, mut held) = (true, choice);
+        let mut fixture = Fixture::new(move |ui| {
+            TransformFields::new("Transform", Bind::bound(&mut row), START, Bind::bound(&mut linked))
+                .bar()
+                .interpolation(Bind::bound(&mut held))
+                .show(ui);
+        });
+        fixture.settle();
+        let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+        assert_eq!(texts.last().map(String::as_str), Some(name), "{choice:?}: {texts:?}");
+    }
+}
+
+/// The Interpolation menu's six methods, in its order, and their ids and saved names.
+#[trial]
+fn the_menu_lists_the_six_methods_in_order_and_each_id_reads_back() {
+    let ids: Vec<&str> = craft_draw::ui::transform::Interpolation::ALL.iter().map(|choice| choice.id()).collect();
+    assert_eq!(ids, ["nearest", "bilinear", "bicubic", "bicubicSmoother", "bicubicSharper", "bicubicAutomatic"]);
+    for choice in craft_draw::ui::transform::Interpolation::ALL {
+        assert_eq!(craft_draw::ui::transform::Interpolation::from_id(choice.id()), Some(choice));
+    }
+    for unknown in ["", "Bicubic", "lanczos", "preserveDetails"] {
+        assert_eq!(craft_draw::ui::transform::Interpolation::from_id(unknown), None, "{unknown:?}");
+    }
+    assert_eq!(craft_draw::ui::transform::Interpolation::default(), craft_draw::ui::transform::Interpolation::Bicubic);
+}
+
+#[trial]
+fn saved_choices_keep_their_names() {
+    // The persisted settings store the serde name: the three earlier ones are unchanged.
+    for (choice, name) in [
+        (craft_draw::ui::transform::Interpolation::Bicubic, "\"bicubic\""),
+        (craft_draw::ui::transform::Interpolation::Bilinear, "\"bilinear\""),
+        (craft_draw::ui::transform::Interpolation::NearestNeighbor, "\"nearestNeighbor\""),
+        (craft_draw::ui::transform::Interpolation::BicubicSmoother, "\"bicubicSmoother\""),
+        (craft_draw::ui::transform::Interpolation::BicubicSharper, "\"bicubicSharper\""),
+        (craft_draw::ui::transform::Interpolation::BicubicAutomatic, "\"bicubicAutomatic\""),
+    ] {
+        assert_eq!(serde_json::to_string(&choice).ok().as_deref(), Some(name));
+        assert_eq!(serde_json::from_str::<craft_draw::ui::transform::Interpolation>(name).ok(), Some(choice));
+    }
+}
