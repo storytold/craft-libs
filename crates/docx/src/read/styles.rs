@@ -283,6 +283,15 @@ impl Reader<'_> {
             }
             t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
+            // Only a twips indent (`dxa`, the default) is a length: `nil` is no indent, and `pct`
+            // or `auto` have no meaning for an indent (ECMA-376 §17.4.50), so the style sets none.
+            // A `w:w` left out is 0 (`CT_TblWidth`), which still overrides a based-on style's.
+            t.indent = tp.child("w:tblInd").and_then(|e| match e.attr("w:type").unwrap_or("dxa") {
+                "dxa" if e.attr("w:w").is_none() => Some(0.0),
+                "dxa" => tw(e, "w:w").map(|i| i.clamp(-1584.0, 1584.0)),
+                "nil" => Some(0.0),
+                _ => None,
+            });
             t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).map(|n| n.min(1000));
             t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(u32_of).map(|n| n.min(1000));
         }

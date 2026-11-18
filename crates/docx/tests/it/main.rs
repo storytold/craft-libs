@@ -47,6 +47,7 @@ mod section_text_direction;
 mod section_valign;
 mod settings_merge;
 mod strict_drawings;
+mod table_style_indent;
 mod text_alignment;
 mod text_boxes;
 mod theme_font_slots;
