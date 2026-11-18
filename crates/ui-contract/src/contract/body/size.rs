@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use super::placement::overlay_of;
-use super::regions::{RegionSizes, end_full_height, footer_in_end};
+use super::regions::{RegionSizes, end_full_height, footer_in_body, footer_in_end};
 use super::scroll::scroll_of;
 use crate::contract::run::ShowAt;
 use crate::contract::{ContainerProps, Mount, PadEdges, ShellPane, Sizing};
@@ -219,6 +219,8 @@ impl<'b> BodyHooks<'b> {
     /// stacks with its content; a full-height end region stands beside the body and the footer.
     pub(super) fn regions_size(&self, props: &ContainerProps, body: Vec2, header: Vec2, footer: Vec2, end: Vec2) -> Vec2 {
         let in_end = footer_in_end(props);
+        // A footer the body places is inside the body's size.
+        let footer = if footer_in_body(props) { Vec2::ZERO } else { footer };
         let end = if in_end { Vec2::new(end.x.max(footer.x), end.y + footer.y) } else { end };
         let across = if in_end { Vec2::ZERO } else { footer };
         let gap = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };

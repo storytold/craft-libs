@@ -4,8 +4,8 @@ use super::inherit::{BodyScope, register_instances};
 use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
-    LabelColumns, LabelsFound, RegionFrame, RegionSizes, Regions, RuleBands, end_full_height, footer_in_end, footer_rule_under, gap_of,
-    header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
+    LabelColumns, LabelsFound, RegionFrame, RegionSizes, Regions, RuleBands, end_full_height, footer_in_body, footer_in_end, footer_rule_under,
+    gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{
@@ -25,7 +25,7 @@ use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
 use crate::runtime::egui::{alloc, areas, child, repaint, response, style};
-use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, Installed, Message, RowLine, ThemeScope};
+use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, FooterSlotOf, Installed, Message, RowLine, ThemeScope};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::{Driver, Presence, spec};
@@ -576,6 +576,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if !plan.real && plan.is_open && props.end.is_some() {
             self.end_step(comp, ui, cx, &mut plan);
         }
+        // A footer the body places is measured before the body, as the end region is.
+        if footer_in_body(&props) {
+            self.footer_slot_step(comp, ui, cx, &mut plan);
+        }
         // B2 label: the control gets the rect the label leaves; the label column adds to the container's extent.
         self.label_step(ui, env, cx, &mut plan);
         // B3 body, if open, under the body env; the gate is read after the header changed it.
@@ -1101,8 +1105,9 @@ impl BodyHooks<'_> {
             });
         }
         // A footer in the end region is part of a column sized from its content: a fill-width child takes its
-        // measured width there and shows across the column, so it never sets the column's width.
-        if footer_in_end(props) {
+        // measured width there and shows across the column, so it never sets the column's width. A footer the body
+        // places shows across its slot the same way.
+        if footer_in_end(props) || footer_in_body(props) {
             plan.footer_env = plan.region_env.derive_local(|scoped| scoped.content_column = true);
         }
         if plan.real {
@@ -1202,10 +1207,16 @@ impl BodyHooks<'_> {
         let (room, content_column, scroll, beside, label_width) =
             (plan.room, plan.content_column, plan.scroll, plan.regions.beside, plan.label_extra.x);
         let first_body = plan.first.1;
+        // The slot of a footer the body places takes the size the measuring run's footer took.
+        let footer_slot = footer_in_body(props)
+            .then(|| FooterSlotOf { owner: id, size: if real { self.measured_footer } else { self.footer_size.unwrap_or(Vec2::ZERO) } });
         plan.body_env = Some(plan.line_env.derive_local(|scoped| {
             self.scope_body(scoped, props, id, BodyScope { room, real, content_column, scroll, label_width, beside });
             scoped.inside_label = inside.map(|inside| inside as crate::runtime::env::Held);
             scoped.cell_fills = cell_fills;
+            if footer_slot.is_some() {
+                scoped.footer_slot = footer_slot;
+            }
             // A scrolling body shows its first child wherever the view is: the container has no first line there.
             scoped.first_line = (!real && scroll.is_none()).then_some(first_body);
         }));
@@ -1483,10 +1494,59 @@ impl BodyHooks<'_> {
         }
     }
 
-    /// B4: the footer region.
+    /// A footer the body places: a measuring run of an open body measures it before the body, in a content column of
+    /// unbounded room, so it takes its content's size and the slot takes that; the real run takes the size from the
+    /// measuring run's record and draws the footer in the slot after the body, in the footer step.
+    fn footer_slot_step<C: Container>(&mut self, comp: &mut C, ui: &mut Ui, cx: &mut Cx<'_, C>, plan: &mut BodyPlan<'_>) {
+        if plan.real {
+            crate::contract::footer_slot::clear(&plan.ctx, plan.id);
+            return;
+        }
+        if !plan.is_open {
+            return;
+        }
+        let at = Rect::from_min_size(plan.regions.body.min, Vec2::INFINITY);
+        let mut footer_ui = plan.frame().region(ui, "footer", at);
+        let share = plan.share(false);
+        let mut bcx = BodyCx::new(
+            plan.body_id,
+            plan.region_env.view(),
+            plan.resolved,
+            at,
+            &mut *cx.core.memory,
+            &mut plan.open,
+            plan.gate.as_mut(),
+            Some(share),
+        );
+        let installed = Env::install_for(&footer_ui, plan.footer_env.clone());
+        comp.footer(&mut footer_ui, &mut bcx);
+        Env::restore(&plan.ctx, installed);
+        plan.close = plan.close.or(bcx.close_requested());
+        self.footer_size = Some(self.region_size(&footer_ui));
+    }
+
+    /// B4: the footer region. A footer the body places is drawn at the slot the body showed, keeping the size it
+    /// measured before the body: it stretched to its cell, not to the footer.
     fn footer_step<C: Container>(&mut self, comp: &mut C, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, plan: &mut BodyPlan<'_>) {
         let props = plan.props;
-        let (mut footer_rect, offset) = self.place_footer(props, &mut plan.regions, plan.inner, plan.body_rect, plan.rtl);
+        let in_body = footer_in_body(props);
+        let slot = (in_body && plan.real).then(|| crate::contract::footer_slot::take(&plan.ctx, plan.id)).flatten();
+        if in_body {
+            debug_assert!(
+                !(plan.real && plan.is_open) || slot.is_some(),
+                "a container whose footer stands in its body (FooterPlace::Body) shows one FooterSlot in it"
+            );
+            if plan.real {
+                self.footer_size = Some(self.measured_footer);
+            }
+            if slot.is_none() {
+                return;
+            }
+        }
+        let (mut footer_rect, offset) = match slot {
+            Some(slot) => (slot, 0.0),
+            None => self.place_footer(props, &mut plan.regions, plan.inner, plan.body_rect, plan.rtl),
+        };
         // The region's size counts the rule's band, the gap and the inset (they are part of what the footer took), so
         // the content starts below the band and the gap and stays the inset away from the sides and the foot.
         let lead = props.footer.and_then(|footer| footer.gap).map_or(0.0, |gap| gap_of(&env.tokens, gap));
@@ -1497,6 +1557,10 @@ impl BodyHooks<'_> {
         footer_rect.min.x += inset;
         footer_rect.max.x = (footer_rect.max.x - inset).max(footer_rect.min.x);
         let mut footer_ui = plan.frame().region(ui, "footer", footer_rect);
+        // A footer in the body shows only where the body's view does.
+        if let (Some(_), Some(view)) = (slot, self.view) {
+            footer_ui.set_clip_rect(view.intersect(footer_ui.clip_rect()));
+        }
         let share = plan.share(false);
         let mut bcx = BodyCx::new(
             plan.body_id,
@@ -1521,7 +1585,9 @@ impl BodyHooks<'_> {
             took.y += lead + inset;
         }
         took.y += self.rules.footer;
-        self.footer_size = Some(took);
+        if slot.is_none() {
+            self.footer_size = Some(took);
+        }
     }
 
     /// The open and gate state the regions left, the scroll bars, the surface at the final rect and the rules.

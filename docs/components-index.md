@@ -15,6 +15,7 @@ Grouped by gallery level, then shape, then name.
 | `CropOverlay` | Leaf | `craft_ui_canvas::canvas::crop` | The crop frame of a document, edited by dragging it as Photoshop's Classic crop does (or moving and turning the image behind it in image mode) and by the keyboard |
 | `Divider` | Leaf | `craft_ui_widgets::display::divider` | A separator line in the divider colour, snapped to the pixel grid |
 | `FalloffPreview` | Leaf | `craft_ui_canvas::canvas_controls::brush::falloff` | A tip's falloff centred at a document point, with the circle of the brush's size round it: the preview a brush resize and a hover show |
+| `FooterSlot` | Leaf | `craft_ui_contract::contract::footer_slot` | The cell where a container whose footer stands in its body (`FooterPlace::Body`) draws that footer: a dialog's buttons in the cell its body's arrangement keeps for them, as the Color Picker keeps one above its second field group |
 | `Guides` | Leaf | `craft_ui_canvas::canvas_controls::guides` | The ruler guides of a canvas: drawn, taken by the pointer and moved with the keyboard |
 | `HeaderText` | Leaf | `craft_ui_contract::contract::items::header` | A header cell's label |
 | `HoverOutline` | Leaf | `craft_ui_canvas::canvas_controls::outline` | The outline of the object under the pointer: decoration over the canvas, drawn after the document and before the tool's own marks |
