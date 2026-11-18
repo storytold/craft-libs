@@ -187,14 +187,39 @@ fn decode_bitplanes<F>(
     stride: u32,
     bits_per_pixel: u32,
     max_cells: u64,
+    decode_next: F,
+) -> Result<Vec<u32>>
+where
+    F: FnMut(u32, &mut Bitmap) -> Result<()>,
+{
+    decode_bitplanes_within(
+        width,
+        height,
+        stride,
+        bits_per_pixel,
+        max_cells,
+        isize::MAX as u64,
+        decode_next,
+    )
+}
+
+/// Craft patch: `decode_bitplanes` with the most bytes the array of values may take. Both the
+/// byte check and the cell check run before the bitplane or the values are allocated.
+fn decode_bitplanes_within<F>(
+    width: u32,
+    height: u32,
+    stride: u32,
+    bits_per_pixel: u32,
+    max_cells: u64,
+    max_bytes: u64,
     mut decode_next: F,
 ) -> Result<Vec<u32>>
 where
     F: FnMut(u32, &mut Bitmap) -> Result<()>,
 {
+    let size = value_count(width, height, max_bytes)?;
     let mut bitplane = Bitmap::new(width, height, max_cells)?;
 
-    let size = value_count(width, height, isize::MAX as u64)?;
     // `GSVALS` - The decoded gray-scale image array.
     let mut values = vec![0_u32; size];
     let mut prev_plane = vec![0; bitplane.data.len()];
@@ -354,5 +379,26 @@ mod pdfcraft_limit_tests {
             Ok((1 << 15) * ((1 << 14) - 1)),
             "just under 2^31 bytes"
         );
+    }
+
+    /// Craft patch: `decode_bitplanes` refuses values past the byte limit before it decodes a
+    /// bitplane. The 32,768 by 16,384 grid is within a cell limit of 2^29 and takes 2^31 bytes of
+    /// values, past `isize::MAX` with 32-bit pointers.
+    #[test]
+    fn decode_bitplanes_refuses_values_past_the_byte_limit_before_decoding() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        let grids: [(u32, u32, u64); 2] =
+            [(64, 64, 64 * 64 * 4 - 1), (1 << 15, 1 << 14, i32::MAX as u64)];
+        for (width, height, max_bytes) in grids {
+            let stride = width.div_ceil(WORD_BITS);
+            let mut decoded = 0;
+            let result =
+                decode_bitplanes_within(width, height, stride, 1, 1 << 29, max_bytes, |_, _| {
+                    decoded += 1;
+                    Ok(())
+                });
+            assert_eq!(result.map(|_| ()), limit, "{width} by {height}");
+            assert_eq!(decoded, 0, "{width} by {height}: no bitplane is decoded");
+        }
     }
 }
