@@ -165,6 +165,7 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
             MenuBar::new("Main menu", titles).show(ui);
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle().idle(2);
     assert!(fixture.focused_stop().is_none(), "nothing holds the focus at the start");
     fixture.key(Key::F10, Modifiers::NONE);
