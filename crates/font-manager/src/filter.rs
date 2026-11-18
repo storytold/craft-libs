@@ -90,6 +90,13 @@ mod tests {
         assert!(serif_ja.contains(&"Noto Serif JP".to_owned()));
         assert!(!serif_ja.contains(&"Noto Sans JP".to_owned()));
 
+        // A family's tags decide its groups; its `categories` apply only without tags.
+        let script = search.families(&index, &Query { category: Some(Category::Script), ..Query::default() });
+        assert!(!script.is_empty());
+        assert!(script.iter().all(|&i| index.families()[i].tags.iter().any(|t| t.starts_with("Script/"))));
+        let slab = index.families().iter().find(|f| f.tags.iter().any(|t| t == "Serif/Slab")).unwrap();
+        assert!(categories(slab).any(|c| c == Category::Serif));
+
         let arabic = names(&Query { script: Some("Arab".into()), ..Query::default() });
         assert!(arabic.contains(&"Amiri".to_owned()));
         assert!(!arabic.contains(&"Roboto".to_owned()));

@@ -16,6 +16,8 @@ pub mod store;
 
 #[cfg(feature = "egui")]
 mod panel;
+#[cfg(feature = "egui")]
+mod script_autonyms;
 
 pub use craft_font_catalog;
 pub use craft_font_catalog::{Catalog, FaceInfo, FontEnv, Source};
