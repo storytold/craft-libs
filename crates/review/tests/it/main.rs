@@ -3,4 +3,4 @@
 mod annotate;
 mod collab;
 mod comments;
-mod note_popup;
+mod signature;

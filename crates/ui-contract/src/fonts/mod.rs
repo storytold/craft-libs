@@ -32,6 +32,9 @@ use crate::runtime::frame;
 use crate::runtime::layout_memory;
 use egui::{Context, FontDefinitions, FontFamily};
 
+/// The egui family name of [`FontRef::signature`]; the stack registers it in every build.
+const SIGNATURE_FAMILY: &str = "signature";
+
 /// A font handle: the family a run is set in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FontRef(FontFamily);
@@ -50,7 +53,7 @@ impl FontRef {
     /// The signature face: always a family egui knows. Its chain is the craft-fonts faces of the signature role,
     /// then the proportional chain; without one in the build, the proportional chain.
     pub fn signature() -> FontRef {
-        todo!("FM-PF1a")
+        FontRef::named(SIGNATURE_FAMILY)
     }
 
     /// A family registered under `name`.

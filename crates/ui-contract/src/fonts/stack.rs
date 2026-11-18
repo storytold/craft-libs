@@ -21,7 +21,9 @@
 //! first face's baseline, scaled down only if a glyph would leave the row ([`CjkRows::Fit`]).
 //! Monospace, and every family declared [`Family::monospaced`], always keeps its Latin face first. A
 //! craft face with the `mono` role (craft-fonts' monospace face) leads those families when the app
-//! embeds it, ahead of egui's Hack.
+//! embeds it, ahead of egui's Hack. The same way, a craft face with the `signature` role leads the
+//! [`FontRef::signature`] family, which every stack registers and which falls back to the
+//! proportional chain; no other family takes that face.
 //! On the suite's egui fork, the other craft faces and installed text faces used as fallbacks sit
 //! on the row's baseline and rows grow to fit them by themselves; emoji and symbol faces stay
 //! centred.
@@ -42,7 +44,7 @@ mod install;
 
 use std::sync::Arc;
 
-use craft_fonts_build::{EmbeddedFace, ServedFace};
+use craft_fonts_build::{EmbeddedFace, MONO_ROLE, SIGNATURE_ROLE, ServedFace};
 use craft_theme::InterfaceFont;
 use egui::{FontData, FontDefinitions, FontFamily, FontProvider};
 
@@ -71,7 +73,6 @@ pub struct Family {
     lead: Option<String>,
     monospaced: bool,
     /// The craft-fonts face role that leads the family's chain.
-    #[allow(dead_code)] // P3(pdf-forms-w1): FM-PF1a
     lead_role: Option<&'static str>,
 }
 
@@ -88,7 +89,13 @@ impl Family {
 
     /// egui's monospace family, e.g. to set its weight.
     pub fn monospace() -> Self {
-        Self::of(FontRef::monospace(), true)
+        Self { lead_role: Some(MONO_ROLE), ..Self::of(FontRef::monospace(), true) }
+    }
+
+    /// The family of [`FontRef::signature`], led by craft-fonts' signature face; it orders languages as the
+    /// proportional family does.
+    pub(crate) fn signature() -> Self {
+        Self { lead_role: Some(SIGNATURE_ROLE), ..Self::of(FontRef::signature(), false) }
     }
 
     fn of(family: FontRef, monospaced: bool) -> Self {
@@ -110,10 +117,11 @@ impl Family {
     }
 
     /// Lay the family out as egui's monospace one, e.g. `Family::named("mono").monospaced()` for
-    /// an app's own code face: its app face stays first in every UI language, and a family without
-    /// app faces starts with egui's monospace faces.
+    /// an app's own code face: its app face stays first in every UI language, a family without
+    /// app faces starts with egui's monospace faces, and craft-fonts' monospace face leads it.
     pub fn monospaced(mut self) -> Self {
         self.monospaced = true;
+        self.lead_role = Some(MONO_ROLE);
         self
     }
 }

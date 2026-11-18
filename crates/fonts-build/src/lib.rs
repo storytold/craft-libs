@@ -81,7 +81,8 @@ pub struct EmbeddedFace {
     /// The font file's bytes, from `include_bytes!`.
     pub bytes: &'static [u8],
     /// The manifest line's `role`: `Some("ui")` for an interface face ([`UI_ROLE`]), `Some("mono")` for the
-    /// monospace face ([`MONO_ROLE`]), `None` for a line without one.
+    /// monospace face ([`MONO_ROLE`]), `Some("signature")` for the signature face ([`SIGNATURE_ROLE`]), `None` for a
+    /// line without one.
     pub role: Option<&'static str>,
 }
 

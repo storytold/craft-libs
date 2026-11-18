@@ -1,6 +1,6 @@
 //! Building the chains: for each family, which faces come in which order.
 
-use craft_fonts_build::{EmbeddedFace, MONO_ROLE, ServedFace};
+use craft_fonts_build::{EmbeddedFace, SIGNATURE_ROLE, ServedFace};
 use craft_i18n::Han;
 use craft_theme::InterfaceFont;
 use egui::{FontData, FontDefinitions, FontFamily};
@@ -56,6 +56,12 @@ fn han_region(face: &EmbeddedFace) -> Option<Han> {
         "Kore" => Some(Han::Korean),
         _ => None,
     })
+}
+
+/// Whether `face` is craft-fonts' signature face, which draws only in the signature family's lead: as a fallback for a
+/// script it would set interface text in handwriting.
+fn signature_face(face: &EmbeddedFace) -> bool {
+    face.role == Some(SIGNATURE_ROLE)
 }
 
 /// `0` for the style a family of `weight` wants, `1` for an acceptable stand-in.
@@ -226,9 +232,10 @@ impl UiFonts<'_> {
         stack
     }
 
-    /// Proportional and Monospace, every family an app face names, then the declared families.
+    /// Proportional, Monospace and the signature family, every family an app face names, then the declared families.
     fn family_specs(&self) -> Vec<Family> {
-        let mut specs = vec![Family::proportional(), Family::monospace()];
+        // The signature family goes in every build: egui fails on a `FontFamily::Name` it doesn't know.
+        let mut specs = vec![Family::proportional(), Family::monospace(), Family::signature()];
         // With no face of its own for the interface, the app gets the suite's, whose semibold roles draw in Inter SemiBold.
         if !self.app_faces.iter().any(|face| face.families.contains(&FontFamily::Proportional)) {
             specs.push(Family::named(super::SEMIBOLD).weight(600));
@@ -278,8 +285,13 @@ impl UiFonts<'_> {
                 others.extend(self.candidates(script, han, weight));
             }
         }
-        let mut rest: Vec<(u8, usize)> =
-            self.craft_faces.iter().enumerate().filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i))).collect();
+        let mut rest: Vec<(u8, usize)> = self
+            .craft_faces
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| !signature_face(face))
+            .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
+            .collect();
         rest.sort();
         others.extend(rest.into_iter().map(|(_, i)| i));
 
@@ -296,21 +308,23 @@ impl UiFonts<'_> {
             .collect();
         base.splice(0..0, self.system_ui_slot(&family.family));
 
-        // craft-fonts' monospace face leads a monospaced family when the build embeds it; Hack follows as the fallback.
-        let mono: Vec<usize> = if family.monospaced {
-            let mut mono: Vec<(u8, usize)> = self
-                .craft_faces
-                .iter()
-                .enumerate()
-                .filter(|(_, face)| face.role == Some(MONO_ROLE))
-                .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
-                .collect();
-            mono.sort();
-            mono.into_iter().map(|(_, i)| i).collect()
-        } else {
-            Vec::new()
+        // The craft-fonts faces of the family's role lead it when the build embeds them (the monospace face ahead of
+        // Hack, the signature face ahead of the proportional chain).
+        let role_lead: Vec<usize> = match family.lead_role {
+            Some(role) => {
+                let mut led: Vec<(u8, usize)> = self
+                    .craft_faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, face)| face.role == Some(role))
+                    .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
+                    .collect();
+                led.sort();
+                led.into_iter().map(|(_, i)| i).collect()
+            }
+            None => Vec::new(),
         };
-        let mut configured = craft(mono);
+        let mut configured = craft(role_lead);
         configured.extend(craft(lead));
         if language_first {
             configured.extend(craft(language));
@@ -372,7 +386,7 @@ impl UiFonts<'_> {
             .craft_faces
             .iter()
             .enumerate()
-            .filter(|(_, face)| covers(face.scripts, script))
+            .filter(|(_, face)| covers(face.scripts, script) && !signature_face(face))
             .filter_map(|(i, face)| {
                 let style = style_rank(face, weight)?;
                 let region = if script == "Hani" { region_rank(han_region(face), han) } else { 0 };

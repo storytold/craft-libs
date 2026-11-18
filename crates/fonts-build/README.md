@@ -99,8 +99,9 @@ below), and `Embed::documents(&["Noto Sans", …])` only the families it names (
 `write` returns the embedded `ManifestEntry`s, for build-time checks such as "the interface face
 is present". The generated file is a slice expression of `EmbeddedFace { family, style, scripts,
 index, bytes, role }` literals; any struct with those fields and that name in scope works too.
-`role` is the manifest line's ninth field: `Some("ui")`, `Some("mono")` or `None`; craft-ui's font
-stack leads the Monospace family with the `mono` face. `EmbeddedFace` itself has `name()`,
+`role` is the manifest line's ninth field: `Some("ui")`, `Some("mono")`, `Some("signature")` or
+`None`; craft-ui's font stack leads the Monospace family with the `mono` face and the signature
+family (`FontRef::signature()`) with the `signature` face. `EmbeddedFace` itself has `name()`,
 `has_script(tag)`, `is_cjk()` and `weight()`.
 
 ## Document fonts
@@ -201,5 +202,6 @@ exact only for the catalogs it was cut to. It also reruns the build script when 
 One face per line, eight or nine fields separated by `" | "`; craft-fonts' `docs/integration.md`
 defines them. Lines starting with `#` are comments. A file field ending in `#<n>` names face `n` of
 a font collection (`fonts/noto-sans-cjk/NotoSansCJK.ttc#2`); without it the index is 0. The ninth
-field, `role`, is `ui` on interface faces, `mono` on the monospace face and absent elsewhere. Fields
+field, `role`, is `ui` on interface faces, `mono` on the monospace face, `signature` on the signature
+face and absent elsewhere. Fields
 after the ninth are ignored.
