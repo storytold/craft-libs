@@ -935,7 +935,7 @@ impl<'r> Builder<'r> {
                         ft.rows.retain(|r| !r.is_empty());
                     }
                     if !ft.rows.is_empty() {
-                        if !col_widths.is_empty() && ft.cols() <= MAX_TABLE_COLS {
+                        if col_widths.iter().any(Option::is_some) && ft.cols() <= MAX_TABLE_COLS {
                             let mut widths = vec![None; ft.cols()];
                             for (i, &cw) in col_widths.iter().take(ft.cols()).enumerate() {
                                 if let Some(w) = cw {

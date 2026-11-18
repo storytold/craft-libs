@@ -310,3 +310,62 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
     let pool = [i.cert.clone(), constrained_root.cert.clone()];
     assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
 }
+
+/// Standards-shaped evidence signed by a directly issued responder, not merely a parse fixture.
+#[test]
+fn delegated_ocsp_requires_the_issuer_signature_eku_and_response_signature() {
+    use craft_pkcs7::keys::DigestAlg;
+    use craft_pkcs7::revocation::{OcspResponse, RevocationStatus};
+
+    let issuer = root();
+    let leaf = end_entity("OCSP Leaf", &issuer);
+    let responder = signer_with("OCSP Responder", &issuer, &[extended_key_usage(&["1.3.6.1.5.5.7.3.9"])]);
+    let missing_eku = signer_with("No OCSP EKU", &issuer, &[]);
+    let wrong_eku = signer_with("Wrong OCSP EKU", &issuer, &[extended_key_usage(&[SERVER_AUTH])]);
+    // Same issuer name, different key: name equality alone must not authorize delegation.
+    let other_issuer = root();
+    let wrong_issuer = signer_with("Wrong Issuer", &other_issuer, &[extended_key_usage(&["1.3.6.1.5.5.7.3.9"])]);
+    let at = time(2026);
+    let hash = DigestAlg::Sha256;
+    let id = der::seq(&[
+        &hash.algorithm(),
+        &der::octets(&hash.digest(&[&leaf.cert.issuer.raw])),
+        &der::octets(&hash.digest(&[&issuer.key.public_key().key_bits()])),
+        &der::uint(&leaf.cert.serial),
+    ]);
+    let single = der::seq(&[&id, &der::tlv(tag::ctx_prim(0), &[]), &at.encode(), &der::explicit(0, &time(2027).encode())]);
+    let evidence = |responder: &Party, key: &PrivateKey, certs: &[u8], by_key: bool| {
+        let identity = if by_key {
+            der::explicit(2, &der::octets(&DigestAlg::Sha1.digest(&[&responder.key.public_key().key_bits()])))
+        } else {
+            der::explicit(1, &responder.name.raw)
+        };
+        let tbs = der::seq(&[&identity, &at.encode(), &der::seq(&[&single])]);
+        let signature = key.sign(hash, &tbs).unwrap();
+        let basic = der::seq(&[&tbs, &key.signature_algorithm(hash), &der::bit_string(&signature), certs]);
+        der::seq(&[&der::tlv(tag::ENUMERATED, &[0]), &der::explicit(0, &der::seq(&[&der::oid("1.3.6.1.5.5.7.48.1.1"), &der::octets(&basic)]))])
+    };
+    for by_key in [false, true] {
+        for (party, signing_key, expected) in [
+            (&responder, &responder.key, RevocationStatus::Good),
+            (&responder, &other_issuer.key, RevocationStatus::Unknown),
+            (&missing_eku, &missing_eku.key, RevocationStatus::Unknown),
+            (&wrong_eku, &wrong_eku.key, RevocationStatus::Unknown),
+            (&wrong_issuer, &wrong_issuer.key, RevocationStatus::Unknown),
+        ] {
+            let certs = der::explicit(0, &der::seq(&[&party.cert.raw]));
+            let response = OcspResponse::parse(&evidence(party, signing_key, &certs, by_key)).unwrap();
+            assert_eq!(response.check(&leaf.cert, &issuer.cert, at), expected);
+            // Even each rejected case must reach policy with a parsed responder certificate.
+            assert_eq!(response.into_parts().responder_cert.as_ref(), Some(&party.cert));
+        }
+        // Extra wrapper nesting is not recursively searched for a usable certificate.
+        let nested = der::explicit(0, &der::seq(&[&der::seq(&[&responder.cert.raw])]));
+        let response = OcspResponse::parse(&evidence(&responder, &responder.key, &nested, by_key)).unwrap();
+        assert_eq!(response.check(&leaf.cert, &issuer.cert, at), RevocationStatus::Unknown);
+        assert!(response.into_parts().responder_cert.is_none());
+        // A truncated DER child inside [0] is malformed, not missing evidence to trust.
+        let malformed = der::explicit(0, &[tag::SEQUENCE, 0x82, 0x01]);
+        assert!(OcspResponse::parse(&evidence(&responder, &responder.key, &malformed, by_key)).is_err());
+    }
+}

@@ -7,12 +7,40 @@
 //! read here. The block stays raw in the model and writes back unchanged. Came from EffectCraft's
 //! `effectcraft-psd`.
 
-use crate::descriptor::Descriptor;
+use crate::descriptor::{Descriptor, ParseLimits};
 use crate::engine_data::{self, TextStyle};
 use crate::error::Result;
 use crate::io::Reader;
 use crate::layer::LayerRecord;
 
+/// Raw text prefix of a `TySh` block, before the optional warp and bounds suffix.
+///
+/// Version fields are consumed without validation. Transform and descriptor numbers
+/// are retained without normalization; consumers choose their own interpretation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypeLayerPrefix {
+    /// Stored affine transform (xx, xy, yx, yy, tx, ty), including nonfinite values.
+    pub transform: [f64; 6],
+    /// Text descriptor, read using the caller's item limits.
+    pub descriptor: Descriptor,
+}
+
+impl TypeLayerPrefix {
+    /// Read the required header and text descriptor only. A missing or malformed
+    /// trailing warp/bounds suffix is ignored; truncated required fields are errors.
+    pub fn from_bytes_with_limits(data: &[u8], limits: ParseLimits) -> Result<Self> {
+        let mut r = Reader::new(data);
+        let _version = r.u16()?;
+        let mut transform = [0.0; 6];
+        for value in &mut transform {
+            *value = r.f64()?;
+        }
+        let _text_version = r.u16()?;
+        let _descriptor_version = r.u32()?;
+        let descriptor = Descriptor::read_with_limits(&mut r, limits)?;
+        Ok(Self { transform, descriptor })
+    }
+}
 /// What a type layer says: its text, where it sits and how its first style run looks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypeLayer {
@@ -32,19 +60,11 @@ pub struct TypeLayer {
 impl TypeLayer {
     /// Reads the data of a `TySh` block.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(data);
-        let _version = r.u16()?;
-        let mut transform = [0.0; 6];
-        for v in &mut transform {
-            *v = r.f64()?;
-        }
+        let TypeLayerPrefix { mut transform, descriptor } = TypeLayerPrefix::from_bytes_with_limits(data, ParseLimits::default())?;
         // A transform with NaN or infinity is unusable: fall back to the identity.
         if transform.iter().any(|v| !v.is_finite()) {
             transform = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
         }
-        let _text_version = r.u16()?;
-        let _descriptor_version = r.u32()?;
-        let descriptor = Descriptor::read(&mut r)?;
         let text = descriptor.get_text("Txt ").unwrap_or_default().replace("\r\n", "\n").replace('\r', "\n");
         let text = text.strip_suffix('\n').map(str::to_string).unwrap_or(text);
         let style = descriptor.get_raw_data("EngineData").map(|e| engine_data::first_style(&engine_data::parse_lossy(e))).unwrap_or_default();
@@ -148,6 +168,40 @@ mod tests {
         engine.truncate(keep.min(engine.len() - 4));
         let t = TypeLayer::from_bytes(&type_block([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], "x", Some(engine), None)).unwrap();
         assert_eq!(t.style.size, Some(12.0));
+    }
+
+    #[test]
+    fn raw_type_prefix_preserves_numbers_and_applies_explicit_limits() {
+        let mut data = Vec::new();
+        data.put_u16(999);
+        for value in [f64::NAN, 0.0, 0.0, 1.0, f64::INFINITY, -0.0] {
+            data.put_f64(value);
+        }
+        data.put_u16(999);
+        data.put_u32(999);
+        let d = Descriptor::new("TxLr")
+            .with("Txt ", Value::Text(UnicodeString::new("a\r\n")))
+            .with("nums", Value::List(vec![Value::Double(f64::NEG_INFINITY), Value::Integer(2)]));
+        d.write(&mut data);
+        let limits = ParseLimits { max_descriptor_items: 2, max_list_items: 2 };
+        for cut in 0..data.len() {
+            assert!(TypeLayerPrefix::from_bytes_with_limits(&data[..cut], limits).is_err(), "cut {cut}");
+        }
+        for suffix in [vec![], vec![255], vec![0; 6], vec![255; 40]] {
+            let mut bytes = data.clone();
+            bytes.extend(suffix);
+            let raw = TypeLayerPrefix::from_bytes_with_limits(&bytes, limits).unwrap();
+            assert!(raw.transform[0].is_nan());
+            assert_eq!(raw.transform[4], f64::INFINITY);
+            assert!(raw.transform[5].is_sign_negative());
+            assert_eq!(raw.descriptor.get_text("Txt "), Some("a\r\n".to_string()));
+            assert!(
+                matches!(raw.descriptor.get("nums"), Some(Value::List(v)) if matches!(v.first(), Some(Value::Double(x)) if *x == f64::NEG_INFINITY))
+            );
+            assert_eq!(TypeLayer::from_bytes(&bytes).unwrap().transform, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        }
+        assert!(TypeLayerPrefix::from_bytes_with_limits(&data, ParseLimits { max_descriptor_items: 1, ..limits }).is_err());
+        assert!(TypeLayerPrefix::from_bytes_with_limits(&data, ParseLimits { max_list_items: 1, ..limits }).is_err());
     }
 }
 
