@@ -141,7 +141,7 @@ impl<'a> MenuBarUi<'a> {
         let entries = move || entries_of(bar_model, english);
         let mut bar = Bar::new(env.words::<BarWords>().label.clone(), titles).keyboard(self.keyboard.unwrap_or(target != Target::Mac));
         if let Some(menu) = help {
-            bar = bar.help(MenuHelp::built(menu, &entries));
+            bar = bar.help(MenuHelp::new(menu, &entries));
         }
         MenuBarOutput { titles: bar.show(ui).titles }
     }

@@ -891,25 +891,24 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let anchor = members.first()?;
         let active = active.min(members.len() - 1);
-        let viewed = match at {
-            // The view draws in a child `Ui` held to the group's rect and clipped to it: it lays out in the group's
-            // room, never in the room the area has left.
-            GroupAt::Show(rect) => {
-                ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                    ui.shrink_clip_rect(rect);
-                    self.panels.group_view(members, active, ui, at, body)
-                })
-                .inner
-            }
-            GroupAt::Measure(_) => self.panels.group_view(members, active, ui, at, body),
-        };
-        if let Some(height) = viewed {
-            return matches!(at, GroupAt::Measure(_)).then_some(height);
+        if let GroupAt::Measure(_) = at
+            && let Some(height) = self.panels.group_view(members, active, ui, at, body)
+        {
+            return Some(height);
         }
         let shown = &members[active];
+        let content = self.panels.content(shown);
+        // A host view settles as a panel body does, under the shown panel's content version (`DockPanels::content`):
+        // it runs again when that version, the group's panels or the shown tab change.
+        let view_version = content.map(|content| {
+            use std::hash::Hasher;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (content, members, active).hash(&mut hasher);
+            hasher.finish()
+        });
         // The group settles when the host versions its specs and the shown body: it runs again when the pass's chrome
         // key, the body's version or how the group shows changes.
-        let version = scene.chrome.zip(self.panels.content(shown)).map(|(chrome, content)| {
+        let version = scene.chrome.zip(content).map(|(chrome, content)| {
             use std::hash::Hasher;
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             (chrome, content, members, active, look.minimized, look.section, look.in_window).hash(&mut hasher);
@@ -967,25 +966,49 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             GroupAt::Show(rect) => rect,
         };
         // One child `Ui` held to the group's rect, whether the group settles or not. It takes the parent's next id, as
-        // the group did before it settled, so a change of the group's first tab keeps every id inside; the Lazy is
-        // keyed by that id, unique among the groups of a dock in a scroll area too.
+        // the group did before it settled, so a change of the group's first tab keeps every id inside; each Lazy is
+        // keyed by its `Ui`'s id, unique among the groups of a dock in a scroll area too. The host view runs first and
+        // settles; where the host leaves the group to the dock, the group shows in its place and settles under its own
+        // version.
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                let lazy = Lazy::new(ui.unique_id(), 0.0).settles(version.is_some());
-                let lazy = match version {
-                    Some(version) => lazy.content(version),
-                    None => lazy,
+                let view = Lazy::new(ui.unique_id(), 0.0).settles(view_version.is_some());
+                let view = match view_version {
+                    Some(version) => view.content(version),
+                    None => view,
                 };
-                lazy.show(ui, |ui| {
-                    let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
-                    // `show_at` takes no room in flow; the run covers the group, so the pointer over it runs it again.
-                    ui.expand_to_include_rect(rect);
-                    output
-                })
+                view.show_or(
+                    ui,
+                    |ui| {
+                        // The view draws held to the group's rect and clipped to it: it lays out in the group's room,
+                        // never in the room the area has left.
+                        let taken = ui
+                            .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                                ui.shrink_clip_rect(rect);
+                                panels.borrow_mut().group_view(members, active, ui, at, body)
+                            })
+                            .inner;
+                        // The run covers the group, so the pointer over it runs the view again.
+                        taken.map(|_| ui.expand_to_include_rect(rect))
+                    },
+                    |ui| {
+                        let lazy = Lazy::new(ui.unique_id(), 0.0).settles(version.is_some());
+                        let lazy = match version {
+                            Some(version) => lazy.content(version),
+                            None => lazy,
+                        };
+                        lazy.show(ui, |ui| {
+                            let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
+                            // `show_at` takes no room in flow; the run covers the group, so the pointer over it runs it again.
+                            ui.expand_to_include_rect(rect);
+                            output
+                        })
+                    },
+                )
             })
             .inner;
-        // A settled group replayed its last run: nothing reached it.
-        let output = output?;
+        // A host view took the group, or a settled view or group replayed its last run: nothing reached it.
+        let output = output.and_then(Result::err).flatten()?;
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
         let fitted = |ui: &Ui, panel: &P| {
