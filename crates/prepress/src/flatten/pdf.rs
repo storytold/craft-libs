@@ -1381,6 +1381,8 @@ mod tests {
     fn even_odd_path_with_inconsistent_windings_is_kept() {
         // The sweep gives this path winding numbers that disagree around a point.
         let path = BezPath::from_svg("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z").unwrap();
+        let union = linesweeper::binary_op(&closed(&path), &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+        assert_eq!(union.err(), Some(linesweeper::Error::InconsistentWindingNumbers));
         assert_eq!(nonzero(&path, FillRule::EvenOdd), (closed(&path), FillRule::EvenOdd));
     }
 

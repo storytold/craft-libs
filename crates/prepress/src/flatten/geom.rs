@@ -956,6 +956,11 @@ mod tests {
              M3,3 C1,2 3,6 5,6 C6,4 2,7 2,0 L1,6 L6,4 L3,4 L6,7 C0,0 7,1 0,7 C0,0 1,1 1,0 Z",
         ] {
             let shapes = [fill(BezPath::from_svg(d).unwrap())];
+            // The arrangement is built, so the error comes from walking its contours.
+            let Ok(arrangement) = Arrangement::new(&shapes, &[], DEFAULT_SLIVER) else {
+                panic!("no arrangement for {d}");
+            };
+            assert!(matches!(arrangement.regions(), Err(GeomError::Degenerate)), "{d}");
             assert!(matches!(regions(&shapes, &[]), Err(GeomError::Degenerate)), "{d}");
         }
     }
