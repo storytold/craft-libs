@@ -467,7 +467,8 @@ the decoded-image cache of 558ffd7f (a performance change). Tests: those that ca
 A craft-libs patch, labeled `Craft patch` in `hayro-jbig2`, derives these bounds from one figure,
 `Limits::max_pixels` (2^28 by default): the pixels of one bitmap (the page, a region, a symbol),
 the decoding work of one image (4 × the pixels, 2^30 by default, and never less than the work of
-decoding one bitmap within the limit as a refined text instance, with its copy and its text region),
+decoding one bitmap within the limit as a refined text instance, with its copy, its text region
+and a reference symbol of width 0 in a height class of up to 65535 rows),
 a dictionary's symbol pixels, the cells of a halftone grid
 (an eighth of the pixels rounded up, 2^25 by default) and the words a page's
 segments may hold (two bitmaps of the pixels, 64 MiB by default, plus up to 31 bits of row padding
@@ -486,6 +487,7 @@ fallibly, and memory that cannot be reserved is refused with `OverflowError::Bit
 `bitmap::pdfcraft_limit_tests::memory_that_cannot_be_reserved_is_refused`,
 `bitmap::pdfcraft_limit_tests::a_low_limit_pays_for_a_bitmap_it_allows`,
 `pdfcraft_tests::jbig2_a_low_limit_decodes_a_refined_instance_it_allows`,
+`pdfcraft_tests::jbig2_a_low_limit_decodes_a_refined_instance_of_a_tall_reference`,
 `bitmap::pdfcraft_limit_tests::a_low_limit_allows_a_grid_of_one_cell`,
 `gray_scale::pdfcraft_limit_tests::gray_scale_values_past_one_allocation_are_refused_by_a_limit`,
 `tests::the_page_and_its_regions_follow_the_limits`,

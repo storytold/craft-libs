@@ -50,13 +50,16 @@ impl Limits {
     /// that decoding one bitmap within `max_pixels` takes as a refined text instance, which costs
     /// the most of the ways to code one: decoding it (see [`decode_work`]), which is its pixels and
     /// the cost of up to 65535 rows that a bitmap of width 0 has with no pixels; copying it into
-    /// its text region, and a text region of the same size (see [`copy_work`]); and
+    /// its text region, and a text region of the same size (see [`copy_work`]); decoding its
+    /// reference symbol of width 0, which costs the up to 65535 rows of its height class; and
     /// [`ONE_INSTANCE_WORK`]. A low limit still decodes a bitmap it allows.
     pub(crate) fn work(&self) -> u64 {
         let decode = self.max_pixels.saturating_add(decode_work(0, MAX_DIMENSION));
         // A copy costs at most a word for each 32 pixels and two for each row, whatever the shape.
         let copy = (self.max_pixels / u64::from(WORD_BITS)).saturating_add(2 * u64::from(MAX_DIMENSION));
-        let one_bitmap = decode.saturating_add(copy.saturating_mul(2)).saturating_add(ONE_INSTANCE_WORK);
+        // The reference symbol of width 0 may sit in a height class of 65535 rows.
+        let reference = decode_work(0, MAX_DIMENSION);
+        let one_bitmap = decode.saturating_add(copy.saturating_mul(2)).saturating_add(reference).saturating_add(ONE_INSTANCE_WORK);
         self.max_pixels.saturating_mul(MAX_WORK / MAX_PIXELS).max(one_bitmap)
     }
 
@@ -91,8 +94,8 @@ pub(crate) const HUFFMAN_LINE_WORK: u64 = 10;
 
 /// Craft patch: the work of a refined text instance apart from its bitmap's decoding and copies
 /// (see [`Limits::work`]): the four integers of its refinement and the four of its placement, its
-/// text region's symbol count and Huffman line, and a dictionary of one symbol with no pixels to
-/// refine, with room to spare.
+/// text region's symbol count and Huffman line, and the integers of a dictionary of one symbol with
+/// no pixels to refine (its rows are charged separately), with room to spare.
 pub(crate) const ONE_INSTANCE_WORK: u64 = 16 * INTEGER_WORK;
 
 /// PdfCraft patch: the work of decoding a bitmap pixel by pixel (see [`MAX_WORK`]). A row costs up
