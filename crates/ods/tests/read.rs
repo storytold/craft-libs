@@ -5,7 +5,7 @@ use craft_ods::testing::{content, package, spreadsheet};
 use craft_ods::{CellRef, Error, Options, Range, Sheet, Value, ValueType, Workbook, read};
 
 fn ods(tables: &str) -> Vec<u8> {
-    spreadsheet(tables)
+    spreadsheet(tables).unwrap()
 }
 fn row(cells: &str) -> Vec<u8> {
     ods(&format!(r#"<table:table table:name="Data"><table:table-row>{cells}</table:table-row></table:table>"#))
@@ -28,8 +28,8 @@ fn a_namespace_declaration_bomb_is_refused() {
         content(r#"<table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#)
             .replacen("<office:document-content ", &format!("<office:document-content{decls} "), 1)
     };
-    assert!(open(&package(doc(&bomb(8)).as_bytes())).is_ok());
-    assert!(open(&package(doc(&bomb(10_000)).as_bytes())).is_err());
+    assert!(open(&package(doc(&bomb(8)).as_bytes()).unwrap()).is_ok());
+    assert!(open(&package(doc(&bomb(10_000)).as_bytes()).unwrap()).is_err());
 }
 
 #[test]
@@ -149,9 +149,9 @@ fn namespaces_are_resolved_not_inferred_from_prefixes() {
         .replace("</table:", "</t:")
         .replace(" table:", " t:")
         .replace("xmlns:table=", "xmlns:t=");
-    assert_eq!(shown(&open(&package(xml.as_bytes())).unwrap().sheets[0], CellRef::new(0, 0)), Value::Number(9.0));
+    assert_eq!(shown(&open(&package(xml.as_bytes()).unwrap()).unwrap().sheets[0], CellRef::new(0, 0)), Value::Number(9.0));
     let spoofed = xml.replace("urn:oasis:names:tc:opendocument:xmlns:table:1.0", "wrong-namespace");
-    assert!(open(&package(spoofed.as_bytes())).is_err());
+    assert!(open(&package(spoofed.as_bytes()).unwrap()).is_err());
     let wb = open(&row(
         r#"<table:table-cell xmlns:fake="wrong-namespace" fake:value-type="float" fake:value="123"><text:p>kept</text:p></table:table-cell>"#,
     ))
@@ -166,7 +166,7 @@ fn bad_packages_encryption_and_bad_xml_are_refused() {
     let mut w = craft_odf::PackageWriter::new("application/zip");
     w.file("content.xml", "text/xml", xml.as_bytes());
     assert!(matches!(open(&w.finish().unwrap()), Err(Error::Invalid(_))));
-    assert!(craft_ods::is_ods(&package(xml.as_bytes())));
+    assert!(craft_ods::is_ods(&package(xml.as_bytes()).unwrap()));
     let mut w = craft_odf::PackageWriter::new(craft_odf::mime::SPREADSHEET);
     w.file("content.xml", "text/xml", xml.as_bytes());
     if let Some(e) = w.manifest_mut().entries.iter_mut().find(|e| e.path == "content.xml") {
@@ -182,10 +182,10 @@ fn bad_packages_encryption_and_bad_xml_are_refused() {
         xml.replace("Data", "&custom;"),
         content(""),
     ] {
-        assert!(open(&package(bad.as_bytes())).is_err(), "{bad}");
+        assert!(open(&package(bad.as_bytes()).unwrap()).is_err(), "{bad}");
     }
     let deep = content(&format!("{}{}", "<x>".repeat(300), "</x>".repeat(300)));
-    assert!(open(&package(deep.as_bytes())).is_err());
+    assert!(open(&package(deep.as_bytes()).unwrap()).is_err());
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn expansion_bounds_stop_small_repeat_bombs() {
     // One row of cells each just under the 1 MiB cell limit, past 64 MiB in all: refused while
     // the row is read. The row's end is never reached.
     let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(1024 * 1024 - 1));
-    let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65))).as_bytes());
+    let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65))).as_bytes()).unwrap();
     assert!(matches!(open(&cells), Err(Error::TooLarge(_))));
     // A row repeated once more than its cells' text allows is refused, and one that fits reads.
     let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
@@ -236,6 +236,67 @@ fn expansion_bounds_stop_small_repeat_bombs() {
     ));
     assert!(matches!(
         read(&row(r#"<table:table-cell table:number-columns-spanned="2"/><table:table-cell table:number-columns-spanned="2"/>"#), &few),
+        Err(Error::TooLarge(_))
+    ));
+}
+
+#[test]
+fn text_past_the_limit_can_be_cut_short_instead_of_refused() {
+    let cut = Options { truncate_text: true, ..Options::default() };
+    // A repeated row past 64 MiB keeps the copies that fit.
+    let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
+    let rows =
+        ods(&format!(r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="65537">{cell}</table:table-row></table:table>"#));
+    assert!(matches!(open(&rows), Err(Error::TooLarge(_))));
+    let wb = read(&rows, &cut).unwrap();
+    assert!(wb.text_truncated);
+    assert_eq!(wb.sheets[0].cells.len(), 65_536);
+    assert!(wb.sheets[0].cells.contains_key(&CellRef::new(65_535, 0)));
+    assert!(
+        !open(&ods(&format!(r#"<table:table table:name="Data"><table:table-row>{cell}</table:table-row></table:table>"#))).unwrap().text_truncated
+    );
+    // Repeated columns keep the copies that fit, and nothing after them is kept: not a later
+    // cell that would fit, not the row's further copies, not later rows or sheets.
+    let small = Options { max_text: 10, ..cut };
+    let bytes = ods(r#"
+      <table:table table:name="A">
+        <table:table-row table:number-rows-repeated="2"><table:table-cell table:number-columns-repeated="3" office:value-type="string" office:string-value="abcd"/><table:table-cell office:value-type="string" office:string-value="z"/><table:table-cell table:number-columns-spanned="2"/></table:table-row>
+        <table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row>
+      </table:table>
+      <table:table table:name="B"><table:table-row><table:table-cell table:formula="of:=1"/></table:table-row></table:table>"#);
+    assert!(matches!(read(&bytes, &Options { max_text: 10, ..Options::default() }), Err(Error::TooLarge(_))));
+    let wb = read(&bytes, &small).unwrap();
+    assert!(wb.text_truncated);
+    assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+    assert_eq!(wb.sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(0, 0), CellRef::new(0, 1)]);
+    assert_eq!(shown(&wb.sheets[0], CellRef::new(0, 1)), text("abcd"));
+    assert!(wb.sheets[0].merges.is_empty() && wb.sheets[1].cells.is_empty());
+    // A repeated row keeps the cells of its next copy that fit.
+    let bytes = ods(
+        r#"<table:table table:name="A"><table:table-row table:number-rows-repeated="3"><table:table-cell office:value-type="string" office:string-value="abcd"/><table:table-cell office:value-type="string" office:string-value="efgh"/></table:table-row></table:table>"#,
+    );
+    let wb = read(&bytes, &Options { max_text: 12, ..cut }).unwrap();
+    assert!(wb.text_truncated);
+    assert_eq!(wb.sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(0, 0), CellRef::new(0, 1), CellRef::new(1, 0)]);
+    // Cells after the cut are not read, so their own size limit does not refuse the document.
+    let small = Options { max_text: 4, max_cell_text: 10, ..cut };
+    let bytes = ods(r#"<table:table table:name="A">
+        <table:table-row><table:table-cell office:value-type="string" office:string-value="abcd"/><table:table-cell office:value-type="string" office:string-value="x"/><table:table-cell office:value-type="string" office:string-value="eleven char"/></table:table-row>
+        <table:table-row><table:table-cell><text:p>more than ten bytes</text:p></table:table-cell></table:table-row>
+      </table:table>"#);
+    assert!(matches!(read(&bytes, &Options { truncate_text: false, ..small }), Err(Error::TooLarge(_))));
+    assert_eq!(read(&bytes, &small).unwrap().sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(0, 0)]);
+    // The cell that passes the limit is read whole first, so its own size limit still applies.
+    let over = row(r#"<table:table-cell office:value-type="string" office:string-value="eleven char"/>"#);
+    assert!(matches!(read(&over, &small), Err(Error::TooLarge(_))));
+    // The other limits refuse the cells kept, and do not count the cells left out.
+    let few = Options { max_cells: 1, ..cut };
+    let after = row(
+        r#"<table:table-cell office:value-type="string" office:string-value="ab"/><table:table-cell table:number-columns-repeated="2" office:value-type="float" office:value="1"/>"#,
+    );
+    assert!(read(&after, &Options { max_text: 1, ..few }).unwrap().sheets[0].cells.is_empty());
+    assert!(matches!(
+        read(&row(r#"<table:table-cell table:number-columns-repeated="2" office:value-type="float" office:value="1"/>"#), &few),
         Err(Error::TooLarge(_))
     ));
 }

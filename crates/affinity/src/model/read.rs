@@ -679,7 +679,11 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
         }
         let class = s.class(id).unwrap_or(Tag::of(b"ShpN"));
         let (path, even_odd) = crate::geometry::outline(self, id, class, world).unwrap_or_else(|| {
-            self.warn("an artboard whose outline could not be read (clipped to its rectangle)");
+            if class == Tag::of(b"PCrv") {
+                self.warn("a converted artboard outline could not be read (clipped to its rectangle)");
+            } else {
+                self.warn("an artboard whose outline could not be read (clipped to its rectangle)");
+            }
             (Path { subpaths: vec![crate::shapes::rectangle(b.x0, b.y0, b.x1, b.y1)] }, false)
         });
         let (background, strokes) = paint::node_paint(self, id, world);

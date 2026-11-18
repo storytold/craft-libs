@@ -150,6 +150,8 @@ pub struct Picture {
     pub chroma: ChromaFormat,
     /// Luma bit depth (chroma uses the same storage type).
     pub bit_depth: u32,
+    /// Chroma bit depth; a stream may code it apart from the luma depth.
+    pub bit_depth_chroma: u32,
     pub y: Plane,
     pub u: Plane,
     pub v: Plane,

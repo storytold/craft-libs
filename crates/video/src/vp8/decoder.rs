@@ -115,6 +115,7 @@ pub struct Decoder {
     sign_bias: [bool; 4],
     color_space: u8,
     stats: DecodeStats,
+    max_luma_samples: usize,
 }
 
 impl Default for Decoder {
@@ -125,6 +126,14 @@ impl Default for Decoder {
 
 impl Decoder {
     pub fn new() -> Decoder {
+        Self::with_max_luma_samples(MAX_LUMA_SAMPLES)
+    }
+
+    /// Set the maximum padded luma samples retained for one frame.
+    ///
+    /// The default is 36 million. Consumers that historically supported a larger bound can
+    /// choose it explicitly while retaining the same checked allocation limit.
+    pub fn with_max_luma_samples(max_luma_samples: usize) -> Decoder {
         Decoder {
             ctx: EntropyContext::default(),
             seg: Segmentation::default(),
@@ -138,6 +147,7 @@ impl Decoder {
             sign_bias: [false; 4],
             color_space: 0,
             stats: DecodeStats::default(),
+            max_luma_samples,
         }
     }
 
@@ -178,7 +188,7 @@ impl Decoder {
         let (w, h) = (usize::from(tag.width), usize::from(tag.height));
         let (mb_w, mb_h) = (w.div_ceil(16), h.div_ceil(16));
         let samples = mb_w.checked_mul(16).and_then(|w| w.checked_mul(mb_h)).and_then(|h| h.checked_mul(16));
-        ensure!(samples.is_some_and(|n| n <= MAX_LUMA_SAMPLES), "frame size {}x{} exceeds the decoder memory limit", tag.width, tag.height);
+        ensure!(samples.is_some_and(|n| n <= self.max_luma_samples), "frame size {}x{} exceeds the decoder memory limit", tag.width, tag.height);
         if w != self.width || h != self.height {
             self.width = w;
             self.height = h;
@@ -1030,6 +1040,14 @@ mod segment_map_tests {
         let mut d = Decoder::new();
         assert!(d.begin_key_frame(&key_tag(8192, 4320)).is_ok());
         assert_eq!((d.width, d.height), (8192, 4320));
+    }
+
+    #[test]
+    fn caller_may_preserve_a_larger_existing_frame_limit() {
+        let mut decoder = Decoder::with_max_luma_samples(1 << 26);
+        assert!(decoder.begin_key_frame(&key_tag(8192, 8192)).is_ok());
+        let mut default = Decoder::new();
+        assert!(default.begin_key_frame(&key_tag(8192, 8192)).is_err());
     }
 
     #[test]
