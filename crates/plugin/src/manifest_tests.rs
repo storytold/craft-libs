@@ -16,7 +16,7 @@ fn manifest(extra: Value) -> Result<Manifest, String> {
 const KINDS: &[&str] = &["command"];
 
 fn app(id: &'static str, version: &'static str) -> AppInfo<'static> {
-    AppInfo { id, version, api: 1..=6, kinds: KINDS, accept_legacy: false }
+    AppInfo { id, version, api: 1..=6, kinds: KINDS, accept_legacy: false, kind_api: &[] }
 }
 
 #[test]
@@ -122,4 +122,33 @@ fn kinds_the_app_doesnt_run_are_refused() {
     assert!(e.contains("`filter`"), "{e}");
     let photocraft = AppInfo { kinds: &["command", "filter"], ..app("photocraft", "1.0.0") };
     assert_eq!(m.target(&photocraft), Ok(Target::Named { api: 1 }));
+}
+
+const FILTER_API: &[crate::KindApi<'static>] = &[crate::KindApi { kind: "filter", api: 1..=1 }];
+const EFFECT_API: &[crate::KindApi<'static>] = &[crate::KindApi { kind: "effect", api: 1..=2 }];
+
+#[test]
+fn each_kind_has_its_own_api_range() {
+    // PhotoCraft: command plug-ins of ABI 1–6, filters of ABI 1 only.
+    let photocraft = AppInfo { kinds: &["command", "filter"], kind_api: FILTER_API, ..app("photocraft", "1.0.0") };
+    assert_eq!(photocraft.api_for("filter"), 1..=1);
+    assert_eq!(photocraft.api_for(KIND_COMMAND), 1..=6, "command plug-ins keep `api`");
+    let filter = |api: u32| manifest(json!({"kind": "filter", "apps": {"photocraft": {"api": api}}})).unwrap();
+    assert_eq!(filter(1).target(&photocraft), Ok(Target::Named { api: 1 }));
+    let e = filter(2).target(&photocraft).unwrap_err();
+    assert!(e.contains("`filter` plug-in API 2") && e.contains("`filter` API 1–1"), "{e}");
+    let command = |api: u32| manifest(json!({"apps": {"photocraft": {"api": api}}})).unwrap();
+    assert_eq!(command(6).target(&photocraft), Ok(Target::Named { api: 6 }));
+    let e = command(7).target(&photocraft).unwrap_err();
+    assert_eq!(e, "it needs plug-in API 7, and this photocraft runs API 1–6");
+
+    // EffectCraft: one AppInfo for both kinds, effects of ABI 1–2.
+    let effectcraft = AppInfo { kinds: &["command", "effect"], kind_api: EFFECT_API, ..app("effectcraft", "1.0.0") };
+    let effect = |api: u32| manifest(json!({"kind": "effect", "apps": {"effectcraft": {"api": api}}})).unwrap();
+    assert_eq!(effect(2).target(&effectcraft), Ok(Target::Named { api: 2 }));
+    assert!(effect(3).target(&effectcraft).is_err());
+    assert!(manifest(json!({"apps": {"effectcraft": {"api": 6}}})).unwrap().target(&effectcraft).is_ok());
+    // An entry for a kind the app doesn't run opens nothing.
+    let narrow = AppInfo { kinds: &["command"], ..effectcraft };
+    assert!(effect(1).target(&narrow).unwrap_err().contains("`effect`"));
 }

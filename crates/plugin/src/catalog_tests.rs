@@ -29,7 +29,7 @@ fn read(packages: Value) -> (crate::catalog::Catalog, Vec<String>) {
 }
 
 fn app(id: &'static str, version: &'static str) -> AppInfo<'static> {
-    AppInfo { id, version, api: 1..=6, kinds: &["command"], accept_legacy: false }
+    AppInfo { id, version, api: 1..=6, kinds: &["command"], accept_legacy: false, kind_api: &[] }
 }
 
 #[test]
@@ -56,10 +56,16 @@ fn reads_effectcrafts_format_and_keeps_unknown_fields() {
     assert_eq!(p.extra["preview"]["video"], "https://youtu.be/x");
     assert_eq!(p.versions[0].extra["effects"], json!(["glow"]));
     assert_eq!(p.versions[0].sha256, sha('b'), "lower-cased");
-    let effectcraft = AppInfo { id: "effectcraft", version: "0.18.0", api: 1..=2, kinds: &["effect"], accept_legacy: true };
+    let effectcraft = AppInfo { id: "effectcraft", version: "0.18.0", api: 1..=2, kinds: &["effect"], accept_legacy: true, kind_api: &[] };
     assert_eq!(p.latest_for(&effectcraft).map(|r| r.version.as_str()), Some("1.0.0"));
     assert!(p.latest_for(&AppInfo { version: "0.17.9", ..effectcraft.clone() }).is_none());
     assert!(p.latest_for(&AppInfo { accept_legacy: false, ..effectcraft }).is_none());
+    // One AppInfo for both of EffectCraft's kinds: the effect ABI comes from `kind_api`.
+    const EFFECT_API: &[crate::KindApi<'static>] = &[crate::KindApi { kind: "effect", api: 1..=2 }];
+    let both = AppInfo { api: 1..=6, kinds: &["command", "effect"], kind_api: EFFECT_API, ..app("effectcraft", "0.18.0") };
+    assert!(p.latest_for(&AppInfo { accept_legacy: true, ..both.clone() }).is_some());
+    const OLD_EFFECTS: &[crate::KindApi<'static>] = &[crate::KindApi { kind: "effect", api: 1..=1 }];
+    assert!(p.latest_for(&AppInfo { accept_legacy: true, kind_api: OLD_EFFECTS, ..both }).is_none(), "the release needs effect ABI 2");
 }
 
 #[test]

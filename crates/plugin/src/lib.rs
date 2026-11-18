@@ -7,7 +7,7 @@
 //!   `figcraft` works too). The app implements [`Host`].
 //! - [`manifest`]: `craft-plugin.json` (and FigCraft's `figcraft-plugin.json`): id, kind, the apps
 //!   it targets, commands and their parameters, permissions, panels. [`Manifest::target`] says
-//!   whether an app can run it.
+//!   whether an app ([`AppInfo`], with an API range per kind) can run it.
 //! - [`permissions`]: the allowlist, the refused list every app shares and the app's own.
 //! - [`bundle`]: the `.craftplugin` file, its SHA-256 and version comparison.
 //! - [`source`]: where an installed plug-in came from ([`Source`]) and its record, on every target.
@@ -46,7 +46,7 @@ pub use sandbox::{
     run,
 };
 pub use source::{Source, SourceRecord};
-pub use target::{AppInfo, Target};
+pub use target::{AppInfo, KindApi, Target};
 pub use widget::{MenuItem, MenuKind, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 
 #[cfg(test)]

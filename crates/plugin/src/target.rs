@@ -14,14 +14,36 @@ pub struct AppInfo<'a> {
     pub id: &'a str,
     /// Its version (`0.30.0`; a pre-release or build suffix, `-dev` or `+abc`, is ignored).
     pub version: &'a str,
-    /// The API versions it runs, for every kind in [`AppInfo::kinds`]: `1..=API_VERSION` for
-    /// command plug-ins.
+    /// The API versions it runs, for every kind in [`AppInfo::kinds`] that [`AppInfo::kind_api`]
+    /// doesn't list: `1..=API_VERSION` for command plug-ins.
     pub api: RangeInclusive<u32>,
     /// The kinds it runs (`command`, and its own).
     pub kinds: &'a [&'a str],
     /// Whether it runs plug-ins that name no app (manifests written before `apps`): FigCraft does,
     /// with the manifest's own `api`; an app new to plug-ins need not.
     pub accept_legacy: bool,
+    /// The API versions of the app's own kinds, where they differ from [`AppInfo::api`]
+    /// (PhotoCraft's `filter` ABI 1, EffectCraft's `effect` ABI 1–2). Empty: every kind is
+    /// checked against `api`. See [`AppInfo::api_for`].
+    pub kind_api: &'a [KindApi<'a>],
+}
+
+/// The API versions an app runs for one of its kinds (an entry of [`AppInfo::kind_api`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KindApi<'a> {
+    /// The kind (`filter`, `effect`…).
+    pub kind: &'a str,
+    /// The API versions of that kind the app runs.
+    pub api: RangeInclusive<u32>,
+}
+
+impl AppInfo<'_> {
+    /// The API versions the app runs for plug-ins of `kind`: its [`AppInfo::kind_api`] entry, or
+    /// [`AppInfo::api`] when it has none (so command plug-ins keep `api` unless an app lists
+    /// `command` there itself). Whether the app runs `kind` at all is [`AppInfo::kinds`].
+    pub fn api_for(&self, kind: &str) -> RangeInclusive<u32> {
+        self.kind_api.iter().find(|k| k.kind == kind).map_or_else(|| self.api.clone(), |k| k.api.clone())
+    }
 }
 
 /// How a plug-in targets the app.
@@ -67,8 +89,13 @@ pub(crate) fn check_target(
             return Err(format!("it was written for {}, not {}", names.join(", "), app.id));
         }
     };
-    if !app.api.contains(&api) {
-        return Err(format!("it needs plug-in API {api}, and this {} runs API {}–{}", app.id, app.api.start(), app.api.end()));
+    let range = app.api_for(kind);
+    if !range.contains(&api) {
+        return Err(if kind == crate::manifest::KIND_COMMAND {
+            format!("it needs plug-in API {api}, and this {} runs API {}–{}", app.id, range.start(), range.end())
+        } else {
+            format!("it needs `{kind}` plug-in API {api}, and this {} runs `{kind}` API {}–{}", app.id, range.start(), range.end())
+        });
     }
     if let Some(min) = min_app {
         let running = release_part(app.version);
@@ -85,7 +112,8 @@ pub(crate) fn check_target(
 impl Manifest {
     /// Whether `app` can run this plug-in: its kind is one the app runs, it names the app in
     /// `apps` (or names no app and the app accepts legacy manifests), with an API version the app
-    /// runs, and the app is at least its `minApp`. The reason, in a sentence, when not.
+    /// runs for that kind ([`AppInfo::api_for`]), and the app is at least its `minApp`. The
+    /// reason, in a sentence, when not.
     pub fn target(&self, app: &AppInfo<'_>) -> Result<Target, String> {
         check_target(&self.kind, &self.apps, Some((self.api, None)), app)
     }
