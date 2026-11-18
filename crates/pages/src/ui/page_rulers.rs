@@ -14,14 +14,14 @@ use craft_text::ui::DocUnit;
 use craft_text::ui::ruler::{RulerValues, TabAlign, TextRuler, TextRulerOutput, nudge_size, ruler_text, snap_step, snap_stop};
 use craft_ui::canvas::{RulerTick, Rulers, TickRule};
 use craft_ui::contract::{
-    Access, Bind, Common, Component, Cx, Focus as _, Input, MeasureCx, Name, Numeric, Outcome, NoValue, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _,
+    Access, Bind, Common, Component, Cx, Focus as _, IdSource, Input, MeasureCx, Name, Numeric, Outcome, NoValue, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _,
     Role, Show as _, Styled as _, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook, TypeRole};
-use egui::{CornerRadius, Pos2, Rangef, Rect, Response, Ui, Vec2, pos2, vec2};
+use egui::{AsIdSalt, CornerRadius, IdSalt, Pos2, Rangef, Rect, Response, Ui, Vec2, pos2, vec2};
 
 use super::margins::{MarginHandles, MarginHandlesOutput, MarginRules, PageEdges};
 use super::view::PlacedPage;
@@ -391,6 +391,8 @@ pub struct PageRulers<'a> {
     rows: &'a [f32],
     gutter: f64,
     mirrored_even: bool,
+    id: IdSource,
+    gaps_draggable: bool,
 }
 
 impl<'a> PageRulers<'a> {
@@ -410,7 +412,22 @@ impl<'a> PageRulers<'a> {
             rows: &[],
             gutter: 0.0,
             mirrored_even: false,
+            id: IdSource::Auto,
+            gaps_draggable: true,
         }
+    }
+
+    /// Salts the text ruler's id with `salt` (the caret paragraph's key): a new salt is a new ruler, so a drag open on
+    /// the ruler of another paragraph ends with no commit.
+    pub fn id_salt(mut self, salt: impl AsIdSalt) -> Self {
+        self.id = IdSource::Salt(IdSalt::new(salt));
+        self
+    }
+
+    /// Whether the column gaps' edges take a drag (the default): [`TextRuler::gaps_draggable`].
+    pub fn gaps_draggable(mut self, on: bool) -> Self {
+        self.gaps_draggable = on;
+        self
     }
 
     /// The text column's start and end, points from the page's left. Without it the column is the text area between the
@@ -470,7 +487,8 @@ impl<'a> PageRulers<'a> {
 
     /// Shows the rulers over the canvas at `canvas_rect`.
     pub fn show_at(self, ui: &mut Ui, canvas_rect: Rect) -> PageRulersOutput {
-        let PageRulers { label, page, mut edges, ruler, column, unit, kind, right_to_left, columns, gaps, rows, gutter, mirrored_even } = self;
+        let PageRulers { label, page, mut edges, ruler, column, unit, kind, right_to_left, columns, gaps, rows, gutter, mirrored_even, id, gaps_draggable } =
+            self;
         let (words, interface_rtl) = {
             let env = Env::of(ui);
             (env.words::<PageRulersWords>(), env.view().direction().is_rtl())
@@ -494,10 +512,12 @@ impl<'a> PageRulers<'a> {
             .unit(unit)
             .columns(columns)
             .gaps(gaps)
+            .gaps_draggable(gaps_draggable)
             .origin(origin)
             .extent(extent)
             .scale(scale)
-            .right_to_left(rtl);
+            .right_to_left(rtl)
+            .id_source(id);
         if let Some(kind) = kind {
             horizontal = horizontal.kind(kind);
         }

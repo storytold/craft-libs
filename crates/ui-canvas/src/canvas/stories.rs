@@ -1,19 +1,22 @@
 //! Stories of the canvas family.
 
-use super::{Canvas, ContextSource, CropOverlay, MiddleButton, NavigationOptions, NoTool, ToolHost, WheelScheme, tool_pass};
+use super::{
+    Canvas, CanvasTool, ContextSource, CropOverlay, MiddleButton, NavigationOptions, NoTool, ToolAction, ToolContext, ToolHost, ToolPath,
+    ToolPointer, WheelScheme, tool_pass,
+};
 use crate::buttons::Button;
 use crate::canvas::testing::canvas_story::{StoryDocument, show_document};
-use crate::contract::{Bind, BodyCx, CanvasGesture, Gap, Sampler as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, BodyCx, CanvasGesture, Gap, Sampler as _, Show as _, ShowContainer as _, clicked, tooltip};
 use crate::dialog::Dialog;
 use crate::display::Text;
 use crate::layout_components::Stack;
-use crate::primitives::{EditorPurpose, EditorState};
+use crate::primitives::{Draw, EditorPurpose, EditorState};
 use crate::runtime::access::Role;
 use crate::runtime::env::Env;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, stage, story};
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{EditorInput, TextPos};
+use craft_behavior::{CancelReason, EditorInput, TextPos};
 use egui::{Key, Modifiers, Rect, Ui, vec2};
 
 /// The zoomed story's zoom, in percent of one device pixel per document pixel.
@@ -175,6 +178,54 @@ fn editor_part(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
         if !typed.is_empty() {
             Text::new(typed.clone()).show_at(ui, at);
+        }
+    });
+    shown.output.into()
+}
+
+/// A tool that asks for a pointer tip on every hover and takes presses, as a document editor's text tool tips a link.
+struct TippingTool;
+
+impl CanvasTool for TippingTool {
+    fn hover(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        cx.tip("Ctrl+click to follow the link");
+    }
+
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Follow Link command")
+    }
+}
+
+/// Rests the pointer on the canvas's centre past the tooltip delay, so the tool's tip shows.
+fn rest_on_centre(fixture: &mut Fixture) {
+    let Some(at) = canvas_centre(fixture) else { return };
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.advance(tooltip::DELAY);
+    fixture.settle();
+}
+
+/// A tool's pointer tip ([`ToolContext::tip`]): it shows at the pointer after the tooltip delay while the pointer rests
+/// on the canvas, and a press hides it.
+#[story(Canvas, covers = [], drive = Drive::Custom(rest_on_centre))]
+fn tool_tip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let room = stage(ui);
+    let view = StoryDocument::STANDARD.view(room, ui.pixels_per_point(), 100.0);
+    let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
+        show_document(ui, body.rect, &StoryDocument::STANDARD);
+        if let Some(pass) = tool_pass(&body.env) {
+            let _ = ToolHost::new().run(ui, &pass, &mut TippingTool);
         }
     });
     shown.output.into()

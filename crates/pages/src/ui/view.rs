@@ -27,8 +27,9 @@ use super::access::AccessDescriber;
 use crate::layout::{
     Fit, LayoutOptions, PageDisplay, PageSpacing, PagedLayout, SCREEN_POINTS_PER_POINT, ViewDefaults, ZOOM_RANGE, fit_scale, place_pages, shown_row,
 };
+use craft_behavior::geometry::{SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
-use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
+use craft_behavior::{Axis, CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, Snap, ToolPass,
     ToolRegion, canvas_space, tool_pass,
@@ -218,6 +219,45 @@ impl PageBody<'_> {
     }
 }
 
+/// The snapping of the coordinates the pointer sets on the view ([`PageView::snap`]), over targets on the pages in
+/// each page's own points: the view places them where their page shows in each pass.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PageSnap {
+    options: SnapOptions,
+    pages: Vec<(usize, Vec<SnapTarget>)>,
+}
+
+impl PageSnap {
+    /// Snapping with `options` and no targets yet.
+    pub fn new(options: SnapOptions) -> Self {
+        PageSnap { options, pages: Vec::new() }
+    }
+
+    /// Adds `targets` on page `page`, in the page's own points from its top left corner, their spans included.
+    #[must_use]
+    pub fn page(mut self, page: usize, targets: Vec<SnapTarget>) -> Self {
+        self.pages.push((page, targets));
+        self
+    }
+}
+
+/// An area of a page where the active tool takes a press over the canvas controls ([`PageView::tool_regions`]), in the
+/// page's own points: the view places it where its page shows in each pass.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PageRegion {
+    page: usize,
+    points: Vec<Point>,
+}
+
+impl PageRegion {
+    /// The polygon with the corners `points` on page `page`, in the page's own points from its top left corner.
+    pub fn polygon(page: usize, points: Vec<Point>) -> Self {
+        PageRegion { page, points }
+    }
+}
+
 /// What the view did this pass.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -285,8 +325,8 @@ pub struct PageView<'a> {
     describer: Option<&'a dyn AccessDescriber>,
     paper: DataColor,
     editor: Option<EditorPurpose>,
-    snap: Option<Snap>,
-    tool_regions: Vec<ToolRegion>,
+    snap: Option<PageSnap>,
+    tool_regions: Vec<PageRegion>,
     rulers: bool,
 }
 
@@ -345,16 +385,19 @@ impl<'a> PageView<'a> {
         self
     }
 
-    /// The snapping of the coordinates the pointer sets on the view, passed to the inner canvas.
+    /// The snapping of the coordinates the pointer sets on the view, with its targets in page points. The view places
+    /// them on the pages that show this pass, drops those of pages outside the shown row and passes the result to the
+    /// inner canvas.
     #[must_use]
-    pub fn snap(mut self, snap: Option<Snap>) -> Self {
+    pub fn snap(mut self, snap: Option<PageSnap>) -> Self {
         self.snap = snap;
         self
     }
 
-    /// The areas where the active tool takes a press over the canvas controls, passed to the inner canvas.
+    /// The areas where the active tool takes a press over the canvas controls, in page points. The view places them
+    /// as [`snap`](Self::snap)'s targets and passes them to the inner canvas.
     #[must_use]
-    pub fn tool_regions(mut self, regions: Vec<ToolRegion>) -> Self {
+    pub fn tool_regions(mut self, regions: Vec<PageRegion>) -> Self {
         self.tool_regions = regions;
         self
     }
@@ -393,12 +436,14 @@ impl<'a> PageView<'a> {
         let given = frame.view(rect, start.offset, geo.scale / SCREEN_POINTS_PER_POINT);
         let mut navigation = navigation;
         navigation.overscroll = !start.continuous;
-        let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).tool_regions(tool_regions).show_rulers(rulers);
+        // The app's page geometry, in page points, placed where its page shows in this pass's layout.
+        let regions: Vec<ToolRegion> = tool_regions.iter().filter_map(|region| placed_region(region, &geo, &frame)).collect();
+        let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).tool_regions(regions).show_rulers(rulers);
         if let Some(purpose) = editor {
             canvas = canvas.editor(purpose);
         }
-        if let Some(snap) = snap {
-            canvas = canvas.snap(snap);
+        if let Some(snap) = &snap {
+            canvas = canvas.snap(placed_snap(snap, &geo, &frame));
         }
         if start.continuous {
             canvas = canvas.document(frame.document(&geo));
@@ -547,6 +592,47 @@ impl Frame {
     fn layout_point(&self, p: Point) -> Point {
         Point::new(p.x * self.zoom + self.origin.x, p.y * self.zoom + self.origin.y)
     }
+
+    /// A layout point as a document point.
+    fn document_point(&self, l: Point) -> Point {
+        Point::new((l.x - self.origin.x) / self.zoom, (l.y - self.origin.y) / self.zoom)
+    }
+}
+
+/// The document point of `p`, a point of page `page` in the page's own points; `None` for a page outside the row
+/// `geo` shows.
+fn page_to_document(geo: &Placed, frame: &Frame, page: usize, p: Point) -> Option<Point> {
+    if !geo.row.contains(&page) {
+        return None;
+    }
+    let origin = geo.layout.rects.get(page)?.origin();
+    Some(frame.document_point(Point::new(origin.x + p.x * geo.scale, origin.y + p.y * geo.scale)))
+}
+
+/// The snapping over `snap`'s targets on the pages `geo` shows, in `frame`'s document units.
+fn placed_snap(snap: &PageSnap, geo: &Placed, frame: &Frame) -> Snap {
+    let mut targets = SnapTargets::new();
+    for (page, list) in &snap.pages {
+        let to_doc = |p: Point| page_to_document(geo, frame, *page, p);
+        for target in list {
+            // A line along Y snaps x and spans y; one along X snaps y and spans x. The mapping is separate per axis.
+            let vertical = target.along == Axis::Y;
+            let across = |v: f64| to_doc(if vertical { Point::new(v, 0.0) } else { Point::new(0.0, v) }).map(|d| if vertical { d.x } else { d.y });
+            let along = |v: f64| to_doc(if vertical { Point::new(0.0, v) } else { Point::new(v, 0.0) }).map(|d| if vertical { d.y } else { d.x });
+            let Some(position) = across(target.position) else { break };
+            let mut placed = *target;
+            placed.position = position;
+            placed.span = target.span.and_then(|(a, b)| Some((along(a)?, along(b)?)));
+            targets.add(placed);
+        }
+    }
+    Snap::new(Arc::new(targets), snap.options)
+}
+
+/// `region` on the page it names, in `frame`'s document units; `None` for a page outside the row `geo` shows.
+fn placed_region(region: &PageRegion, geo: &Placed, frame: &Frame) -> Option<ToolRegion> {
+    let points = region.points.iter().map(|p| page_to_document(geo, frame, region.page, *p)).collect::<Option<Vec<Point>>>()?;
+    Some(ToolRegion::polygon(points))
 }
 
 /// One pass of the canvas body: layout, scrolling, zoom and paging folded into the state; the pasteboard, the

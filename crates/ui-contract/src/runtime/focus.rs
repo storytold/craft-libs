@@ -572,6 +572,12 @@ pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     true
 }
 
+/// Whether focus is on the component `id` or on one of its parts (a canvas's editor part), from the focus record of
+/// the stop focus is on. An app asks it of a component it shows, such as whether its document canvas has focus.
+pub fn has(ctx: &Context, id: Id) -> bool {
+    focused_rec(ctx).is_some_and(|rec| rec.stop.id == id)
+}
+
 /// Applies `target` now, for an AccessKit `Focus` action, which moves focus in the pass that carries it.
 pub(crate) fn request_now(ctx: &Context, target: FocusTarget) {
     let acts = with(ctx, |state| state.apply_target(target));

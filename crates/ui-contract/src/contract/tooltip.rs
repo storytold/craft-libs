@@ -178,6 +178,7 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
         wants_input: hovered,
         pressed: member_pressed.unwrap_or_else(|| core.press.phase.is_press()),
         subject,
+        describes: subject.is_none().then_some(core.id),
     };
     show_tip(call);
 }
@@ -203,6 +204,39 @@ pub fn attach(response: &egui::Response, tooltip: &Tooltip) {
         wants_input: response.hovered() || response.has_focus(),
         pressed: crate::runtime::egui::response::is_pressed(response),
         subject: None,
+        describes: Some(response.id),
+    };
+    show_tip(call);
+}
+
+/// Shows `tip` at the pointer for a surface whose tips have no part of their own (a canvas tool's hover tip): the same
+/// delay, grace, look and hiding as a component's tooltip, placed at the pointer whatever the tip's `at` says.
+///
+/// `owner` is the component whose memory keeps the timer. `at` is where the pointer rests in `ui`'s layer, `None` once
+/// it left; `pressed` is a press or drag that hides the tip. With no tip, a tip shown hides.
+pub fn at_pointer(ui: &Ui, owner: egui::Id, tip: Option<&Tooltip>, at: Option<egui::Pos2>, pressed: bool) {
+    let ctx = ui.ctx();
+    let env = Env::of(ui);
+    let spec = tip.map(|tip| {
+        let mut spec = tip.spec().clone();
+        spec.at = TooltipAt::Pointer;
+        spec
+    });
+    let text = spec.as_ref().map(|spec| spec_text(&env.view(), spec, true));
+    let call = TipCall {
+        ctx,
+        owner,
+        id: sub(owner, "pointer tip"),
+        env: &env,
+        layer: ui.layer_id(),
+        rect: Rect::from_center_size(at.unwrap_or_default(), Vec2::ZERO),
+        text,
+        rich: None,
+        spec,
+        wants_input: at.is_some(),
+        pressed,
+        subject: None,
+        describes: Some(owner),
     };
     show_tip(call);
 }
@@ -225,10 +259,12 @@ struct TipCall<'a> {
     wants_input: bool,
     pressed: bool,
     subject: Option<PartRef>,
+    /// The node the tooltip describes; `None` for a part's tooltip.
+    describes: Option<egui::Id>,
 }
 
 fn show_tip(call: TipCall<'_>) {
-    let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text, rich, spec, wants_input, pressed, subject } = call;
+    let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text, rich, spec, wants_input, pressed, subject, describes } = call;
     let state_id = sub(id, "tip_state");
     let has_content = text.is_some() || rich.is_some();
     // A component with no tooltip content and no timer or fading layer left from before has nothing to advance.
@@ -298,9 +334,9 @@ fn show_tip(call: TipCall<'_>) {
         None => {
             if let Some(text) = &text {
                 let tip = TipText { common: Common::default(), text }.id_salt(tip_id).show(ui);
-                if subject.is_none() {
+                if let Some(node) = describes {
                     // The described control's node was written earlier in the pass; the relation joins it.
-                    let patch = LabelPatch::DescribedBy { node: id, label: tip.id };
+                    let patch = LabelPatch::DescribedBy { node, label: tip.id };
                     crate::runtime::egui::access::write_label_patch(ctx, &patch);
                 }
             }

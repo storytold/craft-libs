@@ -359,6 +359,10 @@ pub struct TextRuler<'a> {
     /// The column gaps as (start, end) points from the column's start edge, painted and dragged by their edges.
     #[prop]
     gaps: &'a [(f32, f32)],
+    /// Whether the gaps' edges take a drag, with the resize cursor (the default). Off, the gaps are shaded only, with no
+    /// grip: the document's column settings fix them.
+    #[prop]
+    gaps_draggable: bool,
     /// The screen x where the ruler's zero sits: a page-wide ruler is measured from the page's text origin. Unset, zero
     /// is the strip's start edge. Given against the screen so the corner square, which only the ruler places, does not
     /// enter the caller's arithmetic.
@@ -396,6 +400,7 @@ impl<'a> TextRuler<'a> {
             width: if width.is_finite() { width.max(0.0) } else { 0.0 },
             columns: &[],
             gaps: &[],
+            gaps_draggable: true,
             origin: None,
             extent: None,
             unit: DocUnit::points(),
@@ -554,7 +559,7 @@ impl Component for TextRuler<'_> {
                 .focus_shape(FocusShape::Rect)
                 .value_part();
         }
-        for (index, gap) in self.gaps.iter().enumerate() {
+        for (index, gap) in self.gaps.iter().enumerate().filter(|_| self.gaps_draggable) {
             for edge in [GapEdge::End, GapEdge::Start] {
                 cx.part(GAP.at(gap_part(index, edge)), layout.shapes.gap_edge(&layout.g, *gap, edge))
                     .sense(Sense::DRAG)

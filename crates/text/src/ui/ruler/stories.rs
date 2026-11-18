@@ -111,6 +111,14 @@ fn two_column_gaps(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).gaps(&TWO_GAPS).show(ui).into()
 }
 
+/// Fixed column gaps: shaded as on any ruler, with no grip and no resize cursor, where the document's column settings
+/// fix the gaps.
+#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
+fn fixed_column_gaps(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let values = data.value("values", RulerValues::default());
+    TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).gaps(&TWO_GAPS).gaps_draggable(false).show(ui).into()
+}
+
 #[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
 fn three_column_gaps(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = data.value("values", RulerValues::default());
