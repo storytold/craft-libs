@@ -78,7 +78,10 @@ impl Warp {
     /// Style, bend, distortions, axis, bounds and order: the keys a `warp` and a `quiltWarp`
     /// share, in Photoshop's order.
     fn head(&self, class: &str) -> Descriptor {
-        let [l, t, r, b] = self.bounds;
+        self.head_with_bounds(class, self.bounds)
+    }
+
+    fn head_with_bounds(&self, class: &str, [l, t, r, b]: [f64; 4]) -> Descriptor {
         let bounds = Descriptor::new("classFloatRect")
             .with("Top ", Value::Double(t))
             .with("Left", Value::Double(l))
@@ -119,15 +122,20 @@ impl Warp {
 
     /// The `quiltWarp` descriptor of a split warp, in Photoshop's layout: the control points,
     /// `deformNumCols` × `deformNumRows` of them, and the patch boundaries (`quiltSliceX` /
-    /// `quiltSliceY`) evenly across the warp's bounds. `None` for any other warp.
+    /// `quiltSliceY`) evenly across the warp's bounds. Invalid axes use 0..1 because this standalone
+    /// method has no content size; the placed-layer writer supplies that size when available.
+    /// `None` for any other warp.
     pub fn quilt_descriptor(&self) -> Option<Descriptor> {
         if !self.is_split() {
             return None;
         }
-        let [l, t, r, b] = self.bounds;
+        // The header and the divisions must describe the same rectangle, including
+        // when a caller leaves bounds at their default or supplies an invalid axis.
+        let axis = |lo: f64, hi: f64| if (hi - lo).is_finite() && hi > lo { (lo, hi) } else { (0.0, 1.0) };
+        let (l, r) = axis(self.bounds[0], self.bounds[2]);
+        let (t, b) = axis(self.bounds[1], self.bounds[3]);
         let slices = |key: &str, n: usize, lo: f64, hi: f64| {
-            let (lo, hi) = if (hi - lo).is_finite() && hi > lo { (lo, hi) } else { (0.0, 1.0) };
-            let values: Vec<f64> = (0..=n).map(|i| lo + (hi - lo) * i as f64 / n as f64).collect();
+            let values: Vec<f64> = (0..=n).map(|i| lo + (hi - lo) * (i as f64 / n as f64)).collect();
             let prefix = values.len() as u32;
             Value::ObjectArray(ObjectArray { prefix, body: Descriptor::new("UntF").with(key, Value::UnitFloats { unit: *b"#Pxl", values }) })
         };
@@ -137,7 +145,7 @@ impl Warp {
             .with("meshPoints", self.mesh_points());
         let count = |n: usize| Value::Integer(i32::try_from(n.saturating_mul(3).saturating_add(1)).unwrap_or(i32::MAX));
         Some(
-            self.head("quiltWarp")
+            self.head_with_bounds("quiltWarp", [l, t, r, b])
                 .with("deformNumRows", count(self.rows))
                 .with("deformNumCols", count(self.cols))
                 .with("customEnvelopeWarp", Value::Descriptor(envelope)),
@@ -159,7 +167,13 @@ impl SmartObject {
     /// The warp written, over the content (or `[0, 0, 0, 0]` without a size) when there is none.
     fn warp_or_none(&self) -> Warp {
         let [w, h] = self.size.unwrap_or([0.0; 2]);
-        self.warp.clone().unwrap_or_else(|| Warp::none([0.0, 0.0, w, h]))
+        let mut warp = self.warp.clone().unwrap_or_else(|| Warp::none([0.0, 0.0, w, h]));
+        // Match Warp::apply's whole-rectangle fallback before encoding explicit
+        // quilt slices. Otherwise default bounds would change the mapping on readback.
+        if warp.is_split() && !(warp.bounds[2] > warp.bounds[0] && warp.bounds[3] > warp.bounds[1]) {
+            warp.bounds = [0.0, 0.0, w, h];
+        }
+        warp
     }
 
     /// The data of a `SoLd` block (`soLD`, version 4, a version-16 descriptor, padded to 4).
@@ -290,6 +304,49 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn quilt_writer_uses_one_rectangle_for_header_slices_and_roundtrip() {
+        for (bounds, expected) in [
+            ([0.0; 4], [0.0, 0.0, 1.0, 1.0]),
+            ([2.0, 3.0, 22.0, 13.0], [2.0, 3.0, 22.0, 13.0]),
+            ([2.0, 3.0, 22.0, 3.0], [2.0, 0.0, 22.0, 1.0]),
+            ([f64::NAN, 3.0, 22.0, 13.0], [0.0, 3.0, 1.0, 13.0]),
+            ([-f64::MAX, 0.0, f64::MAX, 1.0], [0.0, 0.0, 1.0, 1.0]),
+            ([0.0, 0.0, 1e308, 10.0], [0.0, 0.0, 1e308, 10.0]),
+        ] {
+            let warp = Warp { style: "warpCustom".into(), bounds, cols: 2, rows: 1, mesh: grid(2, 1, 20.0, 10.0), ..Warp::default() };
+            let descriptor = warp.quilt_descriptor().unwrap();
+            let back = Warp::try_from_descriptor(&descriptor).unwrap().unwrap();
+            assert_eq!(back.bounds, expected);
+            assert_eq!((back.cols, back.rows, &back.mesh), (2, 1, &warp.mesh));
+            assert_eq!(back.quilt_descriptor().unwrap(), descriptor);
+        }
+        let high_offset = Warp {
+            style: "warpCustom".into(),
+            bounds: [1e16, 0.0, 1e16 + 8.0, 10.0],
+            cols: 3,
+            rows: 1,
+            mesh: grid(3, 1, 20.0, 10.0),
+            ..Warp::default()
+        };
+        assert_eq!(Warp::try_from_descriptor(&high_offset.quilt_descriptor().unwrap()).unwrap(), Some(high_offset));
+        // At the placed-layer boundary content size is available: preserve the
+        // evaluator's fallback mapping, not merely the ability to parse the output.
+        for bounds in [[0.0; 4], [2.0, 3.0, 22.0, 3.0], [f64::NAN, 0.0, 20.0, 10.0]] {
+            let warp = Warp { style: "warpCustom".into(), bounds, cols: 2, rows: 1, mesh: grid(2, 1, 20.0, 10.0), ..Warp::default() };
+            let so = SmartObject { size: Some([20.0, 10.0]), ..placed(Some(warp.clone())) };
+            let bytes = so.to_placed_layer_data(&PlacedLayerOptions::default());
+            let back = SmartObject::from_placed_layer_data(&bytes).unwrap();
+            let parsed = back.warp.as_ref().unwrap();
+            assert_eq!(parsed.bounds, [0.0, 0.0, 20.0, 10.0]);
+            for p in [[0.0, 0.0], [5.0, 4.0], [10.0, 5.0], [20.0, 10.0]] {
+                assert_eq!(parsed.apply(p, 20.0, 10.0), warp.apply(p, 20.0, 10.0));
+            }
+            let template = VersionedDescriptor::parse_prefix(&bytes[8..]).unwrap().0.descriptor;
+            let rewritten = back.to_placed_layer_data(&PlacedLayerOptions { template: Some(&template), ..Default::default() });
+            assert_eq!(SmartObject::from_placed_layer_data(&rewritten).unwrap(), back);
+        }
+    }
     #[test]
     fn templates_drop_unsupported_quilts_but_retain_valid_none() {
         let bounds = [0.0, 0.0, 20.0, 10.0];

@@ -74,11 +74,17 @@ fn quad_from(t: [f64; 8]) -> [[f64; 2]; 4] {
 
 /// The patch boundaries of a custom envelope: a list of numbers, or (as Photoshop writes a
 /// `quiltWarp`) an object array whose body holds them under the same key.
-fn quilt_slices(env: &Descriptor, key: &str) -> Vec<f64> {
-    match env.get(key) {
-        Some(Value::ObjectArray(o)) => o.body.get_numbers(key),
-        _ => env.get_numbers(key),
-    }
+fn quilt_slices(env: &Descriptor, key: &str) -> Result<Vec<f64>> {
+    let Some(value) = env.get(key) else { return Ok(vec![]) };
+    // Filtering nonnumbers would change the number and positions of patches.
+    // Only absence, not a malformed or empty present value, means one patch.
+    let value = if let Value::ObjectArray(o) = value { o.body.get(key) } else { Some(value) };
+    let values = match value {
+        Some(Value::UnitFloats { values, .. }) => Some(values.clone()),
+        Some(Value::List(values)) => values.iter().map(Value::as_number).collect::<Option<Vec<_>>>(),
+        _ => None,
+    };
+    values.filter(|values| !values.is_empty()).ok_or_else(|| PsdError::Unsupported("invalid quilt slice values".into()))
 }
 
 /// The public mesh has no slice coordinates, so only uniform divisions can be
@@ -90,18 +96,23 @@ fn quilt_patches(slices: &[f64]) -> Result<usize> {
     if slices.len() < 2 || slices.iter().any(|v| !v.is_finite()) {
         return Err(PsdError::Unsupported("invalid quilt divisions".into()));
     }
-    let step = slices[1] - slices[0];
-    if !step.is_finite() || step <= 0.0 {
+    let patches = slices.len() - 1;
+    let extent = slices[patches] - slices[0];
+    if !extent.is_finite() || extent <= 0.0 {
         return Err(PsdError::Unsupported("invalid quilt divisions".into()));
     }
-    let tolerance = step.abs() * 1e-9;
-    if slices.windows(2).any(|pair| {
-        let width = pair[1] - pair[0];
-        !width.is_finite() || width <= 0.0 || (width - step).abs() > tolerance
-    }) {
+    // Compare against the same endpoint interpolation the writer uses. At large
+    // coordinate offsets a uniform grid can have differently rounded adjacent widths.
+    let tolerance = (extent / patches as f64) * 1e-9;
+    if slices.windows(2).any(|pair| pair[1] <= pair[0])
+        || slices.iter().enumerate().any(|(i, value)| {
+            let expected = slices[0] + extent * (i as f64 / patches as f64);
+            (value - expected).abs() > tolerance
+        })
+    {
         return Err(PsdError::Unsupported("unequal quilt divisions".into()));
     }
-    Ok(slices.len() - 1)
+    Ok(patches)
 }
 impl Warp {
     /// Reads a `warp` descriptor; `None` for no warp (the identity, or a custom warp without a
@@ -128,8 +139,8 @@ impl Warp {
             style,
         };
         if let Some(env) = d.get_object("customEnvelopeWarp") {
-            let slice_x = quilt_slices(env, "quiltSliceX");
-            let slice_y = quilt_slices(env, "quiltSliceY");
+            let slice_x = quilt_slices(env, "quiltSliceX")?;
+            let slice_y = quilt_slices(env, "quiltSliceY")?;
             let cols = quilt_patches(&slice_x)?;
             let rows = quilt_patches(&slice_y)?;
             if !slice_x.is_empty() || !slice_y.is_empty() {
@@ -1065,8 +1076,44 @@ mod tests {
         }
         assert_eq!(quilt_patches(&[]).unwrap(), 1);
         assert_eq!(quilt_patches(&[0.0, 10.0, 20.0]).unwrap(), 2);
+        assert_eq!(quilt_patches(&[1e16, 1e16 + 2.0, 1e16 + 6.0, 1e16 + 8.0]).unwrap(), 3);
+        assert!(quilt_patches(&[1e16, 1e16 + 4.0, 1e16 + 6.0, 1e16 + 8.0]).is_err());
     }
 
+    #[test]
+    fn quilt_slice_values_are_strict_in_lists_and_object_arrays() {
+        let list = Value::List(vec![Value::Integer(0), Value::Double(10.0), Value::UnitFloat { unit: *b"#Pxl", value: 20.0 }]);
+        let unfl = Value::UnitFloats { unit: *b"#Pxl", values: vec![0.0, 10.0, 20.0] };
+        let bad_list = Value::List(vec![Value::Double(0.0), Value::Text(UnicodeString::new("bad")), Value::Double(10.0), Value::Double(20.0)]);
+        for wrapped in [false, true] {
+            for (value, valid) in [
+                (list.clone(), true),
+                (unfl.clone(), true),
+                (bad_list.clone(), false),
+                (Value::List(vec![]), false),
+                (Value::UnitFloats { unit: *b"#Pxl", values: vec![] }, false),
+                (Value::Integer(1), false),
+            ] {
+                let value = if wrapped {
+                    Value::ObjectArray(ObjectArray { prefix: 3, body: Descriptor::new("UntF").with("quiltSliceX", value) })
+                } else {
+                    value
+                };
+                let mut d = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]);
+                let Value::Descriptor(env) = &mut d.items.iter_mut().find(|(key, _)| key.is("customEnvelopeWarp")).unwrap().1 else {
+                    panic!("envelope")
+                };
+                env.items.iter_mut().find(|(key, _)| key.is("quiltSliceX")).unwrap().1 = value;
+                assert_eq!(Warp::try_from_descriptor(&d).is_ok(), valid);
+                let bytes = placed_layer_data("slices", [0.0; 8], |parent| parent.with("quiltWarp", Value::Descriptor(d)));
+                assert_eq!(SmartObject::from_placed_layer_data(&bytes).is_ok(), valid);
+            }
+        }
+        let absent = Descriptor::new("customEnvelopeWarp");
+        assert!(quilt_slices(&absent, "quiltSliceX").unwrap().is_empty());
+        let missing_body = absent.with("quiltSliceX", Value::ObjectArray(ObjectArray { prefix: 0, body: Descriptor::new("UntF") }));
+        assert!(quilt_slices(&missing_body, "quiltSliceX").is_err());
+    }
     #[test]
     fn quilt_endpoints_define_or_match_the_normalization_bounds() {
         let equal = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]);
