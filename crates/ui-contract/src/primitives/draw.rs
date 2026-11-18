@@ -372,7 +372,8 @@ impl<'a> Draw<'a> {
             }
             _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon),
         }
-        if let Some(badge) = icon.badge {
+        // P3(canvas-w3): rb.R18: only the dot paints; the bar's painting comes with its writer.
+        if let Some(super::IconMark::Dot(badge)) = icon.badge {
             let radius = self.env.tokens.size.handle.sm / 2.0;
             let centre = if self.env.direction == Direction::Rtl {
                 square.left_bottom() + Vec2::new(radius, -radius)
@@ -491,6 +492,14 @@ impl<'a> Draw<'a> {
         data_picture(self.painter, self.env.tokens, self.data, texture, rect, uv, CornerRadius::ZERO);
     }
 
+    /// Paints `uv` of `texture` onto the clockwise quad `corners` (from `uv`'s top left), untinted, as data: a
+    /// disabled component paints it at `Opacity::DISABLED`, and for an inactive part the quad is filled with the
+    /// theme's disabled fill. A quad has square corners.
+    pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect) {
+        let _ = (corners, texture, uv);
+        todo!("cv.K30")
+    }
+
     /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
     /// so it paints as the data over it: at `Opacity::DISABLED` for a disabled component, and for an inactive part as
     /// the theme's disabled fill, as `data_fill` does.
@@ -602,6 +611,14 @@ pub(super) fn data_picture(painter: &Painter, tokens: &UiTokens, mode: DataMode,
     } else {
         crate::runtime::egui::textures::paint(painter, texture, rect, uv, mode.color(tokens, super::textures::UNTINTED), radius);
     }
+}
+
+/// Paints `uv` of `texture` onto the clockwise quad `corners` as the data in `mode`: untinted through `paint_quad`,
+/// or for an inactive part the quad filled with the disabled fill, as `data_picture` fills its rect.
+#[allow(dead_code)] // P3(canvas-w3): cv.K30
+pub(super) fn data_quad(painter: &Painter, tokens: &UiTokens, mode: DataMode, texture: TextureId, corners: [Pos2; 4], uv: Rect) {
+    let _ = (painter, tokens, mode, texture, corners, uv);
+    todo!("cv.K30")
 }
 
 /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left, as the data over it in

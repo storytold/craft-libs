@@ -24,6 +24,37 @@ impl Default for Scale {
     }
 }
 
+/// The user's wheel multipliers: `line` for notches, `point` for touchpad deltas. Distinct from
+/// [`WheelScope`](super::WheelScope), which says who takes the wheel, not how far it moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WheelSpeed {
+    /// The multiplier for line (notch) scrolling.
+    pub line: f32,
+    /// The multiplier for point (touchpad) scrolling.
+    pub point: f32,
+}
+
+impl Default for WheelSpeed {
+    fn default() -> Self {
+        WheelSpeed { line: 1.0, point: 1.0 }
+    }
+}
+
+/// Code pages that decode Alt+numpad codes; the app sets them from the system locale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AltCodePages {
+    /// The ANSI code page, for codes typed with a leading zero.
+    pub ansi: u16,
+    /// The OEM code page, for codes typed without one.
+    pub oem: u16,
+}
+
+impl Default for AltCodePages {
+    fn default() -> Self {
+        AltCodePages { ansi: 1252, oem: 437 }
+    }
+}
+
 /// The motion mode in effect, carried in `Env.motion`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

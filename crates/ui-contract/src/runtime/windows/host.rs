@@ -117,6 +117,13 @@ impl WindowHost {
         screenshot::facts(&self.ctx, viewport)
     }
 
+    /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
+    /// while AccessKit is off.
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<accesskit::TreeUpdate> {
+        let _ = viewport;
+        todo!("ch.C19a")
+    }
+
     /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
     /// held after it, and a button held by earlier injected input stays down, so the move drags. With `rest` (seconds)
     /// the input counts as processed only once the pointer has rested that long. As a window never reports a NaN or

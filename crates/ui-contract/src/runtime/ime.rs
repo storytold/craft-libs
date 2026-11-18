@@ -18,6 +18,9 @@ struct Engine {
     queue: Vec<os::Raw>,
     owner: Option<Id>,
     generation: u64,
+    /// The egui fork's input-method context tracker; replaces `generation`, which stays until canvas-w2 moves its readers.
+    #[allow(dead_code)] // P3(canvas-w2): cv.K28
+    tracker: egui::ime_context::ImeContextTracker,
     composing: bool,
     guard: u8,
     /// A reset was asked for; events of the old composition are dropped until its completion arrives.

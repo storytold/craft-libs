@@ -8,6 +8,7 @@ use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, measure, pass_state, pointer};
 use craft_behavior::PartRef;
+use craft_keymap::CommandRef;
 use egui::{Context, Id, IdMap, IdSet, Rect, Ui};
 use std::sync::Arc;
 
@@ -145,6 +146,8 @@ pub struct Element {
     pub facts: Option<Facts>,
     /// Its place in Tab order within the region, from 1, when keyboard focus reaches it.
     pub stop: Option<usize>,
+    /// The command bound to the control, when it has one.
+    pub command: Option<CommandRef>,
 }
 
 /// A hit area the sensing core registered for a component of the region.
@@ -328,7 +331,8 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
                 let Some(owner) = elements.iter().position(|element| element.id == id && element.part.is_none()) else { continue };
                 let rect = hits.iter().find(|hit| hit.owner == id && hit.part == part).map_or(elements[owner].rect, |hit| hit.rect);
                 let depth = elements[owner].depth + 1;
-                let element = Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None };
+                let element =
+                    Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None, command: None };
                 elements.insert(owner + 1, element);
                 owner + 1
             }
@@ -381,8 +385,17 @@ pub(crate) fn open_element(ui: &Ui, id: Id, component: &'static str) -> bool {
         let Some(open) = log.open.last_mut() else { return false };
         let component = component.rsplit("::").next().unwrap_or(component);
         let component = component.split('<').next().unwrap_or(component);
-        let element =
-            Element { id, part: None, component, depth: open.stack.len(), rect: Rect::NOTHING, content: Rect::NOTHING, facts: None, stop: None };
+        let element = Element {
+            id,
+            part: None,
+            component,
+            depth: open.stack.len(),
+            rect: Rect::NOTHING,
+            content: Rect::NOTHING,
+            facts: None,
+            stop: None,
+            command: None,
+        };
         open.stack.push(open.elements.len());
         open.elements.push((element, layer));
         true
@@ -402,6 +415,14 @@ pub(crate) fn close_element(ctx: &Context, id: Id, rect: Rect, content: Rect) {
     });
 }
 
+/// Notes the command bound to the control `id` in the open region's record; the report step calls it with the
+/// component's resolved command.
+#[allow(dead_code)] // P3(ribbon-w5): rb.R17
+pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
+    let _ = (ctx, id, command);
+    todo!("rb.R17")
+}
+
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.
 pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rect, facts: Facts) {
     pass_state::with::<Log, _>(ctx, |log| {
@@ -412,7 +433,17 @@ pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rec
             Some(part) => {
                 let (component, depth) = (owner.0.component, owner.0.depth + 1);
                 open.parts.retain(|element| !(element.id == id && element.part == Some(part)));
-                open.parts.push(Element { id, part: Some(part), component, depth, rect, content: rect, facts: Some(facts), stop: None });
+                open.parts.push(Element {
+                    id,
+                    part: Some(part),
+                    component,
+                    depth,
+                    rect,
+                    content: rect,
+                    facts: Some(facts),
+                    stop: None,
+                    command: None,
+                });
             }
         }
     });

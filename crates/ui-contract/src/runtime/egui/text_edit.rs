@@ -248,6 +248,13 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     state.store(ctx, id);
 }
 
+/// Whether the widget's field has an undo step and a redo step, as `(undo, redo)`.
+#[allow(dead_code)] // P3(chrome-w6): ch.C17a
+pub(crate) fn history(ctx: &Context, id: Id) -> (bool, bool) {
+    let _ = (ctx, id);
+    todo!("ch.C17a")
+}
+
 /// The undo steps of the widget: `Some(text)` when `step` changed it.
 pub(crate) fn undo(ctx: &Context, id: Id, current: &str, redo: bool) -> Option<String> {
     let mut state = TextEditState::load(ctx, id)?;

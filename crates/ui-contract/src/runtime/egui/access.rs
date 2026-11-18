@@ -48,6 +48,14 @@ fn behind_modal(ctx: &Context, viewport: ViewportId, layer: egui::LayerId) -> bo
 #[cfg(feature = "testing")]
 pub type NodeId = accesskit::NodeId;
 
+/// Settles the AccessKit update's focus: when it is not among the update's nodes, focus goes to the tree root. The
+/// runtime plugin's output hook calls it once per pass.
+#[allow(dead_code)] // P3(chrome-w7): ch.C18
+pub(crate) fn settle_focus(output: &mut egui::FullOutput) {
+    let _ = output;
+    todo!("ch.C18")
+}
+
 /// The AccessKit id of the node of `id`.
 #[cfg(feature = "testing")]
 pub(crate) fn node_id(id: Id) -> NodeId {

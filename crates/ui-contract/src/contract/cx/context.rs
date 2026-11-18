@@ -38,6 +38,8 @@ pub(crate) trait TextResult {
     fn submit_mods(&self) -> craft_keymap::Mods;
     /// Whether Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the part this pass.
     fn left_by_tab(&self) -> Option<bool>;
+    /// Whether a `TabKey::Reports` part kept focus on Tab (`Some(true)`) or Shift+Tab (`Some(false)`) this pass.
+    fn tab(&self) -> Option<bool>;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -45,6 +47,7 @@ pub(crate) struct RecordedText<V> {
     pub(crate) outcome: crate::primitives::TextOutcome<V>,
     pub(crate) submit_mods: craft_keymap::Mods,
     pub(crate) left_by_tab: Option<bool>,
+    pub(crate) tab: Option<bool>,
 }
 
 impl<V: 'static> TextResult for RecordedText<V> {
@@ -54,6 +57,10 @@ impl<V: 'static> TextResult for RecordedText<V> {
 
     fn left_by_tab(&self) -> Option<bool> {
         self.left_by_tab
+    }
+
+    fn tab(&self) -> Option<bool> {
+        self.tab
     }
 
     fn as_any(&self) -> &dyn Any {

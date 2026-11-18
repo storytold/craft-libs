@@ -3,7 +3,7 @@
 use super::root::{ResolvedRoot, RootEnv};
 use crate::runtime::pass_state;
 use crate::style::UiTokens;
-use craft_theme::{AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins, resolve_sized};
+use craft_theme::{AppId, AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins, resolve_sized};
 use egui::Context;
 use std::sync::Arc;
 
@@ -82,11 +82,15 @@ fn resolve_inputs(inputs: &TokenInputs) -> Arc<UiTokens> {
         Appearance { mode: inputs.mode, contrast: inputs.contrast, size: inputs.density, text_size: inputs.text_size, reduced_motion: false };
     let themes = builtins();
     if let Some(def) = &inputs.theme_def {
-        return Arc::new(UiTokens::new(Arc::new(resolve_sized(def, appearance, None, &inputs.sizes).tokens), inputs.contrast, inputs.density));
+        return Arc::new(UiTokens::new(
+            Arc::new(resolve_sized(def, appearance, inputs.app.as_ref(), &inputs.sizes).tokens),
+            inputs.contrast,
+            inputs.density,
+        ));
     }
     let theme: &ThemeDef =
         [inputs.theme.as_str(), SUITE_DEFAULT].into_iter().find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id)).unwrap_or(&themes[0]);
-    Arc::new(UiTokens::new(Arc::new(resolve_sized(theme, appearance, None, &inputs.sizes).tokens), inputs.contrast, inputs.density))
+    Arc::new(UiTokens::new(Arc::new(resolve_sized(theme, appearance, inputs.app.as_ref(), &inputs.sizes).tokens), inputs.contrast, inputs.density))
 }
 
 /// What the resolved root tokens depend on. The sizes are compared by identity, as `set_input` does.
@@ -99,6 +103,8 @@ pub(crate) struct TokenInputs {
     pub(super) contrast: Contrast,
     pub(super) density: Size,
     pub(super) text_size: TextSize,
+    /// The app whose `[apps.<id>]` theme pins apply over the chosen theme.
+    pub(super) app: Option<AppId>,
 }
 
 impl TokenInputs {
@@ -111,6 +117,7 @@ impl TokenInputs {
             contrast: resolved.contrast,
             density: root.density,
             text_size: root.text_size,
+            app: None, // P3(shell-w1): sh.K8
         }
     }
 
@@ -124,6 +131,7 @@ impl TokenInputs {
             && self.contrast == other.contrast
             && self.density == other.density
             && self.text_size == other.text_size
+            && self.app == other.app
     }
 
     fn same(&self, other: &TokenInputs) -> bool {
@@ -134,6 +142,7 @@ impl TokenInputs {
             && self.contrast == other.contrast
             && self.density == other.density
             && self.text_size == other.text_size
+            && self.app == other.app
     }
 }
 

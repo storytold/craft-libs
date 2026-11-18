@@ -34,6 +34,21 @@ impl<V> TextKey<V> {
     }
 }
 
+/// What Tab does in a text field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TabKey {
+    /// Tab moves focus.
+    #[default]
+    Moves,
+    /// Tab inserts a tab.
+    Inserts,
+    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses).
+    Rewrites,
+    /// Tab keeps focus and is handed back as `EditResponse::tab`: `Some(true)` for Tab, `Some(false)` for Shift+Tab.
+    Reports,
+}
+
 /// How a text part behaves beyond its codec.
 #[derive(Clone)]
 pub struct TextOptions {
@@ -57,6 +72,10 @@ pub struct TextOptions {
     pub ink: Option<Ink>,
     /// Tab inserts a tab instead of moving focus.
     pub tab_inserts: bool,
+    /// What Tab does in this field; replaces `tab_inserts` and `tab_rewrites`.
+    pub tab: TabKey,
+    /// The bound caret as a byte offset, read and written through its binding; the adapter keeps no caret of its own.
+    pub caret: Option<usize>,
     /// Candidates for the text before the caret.
     pub complete: Option<Arc<dyn Completer>>,
     /// Enter accepts the highlighted candidate, as Tab does; off, Enter stays the field's own (a cell commits on it).
@@ -112,6 +131,8 @@ impl Default for TextOptions {
             role: TypeRole::Body,
             ink: None,
             tab_inserts: false,
+            tab: TabKey::default(),
+            caret: None,
             complete: None,
             complete_on_enter: false,
             replace_selection: None,
@@ -272,12 +293,42 @@ pub struct EditorState<'a> {
     pub can_undo: bool,
     /// Whether redo has something to do.
     pub can_redo: bool,
+    /// The committed text around the caret, or why there is none, with the input-method target's epoch.
+    pub surrounding: Option<(u64, EditorSurrounding<'a>)>,
 }
 
+/// The committed window around the caret that an editor reports to the input method, or why there is none.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum EditorSurrounding<'a> {
+    /// The text around the caret, with UTF-8 offsets of the cursor and the selection anchor into it.
+    Text {
+        /// The committed text.
+        text: &'a str,
+        /// The cursor's byte offset into `text`.
+        cursor: usize,
+        /// The selection anchor's byte offset into `text`.
+        anchor: usize,
+    },
+    /// The editor has no text to report.
+    Unavailable {
+        /// The revision the editor reports it at, if it keeps one.
+        revision: Option<u64>,
+    },
+}
+
+pub use egui::ime_context::ImeMutationStamp as ImeStamp;
+
 impl<'a> EditorState<'a> {
+    /// Reports `s` as the committed text around the caret, for the input-method target at `epoch`.
+    pub fn surrounding(self, epoch: u64, s: EditorSurrounding<'a>) -> Self {
+        let _ = (epoch, s);
+        todo!("cv.K26")
+    }
+
     /// A state with no selection, no marked text and nothing to undo.
     pub const fn new(caret: Rect, lines: &'a [EditorLine<'a>], caret_at: TextPos) -> Self {
-        EditorState { caret, lines, caret_at, selection: None, composing: false, can_undo: false, can_redo: false }
+        EditorState { caret, lines, caret_at, selection: None, composing: false, can_undo: false, can_redo: false, surrounding: None }
     }
 }
 

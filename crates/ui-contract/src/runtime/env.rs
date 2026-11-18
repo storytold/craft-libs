@@ -8,7 +8,7 @@ mod units;
 pub use label::{Label, Message, Word};
 #[doc(hidden)]
 pub use shell::ShellEntry;
-pub use shell::{BodyMode, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
+pub use shell::{BodyMode, PageBandRoom, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
 pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units};
 
 use crate::runtime::commands::CommandChain;
@@ -51,7 +51,7 @@ pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
 use tokens::tokens_for;
-pub use values::{ArenaId, ColumnAlign, InBar, MotionPolicy, PaneEdge, RowPressed, Scale};
+pub use values::{AltCodePages, ArenaId, ColumnAlign, InBar, MotionPolicy, PaneEdge, RowPressed, Scale, WheelSpeed};
 pub use view::EnvView;
 
 /// The inherited context of a `Ui`: one `Arc` clone per read.

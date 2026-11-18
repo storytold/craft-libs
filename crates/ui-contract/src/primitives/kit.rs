@@ -344,6 +344,17 @@ const MINOR_SHARE: f32 = 0.45;
 /// The radius of a dot, in screen points.
 const DOT_RADIUS: f32 = 0.6;
 
+/// What a grid does when its lines come closer than the minimum step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GridCrowding {
+    /// Draws nothing for an axis whose lines are too close.
+    #[default]
+    Hide,
+    /// Doubles the step, at most 32 times, until the lines fit.
+    Thin,
+}
+
 /// The lines of one axis: positions along it, in the grid's space.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -358,7 +369,8 @@ impl GridAxis {
     /// The lines of one axis between `lo` and `hi`: majors every `step` from `origin`, minors between them when the
     /// minor step is at least [`MIN_STEP`] screen points at `zoom`. An axis whose major step is under `MIN_STEP`
     /// draws nothing; at most [`MAX_LINES`] lines are given.
-    fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64) -> GridAxis {
+    fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64, crowding: GridCrowding) -> GridAxis {
+        let _ = crowding; // P3(canvas-w3): cv.K31
         if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) || step * zoom < MIN_STEP {
             return GridAxis::default();
         }
@@ -398,10 +410,17 @@ pub struct GridLines {
 impl GridLines {
     /// The lines of a grid in document units: majors every `spacing` from `origin`, `subdivisions` steps to a major
     /// (1 or 0 is no minor lines), across `extent` as `view` shows it.
-    pub fn document(view: &CanvasView, extent: kurbo::Rect, spacing: kurbo::Vec2, origin: kurbo::Point, subdivisions: u32) -> Self {
+    pub fn document(
+        view: &CanvasView,
+        extent: kurbo::Rect,
+        spacing: kurbo::Vec2,
+        origin: kurbo::Point,
+        subdivisions: u32,
+        crowding: GridCrowding,
+    ) -> Self {
         let subdivisions = subdivisions.max(1);
-        let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x());
-        let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom);
+        let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x(), crowding);
+        let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom, crowding);
         let crossings = spacing.x * view.zoom_x() >= CROSSING_MIN && spacing.y * view.zoom >= CROSSING_MIN;
         GridLines { x, y, extent: Some(extent), crossings, view: Some(*view) }
     }

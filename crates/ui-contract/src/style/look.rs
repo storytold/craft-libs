@@ -67,13 +67,15 @@ pub enum SurfaceKind {
     Scrim,
     /// An outlined box without fill.
     Frame,
+    /// The app's colour as a surface: the strong accent, square corners, no edge.
+    Brand,
 }
 
 impl SurfaceKind {
     /// The ink text and icons read on this surface.
     pub const fn ink(self) -> super::Ink {
         match self {
-            SurfaceKind::Scrim => super::Ink::OnDark,
+            SurfaceKind::Scrim | SurfaceKind::Brand => super::Ink::OnDark,
             _ => super::Ink::OnPanel,
         }
     }

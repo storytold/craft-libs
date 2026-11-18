@@ -391,7 +391,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     }
     let separated = input.focused && !input.read_only && state.preedit.is_none() && egui_input::take_separator(ctx, input.options.commit_on);
     // The part keeps Tab (`keys_of`), so the focus service left it here; it is taken before the widget would insert it.
-    if input.focused && input.options.tab_rewrites && !input.read_only && state.preedit.is_none() && egui_input::take_tab(ctx) {
+    // P3(chrome-w6): dg.F20a: `take_tab` gave a bool.
+    if input.focused && input.options.tab_rewrites && !input.read_only && state.preedit.is_none() && egui_input::take_tab(ctx).is_some() {
         state.end = Some(End::Rewrite { refuses: true });
     }
     let filter = egui_focus::event_filter(input.keys.keep, false);

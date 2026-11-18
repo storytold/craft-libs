@@ -17,6 +17,9 @@ const ARC_HANDLE: f32 = 0.552_284_8;
 pub(crate) enum Mark {
     /// A straight line with square-cut ends.
     Line(Vec2, Vec2, Stroke),
+    /// A straight line snapped to whole device pixels at the raster scale.
+    #[allow(dead_code)] // P3(canvas-w3): cv.K29
+    Rule(Vec2, Vec2, Stroke),
     /// A circle's outline.
     Ring(Vec2, f32, Stroke),
     /// A rectangle's outline, centred on its edges.
@@ -40,6 +43,7 @@ impl Mark {
             |points: &[Vec2], stroke: &Stroke| Rect::from_points(&points.iter().map(|p| p.to_pos2()).collect::<Vec<_>>()).expand(stroke.width / 2.0);
         match self {
             Mark::Line(a, b, stroke) => around(&[*a, *b], stroke),
+            Mark::Rule(..) => todo!("cv.K29"),
             Mark::Ring(centre, radius, stroke) => Rect::from_center_size(centre.to_pos2(), Vec2::splat(2.0 * radius + stroke.width)),
             Mark::Frame(rect, stroke) => rect.expand(stroke.width / 2.0),
             Mark::Disc(centre, radius, _) => Rect::from_center_size(centre.to_pos2(), Vec2::splat(2.0 * radius)),
@@ -69,6 +73,7 @@ impl Art {
                 Mark::Line(a, b, stroke) => {
                     painter.line_segment([at + *a, at + *b], *stroke);
                 }
+                Mark::Rule(..) => todo!("cv.K29"),
                 Mark::Ring(centre, radius, stroke) => {
                     painter.circle_stroke(at + *centre, *radius, *stroke);
                 }
@@ -193,6 +198,7 @@ fn rounded_path(rect: Rect, round: f32) -> Option<tiny_skia::Path> {
 fn draw(pixmap: &mut tiny_skia::Pixmap, mark: &Mark, transform: tiny_skia::Transform, scale: f32, origin: f32) {
     match mark {
         Mark::Line(a, b, stroke) => stroke_path(pixmap, polyline(&[*a, *b], false), *stroke, transform),
+        Mark::Rule(..) => todo!("cv.K29"),
         Mark::Ring(centre, radius, stroke) => {
             stroke_path(pixmap, tiny_skia::PathBuilder::from_circle(centre.x, centre.y, *radius), *stroke, transform)
         }

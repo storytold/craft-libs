@@ -45,7 +45,7 @@ craft-window = { workspace = true, features = ["ui"] }
 # `quit`, which `runtime::windows::logic` routes a root close through.
 craft-quit = { workspace = true }
 # `appearance::SystemReader`, the OS appearance the root's `System` choices resolve from.
-craft-platform = { workspace = true, features = ["appearance"] }
+craft-platform = { workspace = true, features = ["appearance", "clipboard"] }
 craft-i18n = { workspace = true, features = ["collate"] }
 log = "0.4"
 smallvec = { workspace = true }
@@ -77,7 +77,7 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 # The window host's end hook sets `NSWindow.movable` through craft-window's AppKit code.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `screen::available`: whether the browser has the EyeDropper, read at install for `Caps::SCREEN_CAPTURE`.
-craft-platform = { workspace = true, features = ["screen", "browser"] }
+craft-platform = { workspace = true, features = ["screen", "browser", "clipboard"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 craft-window = { workspace = true, features = ["ui", "appkit"] }

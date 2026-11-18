@@ -1,6 +1,6 @@
 //! Texture uploads and painting: the one place egui's texture calls are made.
 
-use egui::{Color32, ColorImage, Context, CornerRadius, Painter, Rect, TextureHandle, TextureId, TextureOptions};
+use egui::{Color32, ColorImage, Context, CornerRadius, Painter, Pos2, Rect, TextureHandle, TextureId, TextureOptions};
 
 /// Uploads `image` as a texture called `name`, sampled with `filter`. The texture lives as long as the handle.
 pub(crate) fn load(ctx: &Context, name: String, image: ColorImage, filter: TextureOptions) -> TextureHandle {
@@ -15,6 +15,14 @@ pub(crate) fn replace(handle: &mut TextureHandle, image: ColorImage, filter: Tex
 /// Replaces the part of `handle`'s picture whose top-left texel is `origin` with `image`; the texture id stays.
 pub(crate) fn replace_region(handle: &mut TextureHandle, origin: [u32; 2], image: ColorImage, filter: TextureOptions) {
     handle.set_partial(origin.map(|n| n as usize), image, filter);
+}
+
+/// Paints the part `uv` of `texture` onto the clockwise quad `corners` (from `uv`'s top left), tinted by `tint`, as one
+/// textured mesh of two triangles.
+#[allow(dead_code)] // P3(canvas-w3): cv.K30
+pub(crate) fn paint_quad(painter: &Painter, texture: TextureId, corners: [Pos2; 4], uv: Rect, tint: Color32) {
+    let _ = (painter, texture, corners, uv, tint);
+    todo!("cv.K30")
 }
 
 /// Paints `texture` in `rect`, the part `uv` of it, tinted by `tint`, with corners rounded by `radius`.

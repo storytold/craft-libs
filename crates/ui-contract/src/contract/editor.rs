@@ -4,7 +4,7 @@
 
 use super::Component;
 use super::cx::{Cx, Edit as _, PartsCx};
-use crate::primitives::{EditorPurpose, EditorState, ImeSurface};
+use crate::primitives::{EditorPurpose, EditorState, ImeStamp, ImeSurface};
 use crate::runtime::access::text::{self as text_access, Line, Run, TextFacts};
 use crate::runtime::egui::{editor as egui_editor, focus as egui_focus};
 use crate::runtime::focus::KeyUse;
@@ -86,7 +86,49 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
     cx.core.editor_inputs = inputs;
 }
 
+/// The editor part's widget, rect, purpose, focus and read-only state of this pass, which a body that runs inside a
+/// component reports through for the component's editor part.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditorHandle {
+    #[allow(dead_code)] // P3(canvas-w2): cv.K41
+    widget: egui::Id,
+    #[allow(dead_code)] // P3(canvas-w2): cv.K41
+    rect: Rect,
+    #[allow(dead_code)] // P3(canvas-w2): cv.K41
+    purpose: EditorPurpose,
+    #[allow(dead_code)] // P3(canvas-w2): cv.K41
+    focused: bool,
+    #[allow(dead_code)] // P3(canvas-w2): cv.K41
+    read_only: bool,
+}
+
+impl EditorHandle {
+    /// Reports the caret and composition to the input-method engine and puts the text facts in the running pass's
+    /// editor record, which the owning component's report step reads in the same pass.
+    pub fn report(&self, ctx: &egui::Context, state: EditorState<'_>) {
+        let _ = (ctx, state);
+        todo!("cv.K41")
+    }
+}
+
 impl<C: Component> Cx<'_, C> {
+    /// The editor part of this pass, `None` when the component registered none.
+    pub fn editor_handle(&self) -> Option<EditorHandle> {
+        todo!("cv.K41")
+    }
+
+    /// Notes the input-method receipt between the stamps `before` and `after` on the egui fork's tracker for this
+    /// viewport and frame; true when the stamps prove the engine applied it.
+    pub fn ime_receipt(&self, before: ImeStamp, after: ImeStamp) -> bool {
+        let _ = (before, after);
+        todo!("cv.K27")
+    }
+
+    /// Notes an input-method application change on the egui fork's tracker for this viewport and frame.
+    pub fn ime_application_change(&self) {
+        todo!("cv.K27")
+    }
+
     /// The editor part's inputs of this pass in the order they arrived; call it in `update`. The editor applies them
     /// to its own document.
     pub fn editor_input(&mut self) -> impl Iterator<Item = EditorInput> + '_ {

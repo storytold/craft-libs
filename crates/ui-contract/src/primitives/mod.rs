@@ -37,11 +37,11 @@ pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};
 pub use handle::{Handle, HandleShape};
 pub(crate) use icon::SvgIcon;
-pub use icon::{Glyph, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names};
+pub use icon::{Glyph, IconMark, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names};
 pub use ime_surface::ImeSurface;
 pub use kit::{
-    Checker, CheckerArea, GridAxis, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark, ellipse,
-    fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
+    Checker, CheckerArea, GridAxis, GridCrowding, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark,
+    ellipse, fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
 };
 pub use marker::{Marker, MarkerSize};
 pub use paint_slot::PaintSlot;
@@ -55,7 +55,9 @@ pub(crate) use surface::SurfaceSlot;
 pub use surround::paint_surround;
 pub use svg_set::{AppIcons, register_app_icons};
 pub use text::{ChordText, HAlign, LayoutRun, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
-pub use text_input::{Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, TextKey, TextOptions};
+pub use text_input::{
+    Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp, TabKey, TextKey, TextOptions,
+};
 pub use textures::TextureCache;
 pub use tool::ToolIcon;
 

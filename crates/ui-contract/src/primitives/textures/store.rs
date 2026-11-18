@@ -7,7 +7,7 @@ use crate::runtime::egui::pass;
 use crate::runtime::egui::textures;
 use craft_behavior::PixelSize;
 use egui::load::SizedTexture;
-use egui::{ColorImage, Context, TextureHandle, TextureId, TextureOptions, Vec2};
+use egui::{ColorImage, Context, Rect, TextureHandle, TextureId, TextureOptions, Vec2};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Debug;
@@ -90,6 +90,8 @@ pub struct TextureStoreOptions {
     /// The sampling of every texture: `TextureOptions::LINEAR` by default; the clipping overlay and pixel-exact
     /// previews use `TextureOptions::NEAREST`.
     pub filter: TextureOptions,
+    /// The largest side of a picture the store puts on shared pages; `None` gives every picture a texture of its own.
+    pub packed: Option<u32>,
 }
 
 impl TextureStoreOptions {
@@ -109,7 +111,15 @@ impl TextureStoreOptions {
     }
 
     const fn with_budget(max_bytes: usize, max_entries: usize) -> Self {
-        Self { budget: TextureBudget::new(max_bytes, max_entries), filter: TextureOptions::LINEAR }
+        Self { budget: TextureBudget::new(max_bytes, max_entries), filter: TextureOptions::LINEAR, packed: None }
+    }
+
+    /// Puts pictures up to `max_side` on shared pages written in place; when full, the store recycles the least
+    /// recently drawn page, never one drawn this pass. A const fn, so it carries the setting without `todo!`.
+    #[must_use]
+    pub const fn packed(mut self, max_side: u32) -> Self {
+        self.packed = Some(max_side);
+        self
     }
 
     /// The sampling of every texture.
@@ -142,9 +152,18 @@ pub struct CachedTexture {
     pub id: TextureId,
     /// The texture's size in texels (reduced when the image was past the device limit).
     pub size: PixelSize,
+    /// The picture's top-left texel on its page; `[0, 0]` for an unpacked texture.
+    pub origin: [u32; 2],
+    /// The size of the page texture the picture sits on; `size` for an unpacked texture.
+    pub page: PixelSize,
 }
 
 impl CachedTexture {
+    /// The picture's part of its page texture, in uv coordinates, to paint with `id`.
+    pub fn uv(&self) -> Rect {
+        todo!("rb.R20")
+    }
+
     /// `size` as a vector, for fitting: only the aspect matters to a cell.
     pub fn size_vec2(&self) -> Vec2 {
         Vec2::new(self.size.width as f32, self.size.height as f32)
@@ -342,7 +361,7 @@ impl<K: TextureKey> TextureStore<K> {
             }
             (None, name) => textures::load(ctx, name.unwrap_or_default(), image, filter),
         };
-        let texture = CachedTexture { id: handle.id(), size };
+        let texture = CachedTexture { id: handle.id(), size, origin: [0, 0], page: size };
         let bytes = byte_size(size);
         self.with(ctx, |inner| {
             inner.roll_uploads(frame);
@@ -499,7 +518,8 @@ fn texture_size(source: PixelSize, factor: u32) -> PixelSize {
 }
 
 fn cached(handle: &TextureHandle, source: PixelSize, factor: u32) -> CachedTexture {
-    CachedTexture { id: handle.id(), size: texture_size(source, factor) }
+    let size = texture_size(source, factor);
+    CachedTexture { id: handle.id(), size, origin: [0, 0], page: size }
 }
 
 fn picture_bytes(picture: &Picture) -> usize {

@@ -163,6 +163,8 @@ pub enum FireSource {
     Automation,
     /// An AccessKit action on a part of a component.
     Access,
+    /// A keytip badge, sequence or digit.
+    Keytip,
 }
 
 /// The phase of the key press that fired a command.

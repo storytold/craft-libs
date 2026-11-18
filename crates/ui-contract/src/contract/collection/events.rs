@@ -178,6 +178,11 @@ pub enum ColumnEvent {
     Unsorted,
     /// The user reset the columns: the app's order, every column shown, the app's widths. The sort stays.
     Reset,
+    /// The user pressed the column's remove control.
+    Removed {
+        /// The column.
+        key: ColumnKey,
+    },
 }
 
 /// What a collection reports, in drawing order.

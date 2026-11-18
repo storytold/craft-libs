@@ -125,6 +125,18 @@ struct Inner {
     region: Option<Rect>,
     revealed_rects: RevealedRects,
     dialog: DialogRecord,
+    page_band: Option<PageBandRoom>,
+}
+
+/// The room of the page band while a full-window page shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageBandRoom {
+    /// The band's rect.
+    pub rect: Rect,
+    /// Where the band starts along its axis.
+    pub start: f32,
+    /// Where the band ends along its axis.
+    pub end: f32,
 }
 
 /// The rects that body content registered this pass for the edge it was revealed from. The registry is shared by the
@@ -166,6 +178,7 @@ impl ShellCx {
             region: None,
             revealed_rects: RevealedRects::default(),
             dialog: DialogRecord::default(),
+            page_band: None,
         };
         ShellCx { inner: Arc::new(inner) }
     }
@@ -309,6 +322,17 @@ impl ShellCx {
     /// Where floating frames may go: the body rect plus the area under bars that overlay the body.
     pub fn float_bounds(&self) -> Rect {
         self.inner.float_bounds
+    }
+
+    /// The page band's room while a full-window page shows, else `None`.
+    pub fn page_band(&self) -> Option<PageBandRoom> {
+        todo!("ch.C5a")
+    }
+
+    /// Sets the page band's room.
+    pub fn with_page_band(self, room: Option<PageBandRoom>) -> Self {
+        let _ = room;
+        todo!("ch.C5a")
     }
 }
 

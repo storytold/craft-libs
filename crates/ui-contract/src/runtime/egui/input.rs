@@ -657,6 +657,9 @@ pub(crate) struct RawState {
     /// The input time of the last Ctrl+wheel folded into a pinch step.
     last_pinch: Option<f64>,
     control_click: ControlClick,
+    /// The Alt+numpad entry in progress.
+    #[allow(dead_code)] // P3(shell-w1): sh.K5
+    alt_code: super::alt_code::AltCodeEntry,
 }
 
 /// The input hook's raw-input step for every viewport, after the injected step joined the input and before the key
@@ -690,15 +693,17 @@ pub(crate) fn step_key_pressed(ctx: &Context) -> bool {
     ctx.input(|input| [Key::ArrowUp, Key::ArrowDown, Key::PageUp, Key::PageDown].into_iter().any(|key| input.key_pressed(key)))
 }
 
-/// Removes this pass's Tab and Shift+Tab presses from the input events; returns whether there was one. A Tab with
-/// Ctrl, Cmd or Alt is the window's, not the field's, and stays.
-pub(crate) fn take_tab(ctx: &Context) -> bool {
+/// Removes this pass's Tab and Shift+Tab presses from the input events; returns the direction of one if there was
+/// one: `Some(true)` for Tab, `Some(false)` for Shift+Tab. A Tab with Ctrl, Cmd or Alt is the window's, not the
+/// field's, and stays.
+pub(crate) fn take_tab(ctx: &Context) -> Option<bool> {
     ctx.input_mut(|input| {
         let before = input.events.len();
         input.events.retain(|event| {
             !matches!(event, Event::Key { key: Key::Tab, pressed: true, modifiers, .. }
                 if !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd && !modifiers.alt)
         });
-        input.events.len() != before
+        // P3(shell-w1): dg.F20a: the direction is not read yet; every taken press reports Tab.
+        (input.events.len() != before).then_some(true)
     })
 }

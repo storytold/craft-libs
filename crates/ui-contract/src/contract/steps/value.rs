@@ -23,6 +23,9 @@ pub(crate) struct Shown<V> {
 #[derive(Clone, Default)]
 pub(crate) struct ShownState {
     pub last_state: (bool, bool),
+    /// A pointer click on the control, while the pointer has stayed over it since.
+    #[allow(dead_code)] // P3(ribbon-w2): cv.K45
+    pub clicked_over: bool,
     pub tweens: Option<StateTweens>,
 }
 

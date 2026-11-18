@@ -97,8 +97,36 @@ pub struct IconSpec<'a> {
     pub mirror: Mirror,
     /// The set an SVG icon is drawn from.
     pub set: IconSet,
-    /// A dot of a colour from data at the icon's bottom-trailing corner; see [`badge`](Self::badge).
-    pub badge: Option<DataColor>,
+    /// A data-colour mark on the icon: a dot at the bottom-trailing corner (see [`badge`](Self::badge)) or a bar across
+    /// the bottom (see [`with_mark`](Self::with_mark)).
+    pub badge: Option<IconMark>,
+}
+
+/// A data-colour mark on an icon.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum IconMark {
+    /// A dot at the icon's bottom-trailing corner, ringed in the icon's colour.
+    Dot(DataColor),
+    /// A bar across the bottom of the icon square, inside it; `weight` is its thickness in points, else `StrokeWidth::Thick`.
+    Bar {
+        /// The bar's colour.
+        color: DataColor,
+        /// The thickness in points; `None` takes `StrokeWidth::Thick`.
+        weight: Option<f32>,
+    },
+}
+
+impl IconMark {
+    /// A bar of `color` with the default thickness.
+    pub const fn bar(color: DataColor) -> Self {
+        IconMark::Bar { color, weight: None }
+    }
+
+    /// A bar of `color` `weight` points thick.
+    pub const fn weighted_bar(color: DataColor, weight: f32) -> Self {
+        IconMark::Bar { color, weight: Some(weight) }
+    }
 }
 
 impl<'a> IconSpec<'a> {
@@ -184,8 +212,14 @@ impl<'a> IconSpec<'a> {
     /// Adds a dot of `color` at the bottom-trailing corner of an SVG or glyph icon, ringed in the icon's colour: the
     /// tone a point picker sets. The dot is a data colour (`Draw::data_fill`); the ring follows the icon's colour.
     pub fn badge(mut self, color: DataColor) -> Self {
-        self.badge = Some(color);
+        self.badge = Some(IconMark::Dot(color));
         self
+    }
+
+    /// Puts `mark` on the icon in place of any mark it has.
+    pub fn with_mark(self, mark: IconMark) -> Self {
+        let _ = mark;
+        todo!("rb.R18")
     }
 }
 

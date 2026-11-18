@@ -42,6 +42,9 @@ pub struct InstallSpec {
     /// Whether the stories' command sets (`#[command(story)]`) load: the gallery and the story fixtures show
     /// stories, an app does not, so a story's keys never reach an app's keymap.
     pub stories: bool,
+    /// The clipboard the host installs (system, browser event, memory); without one the runtime uses
+    /// `Clipboard::new(EguiClipboard)`.
+    pub clipboard: Option<craft_platform::clipboard::Clipboard>,
 }
 
 /// The modifiers the mouse wheel zooms and scrolls sideways with.
@@ -82,7 +85,14 @@ impl InstallSpec {
             app_id: String::new(),
             pen: None,
             stories: false,
+            clipboard: None,
         }
+    }
+
+    /// Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
+    pub fn clipboard(self, clipboard: craft_platform::clipboard::Clipboard) -> Self {
+        let _ = clipboard;
+        todo!("pf.C-R1")
     }
 
     /// Loads the stories' command sets too, for an install that shows stories.
