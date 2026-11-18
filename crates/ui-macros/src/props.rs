@@ -157,7 +157,7 @@ type Forwarded = (&'static str, &'static str, &'static str);
 /// here.
 const COLLECTION: &[Forwarded] = &[
     ("select", "$ui::contract::SelectMode", "What the user can select."),
-    ("reorder", "$ui::contract::ReorderRule", "Rows reorder by dragging and by the stacking keys (Cmd/Ctrl+[ and ])."),
+    ("reorder", "$ui::contract::ReorderRule", "Rows reorder by dragging and by the stacking keys (Cmd/Ctrl+[ and ]) or the scheme's keys."),
     ("rename", "bool", "Rows rename in place: a double click on the label, F2 or the rename command opens the editor."),
     (
         "rename_column",

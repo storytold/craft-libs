@@ -254,14 +254,25 @@ pub const ALT_ARROW_KEYS: [Chord; 4] =
 /// The `Intent::MoveItem` a key of the scheme `keys` asks for in an order laid out along `axis`, `None` for any other
 /// press.
 pub fn reorder_intent(key: Key, mods: Mods, keys: ReorderKeys, axis: Axis) -> Option<Intent> {
-    // P3(pdf-workflows-w1): WF-W3
-    let _ = (keys, axis);
     let chord = Chord::new(mods, key);
-    if !REORDER_KEYS.contains(&chord) {
-        return None;
+    match keys {
+        ReorderKeys::Stacking => {
+            if !REORDER_KEYS.contains(&chord) {
+                return None;
+            }
+            let front = matches!(key, Key::CloseBracket | Key::CloseCurlyBracket);
+            Some(Intent::move_item(front, mods.shift))
+        }
+        ReorderKeys::AltArrows => {
+            if !ALT_ARROW_KEYS.contains(&chord) {
+                return None;
+            }
+            // Down and Right are one place later in reading order on either axis; the item step turns `front` back
+            // into a direction with `toward_end` over the same axis, which is its own inverse.
+            let later = matches!(key, Key::Down | Key::Right);
+            Some(Intent::move_item(toward_end(later, axis), false))
+        }
     }
-    let front = matches!(key, Key::CloseBracket | Key::CloseCurlyBracket);
-    Some(Intent::move_item(front, mods.shift))
 }
 
 /// Whether a move toward the front goes toward the end of an order laid out along `axis`. The front of a vertical
@@ -289,8 +300,11 @@ pub fn intent(os: Os, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
     if let Some(fine) = fine_move(key, mods, role) {
         return Some(fine);
     }
-    // P3(pdf-workflows-w1): WF-W4
+    // Before the Alt+Up and Alt+Down rows, so that the Alt+arrow scheme reorders instead of opening or closing. Rows
+    // stacked one per line have no neighbour across their axis: the arrows across it stay their move rows there.
+    let across = if role.reorder_axis == Axis::X { matches!(key, Key::Up | Key::Down) } else { matches!(key, Key::Left | Key::Right) };
     if let Some(keys) = role.reorderable
+        && !(role.stacked && across)
         && let Some(reorder) = reorder_intent(key, mods, keys, role.reorder_axis)
     {
         return Some(reorder);

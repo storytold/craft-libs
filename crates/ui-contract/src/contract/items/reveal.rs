@@ -52,7 +52,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             self.aim_reveal(layout, at, view.height());
             let mut in_view = Vec::new();
             layout.visible(ScrollPos { x: self.offset_x, y: self.offset }, view.size(), &mut in_view);
-            let source = self.source;
+            let source = &*self.source;
             let unmeasured: Vec<usize> = rows::measured_heights(&ctx, id, |height| {
                 in_view
                     .into_iter()

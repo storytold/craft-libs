@@ -6,7 +6,7 @@ use crate::contract::Notch;
 pub use crate::runtime::env::RowPressed;
 use crate::runtime::env::{Counted, Label};
 use crate::style::StyleCx;
-use craft_behavior::{Axis, ColumnKey};
+use craft_behavior::{Axis, ColumnKey, MiddleButton, ReorderKeys};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -35,18 +35,18 @@ pub struct ReorderRule {
     /// that `has_children` is a group; an open group without visible children takes items through the middle of its row.
     pub into_groups: bool,
     /// The key scheme that reorders the collection's items; default `Stacking`.
-    pub keys: craft_behavior::ReorderKeys,
+    pub keys: ReorderKeys,
 }
 
 impl ReorderRule {
     /// A rule that only moves.
     pub const fn new() -> Self {
-        ReorderRule { copy_with_alt: false, into_groups: false, keys: craft_behavior::ReorderKeys::Stacking }
+        ReorderRule { copy_with_alt: false, into_groups: false, keys: ReorderKeys::Stacking }
     }
 
     /// The key scheme that reorders the items.
     #[must_use]
-    pub const fn keys(mut self, keys: craft_behavior::ReorderKeys) -> Self {
+    pub const fn keys(mut self, keys: ReorderKeys) -> Self {
         self.keys = keys;
         self
     }
@@ -239,7 +239,7 @@ pub struct CollectionProps {
     /// The distance one wheel notch scrolls the rows; unset, the default notch.
     pub notch: Option<Notch>,
     /// What a middle press does: pan or latched auto-scroll.
-    pub middle_button: craft_behavior::MiddleButton,
+    pub middle_button: MiddleButton,
     /// Flip the direction of middle-button pan and auto-scroll.
     pub invert_middle: bool,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
@@ -333,7 +333,7 @@ impl CollectionProps {
             row_height: RowHeight::Control,
             command_click: false,
             notch: None,
-            middle_button: craft_behavior::MiddleButton::Pan,
+            middle_button: MiddleButton::Pan,
             invert_middle: false,
             overflow: Axis::Y,
             pages: false,
@@ -584,7 +584,7 @@ impl CollectionProps {
 
     /// What a middle press does: pan, or latched auto-scroll (see [`CollectionProps::middle_button`]).
     #[must_use]
-    pub const fn middle_button(mut self, button: craft_behavior::MiddleButton) -> Self {
+    pub const fn middle_button(mut self, button: MiddleButton) -> Self {
         self.middle_button = button;
         self
     }

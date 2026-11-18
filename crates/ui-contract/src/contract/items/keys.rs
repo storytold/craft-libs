@@ -15,7 +15,6 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn navigate(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, view: f32, header_held: bool) {
         let len = self.source.len();
         let mode = Self::select_mode(comp);
-        let outline = Outline::new(self.source).columns(layout.column_count()).layout(layout);
         let cells = layout.column_count() > 0 && Self::selects_cells(comp);
         let page = self.page_rows(layout, view);
         while !header_held && let Some((mv, mods)) = cx.core.intents.take_move() {
@@ -38,6 +37,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let mut state = NavState::new().page(page).wrap(comp.items().arrows_wrap).column(start.map_or(self.lead.column, |(_, column)| column));
             state.lead = start.map(|(at, _)| at);
             state.anchor = lead.map(|at| self.anchor_at(at)).filter(|_| mods.extend);
+            // Built per move: it borrows the source the hooks own, and the moves above take the hooks mutably.
+            let outline = Outline::new(&*self.source).columns(layout.column_count()).layout(layout);
             let step = match nav::step(layout.nav(), &outline, &mut state, mv, mods) {
                 // The ends of the outline, and the first move into it, land on an item, not on a section stop.
                 NavStep::Moved(to) if self.source.section_stop(to) && (lead.is_none() || matches!(mv, NavMove::Start | NavMove::End)) => {
@@ -269,7 +270,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 prefix = typing.push(letter, now).to_owned();
             }
             cx.core.memory.session::<Typing>(sub(id, "typing")).0 = typing;
-            let source = self.source;
+            let source = &*self.source;
             if let Some(to) = TypeAhead::pick(&prefix, lead_at, len, |at| source.text(at).unwrap_or_default(), |text| folder.key(text)) {
                 self.move_lead(to, LeadSource::Keys);
                 self.pick(comp, to, false, false);

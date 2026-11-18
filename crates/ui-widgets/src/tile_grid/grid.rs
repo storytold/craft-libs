@@ -829,7 +829,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
 
     /// The tiles with a header row before each group, then the tail rows: the rows the item step walks and the layout
     /// places.
-    fn filtered<'s>(&self, source: &'s dyn ItemSource<K>, _: &crate::runtime::env::Env) -> Option<Box<dyn ItemSource<K> + 's>> {
+    fn filtered<'s>(&self, source: &'s dyn ItemSource<K>, _: &crate::runtime::env::Env, _: Option<&K>) -> Option<Box<dyn ItemSource<K> + 's>> {
         (!self.groups.is_empty() || !self.tail.is_empty())
             .then(|| Box::new(Outline::new(source, self.groups, self.tail, self.collapsible)) as Box<dyn ItemSource<K> + 's>)
     }

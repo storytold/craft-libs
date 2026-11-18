@@ -35,7 +35,7 @@ use crate::runtime::{keys, layout_memory, pointer, wheel, windows};
 use crate::style::ComponentStyle as _;
 use crate::style::{StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
-use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
+use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, ReorderKeys, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
 use egui::{Context, CornerRadius, Id, Pos2, Rect, Shape, Ui, UiBuilder, Vec2};
 use std::any::Any;
 use std::sync::Arc;
@@ -122,7 +122,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     fn key_role(&self, comp: &C) -> KeyRole {
         let props = comp.props(Internal::new());
         KeyRole::new()
-            .reorderable(props.header.is_some_and(|header| header.band == DragBand::Reorder).then_some(craft_behavior::ReorderKeys::Stacking)) // P3(pdf-workflows-w1): WF-W4
+            .reorderable(props.header.is_some_and(|header| header.band == DragBand::Reorder).then_some(ReorderKeys::Stacking))
             .document(props.scroll_owner)
     }
 

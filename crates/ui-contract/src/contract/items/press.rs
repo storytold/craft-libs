@@ -10,7 +10,7 @@ use crate::runtime::focus;
 use crate::runtime::frame;
 use crate::runtime::memory::sub;
 use crate::runtime::motion::Animate as _;
-use craft_behavior::{Flow, ItemLayout, PressPhase, SelectionChange, Sense};
+use craft_behavior::{Flow, ItemLayout, MiddleButton, PointerButton, PressPhase, SelectionChange, Sense};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
@@ -82,8 +82,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             _ => None,
         };
+        // Under `AutoScroll` a middle press on the rows starts or ends the latch (the items step's `middle_scroll`) and
+        // picks no row.
         if let PressPhase::Down { start, .. } = cx.core.press.phase
             && local(start.origin).y >= 0.0
+            && !(start.button == PointerButton::Middle && props.middle_button == MiddleButton::AutoScroll)
         {
             // A second press, slow or not, ends the wait of the first.
             self.drags.slow = None;

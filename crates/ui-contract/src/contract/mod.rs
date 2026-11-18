@@ -118,6 +118,7 @@ pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
 pub use craft_behavior::MiddleButton;
+pub use craft_behavior::ReorderKeys;
 pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]
@@ -635,8 +636,14 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         0.0
     }
 
-    /// A view of `source` for this pass, such as the rows a filter keeps; `None` shows `source` as it is.
-    fn filtered<'s>(&self, _source: &'s dyn ItemSource<Self::Key>, _env: &crate::runtime::env::Env) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
+    /// A view of `source` for this pass, such as the rows a filter keeps; `None` shows `source` as it is. `kept` is the
+    /// item whose rename runs: the view keeps it whether or not it matches, so it is named in place.
+    fn filtered<'s>(
+        &self,
+        _source: &'s dyn ItemSource<Self::Key>,
+        _env: &crate::runtime::env::Env,
+        _kept: Option<&Self::Key>,
+    ) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
         None
     }
 
@@ -684,17 +691,21 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
-    /// Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): it reports
-    /// `CollectionEvent::Zoom` and the app sets its zoom and, through `Component::scroll`, the scroll position that
-    /// keeps the content under the pointer fixed.
+    /// Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): the items step reports
+    /// it as `CollectionEvent::Zoom`. A collection that leaves the zoom to the app reports the event and the app sets
+    /// its zoom and, through `Component::scroll`, the scroll position. A collection that applies the zoom itself takes
+    /// the event and names the point to keep in place through [`Collection::zoom_anchor`], so the step keeps the row
+    /// under it where it is.
     fn zooms(&self) -> bool {
         false
     }
 
-    /// The point the collection keeps fixed while a zoom reflows it: `wheel`, the point of this pass's zoom event, or
-    /// the pointer a zoom chord was taken at. `None` by default, and for a collection that does not zoom.
-    fn zoom_anchor(&self, wheel: Option<Pos2>) -> Option<Pos2> {
-        let _ = wheel;
+    /// The point whose row stays in place across a zoom step this collection takes in the current pass, in screen
+    /// points. `wheel` is the point of the `CollectionEvent::Zoom` the items step reported in this pass, `None` when
+    /// it reported none; a collection that also takes zoom keys answers the pointer it read with them. Read by the
+    /// items step in `content` of the same pass, against the layout the zoom changes from. `None` by default: the
+    /// step keeps its usual anchor.
+    fn zoom_anchor(&self, _wheel: Option<Pos2>) -> Option<Pos2> {
         None
     }
 

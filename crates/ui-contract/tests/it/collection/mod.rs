@@ -6,6 +6,7 @@ mod drops;
 mod keys;
 pub(crate) mod kit;
 mod list;
+mod middle_scroll;
 mod reorder_groups;
 mod review;
 mod rows;

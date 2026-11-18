@@ -490,7 +490,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return Some(Spot { over, insert: over, parent: None, mark: DropMark::Into(Rect::from_min_max(low, high)) });
         }
         if let Some(step) = groups {
-            let gap = reorder::tree_gap_at(&Outline::new(self.source), over, row, rtl, step, at);
+            let gap = reorder::tree_gap_at(&Outline::new(&*self.source), over, row, rtl, step, at);
             let parent = gap.parent;
             return Some(Spot { over, insert: gap.insert, parent, mark: gap.mark.mapped(|point| self.on_screen(point)) });
         }
@@ -504,7 +504,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.
     fn inside_dragged(&self, payload: &ListDrag<C::Key>, parent: Option<usize>) -> bool {
-        let outline = Outline::new(self.source);
+        let outline = Outline::new(&*self.source);
         let mut held = parent;
         while let Some(row) = held {
             if payload.keys.contains(&self.source.key(row)) {
@@ -526,7 +526,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let copy = matches!(landed.op, DropOperation::Copy);
         let together = at.iter().enumerate().all(|(n, &place)| place == from + n);
         let parent = landed.spot.parent.map(|row| self.source.key(row));
-        let held = if groups { reorder::parent_of(&Outline::new(self.source), from).map(|row| self.source.key(row)) } else { None };
+        let held = if groups { reorder::parent_of(&Outline::new(&*self.source), from).map(|row| self.source.key(row)) } else { None };
         if to == from && together && !copy && parent == held {
             return None;
         }
@@ -681,7 +681,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// (`reorder::key_move`).
     pub(super) fn key_reorder(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, mv: reorder::ItemMove) {
         let groups = props.reorder.is_some_and(|rule| rule.into_groups);
-        let outline = Outline::new(self.source);
+        let outline = Outline::new(&*self.source);
         let tree = groups.then_some(&outline as &dyn craft_behavior::NavOutline);
         let mut places = self.acted_on(at);
         places.sort_unstable();

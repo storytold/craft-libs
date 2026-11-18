@@ -581,8 +581,6 @@ fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
 }
 
 pub(crate) fn show_items<'r, C: Collection>(comp: C, ui: &mut Ui, source: &dyn ItemSource<C::Key>, item: &mut ItemFn<'r, C>) -> C::Output {
-    let view = comp.filtered(source, &Env::of(ui));
-    let source = view.as_deref().unwrap_or(source);
     run(comp, ui, ShowAt::Flow, None, &mut crate::contract::items::ItemsHooks::<C>::new(source, item))
 }
 
