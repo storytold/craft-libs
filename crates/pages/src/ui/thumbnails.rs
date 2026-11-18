@@ -24,18 +24,20 @@
 mod stories;
 
 use super::view::PageSource;
-use craft_behavior::{EditEvent, IconId, MiddleButton, Selection, SelectionChange, keyed};
+use craft_behavior::{EditEvent, IconId, MiddleButton, Selection, SelectionChange, SelectionModel as _, keyed};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, IdSource, NoValue, OsFiles, Outcome, PendingDrop, ReorderMove,
-    ReorderRule, Show as _, ShowCollection as _,
+    Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, IdSource, NoValue, OsFiles, Outcome, PendingDrop, Props as _,
+    ReorderMove, ReorderRule, Show as _, ShowCollection as _,
 };
-use craft_ui::list::ThumbAspect;
+use craft_ui::list::{ThumbAspect, ToggleState};
 use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails};
 use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::drag::OsFile;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::DataColor;
-use craft_ui::tile_grid::{CaptionPlace, GridEvent, GridZoom, TailRow, ThumbnailSlider, Tile, TileGrid, TileGroup, TileMark, TileZoom, ZoomStep};
+use craft_ui::tile_grid::{
+    CaptionPlace, GridEvent, GridZoom, TailRow, ThumbnailSlider, Tile, TileActionPlace, TileGrid, TileGroup, TileMark, TilePartEvent, TileZoom,
+};
 use egui::{Id, Pos2, Response, Ui};
 
 /// The thumbnail zoom: 0.5 to 1.5 of the card thumbnail in steps of 0.25, 1 by default (PdfCraft's
@@ -211,7 +213,8 @@ impl Outcome for PageThumbnailsOutput {
 /// - Drag (when editable): the grid's reorder rule; the grid draws the insert line and scrolls near its edges.
 /// - Keys (one Tab stop, the grid's): arrows go to the next page, Shift extends, Home and End, Enter activates,
 ///   Delete and Backspace delete (the current page when nothing is picked), Cmd/Ctrl+] and [ move the picked
-///   pages, the zoom keys step [`THUMBNAIL_ZOOM`], the Menu key and Shift+F10 ask for the menu.
+///   pages, the zoom keys step [`THUMBNAIL_ZOOM`] ([`ORGANIZE_ZOOM`] in Organize), the Menu key and Shift+F10 ask for
+///   the menu.
 /// - AccessKit: the grid's listbox named [`ThumbnailWords::pages`], one option per page named
 ///   [`ThumbnailWords::page`], selected when picked, the current page marked current.
 #[derive(craft_ui::contract::Pattern)]
@@ -231,6 +234,7 @@ pub struct PageThumbnails<'a> {
     actions: &'a [(IconId, CommandRef)],
     insert_label: Option<&'a dyn Fn(usize) -> Label>,
     middle_button: Option<MiddleButton>,
+    invert_middle: bool,
     id: IdSource,
     reveal: Option<usize>,
 }
@@ -255,6 +259,7 @@ impl<'a> PageThumbnails<'a> {
             actions: &[],
             insert_label: None,
             middle_button: None,
+            invert_middle: false,
             id: IdSource::Auto,
             reveal: None,
         }
@@ -274,7 +279,8 @@ impl<'a> PageThumbnails<'a> {
         self
     }
 
-    /// The name of the insert gap before page `n` in Organize.
+    /// The name of the insert gap before page `n` in Organize; an editable Organize grid shows insert gaps only with
+    /// a name for them.
     #[must_use]
     pub fn insert_label(mut self, label: &'a dyn Fn(usize) -> Label) -> Self {
         self.insert_label = Some(label);
@@ -285,6 +291,13 @@ impl<'a> PageThumbnails<'a> {
     #[must_use]
     pub fn middle_button(mut self, button: MiddleButton) -> Self {
         self.middle_button = Some(button);
+        self
+    }
+
+    /// Flips the direction of the grid's middle-button pan and auto-scroll (the user's Invert middle setting).
+    #[must_use]
+    pub fn invert_middle(mut self, on: bool) -> Self {
+        self.invert_middle = on;
         self
     }
 
@@ -316,7 +329,9 @@ impl<'a> PageThumbnails<'a> {
     }
 
     /// Shows the size row above the grid: craft-ui's [`ThumbnailSlider`] over [`THUMBNAIL_ZOOM`], editing `zoom` (a
-    /// view preference, not the document). The grid's zoom keys step it too.
+    /// view preference, not the document). The grid's zoom keys, Ctrl/Cmd with the wheel and a pinch step it too. In
+    /// Organize there is no size row (the host's bar holds the slider) and the grid steps `zoom` over
+    /// [`ORGANIZE_ZOOM`].
     #[must_use]
     pub fn size(mut self, zoom: &'a mut f64) -> Self {
         self.zoom = Some(zoom);
@@ -373,20 +388,27 @@ impl<'a> PageThumbnails<'a> {
             actions,
             insert_label,
             middle_button,
+            invert_middle,
             id,
             reveal,
         } = self;
-        let _ = (arrangement, actions, insert_label, middle_button, id, reveal); // P3(pdf-canvas-w6): CV-C27
+        let organize = arrangement == ThumbnailArrangement::Organize;
         let env = Env::of(ui);
         let words = env.words::<ThumbnailWords>();
         let count = source.page_count();
         let mut events = Vec::new();
 
         let mut zoom = zoom;
-        if let Some(zoom) = zoom.as_deref_mut() {
+        if !organize && let Some(zoom) = zoom.as_deref_mut() {
             ThumbnailSlider::new(words.size.clone(), Bind::bound(zoom), THUMBNAIL_ZOOM).show(ui);
         }
-        let scale = zoom.as_deref().copied().unwrap_or(1.0);
+        let range = if organize { ORGANIZE_ZOOM } else { THUMBNAIL_ZOOM };
+        let grid_zoom = match zoom {
+            Some(zoom) => GridZoom::Bound(Bind::bound(zoom), range),
+            None => GridZoom::Fixed(1.0),
+        };
+        // The grid holds the selection while it shows, so the tiles' checks read the picked set as it was before.
+        let checked: Vec<bool> = if organize { (0..count).map(|page| picked.contains(&page)).collect() } else { Vec::new() };
 
         let order: Vec<usize> = (0..count).collect();
         let tiles = keyed(&order, |&page| page);
@@ -404,23 +426,38 @@ impl<'a> PageThumbnails<'a> {
         let tail: Vec<TailRow<usize>> = if new_page_row { vec![TailRow::new(new_page, words.new_page.clone())] } else { Vec::new() };
         let aspect = if count == 0 { 1.0 } else { aspect_of(source, 0) };
         let mut grid = TileGrid::<usize>::new(label)
+            .id_source(id)
             .selection(Bind::bound(&mut *picked))
             .aspect(aspect)
-            .zoom(GridZoom::Fixed(scale)) // P3(pdf-canvas-w6): CV-C27
+            .zoom(grid_zoom)
             .caption(caption)
             .current(Some(current))
             .groups(&groups)
             .tail(&tail);
+        if let Some(page) = reveal {
+            grid = grid.reveal(page);
+        }
+        if let Some(button) = middle_button {
+            grid = grid.middle_button(button);
+        }
+        grid = grid.invert_middle(invert_middle);
         if !groups.is_empty() {
             grid = grid.collapsible();
         }
+        if organize {
+            grid = grid.checks(true).action_place(TileActionPlace::Band);
+        }
         if editable {
+            let rule = if organize { ReorderRule::new().copy_with_alt() } else { ReorderRule::new() };
             grid = grid
-                .reorder(ReorderRule::new())
+                .reorder(rule)
                 .accepts(move |_, _, insert| insert <= new_page)
                 .drag_count(words.count.counted())
                 .takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true))
                 .deletable(true);
+            if organize && let Some(insert_label) = insert_label {
+                grid = grid.insert_gaps(insert_label);
+            }
         }
         let ctx = ui.ctx().clone();
         let thumbnails = Thumbnails::<usize>::in_context(&ctx, "page-thumbnails", ThumbnailOptions::new());
@@ -436,6 +473,13 @@ impl<'a> PageThumbnails<'a> {
             if page_marks.animated {
                 tile = tile.mark(TileMark::new(IconId::new("star"), words.animated.clone()));
             }
+            if organize {
+                let on = checked.get(page).copied().unwrap_or(false);
+                tile = tile.check(if on { ToggleState::On } else { ToggleState::Off });
+                for (icon, command) in actions {
+                    tile = tile.action(icon.clone(), command.clone());
+                }
+            }
             let thumbs = &thumbnails;
             tile.accessible_name(accessible.join(", ")).thumb(page_aspect(source, page), move |cx, rect| {
                 let ctx = cx.painter.ctx().clone();
@@ -449,6 +493,7 @@ impl<'a> PageThumbnails<'a> {
             match event {
                 GridEvent::GroupOpen { group, open, .. } => events.push(ThumbnailEvent::SectionOpen { section: group, open }),
                 GridEvent::GroupMenu { group, at, .. } => events.push(ThumbnailEvent::SectionMenu { section: group, at }),
+                GridEvent::Insert { at, .. } if editable && at <= count => events.push(ThumbnailEvent::Insert(at)),
                 _ => {}
             }
         }
@@ -471,14 +516,20 @@ impl<'a> PageThumbnails<'a> {
                 }
                 CollectionEvent::Reorder(edit) if editable => events.push(ThumbnailEvent::Reorder(edit)),
                 CollectionEvent::ContextMenu(request) if request.key < count => events.push(ThumbnailEvent::ContextMenu(request)),
-                CollectionEvent::Dropped { at: DropAt::Gap { insert, .. }, .. } if editable => {
-                    // P3(pdf-canvas-w6): CV-C27, the files come from the drop's `OsFiles` payload
-                    events.push(ThumbnailEvent::FilesDropped { insert, files: Vec::new() });
-                }
-                CollectionEvent::Zoom { factor, .. } => {
-                    if let Some(zoom) = zoom.as_deref_mut() {
-                        *zoom = THUMBNAIL_ZOOM.step(*zoom, if factor > 1.0 { ZoomStep::In } else { ZoomStep::Out });
+                CollectionEvent::Dropped { at: DropAt::Gap { insert, .. }, payload, .. } if editable => {
+                    if let Some(files) = payload.get::<OsFiles>() {
+                        events.push(ThumbnailEvent::FilesDropped { insert, files: files.files.clone() });
                     }
+                }
+                // A check toggles its page in the picked set whatever modifiers are held, and goes to it.
+                CollectionEvent::Item(page, TilePartEvent::Check { .. }) if page < count => {
+                    let change = SelectionChange::Toggle(page);
+                    picked.apply(change.clone());
+                    events.push(ThumbnailEvent::Selection(change));
+                    events.push(ThumbnailEvent::Go(page));
+                }
+                CollectionEvent::Item(page, TilePartEvent::Action(action)) if page < count && action < actions.len() => {
+                    events.push(ThumbnailEvent::Action { page, action });
                 }
                 _ => {}
             }
