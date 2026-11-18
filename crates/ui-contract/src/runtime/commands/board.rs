@@ -96,6 +96,8 @@ pub(crate) struct Board {
     held: Vec<Held>,
     /// The top modal layer's root container of each viewport that has one.
     modal_roots: Vec<(ViewportId, Id)>,
+    /// The root of the page region the window's shell shows, per viewport: where keys with nothing focused also go.
+    page_roots: Vec<(ViewportId, Id)>,
     /// The states published this pass, and the pass before, by an instance inside the top modal layer.
     modal_published: HashSet<StateKey>,
     modal_published_last: HashSet<StateKey>,
@@ -343,7 +345,15 @@ impl Board {
             .or_else(|| focus::record(ctx, pass::current_viewport(ctx)).keys.map(|keys| (keys.edits, keys.inactive)));
         let in_reach = !dialog_open || !from.inside_modal.is_empty();
         let (edits, inactive) = keys.filter(|_| in_reach)?;
-        edits.contains(edit).then_some(Declaration::Focused { inactive: inactive.contains(edit) })
+        let inactive = inactive.contains(edit);
+        // An Undo or Redo the focused part has no step for goes where `fall_through` sends it (the declaring instance
+        // or the app command), so that target answers for it and its state enables the command: a toolbar Undo stays
+        // enabled while the app can undo though the field cannot. Cut, Copy and Delete with nothing selected stay the
+        // part's and disabled.
+        if inactive && matches!(edit, EditCommand::Undo | EditCommand::Redo) {
+            return None;
+        }
+        edits.contains(edit).then_some(Declaration::Focused { inactive })
     }
 
     /// `command` as seen by `instance`, or by the app for an app-scope command, from `from`, before the gate, and the
@@ -662,8 +672,7 @@ pub(crate) fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
 /// The window's own keymap: the registry scopes, the app catalog, the window shortcuts and the app's overrides, as the
 /// board resolves keys with it; none before the first frame builds one.
 pub fn keymap(ctx: &Context) -> Option<Arc<Keymap>> {
-    let _ = ctx;
-    todo!("ch.C22")
+    with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap)))
 }
 
 /// The command that holds `chord` in the window's keymap (`Keymap::holder`); none before the first frame builds one.
@@ -736,6 +745,16 @@ pub(crate) fn set_modal_open(ctx: &Context, open: bool, viewport: ViewportId, ro
         board.here.modal_open = open;
         board.modal_roots.retain(|(of, _)| *of != viewport);
         board.modal_roots.extend(root.map(|root| (viewport, root)));
+    });
+}
+
+/// Records `root` as the page region `viewport` shows (`AppShell::page`): a key pressed with nothing focused reaches
+/// the page's command scope beside the window's.
+#[doc(hidden)]
+pub fn note_page_root(ctx: &Context, viewport: ViewportId, root: Id) {
+    with(ctx, |board| {
+        board.page_roots.retain(|(of, _)| *of != viewport);
+        board.page_roots.push((viewport, root));
     });
 }
 
@@ -1187,6 +1206,7 @@ pub(crate) fn begin(ctx: &Context) {
             board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.ids().collect()).unwrap_or_default()
         });
         // Nothing focused inside a modal: the modal's root takes the commands, as a plain Enter goes to its default button.
+
         let chain = match (chain.is_empty() && focused.is_none(), board.modal_roots.iter().find(|(of, _)| *of == viewport)) {
             (true, Some((_, root))) => vec![*root],
             _ => chain,
@@ -1195,8 +1215,14 @@ pub(crate) fn begin(ctx: &Context) {
             board.last_focused.clone_from(&chain);
         }
         // Nothing focused outside a modal: the window's shell root takes the commands, so a window command's key comes
-        // before an app command's. Nothing holds focus there, so the chain last focused stays.
-        let chain = if chain.is_empty() && focused.is_none() { shell.into_iter().collect() } else { chain };
+        // before an app command's, and the page region's after it. Nothing holds focus there, so the chain last focused
+        // stays.
+        let chain = if chain.is_empty() && focused.is_none() {
+            let page = board.page_roots.iter().find(|(of, _)| *of == viewport).map(|(_, root)| *root);
+            shell.into_iter().chain(page).collect()
+        } else {
+            chain
+        };
         match board.here.focused.iter_mut().find(|(v, _)| *v == viewport) {
             Some(entry) => entry.1.clone_from(&chain),
             None => board.here.focused.push((viewport, chain.clone())),

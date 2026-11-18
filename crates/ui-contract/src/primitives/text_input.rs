@@ -70,9 +70,7 @@ pub struct TextOptions {
     pub role: TypeRole,
     /// The text colour; `None` takes the surface's ink. A disabled part shows the disabled text colour whatever this is.
     pub ink: Option<Ink>,
-    /// Tab inserts a tab instead of moving focus.
-    pub tab_inserts: bool,
-    /// What Tab does in this field; replaces `tab_inserts` and `tab_rewrites`.
+    /// What Tab does in this field.
     pub tab: TabKey,
     /// The bound caret as a byte offset, read and written through its binding; the adapter keeps no caret of its own.
     pub caret: Option<usize>,
@@ -110,9 +108,6 @@ pub struct TextOptions {
     /// The control's caller hangs a context menu of its own on it: a context request opens that menu, not the text
     /// part's edit menu.
     pub own_menu: bool,
-    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses) instead of moving focus; with
-    /// `tab_inserts` it is a debug assertion.
-    pub tab_rewrites: bool,
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
@@ -130,7 +125,6 @@ impl Default for TextOptions {
             mono: false,
             role: TypeRole::Body,
             ink: None,
-            tab_inserts: false,
             tab: TabKey::default(),
             caret: None,
             complete: None,
@@ -146,7 +140,6 @@ impl Default for TextOptions {
             arrows_from_end: false,
             unparsed: None,
             own_menu: false,
-            tab_rewrites: false,
             holds_drafts: false,
         }
     }
@@ -170,7 +163,8 @@ impl std::fmt::Debug for TextOptions {
             .field("lines", &self.lines)
             .field("live", &self.live)
             .field("complete", &self.complete.is_some())
-            .field("tab_rewrites", &self.tab_rewrites)
+            .field("tab", &self.tab)
+            .field("caret", &self.caret)
             .field("holds_drafts", &self.holds_drafts)
             .finish_non_exhaustive()
     }
@@ -317,13 +311,15 @@ pub enum EditorSurrounding<'a> {
     },
 }
 
+/// The input method's mutation stamp, which an editor compares to tell its own edits from the input method's.
 pub use egui::ime_context::ImeMutationStamp as ImeStamp;
 
 impl<'a> EditorState<'a> {
     /// Reports `s` as the committed text around the caret, for the input-method target at `epoch`.
-    pub fn surrounding(self, epoch: u64, s: EditorSurrounding<'a>) -> Self {
-        let _ = (epoch, s);
-        todo!("cv.K26")
+    #[must_use]
+    pub fn surrounding(mut self, epoch: u64, s: EditorSurrounding<'a>) -> Self {
+        self.surrounding = Some((epoch, s));
+        self
     }
 
     /// A state with no selection, no marked text and nothing to undo.

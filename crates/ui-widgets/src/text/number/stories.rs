@@ -1,11 +1,11 @@
 //! Stories of `NumberField`.
 
-use super::{NumberField, NumberPick, UnitPlacement};
+use super::{NamedOr, NumberField, NumberName, NumberPick, UnitPlacement};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::Row;
-use crate::runtime::env::{Env, Message, UnitKind};
+use crate::runtime::env::{Env, LengthUnits, Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{Mixed, NumberCodec, Reader};
 use craft_theme::ControlSize;
@@ -151,6 +151,35 @@ fn number_field_popup_slider(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn number_field_auto(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let codec = NumberCodec::new(Reader::new(), 1).or_parse(|text| text.trim().eq_ignore_ascii_case("auto").then_some(AUTO));
     NumberField::new("Size", Bind::bound(data.value("auto", Some(SIZE)))).codec(codec).range(RANGE).show(ui).edit.into()
+}
+
+/// The one name of the named-length story's presets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LengthName {
+    Auto,
+}
+
+impl NumberName for LengthName {
+    fn id(self) -> u32 {
+        0
+    }
+
+    fn from_id(id: u32) -> Option<Self> {
+        (id == 0).then_some(LengthName::Auto)
+    }
+}
+
+/// A named-or-length field: "Auto" is a name, and the lengths are stored in points and shown in inches.
+#[story(NumberField<'static, NamedOr<LengthName>>, covers = [], drive = Drive::Never)]
+fn number_field_named_length(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let presets = [Entry::new(NumberPick::Choice(0), "Auto")];
+    let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Inches, 72.0);
+    NumberField::named("Leading", Bind::bound(data.value("named_length", NamedOr::<LengthName>::Number(36.0))))
+        .lengths(lengths)
+        .presets(&presets)
+        .show(ui)
+        .edit
+        .into()
 }
 
 #[story(NumberField<'static>, covers = [], drive = Drive::Type("7"))]

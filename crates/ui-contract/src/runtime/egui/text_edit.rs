@@ -43,6 +43,9 @@ pub(crate) struct Edit<'a> {
     /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
     /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
     pub baseline: Option<f32>,
+    /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
+    /// (`text_adapter`), and a single line or a laid-out galley ignores it.
+    pub scroll: f32,
 }
 
 /// What the widget did in one pass.
@@ -58,6 +61,8 @@ pub(crate) struct Shown {
     pub galley: std::sync::Arc<egui::Galley>,
     /// Where the galley sits on screen.
     pub galley_pos: egui::Pos2,
+    /// The height the widget's text takes, margins included: more than the rect's when a multi-line text scrolls.
+    pub content: f32,
 }
 
 /// Runs the widget at `edit.rect`.
@@ -85,6 +90,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         underline,
         galley,
         baseline,
+        scroll,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
     let env = crate::runtime::env::Env::of(ui);
@@ -155,8 +161,11 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     };
     // The component's root took its place in the flow already: the editor runs in a child that takes none, so the
     // parent's cursor stays past the root, not past the text part inside it.
+    // A scrolled multi-line text runs moved up by its offset and shows only inside `rect` (the clip below), so the
+    // widget's own hit test, caret and selection follow the text where it is drawn.
+    let placed = if multiline && galley.is_none() && scroll > 0.0 { rect.translate(egui::vec2(0.0, -scroll)) } else { rect };
     let output = {
-        let ui = &mut super::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
+        let ui = &mut super::alloc::child(ui, egui::UiBuilder::new().max_rect(placed));
         super::style::set_text_edit_unfloored(ui);
         // The text shows only inside the text part, however wide the line is.
         if galley.is_none() {
@@ -231,6 +240,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         entered,
         clicked: output.response.clicked(),
         caret,
+        content: output.response.rect.height(),
         galley: output.galley,
         galley_pos: output.galley_pos,
     }
@@ -248,11 +258,14 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     state.store(ctx, id);
 }
 
-/// Whether the widget's field has an undo step and a redo step, as `(undo, redo)`.
-#[allow(dead_code)] // P3(chrome-w6): ch.C17a
-pub(crate) fn history(ctx: &Context, id: Id) -> (bool, bool) {
-    let _ = (ctx, id);
-    todo!("ch.C17a")
+/// Whether the widget's field has an undo step and a redo step, as `(undo, redo)`, against its current text `text`
+/// (egui's undoer compares its steps with the text, which the widget's state does not hold). It reads the undoer and
+/// steps nothing, so it agrees with what [`undo`] would do now.
+pub(crate) fn history(ctx: &Context, id: Id, text: &str) -> (bool, bool) {
+    let Some(state) = TextEditState::load(ctx, id) else { return (false, false) };
+    let now = (state.cursor.char_range().unwrap_or_default(), text.to_owned());
+    let undoer = state.undoer();
+    (undoer.has_undo(&now), undoer.has_redo(&now))
 }
 
 /// The undo steps of the widget: `Some(text)` when `step` changed it.

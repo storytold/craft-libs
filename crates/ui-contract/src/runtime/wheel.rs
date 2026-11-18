@@ -44,6 +44,25 @@ pub(crate) fn nearest_scroll_owner(ctx: &Context, rect: Rect) -> Option<Id> {
     })
 }
 
+/// The innermost scroll owner inside the field `owner` under `at` that can still move by the vertical scroll `dy`: the
+/// split gives a focused field the whole wheel, and a multi-line text part that scrolls its own text inside the field
+/// (`text_adapter`) answers for it. `None` when `owner` is no field, the share is not vertical, or nothing inside it
+/// scrolls that way, so the field keeps its share and a text at its end lets the wheel go as the field would.
+fn scroll_owner_inside(takers: &[WheelTaker<Id>], owner: Id, at: Pos2, dy: f32) -> Option<Id> {
+    if dy == 0.0 {
+        return None;
+    }
+    let field = takers.iter().find(|taker| taker.owner == owner && taker.field)?;
+    takers
+        .iter()
+        // Takers register outer first: of equal views the later one is the inner.
+        .rev()
+        .filter(|taker| taker.owner != owner && taker.scrolls && taker.vertical && taker.rect.contains(at) && field.rect.contains_rect(taker.rect))
+        .filter(|taker| taker.room.is_none_or(|room| if dy > 0.0 { room.positive.y > 0.0 } else { room.negative.y > 0.0 }))
+        .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+        .map(|taker| taker.owner)
+}
+
 /// The begin hook (H7): rotates the registrations, ends the wheel gesture a press or the gap closed, and splits this
 /// pass's wheel input.
 pub(crate) fn begin(ctx: &Context) {
@@ -120,6 +139,7 @@ pub(crate) fn begin(ctx: &Context) {
                 let focus = WheelFocus::new(focused).app_field(app_field).by_position(by_position);
                 // The device's lines and pages become points of each taker: the notch is the scroll owner's to choose.
                 for (owner, mut share) in split(&state.last, at, share, focus, state.armed, &mut state.gesture, now) {
+                    let owner = scroll_owner_inside(&state.last, owner, at, share.scroll.y).unwrap_or(owner);
                     if unit == WheelUnit::Line {
                         share.lines = share.scroll;
                     }

@@ -686,7 +686,8 @@ fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, me
     let text = parts.text.decl.as_ref().map(|decl| {
         let widget = crate::primitives::text_adapter::text_id(id, decl.key);
         let held = crate::contract::text::held_selection(memory, id);
-        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, base, &decl.options))
+        let draft = crate::contract::text::draft(memory, id);
+        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, draft.as_deref().unwrap_or(&decl.shown), base, &decl.options))
     });
     let editor =
         parts.text.editor.as_ref().map(|decl| (crate::primitives::ImeSurface::of(id, decl.key).widget(), super::editor::keys_of(base, decl.purpose)));

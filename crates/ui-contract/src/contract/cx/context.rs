@@ -40,6 +40,8 @@ pub(crate) trait TextResult {
     fn left_by_tab(&self) -> Option<bool>;
     /// Whether a `TabKey::Reports` part kept focus on Tab (`Some(true)`) or Shift+Tab (`Some(false)`) this pass.
     fn tab(&self) -> Option<bool>;
+    /// The part's caret as a byte offset into its text after the pass; `None` while its widget has no caret.
+    fn caret(&self) -> Option<usize>;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -48,6 +50,7 @@ pub(crate) struct RecordedText<V> {
     pub(crate) submit_mods: craft_keymap::Mods,
     pub(crate) left_by_tab: Option<bool>,
     pub(crate) tab: Option<bool>,
+    pub(crate) caret: Option<usize>,
 }
 
 impl<V: 'static> TextResult for RecordedText<V> {
@@ -61,6 +64,10 @@ impl<V: 'static> TextResult for RecordedText<V> {
 
     fn tab(&self) -> Option<bool> {
         self.tab
+    }
+
+    fn caret(&self) -> Option<usize> {
+        self.caret
     }
 
     fn as_any(&self) -> &dyn Any {

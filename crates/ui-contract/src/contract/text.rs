@@ -36,6 +36,11 @@ pub(crate) fn held_selection(memory: &mut MemoryStage, id: egui::Id) -> Option<(
     memory.shown::<TextState>(state_id(id)).held_selection
 }
 
+/// The draft the text part of the component `id` holds while a typing run is open.
+pub(crate) fn draft(memory: &mut MemoryStage, id: egui::Id) -> Option<String> {
+    memory.shown::<TextState>(state_id(id)).draft.clone()
+}
+
 /// Whether a scrubbing field was in edit before the press that is now down: a press that becomes a drag scrubs and
 /// leaves edit as it found it, and only a click without travel enters it.
 #[derive(Clone, Default)]
@@ -421,6 +426,11 @@ pub(crate) fn run<C: Component>(
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
+    // The bound caret is compared with the widget's before anything else this pass moves it (AccessKit, Select All,
+    // the typing): last pass reported the widget's caret, so only an app write differs here. A composition keeps its
+    // caret.
+    let caret_placed = state.preedit.is_none()
+        && adapter::place_caret(&ctx, widget, state.draft.as_deref().unwrap_or(&decl.shown), decl.options.caret);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
     if std::mem::take(&mut state.select_all) {
         let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();
@@ -453,6 +463,7 @@ pub(crate) fn run<C: Component>(
             caret_visible,
             underline,
             now,
+            caret_placed,
         },
     );
     // Focus that moved to another part of the component leaves the text part like a focus loss: the draft commits.
@@ -467,6 +478,8 @@ pub(crate) fn run<C: Component>(
         let len = decl.shown.chars().count();
         match decl.caret {
             Caret::All => adapter::select(&ctx, widget, 0, len),
+            // A bound caret is where the app put it: focus arriving keeps it.
+            _ if decl.options.caret.is_some() => {}
             _ => adapter::select(&ctx, widget, len, len),
         }
     }
@@ -503,6 +516,8 @@ pub(crate) fn run<C: Component>(
         keys::hold_escape(&ctx, id);
     }
     let completions = state.completions.items.clone();
+    // The caret after every move of this pass, which a bound caret is written back from.
+    let caret = adapter::caret_byte(&ctx, widget, state.draft.as_deref().unwrap_or(&out.layout.full));
     *cx.core.memory.shown::<TextState>(state_id) = state;
     let mut outcome = resolved.outcome;
     outcome.layout = Some(out.layout);
@@ -512,7 +527,7 @@ pub(crate) fn run<C: Component>(
     outcome.clicked = out.clicked;
     // The focus service moved focus off the widget with Tab before this pass's widgets ran.
     let left_by_tab = if was_focused && !out.focused { crate::runtime::focus::tabbed_off(&ctx, widget) } else { None };
-    cx.core.texts = Some((decl.key, Box::new(RecordedText { outcome, submit_mods: resolved.submit_mods, left_by_tab, tab: None })));
+    cx.core.texts = Some((decl.key, Box::new(RecordedText { outcome, submit_mods: resolved.submit_mods, left_by_tab, tab: out.tab, caret })));
     apply_events(cx, resolved.events);
     cx.core.memory.shown::<TextState>(state_id).seen = shown_copy(cx);
     cx.core.submitted |= resolved.submitted;
