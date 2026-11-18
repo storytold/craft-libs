@@ -299,6 +299,22 @@ mod tests {
     }
 
     #[test]
+    fn waits_run_after_an_out_of_memory_error() {
+        use crate::health::{Fault, OUT_OF_MEMORY};
+        let opened = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
+        let health = opened.health.clone();
+        health.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        let index = opened.queue.submit([]);
+        assert!(health.wait(&opened.device, Some(index.clone())), "{health:?}");
+        assert!(health.wait_timeout(&opened.device, index, std::time::Duration::from_secs(5)), "{health:?}");
+        health.clear_out_of_memory(health.out_of_memory_count());
+        assert!(health.is_ok(), "{health:?}");
+        // any other error still stops them
+        health.mark(Fault::Error("Validation Error".into()));
+        assert!(!health.wait(&opened.device, None));
+    }
+
+    #[test]
     fn a_lost_device_is_seen_by_its_health() {
         let opened = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
         let health = opened.health.clone();

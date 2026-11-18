@@ -57,6 +57,11 @@ Licensed under MIT OR Apache-2.0.
   wait.
 - `DeviceHealth::watch` replaces the device's uncaptured-error handler. Polls catch the panic that
   `Device::poll` raises on a lost device and record the loss.
+- After an out-of-memory error, polls and waits keep running, so staging memory is reclaimed.
+  The app reads `DeviceHealth::out_of_memory_count` when it handles the error, frees memory, and
+  passes the count to `DeviceHealth::clear_out_of_memory`. The device is then healthy again,
+  unless it was lost, another error was recorded, or a new out-of-memory error came in after the
+  count was read.
 
 ## Tests
 

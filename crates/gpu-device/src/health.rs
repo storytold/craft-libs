@@ -43,10 +43,12 @@ impl Fault {
         matches!(self, Fault::Lost(_))
     }
 
-    /// An out-of-memory error on a device that still works: freeing memory and trying again can
-    /// succeed, unlike after a loss or a validation error. Only wgpu's own out-of-memory error is
-    /// recorded with exactly [`OUT_OF_MEMORY`]; a validation error that mentions memory is not
-    /// one.
+    /// An out-of-memory error on a device that still works: freeing memory, calling
+    /// [`DeviceHealth::clear_out_of_memory`] with the count read from
+    /// [`DeviceHealth::out_of_memory_count`] and trying again can succeed, unlike after a loss or
+    /// a validation error. Polls and waits keep running meanwhile. Only wgpu's own out-of-memory
+    /// error is recorded with exactly [`OUT_OF_MEMORY`]; a validation error that mentions memory
+    /// is not one.
     pub fn is_out_of_memory(&self) -> bool {
         matches!(self, Fault::Error(s) if s == OUT_OF_MEMORY)
     }
@@ -77,11 +79,12 @@ pub const OUT_OF_MEMORY: &str = "Out of Memory";
 /// of the same slot waits only for that one store.
 #[derive(Default)]
 struct Inner {
-    faulted: AtomicBool,
     /// The first device loss.
     lost: OnceLock<String>,
-    /// An out-of-memory error was seen.
-    out_of_memory: AtomicBool,
+    /// Out-of-memory errors seen.
+    out_of_memory_seen: AtomicU64,
+    /// Out-of-memory errors the caller cleared ([`DeviceHealth::clear_out_of_memory`]).
+    out_of_memory_cleared: AtomicU64,
     /// The first other error.
     error: OnceLock<String>,
     errors: AtomicU64,
@@ -158,35 +161,60 @@ impl DeviceHealth {
     }
 
     /// Mark the device unusable. The first fault is kept; a later device loss replaces an error,
-    /// and a later out-of-memory error replaces another error, so a caller can still free memory
-    /// and recover after a validation error in the same frame.
+    /// and a later out-of-memory error is reported over another error, so a caller still sees
+    /// that freeing memory may help after a validation error in the same frame.
     pub fn mark(&self, fault: Fault) {
         if fault.is_out_of_memory() {
-            self.0.out_of_memory.store(true, Ordering::Release);
-        } else {
-            // A slot already set keeps its first text.
-            let _ = match fault {
-                Fault::Lost(text) => self.0.lost.set(text),
-                Fault::Error(text) => self.0.error.set(text),
-            };
+            self.0.out_of_memory_seen.fetch_add(1, Ordering::AcqRel);
+            return;
         }
-        self.0.faulted.store(true, Ordering::Release);
+        // A slot already set keeps its first text.
+        let _ = match fault {
+            Fault::Lost(text) => self.0.lost.set(text),
+            Fault::Error(text) => self.0.error.set(text),
+        };
     }
 
-    /// Whether the device may still be used.
+    /// Out-of-memory errors recorded so far. Read it when handling an out-of-memory fault, and
+    /// pass it to [`clear_out_of_memory`](Self::clear_out_of_memory) once memory was freed.
+    pub fn out_of_memory_count(&self) -> u64 {
+        self.0.out_of_memory_seen.load(Ordering::Acquire)
+    }
+
+    /// Clear the out-of-memory errors up to `count` (from
+    /// [`out_of_memory_count`](Self::out_of_memory_count)) after the caller freed memory. One
+    /// recorded after `count` was read stays. The device counts as healthy again unless it was
+    /// lost or another error was recorded, which [`fault`](Self::fault) then reports.
+    pub fn clear_out_of_memory(&self, count: u64) {
+        let count = count.min(self.0.out_of_memory_seen.load(Ordering::Acquire));
+        self.0.out_of_memory_cleared.fetch_max(count, Ordering::AcqRel);
+    }
+
+    /// Whether an out-of-memory error is recorded and not cleared.
+    fn out_of_memory(&self) -> bool {
+        let cleared = self.0.out_of_memory_cleared.load(Ordering::Acquire);
+        self.0.out_of_memory_seen.load(Ordering::Acquire) > cleared
+    }
+
+    /// Whether the device may still be used: no fault was recorded, or only out-of-memory errors
+    /// that [`clear_out_of_memory`](Self::clear_out_of_memory) cleared.
     pub fn is_ok(&self) -> bool {
-        !self.0.faulted.load(Ordering::Acquire)
+        self.0.lost.get().is_none() && self.0.error.get().is_none() && !self.out_of_memory()
+    }
+
+    /// Whether polls and waits still run: the device was not lost and reported no error other
+    /// than out of memory. A poll reclaims the staging memory that recovering from an
+    /// out-of-memory error needs.
+    fn pollable(&self) -> bool {
+        self.0.lost.get().is_none() && self.0.error.get().is_none()
     }
 
     /// Why the device cannot be used, if it cannot.
     pub fn fault(&self) -> Option<Fault> {
-        if self.is_ok() {
-            return None;
-        }
         if let Some(text) = self.0.lost.get() {
             return Some(Fault::Lost(text.clone()));
         }
-        if self.0.out_of_memory.load(Ordering::Acquire) {
+        if self.out_of_memory() {
             return Some(Fault::Error(OUT_OF_MEMORY.into()));
         }
         self.0.error.get().map(|text| Fault::Error(text.clone()))
@@ -222,20 +250,21 @@ impl DeviceHealth {
         self.mark(Fault::Lost("the device stopped responding".into()));
     }
 
-    /// Block until `index` (or all submitted work) finished, unless the device is unusable.
-    /// Returns whether the work finished with the device still healthy: `false` when the device
-    /// was unusable, when it faulted, and when the poll itself failed, so the work may still be
-    /// running. A panic in `Device::poll` is caught and recorded as a loss. Native only: the web
-    /// has no blocking wait.
+    /// Block until `index` (or all submitted work) finished, unless the device was lost or
+    /// reported an error other than out of memory. Returns whether the work finished with the
+    /// device still usable: `false` when it was lost or reported such an error, before or during
+    /// the wait, and when the poll itself failed, so the work may still be running. After an
+    /// out-of-memory error the wait still runs. A panic in `Device::poll` is caught and recorded
+    /// as a loss. Native only: the web has no blocking wait.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait(&self, device: &wgpu::Device, index: Option<wgpu::SubmissionIndex>) -> bool {
-        if !self.is_ok() {
+        if !self.pollable() {
             return false;
         }
         let poll =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait { submission_index: index, timeout: None })));
         match poll {
-            Ok(Ok(_)) => self.is_ok(),
+            Ok(Ok(_)) => self.pollable(),
             Ok(Err(e)) => {
                 log::warn!("wgpu poll: {e}");
                 false
@@ -247,9 +276,10 @@ impl DeviceHealth {
         }
     }
 
-    /// Non-blocking poll (reclaims staging memory), skipped once the device is unusable.
+    /// Non-blocking poll (reclaims staging memory), skipped once the device was lost or reported
+    /// an error other than out of memory.
     pub fn poll(&self, device: &wgpu::Device) {
-        if !self.is_ok() {
+        if !self.pollable() {
             return;
         }
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Poll))).is_err() {
@@ -263,7 +293,8 @@ impl DeviceHealth {
     /// device faulted, so later work stops going to a GPU that no longer answers. A submission
     /// index the device never issued returns `false` and leaves the device healthy. A zero
     /// `timeout`, or one that passes before the first poll, returns `false` and leaves the device
-    /// healthy. A device that was already faulted returns `false` unchanged.
+    /// healthy. A device that was already lost, or that reported an error other than out of
+    /// memory, returns `false` unchanged.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_timeout(&self, device: &wgpu::Device, index: wgpu::SubmissionIndex, timeout: Duration) -> bool {
         self.wait_timeout_cancelable(device, index, timeout, &|| false) == WaitOutcome::Finished
@@ -281,19 +312,21 @@ impl DeviceHealth {
         timeout: Duration,
         canceled: &(dyn Fn() -> bool + Sync),
     ) -> WaitOutcome {
-        if !self.is_ok() {
+        if !self.pollable() {
             return WaitOutcome::TimedOut;
         }
         let mut wrong_index = false;
         let mut polled = false;
-        let outcome = wait_slices(timeout, canceled, |slice| {
+        let start = Instant::now();
+        let elapsed = || start.elapsed();
+        let outcome = wait_slices(timeout, canceled, elapsed, |slice| {
             polled = true;
             let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 device.poll(wgpu::PollType::Wait { submission_index: Some(index.clone()), timeout: Some(slice) })
             }));
             match poll {
                 Ok(Ok(_)) => {
-                    if self.is_ok() {
+                    if self.pollable() {
                         SlicePoll::Done
                     } else {
                         SlicePoll::Failed
@@ -313,7 +346,7 @@ impl DeviceHealth {
             }
         });
         // A deadline that passed before the first poll says nothing about the device.
-        if outcome == WaitOutcome::TimedOut && polled && !wrong_index && self.is_ok() {
+        if outcome == WaitOutcome::TimedOut && polled && !wrong_index && self.pollable() {
             self.mark(Fault::Lost(format!("GPU wait timed out after {:.1} s", timeout.as_secs_f64())));
         }
         outcome
@@ -330,17 +363,21 @@ enum SlicePoll {
 }
 
 /// Wait for `total`, polling in slices no longer than 100 ms and checking `canceled` between
-/// them. A slice that times out is pending, not a failure; only the overall deadline or a failed
-/// poll ends the wait early.
+/// them. `elapsed` gives the time since the wait started. A slice that times out is pending, not
+/// a failure; only the overall deadline or a failed poll ends the wait early.
 #[cfg(not(target_arch = "wasm32"))]
-fn wait_slices(total: Duration, canceled: &(dyn Fn() -> bool + Sync), mut poll: impl FnMut(Duration) -> SlicePoll) -> WaitOutcome {
+fn wait_slices(
+    total: Duration,
+    canceled: &(dyn Fn() -> bool + Sync),
+    mut elapsed: impl FnMut() -> Duration,
+    mut poll: impl FnMut(Duration) -> SlicePoll,
+) -> WaitOutcome {
     const SLICE: Duration = Duration::from_millis(100);
-    let start = Instant::now();
     loop {
         if canceled() {
             return WaitOutcome::Canceled;
         }
-        let remaining = total.saturating_sub(start.elapsed());
+        let remaining = total.saturating_sub(elapsed());
         if remaining.is_zero() {
             return WaitOutcome::TimedOut;
         }
@@ -369,23 +406,36 @@ fn caused_by_loss(e: &wgpu::Error) -> bool {
 /// The fault a wgpu error stands for. An error caused by a lost device ([`caused_by_loss`])
 /// follows a device loss whose callback may not have run yet (it runs on the next poll), so it
 /// counts as a loss rather than as an error. An error about a destroyed buffer or texture is an
-/// error. Only wgpu's own out-of-memory error is [`OUT_OF_MEMORY`].
+/// error. Only wgpu's own out-of-memory error is [`OUT_OF_MEMORY`]. The text keeps the causes
+/// ([`one_line`]).
 fn fault_of(e: &wgpu::Error) -> Fault {
     let text = e.to_string();
     if matches!(e, wgpu::Error::OutOfMemory { .. }) {
         Fault::Error(OUT_OF_MEMORY.into())
     } else if caused_by_loss(e) {
-        Fault::Lost(first_line(&text))
+        Fault::Lost(one_line(&text))
     } else {
-        Fault::Error(first_line(&text))
+        Fault::Error(one_line(&text))
     }
 }
 
-fn first_line(s: &str) -> String {
-    let line = s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let mut out: String = line.chars().take(200).collect();
-    if line.chars().count() > 200 {
-        out.push('…');
+/// wgpu's multi-line error text on one line: the heading and each cause, joined with ": ",
+/// without wgpu's "Caused by:" line, cut to 200 characters.
+fn one_line(s: &str) -> String {
+    const MAX: usize = 200;
+    let mut out = String::new();
+    let mut count = 0;
+    let lines = s.lines().map(str::trim).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("Caused by:"));
+    for (i, line) in lines.enumerate() {
+        let separator = if i == 0 { "" } else { ": " };
+        for c in separator.chars().chain(line.chars()) {
+            if count == MAX {
+                out.push('…');
+                return out;
+            }
+            out.push(c);
+            count += 1;
+        }
     }
     out
 }
@@ -416,12 +466,14 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn wait_slices_cancel_timeout_and_completion() {
         let never = || false;
-        assert_eq!(wait_slices(Duration::ZERO, &never, |_| SlicePoll::Done), WaitOutcome::TimedOut);
-        assert_eq!(wait_slices(Duration::from_secs(1), &never, |_| SlicePoll::Done), WaitOutcome::Finished);
-        assert_eq!(wait_slices(Duration::from_secs(1), &never, |_| SlicePoll::Failed), WaitOutcome::TimedOut);
+        // a clock that does not move: only the polls end these waits
+        let still = || Duration::ZERO;
+        assert_eq!(wait_slices(Duration::ZERO, &never, still, |_| SlicePoll::Done), WaitOutcome::TimedOut);
+        assert_eq!(wait_slices(Duration::from_secs(1), &never, still, |_| SlicePoll::Done), WaitOutcome::Finished);
+        assert_eq!(wait_slices(Duration::from_secs(1), &never, still, |_| SlicePoll::Failed), WaitOutcome::TimedOut);
 
         let mut polls = 0;
-        let outcome = wait_slices(Duration::from_secs(1), &never, |_| {
+        let outcome = wait_slices(Duration::from_secs(1), &never, still, |_| {
             polls += 1;
             if polls < 3 { SlicePoll::Pending } else { SlicePoll::Done }
         });
@@ -431,7 +483,7 @@ mod tests {
         let canceled = || true;
         let mut called = false;
         assert_eq!(
-            wait_slices(Duration::from_secs(1), &canceled, |_| {
+            wait_slices(Duration::from_secs(1), &canceled, still, |_| {
                 called = true;
                 SlicePoll::Done
             }),
@@ -442,11 +494,28 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
+    fn wait_slices_end_at_the_deadline_of_a_moving_clock() {
+        let never = || false;
+        let now = std::cell::Cell::new(Duration::ZERO);
+        let mut slices = Vec::new();
+        let clock = || now.get();
+        let outcome = wait_slices(Duration::from_millis(250), &never, clock, |slice| {
+            slices.push(slice);
+            now.set(now.get() + slice);
+            SlicePoll::Pending
+        });
+        assert_eq!(outcome, WaitOutcome::TimedOut);
+        assert_eq!(slices, [Duration::from_millis(100), Duration::from_millis(100), Duration::from_millis(50)]);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait_slices_observes_cancel_while_pending() {
         let flag = AtomicBool::new(false);
         let canceled = || flag.load(Ordering::SeqCst);
         let mut polls = 0;
-        let outcome = wait_slices(Duration::from_secs(1), &canceled, |_| {
+        let still = || Duration::ZERO;
+        let outcome = wait_slices(Duration::from_secs(1), &canceled, still, |_| {
             polls += 1;
             flag.store(true, Ordering::SeqCst);
             SlicePoll::Pending
@@ -459,8 +528,10 @@ mod tests {
     fn fault_text() {
         assert_eq!(Fault::Lost(String::new()).to_string(), "GPU device lost");
         assert_eq!(Fault::Error("x".into()).to_string(), "GPU error: x");
-        assert_eq!(first_line("\n  Buffer 'pc' is invalid\nmore"), "Buffer 'pc' is invalid");
-        assert_eq!(first_line(&"a".repeat(300)).chars().count(), 201);
+        assert_eq!(one_line("\n  Buffer 'pc' is invalid\nmore"), "Buffer 'pc' is invalid: more");
+        assert_eq!(one_line(&"a".repeat(300)).chars().count(), 201);
+        assert_eq!(one_line(&"a".repeat(200)), "a".repeat(200));
+        assert_eq!(one_line(&format!("{}\nb", "a".repeat(199))), format!("{}:…", "a".repeat(199)));
         assert!(Fault::Error("Out of Memory".into()).is_out_of_memory());
         assert!(!Fault::Error("Validation Error".into()).is_out_of_memory());
         assert!(!Fault::Error("Validation Error: buffer allocation would run out of memory".into()).is_out_of_memory());
@@ -472,6 +543,39 @@ mod tests {
         h.mark(Fault::Error(OUT_OF_MEMORY.into()));
         assert!(h.fault().is_some_and(|f| f.is_lost()));
         assert!(!Fault::Lost("out of memory".into()).is_out_of_memory());
+    }
+
+    #[test]
+    fn out_of_memory_keeps_polls_running_until_cleared() {
+        let h = DeviceHealth::new();
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        assert!(!h.is_ok());
+        assert!(h.pollable(), "polls reclaim the memory that recovery needs");
+        let seen = h.out_of_memory_count();
+        // one recorded while the caller freed memory is not cleared with the earlier ones
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        h.clear_out_of_memory(seen);
+        assert!(h.fault().is_some_and(|f| f.is_out_of_memory()));
+        h.clear_out_of_memory(h.out_of_memory_count());
+        assert!(h.is_ok());
+        assert_eq!(h.fault(), None);
+        // a count larger than the ones recorded does not hide later errors
+        h.clear_out_of_memory(u64::MAX);
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        assert!(!h.is_ok());
+        h.clear_out_of_memory(h.out_of_memory_count());
+        // an earlier error is still there once the out-of-memory error is cleared
+        h.mark(Fault::Error("Validation Error".into()));
+        assert!(!h.pollable());
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        assert!(!h.pollable(), "a later out-of-memory error does not undo the earlier error");
+        h.clear_out_of_memory(h.out_of_memory_count());
+        assert_eq!(h.fault(), Some(Fault::Error("Validation Error".into())));
+        assert!(!h.is_ok() && !h.pollable());
+        let lost = DeviceHealth::new();
+        lost.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        lost.mark(Fault::Lost("reset".into()));
+        assert!(!lost.pollable());
     }
 
     #[test]
@@ -520,12 +624,14 @@ mod tests {
         let lost = validation(&["In Device::create_buffer", "Parent device is lost"]);
         assert!(fault_of(&lost).is_lost(), "{:?}", fault_of(&lost));
         let destroyed = validation(&["In Queue::submit", "Buffer 'pc' has been destroyed"]);
-        assert_eq!(fault_of(&destroyed), Fault::Error("Validation Error".into()));
+        // the stored text names what failed, not only wgpu's heading
+        assert_eq!(fault_of(&destroyed), Fault::Error("Validation Error: In Queue::submit: Buffer 'pc' has been destroyed".into()));
+        assert_eq!(fault_of(&lost), Fault::Lost("Validation Error: In Device::create_buffer: Parent device is lost".into()));
         let texture = validation(&["Texture with 'frame' label has been destroyed"]);
         assert!(!fault_of(&texture).is_lost());
         // a label is the caller's text, not the cause, even on a line of its own
         let labeled = validation(&["In Queue::submit", "Buffer 'device is lost' has been destroyed"]);
-        assert_eq!(fault_of(&labeled), Fault::Error("Validation Error".into()));
+        assert_eq!(fault_of(&labeled), Fault::Error("Validation Error: In Queue::submit: Buffer 'device is lost' has been destroyed".into()));
         for label in ["Buffer 'Parent device is lost' has been destroyed", "Buffer 'a\nParent device is lost\nb' has been destroyed"] {
             let labeled = validation(&["In Queue::submit", label]);
             assert!(!fault_of(&labeled).is_lost(), "{label:?}");
