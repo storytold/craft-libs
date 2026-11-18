@@ -182,6 +182,12 @@ impl Palette {
         Palette { common: Common::new(), props: ContainerProps::new().mount(mount) }.label(title).id_salt(title)
     }
 
+    /// A tool window that may not be given less than `least`.
+    fn at_least(title: &'static str, least: Vec2) -> Self {
+        let mount = Mount::viewport_with(Overlay::floating().min_size(least), WindowSpec::tool());
+        Palette { common: Common::new(), props: ContainerProps::new().mount(mount) }.label(title).id_salt(title)
+    }
+
     /// A full-window container in a dialog window of its own, as a workspace that opens its own window mounts.
     fn full_window(title: &'static str) -> Self {
         let mount = Mount::viewport_with(Overlay::full_window(FocusPolicy::DIALOG), WindowSpec::dialog());
@@ -385,7 +391,7 @@ fn placing_a_minimized_window_below_its_minimum_restores_it_at_the_placed_size()
     let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())));
     let frame = || {
         windows.frame(vec![], vec![], |ui| {
-            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            Palette::at_least("tool", Vec2::new(200.0, 150.0)).show(ui, |_, _| {});
         })
     };
     let first = frame();
