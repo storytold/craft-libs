@@ -1632,6 +1632,14 @@ mod tests {
         assert_eq!(tidy.repair(&lens), lens);
     }
 
+    /// How far apart two cubics are, parameter for parameter, at 21 points: the largest distance, or NaN where one is (`f64::max` leaves a NaN out, and a
+    /// reduction by it would make a curve that is not a number as near as any).
+    fn off(c: &CubicBez, from: &CubicBez) -> f64 {
+        (0..=20)
+            .map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0)))
+            .fold(0.0, |most, d| if most.is_nan() || d.is_nan() { f64::NAN } else { most.max(d) })
+    }
+
     /// Two input curves that share their ends and lie nearer to each other than ten matches (a lens thinner than
     /// that) both pass the test of the middles of a run of pieces cut from the second, and the first in the
     /// input took them, moving the boundary by up to the width of the lens: 0.003 here, at coordinates of 500
@@ -1642,9 +1650,6 @@ mod tests {
         let second = CubicBez::new((0.0, 0.0), (150.0, 100.004), (350.0, 100.004), (500.0, 0.0));
         let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
         let run: Vec<Seg> = [0.0..0.5, 0.5..1.0].into_iter().map(|r| Seg { c: second.subsegment(r), line: false }).collect();
-        let off = |c: &CubicBez, from: &CubicBez| {
-            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
-        };
         // The curves are 0.0028 apart at most, more than the precision and less than the noise taken for a match.
         assert!(off(&first, &second) > 2e-3 && off(&first, &second) < 5e-3, "{}", off(&first, &second));
         let tidy = Tidy::keeping(1e-4, [&input(first), &input(second)]);
@@ -1667,9 +1672,6 @@ mod tests {
         let second = CubicBez::new((0.0, 0.0), (150.0, 100.004), (350.0, 100.004), (500.0, 0.0));
         let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
         let run: Vec<Seg> = [0.0..0.5, 0.5..1.0].into_iter().map(|r| Seg { c: second.subsegment(r), line: false }).collect();
-        let off = |c: &CubicBez, from: &CubicBez| {
-            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
-        };
         for precision in [0.0024, 0.0026, 0.0029] {
             let tidy = Tidy::keeping(precision, [&input(first), &input(second)]);
             let merged = try_merge(&run, &tidy).expect("the pieces are one curve");
@@ -1698,9 +1700,6 @@ mod tests {
         let first = CubicBez::new((0.0, 0.0), (150.0, 160.0), (350.0, 340.0), (500.0, 500.0));
         let second = CubicBez::new((0.0, 0.0), (150.0, 170.0), (350.0, 330.0), (500.0, 500.0));
         let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
-        let off = |c: &CubicBez, from: &CubicBez| {
-            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
-        };
         let piece = |r: std::ops::Range<f64>| Seg { c: second.subsegment(r), line: false };
         // Premise: the curves meet at the ends and in the middle, and are far apart at a quarter.
         assert!(first.eval(0.5).distance(second.eval(0.5)) < 1e-9 && first.eval(0.25).distance(second.eval(0.25)) > 1.5);
@@ -1762,9 +1761,6 @@ mod tests {
         let first = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 100.0), (500.0, 0.0));
         let second = CubicBez::new((0.0, 0.0), (150.0, 100.004), (350.0, 100.004), (500.0, 0.0));
         let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
-        let off = |c: &CubicBez, from: &CubicBez| {
-            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
-        };
         // Premise: the curves are 0.003 apart in the middle, more than the precision asked for.
         assert!(first.eval(0.5).distance(second.eval(0.5)) > 0.0029, "{}", first.eval(0.5).distance(second.eval(0.5)));
         let run: Vec<Seg> = [0.0..0.2, 0.2..1.0].into_iter().map(|r| Seg { c: second.subsegment(r), line: false }).collect();
@@ -1831,9 +1827,6 @@ mod tests {
         let input = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(curve.p0), kurbo::PathEl::CurveTo(curve.p1, curve.p2, curve.p3)]);
         let tidy = Tidy::keeping(DEFAULT_PRECISION, [&input]);
         assert!(curve.eval(0.25).distance(curve.eval(0.75)) < 1e-9 && curve.eval(0.25).distance(Point::new(-9.0, 0.0)) < 1e-9);
-        let off = |c: &CubicBez, from: &CubicBez| {
-            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
-        };
         let mut merged = 0;
         for (from, to) in [(0.25, 1.0), (0.75, 1.0), (0.0, 0.25), (0.0, 0.75), (0.25, 0.75), (0.75, 0.25), (0.1, 0.2), (0.3, 0.7), (0.8, 0.95)] {
             let part = if from < to { curve.subsegment(from..to) } else { curve.subsegment(to..from) };
@@ -1927,9 +1920,6 @@ mod tests {
         let curve = CubicBez::new((0.0, -4.5), (-16.0, 6.5), (-16.0, -6.5), (0.0, 4.5));
         let input = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(curve.p0), kurbo::PathEl::CurveTo(curve.p1, curve.p2, curve.p3)]);
         let tidy = Tidy::keeping(DEFAULT_PRECISION, [&input]);
-        let off = |c: &CubicBez, from: &CubicBez| {
-            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
-        };
         let repaired = |piece: &CubicBez| {
             let path = BezPath::from_vec(vec![kurbo::PathEl::MoveTo(piece.p0), kurbo::PathEl::CurveTo(piece.p1, piece.p2, piece.p3)]);
             match tidy.repair(&path).elements() {
