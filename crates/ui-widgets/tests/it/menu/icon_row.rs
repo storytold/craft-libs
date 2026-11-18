@@ -54,6 +54,13 @@ fn an_icon_row_is_one_stop_in_the_menu_left_and_right_move_between_its_icons_and
     let open = |fixture: &mut Fixture| {
         fixture.key(Key::F10, Modifiers::SHIFT);
         fixture.settle();
+        eprintln!(
+            "DIAG an_icon_row_is_one_stop_in_the_menu_left_and_right_move_between_its_icons_and_a_pick_closes_the_chain: target {:?} focused {:?} context request {:?} group shown {}",
+            rows.get().target,
+            fixture.focused_stop(),
+            rows.get().target.and_then(|id| craft_ui::testing::focus::context_request(fixture.ctx(), id)),
+            fixture.by_label("Group").is_some()
+        );
         assert!(fixture.by_label("Ungroup").is_some(), "Shift+F10 opens the context menu");
         // Every walk below starts on the first row.
         request(fixture.ctx(), FocusTarget::Id(rows.get().group.expect("the first row is shown")));

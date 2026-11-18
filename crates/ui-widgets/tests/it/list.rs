@@ -1135,7 +1135,10 @@ fn a_secondary_click_on_a_trailing_part_opens_the_row_menu() {
     fixture.frame(vec![pointer::secondary(button, false)]).settle();
     let events = seen.borrow();
     assert!(events.iter().any(|event| matches!(event, CollectionEvent::ContextMenu(request) if request.key == 1)), "the row's menu: {events:?}");
-    assert!(!events.iter().any(|event| matches!(event, CollectionEvent::Item(_, RowEvent::Trailing { .. }))), "the button is not pressed: {events:?}");
+    assert!(
+        !events.iter().any(|event| matches!(event, CollectionEvent::Item(_, RowEvent::Trailing { .. }))),
+        "the button is not pressed: {events:?}"
+    );
 }
 
 /// A status cell's tip is the cell's description, and its action is reached from the keyboard: into the list, onto
@@ -1220,7 +1223,7 @@ fn a_collection_reports_the_row_under_the_pointer() {
 fn painted_at(shapes: &[egui::Shape], text: &str) -> Option<egui::Rect> {
     shapes.iter().find_map(|shape| match shape {
         egui::Shape::Vec(inner) => painted_at(inner, text),
-        egui::Shape::Text(shown) if shown.galley.text() == text => Some(shown.visual_bounding_rect()),
+        egui::Shape::Text(shown) if shown.galley.text() == text => Some(shown.galley.rect.translate(shown.pos.to_vec2())),
         _ => None,
     })
 }
@@ -1339,8 +1342,7 @@ fn a_filter_matches_any_of_a_rows_texts_and_keeps_the_ancestors_of_a_match() {
     tree.room(Vec2::new(300.0, 200.0));
     tree.settle();
     let titles: Vec<&str> = BRANCHES.iter().map(|(title, _)| *title).collect();
-    let cases: [(&str, &[&str]); 3] =
-        [("istanbul", &[BRANCHES[0].0]), ("KIŞ", &[BRANCHES[0].0, BRANCHES[1].0]), ("izmir", &[])];
+    let cases: [(&str, &[&str]); 3] = [("istanbul", &[BRANCHES[0].0]), ("KIŞ", &[BRANCHES[0].0, BRANCHES[1].0]), ("izmir", &[])];
     for (asked, kept) in cases {
         tree_query.set(asked);
         tree.settle();
@@ -1368,10 +1370,12 @@ fn a_row_in_rename_stays_listed_while_the_filter_excludes_it() {
     fixture.room(Vec2::new(300.0, 200.0));
     fixture.settle();
     assert_eq!(*shown.borrow(), [0], "the query keeps the first row alone");
-    request_rename(fixture.ctx(), list_id(), &2);
+    request_rename(fixture.ctx(), list_id(), &2_usize);
     fixture.settle();
     assert!(
-        seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Begin { before: Mixed::Same(rename), .. }) if rename.key == 2)),
+        seen.borrow()
+            .iter()
+            .any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Begin { before: Mixed::Same(rename), .. }) if rename.key == 2)),
         "the rename of the excluded row begins: {:?}",
         seen.borrow()
     );
@@ -1410,7 +1414,7 @@ fn a_rename_editor_selects_the_name_once_keeps_the_caret_and_escape_cancels() {
             .collect()
     };
 
-    request_rename(fixture.ctx(), list_id(), &0);
+    request_rename(fixture.ctx(), list_id(), &0_usize);
     fixture.settle();
     let field = egui_focused(fixture.ctx()).expect("the rename field takes the focus");
     assert_eq!(caret(fixture.ctx(), field), Some(name.chars().count()), "the field opens with the whole name selected");
@@ -1420,7 +1424,7 @@ fn a_rename_editor_selects_the_name_once_keeps_the_caret_and_escape_cancels() {
     assert!(edits(&seen).is_empty(), "Escape ends the rename with no edit: {:?}", seen.borrow());
     assert_ne!(egui_focused(fixture.ctx()), Some(field), "the rename field is gone");
 
-    request_rename(fixture.ctx(), list_id(), &0);
+    request_rename(fixture.ctx(), list_id(), &0_usize);
     fixture.settle();
     fixture.type_text("Özet").key(Key::Enter, Modifiers::NONE).settle();
     assert_eq!(edits(&seen), [(0, String::from("Özet"))], "typing replaces the whole multibyte name");

@@ -3,6 +3,7 @@
 use super::{CellStatus, HueTarget, ListRow, RowInk, TrailingFace, TrailingPart};
 use crate::contract::Show as _;
 use crate::primitives::IconSpec;
+use crate::runtime::env::Env;
 use crate::style::DataColor;
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::{ColumnKey, IconId};
@@ -91,10 +92,17 @@ fn list_row_status_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     const WARNINGS: ColumnKey = ColumnKey::new("warnings");
     let (left, width, height) = (ui.cursor().min.x, ui.available_width(), ui.spacing().interact_size.y);
     let split = left + width * 0.4;
-    let cells = [
+    let mut cells = [
         (NAME, Rect::from_min_max(Pos2::new(left, 0.0), Pos2::new(split, height))),
         (WARNINGS, Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(left + width, height))),
     ];
+    // The columns are screen rects: under right-to-left the name column is at the right.
+    if Env::of(ui).view().direction().is_rtl() {
+        for (_, cell) in &mut cells {
+            *cell =
+                Rect::from_min_max(Pos2::new(2.0 * left + width - cell.max.x, cell.min.y), Pos2::new(2.0 * left + width - cell.min.x, cell.max.y));
+        }
+    }
     let status = CellStatus::new(Tone::Warn, "2 warnings")
         .tip("The file has form fields that will be flattened.\nIts bookmarks point to pages that are not kept.")
         .action("Details");

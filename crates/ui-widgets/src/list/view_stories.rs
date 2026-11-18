@@ -7,8 +7,8 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit, WordSetCx as _,
-    request_rename,
+    Bind, CollectionEvent, ColumnSpec, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
+    WordSetCx as _, request_rename,
 };
 use crate::layout_components::Stack;
 use crate::menu::Menu;
@@ -483,7 +483,10 @@ fn list_rename_while_filtered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
     const NOTES: usize = 2;
     let id = egui::Id::new("list_rename_while_filtered");
     let names = data.value("names", vec![String::from("Chapter 1"), String::from("Chapter 2"), String::from("Notes")]).clone();
-    if crate::contract::clicked(&Button::new("Rename Notes").show(ui)) {
+    // The button sits at the start of the list's width, which is the right under right-to-left.
+    let start = if Env::of(ui).view().direction().is_rtl() { egui::Align::Max } else { egui::Align::Min };
+    let button = ui.with_layout(egui::Layout::top_down(start), |ui| Button::new("Rename Notes").show(ui)).inner;
+    if crate::contract::clicked(&button) {
         request_rename(ui.ctx(), id, &NOTES);
     }
     let out = List::<usize>::new("Bookmarks")
