@@ -25,7 +25,9 @@ use craft_wordmodel::{Align, Document};
 use craft_flow::{self as model, Cell, FBlock, FTable, Fmt, Inline, Kind, ListInfo, Para, make_img};
 
 mod blocks;
+mod escaping;
 mod export;
+pub mod extracted;
 mod inlines;
 
 pub use craft_flow::MAX_TABLE_CELLS;
