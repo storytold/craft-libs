@@ -153,7 +153,8 @@ pub(crate) struct AdapterIn<'a> {
     pub held: bool,
     pub ink: egui::Color32,
     pub intents: &'a mut Intents,
-    /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's.
+    /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's, except
+    /// in a clearing field that still shows text.
     pub list_open: bool,
     pub placeholder: Option<&'a str>,
     /// Whether the caret stroke shows, from the blink.
@@ -467,10 +468,12 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         Some(DraftChange::Revert) => state.end = Some(End::Revert),
         None => {}
     }
-    // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty.
+    // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty:
+    // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
     let takes_escape =
         if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { state.draft.is_some() || state.preedit.is_some() };
-    if focused_before && takes_escape && !state.completions.open && !input.list_open && input.intents.take(Intent::Cancel) {
+    let list_first = input.list_open && !input.options.clear_on_escape;
+    if focused_before && takes_escape && !state.completions.open && !list_first && input.intents.take(Intent::Cancel) {
         // Escape over a composition alone ends the composition and leaves the text.
         if state.draft.is_some() || state.preedit.is_none() {
             state.end = Some(End::Escape);
