@@ -8,16 +8,29 @@
 //! of its converted corners, and its inner points are within [`NET_TOLERANCE`] of the ones its
 //! boundary implies. Each piece is written as the Coons patch of its boundary.
 //!
-//! A parametric mesh (one with a function) is also checked against the function on a grid of
-//! [`GRID`] steps over the parameter range of the whole mesh: a piece is kept only when every
-//! grid point in its range is within [`TOLERANCE`] of the line through its lowest and highest
-//! corners (the extremes of a bilinear parameter). The grid is the whole mesh's, so a feature
-//! narrower than one step, or inside a patch whose range lies between two grid points, can
-//! still be missed.
+//! A parametric mesh (one with a function) needs the function's breaks: inputs between which
+//! every output is affine in the parameter t (`ShadingFunction::linear_breaks`). A function
+//! without them, such as a PostScript one, leaves the mesh an image. A piece's t is the
+//! bilinear blend of its corners' t, so it spans `[t_lo, t_hi]`, its lowest and highest
+//! corners'. Let L be the line through the converted colors at `t_lo` and `t_hi`.
+//!
+//! - No break in `[t_lo, t_hi]`: the function is affine over the piece, so it blends exactly
+//!   as its corners do, and the checks above are those of a mesh without a function.
+//! - Breaks in `[t_lo, t_hi]`, its ends included (a corner on a jump takes only one side): the
+//!   piece is kept only when the converted function at each break, at the floats just below
+//!   and above it (clamped to the piece), and midway between neighboring breaks is within
+//!   [`LINE_TOLERANCE`] of L; more than [`MAX_PROBED_BREAKS`] split it unprobed. For a
+//!   conversion that is affine (inks that are the shading's components), the function less L
+//!   is piecewise affine with its corners at the breaks, so the probes find its largest
+//!   distance from L. Both the function and the blend of the corners are then within
+//!   `LINE_TOLERANCE` of L, so they are within [`TOLERANCE`] of each other at every point of
+//!   the piece. The midway probes cover a break placed a few floats from where the function
+//!   switches. A conversion that bends is checked by the probes above, as without a function.
 //!
 //! A piece still out at [`MAX_DEPTH`], or more than [`MAX_MESH_PATCHES`] pieces, gives `None`:
-//! the caller reads the shading as an image. A piece across a jump in the function never
-//! passes, so such a mesh is an image, as when a probe lands on either side of the jump.
+//! the caller reads the shading as an image. A jump of more than `TOLERANCE` never passes (the
+//! probes either side of it can't both be within `LINE_TOLERANCE` of one line), so a mesh
+//! whose t reaches one is an image.
 //!
 //! [`resolved`] splits a mesh the same way for a conversion applied when it is written.
 //!
@@ -43,8 +56,11 @@ const NET_TOLERANCE: f64 = 0.01;
 /// The most times a source patch is halved in each direction.
 const MAX_DEPTH: u8 = 8;
 
-/// Steps of a parametric mesh's function grid over the mesh's parameter range.
-const GRID: usize = 256;
+/// How far a parametric piece's function may be from the line through its extreme corners.
+const LINE_TOLERANCE: f32 = TOLERANCE / 2.0;
+
+/// The most breaks a parametric piece's range holds and is probed at; more split it.
+const MAX_PROBED_BREAKS: usize = 8;
 
 /// Control points `net[i][j]`: `i` steps along u, `j` along v.
 type Net = [[Point; 4]; 4];
@@ -61,20 +77,26 @@ struct Piece {
 
 /// The mesh of a type 4 to 7 shading under `matrix` (shading space to page space). `convert`
 /// maps source components (after the shading's function, if any) to ink values; `kind` says
-/// what the values mean. `None` for other types and when the mesh must stay an image.
-pub(super) fn mesh(shading: &ShadingType, matrix: Affine, kind: &StopInks, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> Option<Mesh> {
+/// what the values mean; `breaks` are the function's, sorted, for a parametric mesh. `None`
+/// for other types, a parametric mesh without breaks, and when the mesh must stay an image.
+pub(super) fn mesh(
+    shading: &ShadingType,
+    matrix: Affine,
+    kind: &StopInks,
+    breaks: Option<&[f32]>,
+    convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>,
+) -> Option<Mesh> {
+    if parametric(shading) != breaks.is_some() {
+        return None;
+    }
     let sources = source_nets(shading, matrix)?;
-    let grid = match parametric(shading) {
-        true => Some(Grid::new(&sources, convert)?),
-        false => None,
-    };
     let mut patches = Vec::new();
     let mut pending = sources.len();
     for (net, source) in sources {
         pending = pending.saturating_sub(1);
         let ink = convert_all(&source, convert)?;
         let room = MAX_MESH_PATCHES.checked_sub(patches.len().saturating_add(pending))?;
-        for piece in pieces(Piece { net, source, ink, depth: 0 }, convert, grid.as_ref(), room)? {
+        for piece in pieces(Piece { net, source, ink, depth: 0 }, convert, breaks, room)? {
             patches.push(coons(&piece, kind));
         }
     }
@@ -128,10 +150,10 @@ fn tints_of(color: &InkColor, ids: &[InkId]) -> Vec<f32> {
 
 /// `first` split into pieces within tolerance, (u low, v low) first; `None` past `room`
 /// pieces, past [`MAX_DEPTH`], or when a conversion fails.
-fn pieces(first: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, grid: Option<&Grid>, room: usize) -> Option<Vec<Piece>> {
+fn pieces(first: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, breaks: Option<&[f32]>, room: usize) -> Option<Vec<Piece>> {
     let (mut done, mut stack) = (Vec::new(), vec![first]);
     while let Some(piece) = stack.pop() {
-        match refine(piece, convert, grid)? {
+        match refine(piece, convert, breaks)? {
             Refined::Done(piece) => done.push(*piece),
             Refined::Split(children) => {
                 if done.len().saturating_add(stack.len()).saturating_add(children.len()) > room {
@@ -154,48 +176,42 @@ fn parametric(shading: &ShadingType) -> bool {
     }
 }
 
-/// A parametric mesh's converted colors at [`GRID`] steps over its corners' parameter range.
-struct Grid {
-    /// `(t, values)`, `t` increasing.
-    samples: Vec<(f32, Vec<f32>)>,
-}
-
-impl Grid {
-    /// `None` when a conversion fails or gives a value that isn't finite.
-    fn new(sources: &[(Net, Corners)], convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> Option<Self> {
-        let ts = sources.iter().flat_map(|(_, c)| c.iter().filter_map(|v| v.first().copied()));
-        let (lo, hi) = ts.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), t| (lo.min(t), hi.max(t)));
-        let mut samples = Vec::new();
-        if lo < hi {
-            samples.reserve(GRID.saturating_add(1));
-            for k in 0..=GRID {
-                let t = lo + (hi - lo) * (k as f32 / GRID as f32);
-                samples.push((t, convert(&[t]).filter(|v| v.iter().all(|x| x.is_finite()))?));
-            }
-        }
-        Some(Self { samples })
+/// How far the converted function is from the line through `piece`'s lowest and highest
+/// corners at the probes the module doc lists; infinite past [`MAX_PROBED_BREAKS`] breaks.
+/// `None` when a conversion fails or gives a value that isn't finite.
+fn line_off(piece: &Piece, breaks: &[f32], convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> Option<f32> {
+    let t = |k: usize| piece.source.get(k).and_then(|v| v.first().copied()).unwrap_or(0.0);
+    let (lo, hi) = (0..4).fold((0, 0), |(lo, hi), k| (if t(k) < t(lo) { k } else { lo }, if t(k) > t(hi) { k } else { hi }));
+    let (t_lo, t_hi) = (t(lo), t(hi));
+    if !(t_lo.is_finite() && t_hi.is_finite()) {
+        return Some(f32::INFINITY);
     }
-
-    /// The most a grid value strictly between `piece`'s lowest and highest corner parameters
-    /// is from the line through those corners' values.
-    fn off(&self, piece: &Piece) -> f32 {
-        let t = |k: usize| piece.source.get(k).and_then(|v| v.first().copied()).unwrap_or(0.0);
-        let (lo, hi) = (0..4).fold((0, 0), |(lo, hi), k| (if t(k) < t(lo) { k } else { lo }, if t(k) > t(hi) { k } else { hi }));
-        let (t_lo, t_hi) = (t(lo), t(hi));
-        let (Some(f_lo), Some(f_hi)) = (piece.ink.get(lo), piece.ink.get(hi)) else { return 0.0 };
-        if t_hi <= t_lo {
-            return 0.0;
-        }
-        let (a, b) = (self.samples.partition_point(|(s, _)| *s <= t_lo), self.samples.partition_point(|(s, _)| *s < t_hi));
-        let mut off = 0.0_f32;
-        for (s, values) in self.samples.get(a..b).unwrap_or_default() {
-            let w = (s - t_lo) / (t_hi - t_lo);
-            for ((x, y), v) in f_lo.iter().zip(f_hi).zip(values) {
-                off = off.max((x + (y - x) * w - v).abs());
-            }
-        }
-        off
+    let (Some(f_lo), Some(f_hi)) = (piece.ink.get(lo), piece.ink.get(hi)) else { return Some(0.0) };
+    // A break at a corner counts: the function may jump there, the corner taking one side.
+    let inside = breaks.get(breaks.partition_point(|b| *b < t_lo)..breaks.partition_point(|b| *b <= t_hi)).unwrap_or_default();
+    if inside.is_empty() || t_hi <= t_lo {
+        return Some(0.0);
     }
+    if inside.len() > MAX_PROBED_BREAKS {
+        return Some(f32::INFINITY);
+    }
+    let mut probes = Vec::with_capacity(inside.len() * 4 + 1);
+    let mut prev = t_lo;
+    for &b in inside {
+        probes.extend([(prev + b) / 2.0, b.next_down(), b, b.next_up()]);
+        prev = b;
+    }
+    probes.push((prev + t_hi) / 2.0);
+    let mut off = 0.0_f32;
+    for s in probes {
+        let s = s.max(t_lo).min(t_hi);
+        let values = convert(&[s]).filter(|v| v.len() == f_lo.len() && v.iter().all(|x| x.is_finite()))?;
+        let w = (s - t_lo) / (t_hi - t_lo);
+        for ((x, y), v) in f_lo.iter().zip(f_hi).zip(&values) {
+            off = off.max((x + (y - x) * w - v).abs());
+        }
+    }
+    Some(off)
 }
 
 /// Every source patch as a page-space net with its corner components; `None` past
@@ -294,7 +310,7 @@ enum Refined {
 
 /// `piece` as it is, or its four halves; `None` when it must be split past [`MAX_DEPTH`] or a
 /// conversion fails.
-fn refine(piece: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, grid: Option<&Grid>) -> Option<Refined> {
+fn refine(piece: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, breaks: Option<&[f32]>) -> Option<Refined> {
     let [c0, c1, c2, c3] = &piece.source;
     // Edge midpoints (u = 0, v = 1, u = 1, v = 0) and the center, in source components.
     let source = [blend(&[c0, c1]), blend(&[c1, c2]), blend(&[c2, c3]), blend(&[c3, c0]), blend(&[c0, c1, c2, c3])];
@@ -308,8 +324,11 @@ fn refine(piece: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, gri
         }
         off = got.iter().zip(want).map(|(g, w)| (g - w).abs()).fold(off, f32::max);
     }
-    let off = grid.map_or(off, |g| off.max(g.off(&piece)));
-    let within = off <= TOLERANCE && net_deviation(&piece.net) <= NET_TOLERANCE;
+    let line = match breaks {
+        Some(breaks) => line_off(&piece, breaks, convert)?,
+        None => 0.0,
+    };
+    let within = off <= TOLERANCE && line <= LINE_TOLERANCE && net_deviation(&piece.net) <= NET_TOLERANCE;
     if within {
         return Some(Refined::Done(Box::new(piece)));
     }
@@ -434,7 +453,7 @@ mod tests {
     #[test]
     fn a_linear_conversion_keeps_every_patch_whole() {
         let kind = StopInks::Inks(BLACK.to_vec());
-        let found = mesh(&patches(3, [0.0, 0.2, 0.9, 1.0]), Affine::IDENTITY, &kind, &mut |s| Some(vec![s[0] * 0.5])).unwrap();
+        let found = mesh(&patches(3, [0.0, 0.2, 0.9, 1.0]), Affine::IDENTITY, &kind, None, &mut |s| Some(vec![s[0] * 0.5])).unwrap();
         assert_eq!(found.patches.len(), 3);
         assert_eq!(values(&found.patches[0].colors[2]), [0.45]);
     }
@@ -443,7 +462,7 @@ mod tests {
     fn a_bending_conversion_splits_until_each_piece_is_within_tolerance() {
         let kind = StopInks::Inks(BLACK.to_vec());
         let square_of = |s: &[f32]| Some(vec![s[0] * s[0]]);
-        let found = mesh(&patches(1, [0.0, 1.0, 1.0, 0.0]), Affine::IDENTITY, &kind, &mut |s| square_of(s)).unwrap();
+        let found = mesh(&patches(1, [0.0, 1.0, 1.0, 0.0]), Affine::IDENTITY, &kind, None, &mut |s| square_of(s)).unwrap();
         assert!(found.patches.len() > 4, "{}", found.patches.len());
         for patch in &found.patches {
             // Colors run along v only (u = 0 and u = 1 match), so v is the corner color's root.
@@ -457,28 +476,79 @@ mod tests {
     fn meshes_past_the_patch_limit_or_the_depth_are_left_to_the_image_path() {
         let kind = StopInks::Inks(BLACK.to_vec());
         let linear = &mut |s: &[f32]| Some(vec![s[0]]);
-        assert!(mesh(&patches(MAX_MESH_PATCHES, [0.0; 4]), Affine::IDENTITY, &kind, linear).is_some());
-        assert!(mesh(&patches(MAX_MESH_PATCHES + 1, [0.0; 4]), Affine::IDENTITY, &kind, linear).is_none());
+        assert!(mesh(&patches(MAX_MESH_PATCHES, [0.0; 4]), Affine::IDENTITY, &kind, None, linear).is_some());
+        assert!(mesh(&patches(MAX_MESH_PATCHES + 1, [0.0; 4]), Affine::IDENTITY, &kind, None, linear).is_none());
         let step = &mut |s: &[f32]| Some(vec![if s[0] < 0.3 { 0.0 } else { 1.0 }]);
-        assert!(mesh(&patches(1, [0.0, 1.0, 1.0, 0.0]), Affine::IDENTITY, &kind, step).is_none());
+        assert!(mesh(&patches(1, [0.0, 1.0, 1.0, 0.0]), Affine::IDENTITY, &kind, None, step).is_none());
         let failing = &mut |_: &[f32]| None;
-        assert!(mesh(&patches(1, [0.0; 4]), Affine::IDENTITY, &kind, failing).is_none());
+        assert!(mesh(&patches(1, [0.0; 4]), Affine::IDENTITY, &kind, None, failing).is_none());
         // One patch failing is the whole mesh failing.
         let ShadingType::CoonsPatchMesh { patches: mut two, .. } = patches(2, [0.0; 4]) else { panic!() };
         two[1].colors = [0.9; 4].map(|c| ColorComponents::from_slice(&[c]));
         let partly = &mut |s: &[f32]| (s[0] < 0.5).then(|| vec![s[0]]);
-        assert!(mesh(&ShadingType::CoonsPatchMesh { patches: two, function: None }, Affine::IDENTITY, &kind, partly).is_none());
+        assert!(mesh(&ShadingType::CoonsPatchMesh { patches: two, function: None }, Affine::IDENTITY, &kind, None, partly).is_none());
+    }
+
+    /// A piece whose t runs 0 to 1 along v, with `f` of its corners as its ink.
+    fn ramp_piece(f: fn(f32) -> f32) -> Piece {
+        let source = [0.0, 1.0, 1.0, 0.0].map(|t| vec![t]);
+        Piece { net: implied_net(&square(10.0)), ink: source.clone().map(|v| vec![f(v[0])]), source, depth: 0 }
+    }
+
+    #[test]
+    fn a_band_between_corners_is_split_at_its_breaks_or_left_to_the_image_path() {
+        // Full for t in 0.126..0.127: no corner, edge midpoint or center samples it.
+        fn band(t: f32) -> f32 {
+            if (0.126..0.127).contains(&t) { 1.0 } else { 0.0 }
+        }
+        let convert = &mut |s: &[f32]| Some(vec![band(s[0])]);
+        // Unseen without its breaks, one blank piece.
+        let blank = pieces(ramp_piece(band), convert, Some(&[0.0, 1.0]), MAX_MESH_PATCHES).unwrap();
+        assert_eq!(blank.len(), 1);
+        // Its edges are jumps, which no piece fits.
+        assert!(pieces(ramp_piece(band), convert, Some(&[0.0, 0.126, 0.127, 1.0]), MAX_MESH_PATCHES).is_none());
+        // Nor does a jump that a split puts at a corner, which takes only one side of it, even
+        // one small enough that the midpoint checks pass the piece beside it.
+        fn step(t: f32) -> f32 {
+            if t < 0.5 { 0.0 } else { TOLERANCE * 1.5 }
+        }
+        let convert = &mut |s: &[f32]| Some(vec![step(s[0])]);
+        assert!(pieces(ramp_piece(step), convert, Some(&[0.0, 0.5, 1.0]), MAX_MESH_PATCHES).is_none());
+
+        // A kink at a break the split reaches: four pieces, none across it.
+        fn kink(t: f32) -> f32 {
+            if t < 0.5 { t * 1.5 } else { 0.5 + t * 0.5 }
+        }
+        let convert = &mut |s: &[f32]| Some(vec![kink(s[0])]);
+        let found = pieces(ramp_piece(kink), convert, Some(&[0.0, 0.5, 1.0]), MAX_MESH_PATCHES).unwrap();
+        assert_eq!(found.len(), 4);
+        assert!(found.iter().all(|p| p.ink.iter().any(|v| v == &[0.75])));
+        // A kink no split reaches: split until each piece is within tolerance of its line.
+        fn off_grid(t: f32) -> f32 {
+            if t < 0.3 { t } else { 0.3 + (t - 0.3) * 0.5 }
+        }
+        let convert = &mut |s: &[f32]| Some(vec![off_grid(s[0])]);
+        let found = pieces(ramp_piece(off_grid), convert, Some(&[0.0, 0.3, 1.0]), MAX_MESH_PATCHES).unwrap();
+        for p in &found {
+            let ts = p.source.each_ref().map(|v| v[0]);
+            let (lo, hi) = (ts.iter().copied().fold(1.0, f32::min), ts.iter().copied().fold(0.0, f32::max));
+            if lo < 0.3 && 0.3 < hi {
+                let line = off_grid(lo) + (off_grid(hi) - off_grid(lo)) * (0.3 - lo) / (hi - lo);
+                assert!((line - off_grid(0.3)).abs() <= LINE_TOLERANCE, "{lo} {hi}");
+            }
+        }
+        assert!(found.len() > 4, "{}", found.len());
     }
 
     #[test]
     fn values_and_points_that_arent_finite_are_left_to_the_image_path() {
         let kind = StopInks::Inks(BLACK.to_vec());
         let nan_in_the_middle = &mut |s: &[f32]| Some(vec![if s[0] == 0.5 { f32::NAN } else { s[0] }]);
-        assert!(mesh(&patches(1, [0.0, 1.0, 1.0, 0.0]), Affine::IDENTITY, &kind, nan_in_the_middle).is_none());
+        assert!(mesh(&patches(1, [0.0, 1.0, 1.0, 0.0]), Affine::IDENTITY, &kind, None, nan_in_the_middle).is_none());
         let ShadingType::CoonsPatchMesh { patches: mut one, .. } = patches(1, [0.0; 4]) else { panic!() };
         one[0].control_points[4].x = f64::NAN;
         let linear = &mut |s: &[f32]| Some(vec![s[0]]);
-        assert!(mesh(&ShadingType::CoonsPatchMesh { patches: one, function: None }, Affine::IDENTITY, &kind, linear).is_none());
+        assert!(mesh(&ShadingType::CoonsPatchMesh { patches: one, function: None }, Affine::IDENTITY, &kind, None, linear).is_none());
     }
 
     #[test]
@@ -545,7 +615,8 @@ mod tests {
         let patch = tensor(25.0);
         let net = tensor_net(&patch);
         let found =
-            mesh(&ShadingType::TensorProductPatchMesh { patches: vec![patch.clone()], function: None }, Affine::IDENTITY, &kind, linear).unwrap();
+            mesh(&ShadingType::TensorProductPatchMesh { patches: vec![patch.clone()], function: None }, Affine::IDENTITY, &kind, None, linear)
+                .unwrap();
         // The same refinement, keeping each piece's net.
         let (mut stack, mut done) = (vec![Piece { net, source: corners(&patch.colors), ink: corners(&patch.colors), depth: 0 }], Vec::new());
         while let Some(piece) = stack.pop() {
@@ -564,7 +635,7 @@ mod tests {
         }
         // A flat tensor patch is one Coons patch.
         let flat = ShadingType::TensorProductPatchMesh { patches: vec![tensor(0.0)], function: None };
-        assert_eq!(mesh(&flat, Affine::IDENTITY, &kind, linear).unwrap().patches.len(), 1);
+        assert_eq!(mesh(&flat, Affine::IDENTITY, &kind, None, linear).unwrap().patches.len(), 1);
     }
 
     #[test]

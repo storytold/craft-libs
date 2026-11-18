@@ -111,6 +111,42 @@ impl Function {
             _ => SmallVec::new(),
         }
     }
+
+    /// Craft patch (mesh breaks): the inputs, sorted, between which every output is an affine
+    /// function of the single input (it may jump at one). `None` for a function not known to
+    /// be piecewise affine, or with more than [`MAX_LINEAR_BREAKS`] of them: Type 2 needs
+    /// N = 1, Type 0 one input and a Decode inside its Range (samples are interpolated
+    /// linearly here, whatever the /Order), and Type 3 children of those and no Range.
+    pub(crate) fn linear_breaks(&self) -> Option<Vec<f32>> {
+        let breaks = match self.0.as_ref() {
+            FunctionType::Type0(t0) => t0.linear_breaks()?,
+            FunctionType::Type2(t2) => t2.linear_breaks()?,
+            FunctionType::Type3(t3) => t3.linear_breaks()?,
+            FunctionType::Type4(_) => return None,
+        };
+        sorted_breaks(breaks)
+    }
+}
+
+/// Craft patch (mesh breaks): the most breaks [`Function::linear_breaks`] gives.
+pub(crate) const MAX_LINEAR_BREAKS: usize = 4096;
+
+/// Craft patch (mesh breaks): `breaks` sorted, finite and without repeats; `None` past
+/// [`MAX_LINEAR_BREAKS`].
+pub(crate) fn sorted_breaks(mut breaks: Vec<f32>) -> Option<Vec<f32>> {
+    breaks.retain(|b| b.is_finite());
+    breaks.sort_by(f32::total_cmp);
+    breaks.dedup();
+    (breaks.len() <= MAX_LINEAR_BREAKS).then_some(breaks)
+}
+
+/// Craft patch (mesh breaks): the ends of `domain`, where clamping the input starts, with
+/// `breaks` kept only inside it.
+pub(crate) fn in_domain(domain: (f32, f32), mut breaks: Vec<f32>) -> Vec<f32> {
+    let (lo, hi) = (domain.0.min(domain.1), domain.0.max(domain.1));
+    breaks.retain(|b| *b > lo && *b < hi);
+    breaks.extend([domain.0, domain.1]);
+    breaks
 }
 
 #[derive(Debug, Clone)]

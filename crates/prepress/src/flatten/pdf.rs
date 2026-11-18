@@ -705,7 +705,12 @@ impl<'s, 'a> Reader<'s, 'a> {
             cs.ink_values(&components, simulation.as_ref(), &mut values);
             Some(channels.apply_f32(&values))
         };
-        let mesh = mesh::mesh(sp.shading.shading_type.as_ref(), sp.matrix, &inks.stop_inks(), &mut convert)?;
+        // A parametric mesh is a vector only where its function's pieces are known.
+        let breaks = match function {
+            Some(f) => Some(f.linear_breaks()?),
+            None => None,
+        };
+        let mesh = mesh::mesh(sp.shading.shading_type.as_ref(), sp.matrix, &inks.stop_inks(), breaks.as_deref(), &mut convert)?;
         self.shared.report.vector_meshes += 1;
         Some(Paint::Mesh(Arc::new(mesh)))
     }

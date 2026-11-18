@@ -674,6 +674,11 @@ fn a_narrow_band_in_a_mesh_function_is_kept() {
     // The band's edges are jumps, which no piece fits, so the shading is read as an image.
     let (_, report) = read(&pdf);
     assert_eq!((report.vector_meshes, report.rasterized_shadings), (0, 1));
+    // So is a band between any two points a fixed grid over t would sample.
+    let narrow = band.replace("0.125 0.375", "0.126 0.127");
+    let mesh = coons_square(&format!("/DeviceCMYK {narrow}"), "0 1", "00 FF FF 00");
+    let (_, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (0, 1));
 
     // A linear function stays one patch.
     let ramp = "/Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 0 0 0] /N 1 >>";
@@ -681,6 +686,34 @@ fn a_narrow_band_in_a_mesh_function_is_kept() {
     let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
     assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
     assert_eq!(meshes(&list)[0].patches.len(), 1);
+}
+
+#[test]
+fn mesh_functions_are_vectors_only_where_their_pieces_are_known() {
+    let read_mesh = |function: &str, objects: &[String]| {
+        let mut all = vec![coons_square(&format!("/DeviceCMYK /Function {function}"), "0 1", "00 FF FF 00")];
+        all.extend_from_slice(objects);
+        let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &all);
+        let (list, report) = read(&pdf);
+        let pieces = meshes(&list).first().map(|m| m.patches.len());
+        (pdf, report.vector_meshes, report.rasterized_shadings, pieces)
+    };
+    // Sampled, cyan rising to t = 0.5 and falling back: split at the middle sample.
+    let sampled = hex_image_free("/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1 0 1] /Size [3] /BitsPerSample 8", "00000000 FF000000 00000000");
+    let (pdf, vectors, images, pieces) = read_mesh("6 0 R", &[sampled]);
+    assert_eq!((vectors, images, pieces), (1, 0, Some(4)));
+    assert!(!separates_like_the_source(&pdf), "no image");
+    // Stitched linear pieces with a bend at their bound.
+    let rise = |c0: &str, c1: &str| format!("<< /FunctionType 2 /Domain [0 1] /C0 [{c0} 0 0 0] /C1 [{c1} 0 0 0] /N 1 >>");
+    let stitched =
+        format!("<< /FunctionType 3 /Domain [0 1] /Bounds [0.5] /Encode [0 1 0 1] /Functions [{} {}] >>", rise("0", "0.8"), rise("0.8", "1"));
+    let (pdf, vectors, images, pieces) = read_mesh(&stitched, &[]);
+    assert_eq!((vectors, images, pieces), (1, 0, Some(4)));
+    assert!(!separates_like_the_source(&pdf), "no image");
+    // PostScript, linear or not, has no known pieces.
+    let calculator = stream("/FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1 0 1]", "{ 0 0 0 }");
+    let (_, vectors, images, _) = read_mesh("6 0 R", &[calculator]);
+    assert_eq!((vectors, images), (0, 1));
 }
 
 #[test]

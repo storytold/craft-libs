@@ -1,4 +1,6 @@
-use crate::function::{Clamper, Function, StitchingBounds, TupleVec, Values, interpolate};
+use crate::function::{
+    Clamper, Function, MAX_LINEAR_BREAKS, StitchingBounds, TupleVec, Values, in_domain, interpolate,
+};
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Object;
@@ -127,6 +129,29 @@ impl Type3 {
         stitching_bounds.dedup_by(|a, b| (*a - *b).abs() <= f32::EPSILON);
 
         stitching_bounds
+    }
+
+    /// Craft patch (mesh breaks): the bounds, and each child's breaks mapped back through its
+    /// Encode. A child whose Encode is one value is constant. A Range bends the children where
+    /// they reach it, at inputs not known here, so it gives `None`.
+    pub(crate) fn linear_breaks(&self) -> Option<Vec<f32>> {
+        if self.clamper.range.is_some() {
+            return None;
+        }
+        let domain = *self.clamper.domain.first()?;
+        let mut breaks = self.bounds.get(1..self.bounds.len().saturating_sub(1)).unwrap_or_default().to_vec();
+        for (index, function) in self.functions.iter().enumerate() {
+            let (Some(lo), Some(hi), Some((e0, e1))) = (self.bounds.get(index), self.bounds.get(index + 1), self.encode.get(index)) else {
+                continue;
+            };
+            if e1 != e0 {
+                breaks.extend(function.linear_breaks()?.into_iter().map(|b| interpolate(b, *e0, *e1, *lo, *hi)));
+            }
+            if breaks.len() > MAX_LINEAR_BREAKS {
+                return None;
+            }
+        }
+        Some(in_domain(domain, breaks))
     }
 }
 
@@ -298,5 +323,36 @@ mod tests {
         let data = function_limits_fanout(10000);
         let object = Object::from_bytes(data.as_bytes()).unwrap();
         assert!(Function::new(&object).is_none());
+    }
+
+    fn breaks(data: &str) -> Option<Vec<f32>> {
+        Function::new(&Object::from_bytes(data.as_bytes()).unwrap()).unwrap().linear_breaks()
+    }
+
+    // Craft patch (mesh breaks).
+    #[test]
+    fn linear_breaks_follow_bounds_encode_and_range() {
+        let constant = |c: &str| format!("<< /FunctionType 2 /Domain [0 1] /C0 [{c}] /C1 [{c}] /N 1 >>");
+        let band = format!(
+            "<< /FunctionType 3 /Domain [0 1] /Bounds [0.126 0.127] /Encode [0 1 0 1 0 1] /Functions [{} {} {}] >>",
+            constant("0"),
+            constant("1"),
+            constant("0")
+        );
+        assert_eq!(breaks(&band), Some(vec![0.0, 0.126, 0.127, 1.0]));
+        // A child's bound, mapped through its Encode, is where the function jumps.
+        let nested = format!("<< /FunctionType 3 /Domain [0 1] /Bounds [0.5] /Encode [0 1 0 1] /Functions [{band} {}] >>", constant("0"));
+        let found = breaks(&nested).unwrap();
+        let function = Function::new(&Object::from_bytes(nested.as_bytes()).unwrap()).unwrap();
+        let at = |x: f32| function.eval(smallvec![x]).unwrap()[0];
+        let jump = found.iter().find(|b| (**b - 0.063).abs() < 1e-3).unwrap();
+        assert_eq!((at(jump - 1e-6), at(jump + 1e-6)), (0.0, 1.0));
+        assert_eq!(found.len(), 5, "{found:?}");
+        // A Range bends a ramp where it reaches it; other exponents and a Range on a stitching
+        // function aren't known to be piecewise affine.
+        assert_eq!(breaks("<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [2] /Range [0 1] /N 1 >>"), Some(vec![0.0, 0.5, 1.0]));
+        assert_eq!(breaks("<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 2 >>"), None);
+        let ranged = format!("<< /FunctionType 3 /Domain [0 1] /Range [0 1] /Bounds [] /Encode [0 1] /Functions [{}] >>", constant("0"));
+        assert_eq!(breaks(&ranged), None);
     }
 }
