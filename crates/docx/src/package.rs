@@ -116,8 +116,8 @@ pub const CUSTOM_XML_ROOTS: &str = "wordcraft:customXml.roots";
 pub const SETTINGS_ORIG: &str = "wordcraft:settings.orig";
 /// The theme's East Asian, complex-script and per-script fonts (`a:ea`, `a:cs`, `a:font
 /// script="Hans"` in `a:majorFont` / `a:minorFont`), which the model doesn't hold: `major|minor
-/// \tface\tea|cs\ttypeface` and `major|minor\tscript\t<script>\ttypeface` lines (at most 256
-/// scripts each). Written back into the theme on save, so the
+/// \tface\tea|cs\ttypeface` and `major|minor\tscript\t<script>\ttypeface` lines (per font, at
+/// most 256 script ids of 8 characters or fewer and 256 longer ones, such as `zh-Hant-TW`). Written back into the theme on save, so the
 /// `w:eastAsiaTheme` and `w:cstheme` slots a save keeps still name a font in Word. Not a package
 /// part: WordCraft's own bookkeeping.
 pub const THEME_FONTS: &str = "wordcraft:theme.fonts";
