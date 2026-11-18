@@ -10,12 +10,14 @@
 //! Written from the public Standard MIDI Files 1.0 specification.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod ins;
 mod sequence;
 mod smf;
 /// Source-timed SMF compatibility model, including tolerant and SMPTE reading.
 pub mod source_timed;
 pub mod sync;
 
+pub use ins::{InsBank, InsError, InsInstrument, MAX_INS_BYTES, read_ins};
 pub use sequence::{CtrlEvent, CtrlKind, Note, Sequence};
 pub use smf::{
     LenientRead, MAX_EVENTS, MAX_TRACKS, MAX_WARNINGS, Smf, SmfTrack, TimedEvent, encode_meta_event, read_smf, read_smf_lenient, write_smf,
