@@ -10,6 +10,7 @@
 //!   whether an app can run it.
 //! - [`permissions`]: the allowlist, the refused list every app shares and the app's own.
 //! - [`bundle`]: the `.craftplugin` file, its SHA-256 and version comparison.
+//! - [`source`]: where an installed plug-in came from ([`Source`]) and its record, on every target.
 //! - [`store`] (native builds): the per-user `Plug-ins` folder.
 //! - [`catalog`] and [`github`]: catalogs (`index.json`) and installing from a repository's
 //!   releases, as pure functions; [`fetch`] runs them over the app's HTTP client.
@@ -26,6 +27,7 @@ pub mod github;
 pub mod manifest;
 pub mod permissions;
 pub mod sandbox;
+pub mod source;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 mod target;
@@ -43,6 +45,7 @@ pub use sandbox::{
     ENTRY, Host, IMPORT_MODULE, IMPORT_MODULES, Instance, LEGACY_ENTRY, LEGACY_IMPORT_MODULE, Limits, PluginError, RunOutput, UiChange, check_module,
     run,
 };
+pub use source::{Source, SourceRecord};
 pub use target::{AppInfo, Target};
 pub use widget::{MenuItem, MenuKind, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 
@@ -62,6 +65,8 @@ mod manifest_tests;
 mod permissions_tests;
 #[cfg(test)]
 mod save_file_tests;
+#[cfg(test)]
+mod source_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod store_tests;
 #[cfg(test)]

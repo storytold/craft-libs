@@ -13,23 +13,23 @@
 //! or an asset name can't climb out of the store. Every write is atomic (craft-atomic), and an
 //! update writes the new bundle beside the old one before `source.json` switches to it, so a crash
 //! leaves either installation whole. Native builds only; the web builds keep plug-ins in browser
-//! storage.
+//! storage, with the same [`Source`] and [`SourceRecord`] ([`crate::source`]).
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::bundle::{BUNDLE_EXTENSION, Bundle, MAX_BUNDLE_BYTES, ModuleCheck, check_command_module, open_with, sha256_hex};
 use crate::github::is_hex64;
 use crate::manifest::Manifest;
+/// [`Source`] and [`SourceRecord`] live in [`crate::source`] (every target); named here too.
+pub use crate::source::{Source, SourceRecord};
 
 /// The store's folder name inside the app's settings folder.
 pub const PLUGINS_DIR: &str = "Plug-ins";
 /// The record of an installed plug-in.
 pub const SOURCE_FILE: &str = "source.json";
 const MAX_SOURCE_BYTES: u64 = 64 * 1024;
-const MAX_FIELD: usize = 1000;
 /// Most plug-in folders [`Store::list`] reads.
 pub const MAX_INSTALLED: usize = 4096;
 
@@ -43,45 +43,6 @@ pub fn plugins_dir(settings_dir: &Path) -> PathBuf {
 /// (ids differing only in case are one plug-in, as on Windows and macOS folders).
 pub fn folder_name(id: &str) -> String {
     Sha256::digest(id.to_ascii_lowercase().as_bytes()).iter().take(16).map(|b| format!("{b:02x}")).collect()
-}
-
-/// Where an installed plug-in came from.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum Source {
-    /// A bundle file the person picked (as the app chose to describe it: its name or path).
-    File { path: String },
-    /// A catalog's package.
-    Catalog { catalog: String, package: String },
-    /// A GitHub repository's release (`owner/repo`, its tag and the asset installed).
-    Github { repo: String, tag: String, asset: String },
-}
-
-impl Source {
-    /// Every text is short and has no control characters.
-    fn check(&self) -> Result<(), String> {
-        let texts: Vec<&str> = match self {
-            Source::File { path } => vec![path],
-            Source::Catalog { catalog, package } => vec![catalog, package],
-            Source::Github { repo, tag, asset } => vec![repo, tag, asset],
-        };
-        if texts.iter().any(|t| t.chars().count() > MAX_FIELD || t.chars().any(char::is_control)) {
-            return Err("the plug-in's source is too long or has control characters".into());
-        }
-        Ok(())
-    }
-}
-
-/// `source.json`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SourceRecord {
-    /// The manifest's id.
-    pub id: String,
-    /// The manifest's version.
-    pub version: String,
-    /// Lower-case hex SHA-256 of the bundle (also its file name).
-    pub sha256: String,
-    pub source: Source,
 }
 
 /// An installed plug-in, read back and checked against its record.
