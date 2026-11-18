@@ -55,7 +55,6 @@ impl Files for StubFiles {
         Err(FileError::Unsupported)
     }
 
-    // P3(pdf-workflows-w4): L-184 the intent and the page-took-it result.
     fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
     }

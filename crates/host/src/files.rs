@@ -192,8 +192,11 @@ pub struct PickAnswer {
     pub picked: Picked,
 }
 
-/// Why a file is written: a Save to the document's own place, or a Save As to a new one.
+/// Why a file is written: a Save to the document's own place, or a Save As to a new one. A
+/// service that hands the bytes to an embedding page passes it on, so the page can tell the two
+/// apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WriteIntent {
     /// Save to the place the document already has.
     Save,
@@ -308,9 +311,9 @@ impl Files for NoPickFiles {
         Err(FileError::Unsupported)
     }
 
+    // No page to hand the bytes to: every intent writes the path, and no page took them.
     #[cfg(not(target_arch = "wasm32"))]
-    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
-        let _ = intent; // P3(pdf-workflows-w4): SH-C35
+    fn write(&self, path: &Path, bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         let tmp = path.with_extension(format!("{}.tmp", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
         std::fs::write(&tmp, bytes).map_err(|e| with_path(e, path))?;
         std::fs::rename(&tmp, path).map_err(|e| with_path(e, path))?;
@@ -370,8 +373,9 @@ impl ScriptedFiles {
     }
 
     /// A service whose picks stay open until the test answers them with
-    /// [`answer`](ScriptedFiles::answer) or [`answer_to`](ScriptedFiles::answer_to): the state of
-    /// a user who has the dialog on screen.
+    /// [`answer`](ScriptedFiles::answer), [`answer_to`](ScriptedFiles::answer_to) or
+    /// [`Files::answer_next`]: the state of a user who has the dialog on screen. A pick that finds
+    /// an answer queued takes it at once.
     pub fn held() -> Self {
         let files = Self::default();
         files.state().held = true;
@@ -446,12 +450,15 @@ impl Files for ScriptedFiles {
         let id = PickId(state.next);
         let suggested = (state.save_suggested && request.kind == PickKind::Save).then(|| Self::suggested(&request));
         state.asked.push(request.clone());
-        if state.held {
-            state.open.push((id, request));
-            return id;
+        let picked = if state.held {
+            state.queued.pop_front()
+        } else {
+            Some(suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled))
+        };
+        match picked {
+            Some(picked) => state.answered.push(PickAnswer { id, request, picked }),
+            None => state.open.push((id, request)),
         }
-        let picked = suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled);
-        state.answered.push(PickAnswer { id, request, picked });
         id
     }
 
@@ -475,15 +482,24 @@ impl Files for ScriptedFiles {
         self.file(path).ok_or_else(|| FileError::NotFound(path.to_owned()))
     }
 
-    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
-        let _ = intent; // P3(pdf-workflows-w4): SH-C35
+    // Kept in memory whatever the intent; no page takes the bytes.
+    fn write(&self, path: &Path, bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         self.state().files.insert(path.to_owned(), bytes.to_vec());
         Ok(false)
     }
 
+    /// Answers the oldest open pick of a [`held`](ScriptedFiles::held) service; otherwise the
+    /// answer is queued for the next pick. [`answer`](ScriptedFiles::answer) answers the newest
+    /// instead, so this does not go through it.
     fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
-        let _ = picked;
-        todo!("WF-W16")
+        let mut state = self.state();
+        if state.held && !state.open.is_empty() {
+            let (id, request) = state.open.remove(0);
+            state.answered.push(PickAnswer { id, request, picked });
+        } else {
+            state.queued.push_back(picked);
+        }
+        Ok(())
     }
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
@@ -499,3 +515,4 @@ fn with_path(e: std::io::Error, path: &Path) -> FileError {
         other => other,
     }
 }
+
