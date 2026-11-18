@@ -1917,6 +1917,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-evm"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ews"
 version = "0.1.0"
 dependencies = [
@@ -2300,6 +2310,7 @@ dependencies = [
 name = "craft-java-class"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -3170,11 +3181,14 @@ dependencies = [
  "craft-xml",
  "data-url",
  "flate2",
+ "gif",
+ "image-webp",
  "kurbo 0.13.1",
  "quick-xml 0.41.0",
  "resvg 0.48.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+ "toml",
  "usvg 0.48.1",
  "vectorcraft-geom",
  "vectorcraft-pathops",
@@ -3192,6 +3206,7 @@ dependencies = [
 name = "craft-tar"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
 ]
 
@@ -3382,6 +3397,7 @@ dependencies = [
 name = "craft-wasm"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
  "wasmparser 0.261.0",
@@ -3459,6 +3475,14 @@ name = "craft-xcf"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xfdf"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
  "thiserror 2.0.21",
 ]
 

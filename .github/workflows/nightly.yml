@@ -28,4 +28,7 @@ jobs:
       linux-env: WGPU_BACKEND=vulkan
       env: CRAFT_PRINT_REQUIRE_QUEUE=0
       setup-command: bash scripts/ci-test-inputs.sh
+      cache-paths: .test-inputs/photocraft/corpus
+      cache-key: photocraft-corpus
+      cache-key-files: scripts/ci-test-inputs.sh
       command: cargo nextest run --workspace --all-features --locked --profile ci

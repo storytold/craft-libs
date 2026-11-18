@@ -18,7 +18,7 @@ def block(text, name):
     return "\n".join(line[8:] for line in match[1].splitlines())
 
 
-def commands(os_name, fail=""):
+def commands(os_name, fail="", name="command"):
     # Functions avoid executing any caller-supplied cargo command or changing the workspace.
     # The real bash -euo pipefail semantics still apply, including failures inside a branch.
     stub = """
@@ -29,7 +29,7 @@ cargo() {
 python3() { :; }
 """
     return subprocess.run(
-        ["bash", "-euo", "pipefail", "-c", stub + block(WORKFLOW.read_text(), "command")],
+        ["bash", "-euo", "pipefail", "-c", stub + block(WORKFLOW.read_text(), name)],
         env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail},
         text=True, capture_output=True, check=False,
     )
@@ -48,24 +48,32 @@ TESTS = [
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_every_leg_lints_with_both_feature_sets(self):
+        for os_name in ("Linux", "macOS", "Windows"):
+            with self.subTest(os=os_name):
+                result = commands(os_name, name="lint-command")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), COMMON)
+
     def test_linux_and_macos_run_one_feature_set_with_doctests(self):
         for os_name in ("Linux", "macOS"):
             with self.subTest(os=os_name):
                 result = commands(os_name)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), COMMON + TESTS)
+                self.assertEqual(result.stdout.splitlines(), TESTS)
 
     def test_each_stage_failure_remains_fatal(self):
-        for index, command in enumerate(COMMON + TESTS):
-            with self.subTest(command=command):
-                result = commands("Linux", command)
-                self.assertEqual(result.returncode, 17, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), (COMMON + TESTS)[:index + 1])
+        for name, stages in (("lint-command", COMMON), ("command", TESTS)):
+            for index, command in enumerate(stages):
+                with self.subTest(block=name, command=command):
+                    result = commands("Linux", command, name)
+                    self.assertEqual(result.returncode, 17, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), stages[:index + 1])
 
-    def test_windows_runs_the_same_cargo_commands(self):
+    def test_windows_runs_the_same_tests(self):
         source = block(WORKFLOW.read_text(), "windows-command")
         cargo = [line.strip() for line in source.splitlines() if line.strip().startswith("cargo ")]
-        self.assertEqual(cargo, ["cargo " + command for command in COMMON + TESTS])
+        self.assertEqual(cargo, ["cargo " + command for command in TESTS])
 
     def test_ci_profile_keeps_its_failure_policy_without_retries_or_filtering(self):
         config = tomllib.loads((ROOT / ".config/nextest.toml").read_text())
@@ -94,7 +102,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn('os: \'["ubuntu-latest","windows-latest","macos-latest"]\'', source)
         self.assertIn("  msrv:", source)
         self.assertIn("  wasm:", source)
-        self.assertIn("python3 scripts/test-workspace-tests.py", block(source, "command"))
+        self.assertIn("python3 scripts/test-workspace-tests.py", block(source, "lint-command"))
 
 
 if __name__ == "__main__":
