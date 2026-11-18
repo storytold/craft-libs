@@ -41,6 +41,8 @@ pub const MIN_COLUMN_WIDTH: f32 = 18.0;
 /// The largest spacing, points (22 in, PowerPoint).
 pub const MAX_SPACING: f32 = 1584.0;
 
+/// The OK footer button's index, in the order the buttons are given.
+const OK: usize = 0;
 /// The spacing between columns Word gives a preset and a new section's columns, points: Word's
 /// 0.5 in.
 const DEFAULT_SPACING: f32 = 0.5 * 72.0;
@@ -668,6 +670,14 @@ impl StackDialog for TextColumnsDialog {
             });
         if refused.is_some() && !unchanged.get() {
             self.held.clear_refusal();
+        }
+        // A held OK stays open: its pick files the answer, and only Cancel closes.
+        if self.hold && shown.output.picked == Some(OK) {
+            if !valid.get() {
+                return None;
+            }
+            let changes = self.changes();
+            return self.settle(changes).map(DialogResult::Ok);
         }
         match shown.output.result(|| self.changes()) {
             Some(DialogResult::Ok(changes)) if valid.get() => self.settle(changes).map(DialogResult::Ok),

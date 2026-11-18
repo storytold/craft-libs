@@ -33,6 +33,9 @@ use std::cell::{Cell, RefCell};
 #[cfg(feature = "screen-testing")]
 mod stories;
 
+/// The OK footer button's index, in the order the buttons are given.
+const OK: usize = 0;
+
 const POSITION: ColumnKey = ColumnKey::new("position");
 const ALIGNMENT: ColumnKey = ColumnKey::new("alignment");
 const LEADER: ColumnKey = ColumnKey::new("leader");
@@ -96,6 +99,8 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 #[derive(craft_ui::contract::Pattern)]
 pub struct TabStopsDialog {
     stops: Vec<TabStop>,
+    /// The positions the paragraph's stops began at: one that no stop holds any more is cleared in the result.
+    basis: Vec<f32>,
     cleared: Vec<f32>,
     default_interval: f32,
     selected: Option<usize>,
@@ -116,6 +121,7 @@ impl TabStopsDialog {
         stops.retain(|stop| stop.position.is_finite());
         stops.truncate(MAX_STOPS);
         TabStopsDialog {
+            basis: stops.iter().map(|stop| stop.position).collect(),
             stops,
             cleared: Vec::new(),
             default_interval,
@@ -220,7 +226,20 @@ impl TabStopsDialog {
     /// What OK returns: the stops normalized, the cleared positions and the default interval.
     pub fn result(&mut self) -> TabStopsResult {
         self.normalize();
-        TabStopsResult { stops: self.stops.clone(), cleared: self.cleared.clone(), default_interval: self.default_interval }
+        TabStopsResult { stops: self.stops.clone(), cleared: self.cleared_positions(), default_interval: self.default_interval }
+    }
+
+    /// The positions to clear: the ones cleared here, and the ones a stop began at that no stop holds now (a moved
+    /// stop clears its old position).
+    fn cleared_positions(&self) -> Vec<f32> {
+        let mut cleared = self.cleared.clone();
+        for at in &self.basis {
+            let held = |position: f32| (position - at).abs() < SAME_POSITION;
+            if !self.stops.iter().any(|stop| held(stop.position)) && !cleared.iter().any(|gone| held(*gone)) {
+                cleared.push(*at);
+            }
+        }
+        cleared
     }
 }
 
@@ -281,7 +300,7 @@ impl TabStopsDialog {
 
     /// Whether the stops, the cleared positions and the interval are those of `result`.
     fn matches(&self, result: &TabStopsResult) -> bool {
-        self.stops == result.stops && self.cleared == result.cleared && self.default_interval == result.default_interval
+        self.stops == result.stops && self.cleared_positions() == result.cleared && self.default_interval == result.default_interval
     }
 }
 
@@ -323,6 +342,11 @@ impl StackDialog for TabStopsDialog {
             });
         if refused.is_some() && !unchanged.get() {
             self.held.clear_refusal();
+        }
+        // A held OK stays open: its pick files the answer, and only Cancel closes.
+        if self.hold && shown.output.picked == Some(OK) {
+            let result = self.result();
+            return self.settle(result).map(DialogResult::Ok);
         }
         match shown.output.result(|| self.result()) {
             Some(DialogResult::Ok(result)) => self.settle(result).map(DialogResult::Ok),
