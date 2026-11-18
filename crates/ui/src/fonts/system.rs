@@ -2,8 +2,8 @@
 //!
 //! Lookups that may not block (the UI thread's) find nothing until the index is built: egui
 //! draws with the faces it has, and every context that was turned away reloads its fonts when the
-//! index arrives, which forgets egui's cached misses and repaints. If the build panics, every
-//! lookup finds nothing from then on and egui keeps the faces it has.
+//! index arrives, which forgets egui's cached misses and repaints. If the worker cannot start or
+//! the build panics, every lookup finds nothing from then on and egui keeps the faces it has.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -44,6 +44,10 @@ impl<T: FontIndex> Shared<T> {
     /// Start building the index on a background thread unless it is built or building. `ctx`
     /// reloads its fonts when the index arrives if a lookup was turned away meanwhile.
     pub(super) fn start(&'static self, ctx: Option<&egui::Context>) {
+        self.start_with(ctx, || std::thread::Builder::new().name("craft-ui system fonts".into()).spawn(|| self.finish()).map(|_| ()));
+    }
+
+    fn start_with(&'static self, ctx: Option<&egui::Context>, spawn: impl FnOnce() -> std::io::Result<()>) {
         let idle = {
             let mut state = self.lock();
             let idle = matches!(*state, State::Idle);
@@ -55,8 +59,12 @@ impl<T: FontIndex> Shared<T> {
             }
             idle
         };
-        if idle && std::thread::Builder::new().name("craft-ui system fonts".into()).spawn(|| self.finish()).is_err() {
-            self.finish();
+        if idle && let Err(error) = spawn() {
+            // Never fall back to indexing on the caller: this may be the UI thread.
+            // Wake blocking lookups too, and retain the existing faces and fallbacks.
+            *self.lock() = State::Failed;
+            self.built.notify_all();
+            eprintln!("craft-ui: starting the system font index failed, so it adds no fonts: {error}");
         }
     }
 
@@ -163,6 +171,50 @@ mod tests {
     }
 
     static GATED: Shared<Gated> = Shared::new(build_when_open);
+
+    #[test]
+    fn thread_creation_failure_wakes_waiters_without_building_and_preserves_fallbacks() {
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        fn build() -> Gated {
+            BUILDS.fetch_add(1, Ordering::Relaxed);
+            Gated
+        }
+        static INDEX: Shared<Gated> = Shared::new(build);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let system: Arc<dyn FontProvider> = Arc::new(Lookup::new(&INDEX, (), false));
+        let fallback: Arc<dyn FontProvider> =
+            Arc::new(|_: &FallbackRequest<'_>| Some(FontInsert::new("fallback", FontData::from_static(ARABIC), vec![])));
+        super::super::providers::set_font_providers(&ctx, vec![system, fallback]);
+        let (waiting, ready) = std::sync::mpsc::channel();
+        let (finished, done) = std::sync::mpsc::channel();
+        let mut worker = None;
+        INDEX.start_with(Some(&ctx), || {
+            worker = Some(std::thread::spawn(move || {
+                let mut state = INDEX.lock();
+                waiting.send(()).unwrap();
+                // Holding the mutex until wait releases it ensures failure notification
+                // cannot race ahead of this waiter actually waiting.
+                while matches!(*state, State::Building { .. }) {
+                    state = INDEX.built.wait(state).unwrap();
+                }
+                finished.send(matches!(*state, State::Failed)).unwrap();
+            }));
+            ready.recv_timeout(Duration::from_secs(10)).unwrap();
+            Err(std::io::Error::other("injected thread creation failure"))
+        });
+        assert_eq!(done.recv_timeout(Duration::from_secs(10)), Ok(true), "failure must wake existing waiters");
+        worker.unwrap().join().unwrap();
+        assert_eq!(BUILDS.load(Ordering::Relaxed), 0, "never build the index on the caller's thread");
+        assert!(INDEX.get(false).is_none());
+        assert!(INDEX.get(true).is_none());
+        INDEX.start_with(None, || panic!("failed indexing must not retry on every lookup"));
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            assert!(fonts.has_glyph(&FontId::proportional(14.0), 'ع'));
+            assert_eq!(fonts.discovered_fonts().last().unwrap().name, "fallback");
+        });
+    }
 
     #[test]
     fn ui_lookups_skip_the_index_until_it_is_built_then_the_context_reloads() {
