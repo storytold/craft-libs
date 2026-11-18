@@ -1,4 +1,5 @@
-//! Panel and overlay patterns: `Panel`, `Inspector`, `HistoryPanel`, `ModifierKeysPanel`, `CommandPalette` and `Tour`.
+//! Panel and overlay patterns: `Panel`, `Inspector`, `HistoryPanel`, `ModifierKeysPanel`, `CommandPalette` (a centred
+//! box, or in place under a search box through `PaletteFace::InPlace`) and `Tour`.
 
 mod words;
 
