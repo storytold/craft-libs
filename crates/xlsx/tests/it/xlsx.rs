@@ -1,6 +1,6 @@
 //! SpreadsheetML workbooks through the part layer.
 
-mod common;
+use crate::common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::{workbook, zip};
