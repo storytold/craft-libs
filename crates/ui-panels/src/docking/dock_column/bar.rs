@@ -116,16 +116,16 @@ pub(in crate::docking) fn show_bar<P: Clone + Send + Sync + 'static>(
 /// settles: it runs when that version, its band or something the framework tracks in it changed, or the pointer or
 /// focus is on it, and otherwise repaints its last run, which reports nothing.
 pub(in crate::docking) fn settled_bar(ui: &mut Ui, band: Rect, content: Option<u64>, show: impl FnOnce(&mut Ui) -> BarRecord) -> BarRecord {
-    let key = "column bar";
-    let lazy = Lazy::new(key, 0.0).settles(content.is_some());
-    let lazy = match content {
-        Some(version) => lazy.content(version),
-        None => lazy,
-    };
     if !band.is_positive() {
         return BarRecord::default();
     }
-    ui.scope_builder(UiBuilder::new().max_rect(band).id_salt(key), |ui| {
+    ui.scope_builder(UiBuilder::new().max_rect(band).id_salt("column bar"), |ui| {
+        // Keyed by the scope's id, under its column's: unique among the bars of a scroll area's columns.
+        let lazy = Lazy::new(ui.id(), 0.0).settles(content.is_some());
+        let lazy = match content {
+            Some(version) => lazy.content(version),
+            None => lazy,
+        };
         lazy.show(ui, |ui| {
             let record = show(ui);
             // The grip takes no room in flow; the run covers the band, so the pointer over it runs it again.

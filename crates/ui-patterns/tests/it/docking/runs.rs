@@ -5,7 +5,7 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx};
+use craft_ui::contract::{Bind, BodyCx, Role};
 use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec};
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
@@ -246,4 +246,53 @@ fn a_tab_dropped_on_a_settled_group_lands_there() {
     let layout = &workspace.borrow().layout;
     let group = layout.place(&4).and_then(|place| layout.node_of(&place));
     assert!(matches!(group, Some(Node::Tabs { panels, .. }) if panels.contains(&0)), "the tab joined the third group: {group:?}");
+}
+
+/// Close in a settled group's panel menu closes the panel in the frame after the pick, with the pointer gone from the
+/// group: the command the menu queued for the group reaches it.
+#[trial]
+fn close_in_a_settled_groups_panel_menu_closes_the_panel() {
+    let (mut fixture, _, workspace) = settling(side_by_side(2), None);
+    let buttons: Vec<_> =
+        fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
+    assert_eq!(buttons.len(), 2, "each group shows its panel menu button");
+    fixture.click(&buttons[1]).idle(2);
+    let close = fixture.by_label("Close").expect("the menu's Close row");
+    fixture.click(&close);
+    fixture.frame(vec![egui::Event::PointerGone]);
+    assert!(workspace.borrow().layout.place(&2).is_none(), "Close closed the second group's panel");
+}
+
+/// Panels without versions whose bodies note the id of the `Ui` they run in.
+struct Noted {
+    ids: Rc<RefCell<Vec<(usize, egui::Id)>>>,
+}
+
+impl DockPanels<usize> for Noted {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+
+    fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        self.ids.borrow_mut().push((*panel, ui.id()));
+    }
+}
+
+/// Moving another tab to the front of a group keeps the shown body's ids, and with them its scroll, collapsing and
+/// text state.
+#[trial]
+fn a_tab_moved_to_the_front_keeps_the_shown_bodys_ids() {
+    let ids: Rc<RefCell<Vec<(usize, egui::Id)>>> = Rc::default();
+    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(Node::tabs(vec![0, 1], 0)), Vec::new()))));
+    let (shown, mut panels) = (Rc::clone(&workspace), Noted { ids: Rc::clone(&ids) });
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &mut panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(800.0, 600.0)).settle();
+    let body_id = |ids: &RefCell<Vec<(usize, egui::Id)>>| ids.borrow().iter().rev().find(|(panel, _)| *panel == 0).map(|(_, id)| *id);
+    let before = body_id(&ids).expect("panel 0's body ran");
+    workspace.borrow_mut().layout.root = Some(Node::tabs(vec![1, 0], 1));
+    ids.borrow_mut().clear();
+    fixture.frame(Vec::new());
+    assert_eq!(body_id(&ids), Some(before), "the shown body keeps its id when another tab moves to the front");
 }

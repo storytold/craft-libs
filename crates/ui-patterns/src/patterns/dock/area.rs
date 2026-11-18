@@ -781,6 +781,7 @@ fn chrome_key<P: Hash>(layout: &Layout<P>, version: u64, config: &DockConfig, lo
                 side.hash(hasher);
                 columns.iter().for_each(|one| column(one, hasher));
             }
+            // `Node` is non_exhaustive: a variant added later hashes only its discriminant until it is listed here.
             _ => {}
         }
     }
@@ -965,15 +966,16 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             GroupAt::Show(rect) => rect,
         };
-        // One child `Ui` held to the group's rect, whether the group settles or not, so its contents keep their ids.
-        let key = ("dock group", PanelKey::of(anchor).0);
-        let lazy = Lazy::new(key, 0.0).settles(version.is_some());
-        let lazy = match version {
-            Some(version) => lazy.content(version),
-            None => lazy,
-        };
+        // One child `Ui` held to the group's rect, whether the group settles or not. It takes the parent's next id, as
+        // the group did before it settled, so a change of the group's first tab keeps every id inside; the Lazy is
+        // keyed by that id, unique among the groups of a dock in a scroll area too.
         let output = ui
-            .scope_builder(UiBuilder::new().max_rect(rect).id_salt(key), |ui| {
+            .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                let lazy = Lazy::new(ui.unique_id(), 0.0).settles(version.is_some());
+                let lazy = match version {
+                    Some(version) => lazy.content(version),
+                    None => lazy,
+                };
                 lazy.show(ui, |ui| {
                     let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
                     // `show_at` takes no room in flow; the run covers the group, so the pointer over it runs it again.
