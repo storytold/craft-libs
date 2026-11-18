@@ -265,19 +265,23 @@ fn a_header_field_edits_and_a_header_remove_reports_its_column() {
     fixture.in_room(Room::Dialog).settle();
     assert!(fixture.by_label("Name").is_some(), "the column header keeps its name");
 
-    fixture.key(Key::Tab, Modifiers::NONE).settle();
-    let (table, part) = fixture.focused_stop().expect("Tab reaches the header's group");
-    assert!(part.is_some(), "Tab lands on a header part: {part:?}");
-    // The hosted field joins the header's roving group, so an arrow from the header parts reaches it.
-    let mut reached = false;
+    // Tab enters the rows; Shift+Tab goes back to the header's roving group.
+    fixture.key(Key::Tab, Modifiers::NONE).key(Key::Tab, Modifiers::SHIFT).settle();
+    let first = fixture.focused_stop().expect("Shift+Tab reaches the header's group");
+    eprintln!("DIAG a_header_field_edits_and_a_header_remove_reports_its_column: Shift+Tab lands on {first:?}");
+    // The hosted field joins the header's roving group beside the header parts, so arrows reach both kinds of stop.
+    let mut stops = vec![first];
     for _ in 0..4 {
         fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
-        if fixture.focused_stop().is_some_and(|(id, _)| id != table) {
-            reached = true;
-            break;
+        if let Some(stop) = fixture.focused_stop() {
+            eprintln!("DIAG a_header_field_edits_and_a_header_remove_reports_its_column: arrow lands on {stop:?}");
+            if !stops.contains(&stop) {
+                stops.push(stop);
+            }
         }
     }
-    assert!(reached, "an arrow from the header parts lands on the hosted field");
+    assert!(stops.iter().any(|(_, part)| part.is_some()), "the header's group has a header part: {stops:?}");
+    assert!(stops.iter().any(|(_, part)| part.is_none()), "the hosted field is a stop of the header's group: {stops:?}");
 
     let field = fixture.by_label("Name title").expect("the hosted field's node");
     fixture.click(&field).type_text("x").settle();
