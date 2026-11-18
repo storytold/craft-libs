@@ -1,8 +1,9 @@
 //! The settings document without a window: rows, applied edits, rebase and row conditions.
 
 use craft_theme::Rgba;
+// P3(chrome-w4): ch.C10
 use craft_ui::patterns::preferences::{
-    CustomSettings, PageInfo, PrefValue, PreferencesModel, RowKind, SettingRule, SettingsDocument, SettingsDraft, StandardPage,
+    CustomSettings, PageInfo, PrefValue, PreferencesDraft, PreferencesModel, RowKind, SettingRule, SettingsDocument, SettingsDraft, StandardPage,
 };
 use craft_ui::testing::trial;
 use serde::{Deserialize, Serialize};

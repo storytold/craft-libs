@@ -19,15 +19,18 @@ mod model;
 mod search;
 
 pub use document::{CustomSettings, PageInfo, RuleKind, SettingRule, SettingsDocument, SettingsDraft, StandardPage, setting_label};
-pub use model::{Closed, GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesOutput, RowKind, RowSpec};
+pub use model::{Closed, GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesModel, PreferencesOutput, RowKind, RowSpec};
 pub use search::{Listed, list_pages, matches, row_matches, row_shown, shown_position};
 pub use words::{PreferencesWords, SettingsDocumentWords};
 
 // The window, its body and its rows.
 mod body;
+mod page;
 mod path_setting;
 mod rows;
 mod window;
+
+pub use page::{PreferencesPage, PreferencesPageOutput};
 
 pub use path_setting::{PathSetting, PathSettingOutput};
 

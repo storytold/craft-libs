@@ -61,8 +61,8 @@ pub use new_document::{
 mod about;
 
 pub use about::{
-    AboutDialog, AboutInfo, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits, HostedAbout,
-    ModelCredit, NameMode,
+    AboutAppTab, AboutDialog, AboutInfo, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits,
+    HostedAbout, ModelCredit, NameMode,
 };
 
 mod color_choice;

@@ -299,6 +299,19 @@ pub trait PreferencesModel {
     fn custom_row(&mut self, ui: &mut Ui, key: &str);
     /// Draws a [`PageSpec::custom`] page.
     fn custom_page(&mut self, ui: &mut Ui, page: &str);
+    /// Resets the page's rows in the draft to their defaults.
+    fn reset_page(&mut self, page: &str);
+    /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in
+    /// every pass.
+    fn nested(&mut self, _ctx: &Context) {}
+    /// Whether a nested dialog is open: the window takes no keys then, and refuses OK.
+    fn nested_open(&self) -> bool {
+        false
+    }
+}
+
+/// The draft side of a preferences model: what a window with Apply, OK and Cancel needs beyond the rows.
+pub trait PreferencesDraft: PreferencesModel {
     /// Whether the draft differs from the saved settings: enables Apply.
     fn differs(&self) -> bool;
     /// Whether OK may close the window.
@@ -309,13 +322,4 @@ pub trait PreferencesModel {
     fn apply(&mut self) -> Result<(), String>;
     /// Drops the draft and undoes previews (the language).
     fn cancel(&mut self);
-    /// Resets the page's rows in the draft to their defaults.
-    fn reset_page(&mut self, page: &str);
-    /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in
-    /// every pass.
-    fn nested(&mut self, _ctx: &Context) {}
-    /// Whether a nested dialog is open: the window takes no keys then, and refuses OK.
-    fn nested_open(&self) -> bool {
-        false
-    }
 }

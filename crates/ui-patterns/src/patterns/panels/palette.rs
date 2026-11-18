@@ -11,7 +11,7 @@ use crate::list::{List, ListRow};
 use crate::menu::search::{HelpEntry, search_order};
 use crate::popover::Popover;
 use crate::runtime::commands::{self, CommandRef, FireSource};
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::{Env, Label, WordTemplate};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::common::CommonWords;
@@ -41,6 +41,17 @@ struct Session {
     announced: Option<usize>,
 }
 
+/// Where a [`CommandPalette`] shows its search.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PaletteFace {
+    /// A centred box.
+    #[default]
+    Dialog,
+    /// A search box where it is laid out (the title bar) that opens to the field and its results in place.
+    InPlace,
+}
+
 /// What a palette reports: its response, the command picked in this pass and how it closed.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -51,6 +62,8 @@ pub struct PaletteOutput {
     pub picked: Option<CommandRef>,
     /// How the palette closed in this pass; `None` while it stays open.
     pub closed: Option<CloseReason>,
+    /// The query the fallback row handed back, when the user picked it in this pass.
+    pub fallback: Option<String>,
 }
 
 impl crate::contract::Outcome for PaletteOutput {
@@ -82,12 +95,33 @@ pub struct CommandPalette<'a> {
     /// The commands last run, newest first.
     #[prop]
     recents: Bind<'a, Vec<CommandRef>>,
+    /// Where the search shows: a centred box or in place.
+    #[prop]
+    face: PaletteFace,
+    /// The hint the in-place search box shows while it is closed.
+    #[prop(into)]
+    placeholder: Option<Label>,
+    /// The rows listed on an empty query, under a heading.
+    #[prop(into)]
+    suggested: Option<(Label, Vec<CommandRef>)>,
+    /// The row that hands the query back; its text is the template filled with the query as `{text}`.
+    #[prop]
+    fallback: Option<WordTemplate>,
 }
 
 impl<'a> CommandPalette<'a> {
     /// A palette named `label` over `entries`, open while `open` is true.
     pub fn new(label: impl Into<Label>, entries: &'a [HelpEntry], open: Bind<'a, bool>) -> Self {
-        CommandPalette { label: label.into(), entries, open, recents: Bind::kept() }
+        CommandPalette {
+            label: label.into(),
+            entries,
+            open,
+            recents: Bind::kept(),
+            face: PaletteFace::default(),
+            placeholder: None,
+            suggested: None,
+            fallback: None,
+        }
     }
 
     /// Puts `command` first in `recents`, once, keeping the newest `RECENT`.
@@ -99,7 +133,8 @@ impl<'a> CommandPalette<'a> {
 
     /// Shows the palette while it is open.
     pub fn show(self, ui: &mut Ui) -> PaletteOutput {
-        let CommandPalette { label, entries, open, mut recents } = self;
+        let CommandPalette { label, entries, open, mut recents, face, placeholder, suggested, fallback } = self;
+        let _ = (face, placeholder, suggested, fallback); // P3(chrome-w3): ch.C9, dg.F27
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
@@ -166,7 +201,7 @@ impl<'a> CommandPalette<'a> {
                 }
             });
         let closed = shown.output.closed;
-        PaletteOutput { response: shown.output.response, picked, closed }
+        PaletteOutput { response: shown.output.response, picked, closed, fallback: None }
     }
 }
 
@@ -186,7 +221,8 @@ fn texts_of(entries: &[HelpEntry], env: &crate::runtime::env::EnvView<'_>) -> Ve
 /// The entries the list shows, by position in `entries`: the matches for a query, best first, else the commands
 /// last run, newest first, else the first entries. A command appears once.
 fn listing(entries: &[HelpEntry], query: &str, folder: &craft_i18n::Folder, texts: &[[String; 3]], recent: &[CommandRef]) -> Vec<usize> {
-    let refs: Vec<[&str; 3]> = texts.iter().map(|[label, english, path]| [label.as_str(), english.as_str(), path.as_str()]).collect();
+    // P3(chrome-w3): dg.F26 (the fourth text is the command id; empty until chrome-w3 passes it)
+    let refs: Vec<[&str; 4]> = texts.iter().map(|[label, english, path]| [label.as_str(), english.as_str(), path.as_str(), ""]).collect();
     let candidates: Vec<usize> = if query.trim().is_empty() {
         let last: Vec<usize> = recent.iter().filter_map(|command| entries.iter().position(|entry| entry.command() == command)).collect();
         if last.is_empty() { (0..entries.len()).collect() } else { last }

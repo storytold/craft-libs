@@ -104,6 +104,25 @@ pub enum AboutTab {
     Contributors,
     /// The credited AI models.
     Models,
+    /// The app's own tab at this position in the app's tabs, shown after Models.
+    App(u8),
+}
+
+/// A tab the app adds after Models: a name for the hosted dialog's `tab` field, a title and a body.
+pub struct AboutAppTab {
+    #[allow(dead_code)] // P3(chrome-w4): ch.C11
+    name: &'static str,
+    #[allow(dead_code)] // P3(chrome-w4): ch.C11
+    title: Label,
+    #[allow(dead_code)] // P3(chrome-w4): ch.C11
+    body: Box<dyn FnMut(&mut Ui) + Send>,
+}
+
+impl AboutAppTab {
+    /// A tab named `name` in the hosted dialog's `tab` field, titled `title`, whose content `body` draws.
+    pub fn new(name: &'static str, title: impl Into<Label>, body: impl FnMut(&mut Ui) + Send + 'static) -> Self {
+        AboutAppTab { name, title: title.into(), body: Box::new(body) }
+    }
 }
 
 /// What the dialog keeps while it is open, in its container's slot.
@@ -216,17 +235,25 @@ pub struct AboutDialog<'a> {
     /// Binds the shown tab to `tab`; the dialog opens on it.
     #[prop]
     tab: Option<Bind<'a, AboutTab>>,
+    app_tabs: Option<&'a mut [AboutAppTab]>,
 }
 
 impl<'a> AboutDialog<'a> {
     /// The dialog over `info` and `credits`, opening on the About tab.
     pub fn new(info: &'a AboutInfo, credits: &'a Credits) -> Self {
-        AboutDialog { info, credits, open: None, tab: None }
+        AboutDialog { info, credits, open: None, tab: None, app_tabs: None }
+    }
+
+    /// The app's own tabs, shown after Models.
+    pub fn app_tabs(mut self, tabs: &'a mut [AboutAppTab]) -> Self {
+        self.app_tabs = Some(tabs);
+        self
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> AboutOutput {
-        let AboutDialog { info, credits, open, tab } = self;
+        let AboutDialog { info, credits, open, tab, app_tabs } = self;
+        let _ = app_tabs; // P3(chrome-w4): ch.C11
         let env = Env::of(ui);
         let words = env.words::<AboutWords>();
         let common = env.words::<CommonWords>();
@@ -259,6 +286,7 @@ impl<'a> AboutDialog<'a> {
                     AboutTab::About => shown.about(ui, &link),
                     AboutTab::Contributors => shown.contributors(ui, &view, &link),
                     AboutTab::Models => shown.models(ui),
+                    AboutTab::App(_) => todo!("ch.C11"),
                 }
             });
             let picked = view.borrow().tab;
@@ -489,6 +517,7 @@ pub struct HostedAbout {
     tab: AboutTab,
     link: Option<String>,
     open: bool,
+    app_tabs: Vec<AboutAppTab>,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -503,9 +532,17 @@ impl HostedAbout {
             tab: AboutTab::default(),
             link: None,
             open: true,
+            app_tabs: Vec::new(),
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
+    }
+
+    /// Adds an app tab after Models.
+    #[must_use]
+    pub fn app_tab(mut self, tab: AboutAppTab) -> Self {
+        self.app_tabs.push(tab);
+        self
     }
 
     /// The tab the dialog opens on.
@@ -527,8 +564,16 @@ const ABOUT_KEY: &str = "help.about";
 /// The tabs' names in the hosted dialog's `tab` field.
 const TAB_NAMES: [(AboutTab, &str); 3] = [(AboutTab::About, "about"), (AboutTab::Contributors, "contributors"), (AboutTab::Models, "models")];
 
-fn tab_name(tab: AboutTab) -> &'static str {
-    TAB_NAMES.iter().find(|(known, _)| *known == tab).map_or("about", |(_, name)| *name)
+impl HostedAbout {
+    /// The name of `tab` in the dialog's `tab` field: the app tabs' names as well as the three built in.
+    fn tab_name(&self, tab: AboutTab) -> &str {
+        if let AboutTab::App(at) = tab
+            && let Some(app) = self.app_tabs.get(usize::from(at))
+        {
+            return app.name;
+        }
+        TAB_NAMES.iter().find(|(known, _)| *known == tab).map_or("about", |(_, name)| *name)
+    }
 }
 
 impl StackDialog for HostedAbout {
@@ -539,7 +584,7 @@ impl StackDialog for HostedAbout {
     }
 
     fn json_fields(&self) -> Option<Value> {
-        Some(json!({ "tab": tab_name(self.tab) }))
+        Some(json!({ "tab": self.tab_name(self.tab) }))
     }
 
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: Value) -> Result<(), String> {
@@ -557,9 +602,14 @@ impl StackDialog for HostedAbout {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
-        let shown =
-            AboutDialog { info: &self.info, credits: &self.credits, open: Some(Bind::bound(&mut self.open)), tab: Some(Bind::bound(&mut self.tab)) }
-                .show(ui);
+        let shown = AboutDialog {
+            info: &self.info,
+            credits: &self.credits,
+            open: Some(Bind::bound(&mut self.open)),
+            tab: Some(Bind::bound(&mut self.tab)),
+            app_tabs: Some(&mut self.app_tabs[..]),
+        }
+        .show(ui);
         #[cfg(feature = "testing")]
         {
             self.facts = crate::contract::Outcome::story_facts(&shown);

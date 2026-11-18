@@ -5,7 +5,9 @@
 mod stories;
 
 use super::body::{self, BodyOut};
-use super::model::{Closed, PreferencesModel, PreferencesOutput};
+#[cfg(doc)]
+use super::model::PreferencesModel;
+use super::model::{Closed, PreferencesDraft, PreferencesOutput};
 use super::words::PreferencesWords;
 use crate::contract::{Bind, Props as _, Remember, SaveKey, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogOutput};
@@ -88,7 +90,7 @@ struct Session<'h, 'b, H: ?Sized> {
     applied: bool,
 }
 
-impl<H: PreferencesModel + ?Sized> Session<'_, '_, H> {
+impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
     /// Reads the state at the start of the body. A window that has just opened starts with no search and no error.
     fn begin(&mut self, cx: &mut (impl StageAccess + Remember)) {
         self.before = match self.state.reborrow().read(cx) {
@@ -134,7 +136,7 @@ impl<'a> PreferencesWindow<'a> {
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
-    pub fn show<H: PreferencesModel + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
+    pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
         let PreferencesWindow { state, title, embedded, remember } = self;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();

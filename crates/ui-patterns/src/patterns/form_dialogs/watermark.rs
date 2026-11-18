@@ -262,7 +262,9 @@ fn rows(ui: &mut Ui, words: &WatermarkWords, units: &Units, now: &mut WatermarkS
         }
     }
     Field::new(words.position.clone()).id_salt("position").show(ui, |ui, _| {
-        if let Some(position) = ReferencePoint::new(words.position.clone(), Bind::given(now.position)).show(ui).value().cloned() {
+        // P3(dialogs-w12): dg.F30
+        let picked = ReferencePoint::new(words.position.clone(), Bind::given(Some(now.position))).show(ui);
+        if let Some(position) = picked.value().cloned().flatten() {
             now.position = position;
         }
     });

@@ -277,6 +277,8 @@ pub struct ParamDialog<'a> {
     /// The colours the colour rows show in place of their values in this pass, by row key.
     #[prop(vis = "pub(crate)")]
     preview_colors: Vec<(String, Srgba)>,
+    /// Where OK files the values instead of closing; replaces `hold`.
+    held: Option<&'a mut HeldAnswer<DialogFields>>,
 }
 
 /// What `ParamDialog::shaped` applies to the built [`Dialog`].
@@ -333,7 +335,15 @@ impl<'a> ParamDialog<'a> {
             refusal: None,
             centre: None,
             preview_colors: Vec::new(),
+            held: None,
         }
+    }
+
+    /// OK files the values in `held` and the dialog stays open; a refusal shows until the values change.
+    #[allow(dead_code)] // P3(dialogs-w5): dg.F11
+    pub(crate) fn held(mut self, held: &'a mut HeldAnswer<DialogFields>) -> Self {
+        self.held = Some(held);
+        self
     }
 
     /// Changes the built [`Dialog`] before it shows, for the `Dialog` settings a form track needs and `ParamDialog`
@@ -438,7 +448,9 @@ impl<'a> ParamDialog<'a> {
             refusal,
             centre,
             preview_colors,
+            held,
         } = self;
+        let _ = held; // P3(dialogs-w5): dg.F11
         let preview_label = Env::of(ui).words::<FormDialogWords>().preview.clone();
         // The footer `FormDialog` builds for this pass, made the same way, so its `pick` reads `FormOutput::picked`.
         let footer = ResetFooter::new(ui, cancel_label.clone(), alt_resets);

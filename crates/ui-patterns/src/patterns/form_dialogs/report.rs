@@ -168,12 +168,29 @@ pub struct HostedReport {
     lines: Vec<String>,
     open: bool,
     copied: Option<String>,
+    #[allow(dead_code)] // P3(dialogs-w5): dg.F15
+    notes: Vec<ReportNote>,
 }
 
 impl HostedReport {
     /// A report titled `title` with one `summary` line and the `lines`.
     pub fn new(title: impl Into<Label>, summary: impl Into<Label>, lines: Vec<String>) -> Self {
-        HostedReport { id: crate::dialog::dialog_id("report"), title: title.into(), summary: summary.into(), lines, open: true, copied: None }
+        HostedReport {
+            id: crate::dialog::dialog_id("report"),
+            title: title.into(),
+            summary: summary.into(),
+            lines,
+            open: true,
+            copied: None,
+            notes: Vec::new(),
+        }
+    }
+
+    /// Shows `notes` with the report; `json_fields` lists them.
+    #[must_use]
+    pub fn notes(mut self, notes: Vec<ReportNote>) -> Self {
+        self.notes = notes;
+        self
     }
 
     /// The text the Copy button copied since the last call, once. The app puts it on the clipboard.

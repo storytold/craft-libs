@@ -762,6 +762,20 @@ impl Param {
         self
     }
 
+    /// The most characters a [`ParamKind::Text`] row takes: the field limits its input and `accepts` refuses longer text.
+    #[must_use]
+    pub fn max_chars(mut self, chars: usize) -> Self {
+        let _ = (&mut self, chars);
+        todo!("dg.F17")
+    }
+
+    /// Shows a [`ParamKind::Text`] row's text in the monospace face.
+    #[must_use]
+    pub fn mono(mut self) -> Self {
+        let _ = &mut self;
+        todo!("dg.F17")
+    }
+
     /// Hover text for the whole row, label and control, of any kind.
     #[must_use]
     pub fn tooltip(mut self, text: impl Into<Label>) -> Self {

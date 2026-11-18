@@ -96,6 +96,10 @@ pub enum ActionEnabled {
     },
     /// When the name box holds a name no entry has (Create).
     OnNewName,
+    /// When the name box holds a name `name_check` accepts.
+    OnValidName,
+    /// Never: the button is shown disabled.
+    Never,
 }
 
 /// One button of the column, top to bottom.
@@ -285,9 +289,24 @@ pub struct ListManager<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
+    /// Whether a name is valid, for [`ActionEnabled::OnValidName`].
+    #[prop]
+    name_check: Option<fn(&str) -> bool>,
+    /// The second button's label when it is not Cancel.
+    #[prop(into)]
+    cancel_label: Option<Label>,
+    /// Draws a section under the list.
+    under: Option<Box<dyn FnMut(&mut Ui) + 'a>>,
 }
 
 impl<'a> ListManager<'a> {
+    /// Draws `content` under the list.
+    #[must_use]
+    pub fn under_list(mut self, content: impl FnMut(&mut Ui) + 'a) -> Self {
+        self.under = Some(Box::new(content));
+        self
+    }
+
     /// A list manager titled `title` whose name box is labelled `name_label` ("Macro name:").
     pub fn new(
         title: impl Into<Label>,
@@ -305,12 +324,16 @@ impl<'a> ListManager<'a> {
             searchable: false,
             name: None,
             open: None,
+            name_check: None,
+            cancel_label: None,
+            under: None,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ListManagerOutput {
-        let ListManager { title, name_label, entries, actions, empty, note, searchable, name, open } = self;
+        let ListManager { title, name_label, entries, actions, empty, note, searchable, name, open, name_check, cancel_label, under } = self;
+        let _ = (name_check, cancel_label, under); // P3(dialogs-w5): dg.F13
         let env = Env::of(ui);
         let words = env.words::<ListManagerWords>();
         let common = env.words::<CommonWords>();

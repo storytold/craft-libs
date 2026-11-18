@@ -206,8 +206,9 @@ impl<'a> CanvasSize<'a> {
                     }
                     let growth = (f64::from(now.width) - f64::from(size.width), f64::from(now.height) - f64::from(size.height));
                     Field::new(words.anchor.clone()).id_salt("anchor").show(ui, |ui, _| {
-                        let picked = ReferencePoint::new(words.anchor.clone(), Bind::given(state.anchor)).growth(growth).show(ui);
-                        if let Some(anchor) = picked.value().copied() {
+                        // P3(dialogs-w12): dg.F30
+                        let picked = ReferencePoint::new(words.anchor.clone(), Bind::given(Some(state.anchor))).growth(growth).show(ui);
+                        if let Some(anchor) = picked.value().copied().flatten() {
                             state.anchor = anchor;
                         }
                     });

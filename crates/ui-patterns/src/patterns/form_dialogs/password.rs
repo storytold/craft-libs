@@ -140,6 +140,8 @@ pub enum PasswordPurpose {
     /// A new password typed twice, with its strength under the first field; OK stays disabled until both match and
     /// are not empty.
     Set,
+    /// A new password typed twice; both fields empty is valid and clears the password.
+    SetOrClear,
 }
 
 impl PasswordPurpose {
@@ -265,6 +267,7 @@ impl<'a> PasswordDialog<'a> {
                 (words.permissions_title.clone(), Some(Label::from(words.permissions_message.fill(&[("name", name.as_str())]))), words.unlock.clone())
             }
             PasswordPurpose::Set => (words.set_title.clone(), None, common.ok.clone()),
+            PasswordPurpose::SetOrClear => todo!("dg.F14"),
         };
         let mut dialog = Dialog::new(title)
             .buttons([FooterButton::new(ok, DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])

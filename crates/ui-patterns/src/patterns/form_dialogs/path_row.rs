@@ -65,6 +65,9 @@ pub struct PathRow<'a> {
     /// What Browse asks the host's file service to pick; without it the caller files the request.
     #[prop(into)]
     pick: Option<PickRequest>,
+    /// Browse is disabled and this tells why.
+    #[prop(into)]
+    browse_reason: Option<Label>,
 }
 
 /// The pick the row is waiting for, kept in the row's container while it is shown.
@@ -74,12 +77,13 @@ struct Ticket(Option<PickId>);
 impl<'a> PathRow<'a> {
     /// A row over the path `value`, its field named `name`.
     pub fn new(name: impl Into<Label>, value: Bind<'a, String>) -> Self {
-        PathRow { name: name.into(), value, button: None, placeholder: None, pick: None }
+        PathRow { name: name.into(), value, button: None, placeholder: None, pick: None, browse_reason: None }
     }
 
     /// Shows the row.
     pub fn show(self, ui: &mut Ui) -> PathRowOutput {
-        let PathRow { name, mut value, button, placeholder, pick } = self;
+        let PathRow { name, mut value, button, placeholder, pick, browse_reason } = self;
+        let _ = browse_reason; // P3(dialogs-w5): dg.F16
         let button = button.unwrap_or_else(|| Env::of(ui).words::<PathRowWords>().browse.clone());
         let mut edit = EditEvents::new();
         let mut browse = false;

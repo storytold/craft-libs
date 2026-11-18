@@ -186,6 +186,25 @@ pub struct PaneSpec {
     /// `true`: the body is one collection (a layers list, a bin) that owns the scroll. `false`: the pane scrolls its
     /// body.
     pub collection_body: bool,
+    /// The edges the pane may dock at; a request for another edge is refused and its commands are left out.
+    pub edges: PaneEdges,
+}
+
+/// A set of dock edges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaneEdges(u8);
+
+impl PaneEdges {
+    /// Every edge, the centre included.
+    pub const ALL: PaneEdges = PaneEdges(0b1_1111);
+    /// The four sides, without the centre.
+    pub const SIDES: PaneEdges = PaneEdges(0b1111);
+
+    /// Whether `edge` is in the set.
+    pub fn contains(self, edge: PaneEdge) -> bool {
+        let _ = (self, edge);
+        todo!("ch.C12")
+    }
 }
 
 impl PaneSpec {
@@ -200,6 +219,7 @@ impl PaneSpec {
             closable: true,
             title_bar: true,
             collection_body: false,
+            edges: PaneEdges::ALL,
         }
     }
 }

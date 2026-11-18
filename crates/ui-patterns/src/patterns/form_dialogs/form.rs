@@ -9,7 +9,7 @@ use crate::contract::{Bind, BodyCx, Props as _, Remember as _, Show as _, ShowCo
 use crate::runtime::commands::Commands as _;
 use crate::runtime::requests::HostAnswer;
 
-use crate::dialog::{Dialog, DialogOutput};
+use crate::dialog::{Dialog, DialogOutput, HeldAnswer};
 
 use crate::runtime::env::{Env, Label};
 
@@ -191,6 +191,8 @@ pub struct FormDialog<'a, V: Value + Default> {
     on_reset: Option<OnResetFn<'a>>,
     /// The host's opening values: each pass given them keeps them as the values Reset restores.
     opening: Option<V>,
+    /// Where OK files the values instead of closing; a refusal shows until the values change.
+    held: Option<&'a mut HeldAnswer<V>>,
 }
 
 impl<'a, V: Value + Default> FormDialog<'a, V> {
@@ -221,7 +223,15 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             reset_with: None,
             opening: None,
             on_reset: None,
+            held: None,
         }
+    }
+
+    /// OK files the values in `held` and the dialog stays open; a refusal shows through `Dialog::refusal` until the
+    /// values change, and an accepted answer closes it.
+    pub fn held(mut self, held: &'a mut HeldAnswer<V>) -> Self {
+        self.held = Some(held);
+        self
     }
 
     /// A dialog that keeps its value in its own memory while it is open.
@@ -393,7 +403,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             reset_with,
             on_reset,
             opening,
+            held,
         } = self;
+        let _ = held; // P3(dialogs-w5): dg.F11
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let name: Arc<str> = title.as_str().into();
