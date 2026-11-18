@@ -203,7 +203,8 @@ impl Lut1 {
     /// holds the sample points of both tables. Between two grid points it differs from
     /// `self.eval(inner.eval(x))` by at most one grid step times the product of the two
     /// tables' steepest slopes. When no grid of that size holds both tables' points, the result
-    /// uses the longer table's grid.
+    /// uses the longer table's grid, with the same bound for that grid's step: a table whose
+    /// slope is near its entry count can then lose the other table's knots between two samples.
     pub fn compose(&self, inner: &Lut1) -> Lut1 {
         if inner.v.is_empty() {
             return self.clone();
