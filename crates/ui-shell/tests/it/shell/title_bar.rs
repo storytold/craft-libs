@@ -164,8 +164,8 @@ fn titled(title: &'static str) -> (Fixture, Rc<Cell<TitleSeen>>) {
 const LONG: &str = "A very long document title that cannot fit in the free gap of a title bar six hundred points wide, \
                     so the bar cuts it with an ellipsis and keeps the whole of it for the tooltip and the name.psd";
 
-/// An action title is a focusable button named by the shown title. A click and Enter each report it in the pass they
-/// land in and no later pass. The button sits on the window's centre line, and a title too long for the gap is cut to
+/// An action title is a focusable button named by the shown title. A click and Enter (on the title Tab focused) each
+/// report it in the pass they land in and no later pass. The button sits on the window's centre line, and a title too long for the gap is cut to
 /// fit inside the bar.
 #[trial]
 fn an_action_title_is_a_button_and_reports_its_activation() {
@@ -178,7 +178,9 @@ fn an_action_title_is_a_button_and_reports_its_activation() {
 
     fixture.click(&title).idle(3);
     assert_eq!(seen.get().activations, 1, "a click reports the title once, in its pass only");
-    assert!(fixture.focused_stop().is_some(), "the click focuses the title");
+    // A button takes no focus from a click (it senses no `TAKE_FOCUS`); Tab reaches the title, and Enter then reports it.
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(3);
+    assert!(fixture.focused_stop().is_some(), "Tab focuses the title");
     fixture.key(egui::Key::Enter, egui::Modifiers::NONE).idle(3);
     assert_eq!(seen.get().activations, 2, "Enter on the focused title reports it once");
 

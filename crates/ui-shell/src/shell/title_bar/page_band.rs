@@ -1,10 +1,13 @@
 //! `PageBand`: the move band the shell's page shows over the window.
 
+#[cfg(feature = "testing")]
+mod stories;
+
 use super::bar::{Window, act_on_double_click, show_end, window, window_acting};
 use super::measure::End;
 use crate::contract::{
     BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DragBand, EndRegion, HeaderRegion, Pad, Props as _, Role,
-    ShowContainer as _,
+    ShowContainer as _, Sizing,
 };
 use crate::runtime::egui::pass;
 use crate::runtime::env::{Env, PageBandRoom, ShellEntry};
@@ -57,9 +60,11 @@ pub(crate) struct PageBand {
 impl PageBand {
     /// A band with the window's ends at the room the shell gives it.
     pub(crate) fn new() -> Self {
-        // No surface: the page shows through the band.
+        // No surface: the page shows through the band. It fills the room the shell gives it, so its move band spans
+        // the free part between the ends whatever they hold.
         let props = ContainerProps::new()
             .pad(Pad::None)
+            .sizing(Sizing::Fill)
             .layout(BodyLayout::row())
             .header(HeaderRegion::new().band(DragBand::Move).inline(true))
             .end(EndRegion::new());
