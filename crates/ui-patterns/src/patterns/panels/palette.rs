@@ -244,9 +244,11 @@ impl<'a> CommandPalette<'a> {
             if !is_open {
                 return;
             }
-            // The container exists only while the palette is open, so its memory starts empty at each opening.
+            // The container's memory is kept by its id across a close, so each opening starts a fresh session: an
+            // empty query and no active row.
             Row::new().show(ui, |ui, inner| {
                 if opening {
+                    *inner.memory::<Session>() = Session::default();
                     focus::request(&ctx, FocusTarget::Id(field_id));
                 }
                 let session = inner.memory::<Session>();
