@@ -364,6 +364,7 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
     output.delivered = commands::take_delivered(ctx);
+    output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
     // already acted in the key stage.

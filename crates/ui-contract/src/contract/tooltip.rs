@@ -71,29 +71,33 @@ fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled
 }
 
 /// The text the component's own tooltip shows, or `None` when it has none: its validity message when no container
-/// shows it (`message`); else the tooltip's text, or its disabled text while disabled, with the bound command's
-/// chord; else the full label when the paint cut it, or its own label when the component declares it paints no
-/// label (`shows_label`).
+/// shows it (`message`); else a base text with the bound command's chord, and the bound command's hint on a line
+/// after it; else, with no base text, the hint alone with the chord. The base is the tooltip's text, or its disabled
+/// text while disabled; else the full label when the paint cut it, or its own label when the component declares it
+/// paints no label (`shows_label`).
 fn text_of(core: &super::CxCore<'_>, shows_label: bool, message: Option<String>) -> Option<String> {
     if message.is_some() {
         return message;
     }
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
-        Some(spec) => spec_text(&core.env, spec, core.resolved.enabled),
+        Some(spec) => Some(spec_text(&core.env, spec, core.resolved.enabled)),
         None => {
             let paint = core.paint.borrow();
-            match paint.elided.clone() {
-                Some(full) => full,
-                None if !shows_label && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
-                None => return None,
-            }
+            paint.elided.clone().or_else(|| (!shows_label && !core.resolved.label.is_empty()).then(|| core.resolved.label.to_owned()))
         }
     };
+    let command = core.command.as_deref();
     let platform = crate::runtime::windows::os_of(&core.ctx);
-    Some(match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
-        Some(chord) => with_chord(&base, chord, platform),
-        None => base,
-    })
+    let chorded = |text: &str| match command.and_then(|command| command.chord.as_ref()) {
+        Some(chord) => with_chord(text, chord, platform),
+        None => text.to_owned(),
+    };
+    match (base, command.and_then(|command| command.hint.as_deref())) {
+        (Some(base), Some(hint)) => Some(format!("{}\n{hint}", chorded(&base))),
+        (Some(base), None) => Some(chorded(&base)),
+        (None, Some(hint)) => Some(chorded(hint)),
+        (None, None) => None,
+    }
 }
 
 /// A tooltip's text followed by the chord that does the same, as every tooltip shows a key: "Hide Layers (⌘,)".

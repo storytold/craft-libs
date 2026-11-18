@@ -31,7 +31,6 @@ use crate::scripts::{Direction, direction};
 pub struct Folder {
     turkic: bool,
     accents: bool,
-    #[allow(dead_code)] // P3(pdf-chrome-w1): CH-C3
     rtl: bool,
 }
 
@@ -56,6 +55,12 @@ impl Folder {
     /// Whether the locale is Turkic (`tr`, `az`): `I` folds to `ı` and `İ` to `i`.
     pub fn turkic(&self) -> bool {
         self.turkic
+    }
+
+    /// Whether the locale writes right to left, by its main script ([`direction`]); a locale with no script data is
+    /// left to right.
+    pub(crate) fn rtl(&self) -> bool {
+        self.rtl
     }
 
     /// `s` folded, with the map back to `s`.

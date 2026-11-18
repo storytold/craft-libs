@@ -25,7 +25,8 @@ pub use board::keymap_builds;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
-    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
+    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_declined, take_delivered, take_fired,
+    window_shortcuts,
 };
 #[doc(hidden)]
 pub use board::{bound_around, take_around};
@@ -224,11 +225,10 @@ impl CommandState {
     }
 
     /// An icon for this frame in place of the command's own, by catalogue name or registered app set name.
-    #[allow(dead_code)] // P3(pdf-chrome-w1): CM-C31
     #[must_use]
-    pub fn icon(self, icon: impl Into<Cow<'static, str>>) -> Self {
-        let _ = icon;
-        todo!("CM-C31")
+    pub fn icon(mut self, icon: impl Into<Cow<'static, str>>) -> Self {
+        self.icon = Some(icon.into());
+        self
     }
 
     /// The accessible description and second tooltip line.
@@ -255,7 +255,6 @@ impl CommandState {
         self.title.as_ref()
     }
 
-    #[allow(dead_code)] // P3(pdf-chrome-w1): CM-C31
     pub(crate) fn icon_ref(&self) -> Option<&Cow<'static, str>> {
         self.icon.as_ref()
     }
@@ -274,7 +273,7 @@ pub struct ResolvedCommand {
     /// The command's catalogue label (the registry's), whatever title the state sets; `None` for a command the
     /// registry does not define.
     pub catalog_label: Option<Arc<str>>,
-    /// The icon name.
+    /// The icon name: the state's icon, else the command's own.
     pub icon: Option<Cow<'static, str>>,
     /// The chord surfaces show: the first single-press binding that runs the command ([`chord`]).
     pub chord: Option<Chord>,
@@ -289,6 +288,10 @@ pub struct ResolvedCommand {
     /// What the command is.
     pub kind: CommandKind,
     pub(crate) command: CommandRef,
+    /// Something besides the command's own state refuses it: the gate, the modal rule, the instance's liveness or a
+    /// focused component whose edit does nothing now. A key whose app-scope command its state alone disables is
+    /// declined (`FrameOutput::declined`); a refused one is not.
+    pub(crate) refused: bool,
     #[doc(hidden)]
     pub instance: Option<Id>,
 }

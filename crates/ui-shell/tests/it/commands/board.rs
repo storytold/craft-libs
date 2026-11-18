@@ -1,7 +1,7 @@
 use super::kit::{AppCommand, Dock, DockCommand, PaneCommand, Tap};
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft_ui::runtime::commands::{
-    CommandGate, CommandInput, CommandRef, CommandState, Commands as _, EditCommands, FireSource, Fired, fire, resolve,
+    CommandGate, CommandInput, CommandRef, CommandState, Commands as _, EditCommands, FirePhase, FireSource, Fired, fire, resolve,
 };
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::runtime::frame::take_output;
@@ -101,6 +101,43 @@ fn the_gate_may_resolve_commands() {
     frames.idle(2, &mut show);
     frames.frame(vec![key_press(Key::K, Modifiers::COMMAND)], &mut show);
     assert_eq!(ids(&take_output(&frames.ctx).fired), ["trial.save"]);
+}
+
+/// 11.3: a key whose app-scope command only the app's own state disables is declined, in order, once, though a discard
+/// pass reruns its frame; one the gate also refuses is not, and none of them fires.
+#[trial]
+fn a_disabled_commands_key_is_declined_and_a_gated_one_is_not() {
+    let mut frames = Frames::new();
+    frames.commands(
+        CommandInput::new()
+            .state(AppCommand::Play, CommandState::new().enabled(false))
+            .state(AppCommand::Save, CommandState::new().enabled(false))
+            .state(AppCommand::Jump, CommandState::new().enabled(false))
+            .gate(CommandGate::new(|command: &CommandRef| *command != CommandRef::from(AppCommand::Jump))),
+    );
+    let mut show = |ui: &mut Ui| {
+        Tap::new().id_salt("go").command(AppCommand::Go).show(ui);
+    };
+    frames.idle(2, &mut show);
+    let keys = vec![
+        key_press(Key::F8, Modifiers::NONE),
+        key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT),
+        key_press(Key::K, Modifiers::COMMAND),
+    ];
+    let mut first = true;
+    frames.frame(keys, |ui| {
+        show(ui);
+        if std::mem::take(&mut first) {
+            ui.ctx().request_discard("declined trial");
+        }
+    });
+    frames.idle(1, &mut show);
+    let output = take_output(&frames.ctx);
+    assert_eq!(ids(&output.declined), ["trial.play", "trial.save"], "the state-disabled keys, in order, and not the gated one");
+    assert!(output.declined.iter().all(|declined| declined.source == FireSource::Key && declined.phase == FirePhase::Press));
+    assert!(output.fired.is_empty(), "a declined key fires nothing");
+    frames.idle(2, &mut show);
+    assert!(take_output(&frames.ctx).declined.is_empty(), "nothing is declined again in later frames");
 }
 
 /// 11.3: a scoped entry waits for its instance and is dropped when the instance stops being live.

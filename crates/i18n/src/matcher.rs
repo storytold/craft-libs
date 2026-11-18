@@ -27,7 +27,8 @@ pub enum Rank {
 pub struct Match {
     /// How well it matches.
     pub rank: Rank,
-    /// Every occurrence of the query, as byte ranges of the text, in order.
+    /// Every occurrence of the query, as byte ranges of the text, in order; for `AllWords`, the first occurrence of
+    /// each word, sorted by start.
     pub ranges: Vec<Range<usize>>,
 }
 
@@ -36,12 +37,22 @@ pub struct Match {
 pub struct Matcher {
     folder: Folder,
     query: Folded,
+    /// The folded words of a query of two or more words in a right-to-left locale, where a line typed or pasted
+    /// across directions often holds its words in another order; empty otherwise, so a left-to-right ranking is
+    /// the whole-run one.
+    words: Vec<Folded>,
 }
 
 impl Matcher {
     /// A matcher for `query` with surrounding space ignored. An empty query matches every text.
     pub fn new(folder: &Folder, query: &str) -> Matcher {
-        Matcher { folder: *folder, query: folder.fold(query.trim()) }
+        let query = query.trim();
+        let words: Vec<Folded> = if folder.rtl() {
+            query.split_whitespace().map(|word| folder.fold(word)).filter(|word| !word.as_str().is_empty()).collect()
+        } else {
+            Vec::new()
+        };
+        Matcher { folder: *folder, query: folder.fold(query), words: if words.len() > 1 { words } else { Vec::new() } }
     }
 
     /// Whether the query is empty.
@@ -54,8 +65,11 @@ impl Matcher {
         if self.is_empty() {
             return Some(Match { rank: Rank::Whole, ranges: Vec::new() });
         }
-        let ranges: Vec<Range<usize>> = self.folder.fold(text).matches(&self.query).collect();
-        let first = ranges.first()?;
+        let folded = self.folder.fold(text);
+        let ranges: Vec<Range<usize>> = folded.matches(&self.query).collect();
+        let Some(first) = ranges.first().cloned() else {
+            return self.all_words(&folded);
+        };
         let rank = if first.start == 0 && first.end == text.len() {
             Rank::Whole
         } else if first.start == 0 {
@@ -66,5 +80,16 @@ impl Matcher {
             Rank::Contains
         };
         Some(Match { rank, ranges })
+    }
+
+    /// `AllWords` when every word of the query occurs in `folded`, with each word's first occurrence as source ranges.
+    fn all_words(&self, folded: &Folded) -> Option<Match> {
+        if self.words.is_empty() {
+            return None;
+        }
+        let mut ranges: Vec<Range<usize>> = self.words.iter().map(|word| folded.matches(word).next()).collect::<Option<_>>()?;
+        ranges.sort_by_key(|range| range.start);
+        ranges.dedup();
+        Some(Match { rank: Rank::AllWords, ranges })
     }
 }

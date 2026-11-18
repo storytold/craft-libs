@@ -80,6 +80,8 @@ pub(crate) struct Board {
     queue: Vec<Fired>,
     /// App-scope commands for the next `FrameOutput`.
     out: Vec<Fired>,
+    /// App-scope commands a key pressed while only their own state disabled them, for the next `FrameOutput`.
+    declined: Vec<Fired>,
     /// The commands instances took since the last `FrameOutput`, in order.
     delivered: Vec<Fired>,
     instances: Vec<Instance>,
@@ -394,13 +396,15 @@ impl Board {
                 Some(_) => reached,
             };
         let live = app || instance.is_some_and(|id| self.is_live(ctx, id));
+        let refused = !(modal && live && !matches!(declaring, Some(Declaration::Focused { inactive: true })));
         let chord = self.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command));
         let resolved = ResolvedCommand {
             label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
-            catalog_label: Default::default(), // P3(pdf-chrome-w1): CH-C25
-            icon: def.and_then(|def| def.icon.clone()),
+            catalog_label: def.map(|def| Arc::from(def.label.as_str())),
+            icon: state.and_then(|s| s.icon_ref().cloned()).or_else(|| def.and_then(|def| def.icon.clone())),
             chord,
-            enabled: flags.enabled && modal && live && !matches!(declaring, Some(Declaration::Focused { inactive: true })),
+            enabled: flags.enabled && !refused,
+            refused,
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
             hint: state.and_then(|s| s.hint_ref().cloned()),
@@ -677,10 +681,8 @@ pub(crate) fn take_fired(ctx: &Context) -> Vec<Fired> {
 
 /// The app-scope commands a key press fired while only the app's own command state disabled them, since the last
 /// call.
-#[allow(dead_code)] // P3(pdf-chrome-w1): CH-C2
 pub(crate) fn take_declined(ctx: &Context) -> Vec<Fired> {
-    let _ = ctx;
-    todo!("CH-C2")
+    with(ctx, |board| std::mem::take(&mut board.declined))
 }
 
 /// The commands instances took since the last call.
@@ -814,6 +816,7 @@ fn resolve_in(
     }
     if gate.is_some_and(|gate| !gate.allows(command)) {
         resolved.enabled = false;
+        resolved.refused = true;
     }
     (resolved, key)
 }
@@ -1249,6 +1252,21 @@ pub(crate) fn begin(ctx: &Context) {
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
                 let (resolved, _) = resolve_in(ctx, &hit.command, instance, Reach::Focus, None);
                 if !resolved.enabled {
+                    // The key stays taken. When the app's own state of an app-scope command is all that disables it,
+                    // the app hears of the press so it can say why nothing ran; a refusal by the gate, the modal rule
+                    // or a declaring instance's state is not the app's to explain.
+                    if app && resolved.instance.is_none() && !resolved.refused {
+                        let declined = Fired {
+                            command: hit.command,
+                            target: None,
+                            source: FireSource::Key,
+                            phase: FirePhase::Press,
+                            cycle: hit.cycle.len() > 1,
+                            alt_variant: hit.alt_variant,
+                            time,
+                        };
+                        with(ctx, |board| board.declined.push(declined));
+                    }
                     continue;
                 }
                 // An app-scope command a modal layer's instance declares is delivered to that instance.
