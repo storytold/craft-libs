@@ -12,6 +12,9 @@ nextest-version = "0.9.150"
 # process per test those mutexes no longer serialize anything, so these groups do it instead, one
 # test at a time, as under `cargo test`.
 [test-groups]
+# craft-ui: `gpu_test_lock()` / `gpu_lock()`. Each renderer creates its own wgpu instance and
+# device, and creating or destroying one while another test uses its device can crash.
+gpu = { max-threads = 1 }
 # craft-video h264_decode: `FIXTURE_GENERATION` keeps a second producer from replacing a fixture
 # file another test is reading.
 video-fixtures = { max-threads = 1 }
@@ -38,10 +41,15 @@ fail-fast = false
 slow-timeout = { period = "60s" }
 failure-output = "immediate-final"
 
-# Linux and macOS (the resource audit in craft-libs#2058): the craft-video integration binaries
-# share their fixture directories. Conservative on purpose: the in-process mutexes these tests rely
-# on do not reach across nextest's processes. Windows keeps the default groups above, which its leg
-# has passed with since it moved to nextest.
+# Linux and macOS (the resource audit in craft-libs#2058): every GPU consumer shares the one `gpu`
+# slot, and the craft-video integration binaries share their fixture directories. Conservative on
+# purpose: the in-process mutexes these tests rely on do not reach across nextest's processes.
+# Windows keeps the default groups above, which its leg has passed with since it moved to nextest.
+[[profile.ci.overrides]]
+platform = 'cfg(unix)'
+filter = 'package(craft-ui) | package(craft-keymap) | package(craft-update)'
+test-group = 'gpu'
+
 [[profile.ci.overrides]]
 platform = 'cfg(unix)'
 filter = 'package(craft-video) & kind(test)'

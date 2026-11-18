@@ -28,7 +28,12 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
+          components: clippy
       - uses: step-security/rust-cache@v2.9.2
+      # A lib build selects no dev-dependency, so craft-ui's `testing` stays off as in an app's
+      # build: warnings that show only without it fail here.
+      - name: Facade as an app builds it
+        run: cargo clippy -p craft --lib --locked --features ui,layers,color,draw,imaging -- -D warnings
       - name: Docs (links and missing docs)
         run: cargo doc --workspace --no-deps --locked --keep-going
         env:

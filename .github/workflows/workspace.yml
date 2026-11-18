@@ -66,13 +66,8 @@ jobs:
           python3 scripts/test-workspace-tests.py
         fi
         cargo fmt --check
-        cargo clippy --workspace --all-targets --locked --keep-going -- -D warnings
-        cargo clippy --workspace --all-targets --all-features --locked --keep-going -- -D warnings
-        # A lib build selects no dev-dependency, so craft-ui's `testing` stays off as in an app's
-        # build: warnings that show only without it fail here.
-        if [ "$RUNNER_OS" = Linux ]; then
-          cargo clippy -p craft --lib --locked --features ui,layers,color,draw,imaging -- -D warnings
-        fi
+        cargo clippy --workspace --all-targets --locked -- -D warnings
+        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       command: |
         # The tests run once, with every feature, in parallel across test binaries; nextest skips
         # doctests, so `cargo test --doc` runs them. The default-feature compile is the lint leg's

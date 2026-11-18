@@ -99,7 +99,8 @@ class WorkspaceTests(unittest.TestCase):
     def test_workflow_stays_shared_and_keeps_platform_gates(self):
         source = WORKFLOW.read_text()
         self.assertIn("uses: storytold/craft-common-actions/.github/workflows/gate.yml@main", source)
-        self.assertIn('os: \'["ubuntu-latest","windows-latest","macos-latest"]\'', source)
+        # Pushes to next run Linux only; every other run keeps all three.
+        self.assertIn('\'["ubuntu-latest","windows-latest","macos-latest"]\'', source)
         self.assertIn("  msrv:", source)
         self.assertIn("  wasm:", source)
         self.assertIn("python3 scripts/test-workspace-tests.py", block(source, "lint-command"))
