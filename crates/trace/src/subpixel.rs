@@ -15,8 +15,8 @@
 //! A staircase of longer steps is read the same way where a smooth area was split into bands (see
 //! [`outline`]).
 
-use kurbo::Vec2;
 use craft_geom::Point;
+use kurbo::Vec2;
 
 use crate::contour::Loop;
 

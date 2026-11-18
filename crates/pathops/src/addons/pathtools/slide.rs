@@ -2,8 +2,8 @@
 //! the segments beside it are refitted, so the outline stays where it was. It is a new anchor at
 //! that point (an exact split) with the old one removed by the shared keep-shape refit.
 
-use kurbo::{CubicBez, ParamCurve, ParamCurveDeriv, ParamCurveNearest, Point};
 use craft_geom::SubPath;
+use kurbo::{CubicBez, ParamCurve, ParamCurveDeriv, ParamCurveNearest, Point};
 
 use super::{ACCURACY, TINY, insert_at, neighbours};
 use crate::addons::keep_shape::remove_anchor_keep_shape;

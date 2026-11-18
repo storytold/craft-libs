@@ -1,7 +1,7 @@
 use super::*;
+use craft_geom::{FillRule, Rect, shapes};
 use kurbo::{ParamCurveNearest, Vec2};
 use proptest::prelude::*;
-use craft_geom::{FillRule, Rect, shapes};
 
 fn line(a: (f64, f64), b: (f64, f64)) -> Shape {
     Shape::new(PathData::single(SubPath::polyline(&[Point::new(a.0, a.1), Point::new(b.0, b.1)], false)), FillRule::NonZero, 0)

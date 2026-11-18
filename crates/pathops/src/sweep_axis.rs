@@ -7,8 +7,8 @@
 //! turns the result back. A quarter turn swaps and negates coordinates, so no point moves by
 //! rounding.
 
-use kurbo::{Affine, BezPath, PathSeg, Rect};
 use craft_geom::{Anchor, FillRule, PathData, SubPath};
+use kurbo::{Affine, BezPath, PathSeg, Rect};
 
 /// Inputs with fewer segments than this are always swept as they are.
 const MIN_SEGMENTS: usize = 2048;
@@ -156,8 +156,8 @@ pub(crate) fn unturn_point(p: kurbo::Point) -> kurbo::Point {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::{Join, Stroke, StrokeOpts};
     use craft_geom::{Anchor, Point, Vec2};
+    use kurbo::{Join, Stroke, StrokeOpts};
 
     use super::*;
     use crate::boolean::{BoolOp, DEFAULT_PRECISION, fill_bezpath, try_area, try_boolean, try_unite_all_upright, unite_all_upright};

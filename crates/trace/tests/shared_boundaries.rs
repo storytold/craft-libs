@@ -20,8 +20,8 @@
 // Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveExtrema, ParamCurveNearest, Point, Rect, Shape};
 use craft_trace::{Method, Mode, Raster, TraceParams, TraceResult, trace};
+use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveExtrema, ParamCurveNearest, Point, Rect, Shape};
 
 /// How far (px) a point of one path's outline may lie from its neighbour's outline.
 const TOL: f64 = 1e-3;

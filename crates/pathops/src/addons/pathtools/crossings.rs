@@ -4,8 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use kurbo::{CubicBez, ParamCurve, ParamCurveDeriv, ParamCurveNearest, Point, Rect};
 use craft_geom::{Anchor, AnchorKind, PathData, SubPath};
+use kurbo::{CubicBez, ParamCurve, ParamCurveDeriv, ParamCurveNearest, Point, Rect};
 
 /// Most segments [`crossings`] compares at once.
 pub const MAX_CROSSING_SEGMENTS: usize = 10_000;

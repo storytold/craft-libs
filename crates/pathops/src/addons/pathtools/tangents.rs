@@ -14,8 +14,8 @@
 
 use std::f64::consts::TAU;
 
-use kurbo::{Affine, CubicBez, ParamCurve, Point, Vec2};
 use craft_geom::SubPath;
+use kurbo::{Affine, CubicBez, ParamCurve, Point, Vec2};
 
 /// Most segments one outline may have.
 pub const MAX_TANGENT_SEGMENTS: usize = 10_000;
@@ -682,8 +682,8 @@ fn golden(g: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64) -> (f64, f64) {
 mod tests {
     use std::cell::Cell;
 
-    use kurbo::Rect;
     use craft_geom::shapes;
+    use kurbo::Rect;
 
     use super::*;
 

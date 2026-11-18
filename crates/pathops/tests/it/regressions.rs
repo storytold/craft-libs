@@ -1,9 +1,9 @@
 //! Minimal failures found by the property suites (`props.rs`, `prop_pathops.rs`), kept as
 //! deterministic tests.
 
-use kurbo::{BezPath, Shape as _};
 use craft_geom::{Anchor, FillRule, PathData, SubPath};
 use craft_pathops::*;
+use kurbo::{BezPath, Shape as _};
 
 const NZ: FillRule = FillRule::NonZero;
 

@@ -1,7 +1,7 @@
 //! Loop → Bézier curves, and the pieces of that which centre lines use too.
 
-use kurbo::ParamCurveArea;
 use craft_geom::{Anchor, AnchorKind, Point, SubPath};
+use kurbo::ParamCurveArea;
 
 use crate::contour::Loop;
 use crate::logo::{

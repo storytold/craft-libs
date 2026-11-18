@@ -7,10 +7,10 @@
 
 use std::f64::consts::{PI, TAU};
 
-use kurbo::{Affine, Point, Vec2};
 use craft_geom::corners::cut_corners;
 use craft_geom::shapes::KAPPA;
 use craft_geom::{Anchor, AnchorKind, PathData, SubPath};
+use kurbo::{Affine, Point, Vec2};
 
 /// The fewest sides, points or teeth.
 pub const MIN_COUNT: u32 = 3;

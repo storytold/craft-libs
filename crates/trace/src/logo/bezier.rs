@@ -4,8 +4,8 @@
 //! (Graphics Gems, 1990), written from the description there.
 
 use super::geom::{Cubic, bez};
-use kurbo::{CubicBez, ParamCurveNearest, Vec2};
 use craft_geom::Point;
+use kurbo::{CubicBez, ParamCurveNearest, Vec2};
 
 /// From this depth a run still over the tolerance is cut in the middle, which bounds the recursion
 /// at this depth plus the logarithm of the run's length.

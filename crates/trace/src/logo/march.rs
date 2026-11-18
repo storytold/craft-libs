@@ -3,8 +3,8 @@
 //! Segments keep the positive side on their left (x right, y down), so a region's outer boundary
 //! and its holes wind in opposite directions and need no point-in-polygon test to tell apart.
 
-use std::collections::HashMap;
 use craft_geom::Point;
+use std::collections::HashMap;
 
 /// Edge ids: `(y * w + x) * 2` is the horizontal edge from `(x, y)` to `(x + 1, y)`, `+ 1` the
 /// vertical edge from `(x, y)` to `(x, y + 1)`.

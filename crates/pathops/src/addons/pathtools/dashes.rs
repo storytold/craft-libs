@@ -3,8 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use kurbo::{CubicBez, ParamCurve, ParamCurveArclen};
 use craft_geom::{Anchor, AnchorKind, SubPath};
+use kurbo::{CubicBez, ParamCurve, ParamCurveArclen};
 
 use super::{ACCURACY, TINY};
 

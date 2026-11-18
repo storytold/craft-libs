@@ -24,8 +24,8 @@ mod trim;
 
 use std::collections::BTreeSet;
 
-use kurbo::{CubicBez, ParamCurve, ParamCurveArclen, ParamCurveNearest, Point, Vec2};
 use craft_geom::{Anchor, AnchorKind, PathData, SubPath};
+use kurbo::{CubicBez, ParamCurve, ParamCurveArclen, ParamCurveNearest, Point, Vec2};
 
 pub use bridge::{BridgeError, circle_of, smooth_bridge};
 pub use crossings::{MAX_CROSSED_BY_SEGMENTS, MAX_CROSSING_SEGMENTS, Place, Work, crossings, crossings_on, crossings_on_within, insert_at};

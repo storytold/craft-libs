@@ -1,8 +1,8 @@
 //! A small scanline rasteriser and image filters for the quality harness: test inputs are drawn
 //! from ground-truth vector shapes here, never loaded from files.
 
-use kurbo::{BezPath, PathEl, Point};
 use craft_trace::{Raster, TracedGradient};
+use kurbo::{BezPath, PathEl, Point};
 
 /// The closed polylines of `path` (one per subpath), flattened within `tol`.
 pub fn polylines(path: &BezPath, tol: f64) -> Vec<Vec<Point>> {

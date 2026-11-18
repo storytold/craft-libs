@@ -1,6 +1,6 @@
 use super::*;
-use proptest::prelude::*;
 use craft_geom::{Rect, shapes};
+use proptest::prelude::*;
 
 /// Sparse crossings add, compare and read like the dense counts they stand for.
 #[test]

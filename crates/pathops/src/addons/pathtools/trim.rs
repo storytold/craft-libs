@@ -2,8 +2,8 @@
 //! lies on ([`span_at`]), a stretch as a subpath of its own ([`slice`]) and the subpath with some
 //! of its stretches removed ([`without_spans`]).
 
-use kurbo::{ParamCurve, Point};
 use craft_geom::{Anchor, AnchorKind, SubPath};
+use kurbo::{ParamCurve, Point};
 
 /// A parameter this close to a segment's end is its anchor.
 const END: f64 = 1e-6;

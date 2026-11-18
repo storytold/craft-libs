@@ -2,10 +2,10 @@ use crate::common;
 
 use std::f64::consts::PI;
 
-use kurbo::{ParamCurve, Point, Rect, Shape as _};
-use proptest::prelude::*;
 use craft_geom::{FillRule, PathData, SubPath};
 use craft_pathops::*;
+use kurbo::{ParamCurve, Point, Rect, Shape as _};
+use proptest::prelude::*;
 
 const NZ: FillRule = FillRule::NonZero;
 

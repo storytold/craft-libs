@@ -1,5 +1,5 @@
-use kurbo::{Affine, Point, Rect};
 use craft_geom::{PathData, SubPath, shapes};
+use kurbo::{Affine, Point, Rect};
 
 use super::*;
 

@@ -19,9 +19,9 @@
 
 use std::collections::HashMap;
 
+use craft_geom::{FillRule, PathData, SubPath};
 use kurbo::{Affine, BezPath, CubicBez, ParamCurve, ParamCurveArclen, PathSeg, Point, Shape as _};
 use linesweeper::topology::{Topology, WindingNumber};
-use craft_geom::{FillRule, PathData, SubPath};
 
 use crate::boolean::{DEFAULT_PRECISION, Seg, Tidy, eps_for, is_sliver, segs_to_subpath, snap_horizontals, tidy_segments, to_seg};
 use crate::pathfinder::{Region, Shape};

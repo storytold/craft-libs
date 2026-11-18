@@ -1,9 +1,9 @@
 //! Small geometry helpers for outlines: resampling, smoothing, corners, line and circle fits.
 
+use craft_geom::Point;
 use kurbo::Vec2;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
-use craft_geom::Point;
 
 /// One cubic Bézier segment: start, two handles, end.
 pub(crate) type Cubic = [Point; 4];

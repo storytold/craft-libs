@@ -3,13 +3,11 @@
 
 use crate::common;
 
-use proptest::prelude::*;
 use craft_geom::{FillRule, PathData, Point, Rect};
 use craft_pathops::*;
 use craft_testkit::geom::{directed_hausdorff, grid, hausdorff, polygon_area, rel_close};
-use craft_testkit::strategies::{
-    arb_closed_shape, arb_convex_polygon, arb_ellipse, arb_rect, arb_smooth_curve, arb_star_polygon, polygon_path,
-};
+use craft_testkit::strategies::{arb_closed_shape, arb_convex_polygon, arb_ellipse, arb_rect, arb_smooth_curve, arb_star_polygon, polygon_path};
+use proptest::prelude::*;
 
 const NZ: FillRule = FillRule::NonZero;
 

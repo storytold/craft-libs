@@ -4,8 +4,8 @@
 //! A missing handle grows out of its anchor, and a smooth anchor's other handle turns with the one
 //! moved, so the path stays smooth there.
 
-use kurbo::Vec2;
 use craft_geom::SubPath;
+use kurbo::Vec2;
 
 /// The range the grab position `t` is held to: right at an end, the handle beside it would have
 /// to grow without bound to move the point.
@@ -119,8 +119,8 @@ fn keep_angles(sp: &mut SubPath, seg: usize, t: f64, dv: Vec2) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::{ParamCurve, Point, Vec2};
     use craft_geom::{Anchor, AnchorKind, SubPath};
+    use kurbo::{ParamCurve, Point, Vec2};
 
     use super::*;
 

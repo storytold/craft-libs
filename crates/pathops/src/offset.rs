@@ -1,7 +1,7 @@
 //! Offset Path and Outline Stroke.
 
-use kurbo::{BezPath, PathEl, Stroke, StrokeOpts};
 use craft_geom::{FillRule, PathData, SubPath};
+use kurbo::{BezPath, PathEl, Stroke, StrokeOpts};
 
 pub use kurbo::{Cap, Join};
 
@@ -754,8 +754,8 @@ mod tests {
     }
 
     fn outline_max_deviation(a: &BezPath, b: &BezPath) -> f64 {
-        use kurbo::ParamCurve;
         use craft_geom::Point;
+        use kurbo::ParamCurve;
         let pa = PathData::from_bezpath(a);
         let pb = PathData::from_bezpath(b);
         let mut worst: f64 = 0.0;
@@ -784,8 +784,7 @@ mod tests {
         let compact = stroke_bez(&dense_bez, width, cap, join, miter);
         let raw = stroke_bez_without_spine_compact(&dense_bez, width, cap, join, miter);
         assert!(outline_max_deviation(&compact, &raw) <= 1e-3, "colinear compaction must not refit the stroke outline");
-        let sparse =
-            PathData::single(SubPath::polyline(&[craft_geom::Point::new(0.0, 50.0), craft_geom::Point::new(100.0, 50.0)], false));
+        let sparse = PathData::single(SubPath::polyline(&[craft_geom::Point::new(0.0, 50.0), craft_geom::Point::new(100.0, 50.0)], false));
         let sparse_outline = outline_stroke(&sparse, width, cap, join, miter);
         let compact_region = stroke_region(&[compact]);
         assert!(
@@ -839,9 +838,7 @@ mod tests {
             bp.extend(rect.to_path(0.1).iter());
         }
         let mut dense_non_finite = PathData::from_bezpath(&bp);
-        dense_non_finite
-            .subpaths
-            .push(SubPath::polyline(&[craft_geom::Point::new(f64::NAN, 0.0), craft_geom::Point::new(10.0, 10.0)], true));
+        dense_non_finite.subpaths.push(SubPath::polyline(&[craft_geom::Point::new(f64::NAN, 0.0), craft_geom::Point::new(10.0, 10.0)], true));
         assert_eq!(try_offset_path(&dense_non_finite, 5.0, Join::Round, 4.0), Err(PathOpsError::NonFinite));
         assert!(offset_path(&dense_non_finite, 5.0, Join::Round, 4.0).is_empty());
     }

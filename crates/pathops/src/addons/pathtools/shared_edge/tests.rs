@@ -1,5 +1,5 @@
-use kurbo::{ParamCurve, Point};
 use craft_geom::{Anchor, PathData, SubPath};
+use kurbo::{ParamCurve, Point};
 
 use super::*;
 

@@ -2,8 +2,8 @@
 //! area of an adjoining colour, so a slight misregistration on press leaves no paper gap between
 //! them. See `vectorcraft_effects::trap` for which colour spreads and how the strip is painted.
 
-use kurbo::Affine;
 use craft_geom::{FillRule, PathData};
+use kurbo::Affine;
 
 use crate::boolean::{BoolOp, try_boolean, try_normalize};
 use crate::offset::{Cap, Join, outline_stroke};

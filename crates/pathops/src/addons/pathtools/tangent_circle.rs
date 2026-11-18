@@ -11,8 +11,8 @@
 //! center is too far from every condition holds no center and is dropped. The cells left are
 //! refined with Newton's method on the exact curves.
 
-use kurbo::{CubicBez, ParamCurve, Point, Vec2};
 use craft_geom::PathData;
+use kurbo::{CubicBez, ParamCurve, Point, Vec2};
 
 #[cfg(test)]
 mod tests;

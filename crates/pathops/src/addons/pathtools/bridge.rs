@@ -3,8 +3,8 @@
 
 use std::f64::consts::{FRAC_PI_2, PI, SQRT_2, TAU};
 
-use kurbo::{CubicBez, ParamCurve, Point, Shape, Vec2};
 use craft_geom::{Anchor, AnchorKind, PathData, SubPath};
+use kurbo::{CubicBez, ParamCurve, Point, Shape, Vec2};
 
 use super::Circle;
 

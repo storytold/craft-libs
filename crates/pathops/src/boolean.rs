@@ -9,9 +9,9 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::HashSet;
 
+use craft_geom::{Anchor, FillRule, PathData, SubPath};
 use kurbo::{BezPath, CubicBez, PathSeg, Point, Shape as _};
 use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
-use craft_geom::{Anchor, FillRule, PathData, SubPath};
 
 use crate::PathOpsError;
 use crate::fit::{end_tangent, fit_single, is_straight, sample, start_tangent};
@@ -1411,10 +1411,7 @@ mod tests {
 
     fn square(x: f64, y: f64, size: f64) -> PathData {
         PathData::single(craft_geom::SubPath::new(
-            [(x, y), (x + size, y), (x + size, y + size), (x, y + size)]
-                .iter()
-                .map(|&(x, y)| craft_geom::Anchor::corner(Point::new(x, y)))
-                .collect(),
+            [(x, y), (x + size, y), (x + size, y + size), (x, y + size)].iter().map(|&(x, y)| craft_geom::Anchor::corner(Point::new(x, y))).collect(),
             true,
         ))
     }

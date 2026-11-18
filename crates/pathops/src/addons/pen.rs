@@ -2,8 +2,8 @@
 //! what comes before them), toggling an anchor between smooth and corner, and deleting an anchor
 //! without refitting the handles beside it.
 
-use kurbo::Vec2;
 use craft_geom::{AnchorKind, SubPath};
+use kurbo::Vec2;
 
 use super::pathtools::{auto_smooth, make_corner, neighbours};
 
@@ -109,8 +109,8 @@ pub fn delete_anchor(sp: &mut SubPath, i: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::Point;
     use craft_geom::{Anchor, AnchorKind, SubPath};
+    use kurbo::Point;
 
     use super::*;
     use crate::addons::pathtools::SMOOTH_RATIO;

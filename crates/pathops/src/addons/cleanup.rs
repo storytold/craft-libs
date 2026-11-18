@@ -5,8 +5,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use kurbo::{Point, Vec2};
 use craft_geom::{Anchor, AnchorKind, EPS, SubPath};
+use kurbo::{Point, Vec2};
 
 use crate::fit::{end_tangent, start_tangent};
 

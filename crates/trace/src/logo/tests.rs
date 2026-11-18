@@ -1,8 +1,8 @@
 //! End-to-end tests: synthetic logos made in code, with known geometry, traced and measured.
 
 use crate::{Method, Mode, Raster, TraceError, TraceParams, TraceResult, trace_within};
-use kurbo::{ParamCurve, Shape};
 use craft_geom::Point;
+use kurbo::{ParamCurve, Shape};
 
 /// A soft, anti-aliased render of `shade` (`Some(colour)` where the shape is), supersampled `ss × ss`
 /// and blurred by `blur` pixels, on a transparent background.

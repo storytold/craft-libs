@@ -1,8 +1,8 @@
 use std::f64::consts::PI;
 
-use kurbo::{ParamCurve, Point, Rect, Shape as _};
 use craft_geom::{Anchor, AnchorKind, FillRule, PathData, SubPath};
 use craft_pathops::*;
+use kurbo::{ParamCurve, Point, Rect, Shape as _};
 
 const NZ: FillRule = FillRule::NonZero;
 

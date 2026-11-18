@@ -86,6 +86,12 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
+    '.github/workflows/vector-kernel.yml':
+        - 'actions/checkout@v4.4.0'
+        - 'actions/checkout@v7.0.1'
+        - 'dtolnay/rust-toolchain@stable'
+        - 'step-security/dtolnay-rust-toolchain@v1.0.0'
+        - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/vectorcraft-format.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'

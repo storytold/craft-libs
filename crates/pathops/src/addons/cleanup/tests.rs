@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use kurbo::{Point, Vec2};
 use craft_geom::{Anchor, AnchorKind, EPS, SubPath};
+use kurbo::{Point, Vec2};
 
 use super::{
     End, Rejoined, chains, close_nearly_closed, merge_duplicate_anchors, near_point_groups, outward, rejoin, remove_collinear_anchors,

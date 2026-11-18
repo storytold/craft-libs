@@ -2,11 +2,11 @@
 // Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md › Robustness).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use proptest::prelude::*;
 use craft_geom::hit::{distance_to_outline, fill_contains, stroke_contains};
 use craft_geom::{Affine, BezPath, FillRule, PathData, PathEl, Point, Rect, Shape, Vec2, shapes};
 use craft_testkit::geom::{grid, hausdorff, polygon_area, rect_contains, sample, sample_path};
 use craft_testkit::strategies::{arb_closed_shape, arb_convex_polygon, arb_path_data, arb_point, arb_rect, arb_star_polygon, polygon_path};
+use proptest::prelude::*;
 
 fn els_close(a: &BezPath, b: &BezPath, eps: f64) -> bool {
     let (a, b) = (a.elements(), b.elements());

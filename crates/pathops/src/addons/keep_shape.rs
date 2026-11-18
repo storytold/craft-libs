@@ -4,8 +4,8 @@
 //! [`simplify_keep_shape`] removes as many as it can while every new segment stays within a
 //! tolerance of the original outline.
 
-use kurbo::{CubicBez, ParamCurve, ParamCurveNearest};
 use craft_geom::{Anchor, PathData, SubPath};
+use kurbo::{CubicBez, ParamCurve, ParamCurveNearest};
 
 use crate::edit::remove_anchor;
 use crate::fit::{end_tangent, start_tangent};
@@ -215,8 +215,8 @@ impl<'a> Reducer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::{ParamCurveNearest, Point, Vec2};
     use craft_geom::{Anchor, PathData, SubPath};
+    use kurbo::{ParamCurveNearest, Point, Vec2};
 
     use super::{remove_anchor_keep_shape, simplify_keep_shape};
 

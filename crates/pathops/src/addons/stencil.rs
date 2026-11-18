@@ -16,8 +16,8 @@ mod tests;
 
 use std::cell::Cell;
 
-use kurbo::{BezPath, ParamCurve, PathEl, Point};
 use craft_geom::{FillRule, PathData, SubPath};
+use kurbo::{BezPath, ParamCurve, PathEl, Point};
 
 use crate::{BoolOp, DEFAULT_PRECISION, PathOpsError, try_boolean, try_unite_all};
 

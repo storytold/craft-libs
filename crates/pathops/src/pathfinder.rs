@@ -4,9 +4,9 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
+use craft_geom::{FillRule, PathData};
 use kurbo::{BezPath, Line, ParamCurve, ParamCurveNearest, PathSeg, Point, Shape as _};
 use linesweeper::topology::{ContourIdx, Contours};
-use craft_geom::{FillRule, PathData};
 
 use crate::boolean::{
     Arrangement, DEFAULT_PRECISION, Multi, Seg, Tidy, all_contours_to_path, contours_to_path, eps_for, fill_bezpath, normalize_bez, segs_to_subpath,
@@ -1115,8 +1115,8 @@ fn mid_point(c: &[Seg]) -> Point {
 mod tests {
     use super::*;
     use crate::boolean::CONTOUR_PASSES;
-    use proptest::prelude::*;
     use craft_geom::{Rect, SubPath, shapes};
+    use proptest::prelude::*;
 
     /// The faces one contour pass per mask finds: what [`regions_of`] must match exactly when no
     /// face lies inside a hole of its own mask (`grouped` puts such an island in the frame's face).

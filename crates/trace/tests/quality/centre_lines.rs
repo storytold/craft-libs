@@ -1,10 +1,10 @@
 //! Centre-line measurements on code-drawn scenes. No external images or tracer required.
 use super::centre_geom::{P, seg_dist};
 use super::centre_scenes::{self as scenes, Scene};
+use craft_trace::{Raster, TraceParams, TraceResult, trace_within};
 use kurbo::{BezPath, ParamCurve, PathSeg};
 use std::fmt::Write as _;
 use std::time::Instant;
-use craft_trace::{Raster, TraceParams, TraceResult, trace_within};
 
 /// Nearest-point queries over a point set (uniform grid buckets).
 struct Near {

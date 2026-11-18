@@ -1,5 +1,5 @@
-use kurbo::{BezPath, Point, Shape};
 use craft_geom::{FillRule, PathData, SubPath};
+use kurbo::{BezPath, Point, Shape};
 
 use super::*;
 

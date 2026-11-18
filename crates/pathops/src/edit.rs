@@ -3,9 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use kurbo::{CubicBez, Line, ParamCurve, ParamCurveNearest, PathSeg, Point, Rect, Vec2};
 use craft_geom::path::measured_arclen;
 use craft_geom::{Anchor, AnchorKind, Anchors, PathData, SubPath};
+use kurbo::{CubicBez, Line, ParamCurve, ParamCurveNearest, PathSeg, Point, Rect, Vec2};
 
 use crate::boolean::{Seg, segs_to_subpath};
 use crate::fit::{end_tangent, fit_cubics, fit_single, fit_single_from, is_straight, largest_second_difference, sample, start_tangent, unit};

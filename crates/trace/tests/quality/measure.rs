@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use kurbo::{BezPath, ParamCurveArclen, Point, Shape, Stroke, StrokeOpts};
 use craft_geom::SubPath;
 use craft_trace::{Method, Mode, Raster, TraceParams, TraceResult, TracedGradient, TracedPath};
+use kurbo::{BezPath, ParamCurveArclen, Point, Shape, Stroke, StrokeOpts};
 
 use crate::inputs::{Class, Input, Variant};
 use crate::raster::{coverage_into, polylines, render_painted};

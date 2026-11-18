@@ -11,8 +11,8 @@
 
 use std::collections::BTreeSet;
 
-use kurbo::Vec2;
 use craft_geom::Point;
+use kurbo::Vec2;
 
 use super::Grid;
 

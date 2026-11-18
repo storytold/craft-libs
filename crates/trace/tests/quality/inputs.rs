@@ -1,8 +1,8 @@
 //! The harness inputs: ground-truth vector art (drawn in a 256-unit square, rasterised at several
 //! sizes) and two continuous-tone images computed per pixel.
 
-use kurbo::{Affine, BezPath, Circle, Ellipse, Point, RoundedRect, Shape};
 use craft_trace::{Raster, TracedShape};
+use kurbo::{Affine, BezPath, Circle, Ellipse, Point, RoundedRect, Shape};
 
 use crate::raster::{self, noise};
 

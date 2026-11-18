@@ -4,8 +4,8 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use kurbo::{CubicBez, ParamCurve, ParamCurveArclen, Point, Vec2};
 use craft_geom::{Anchor, AnchorKind, SubPath};
+use kurbo::{CubicBez, ParamCurve, ParamCurveArclen, Point, Vec2};
 
 use super::{ACCURACY, TINY, nearest_on};
 use crate::fit::end_tangent;
