@@ -85,9 +85,11 @@ fn a_double_click_on_the_empty_room_opens_and_one_on_a_card_opens_only_its_file(
 }
 
 /// A recent file's menu offers Show in Folder exactly where the platform can reveal a file, and the menu key and
-/// Shift+F10 open it from the focused card.
+/// Shift+F10 open it from the focused card. The menu is told by "Clear Recent Files", which only the menu has: the
+/// card's hover action carries "Remove from Recent" too.
 #[trial]
 fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
+    const MENU_ONLY: &str = "Clear Recent Files";
     let (mut fixture, _log) = screen();
     let card = fixture.by_label("Poster.psd").expect("the card shows");
     fixture.click(&card).idle(2);
@@ -96,16 +98,18 @@ fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     fixture.frame(vec![secondary(at, true)]);
     fixture.frame(vec![secondary(at, false)]);
     fixture.idle(3);
-    assert!(fixture.by_label("Remove from Recent").is_some(), "a right click on a recent file opens its menu");
+    assert!(fixture.by_label(MENU_ONLY).is_some(), "a right click on a recent file opens its menu");
     assert_eq!(fixture.by_label("Show in Folder").is_some(), craft_platform::open::CAN_REVEAL);
 
     for (key, modifiers) in [(Key::Menu, Modifiers::NONE), (Key::F10, Modifiers::SHIFT)] {
         fixture.key(Key::Escape, Modifiers::NONE).idle(3);
-        assert!(fixture.by_label("Remove from Recent").is_none(), "Escape closes the menu before {key:?}");
+        let remove = fixture.by_label("Remove from Recent").map(|found| fixture.tree().role_of(found.node));
+        eprintln!("DIAG the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal: {key:?} after Escape: remove {remove:?}");
+        assert!(fixture.by_label(MENU_ONLY).is_none(), "Escape closes the menu before {key:?}");
         let card = fixture.by_label("Poster.psd").expect("the card shows");
         fixture.click(&card).idle(2);
         fixture.key(key, modifiers).idle(3);
-        assert!(fixture.by_label("Remove from Recent").is_some(), "{key:?} with {modifiers:?} opens the focused card's menu");
+        assert!(fixture.by_label(MENU_ONLY).is_some(), "{key:?} with {modifiers:?} opens the focused card's menu");
     }
 }
 
@@ -197,8 +201,9 @@ fn pinned_screen(folders: Vec<PinnedFolder>) -> (Fixture, Log, Pins, Notes) {
         let folders = held.borrow().clone();
         let env = Env::of(ui);
         let words = env.words::<ShellWords>();
-        *words_seen.borrow_mut() =
-            [&words.looking_for_files, &words.folder_unavailable].map(|word| env.view().resolve(&Label::from(word.clone())).as_str().to_owned()).to_vec();
+        *words_seen.borrow_mut() = [&words.looking_for_files, &words.folder_unavailable]
+            .map(|word| env.view().resolve(&Label::from(word.clone())).as_str().to_owned())
+            .to_vec();
         let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &[]).pinned(&folders).show(ui);
         seen.borrow_mut().extend(out.actions);
     });
@@ -229,7 +234,8 @@ fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
         assert_eq!(fixture.by_label(&file_name(n)).is_some(), n < PINNED_FILES_SHOWN, "only the first {PINNED_FILES_SHOWN} files show: {n}");
     }
     let painted = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|painted| painted.text == text);
-    let notes = notes.borrow();
+    // Owned: the screen writes the notes again in every pass, and a borrow held across the frames below would panic it.
+    let notes = notes.borrow().clone();
     assert!(painted(&fixture, &notes[0]), "a pending folder says it is still listing");
     assert!(painted(&fixture, &notes[1]), "an unavailable folder says so");
 

@@ -548,6 +548,11 @@ impl StartScreen<'_> {
         let rail = !links.is_empty() && {
             let rail_width = rail_stack().measure_in(ui, Proposal::Ideal, |ui, _| rail_body(ui)).x;
             let sections_least = page_stack().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true)).x;
+            eprintln!(
+                "DIAG host_sections_sit_at_their_place_and_count_in_the_rail_decision: rail {rail_width} least {sections_least} room {} gap {}",
+                ui.available_width(),
+                env.tokens.space.gap.section
+            );
             ui.available_width() >= rail_width + env.tokens.space.gap.section + sections_least
         };
 
@@ -880,8 +885,10 @@ impl ItemSource<PinnedKey> for PinnedRows<'_> {}
 fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
     match row {
         PinnedRow::Folder(folder) => {
-            let mut heading =
-                ListRow::new(Label::from(folder.name.clone())).detail(folder.path.display().to_string()).icon(IconSpec::svg(IconId::new("folder"))).depth(0);
+            let mut heading = ListRow::new(Label::from(folder.name.clone()))
+                .detail(folder.path.display().to_string())
+                .icon(IconSpec::svg(IconId::new("folder")))
+                .depth(0);
             if !listed_files(folder).is_empty() {
                 heading = heading.group(!folder.folded);
             }
