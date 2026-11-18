@@ -141,6 +141,39 @@ pub struct PinnedFolder {
     pub expanded: bool,
 }
 
+impl PinnedFolder {
+    /// A pinned folder at `path` shown as `name`, not yet listed, unfolded and not expanded.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
+        let _ = (path, name);
+        todo!("L-165")
+    }
+
+    /// This folder with its files, `listing`, as the app found them.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    #[must_use]
+    pub fn listing(self, listing: FolderListing) -> Self {
+        let _ = listing;
+        todo!("L-165")
+    }
+
+    /// This folder shown folded (no files) or not.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    #[must_use]
+    pub fn folded(self, folded: bool) -> Self {
+        let _ = folded;
+        todo!("L-165")
+    }
+
+    /// This folder listing all of its files, or only the first [`PINNED_FILES_SHOWN`].
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    #[must_use]
+    pub fn expanded(self, expanded: bool) -> Self {
+        let _ = expanded;
+        todo!("L-165")
+    }
+}
+
 /// What the app knows of a pinned folder's files.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -168,6 +201,23 @@ pub struct PinnedFile {
     pub name: String,
     /// A second line under the name.
     pub note: Option<String>,
+}
+
+impl PinnedFile {
+    /// A file at `path` shown as `name`, with no second line.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
+        let _ = (path, name);
+        todo!("L-165")
+    }
+
+    /// This file with a second line, `note`, under its name.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    #[must_use]
+    pub fn note(self, note: impl Into<String>) -> Self {
+        let _ = note;
+        todo!("L-165")
+    }
 }
 
 /// What a start screen pass reports.

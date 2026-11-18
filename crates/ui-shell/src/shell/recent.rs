@@ -37,6 +37,22 @@ impl RecentFile {
         RecentFile { path: path.into(), name: name.into(), opened: None, created: None, note: None }
     }
 
+    /// This file last opened at `opened`, in seconds since the Unix epoch.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    #[must_use]
+    pub fn opened(self, opened: i64) -> Self {
+        let _ = opened;
+        todo!("L-165")
+    }
+
+    /// This file created at `created`, in seconds since the Unix epoch.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
+    #[must_use]
+    pub fn created(self, created: i64) -> Self {
+        let _ = created;
+        todo!("L-165")
+    }
+
     /// This file with a second line, `note`, under its name.
     #[must_use]
     pub fn note(self, note: impl Into<String>) -> Self {

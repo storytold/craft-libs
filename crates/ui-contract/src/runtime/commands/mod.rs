@@ -183,6 +183,7 @@ pub enum FirePhase {
 pub struct CommandState {
     flags: CommandFlags,
     title: Option<Arc<str>>,
+    icon: Option<Cow<'static, str>>,
     hint: Option<Arc<str>>,
     marked: bool,
 }
@@ -222,6 +223,14 @@ impl CommandState {
         self
     }
 
+    /// An icon for this frame in place of the command's own, by catalogue name or registered app set name.
+    #[allow(dead_code)] // P3(pdf-chrome-w1): CM-C31
+    #[must_use]
+    pub fn icon(self, icon: impl Into<Cow<'static, str>>) -> Self {
+        let _ = icon;
+        todo!("CM-C31")
+    }
+
     /// The accessible description and second tooltip line.
     #[must_use]
     pub fn hint(mut self, hint: impl Into<Arc<str>>) -> Self {
@@ -244,6 +253,11 @@ impl CommandState {
 
     pub(crate) fn title_ref(&self) -> Option<&Arc<str>> {
         self.title.as_ref()
+    }
+
+    #[allow(dead_code)] // P3(pdf-chrome-w1): CM-C31
+    pub(crate) fn icon_ref(&self) -> Option<&Cow<'static, str>> {
+        self.icon.as_ref()
     }
 
     pub(crate) fn hint_ref(&self) -> Option<&Arc<str>> {

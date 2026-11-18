@@ -107,7 +107,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Flags, StyleCx, StyleKey};
 pub use craft_behavior::Input;
 use craft_behavior::{CellSpace, ItemLayout, ItemSource, Proposal, ScrollPos, SelectionModel, Sense};
-use egui::{Id, IdSalt, Rect, Ui, Vec2};
+use egui::{Id, IdSalt, Pos2, Rect, Ui, Vec2};
 use run::ShowAt;
 use std::hash::Hash;
 use std::ops::Deref;
@@ -689,6 +689,13 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     /// keeps the content under the pointer fixed.
     fn zooms(&self) -> bool {
         false
+    }
+
+    /// The point the collection keeps fixed while a zoom reflows it: `wheel`, the point of this pass's zoom event, or
+    /// the pointer a zoom chord was taken at. `None` by default, and for a collection that does not zoom.
+    fn zoom_anchor(&self, wheel: Option<Pos2>) -> Option<Pos2> {
+        let _ = wheel;
+        None
     }
 
     /// The height of the empty state at `width`: a `Sizing::Content` collection with no rows is this tall. The

@@ -822,6 +822,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         self.zooms
     }
 
+    fn zoom_anchor(&self, wheel: Option<Pos2>) -> Option<Pos2> {
+        let _ = wheel;
+        todo!("WF-W12")
+    }
+
     /// The tiles with a header row before each group, then the tail rows: the rows the item step walks and the layout
     /// places.
     fn filtered<'s>(&self, source: &'s dyn ItemSource<K>, _: &crate::runtime::env::Env) -> Option<Box<dyn ItemSource<K> + 's>> {
