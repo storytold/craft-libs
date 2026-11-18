@@ -43,6 +43,11 @@ fn small_rooms_paint_inside_the_shown_rect(subject: &Subject) -> Result<(), Stri
             if let Some((outside, _)) =
                 shapes.into_iter().find(|(bounds, overshoot)| !areas.iter().any(|area| area.expand(ROUNDING + **overshoot).contains_rect(**bounds)))
             {
+                eprintln!(
+                    "DIAG suite::craft_menu::keytips::Keytips<'_>::reads: story {} all shapes {:?} areas {areas:?}",
+                    story.name,
+                    fixture.shape_bounds()
+                );
                 return Err(format!("{}: in a room of {room:?} a shape paints at {outside:?}, outside {:?}", story.name, fixture.shown()));
             }
             let tree = fixture.tree();

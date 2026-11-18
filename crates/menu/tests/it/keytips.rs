@@ -126,11 +126,12 @@ impl Rig {
         passes.last().cloned().unwrap_or_else(|| panic!("the rig ran a pass"))
     }
 
-    /// A key press and release, then a settled window; the passes it ran.
+    /// A key press and release, then a settled window; the passes it ran. They stay the rig's passes until the next
+    /// call, so `last` reads the last of them.
     fn key(&mut self, key: Key) -> Vec<Pass> {
         self.take();
         self.fixture.key(key, Modifiers::NONE).settle();
-        self.take()
+        self.passes.borrow().clone()
     }
 
     /// Alt pressed and released with nothing between, then a settled window.
