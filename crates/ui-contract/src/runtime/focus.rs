@@ -636,6 +636,9 @@ pub(crate) enum FocusOrigin {
     Press,
     /// The keyboard (Tab, arrows, Page keys) or a focus request.
     Request,
+    /// A scope shown for the first time moved focus to its initial stop (a dialog's first field): a request too, so
+    /// it counts as an arrival by key, and a text part selects its whole text so typing replaces it.
+    Open,
     /// The focused stop went away and handed focus to its neighbour: neither the keyboard nor a request chose it, so
     /// it is no arrival by key (a deleted guide selects no other guide).
     Removal,

@@ -465,7 +465,12 @@ pub(crate) fn run<C: Component>(
     let back_from_menu = menu_held && state.held_selection.is_none();
     if out.focused && !left_for_part && !was_focused && !back_from_menu {
         let len = decl.shown.chars().count();
-        match decl.caret {
+        // A dialog that opens on this field selects its whole text whatever the codec's caret, so typing replaces it
+        // (photocraft#15540).
+        let opened = crate::runtime::focus::focused_rec(&ctx)
+            .and_then(|rec| crate::runtime::focus::origin(&ctx, &rec))
+            .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
+        match if opened { Caret::All } else { decl.caret } {
             Caret::All => adapter::select(&ctx, widget, 0, len),
             _ => adapter::select(&ctx, widget, len, len),
         }
