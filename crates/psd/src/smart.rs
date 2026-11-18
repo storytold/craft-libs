@@ -8,7 +8,8 @@
 //! bicubic Bézier patches.
 //!
 //! The custom mesh is evaluated exactly (bicubic Bézier patches over `meshPoints`, split by
-//! `quiltSliceX` / `quiltSliceY`). Photoshop does not publish the curves of its named styles;
+//! equally spaced `quiltSliceX` / `quiltSliceY`). Unequal divisions are rejected by the
+//! fallible placement reader. Photoshop does not publish the curves of its named styles;
 //! the styles here are clean-room geometric definitions of what each name describes (Arc,
 //! Arch, Bulge, Shell, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze, Twist), matched by
 //! behaviour, not numerically.
@@ -59,7 +60,11 @@ pub struct Warp {
 
 /// The eight numbers of a transform entry (`Trnf`, `nonAffineTransform`), when it has exactly eight.
 fn eight(d: &Descriptor, key: &str) -> Option<[f64; 8]> {
-    d.get_numbers(key).try_into().ok()
+    d.get_numbers(key).into_iter().map(finite).collect::<Vec<_>>().try_into().ok()
+}
+
+fn finite(value: f64) -> f64 {
+    if value.is_finite() { value } else { 0.0 }
 }
 
 /// The corner quad (top-left, top-right, bottom-right, bottom-left) from x0 y0 … x3 y3.
@@ -76,17 +81,45 @@ fn quilt_slices(env: &Descriptor, key: &str) -> Vec<f64> {
     }
 }
 
+/// The public mesh has no slice coordinates, so only uniform divisions can be
+/// represented faithfully. Keep the legacy absent-slices single-patch convention.
+fn quilt_patches(slices: &[f64]) -> Result<usize> {
+    if slices.is_empty() {
+        return Ok(1);
+    }
+    if slices.len() < 2 || slices.iter().any(|v| !v.is_finite()) {
+        return Err(PsdError::Unsupported("invalid quilt divisions".into()));
+    }
+    let step = slices[1] - slices[0];
+    if !step.is_finite() || step <= 0.0 {
+        return Err(PsdError::Unsupported("invalid quilt divisions".into()));
+    }
+    let tolerance = step.abs() * 1e-9;
+    if slices.windows(2).any(|pair| {
+        let width = pair[1] - pair[0];
+        !width.is_finite() || width <= 0.0 || (width - step).abs() > tolerance
+    }) {
+        return Err(PsdError::Unsupported("unequal quilt divisions".into()));
+    }
+    Ok(slices.len() - 1)
+}
 impl Warp {
     /// Reads a `warp` descriptor; `None` for no warp (the identity, or a custom warp without a
-    /// usable mesh).
+    /// usable mesh), or an unsupported quilt. Use [`Self::try_from_descriptor`] to report unsupported geometry.
     pub fn from_descriptor(d: &Descriptor) -> Option<Warp> {
+        Self::try_from_descriptor(d).ok().flatten()
+    }
+
+    /// Reads a warp, rejecting unequal or invalid quilt divisions rather than
+    /// interpreting them as equal-sized patches. Nonfinite geometry becomes zero.
+    pub fn try_from_descriptor(d: &Descriptor) -> Result<Option<Warp>> {
         let style = d.get_enum("warpStyle").unwrap_or_else(|| "warpNone".to_string());
-        let side = |b: &Descriptor, k: &str| b.get_number(k).unwrap_or(0.0);
+        let side = |b: &Descriptor, k: &str| finite(b.get_number(k).unwrap_or(0.0));
         let bounds = d.get_object("bounds").map_or([0.0; 4], |b| [side(b, "Left"), side(b, "Top "), side(b, "Rght"), side(b, "Btom")]);
         let mut w = Warp {
-            bend: d.get_number("warpValue").unwrap_or(0.0),
-            horizontal: d.get_number("warpPerspective").unwrap_or(0.0),
-            vertical: d.get_number("warpPerspectiveOther").unwrap_or(0.0),
+            bend: finite(d.get_number("warpValue").unwrap_or(0.0)),
+            horizontal: finite(d.get_number("warpPerspective").unwrap_or(0.0)),
+            vertical: finite(d.get_number("warpPerspectiveOther").unwrap_or(0.0)),
             rotate_vertical: d.get_enum("warpRotate").as_deref() == Some("Vrtc"),
             bounds,
             cols: 1,
@@ -95,8 +128,33 @@ impl Warp {
             style,
         };
         if let Some(env) = d.get_object("customEnvelopeWarp") {
-            let cols = quilt_slices(env, "quiltSliceX").len().saturating_sub(1).max(1);
-            let rows = quilt_slices(env, "quiltSliceY").len().saturating_sub(1).max(1);
+            let slice_x = quilt_slices(env, "quiltSliceX");
+            let slice_y = quilt_slices(env, "quiltSliceY");
+            let cols = quilt_patches(&slice_x)?;
+            let rows = quilt_patches(&slice_y)?;
+            if !slice_x.is_empty() || !slice_y.is_empty() {
+                // The evaluator normalizes over bounds, not stored slice coordinates.
+                // Infer a missing rectangle only when both explicit axes define it.
+                if !(w.bounds[2] > w.bounds[0] && w.bounds[3] > w.bounds[1]) {
+                    let (Some(&left), Some(&right), Some(&top), Some(&bottom)) = (slice_x.first(), slice_x.last(), slice_y.first(), slice_y.last())
+                    else {
+                        return Err(PsdError::Unsupported("quilt divisions need bounds or both axes".into()));
+                    };
+                    w.bounds = [left, top, right, bottom];
+                }
+                for (slices, start, end) in [(&slice_x, w.bounds[0], w.bounds[2]), (&slice_y, w.bounds[1], w.bounds[3])] {
+                    if let (Some(&first), Some(&last)) = (slices.first(), slices.last()) {
+                        let extent = end - start;
+                        if !extent.is_finite() {
+                            return Err(PsdError::Unsupported("quilt bounds overflow".into()));
+                        }
+                        let tolerance = extent.abs() * 1e-9;
+                        if (first - start).abs() > tolerance || (last - end).abs() > tolerance {
+                            return Err(PsdError::Unsupported("quilt divisions do not match warp bounds".into()));
+                        }
+                    }
+                }
+            }
             if let Some(Value::ObjectArray(pts)) = env.get("meshPoints") {
                 let xs = pts.body.get_numbers("Hrzn");
                 let ys = pts.body.get_numbers("Vrtc");
@@ -104,13 +162,13 @@ impl Warp {
                 if n.is_some_and(|n| xs.len() == n && ys.len() == n) {
                     w.cols = cols;
                     w.rows = rows;
-                    w.mesh = xs.into_iter().zip(ys).map(|(x, y)| [x, y]).collect();
+                    w.mesh = xs.into_iter().zip(ys).map(|(x, y)| [finite(x), finite(y)]).collect();
                 }
             }
         }
         let identity = w.style == "warpNone" || (w.style != "warpCustom" && w.bend == 0.0 && w.horizontal == 0.0 && w.vertical == 0.0);
         let custom_ok = w.style != "warpCustom" || !w.mesh.is_empty();
-        (!identity && custom_ok).then_some(w)
+        Ok((!identity && custom_ok).then_some(w))
     }
 
     /// The warp of a content point (content pixels → content pixels).
@@ -273,9 +331,12 @@ impl SmartObject {
         let t = eight(&d, "Trnf").unwrap_or([0.0; 8]);
         // The non-affine transform when present (perspective), else the transform.
         let t = eight(&d, "nonAffineTransform").unwrap_or(t);
-        let size = d.get_object("Sz  ").and_then(|s| Some([s.get_number("Wdth")?, s.get_number("Hght")?]));
+        let size = d.get_object("Sz  ").and_then(|s| Some([finite(s.get_number("Wdth")?), finite(s.get_number("Hght")?)]));
         // A split warp is in `quiltWarp`, with `warp` holding none.
-        let warp = d.get_object("quiltWarp").and_then(Warp::from_descriptor).or_else(|| d.get_object("warp").and_then(Warp::from_descriptor));
+        let mut warp = d.get_object("quiltWarp").map(Warp::try_from_descriptor).transpose()?.flatten();
+        if warp.is_none() {
+            warp = d.get_object("warp").map(Warp::try_from_descriptor).transpose()?.flatten();
+        }
         Ok(SmartObject { uuid, quad: quad_from(t), size, warp })
     }
 
@@ -947,6 +1008,96 @@ mod tests {
         // A literal replacement character can itself be a valid UTF-8 id.
         let unicode = encode_embedded_file("\u{fffd}", "unicode.psb", &[4; 2]);
         assert!(select_linked_records(&unicode, &|uuid, _| uuid == "\u{fffd}").unwrap().is_none());
+    }
+
+    #[test]
+    fn placement_normalizes_nonfinite_geometry_before_classification() {
+        let data = placed_layer_data("finite", [f64::NAN, 0.0, 20.0, 0.0, 20.0, 10.0, 0.0, 10.0], |d| {
+            let warp = Descriptor::new("warp")
+                .with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpArc") })
+                .with("warpValue", Value::Double(f64::NAN))
+                .with("warpPerspective", Value::Double(f64::INFINITY))
+                .with("warpPerspectiveOther", Value::Double(f64::NEG_INFINITY));
+            let size = Descriptor::new("Pnt ").with("Wdth", Value::Double(f64::INFINITY)).with("Hght", Value::Double(10.0));
+            d.with("warp", Value::Descriptor(warp)).with("Sz  ", Value::Descriptor(size))
+        });
+        let object = SmartObject::from_placed_layer_data(&data).unwrap();
+        assert_eq!(object.quad, [[0.0, 0.0], [20.0, 0.0], [20.0, 10.0], [0.0, 10.0]]);
+        assert_eq!(object.size, Some([0.0, 10.0]));
+        assert!(!object.needs_bake());
+        assert_eq!(object.map([5.0, 5.0], 20.0, 10.0), [5.0, 5.0]);
+    }
+
+    fn quilt_descriptor(xs: Vec<f64>, ys: Vec<f64>) -> Descriptor {
+        let unfl = |values| Value::UnitFloats { unit: *b"#Pxl", values };
+        // Identity control points for a 7 x 4 mesh with a split at x=5.
+        let x = [0.0, 5.0 / 3.0, 10.0 / 3.0, 5.0, 10.0, 15.0, 20.0];
+        let body = Descriptor::new("rationalPoint")
+            .with("Hrzn", unfl((0..4).flat_map(|_| x).collect()))
+            .with("Vrtc", unfl((0..4).flat_map(|j| [j as f64 * 10.0 / 3.0; 7]).collect()));
+        let env = Descriptor::new("customEnvelopeWarp")
+            .with("quiltSliceX", unfl(xs))
+            .with("quiltSliceY", unfl(ys))
+            .with("meshPoints", Value::ObjectArray(ObjectArray { prefix: 16, body }));
+        Descriptor::new("warp")
+            .with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpCustom") })
+            .with("customEnvelopeWarp", Value::Descriptor(env))
+    }
+
+    #[test]
+    fn unequal_quilts_are_errors_not_uniform_meshes_or_fallback_warps() {
+        for (xs, ys) in [(vec![0.0, 5.0, 20.0], vec![0.0, 10.0]), (vec![0.0, 10.0, 20.0], vec![0.0, 2.0, 10.0])] {
+            let warp = quilt_descriptor(xs, ys);
+            assert!(matches!(Warp::try_from_descriptor(&warp), Err(PsdError::Unsupported(_))));
+            for key in ["warp", "quiltWarp"] {
+                let data = placed_layer_data("quilt", [0.0; 8], |d| {
+                    let d = if key == "quiltWarp" { d.with("warp", Value::Descriptor(Descriptor::new("warp"))) } else { d };
+                    d.with(key, Value::Descriptor(warp.clone()))
+                });
+                assert!(matches!(SmartObject::from_placed_layer_data(&data), Err(PsdError::Unsupported(_))));
+            }
+        }
+        for slices in [vec![0.0], vec![0.0, 0.0], vec![10.0, 0.0], vec![0.0, f64::NAN]] {
+            assert!(quilt_patches(&slices).is_err());
+        }
+        assert_eq!(quilt_patches(&[]).unwrap(), 1);
+        assert_eq!(quilt_patches(&[0.0, 10.0, 20.0]).unwrap(), 2);
+    }
+
+    #[test]
+    fn quilt_endpoints_define_or_match_the_normalization_bounds() {
+        let equal = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]);
+        assert_eq!(Warp::try_from_descriptor(&equal).unwrap().unwrap().bounds, [0.0, 0.0, 20.0, 10.0]);
+        let bounds = Descriptor::new("bounds")
+            .with("Left", Value::Double(0.0))
+            .with("Top ", Value::Double(0.0))
+            .with("Rght", Value::Double(40.0))
+            .with("Btom", Value::Double(10.0));
+        assert!(Warp::try_from_descriptor(&equal.with("bounds", Value::Descriptor(bounds))).is_err());
+        let missing = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![]);
+        assert!(Warp::try_from_descriptor(&missing).is_err());
+    }
+    #[test]
+    fn finite_warp_views_preserve_raw_descriptor_values() {
+        let mut warp = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]);
+        let bounds = Descriptor::new("bounds")
+            .with("Left", Value::Double(f64::NAN))
+            .with("Top ", Value::Double(f64::NEG_INFINITY))
+            .with("Rght", Value::Double(20.0))
+            .with("Btom", Value::Double(10.0));
+        warp = warp.with("bounds", Value::Descriptor(bounds));
+        let env = warp.items.iter_mut().find(|(key, _)| key.as_bytes() == b"customEnvelopeWarp").unwrap();
+        let Value::Descriptor(env) = &mut env.1 else { panic!("envelope") };
+        let points = env.items.iter_mut().find(|(key, _)| key.as_bytes() == b"meshPoints").unwrap();
+        let Value::ObjectArray(points) = &mut points.1 else { panic!("mesh") };
+        let values = &mut points.body.items[0].1;
+        let Value::UnitFloats { values, .. } = values else { panic!("coordinates") };
+        values[0] = f64::NAN;
+        let bytes = warp.to_bytes();
+        let view = Warp::try_from_descriptor(&warp).unwrap().unwrap();
+        assert_eq!(view.bounds, [0.0, 0.0, 20.0, 10.0]);
+        assert_eq!(view.mesh[0], [0.0, 0.0]);
+        assert_eq!(warp.to_bytes(), bytes);
     }
 
     #[test]
