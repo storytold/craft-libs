@@ -323,7 +323,7 @@ deckcraft-format = ["dep:craft-deckcraft-format"]
 
 designcraft-format = ["dep:craft-designcraft-format"]
 
-dialogs = ["dep:craft-dialogs"] # native only: rfd's folder picker and file paths
+dialogs = ["dep:craft-dialogs", "browse"] # native only: rfd's folder picker and file paths
 
 doc = ["dep:craft-doc"]
 doc-pcraft-pixels = ["doc", "craft-doc/pcraft-pixels"]
@@ -542,7 +542,7 @@ openpgp = ["dep:craft-openpgp"]
 
 ora = ["dep:craft-ora"]
 
-pages = ["dep:craft-pages"]
+pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
 
@@ -642,7 +642,7 @@ raw-raf = ["raw", "craft-raw/raf"]
 raw-rw2 = ["raw", "craft-raw/rw2"]
 raw-srw = ["raw", "craft-raw/srw"]
 
-review = ["dep:craft-review", "keymap"]
+review = ["dep:craft-review", "keymap", "pages"]
 
 rtf = ["dep:craft-rtf"]
 rtf-doc = ["rtf", "craft-rtf/doc"]
