@@ -145,7 +145,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 
 ## XFA XML DOM
 
-`crates/xfa/src/xml.rs` is extracted from PDFCraft at `271e479c53723b1b294c866d5cb2f27604601b29`, originally by Dylan M. Taylor (`eead4541`, `7d44e654`), MIT OR Apache-2.0. Only visibility and module boundaries change; PDF/layout/form policy remains in the app.
+`crates/xfa/src/xml.rs` is extracted from PDFCraft at `271e479c53723b1b294c866d5cb2f27604601b29`, originally by Dylan M. Taylor (`eead4541`, `7d44e654`), MIT OR Apache-2.0. The initial extraction changes visibility and module boundaries; subsequent namespace-retention budget hardening intentionally tightens resource admission. PDF/layout/form policy remains in the app.
 
 ## Java class inspection
 
