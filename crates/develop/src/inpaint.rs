@@ -50,6 +50,50 @@ mod tests {
     }
 
     #[test]
+    fn a_patch_radius_no_image_could_hold_finds_nothing_to_copy() {
+        let mut hole = vec![false; 32 * 32];
+        hole[16 * 32 + 16] = true;
+        for patch_radius in [16, usize::MAX / 2, usize::MAX] {
+            let p = CompleteParams { patch_radius, ..CompleteParams::default() };
+            assert_eq!(complete(32, 32, 1, &[0.5; 32 * 32], &hole, &p), None, "radius {patch_radius}");
+        }
+        // A radius the image has room for still fills.
+        let p = CompleteParams { patch_radius: 5, ..CompleteParams::default() };
+        assert!(complete(32, 32, 1, &[0.5; 32 * 32], &hole, &p).is_some());
+    }
+
+    #[test]
+    fn an_image_with_no_pixels_is_returned_without_walking_its_rows() {
+        let p = CompleteParams::default();
+        assert_eq!(complete_with(0, usize::MAX, 1, &[], &[], &p, &|| false), Ok(Some(Vec::new())));
+        assert_eq!(complete_with(usize::MAX, 0, 3, &[], &[], &p, &|| false), Ok(Some(Vec::new())));
+    }
+
+    /// Whichever poll says "cancelled", and only that one, the call ends in `Err`: also when it was a
+    /// worker's poll, which can stop the worker but not return.
+    #[test]
+    fn one_cancelled_poll_anywhere_cancels_the_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (w, h) = (48usize, 48usize);
+        let img: Vec<f32> = (0..w * h).map(|i| ((i % w) as f32 * 0.37).sin() * 0.5 + 0.5).collect();
+        let hole: Vec<bool> = (0..w * h).map(|i| (i % w).abs_diff(24) < 5 && (i / w).abs_diff(24) < 5).collect();
+        let p = CompleteParams::default();
+        let polls = AtomicUsize::new(0);
+        let count = || {
+            polls.fetch_add(1, Ordering::Relaxed);
+            false
+        };
+        assert!(matches!(complete_with(w, h, 1, &img, &hole, &p, &count), Ok(Some(_))));
+        let total = polls.load(Ordering::Relaxed);
+        assert!(total > 8, "the scene polls in the workers too: {total}");
+        for nth in 0..total {
+            let polls = AtomicUsize::new(0);
+            let once = || polls.fetch_add(1, Ordering::Relaxed) == nth;
+            assert_eq!(complete_with(w, h, 1, &img, &hole, &p, &once), Err(Cancelled), "poll {nth} of {total}");
+        }
+    }
+
+    #[test]
     fn cancellation_stops() {
         let img = vec![0.5f32; 64 * 64];
         let hole: Vec<bool> = (0..64 * 64usize).map(|i| (i % 64).abs_diff(32) < 4 && (i / 64).abs_diff(32) < 4).collect();

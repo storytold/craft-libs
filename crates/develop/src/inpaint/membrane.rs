@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn a_zero_area_image_comes_back_unchanged_whatever_its_channel_count() {
         assert!(membrane_fill(0, 5, usize::MAX, &[], &[]).is_empty());
-        assert!(membrane_fill(3, 0, 1 << 40, &[], &[]).is_empty());
+        assert!(membrane_fill(3, 0, usize::MAX / 2, &[], &[]).is_empty());
     }
 
     #[test]

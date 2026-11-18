@@ -23,6 +23,7 @@
 
 use crate::inpaint::Cancelled;
 use crate::inpaint::membrane::membrane_fill;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Below this many grid cells a level runs single-threaded (thread hand-off costs more than it saves).
 #[cfg(not(target_arch = "wasm32"))]
@@ -377,12 +378,31 @@ pub fn complete_with(
     p: &CompleteParams,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<Vec<f32>>, Cancelled> {
+    // The workers poll `cancelled` too and can only stop early, not return an error. One `true` from it,
+    // wherever it was seen, is kept, so the next check out here ends the call and a half-finished pass
+    // is never returned as a result.
+    let seen = AtomicBool::new(false);
+    let cancelled: &(dyn Fn() -> bool + Sync) = &|| {
+        if !seen.load(Ordering::Relaxed) && cancelled() {
+            seen.store(true, Ordering::Relaxed);
+        }
+        seen.load(Ordering::Relaxed)
+    };
     let check = || if cancelled() { Err(Cancelled) } else { Ok(()) };
     if ch == 0 || Some(hole.len()) != w.checked_mul(h) || Some(img.len()) != hole.len().checked_mul(ch) {
         return Ok(None);
     }
+    // No pixels (a zero width or height, whatever the other is): nothing to scan and nothing to fill.
+    if hole.is_empty() {
+        return Ok(Some(img.to_vec()));
+    }
     let Some((bx0, by0, bx1, by1)) = hole_bbox(w, h, hole) else { return Ok(Some(img.to_vec())) };
     let r = p.patch_radius.max(1);
+    // A patch wider than the image has no place to be copied from, which is the `None` the search below
+    // would reach anyway. Said here, before `2 * r + 1` and `r as i32` can overflow on an absurd radius.
+    if r > (w.min(h) - 1) / 2 {
+        return Ok(None);
+    }
     let psz = 2 * r + 1;
     // Pyramid: shrink until the hole is a few patches across.
     let mut levels = vec![Level { w, h, img: img.to_vec(), hole: hole.to_vec() }];
