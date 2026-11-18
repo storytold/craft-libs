@@ -202,16 +202,18 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         if real && (layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. })) {
             access::report_layer(ctx, layer.id, ui.unique_id(), ui.max_rect(), overlay.rank.is_modal(), layer.exiting);
         }
-        if let (Some(policy), true) = (scope, real) {
+        // Every layer is a focus scope, one without a policy (`FocusPolicy::NONE`) included: its stops are the layer's,
+        // not those of the scope it was opened in, so a trap around it leaves them out (a menu's companion bar).
+        if real {
             let entering = !std::mem::replace(&mut memory.scope_entered, true);
-            focus::push_scope_from(ctx, layer.id, policy, None, opener, layer.exiting, Some(entering));
+            focus::push_scope_from(ctx, layer.id, overlay.focus, None, opener, layer.exiting, Some(entering));
         }
         areas::bound(ui, placed.room, min_width.min(placed.room.x));
         if overlay.fit == OverlayFit::Resizable {
             ui.set_min_size(overlay.size_limits.min.min(placed.room));
         }
         access::scope::outside(ctx, || body(ui));
-        if scope.is_some() && real {
+        if real {
             focus::pop_scope(ctx);
         }
         Env::restore(ctx, installed);

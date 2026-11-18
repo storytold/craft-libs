@@ -278,7 +278,7 @@ impl Overlay {
     }
 
     /// The chrome of a modal over a part of the window the modal covers, placed at `rect`: above the modal, with no
-    /// focus scope and no dismissal of its own. Its move band moves the window the layer is shown in.
+    /// focus policy and no dismissal of its own. Its move band moves the window the layer is shown in.
     pub fn modal_chrome(rect: Rect) -> Overlay {
         let mut overlay =
             Overlay::base(Rank::ModalChrome, Place::Float(FloatPlace::centred()), OverlayFit::Content, OwnerClass::Widget, FocusPolicy::NONE);
