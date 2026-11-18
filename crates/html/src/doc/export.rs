@@ -263,21 +263,87 @@ fn para_html(p: &Para) -> String {
     }
 }
 
+/// Render an HTML table element, emitting `<colgroup>` column widths and cell attributes.
 fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("<table style=\"border-collapse:collapse\">\n");
-    for row in &t.rows {
-        out.push_str("<tr>");
-        for c in row {
-            if c.covered {
+    if !t.widths.is_empty() {
+        out.push_str("<colgroup>\n");
+        for w in &t.widths {
+            out.push_str(&format!("<col style=\"width:{w:.2}pt\">\n"));
+        }
+        out.push_str("</colgroup>\n");
+    }
+    let nrows = t.rows.len();
+    let grid_cols: Vec<Vec<usize>> = t
+        .rows
+        .iter()
+        .map(|row| {
+            let mut x = 0usize;
+            row.iter()
+                .map(|c| {
+                    let start = x;
+                    x = x.saturating_add(c.colspan.clamp(1, 63) as usize);
+                    start
+                })
+                .collect()
+        })
+        .collect();
+    let cell_at_grid = |r: usize, target_g: usize| -> Option<usize> { grid_cols.get(r)?.binary_search(&target_g).ok() };
+    let grid_col = |r: usize, ci: usize| -> usize { grid_cols.get(r).and_then(|row| row.get(ci)).copied().unwrap_or(0) };
+
+    let mut is_covered: Vec<Vec<bool>> = t.rows.iter().map(|r| vec![false; r.len()]).collect();
+    let mut rowspans: Vec<Vec<u32>> = t.rows.iter().map(|r| r.iter().map(|c| c.rowspan.clamp(1, 1000)).collect()).collect();
+
+    for r in 0..nrows {
+        let row_len = t.rows.get(r).map_or(0, |row| row.len());
+        for ci in 0..row_len {
+            if is_covered.get(r).and_then(|row| row.get(ci)).copied().unwrap_or(false) {
                 continue;
             }
+            let Some(c) = t.rows.get(r).and_then(|row| row.get(ci)) else { continue };
+            let g = grid_col(r, ci);
+            let span = c.colspan.clamp(1, 63) as usize;
+            let mut extent = 1u32;
+            for down_r in (r + 1)..nrows {
+                let Some(down_ci) = cell_at_grid(down_r, g) else { break };
+                let Some(down_c) = t.rows.get(down_r).and_then(|row| row.get(down_ci)) else { break };
+                let down_covered = is_covered.get(down_r).and_then(|row| row.get(down_ci)).copied().unwrap_or(false);
+                if grid_col(down_r, down_ci) == g
+                    && down_c.colspan.clamp(1, 63) as usize == span
+                    && down_c.covered
+                    && !down_c.vmerge_restart
+                    && !down_covered
+                {
+                    if let Some(down_row) = is_covered.get_mut(down_r)
+                        && let Some(slot) = down_row.get_mut(down_ci)
+                    {
+                        *slot = true;
+                    }
+                    extent = extent.saturating_add(1);
+                } else {
+                    break;
+                }
+            }
+            if let Some(slot) = rowspans.get_mut(r).and_then(|row| row.get_mut(ci)) {
+                *slot = (*slot).max(extent);
+            }
+        }
+    }
+
+    for (ri, row) in t.rows.iter().enumerate() {
+        out.push_str("<tr>");
+        for (ci, c) in row.iter().enumerate() {
+            if is_covered.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(false) {
+                continue;
+            }
+            let rowspan = rowspans.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(c.rowspan.clamp(1, 1000));
             let tag = if c.header { "th" } else { "td" };
             let mut attrs = String::new();
             if c.colspan > 1 {
                 attrs.push_str(&format!(" colspan=\"{}\"", c.colspan));
             }
-            if c.rowspan > 1 {
-                attrs.push_str(&format!(" rowspan=\"{}\"", c.rowspan));
+            if rowspan > 1 {
+                attrs.push_str(&format!(" rowspan=\"{}\"", rowspan));
             }
             let v_css = match c.valign {
                 Some(VAlign::Center) => "vertical-align:middle",
@@ -287,6 +353,9 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             let mut css = vec!["padding:4px 6px".to_string(), v_css.to_string()];
             if !t.borderless {
                 css.insert(0, "border:1px solid #999".to_string());
+            }
+            if let Some(w) = c.width {
+                css.push(format!("width:{w:.2}pt"));
             }
             if let Some(s) = c.shading {
                 css.push(format!("background-color:#{}", s.hex()));

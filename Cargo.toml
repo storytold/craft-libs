@@ -11,6 +11,13 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-evm = { path = "crates/evm" }
+craft-java-class = { path = "crates/java-class" }
+craft-sourcemap = { path = "crates/sourcemap" }
+craft-pcap = { path = "crates/pcap" }
+craft-har = { path = "crates/har" }
+craft-xfdf = { path = "crates/xfdf" }
+craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
 craft-shx = { path = "crates/shx" }
@@ -25,6 +32,7 @@ acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-plist = { path = "crates/plist" }
+craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
@@ -56,6 +64,8 @@ craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
+craft-cloud = { path = "crates/cloud" }
+craft-cloud-local = { path = "crates/cloud-local" }
 craft-color = { path = "crates/color" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
@@ -163,6 +173,7 @@ craft-settings = { path = "crates/settings" }
 craft-scraft-format = { path = "crates/scraft-format" }
 craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
+craft-suite-account = { path = "crates/suite-account" }
 craft-svg = { path = "crates/svg" }
 craft-stencilcraft-format = { path = "crates/stencilcraft-format" }
 craft-stencilcraft-document = { path = "crates/stencilcraft-document" }

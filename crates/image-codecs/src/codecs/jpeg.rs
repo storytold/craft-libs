@@ -46,6 +46,45 @@ pub(crate) struct JpegMeta {
     pub held_coefficients: u64,
 }
 
+/// Validate a JPEG by decoding the 8-bit RGBA output used by renderers.
+///
+/// This deliberately uses the existing zune backend's default decode policy.
+/// Unlike general JPEG import it does not fall back to additional JPEG modes,
+/// apply orientation, or retain pixels. The caller supplies the admitted pixel count.
+pub fn validate_jpeg_rgba8(bytes: &[u8], max_pixels: u64) -> Result<(), CodecError> {
+    validate_jpeg_rgba8_with_panic_policy(bytes, max_pixels, cfg!(panic = "abort"))
+}
+
+fn validate_jpeg_rgba8_with_panic_policy(bytes: &[u8], max_pixels: u64, panic_aborts: bool) -> Result<(), CodecError> {
+    // The decoder can assert while upsampling these frames. On abort builds the
+    // unwind guard below cannot turn that assertion into an image omission.
+    if panic_aborts && first_component_subsampled(bytes) {
+        return Err(CodecError::malformed(F, "JPEG first component is subsampled below the frame maximum"));
+    }
+    let decode = || {
+        let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+        let mut decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), options);
+        decoder.decode_headers().map_err(|error| CodecError::malformed(F, format_args!("{error:?}")))?;
+        let info = decoder.info().ok_or_else(|| CodecError::malformed(F, "missing frame dimensions"))?;
+        let pixels = u64::from(info.width) * u64::from(info.height);
+        if pixels == 0 {
+            return Err(CodecError::malformed(F, "empty frame"));
+        }
+        if pixels > max_pixels {
+            return Err(CodecError::LimitExceeded("JPEG exceeds the admitted pixel count".into()));
+        }
+        let length = usize::try_from(pixels * 4).map_err(|_| CodecError::LimitExceeded("JPEG RGBA output is too large".into()))?;
+        if decoder.output_colorspace() != Some(ColorSpace::RGBA) || decoder.output_buffer_size() != Some(length) {
+            return Err(CodecError::malformed(F, "unexpected RGBA output"));
+        }
+        let mut output = Vec::new();
+        output.try_reserve_exact(length).map_err(|_| CodecError::LimitExceeded("could not allocate JPEG RGBA output".into()))?;
+        output.resize(length, 0);
+        decoder.decode_into(&mut output).map_err(|error| CodecError::malformed(F, format_args!("{error:?}")))
+    };
+    std::panic::catch_unwind(decode).map_err(|_| CodecError::malformed(F, "JPEG decoder failed on this frame"))?
+}
+
 /// The first frame of `b` as [`crate::JpegInfo`], from its markers alone (see [`crate::jpeg_info`]).
 pub(crate) fn info(b: &[u8]) -> Option<crate::JpegInfo> {
     let m = scan_metadata(b);
@@ -84,6 +123,83 @@ fn held_coefficients(marker: u8, seg: &[u8], scan_components: Option<u8>) -> u64
     let vmax = factors.iter().map(|f| f.1).max().unwrap_or(1).max(1);
     let mcus = w.div_ceil(8 * hmax) * h.div_ceil(8 * vmax);
     factors.iter().map(|&(fh, fv)| mcus * fh * fv * 64 * 2).sum()
+}
+
+/// Bytes of DCT coefficients to budget for before decoding hostile `b`: the larger of
+/// [`crate::JpegInfo::held_coefficients`]'s rule (first frame; SOF2, or SOF0/SOF1 whose first
+/// scan lacks components; 8-bit only; sampling factors as written) and a coarser one that
+/// keeps a progressive JPEG's coefficients for the whole picture:
+/// - every SOF2, SOF6, SOF10 and SOF14 header before the first scan counts, at any precision, and
+///   the largest wins; each charges 2 bytes a coefficient: per component, `2 * 64 * h * v` per
+///   MCU, with `h` and `v` clamped to 1..=4 and the MCUs covering the frame at the largest `h`, `v`;
+/// - a header that can't be followed (a segment that is cut, a length under 2, a frame header
+///   without its components, no `0xFF` where a marker belongs) charges the costliest frame,
+///   four components sampled 4 × 4, at the first frame's size (as `scan_metadata` reads it), and 0 without one.
+///
+/// Never less than either rule. Frames `craft-jpeg` decodes (arithmetic, lossless, 12-bit)
+/// enforce `max_alloc` on their own buffers, and SOF6/SOF14 (hierarchical) are not decoded at all,
+/// so charging them is only a conservative budget. Arithmetic saturates; the scan is linear.
+pub(crate) fn worst_case_coefficients(b: &[u8]) -> u64 {
+    let m = scan_metadata(b);
+    let mut at = 2usize;
+    let mut most = 0u64;
+    let first: Option<(u64, u64)> = m.frame.map(|(w, h, _)| (u64::from(w), u64::from(h)));
+    let mut broken = false;
+    while !broken {
+        if b.get(at) != Some(&0xFF) {
+            broken = true;
+            break;
+        }
+        while b.get(at) == Some(&0xFF) {
+            at += 1;
+        }
+        let Some(&code) = b.get(at) else {
+            broken = true;
+            break;
+        };
+        at += 1;
+        match code {
+            0xD8 | 0x01 | 0xD0..=0xD7 => continue,
+            0xD9 | 0xDA => break,
+            _ => {}
+        }
+        let len = match (b.get(at), b.get(at + 1)) {
+            (Some(&hi), Some(&lo)) => usize::from(u16::from_be_bytes([hi, lo])),
+            _ => 0,
+        };
+        let Some(seg) = (len >= 2).then(|| b.get(at + 2..at + len)).flatten() else {
+            broken = true;
+            break;
+        };
+        if matches!(code, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+            match progressive_frame_coefficients(seg) {
+                Some(held) => most = most.max(held),
+                None => {
+                    broken = true;
+                    break;
+                }
+            }
+        }
+        at += len;
+    }
+    if broken && let Some((w, h)) = first {
+        let mcus = w.div_ceil(32).saturating_mul(h.div_ceil(32));
+        most = most.max(mcus.saturating_mul(2 * 64 * 16 * 4));
+    }
+    most.max(m.held_coefficients)
+}
+
+/// [`worst_case_coefficients`]'s charge for one frame header `sof` (after its length).
+fn progressive_frame_coefficients(sof: &[u8]) -> Option<u64> {
+    let height = u64::from(u16::from_be_bytes([*sof.get(1)?, *sof.get(2)?]));
+    let width = u64::from(u16::from_be_bytes([*sof.get(3)?, *sof.get(4)?]));
+    let n = usize::from(*sof.get(5)?);
+    let comps = sof.get(6..6usize.checked_add(n.checked_mul(3)?)?)?;
+    let factors: Vec<(u64, u64)> =
+        comps.as_chunks::<3>().0.iter().map(|&[_, f, _]| (u64::from(f >> 4).clamp(1, 4), u64::from(f & 15).clamp(1, 4))).collect();
+    let (hmax, vmax) = factors.iter().fold((1, 1), |(h, v), &(a, b)| (h.max(a), v.max(b)));
+    let mcus = width.div_ceil(8 * hmax).saturating_mul(height.div_ceil(8 * vmax));
+    Some(factors.iter().fold(0u64, |sum, &(h, v)| sum.saturating_add(mcus.saturating_mul(2 * 64 * h * v))))
 }
 
 /// Walk the marker segments up to SOS and collect metadata.
@@ -340,10 +456,17 @@ fn first_component_subsampled(b: &[u8]) -> bool {
         return false;
     }
     let mut i = 2;
-    while let (Some(&0xFF), Some(&m)) = (b.get(i), b.get(i + 1)) {
+    while let Some(&prefix) = b.get(i) {
+        // The decoder searches forward between segments. Stray bytes and
+        // stuffed FF 00 pairs must not hide a frame from the abort-build guard.
+        if prefix != 0xFF {
+            i += 1;
+            continue;
+        }
+        let Some(&m) = b.get(i + 1) else { return false };
         match m {
             0xFF => i += 1,
-            0x01 | 0xD0..=0xD8 => i += 2,
+            0x00 | 0x01 | 0xD0..=0xD8 => i += 2,
             0xD9 | 0xDA => return false,
             _ => {
                 let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
@@ -825,6 +948,170 @@ mod tests {
         assert_eq!(held(&frame(0xC2, 12, &[0x11, 0x11, 0x11], None)), Some(0));
     }
 
+    /// The consumer's own estimate (WordCraft's `jpeg_coefficients`), ported as the oracle that
+    /// `worst_case_coefficients` must never undercut.
+    fn oracle(bytes: &[u8]) -> u64 {
+        fn worst(bytes: &[u8]) -> u64 {
+            let Some((w, h)) = info(bytes).map(|i| (i.width, i.height)) else { return 0 };
+            let mcus = u64::from(w).div_ceil(32) * u64::from(h).div_ceil(32);
+            mcus.saturating_mul(2 * 64 * 16 * 4)
+        }
+        fn frame(sof: &[u8]) -> Option<u64> {
+            let height = u64::from(u16::from_be_bytes([*sof.get(1)?, *sof.get(2)?]));
+            let width = u64::from(u16::from_be_bytes([*sof.get(3)?, *sof.get(4)?]));
+            let n = usize::from(*sof.get(5)?);
+            let s: Vec<(u64, u64)> = sof
+                .get(6..6 + 3 * n)?
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|&[_, s, _]| (u64::from(s >> 4).clamp(1, 4), u64::from(s & 15).clamp(1, 4)))
+                .collect();
+            let (hm, vm) = s.iter().fold((1, 1), |(h, v), &(a, b)| (h.max(a), v.max(b)));
+            let mcus = width.div_ceil(8 * hm).checked_mul(height.div_ceil(8 * vm))?;
+            s.iter().try_fold(0u64, |sum, &(h, v)| sum.checked_add(mcus.checked_mul(2 * 64 * h * v)?))
+        }
+        let mut at = 2;
+        let mut most = 0u64;
+        loop {
+            if bytes.get(at) != Some(&0xFF) {
+                return worst(bytes).max(most);
+            }
+            while bytes.get(at) == Some(&0xFF) {
+                at += 1;
+            }
+            let Some(&code) = bytes.get(at) else { return worst(bytes).max(most) };
+            at += 1;
+            match code {
+                0xD8 | 0x01 | 0xD0..=0xD7 => continue,
+                0xD9 | 0xDA => return most,
+                _ => {}
+            }
+            let len = match (bytes.get(at), bytes.get(at + 1)) {
+                (Some(&hi), Some(&lo)) => usize::from(u16::from_be_bytes([hi, lo])),
+                _ => 0,
+            };
+            let Some(seg) = bytes.get(at + 2..at + len).filter(|_| len >= 2) else { return worst(bytes).max(most) };
+            if matches!(code, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+                let Some(h) = frame(seg) else { return worst(bytes).max(most) };
+                most = most.max(h);
+            }
+            at += len;
+        }
+    }
+
+    /// A JPEG header: each frame is (marker, precision, width, height, sampling bytes), then an
+    /// optional scan of `scan` components, then EOI.
+    fn header(frames: &[(u8, u8, u16, u16, &[u8])], scan: Option<u8>) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8];
+        for &(marker, precision, w, h, f) in frames {
+            b.extend_from_slice(&[0xFF, marker]);
+            b.extend_from_slice(&(8 + 3 * f.len() as u16).to_be_bytes());
+            b.push(precision);
+            b.extend_from_slice(&h.to_be_bytes());
+            b.extend_from_slice(&w.to_be_bytes());
+            b.push(f.len() as u8);
+            for (i, &s) in f.iter().enumerate() {
+                b.extend_from_slice(&[i as u8 + 1, s, 0]);
+            }
+        }
+        if let Some(n) = scan {
+            b.extend_from_slice(&[0xFF, 0xDA, 0, 6 + 2 * n, n]);
+            (1..=n).for_each(|c| b.extend_from_slice(&[c, 0]));
+            b.extend_from_slice(&[0, 63, 0]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
+    /// Never less than the oracle or `held_coefficients`; equal to the larger on valid headers.
+    #[test]
+    fn worst_case_coefficients_covers_both_rule_sets() {
+        const C3: &[u8] = &[0x22, 0x11, 0x11];
+        const G: &[u8] = &[0x11];
+        let cases: Vec<Vec<u8>> = vec![
+            header(&[(0xC0, 8, 640, 480, C3)], Some(3)),
+            header(&[(0xC0, 8, 640, 480, G)], Some(1)),
+            header(&[(0xC0, 8, 640, 480, C3)], Some(1)),
+            header(&[(0xC1, 8, 640, 480, C3)], None),
+            header(&[(0xC2, 8, 640, 480, C3)], Some(1)),
+            header(&[(0xC2, 12, 640, 480, C3)], Some(1)),
+            header(&[(0xC6, 8, 640, 480, C3)], None),
+            header(&[(0xCA, 8, 640, 480, C3)], None),
+            header(&[(0xCE, 8, 640, 480, C3)], None),
+            header(&[(0xC0, 8, 64, 64, G), (0xC2, 8, 6000, 4000, C3), (0xC2, 8, 100, 100, C3)], Some(1)),
+            header(&[(0xC2, 8, 640, 480, &[0x00, 0x00, 0x00])], None),
+            header(&[(0xC2, 8, 640, 480, &[0xFF, 0xFF, 0xFF, 0xFF])], None),
+            header(&[(0xC2, 8, 65535, 65535, &[0x44; 4])], None),
+            header(&[(0xC0, 8, 65535, 65535, &[0xFF; 4])], Some(1)),
+            header(&[], None),
+            vec![0xFF, 0xD8],
+            vec![],
+            b"not a jpeg at all".to_vec(),
+        ];
+        for b in &cases {
+            let held = scan_metadata(b).held_coefficients;
+            let got = worst_case_coefficients(b);
+            assert!(got >= oracle(b) && got >= held, "{b:02x?}");
+            assert!(got >= info(b).map_or(0, |i| i.held_coefficients));
+        }
+        let at = |i: usize| worst_case_coefficients(&cases[i]);
+        // Equal to the oracle where the shared rule charges nothing extra.
+        for i in [0, 1, 6, 7, 8, 9, 10, 12, 14] {
+            assert_eq!(at(i), oracle(&cases[i]), "case {i}");
+        }
+        // Where it does, the shared figure wins (the oracle misses a short first scan).
+        assert_eq!(oracle(&cases[2]), 0);
+        assert_eq!(at(2), scan_metadata(&cases[2]).held_coefficients);
+        // Unclamped factors (15 × 15) charge the shared rule more than the clamped oracle.
+        assert_eq!(at(11), scan_metadata(&cases[11]).held_coefficients);
+        assert!(at(11) > oracle(&cases[11]));
+        assert!(at(2) > 0 && at(3) == 0 && at(0) == 0);
+        // 12-bit and arithmetic progressive frames are charged though craft-jpeg limits itself.
+        assert_eq!(at(5), at(4));
+        // Sampling factors clamp: 0 acts as 1, 15 as 4.
+        assert_eq!(at(10), 80 * 60 * 3 * 128);
+        assert_eq!(at(12), 2048 * 2048 * 4 * 2 * 64 * 16);
+        // The largest of several frames wins.
+        assert_eq!(at(9), oracle(&header(&[(0xC2, 8, 6000, 4000, C3)], None)));
+    }
+
+    /// A cut header charges the costliest frame at its size; every prefix and random damage stays
+    /// bounded, never panics and never undercuts the oracle.
+    #[test]
+    fn worst_case_coefficients_hostile_input() {
+        let full = header(&[(0xC2, 8, 6000, 4000, &[0x22, 0x11, 0x11])], Some(1));
+        let cut = &full[..full.len() - 8];
+        // Cut inside the component list: a frame the scan can't read, at its own size.
+        let sof_cut = &full[..14];
+        assert_eq!(worst_case_coefficients(sof_cut), oracle(sof_cut));
+        assert_eq!(worst_case_coefficients(cut), oracle(cut));
+        let mut bases = vec![full.clone(), header(&[(0xC0, 8, 6000, 4000, &[0x11; 3])], Some(1))];
+        bases.push(header(&[(0xC2, 8, 65535, 65535, &[0xFF; 4])], None));
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize
+        };
+        for base in &bases {
+            for n in 0..=base.len() {
+                let b = &base[..n];
+                let got = worst_case_coefficients(b);
+                assert!(got >= oracle(b) && got < 1 << 50);
+            }
+            for _ in 0..2000 {
+                let mut b = base.clone();
+                for _ in 0..=next() % 4 {
+                    let i = next() % b.len();
+                    b[i] = next() as u8;
+                }
+                b.truncate(next() % (b.len() + 1));
+                let got = worst_case_coefficients(&b);
+                assert!(got >= oracle(&b) && got >= scan_metadata(&b).held_coefficients && got < 1 << 50);
+            }
+        }
+    }
+
     /// An APP1 Extended XMP fragment (GUID, total size, offset, data).
     fn extended_xmp(offset: u32) -> Vec<u8> {
         let mut seg = EXTENDED_XMP_HEADER.to_vec();
@@ -1073,23 +1360,59 @@ mod tests {
         (v * 65535.0 / 4095.0).round() as u16
     }
 
+    fn progressive_frame_header(comps: &[(u8, u8)]) -> Vec<u8> {
+        let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
+        for (i, &(h, v)) in comps.iter().enumerate() {
+            s.extend([i as u8 + 1, (h << 4) | v, 0]);
+        }
+        s
+    }
+
     #[test]
     fn first_component_subsampling() {
-        let sof = |comps: &[(u8, u8)]| {
-            let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
-            for (i, &(h, v)) in comps.iter().enumerate() {
-                s.extend([i as u8 + 1, (h << 4) | v, 0]);
-            }
-            s
-        };
-        assert!(first_component_subsampled(&sof(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
-        assert!(first_component_subsampled(&sof(&[(1, 2), (1, 2), (2, 1)])));
-        assert!(!first_component_subsampled(&sof(&[(2, 2), (1, 1), (1, 1)])));
-        assert!(!first_component_subsampled(&sof(&[(1, 1); 4])));
-        assert!(!first_component_subsampled(&sof(&[])));
+        assert!(first_component_subsampled(&progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
+        assert!(first_component_subsampled(&progressive_frame_header(&[(1, 2), (1, 2), (2, 1)])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[(2, 2), (1, 1), (1, 1)])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[(1, 1); 4])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[])));
         assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]));
         assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 20, 8]));
         assert!(!first_component_subsampled(b"not a jpeg"));
+    }
+
+    #[test]
+    fn renderer_validation_refuses_unsafe_sampling_under_abort_policy() {
+        // The frame header alone exercises refusal before any pixel decode.
+        let header = progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)]);
+        let refuses_sampling = |result| {
+            matches!(
+                result,
+                Err(CodecError::Malformed { format: Format::Jpeg, message })
+                if message == "JPEG first component is subsampled below the frame maximum"
+            )
+        };
+        assert!(refuses_sampling(validate_jpeg_rgba8_with_panic_policy(&header, 64, true)));
+        assert!(!refuses_sampling(validate_jpeg_rgba8_with_panic_policy(&header, 64, false)));
+
+        let mut ordinary = Vec::new();
+        jpeg_encoder::Encoder::new(&mut ordinary, 90).encode(&[128], 1, 1, jpeg_encoder::ColorType::Luma).unwrap();
+        validate_jpeg_rgba8_with_panic_policy(&ordinary, 1, true).unwrap();
+    }
+
+    #[test]
+    fn jpeg_sampling_guard_finds_frame_after_marker_padding() {
+        let header = progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)]);
+        // Exercise the shared header guard, without a pixel payload.
+        for split in [2, 8] {
+            let (before, after) = header.split_at(split);
+            for padding in [&[0][..], &[0x7F, 0][..], &[0xFF, 0][..], &[0xFF][..]] {
+                let padded = [before, padding, after].concat();
+                assert!(first_component_subsampled(&padded), "offset {split}, padding {padding:?}");
+                let got = validate_jpeg_rgba8_with_panic_policy(&padded, 64, true);
+                assert!(matches!(got, Err(CodecError::Malformed { message, .. }) if message.contains("frame maximum")));
+            }
+        }
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0, 0xFF]));
     }
 
     #[test]
