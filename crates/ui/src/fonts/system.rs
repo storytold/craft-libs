@@ -193,6 +193,49 @@ mod tests {
         assert_eq!(BUILDS.load(Ordering::Relaxed), 1, "every locale shares one index");
     }
 
+    #[test]
+    fn custom_provider_install_reloads_fallbacks_and_preserves_opt_out() {
+        static OPEN_CUSTOM: AtomicBool = AtomicBool::new(false);
+        fn build() -> Gated {
+            while !OPEN_CUSTOM.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Gated
+        }
+        static INDEX: Shared<Gated> = Shared::new(build);
+        fn start(ctx: &egui::Context) {
+            INDEX.start(Some(ctx));
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let disabled = egui::Context::default();
+        disabled.set_fonts(egui::FontDefinitions::empty());
+        let fallback: Arc<dyn FontProvider> =
+            Arc::new(|_: &FallbackRequest<'_>| Some(FontInsert::new("temporary", FontData::from_static(ARABIC), vec![])));
+        let ui = || Arc::new(Lookup::new(&INDEX, (), false)) as Arc<dyn FontProvider>;
+        super::super::install_context_providers(&ctx, Some((ui(), start)), vec![fallback]);
+        super::super::install_context_providers(&disabled, Some((ui(), start)), vec![]);
+        let selected = |ctx: &egui::Context| {
+            ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&FontId::proportional(14.0), 'ع');
+                f.discovered_fonts().last().map(|f| f.name.clone())
+            })
+        };
+        assert_eq!(selected(&ctx).as_deref(), Some("temporary"));
+        assert!(selected(&disabled).is_none());
+        super::super::install_font_providers(&disabled, None, vec![]);
+        OPEN_CUSTOM.store(true, Ordering::Release);
+        let request = FallbackRequest { cluster: "ع", family: &FontFamily::Proportional };
+        assert!(Lookup::new(&INDEX, (), true).font_for(&request).is_some());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while selected(&ctx).as_deref() != Some("index:Arabic") {
+            assert!(Instant::now() < deadline, "temporary fallback must be forgotten");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(selected(&disabled).is_none(), "index completion must not restore disabled providers");
+    }
+
     fn build_panics() -> Gated {
         panic!("stand-in index build failure");
     }
