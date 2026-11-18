@@ -3,7 +3,7 @@
 use super::{Destination, Duplex, Printer, Settings, shown_names};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Entry, FieldLayout, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
@@ -203,23 +203,24 @@ impl<'a> PrintPanel<'a> {
             });
             // The chosen printer's own dialog decides the job controls: they show the settings, disabled, with its note.
             let own_dialog = match &now.destination {
-                Destination::Printer(name) => {
-                    printers.iter().find(|printer| printer.name == *name).and_then(|printer| printer.own_dialog.clone())
-                }
+                Destination::Printer(name) => printers.iter().find(|printer| printer.name == *name).and_then(|printer| printer.own_dialog.clone()),
                 Destination::File => None,
             };
             let free = own_dialog.is_none();
             Field::new(words.copies.clone()).id_salt("copies").show(ui, |ui, _| {
-                Row::new().show(ui, |ui, _| {
+                Row::new().show(ui, |ui, cx| {
                     if let Some(copies) = copies_field(&words.copies, now.copies).enabled(free).show(ui).value().copied().flatten() {
                         now.copies = (copies.round() as u32).clamp(1, MOST_COPIES);
                     }
-                    let collate = Checkbox::new(Bind::given(now.collate)).label(words.collate.clone()).enabled(free).id_salt("collate").show(ui);
+                    // The Field's label names the copies field, so each check box shows its own text through the label step.
+                    let after = SideLabel::new().layout(FieldLayout::After);
+                    let collate =
+                        cx.labelled(ui, "collate", words.collate.clone(), after.clone(), Checkbox::new(Bind::given(now.collate)).enabled(free));
                     if let Some(on) = collate.value().copied() {
                         now.collate = on;
                     }
                     let grayscale =
-                        Checkbox::new(Bind::given(now.grayscale)).label(words.grayscale.clone()).enabled(free).id_salt("grayscale").show(ui);
+                        cx.labelled(ui, "grayscale", words.grayscale.clone(), after, Checkbox::new(Bind::given(now.grayscale)).enabled(free));
                     if let Some(on) = grayscale.value().copied() {
                         now.grayscale = on;
                     }
@@ -227,8 +228,7 @@ impl<'a> PrintPanel<'a> {
             });
             if !duplex_by_layout {
                 Field::new(words.duplex.clone()).id_salt("duplex").show(ui, |ui, _| {
-                    let picked =
-                        Select::new(words.duplex.clone(), Bind::given(now.duplex), &duplexes).enabled(free).id_salt("duplex").show(ui);
+                    let picked = Select::new(words.duplex.clone(), Bind::given(now.duplex), &duplexes).enabled(free).id_salt("duplex").show(ui);
                     if let Some(duplex) = picked.value().copied() {
                         now.duplex = duplex;
                     }
