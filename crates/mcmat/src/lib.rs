@@ -3,7 +3,8 @@
 //! The clean-room MCMAT v3 source archive. Applications interpret the SBS entry graph.
 
 use craft_zip::{Archive, Compression, Writer};
-use serde::Deserialize;
+use serde::Deserializer;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const VERSION: u32 = 3;
@@ -62,20 +63,36 @@ impl Material {
             return Err(Error::Invalid("duplicate or overlapping archive entries".into()));
         }
         let json = archive.read(MANIFEST_ENTRY, limits.max_manifest_bytes)?.ok_or_else(|| Error::Invalid("missing material.json".into()))?;
-        #[derive(Deserialize)]
-        struct Version {
-            version: u32,
+        struct Marker;
+        impl<'de> Visitor<'de> for Marker {
+            type Value = (u32, bool);
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a version object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut version = None;
+                let mut extra = false;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "version" {
+                        if version.is_some() {
+                            return Err(serde::de::Error::duplicate_field("version"));
+                        }
+                        version = Some(map.next_value::<u32>()?);
+                    } else {
+                        map.next_value::<IgnoredAny>()?;
+                        extra = true;
+                    }
+                }
+                Ok((version.ok_or_else(|| serde::de::Error::missing_field("version"))?, extra))
+            }
         }
-        let marker: Version = serde_json::from_slice(&json).map_err(|err| Error::Invalid(format!("material.json: {err}")))?;
-        if marker.version != VERSION {
-            return Err(Error::Version(marker.version));
+        let mut deserializer = serde_json::Deserializer::from_slice(&json);
+        let (version, extra) = deserializer.deserialize_map(Marker).map_err(|err| Error::Invalid(format!("material.json: {err}")))?;
+        deserializer.end().map_err(|err| Error::Invalid(format!("material.json: {err}")))?;
+        if version != VERSION {
+            return Err(Error::Version(version));
         }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Marker {
-            version: u32,
-        }
-        if !serde_json::from_slice::<Marker>(&json).is_ok_and(|m| m.version == VERSION) {
+        if extra {
             return Err(Error::Invalid("material.json must contain only the version".into()));
         }
         let source = archive.read(SOURCE_ENTRY, limits.max_entry_bytes)?.ok_or_else(|| Error::Invalid("missing source.sbs".into()))?;
@@ -87,12 +104,15 @@ impl Material {
                 continue;
             }
             if name.strip_suffix('/').is_some_and(|dir| dir == "resources" || valid_resource(dir)) {
+                if archive.entry_sizes(index)? != Some((0, 0)) {
+                    return Err(Error::Invalid("directory entries must have no payload".into()));
+                }
                 continue;
             }
             if !valid_resource(&name) || !seen.insert(name.to_ascii_lowercase()) {
                 return Err(Error::Invalid(format!("invalid or ambiguous resource path `{name}`")));
             }
-            let data = archive.read(&name, limits.max_entry_bytes)?.ok_or_else(|| Error::Invalid(format!("missing `{name}`")))?;
+            let data = archive.read_index(index, limits.max_entry_bytes)?.ok_or_else(|| Error::Invalid(format!("missing `{name}`")))?;
             resources.insert(name, data);
         }
         Ok(Self { source, resources })
@@ -149,6 +169,48 @@ mod tests {
         ] {
             assert!(Material::open(&bytes, limits).is_err());
         }
+    }
+
+    #[test]
+    fn marker_requires_an_object_and_complete_input() {
+        for marker in [b"[3]".as_slice(), b"[2]", b"null", b"3", br#"{"version":3} {}"#, br#"{"version":3,"version":3}"#] {
+            let mut zip = Writer::new();
+            zip.add(MANIFEST_ENTRY, marker, Compression::Stored).unwrap();
+            zip.add(SOURCE_ENTRY, b"source", Compression::Stored).unwrap();
+            assert!(matches!(Material::open(&zip.finish().unwrap(), Limits::default()), Err(Error::Invalid(_))));
+        }
+    }
+
+    #[test]
+    fn directory_members_must_be_empty() {
+        for payload in [b"".as_slice(), b"hidden"] {
+            let mut zip = Writer::new();
+            zip.add(MANIFEST_ENTRY, MARKER, Compression::Stored).unwrap();
+            zip.add(SOURCE_ENTRY, b"source", Compression::Stored).unwrap();
+            zip.add("resources/", payload, Compression::Stored).unwrap();
+            assert_eq!(Material::open(&zip.finish().unwrap(), Limits::default()).is_ok(), payload.is_empty());
+        }
+    }
+
+    #[test]
+    fn legacy_encoded_resource_names_read_by_index_under_one_budget() {
+        let mut zip = Writer::new();
+        zip.add(MANIFEST_ENTRY, MARKER, Compression::Stored).unwrap();
+        zip.add(SOURCE_ENTRY, b"s", Compression::Stored).unwrap();
+        zip.add("resources/a.bin", b"data", Compression::Stored).unwrap();
+        let mut bytes = zip.finish().unwrap();
+        // Same-length CP437 name in both headers: no UTF-8 flag, 0x82 decodes to é.
+        let offsets: Vec<_> =
+            bytes.windows(b"resources/a.bin".len()).enumerate().filter_map(|(i, n)| (n == b"resources/a.bin").then_some(i + 10)).collect();
+        assert_eq!(offsets.len(), 2);
+        for offset in offsets {
+            bytes[offset] = 0x82;
+        }
+        let total = MARKER.len() as u64 + 1 + 4;
+        let limits = Limits { max_total_bytes: total, ..Default::default() };
+        let material = Material::open(&bytes, limits).unwrap();
+        assert_eq!(material.resources["resources/é.bin"], b"data");
+        assert!(Material::open(&bytes, Limits { max_total_bytes: total - 1, ..limits }).is_err());
     }
 
     #[test]
