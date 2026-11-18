@@ -1569,6 +1569,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-agents"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=35e0352666a117407d62230a6c6c2366f3e21a3b#35e0352666a117407d62230a6c6c2366f3e21a3b"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-ai-core"
 version = "0.1.0"
 dependencies = [
@@ -1686,10 +1696,15 @@ dependencies = [
 name = "craft-control"
 version = "0.1.0"
 dependencies = [
+ "craft-ai-agents",
+ "craft-atomic",
+ "craft-flags",
  "getrandom 0.3.4",
+ "log",
  "proptest",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
