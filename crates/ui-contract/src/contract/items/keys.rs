@@ -245,7 +245,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && !self.source.section_stop(at)
             && comp.can_drag(&self.source.key(at))
         {
-            self.key_reorder(cx, props, at, mv);
+            self.key_reorder(comp, cx, props, at, mv);
         }
         if props.rename
             && cx.core.intents.take(Intent::Rename)

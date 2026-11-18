@@ -62,7 +62,7 @@ pub(crate) struct TipIn<'a> {
 }
 
 /// The text a tooltip shows for `spec`: the disabled text while disabled.
-fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
+pub(crate) fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
     let label = match (&spec.disabled_text, enabled) {
         (Some(disabled), false) => disabled,
         _ => &spec.text,
