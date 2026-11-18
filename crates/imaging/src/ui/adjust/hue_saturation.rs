@@ -6,10 +6,11 @@ mod stories;
 
 use craft_behavior::Mixed;
 use craft_theme::{Hsb, Srgba};
-use craft_ui::choice::Checkbox;
+use craft_ui::choice::{Checkbox, RadioGroup, Swatch};
 use craft_ui::contract::{Bind, EditResponse, Entry, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
+use craft_ui::layout_components::Row as Line;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::style::{DataColor, TypeRole};
@@ -197,6 +198,43 @@ fn hue_color(degrees: f64) -> DataColor {
     DataColor::new(Color32::from(Srgba::from_hsb(Hsb { h: degrees as f32, s: 1.0, b: 1.0 })))
 }
 
+/// A fully saturated, full-brightness hue as a swatch colour.
+fn hue_srgba(degrees: f64) -> Srgba {
+    Srgba::from_hsb(Hsb { h: degrees.rem_euclid(TURN) as f32, s: 1.0, b: 1.0 })
+}
+
+/// The colour of hue `degrees`, saturation `s` and lightness `l` (both 0..=1).
+fn hsl(degrees: f64, s: f64, l: f64) -> Srgba {
+    let (s, l) = (s.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
+    let chroma = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let full = hue_srgba(degrees);
+    let mix = |c: f32| (l - chroma / 2.0 + chroma * f64::from(c)) as f32;
+    Srgba { r: mix(full.r), g: mix(full.g), b: mix(full.b), a: 1.0 }
+}
+
+/// The middle of range `range`'s fully-on span, in 0..360.
+fn range_centre(range: &HueRangeValue) -> f64 {
+    ((range.bounds[1] + range.bounds[2]) / 2.0).rem_euclid(TURN)
+}
+
+/// Whether the range's own Hue, Saturation or Lightness is set.
+fn range_edited(range: &HueRangeValue) -> bool {
+    range.hue != 0.0 || range.saturation != 0.0 || range.lightness != 0.0
+}
+
+/// What the range's own settings make of its centre colour (Master and the other ranges aside): the hue shifted, the
+/// saturation scaled and the colour taken towards white or black.
+fn range_after(range: &HueRangeValue) -> Srgba {
+    let s = 1.0 + range.saturation / 100.0;
+    let l = 0.5 + range.lightness / 200.0;
+    hsl(range_centre(range) + range.hue, s, l)
+}
+
+/// What Colorize makes of a mid grey.
+fn colorize_color(value: &HueSaturation) -> Srgba {
+    hsl(value.hue, value.saturation / 100.0, 0.5 + value.lightness / 200.0)
+}
+
 /// The hue spectrum for a colour track: red, yellow, green, cyan, blue, magenta, red.
 fn hue_stops() -> Vec<DataColor> {
     (0..TRACK_STOPS).map(|i| hue_color(i as f64 * TRACK_STEP)).collect()
@@ -266,12 +304,13 @@ pub struct HueSaturationEditor<'a> {
     adjusted: Option<&'a dyn Fn(f64) -> Srgba>,
     range: Option<Option<usize>>,
     context: AdjustContext,
+    swatches: bool,
 }
 
 impl<'a> HueSaturationEditor<'a> {
     /// The editor named `label` of `value`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, HueSaturation>) -> Self {
-        Self { label: label.into(), value, adjusted: None, range: None, context: AdjustContext::dialog(true) }
+        Self { label: label.into(), value, adjusted: None, range: None, context: AdjustContext::dialog(true), swatches: false }
     }
 
     /// What a fully saturated, full-brightness hue (degrees 0..=360) becomes under the shown value: the host runs its
@@ -288,6 +327,15 @@ impl<'a> HueSaturationEditor<'a> {
         self
     }
 
+    /// Picks the range with seven round swatches instead of the Range select: Master (the circle of hues), then Reds …
+    /// Magentas in each range's centre colour. A range whose own Hue, Saturation or Lightness is set splits into its
+    /// centre colour and what those settings make of it, with a mark. Over the Hue row a range shows its centre ("0°",
+    /// or "0° / 30°" after a Hue shift). With Colorize on the row is one swatch of the colorize colour.
+    pub fn range_swatches(mut self) -> Self {
+        self.swatches = true;
+        self
+    }
+
     /// Dialog or Properties panel; a dialog by default.
     pub fn context(mut self, context: AdjustContext) -> Self {
         self.context = context;
@@ -296,7 +344,7 @@ impl<'a> HueSaturationEditor<'a> {
 
     /// Shows the editor and returns this pass's edit of the `HueSaturation` and the range shown.
     pub fn show(self, ui: &mut Ui) -> HueSaturationOutput {
-        let HueSaturationEditor { label, mut value, adjusted, range: host_range, context } = self;
+        let HueSaturationEditor { label, mut value, adjusted, range: host_range, context, swatches } = self;
         let words = words(ui);
         let units = Env::of(ui).units();
         let mut out = None;
@@ -311,9 +359,40 @@ impl<'a> HueSaturationEditor<'a> {
             let mut entries = vec![Entry::new(0usize, words.master.clone())];
             entries.extend(names.iter().enumerate().map(|(i, name)| Entry::new(i + 1, (*name).clone())));
             let mut picked = None;
-            Field::new(words.range.clone()).id_salt("range").show(ui, |ui, _| {
-                picked = Select::new(words.range.clone(), Bind::given(at), &entries).enabled(!now.colorize).show(ui).value().copied();
-            });
+            if !swatches {
+                Field::new(words.range.clone()).id_salt("range").show(ui, |ui, _| {
+                    picked = Select::new(words.range.clone(), Bind::given(at), &entries).enabled(!now.colorize).show(ui).value().copied();
+                });
+            } else if now.colorize {
+                Swatch::new(words.colorize.clone(), colorize_color(&now)).show(ui);
+            } else {
+                let mut chosen = at;
+                RadioGroup::new(words.range.clone(), Bind::bound(&mut chosen)).show(ui, |ui, _| {
+                    Line::new().show(ui, |ui, _| {
+                        Swatch::new(words.master.clone(), hue_srgba(0.0)).hue_wheel().member(0usize).show(ui);
+                        for (i, name) in names.iter().enumerate() {
+                            let shown = &now.ranges[i];
+                            let mut swatch = Swatch::new((*name).clone(), hue_srgba(range_centre(shown)));
+                            if range_edited(shown) {
+                                swatch = swatch.after(range_after(shown)).marked();
+                            }
+                            swatch.member(i + 1).show(ui);
+                        }
+                    });
+                });
+                picked = (chosen != at).then_some(chosen);
+                // The centre of the range shown, and where its Hue moves it.
+                if let Some(shown) = range.and_then(|r| now.ranges.get(r)) {
+                    let degrees = |d: f64| units.text(UnitKind::Degrees, d, 0..=0);
+                    let centre = range_centre(shown);
+                    let text = if shown.hue == 0.0 {
+                        degrees(centre)
+                    } else {
+                        format!("{} / {}", degrees(centre), degrees((centre + shown.hue).rem_euclid(TURN)))
+                    };
+                    Text::new(text).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
+                }
+            }
             let mut run = Run::start(&mut value, context, now, memory.began);
             let hue_track = AdjustTrack::Colors(hue_stops());
             let degrees =

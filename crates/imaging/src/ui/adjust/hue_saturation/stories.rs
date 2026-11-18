@@ -41,3 +41,13 @@ fn hue_saturation_colorize(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let value = data.value("colorize", HueSaturation { hue: 210.0, saturation: 40.0, colorize: true, ..HueSaturation::default() });
     HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).show(ui).into()
 }
+
+/// The range swatches: Reds shifted 30° (split, with its mark) and Blues desaturated, Reds shown with its centre.
+#[story(HueSaturationEditor<'static>, covers = [], drive = Drive::Never)]
+fn hue_saturation_swatches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut start = HueSaturation::default();
+    start.ranges[0] = HueRangeValue { hue: 30.0, ..HueRangeValue::neutral(0) };
+    start.ranges[4] = HueRangeValue { saturation: -80.0, ..HueRangeValue::neutral(4) };
+    let value = data.value("swatches", start);
+    HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).range(Some(0)).range_swatches().adjusted_spectrum(&shifted).show(ui).into()
+}
