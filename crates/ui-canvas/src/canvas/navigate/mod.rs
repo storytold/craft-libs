@@ -14,7 +14,7 @@ mod options;
 mod stories;
 mod wheel;
 
-pub(crate) use autoscroll::MiddleAutoscroll;
+pub(crate) use autoscroll::{MiddleAutoscroll, paint_mark};
 pub use bar::{NavigateBar, NavigateBarOutput};
 pub use keys::PageKey;
 pub use options::{MiddleButton, NavigationOptions, WheelScheme};

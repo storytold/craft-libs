@@ -13,10 +13,13 @@
 mod stories;
 
 use super::words::CanvasWords;
+use crate::contract::overlay::{Anchor, Place};
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, THUMB, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi,
+    PartsCx, Pointer as _, Props as _, Role, Show as _, THUMB, WordSetCx as _,
 };
+use crate::display::Text;
+use craft_behavior::overlay::{Align, Side};
 use crate::runtime::access::Numeric;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
@@ -29,6 +32,9 @@ use std::ops::{Deref, Range};
 
 const HORIZONTAL: PartKey = PartKey::new("horizontal");
 const VERTICAL: PartKey = PartKey::new("vertical");
+
+/// The popup of the tip beside a dragged vertical thumb.
+const TIP: &str = "tip";
 
 /// The thumb part that `PartsCx::scroll` declares for the bar `bar`.
 fn thumb_of(bar: PartKey) -> PartRef {
@@ -176,9 +182,10 @@ pub struct CanvasScrollbars<'a> {
     /// horizontal bar or corner is shown.
     #[prop(flag)]
     vertical_only: bool,
-    /// While the vertical thumb drags, the bars show this tip beside the thumb on the reading-start side.
-    #[prop(into)]
-    tip: Option<Label>,
+    /// While the vertical thumb drags, the bars show the tip this builds from the view as the drag moved it, beside the
+    /// thumb on the reading-start side.
+    #[prop]
+    tip: Option<&'a dyn Fn(&CanvasView) -> Label>,
 }
 
 impl<'a> CanvasScrollbars<'a> {
@@ -266,6 +273,13 @@ impl Component for CanvasScrollbars<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // The tip shows in the passes the vertical thumb drags and in no other: its popup opens or closes every pass.
+        let tip = cx.popup(TIP);
+        if self.tip.is_some() && thumb_dragging(cx) == Some(Axis::Y) {
+            tip.open(cx);
+        } else {
+            tip.close(cx);
+        }
         let Some(view) = cx.value().copied() else { return };
         let bars = self.bars(&view, cx.rect, cx.style.look.thickness);
         for (key, axis, _) in bars.each() {
@@ -283,6 +297,20 @@ impl Component for CanvasScrollbars<'_> {
                 cx.set(next);
             }
         }
+    }
+
+    /// The tip beside the dragged vertical thumb, on the reading-start side, in a tooltip layer of the bars' own: the
+    /// tooltip pipeline hides a tip while its subject is pressed, and here the press is the point.
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        let popup = cx.popup(TIP);
+        let (Some(tip), Some(view), Some(thumb)) =
+            (self.tip, cx.value().copied(), cx.part_if_declared(thumb_of(VERTICAL)).map(|result| result.rect))
+        else {
+            return;
+        };
+        let label = tip(&view);
+        let layer = Overlay::tooltip().place(Place::anchored(Anchor::Rect(thumb), Side::Start, Align::Center));
+        let _ = ui.show(popup, layer, |ui, _| Text::new(label.clone()).show(ui));
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -315,8 +343,17 @@ impl Component for CanvasScrollbars<'_> {
                 .into_iter()
                 .any(|part| cx.part_if_declared(part).is_some_and(|result| result.hovered || result.press.phase.is_press()))
         });
-        CanvasScrollbarsOutput { view: cx.edit_response(), over, dragging: None }
+        let dragging = thumb_dragging(&cx);
+        CanvasScrollbarsOutput { view: cx.edit_response(), over, dragging }
     }
+}
+
+/// The axis whose thumb drags in this pass: its press past the drag threshold and still down.
+fn thumb_dragging(cx: &Cx<'_, CanvasScrollbars<'_>>) -> Option<Axis> {
+    [(HORIZONTAL, Axis::X), (VERTICAL, Axis::Y)].into_iter().find_map(|(key, axis)| {
+        let press = cx.part_if_declared(thumb_of(key))?.press;
+        matches!(press.phase, PressPhase::DragStart { .. } | PressPhase::Drag { .. }).then_some(axis)
+    })
 }
 
 /// What the scroll bars report in a pass.

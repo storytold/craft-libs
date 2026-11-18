@@ -130,8 +130,7 @@ pub(crate) struct ViewMotion {
     pub(crate) animation: ZoomAnimation,
     /// What the tool host or the Navigator asked of the ease since the canvas's last pass.
     pub(crate) steer: Option<Steer>,
-    /// The middle button's autoscroll.
-    #[allow(dead_code)] // P3(canvas-w1): cv.K4
+    /// The middle button's autoscroll, with the pass clock of its last step: gesture state, as the ease is.
     pub(crate) autoscroll: super::navigate::MiddleAutoscroll,
 }
 
