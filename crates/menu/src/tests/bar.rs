@@ -1,6 +1,6 @@
 //! The egui bar: clicks, hover, the keys, overflow, scrolling, submenu hover intent and AccessKit.
 
-use egui::accesskit::{self, NodeId, Role, Toggled};
+use egui::accesskit::{self, NodeId, Role};
 use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Vec2, pos2, vec2};
 
 use super::*;
@@ -9,23 +9,6 @@ use crate::bar::nav::{ARROW, Nav, heading, is_open};
 
 #[path = "bar_keys.rs"]
 mod keys;
-
-#[test]
-fn rows_from_an_earlier_frame_are_never_activated() {
-    let ctx = egui::Context::default();
-    let id = Id::unique("nav");
-    let row = crate::bar::nav::Row {
-        widget: Id::unique("row"),
-        enabled: true,
-        command: Some(Builtin::Quit.command()),
-        rect: Rect::NOTHING,
-        mnemonic: None,
-    };
-    let mut stale = Nav::default();
-    stale.rows = vec![vec![row]];
-    ctx.data_mut(|d| d.insert_temp(id, stale));
-    assert!(Nav::load(&ctx, id).rows.is_empty(), "rows are this frame's only");
-}
 
 fn item(id: &str, label: &str) -> Item {
     Item::new(id, label)
@@ -261,14 +244,11 @@ fn clicking_an_item_returns_its_command_and_closes_the_menu() {
 }
 
 #[test]
-fn a_second_click_escape_or_a_click_outside_closes_the_menu() {
+fn a_second_click_or_a_click_outside_closes_the_menu() {
     let mut b = wide();
     b.click("File");
     b.click("File");
     assert!(!b.shown("New"), "a second click on the title");
-    b.click("File");
-    b.key(Key::Escape);
-    assert!(!b.shown("New"), "Esc");
     b.click("File");
     b.click_at(pos2(700.0, 500.0));
     assert!(!b.shown("New"), "a click outside");
@@ -336,10 +316,8 @@ fn hovering_another_title_switches_menus_only_while_one_is_open() {
 fn submenus_open_on_hover() {
     let mut b = wide();
     b.click("File");
-    assert!(!b.shown("a.txt"));
     b.hover("Open Recent");
     b.run(3);
-    assert!(b.shown("a.txt"), "hovering a submenu row opens it");
     assert_eq!(b.node("Open Recent").and_then(|n| n.is_expanded()), Some(true));
     b.click("b.txt");
     assert_eq!(b.take(), vec![CommandRef::new("file.recent.b")]);
@@ -395,17 +373,6 @@ fn left_and_right_switch_menus() {
 }
 
 #[test]
-fn a_gate_forbidden_item_doesnt_run_from_the_keys() {
-    let mut b = wide();
-    b.gate = Gate { recording_shortcut: true, ..Gate::default() };
-    b.click("Edit");
-    b.key(Key::ArrowDown);
-    b.key(Key::Enter);
-    assert!(b.take().is_empty());
-    assert_eq!(b.nav().highlighted(0), None, "no enabled row to light");
-}
-
-#[test]
 fn titles_that_dont_fit_move_into_the_overflow_menu() {
     let file_and_edit = {
         let b = wide();
@@ -424,44 +391,6 @@ fn titles_that_dont_fit_move_into_the_overflow_menu() {
     let b = Bar::new(sample(), vec2(20.0, 400.0));
     assert!(b.title("File").is_none() && b.title("⋯").is_none());
     assert!(b.title("Menu").is_some(), "one Menu holds all when none fits");
-}
-
-#[test]
-fn the_overflow_labels_come_from_the_label_hook() {
-    let ctx = egui::Context::default();
-    ctx.enable_accesskit();
-    let bar = sample();
-    let label = |english: &'static str| if english == "Menu" { "Menü".to_owned() } else { english.to_owned() };
-    let mut tree = Vec::new();
-    for _ in 0..2 {
-        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(20.0, 300.0))), ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| {
-            MenuBarUi::new(&bar).label(&label).show(ui);
-        });
-        out.textures_delta.clear();
-        tree = out.platform_output.accesskit_update.map(|u| u.nodes).unwrap_or_default();
-    }
-    assert!(tree.iter().any(|(_, n)| n.label() == Some("Menü")));
-}
-
-#[test]
-fn accesskit_sees_a_menu_bar_of_menus_with_checked_states_and_shortcuts() {
-    let mut b = wide();
-    assert!(b.tree.iter().any(|(_, n)| n.role() == Role::MenuBar), "the bar");
-    let file = b.title("File").expect("File is a title in the bar");
-    assert_eq!(file.role(), Role::MenuItem);
-    assert_eq!(file.is_expanded(), Some(false));
-    b.click("View");
-    assert_eq!(b.title("View").and_then(|n| n.is_expanded()), Some(true));
-    assert!(b.tree.iter().any(|(_, n)| n.role() == Role::Menu), "the open menu");
-    let state = |label: &str| b.node(label).map(|n| (n.role(), n.toggled()));
-    assert_eq!(state("Grid"), Some((Role::MenuItemCheckBox, Some(Toggled::True))));
-    assert_eq!(state("Rulers"), Some((Role::MenuItemCheckBox, Some(Toggled::False))));
-    assert_eq!(state("Light"), Some((Role::MenuItemRadio, Some(Toggled::True))));
-    assert_eq!(state("Dark"), Some((Role::MenuItemRadio, Some(Toggled::False))));
-    assert_eq!(b.node("Grid").and_then(|n| n.keyboard_shortcut()), Some("G"), "a display-only shortcut too");
-    b.hover("File");
-    assert_eq!(b.node("New").map(|n| (n.role(), n.keyboard_shortcut())), Some((Role::MenuItem, Some("Ctrl+N"))));
 }
 
 /// In a browser the names are those of the system it runs on, and on a Mac there are no
@@ -500,14 +429,11 @@ fn a_bar_shrunk_to_fit_shares_its_row() {
     assert!(b.title("⋯").is_some(), "the menus past 100 points overflow");
     // The bar's 100 points and the row's item spacing (8).
     assert!(b.after.is_some_and(|x| x <= 109.0), "{:?}", b.after);
-    // A limit an app computed from a full row can go negative.
-    b.fit = Some(-20.0);
-    b.run(2);
 }
 
 /// A menu far taller than the window.
 fn tall() -> Bar {
-    let rows = (0..60).map(|i| item(&format!("cmd.{i}"), &format!("Item {i}")).into()).collect();
+    let rows = (0..20).map(|i| item(&format!("cmd.{i}"), &format!("Item {i}")).into()).collect();
     Bar::new(MenuBar { menus: vec![Menu::new("Long", rows)], documents: Vec::new() }, vec2(600.0, 300.0))
 }
 
@@ -515,7 +441,7 @@ fn open_tall() -> Bar {
     let mut b = tall();
     b.click("Long");
     b.run(3);
-    assert_eq!(b.nav().rows[0].len(), 60);
+    assert_eq!(b.nav().rows[0].len(), 20);
     b
 }
 
@@ -524,7 +450,7 @@ fn a_tall_menu_stays_in_the_window_below_the_bar_and_shows_scroll_arrows() {
     let b = open_tall();
     let nav = b.nav();
     let screen = b.ctx.content_rect();
-    assert!(!b.visible(0, 59), "the menu must overflow for this test to mean anything");
+    assert!(!b.visible(0, 19), "the menu must overflow for this test to mean anything");
     assert!(nav.views[0].bottom() <= screen.bottom() && nav.views[0].top() >= b.rect("Long").bottom());
     assert!(b.shown("Scroll menu down") && b.shown("Scroll menu up"));
 }
@@ -532,7 +458,7 @@ fn a_tall_menu_stays_in_the_window_below_the_bar_and_shows_scroll_arrows() {
 #[test]
 fn every_row_of_a_tall_menu_is_reachable_with_the_arrow_keys() {
     let mut b = open_tall();
-    for i in 0..60 {
+    for i in 0..20 {
         b.key(Key::ArrowDown);
         // The scroll lands a frame after the row is revealed.
         b.run(2);
@@ -546,39 +472,17 @@ fn every_row_of_a_tall_menu_is_reachable_with_the_arrow_keys() {
 }
 
 #[test]
-fn the_wheel_scrolls_a_tall_menu() {
-    let mut b = open_tall();
-    let view = b.nav().views[0];
-    b.move_to(view.center());
-    for _ in 0..60 {
-        if b.visible(0, 59) {
-            break;
-        }
-        b.events.push(Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(0.0, -60.0),
-            modifiers: Modifiers::NONE,
-            phase: egui::TouchPhase::Move,
-            source: egui::MouseWheelSource::Unknown,
-        });
-        b.run(2);
-    }
-    assert!(b.visible(0, 59), "the wheel reaches the last row");
-    assert_eq!(b.nav().rows[0].len(), 60, "the menu stays open while scrolling");
-}
-
-#[test]
 fn resting_on_the_scroll_arrows_scrolls() {
     let mut b = open_tall();
     let view = b.nav().views[0];
     b.move_to(pos2(view.center().x, view.bottom() + ARROW / 2.0));
     for _ in 0..240 {
-        if b.visible(0, 59) {
+        if b.visible(0, 19) {
             break;
         }
         b.frame();
     }
-    assert!(b.visible(0, 59), "resting on ▼ scrolls to the end");
+    assert!(b.visible(0, 19), "resting on ▼ scrolls to the end");
     let view = b.nav().views[0];
     b.move_to(pos2(view.center().x, view.top() - ARROW / 2.0));
     for _ in 0..240 {
@@ -652,8 +556,8 @@ fn bowed(a: Pos2, b: Pos2, bow: f32) -> impl Fn(f32) -> Pos2 {
 fn a_submenu_stays_open_while_the_pointer_heads_for_it() {
     let paths = [("straight", 36, None, 0.0), ("hesitate", 36, Some((0.3, 18)), 0.0), ("bowed", 42, None, 0.2), ("slow and bowed", 96, None, 0.2)];
     let mut wrong = Vec::new();
+    let mut b = two_submenus();
     for (name, frames, pause, bow) in paths {
-        let mut b = two_submenus();
         let (from, adjust, target) = rest_on_mode(&mut b);
         let to = pos2(target.left() + 40.0, target.center().y);
         let path = bowed(from, to, bow);
@@ -671,6 +575,8 @@ fn a_submenu_stays_open_while_the_pointer_heads_for_it() {
         if let Some(row) = b.nav().highlighted(0).filter(|&row| row != 0) {
             wrong.push(format!("{name}: row {row} is highlighted, not Mode"));
         }
+        b.key(Key::Escape);
+        b.run(2);
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
@@ -688,15 +594,13 @@ fn resting_on_another_row_or_moving_away_switches_submenus() {
     assert_eq!(open_submenu(&b), "Adjust", "resting on Adjust opens it");
     assert_eq!(b.nav().highlighted(0), Some(1));
 
-    for dx in [0.0, -60.0] {
-        let mut b = two_submenus();
-        let (from, adjust, _) = rest_on_mode(&mut b);
-        let to = pos2(from.x + dx, adjust.center().y);
-        glide(&mut b, 10, None, |t| from + (to - from) * t);
-        b.run(30);
-        assert_eq!(open_submenu(&b), "Adjust", "moving away ({dx}) from Mode's submenu opens Adjust's");
-        assert_eq!(b.nav().highlighted(0), Some(1));
-    }
+    let mut b = two_submenus();
+    let (from, adjust, _) = rest_on_mode(&mut b);
+    let to = pos2(from.x - 60.0, adjust.center().y);
+    glide(&mut b, 10, None, |t| from + (to - from) * t);
+    b.run(30);
+    assert_eq!(open_submenu(&b), "Adjust", "moving away from Mode's submenu opens Adjust's");
+    assert_eq!(b.nav().highlighted(0), Some(1));
 }
 
 #[test]

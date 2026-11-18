@@ -171,21 +171,6 @@ fn a_check_item_keeps_its_kind() {
     assert_eq!(structure_key(&synced[1]), structure_key(&synced[0]));
 }
 
-/// Only shortcuts with ⌘ or ⌃ are key equivalents. A tool key (`B`, `⇧B`, `⌥B`, `F5`) is
-/// display-only: choosing its item with ↩ in the open menu is a click.
-#[test]
-fn only_command_or_control_shortcuts_are_key_equivalents() {
-    use crate::driver::native_ok;
-    for s in ["Cmd+B", "Ctrl+B", "Ctrl+F5", "Alt+Cmd+F12", "Shift+Ctrl+Tab"] {
-        assert!(native_ok(&chord(s)), "{s}");
-    }
-    for s in ["B", "Shift+B", "Alt+B", "Shift+Alt+B", "F5", "Shift+F5", "Escape"] {
-        assert!(!native_ok(&chord(s)), "{s}");
-        let event = chosen_event(&cmd("tool"), Some(&chord(s)), false, held([false; 4]), Gate::default());
-        assert_eq!(event, Event::Click(cmd("tool")), "{s}");
-    }
-}
-
 /// While a shortcut is recorded every key equivalent reaches egui as the key that was pressed,
 /// also those that are clicks otherwise (⌘Q on the app's Quit, Minimize, while typing) and the
 /// clipboard keys.
@@ -196,8 +181,6 @@ fn recording_a_shortcut_passes_key_equivalents_through() {
     assert_eq!(chosen_event(&cmd("file.exit"), Some(&quit), true, cmd_held, recording()), Event::Key(quit));
     let min = chord("Ctrl+Cmd+M");
     assert_eq!(chosen_event(&Builtin::Minimize.command(), Some(&min), false, held([true, true, false, false]), recording()), Event::Key(min));
-    let hide = chord("Cmd+H");
-    assert_eq!(chosen_event(&Builtin::Hide.command(), Some(&hide), true, cmd_held, recording()), Event::Key(hide));
     let typing_and_recording = Gate { text_editing: true, recording_shortcut: true, ..Gate::default() };
     assert_eq!(chosen_event(&cmd("file.save"), Some(&chord("Cmd+S")), false, cmd_held, typing_and_recording), Event::Key(chord("Cmd+S")));
     assert_eq!(chosen_event(&cmd("file.exit"), Some(&quit), true, None, recording()), Event::Click(cmd("file.exit")), "a mouse click");

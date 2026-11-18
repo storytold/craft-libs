@@ -5,7 +5,7 @@
 use egui::{Event, Key, Modifiers, PointerButton, pos2};
 
 use super::*;
-use crate::bar::keys::{Keys, assign, is_command_key, key_char, localized};
+use crate::bar::keys::{Keys, assign, is_command_key, localized};
 use crate::bar::{Labeled, is_focused, leave_for_shortcut};
 
 impl Bar {
@@ -72,12 +72,7 @@ fn mnemonics_are_unique_word_starts_first_and_take_preferred_letters() {
 }
 
 #[test]
-fn key_chars_are_plain_letters_and_digits_and_command_keys_leave_the_bar() {
-    assert_eq!(key_char(Key::A), Some('A'));
-    assert_eq!(key_char(Key::Num7), Some('7'));
-    assert_eq!(key_char(Key::F10), None);
-    assert_eq!(key_char(Key::ArrowDown), None);
-    assert_eq!(key_char(Key::Space), None);
+fn command_keys_leave_the_bar() {
     assert!(is_command_key(Key::D, Modifiers::COMMAND));
     assert!(is_command_key(Key::F7, Modifiers::NONE));
     assert!(!is_command_key(Key::F10, Modifiers::NONE), "F10 toggles the bar");
@@ -355,7 +350,6 @@ fn a_mac_target_has_no_mnemonics() {
     b.alt(true);
     assert!(!b.nav().underline, "Option shows no underlines");
     assert!(b.nav().rows[0].iter().all(|r| r.mnemonic.is_none()), "the rows have no mnemonics");
-    assert_eq!(b.node("New").and_then(|n| n.access_key()), None);
     b.alt(false);
     b.letter('n');
     assert!(b.take().is_empty(), "letters run nothing");

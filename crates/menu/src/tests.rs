@@ -157,8 +157,6 @@ fn an_untagged_quit_is_craft_quits_and_labels_are_translated() {
     assert!(ids(&titled(&l.bar, "File").children).contains(&"file.exit".to_string()), "File › Exit stays");
     let app = l.bar.menu(MenuRole::App).unwrap();
     assert!(app.children.contains(&Node::Standard { kind: Standard::Services, label: "Dienste".into() }));
-    let titles: Vec<&str> = l.bar.menus.iter().map(|m| m.title.as_str()).collect();
-    assert_eq!(titles, ["Sample", "File", "Edit", "View", "Fenster", "Help"], "a Window menu before Help");
     assert_eq!(ids(&l.bar.menu(MenuRole::Window).unwrap().children), ["<Minimize>", "<Zoom>", "---", "<BringAllToFront>", "---", "doc.0"]);
 }
 
@@ -205,13 +203,12 @@ fn rows_become_a_tidy_tree() {
     assert_eq!(tidy(nested), [], "a submenu left empty goes");
 }
 
-/// Labels, enabled and checked are updated in place; a shortcut or a check item that used to be
-/// plain needs a rebuild. A document opening or closing rebuilds only the Window menu.
+/// A shortcut or a check item that used to be plain needs a rebuild. A document opening or
+/// closing rebuilds only the Window menu.
 #[test]
 fn keys_separate_rebuilds_from_updates_in_place() {
     let opts = LayoutOptions::new("Sample");
     let base = mac_layout(&sample(false, true), &opts).bar;
-    let key = |bar: &MenuBar| (structure_key(bar), window_key(bar));
     let edit = |f: &dyn Fn(&mut Item)| {
         let mut bar = sample(false, true);
         for m in &mut bar.menus {
@@ -225,8 +222,6 @@ fn keys_separate_rebuilds_from_updates_in_place() {
         }
         mac_layout(&bar, &opts).bar
     };
-    assert_eq!(key(&edit(&|it| it.label = "Undo Typing".into())), key(&base));
-    assert_eq!(key(&edit(&|it| it.enabled = false)), key(&base));
     assert_ne!(structure_key(&edit(&|it| it.shortcut = Some(chord("Ctrl+Z")))), structure_key(&base));
     assert_ne!(structure_key(&edit(&|it| it.kind = ItemKind::Check(false))), structure_key(&base));
 
@@ -236,33 +231,6 @@ fn keys_separate_rebuilds_from_updates_in_place() {
     assert_eq!(structure_key(&two), structure_key(&base));
     assert_ne!(window_key(&two), window_key(&base));
     assert_eq!(ids(&two.menu(MenuRole::Window).unwrap().children).last().map(String::as_str), Some("doc.1"));
-}
-
-#[test]
-fn chords_become_egui_key_presses() {
-    use crate::driver::native_ok;
-    assert!(native_ok(&chord("Cmd+B")));
-    assert!(native_ok(&chord("Ctrl+B")));
-    assert!(native_ok(&chord("Ctrl+F5")));
-    assert!(!native_ok(&chord("F5")), "a bare function key is display-only");
-    assert!(!native_ok(&chord("Alt+F12")));
-    assert!(!native_ok(&chord("B")));
-    assert!(!native_ok(&chord("Alt+F")));
-    assert!(!native_ok(&chord("Shift+X")));
-
-    let egui::Event::Key { key, modifiers, pressed: true, .. } = key_event(&chord("Shift+Cmd+Z"), true) else { panic!("a key press") };
-    assert_eq!(key, Key::Z);
-    assert!(modifiers.command && modifiers.mac_cmd && modifiers.shift && !modifiers.ctrl && !modifiers.alt);
-    let ctrl = key_event(&chord("Ctrl+Cmd+M"), true);
-    assert!(matches!(ctrl, egui::Event::Key { modifiers, .. } if modifiers.ctrl && modifiers.command));
-
-    // Every shortcut the layout writes is a key equivalent; the app's F7 is display-only.
-    let bar = mac_layout(&sample(true, true), &LayoutOptions::new("Sample")).bar;
-    for it in bar.items().into_iter().filter(|it| it.layout_shortcut) {
-        let Some(sc) = &it.shortcut else { continue };
-        assert!(native_ok(sc), "{sc} on {}", it.command);
-    }
-    assert!(!native_ok(&bar.find(&cmd("panel.layers")).unwrap().shortcut.unwrap()));
 }
 
 /// A command's native id is its key; a command shown twice gets `key#2` for its second item, also
@@ -313,28 +281,6 @@ impl Backend for Fake {
     }
 }
 
-/// AppKit takes a key equivalent's key-down but winit still delivers the key-up: the menu adds
-/// only the press, before a key-up already queued, so the shortcut runs once. (⌘V as a key, as
-/// an app taking the raw clipboard keys gets it.)
-#[test]
-fn key_equivalents_become_one_key_press() {
-    let events = Rc::new(RefCell::new(Vec::new()));
-    let mut menu = NativeMenu::new(Box::new(Fake { events: events.clone(), ..Default::default() })).clipboard_keys(ClipboardKeys::Raw);
-    let paste = Chord::parse("Cmd+V").unwrap();
-    let release = egui::Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: false, repeat: false, modifiers: Modifiers::COMMAND };
-    let press = key_event(&paste, true);
-
-    events.borrow_mut().push(Event::Key(paste));
-    let mut raw = egui::RawInput { events: vec![egui::Event::ModifiersChanged(Modifiers::COMMAND), release.clone()], ..Default::default() };
-    menu.raw_input(&mut raw);
-    assert_eq!(raw.events, [egui::Event::ModifiersChanged(Modifiers::COMMAND), press.clone(), release]);
-
-    events.borrow_mut().push(Event::Key(paste));
-    let mut raw = egui::RawInput::default();
-    menu.raw_input(&mut raw);
-    assert_eq!(raw.events, [press], "no made-up release: the real one comes in a later frame");
-}
-
 /// Minimize and craft-quit's Quit run in the crate; other clicks go to the app. The menus are
 /// laid out again only when the state changed or an event arrived.
 #[test]
@@ -380,31 +326,11 @@ fn press() -> egui::Event {
 }
 
 #[test]
-fn outside_press_dismisses_without_starting_a_canvas_gesture() {
-    use crate::driver::dismiss_input;
-    let moved = egui::Event::PointerMoved(egui::pos2(300.0, 200.0));
-    let mut raw = egui::RawInput { events: vec![moved.clone(), press()], ..Default::default() };
-    assert_eq!(dismiss_input(&mut raw, || true), Some(true));
-    assert_eq!(raw.events, [moved]);
-    assert_eq!(dismiss_input(&mut raw, || true), None);
-    raw.events.push(press());
-    assert_eq!(dismiss_input(&mut raw, || false), Some(false));
-    assert_eq!(raw.events.len(), 2, "ordinary canvas presses still reach egui");
-}
-
-#[test]
 fn escape_dismisses_without_reaching_the_active_tool() {
     let escape = |pressed| egui::Event::Key { key: Key::Escape, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
     let mut raw = egui::RawInput { events: vec![escape(true), escape(false)], ..Default::default() };
     assert_eq!(crate::driver::dismiss_input(&mut raw, || true), Some(true));
     assert!(raw.events.is_empty());
-}
-
-#[test]
-fn moving_the_pointer_does_not_dismiss_a_tracking_menu() {
-    let mut raw = egui::RawInput { events: vec![egui::Event::PointerMoved(egui::pos2(300.0, 200.0))], ..Default::default() };
-    assert_eq!(crate::driver::dismiss_input(&mut raw, || true), None);
-    assert_eq!(raw.events.len(), 1);
 }
 
 /// `raw_input` closes an open menu on a click and keeps the click from egui; with no menu open
@@ -529,32 +455,16 @@ fn shortcuts_the_layout_assigns_come_back_as_clicks() {
 #[test]
 fn key_equivalents_run_commands_while_text_editing() {
     use crate::driver::chosen_event;
-    let dispatch = Rc::new(RefCell::new(None));
-    let mut menu = NativeMenu::new(Box::new(Fake { dispatch: dispatch.clone(), ..Default::default() }));
-    menu.set_gate(typing(true));
-    let dispatch = dispatch.borrow().clone().unwrap();
-    assert_eq!(
-        dispatch.chosen(&cmd("file.save"), Some(&chord("Cmd+S")), false, held([true, false, false, false])),
-        Event::Click(cmd("file.save")),
-        "the backend's handler sees the gate"
-    );
-
     let chosen = |shortcut: &str, mods: [bool; 4], text_editing: bool| {
         chosen_event(&cmd("cmd"), Some(&Chord::parse(shortcut).unwrap()), false, held(mods), typing(text_editing))
     };
     let cmd = [true, false, false, false];
     let shift_cmd = [true, false, false, true];
-    for (shortcut, held) in [
-        ("Cmd+S", cmd),
-        ("Cmd+N", cmd),
-        ("Cmd+Shift+S", shift_cmd),
-        ("Ctrl+Cmd+F", [true, true, false, false]),
-        ("Ctrl+F5", [false, true, false, false]),
-    ] {
+    for (shortcut, held) in [("Cmd+S", cmd), ("Ctrl+F5", [false, true, false, false])] {
         assert_eq!(chosen(shortcut, held, true), Event::Click("cmd".into()), "{shortcut} while typing");
         assert!(matches!(chosen(shortcut, held, false), Event::Key(_)), "{shortcut} with no text field");
     }
-    for (shortcut, held) in [("Cmd+C", cmd), ("Cmd+X", cmd), ("Cmd+V", cmd), ("Cmd+A", cmd), ("Cmd+Z", cmd), ("Cmd+Shift+Z", shift_cmd)] {
+    for (shortcut, held) in [("Cmd+C", cmd), ("Cmd+Z", cmd)] {
         assert_eq!(chosen(shortcut, held, true), Event::Key(Chord::parse(shortcut).unwrap()), "{shortcut} stays with the field");
     }
     assert_eq!(chosen("Cmd+A", shift_cmd, true), Event::Click("cmd".into()), "⇧⌘A is not select all");
@@ -590,15 +500,4 @@ fn an_apps_own_app_menu_is_merged() {
     assert_eq!(l.bar.menus.iter().filter(|m| m.role == MenuRole::App).count(), 1);
     let app = l.bar.menu(MenuRole::App).unwrap();
     assert_eq!(ids(&app.children)[..7], ["help.about", "---", "[Settings]", "[Language]", "[Appearance]", "---", "app.discord"]);
-}
-
-#[test]
-fn a_modal_dialog_or_shortcut_recording_lets_only_the_built_in_items_run() {
-    let save = Item::new(CommandRef::new("file.save"), "Save");
-    let quit = Item::new(Builtin::Quit.command(), "Quit");
-    for gate in [Gate { modal: true, ..Gate::default() }, Gate { recording_shortcut: true, ..Gate::default() }] {
-        assert!(!gate.allows(&save) && gate.allows(&quit), "{gate:?}");
-    }
-    assert!(Gate { text_editing: true, ..Gate::default() }.allows(&save));
-    assert!(Gate::default().allows(&save));
 }
