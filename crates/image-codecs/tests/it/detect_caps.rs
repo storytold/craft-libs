@@ -343,6 +343,54 @@ fn a_cut_off_jpeg_asks_for_more_bytes() {
     assert_eq!(detect_prefix(&[]), Detection::Unknown);
 }
 
+#[test]
+fn a_restart_interval_before_the_frame_header_is_jpeg_ls() {
+    // A DRI segment may come before the frame header. An interval of 0 turns restarts off.
+    let (img, plain) = jpeg_ls_file();
+    let mut bytes = plain[..2].to_vec();
+    bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, 0]);
+    bytes.extend_from_slice(&plain[2..]);
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert_eq!(detect_by_prefix(&bytes, 4), Detection::Format(Format::JpegLs));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert_eq!(decode_as(Format::JpegLs, &bytes).unwrap().data(), img.data());
+    // A file that sets a restart interval is JPEG-LS, and its restart markers are not read.
+    bytes[7] = 1;
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert!(matches!(decode(&bytes), Err(CodecError::Unsupported { .. })));
+    // A 3- or 4-byte interval of 0 also turns restarts off. A segment with fewer than 2 interval
+    // bytes or more than 4 is malformed.
+    for (size, ok) in [(0, false), (1, false), (2, true), (3, true), (4, true), (5, false)] {
+        let mut bytes = plain[..2].to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xDD, 0, 2 + size as u8]);
+        bytes.extend(std::iter::repeat_n(0, size));
+        bytes.extend_from_slice(&plain[2..]);
+        assert_eq!(detect(&bytes), Some(Format::JpegLs));
+        assert_eq!(decode(&bytes).is_ok(), ok, "{size} interval bytes");
+    }
+}
+
+#[test]
+fn a_stuffed_zero_where_a_marker_should_be_is_jpeg() {
+    // `FF 00` is not a marker, so the walk ends there without asking for a length field.
+    assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0x00]), Detection::Format(Format::Jpeg));
+    assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0xFE, 0, 2, 0xFF, 0x00]), Detection::Format(Format::Jpeg));
+}
+
+#[test]
+fn a_detector_that_found_a_jpeg_frame_does_not_walk_again() {
+    // SOI, a comment with two bytes of text, then a baseline frame header.
+    let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xC0, 0, 11];
+    let mut detector = PrefixDetector::new();
+    assert_eq!(detector.detect(&file), Detection::Format(Format::Jpeg));
+    // With an SOF55 marker where the comment marker was, a walk from the SOI finds JPEG-LS. The
+    // detector starts at the baseline frame header it stopped at and still answers JPEG.
+    let mut changed = file;
+    changed[3] = 0xF7;
+    assert_eq!(detect_prefix(&changed), Detection::Format(Format::JpegLs));
+    assert_eq!(detector.detect(&changed), Detection::Format(Format::Jpeg));
+}
+
 #[cfg(feature = "sunraster")]
 #[test]
 fn detect_magic_sun_raster() {

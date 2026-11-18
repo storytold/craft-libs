@@ -395,6 +395,8 @@ impl PrefixDetector {
         match jpeg_frame_from(bytes, &mut self.jpeg_pos) {
             Some(JpegFrame::Short(len)) => Detection::NeedBytes(len),
             Some(JpegFrame::Ls) => Detection::Format(Format::JpegLs),
+            // The walk found no SOF55 frame header, so `detect` answers JPEG for these bytes.
+            Some(JpegFrame::Other) if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) => Detection::Format(Format::Jpeg),
             Some(JpegFrame::Other) | None => detect(bytes).map_or(Detection::Unknown, Detection::Format),
         }
     }

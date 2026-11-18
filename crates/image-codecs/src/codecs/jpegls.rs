@@ -72,8 +72,11 @@ pub(crate) fn jpeg_frame_from(b: &[u8], pos: &mut usize) -> Option<JpegFrame> {
         }
         match marker {
             SOF55 => return Some(JpegFrame::Ls),
-            0xDA | 0xD9 => return Some(JpegFrame::Other),
-            0xC0..=0xCF | 0xDB..=0xDF => return Some(JpegFrame::Other),
+            // `FF 00` is a stuffed zero, not a marker.
+            0x00 | 0xDA | 0xD9 => return Some(JpegFrame::Other),
+            // A DRI segment (`0xDD`) may precede an SOF55 frame header, so it takes the
+            // length-prefixed path below.
+            0xC0..=0xCF | 0xDB | 0xDC | 0xDE | 0xDF => return Some(JpegFrame::Other),
             0x01 | 0xD0..=0xD7 | 0xFF => *pos += if marker == 0xFF { 1 } else { 2 },
             _ => {
                 let Some(len) = b.get(*pos + 2..*pos + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else {
@@ -702,6 +705,16 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                     }
                 } else if seg.first() != Some(&1) {
                     return Err(CodecError::unsupported(F, "mapping tables and colour transforms (LSE)"));
+                }
+            }
+            // DRI: a 2-, 3- or 4-byte interval (T.87 C.2.5). An interval of 0 turns restart
+            // markers off.
+            0xDD => {
+                if !(2..=4).contains(&seg.len()) {
+                    return Err(bad("bad restart interval segment"));
+                }
+                if seg.iter().any(|&v| v != 0) {
+                    return Err(CodecError::unsupported(F, "a restart interval"));
                 }
             }
             0xDA => {
