@@ -186,7 +186,7 @@ fn aes_encrypts_the_same_object_to_different_bytes_each_time() {
 }
 
 /// Should the random source fail, the vector is derived from the key, the object and its content:
-/// an unchanged object repeats it, another object or other content does not.
+/// the same content in the same object repeats it, another object or other content does not.
 #[test]
 fn without_a_random_source_the_vector_is_derived_from_the_object() {
     let iv = |num, data: &[u8]| initialization_vector(|_| Err(getrandom::Error::UNSUPPORTED), b"key", num, 0, data);
