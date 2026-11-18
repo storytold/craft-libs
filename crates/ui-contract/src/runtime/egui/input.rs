@@ -273,7 +273,8 @@ pub(crate) struct PointerRead {
     pub focus_lost: bool,
     /// Whether the real pointer moved or entered in this pass.
     pub stirred: bool,
-    /// The zoom factor of the pass: pinch and Ctrl or Cmd with the wheel.
+    /// The zoom factor of the pass's own events: `Event::Zoom` and wheel deltas under egui's zoom modifier. The
+    /// fingers' factor is `multi_touch`'s alone.
     pub zoom: f32,
     /// The pass's summed `Event::Rotate` radians.
     pub rotation: f32,
@@ -312,6 +313,10 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
     let injected_pen = super::injected::pen(ctx);
     let pen = crate::runtime::pen::source(ctx).filter(|_| injected_pen.is_none());
     let pointed = ctx.input(|input| input.raw.events.iter().any(|event| matches!(event, Event::PointerMoved(_) | Event::PointerButton { .. })));
+    let (zoom_modifier, line, zoom_speed) = ctx.options(|options| {
+        (options.input_options.zoom_modifier, options.input_options.line_scroll_speed, options.input_options.scroll_zoom_speed)
+    });
+    let page = ctx.content_rect().height();
     let tablet = match injected_pen {
         Some(sample) => Some(PenPass::injected(sample)),
         None => pen.as_ref().map(|source| if pointed { PenPass::read(source) } else { PenPass::live(source) }),
@@ -326,6 +331,9 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         let mut release = None;
         let mut other_press = None;
         let mut rotation = 0.0;
+        // The pass's own zoom: its pinch steps and its zoom-modifier wheel deltas, each applied once. egui's eased
+        // `zoom_delta` would hand one notch to several passes and frames; easing is the zooming component's motion.
+        let mut zoom = 1.0_f32;
         let mut barrel_press = tablet.as_ref().is_some_and(|tablet| tablet.barrel_press);
         let mut barrel_pressed = false;
         for event in &input.raw.events {
@@ -382,9 +390,23 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                     }
                 }
                 Event::Rotate(radians) if radians.is_finite() => rotation += *radians,
+                // A hostile factor (NaN, infinite, not positive) zooms nowhere: it is left out.
+                Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => zoom *= *factor,
+                Event::MouseWheel { unit, delta, modifiers, .. } if modifiers.matches_any(zoom_modifier) => {
+                    let points = match unit {
+                        MouseWheelUnit::Point => 1.0,
+                        MouseWheelUnit::Line => line,
+                        MouseWheelUnit::Page => page,
+                    };
+                    let factor = (zoom_speed * points * (delta.x + delta.y)).exp();
+                    if factor.is_finite() && factor > 0.0 {
+                        zoom *= factor;
+                    }
+                }
                 _ => {}
             }
         }
+        let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
         let pen_active = tablet.as_ref().is_some_and(PenPass::active);
         let (kind, sample) = match &tablet {
             _ if touched => (PointerKind::Touch, touch_sample),
@@ -424,7 +446,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             sample,
             focus_lost,
             stirred,
-            zoom: input.zoom_delta(),
+            zoom,
             rotation,
             multi_touch,
         };
