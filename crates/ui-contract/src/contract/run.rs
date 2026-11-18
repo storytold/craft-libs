@@ -895,7 +895,6 @@ struct HostStep {
 
 /// Steps 6 to 8b: place, parts, sense and the text part. `None` when the pass stops before 8b: a sizing pass, or an
 /// inert component.
-#[expect(clippy::cognitive_complexity, reason = "steps 6 to 8 in their fixed order; each step is already its own function and the rest is the order")]
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
 fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, env: &Env) -> Option<HostStep> {
@@ -1586,7 +1585,6 @@ fn extent_step(
 }
 
 /// Step 5's sizes from the `extent`, and what the rows and bodies around the component take from it.
-#[expect(clippy::cognitive_complexity, reason = "step 5 in its fixed order: the measure, the calls its body keeps, the caps and the shrink reports")]
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
 fn measure_step(
@@ -1678,10 +1676,10 @@ fn measure_step(
     match shrink {
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
             // The `Ideal` size in no room, and the least width at which its content shows whole.
-            let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: None };
+            let input = MeasureIn { ui, env, proposal: Proposal::Ideal, room: None };
             let (content, _) = t.measure_content(&input, resolved);
-            let ideal = steps::measure(&*style, &input, content, Vec2::ZERO, resolved).x;
-            let whole = steps::whole(&*style, content, Vec2::ZERO, resolved);
+            let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
+            let whole = steps::whole(style, content, Vec2::ZERO, resolved);
             let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
             crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
         }

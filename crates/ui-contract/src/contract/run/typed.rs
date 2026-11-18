@@ -260,11 +260,11 @@ struct TypedPass<'r, 'a, C: Component> {
 
 impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     fn core(&mut self) -> &mut CxCore<'a> {
-        &mut self.cx.core
+        self.cx.core
     }
 
     fn core_ref(&self) -> &CxCore<'a> {
-        &self.cx.core
+        self.cx.core
     }
 
     fn shown_state(&mut self) -> &mut steps::ShownState {
@@ -371,11 +371,11 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn paint(&mut self, ui: &mut Ui, env: &Env) {
-        self.comp.paint(&mut paint_ui(ui, env, &self.cx.core, self.cx.style), self.cx);
+        self.comp.paint(&mut paint_ui(ui, env, self.cx.core, self.cx.style), self.cx);
     }
 
     fn paint_over(&mut self, ui: &mut Ui, env: &Env) {
-        self.comp.paint_over(&mut paint_ui(ui, env, &self.cx.core, self.cx.style), self.cx);
+        self.comp.paint_over(&mut paint_ui(ui, env, self.cx.core, self.cx.style), self.cx);
     }
 
     fn settle_values(&mut self) -> steps::ValueEdit {

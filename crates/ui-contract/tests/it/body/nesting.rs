@@ -27,7 +27,7 @@ fn sixteen_nested_containers_show_on_a_512_kib_stack() {
 }
 
 fn nest(ui: &mut Ui, depth: usize, reached: &Cell<usize>) {
-    let layout = if depth % 2 == 0 { BodyLayout::Stack } else { BodyLayout::row() };
+    let layout = if depth.is_multiple_of(2) { BodyLayout::Stack } else { BodyLayout::row() };
     Panel::new().layout(layout).id_salt(depth).show(ui, |ui, _| {
         if depth == 1 {
             Block::new(Vec2::splat(10.0)).show(ui);

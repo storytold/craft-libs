@@ -556,10 +556,6 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "the body step of the pass: its sub-steps share locals and run in one order, so a split would pass them all through"
-    )]
     /// The body step. The children of the header, the body, the end region and the footer run inside their own step
     /// functions; between them this frame holds only the `BodyPlan` the regions share.
     fn content(&mut self, comp: &mut C, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, values: &AppValues) {
@@ -806,7 +802,7 @@ impl BodyHooks<'_> {
         let props = Arc::clone(&self.props);
         let ctx = at.ui.ctx();
         let pad = 2.0 * self.pads(&props, at.scx.tokens);
-        let record = |key: Id, took: Vec2| layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(self.room, took));
+        let record = |key: Id, took: Vec2| layout_memory::emit_record(ctx, key, layout_memory::Measured::new(self.room, took));
         record(id, self.body_size.unwrap_or(Vec2::ZERO));
         if let Some(first) = self.first_line {
             record(sub(id, "first"), Vec2::new(0.0, first));
@@ -826,9 +822,9 @@ impl BodyHooks<'_> {
             let (body, [header, footer, end]) =
                 (self.body_size.unwrap_or(Vec2::ZERO), [self.header_size, self.footer_size, self.end_size].map(Option::unwrap_or_default));
             let outer = (self.regions_size(&props, body, header, footer, end) + pad).x;
-            reached.forward(&ctx, |columns, past| if row { outer - columns } else { past + outer - body.x });
+            reached.forward(ctx, |columns, past| if row { outer - columns } else { past + outer - body.x });
         }
-        layout_memory::end_measure(&ctx, id, key);
+        layout_memory::end_measure(ctx, id, key);
         let body = if self.open { self.body_size.unwrap_or(Vec2::ZERO) } else { Vec2::ZERO };
         let (header, footer, end) =
             (self.header_size.unwrap_or(Vec2::ZERO), self.footer_size.unwrap_or(Vec2::ZERO), self.end_size.unwrap_or(Vec2::ZERO));

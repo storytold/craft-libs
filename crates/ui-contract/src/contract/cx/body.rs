@@ -152,7 +152,6 @@ impl<'a> BodyCx<'a> {
     }
 }
 
-/// What a container's body reads of its container: the style step 2 resolved for this pass, and the body gap.
 /// What a container's regions share in their `BodyCx`: whether its gate is mixed (the header's only), its field's
 /// message and the container that owns them.
 pub(crate) struct RegionShare<'a> {
@@ -161,6 +160,7 @@ pub(crate) struct RegionShare<'a> {
     pub owner: BodyOwner<'a>,
 }
 
+/// What a container's body reads of its container: the style step 2 resolved for this pass, and the body gap.
 #[derive(Clone, Copy)]
 pub(crate) struct BodyOwner<'a> {
     style: &'a (dyn Any + Send + Sync),
