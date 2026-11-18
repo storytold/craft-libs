@@ -64,7 +64,11 @@ impl Reader {
 
     /// `\chpgn`, the current page number: a `PAGE` field.
     pub(super) fn page_number_symbol(&mut self) {
-        if self.marks_on && self.st.dest == Dest::Body && !self.st.hidden {
+        if self.st.dest == Dest::Body && self.st.hidden {
+            self.hidden_text_dropped();
+            return;
+        }
+        if self.marks_on && self.st.dest == Dest::Body {
             // Tracked like text, so Accept and Reject apply to it.
             let fmt = self.text_fmt();
             self.para.inlines.push(Inline::Field { instr: "PAGE".into(), result: String::new(), fmt, locked: false });
@@ -75,10 +79,11 @@ impl Reader {
     /// Hidden text left out of the body: an open field's result is then not what showed, and the
     /// field is left as read rather than made a field that would show.
     pub(super) fn hidden_text_dropped(&mut self) {
-        if let Some(f) = self.open_fields.last_mut()
-            && f.result
-        {
-            f.hidden = true;
+        // An omitted nested result is also omitted from each enclosing result.
+        for f in &mut self.open_fields {
+            if f.result {
+                f.hidden = true;
+            }
         }
     }
 
@@ -95,8 +100,11 @@ impl Reader {
         if !page_dependent(instr) {
             return;
         }
-        let Some((result, fmt)) = result_text(&self.para.inlines, &f, &self.st.fmt) else { return };
-        let field = Inline::Field { instr: instr.to_string(), result, fmt, locked: f.locked };
+        let instr = instr.to_string();
+        // An empty result has no run to carry the group's revision marks.
+        let group = self.text_fmt();
+        let Some((result, fmt)) = result_text(&self.para.inlines, &f, &group) else { return };
+        let field = Inline::Field { instr, result, fmt, locked: f.locked };
         let inlines = &mut self.para.inlines;
         inlines.truncate(f.start);
         if let (Some(n), Some(Inline::Text(t, _))) = (f.tail_from, inlines.last_mut()) {

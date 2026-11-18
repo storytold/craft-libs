@@ -206,3 +206,30 @@ fn a_result_whose_text_is_hidden_inside_it_stays_as_read() {
     // A result that is really empty is still a field.
     assert_eq!(f[1].1.len(), 1, "{f:?}");
 }
+
+#[test]
+fn hidden_page_symbols_and_nested_results_do_not_reappear_as_fields() {
+    for result in [r"{\v\chpgn}", r"{\field{\*\fldinst DATE}{\fldrslt {\v 2}}}"] {
+        let rtf = format!(r"{{\rtf1\ansi\pard x{{\field{{\*\fldinst PAGE}}{{\fldrslt {result}}}}}y\par}}");
+        let d = import(rtf.as_bytes()).unwrap();
+        let f = fields_of(&d.body);
+        assert_eq!(f[0], ("xy".into(), Vec::new()), "{result}: {f:?}");
+    }
+    // A visible nested result remains eligible for conversion by its enclosing PAGE field.
+    let d = import(br"{\rtf1\ansi{\field{\*\fldinst PAGE}{\fldrslt {\field{\*\fldinst DATE}{\fldrslt 2}}}}\par}").unwrap();
+    assert_eq!(fields_of(&d.body)[0].1, [("PAGE".into(), "2".into(), false)]);
+}
+
+#[test]
+fn empty_page_fields_keep_insertion_and_deletion_marks() {
+    for (mark, insertion) in [(r"\revised\revauth1", true), (r"\deleted\revauthdel1", false)] {
+        let rtf = format!(r"{{\rtf1\ansi{{\*\revtbl{{Unknown;}}{{Ann;}}}}\pard {{{mark}{{\field{{\*\fldinst PAGE}}{{\fldrslt }}}}}}\par}}");
+        let d = import(rtf.as_bytes()).unwrap();
+        let fields = fields_of(&d.body);
+        assert_eq!(fields[0].1, [("PAGE".into(), String::new(), false)]);
+        let p = d.body[0].as_para().unwrap();
+        assert_eq!(p.text, "\u{FFFC}", "the sole character is the field marker");
+        let props = p.props_at(0);
+        assert!(if insertion { props.ins.is_some() } else { props.del.is_some() }, "{mark}: {props:?}");
+    }
+}
