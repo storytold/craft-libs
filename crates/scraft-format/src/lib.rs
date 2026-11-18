@@ -26,7 +26,8 @@ pub use clip::{Clip, ClipContent, Fade, FadeShape};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use markers::{Group, MarkerKind, MemoryLocation};
 pub use mixer::{
-    Bus, ChannelFormat, INSERT_SLOTS, Insert, Mixer, OutputPath, Route, SEND_SLOTS, SendSlot, Speaker, SurroundPan, fader_db_to_pos, fader_pos_to_db,
+    Bus, ChannelFormat, INSERT_SLOTS, InputPath, Insert, Mixer, OutputPath, Route, SEND_SLOTS, SendSlot, Speaker, SurroundPan, fader_db_to_pos,
+    fader_pos_to_db,
 };
 pub use room_tone::RoomTone;
 pub use session::{
@@ -105,6 +106,21 @@ pub fn write_session_named(session: &Session, name: &str, limit: u64) -> Result<
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod session_io_tests {
     use super::*;
+
+    #[test]
+    fn named_inputs_round_trip_and_legacy_documents_default_to_no_paths() {
+        let mut session = Session::default();
+        let id = session.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        session.track_mut(id).unwrap().mixer.input = Route::Hardware("In 64".into());
+        let old = session.to_json().unwrap();
+        assert!(!old.contains("\"inputs\""));
+        assert_eq!(Session::from_json(&old).unwrap(), session);
+
+        session.inputs.push(InputPath { name: "Talkback".into(), first_channel: 63, format: ChannelFormat::Mono });
+        session.track_mut(id).unwrap().mixer.input = Route::Input("Talkback".into());
+        let json = write_session(&session, MAX_SESSION_BYTES).unwrap();
+        assert_eq!(Session::from_json(&json).unwrap(), session);
+    }
 
     #[test]
     fn bounded_writer_matches_canonical_session_json_and_refuses_one_byte_under() {

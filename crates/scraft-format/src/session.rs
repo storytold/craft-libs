@@ -3,8 +3,8 @@
 use crate::clip::{bound, bound_sequence};
 use crate::soundcraft_time::{FrameRate, GridScale, GridValue, Range, SampleRate, Samples, TempoMap, TimeFormat};
 use crate::{
-    Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, MarkerId, MarkerKind, MemoryLocation, OutputPath, Source, SourceId, SourcePool,
-    TRACK_COLORS, Track, TrackId, TrackKind, VideoSource,
+    Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, InputPath, MarkerId, MarkerKind, MemoryLocation, OutputPath, Source, SourceId,
+    SourcePool, TRACK_COLORS, Track, TrackId, TrackKind, VideoSource,
 };
 
 /// Native session file extension.
@@ -363,6 +363,8 @@ pub struct Session {
     #[serde(default)]
     pub videos: Vec<VideoSource>,
     pub busses: Vec<Bus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<InputPath>,
     pub outputs: Vec<OutputPath>,
     pub markers: Vec<MemoryLocation>,
     pub groups: Vec<Group>,
@@ -422,6 +424,7 @@ impl Session {
             sources: Vec::new(),
             videos: Vec::new(),
             busses: Vec::new(),
+            inputs: Vec::new(),
             outputs: vec![OutputPath { name: "Out 1-2".into(), first_channel: 0, format: ChannelFormat::Stereo }],
             markers: Vec::new(),
             groups: Vec::new(),
@@ -869,6 +872,7 @@ impl Session {
         }
         self.busses.iter_mut().for_each(|b| truncate_chars(&mut b.name, MAX_NAME_CHARS));
         self.outputs.iter_mut().for_each(|o| truncate_chars(&mut o.name, MAX_NAME_CHARS));
+        self.inputs.iter_mut().for_each(|input| truncate_chars(&mut input.name, MAX_NAME_CHARS));
         self.groups.iter_mut().for_each(|g| truncate_chars(&mut g.name, MAX_NAME_CHARS));
         self.sources.iter_mut().for_each(|s| truncate_chars(&mut s.name, MAX_NAME_CHARS));
         // A room tone must play part of a source the session still lists.

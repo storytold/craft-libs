@@ -408,6 +408,15 @@ pub struct OutputPath {
     pub format: ChannelFormat,
 }
 
+/// A named physical input path (from I/O Setup).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InputPath {
+    pub name: String,
+    /// First hardware channel (0-based).
+    pub first_channel: u16,
+    pub format: ChannelFormat,
+}
+
 /// Where a signal goes or comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum Route {
@@ -418,6 +427,8 @@ pub enum Route {
     Bus(BusId),
     /// Hardware input/output by path name.
     Hardware(String),
+    /// A named I/O Setup input, kept separate from legacy numbered hardware assignments.
+    Input(String),
 }
 
 /// A plugin instance on an insert slot.
