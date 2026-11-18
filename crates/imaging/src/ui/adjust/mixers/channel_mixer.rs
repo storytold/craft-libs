@@ -3,7 +3,7 @@
 
 use craft_theme::variant::Tone;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, EditResponse, Entry, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, EditResponse, Entry, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, TooltipSpec};
 use craft_ui::display::Text;
 use craft_ui::form::{Field, Help};
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
@@ -75,16 +75,20 @@ impl ChannelMixer {
     }
 }
 
-/// The Total readout as text: whole percent, with a sign for zero and up.
+/// The Total readout as text: whole percent, with a sign for zero and up. A Total over 100 % that whole percent would
+/// show as 100 % keeps its hundredths, so the readout agrees with its warning.
 fn total_text(units: &Units, words: &AdjustWords, total: f64) -> String {
     let whole = total.round();
-    let text = units.text(UnitKind::Percent, whole, 0..=0);
+    let text =
+        if total_warns(total) && whole <= 100.0 { units.text(UnitKind::Percent, total, 0..=2) } else { units.text(UnitKind::Percent, whole, 0..=0) };
     if whole < 0.0 { text } else { words.plus.fill(&[("n", &text)]) }
 }
 
-/// Whether the Total is over what the channels can show.
+/// Whether the Total is over what the channels can show. It is compared to the hundredth, the most the readout shows:
+/// sources that add up to 100 % can sum a hair over it in floating point (67.89 + 28.35 + 3.76), and the readout would
+/// then warn of an excess it cannot show.
 fn total_warns(total: f64) -> bool {
-    total > 100.0
+    (total * 100.0).round() > 100.0 * 100.0
 }
 
 /// What a Channel Mixer editor keeps between passes: the output channel shown and the value its running gesture began
@@ -230,9 +234,10 @@ impl CmykChannelMixer {
         }
     }
 
-    /// The value with the row of output `out` replaced, in whole percent.
+    /// The value with the row of output `out` replaced. The rest of the row stays as it was: an imported value need
+    /// not be whole percent, and the edit that ends a gesture already comes rounded to its row's step
+    /// (`Run::slider_row`).
     fn with_row(mut self, out: usize, row: [f64; 5]) -> Self {
-        let row = row.map(f64::round);
         match (self.gray, out) {
             (Some(_), _) => self.gray = Some(row),
             (None, 0) => self.cyan = row,
@@ -286,7 +291,8 @@ impl<'a> CmykChannelMixerEditor<'a> {
         self
     }
 
-    /// The tooltip of the Monochrome check box, which says why it cannot be turned on; none by default.
+    /// The tooltip of the Monochrome check box, which says why it cannot be turned on; none by default. The disabled box
+    /// stays a Tab stop and shows it on keyboard focus.
     pub fn monochrome_tip(mut self, tip: impl Into<Label>) -> Self {
         self.monochrome_tip = Some(tip.into());
         self
@@ -347,10 +353,11 @@ impl<'a> CmykChannelMixerEditor<'a> {
             });
             let constant = AdjustField::new("constant", words.constant.clone(), -200.0..=200.0, 0.0).unit_kind(UnitKind::Percent);
             run.slider_row_enabled(ui, cx, &constant, row[4], !mono, move |now: &CmykChannelMixer, x| set(now, 4, x));
-            // Monochrome only turns off: the box is enabled only while it is on.
+            // Monochrome only turns off: the box is enabled only while it is on. The reason is its disabled text too, which
+            // keeps the disabled box a Tab stop, so the keyboard reaches the reason as well as the pointer.
             let mut monochrome = Checkbox::new(Bind::given(mono)).label(words.monochrome.clone()).enabled(mono);
             if let Some(tip) = &monochrome_tip {
-                monochrome = monochrome.tooltip(tip.clone());
+                monochrome = monochrome.tooltip(TooltipSpec::new(tip.clone()).disabled_text(tip.clone()));
             }
             let monochrome = monochrome.show(ui);
             run.push(cx, monochrome, |now, on| if *on { *now } else { CmykChannelMixer { gray: None, ..*now } });
