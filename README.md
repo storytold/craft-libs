@@ -69,6 +69,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-assuan`](crates/assuan/README.md): the Assuan protocol and gpg-agent's operations (key lookup, signing a digest, decrypting a session key) over any `Read + Write` stream, with a bounded canonical S-expression reader. No sockets; everything the agent sends is capped.
 - [`craft-affinity`](crates/affinity/README.md): bounded reader for native Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`): archive, object stream and a neutral document model with layers, artboards, vectors, text, tables, images and masks. Read only; mapping onto an app's document stays in the app.
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
+- [`craft-xtask`](crates/xtask/README.md): a library for the apps' `cargo xtask` binaries: the gate's step runner (steps in order, stop at the first failure, the ok, FAIL and skip summary, workspace tests that exclude the running xtask package), an optional slot lock held across processes and an optional per-step JSON report. Each app keeps its step list and its own policy. Planned for DesignCraft and LightCraft.
 - [`craft-captions`](crates/captions/README.md): caption and subtitle files behind one neutral
   model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
   TTML / IMSC1 / DFXP readers and writers, and CEA-608 / CEA-708 byte-pair coding. Carved from
@@ -89,6 +90,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
   log, scripts, verification) is in `crates/crw/clean-room/`. Colour stays in each app.
 - [`craft-csv`](crates/csv/README.md): delimited text (CSV, TSV) and SYLK: encoding detection (UTF-8, UTF-16, Windows-1252 or Windows-1256), delimiter sniffing, a record parser with a cap on fields per record, field quoting for writers, and a SYLK (`.slk`) reader with R1C1 formulas rewritten to A1.
+- [`craft-dds`](crates/dds/README.md): DirectDraw Surface (DDS) textures, read and written: the
+  top mip level of uncompressed, BC1 to BC3 (DXT1/3/5) and BC4/BC5 (grayscale data and normal
+  maps) textures, legacy and DX10 headers, and our own block encoder with optional mip chains. No dependencies (rayon behind `parallel`), so an
+  app that only exports textures needn't take the whole `craft-image-codecs` codec set and its
+  licences; `craft-image-codecs` reads and writes DDS through it.
 - [`craft-dialogs`](crates/dialogs/README.md): native file and message dialogs that never block
   the event loop: queued requests shown at the end of the frame and answered on a later frame,
   free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
@@ -249,7 +255,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   encoder, from PhotoCraft; includes a frame probe for routing. Metadata interpretation stays in
   each app.
 - [`craft-raster-codecs`](crates/raster-codecs/README.md): small raster formats, one module each,
-  from PhotoCraft: DDS (BC1 to BC3, read and write), DICOM, FITS (read and write), IFF/ILBM (read
+  from PhotoCraft: DDS (BC1 to BC3 read and write, BC4 and BC5 read), DICOM, FITS (read and write), IFF/ILBM (read
   and write), PCX, PNM/PAM/PFM (read and write) and XPM, into one flat image type. Bounded and
   panic-free on hostile input. Colour, orientation and the document mapping stay in each app.
 - [`craft-kiwi`](crates/kiwi/README.md): clean-room decoder and encoder for the kiwi binary schema
@@ -268,7 +274,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
-  MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
+  MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, a Sierra VMD (`vmd`) demuxer, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
 - [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON: the document model of
   lottie-spec 1.0 (animation, assets, layers by type, shape items, masks, effects, text, markers)
@@ -281,9 +287,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   stay in each app.
 - [`craft-mesh`](crates/mesh/README.md): 3D mesh file formats behind one neutral model (meshes
   of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY,
-  glTF 2.0 / GLB and 3MF, one feature each. Readers are bounded by `Limits`, never open a file themselves
-  glTF 2.0 / GLB and FBX, one feature each. Readers are bounded by `Limits`, never open a file themselves
-  and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
+  glTF 2.0 / GLB, FBX and 3MF, one feature each. Readers are bounded by `Limits`, never open a file
+  themselves and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
 - [`craft-midi`](crates/midi/README.md): Standard MIDI Files: a bounded reader for formats 0, 1 and
   2 and a format-1 writer, over a neutral model of notes and channel events in ticks at 960 per
   quarter note. From SoundCraft.
@@ -321,6 +326,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-pptx`](crates/pptx/README.md): PresentationML, the model of a `.pptx` presentation:
   masters, layouts, slides, shapes, placeholders and their inheritance, transitions and animations,
   comments, sections, media and kept parts. From DeckCraft. DrawingML comes from `craft-drawingml`.
+- [`craft-press-print`](crates/press-print/README.md): press-accurate printing: a PDF page separated
+  into plates by `craft-prepress`, composited into the printer's RGB profile and printed through
+  `craft-print`'s RGB transport, application-managed.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
@@ -359,6 +367,13 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   check for drawing a tree with resvg. Apps take usvg from here, not as their own dependency.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
   `color` and `write`; re-exports them for existing users.
+- [`craft-testkit`](crates/testkit/README.md): test support for the apps' own tests. Its `guards` module
+  reports source patterns that broke platforms before: muda's predefined Quit item, WGSL float literals
+  out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
+  whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
+  replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
+  copies of a valid input, and fails the test with the case that panicked or did not finish. Not
+  published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
@@ -366,6 +381,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   nearest and bilinear sampling that repeats or clamps, resizing and display conversion. Sizes are
   bounded by `Limits`. From MaterialCraft.
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
+- [`craft-ai`](crates/ai/README.md) *(spec)*: AI provider abstraction — BYO API keys (OpenAI-compatible) and one-click curated local models with capability probing, resumable checksummed downloads, and document segmentation that protects markup while translating prose;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
 - [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read
   (legacy character sets, quoted-printable, labels and Apple label groups, `KEY` certificates and
