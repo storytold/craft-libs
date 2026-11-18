@@ -75,7 +75,9 @@ pub struct AxisDetail {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct InstanceDetail {
-    /// Cut at 256 characters, like every name (see [`FaceDetails::names_partial`]).
+    /// The font's subfamily name, cut at 256 characters or sooner if the face's name budget
+    /// runs low (see [`FaceDetails::names_partial`]). Empty if missing, blank, or left out by
+    /// the budget. The instance's coordinates are still available.
     pub name: String,
     /// The instance's own PostScript name (`InterVariable-Bold`), if the font gives one. Cut at
     /// 256 characters.
@@ -121,6 +123,7 @@ pub struct StatAxisDetail {
 #[non_exhaustive]
 pub struct FaceDetails {
     pub axes: Vec<AxisDetail>,
+    /// Instances in `fvar` order, including those without a display name.
     pub instances: Vec<InstanceDetail>,
     /// Variations PostScript Name Prefix (name ID 25), if the font has one.
     pub variations_prefix: Option<String>,
@@ -128,10 +131,9 @@ pub struct FaceDetails {
     pub stat_axes: Vec<StatAxisDetail>,
     /// Sorted by tag, each tag once.
     pub features: Vec<FeatureDetail>,
-    /// Some name isn't the font's whole name: one was cut at 256 characters, or the face's name
-    /// budget ran out, cutting a name short or leaving it out. A name left out leaves out the
-    /// instance it names; names are handed out in the order the prefix, axes, features, then
-    /// instances, so the instances are what a hostile font's names cost first.
+    /// A name was cut at 256 characters or shortened or omitted to stay within the face's name
+    /// budget. Names are handed out in this order: the prefix, axes, features, then instances.
+    /// Leaving out a name does not leave out the instance it names.
     pub names_partial: bool,
 }
 
@@ -308,12 +310,14 @@ fn read_face(font: &FontRef) -> FaceDetails {
             entry.name = ids.iter().find_map(|&id| names.take(id));
         }
     }
-    let mut instances = Vec::new();
-    for (name_id, ps_id, coords) in raw_instances {
-        // An instance without a name is left out (a budget that ran out has already said so).
-        let Some(name) = names.take(name_id) else { continue };
-        instances.push(InstanceDetail { name, postscript_name: ps_id.and_then(|id| names.take(id)), coords });
-    }
+    let instances = raw_instances
+        .into_iter()
+        .map(|(name_id, ps_id, coords)| InstanceDetail {
+            name: names.take(name_id).unwrap_or_default(),
+            postscript_name: ps_id.and_then(|id| names.take(id)),
+            coords,
+        })
+        .collect();
     FaceDetails {
         axes,
         instances,

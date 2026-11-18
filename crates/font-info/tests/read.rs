@@ -50,7 +50,7 @@ fn font() -> Vec<u8> {
             coordinates: vec![Fixed::from_f64(800.0), Fixed::from_f64(96.0)],
             post_script_name_id: Some(NameId::new(262)),
         },
-        // A blank name is no instance.
+        // A blank name does not hide the instance.
         InstanceRecord {
             subfamily_name_id: NameId::new(261),
             flags: 0,
@@ -105,10 +105,13 @@ fn reads_axes_instances_and_named_features() {
     assert_eq!((wght.name.as_deref(), wght.min, wght.default, wght.max, wght.hidden), (Some("Weight"), 100.0, 400.0, 900.0, false));
     let xopq = d.axis("XOPQ").unwrap();
     assert_eq!((xopq.name.as_deref(), xopq.hidden), (Some("Parametric Thick Stroke"), true));
-    assert_eq!(d.instances.len(), 1, "{:?}", d.instances);
+    assert_eq!(d.instances.len(), 2, "{:?}", d.instances);
     assert_eq!(d.instances[0].name, "Heavy");
     assert_eq!(d.instances[0].coords, vec![("wght".to_string(), 800.0), ("XOPQ".to_string(), 96.0)]);
     assert_eq!(d.instances[0].postscript_name.as_deref(), Some("TestVF-Heavy"));
+    assert!(d.instances[1].name.is_empty());
+    assert_eq!(d.instances[1].coords, vec![("wght".to_string(), 100.0), ("XOPQ".to_string(), 96.0)]);
+    assert!(d.instances[1].postscript_name.is_none());
     assert_eq!(d.variations_prefix.as_deref(), Some("TestVF"));
     let stat: Vec<(&str, Option<f32>)> = d.stat_axes.iter().map(|a| (a.tag.as_str(), a.value)).collect();
     assert_eq!(stat, [("wght", None), ("ital", Some(0.0))]);
@@ -595,8 +598,12 @@ fn a_name_shared_by_thousands_of_instances_stays_within_budget() {
     assert_eq!(d.axes[0].name.as_deref(), Some("Weight"));
     assert!(d.names_partial);
     assert!(name_chars(&d) <= NAME_BUDGET, "{} name characters", name_chars(&d));
-    assert!(!d.instances.is_empty() && d.instances.len() < 2_000, "{} instances", d.instances.len());
-    assert!(d.instances.iter().all(|i| i.name.chars().count() == 256));
+    assert_eq!(d.instances.len(), 2_000);
+    assert_eq!(d.instances[0].name.chars().count(), 256);
+    assert!(d.instances[1_999].name.is_empty());
+    assert!(d.instances[1_999].postscript_name.is_none());
+    let coords = [("wght".to_string(), 400.0)];
+    assert!(d.instances.iter().all(|i| i.coords == coords));
 }
 
 /// 5,460 records (as many as a `name` table's 16-bit storage offset allows), each under its own
@@ -616,7 +623,20 @@ fn many_records_sharing_one_long_string_stay_within_budget() {
     assert!(took < std::time::Duration::from_secs(1), "{took:?} for {} bytes", bytes.len());
     assert!(d.names_partial);
     assert!(name_chars(&d) <= NAME_BUDGET, "{} name characters", name_chars(&d));
-    assert!(!d.instances.is_empty());
+    assert_eq!(d.instances.len(), ids.len());
+}
+
+#[test]
+fn instances_with_missing_or_blank_display_names_are_kept() {
+    let names = shared_name_table(&[(256, "Weight"), (301, "Test-Medium"), (302, " "), (303, "Test-Regular")]);
+    let bytes = named_instances_font(&[(300, Some(301)), (302, Some(303))], &names);
+    let d = craft_font_info::read(&bytes, 0).unwrap();
+    assert!(!d.names_partial);
+    assert_eq!(d.instances.len(), 2);
+    assert_eq!(d.instances[0].postscript_name.as_deref(), Some("Test-Medium"));
+    assert_eq!(d.instances[1].postscript_name.as_deref(), Some("Test-Regular"));
+    let coords = [("wght".to_string(), 400.0)];
+    assert!(d.instances.iter().all(|i| i.name.is_empty() && i.coords == coords));
 }
 
 /// A face whose names fit is not marked: the flag means something was cut.
