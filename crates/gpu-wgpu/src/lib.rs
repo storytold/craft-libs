@@ -253,10 +253,14 @@ impl WgpuContext {
     /// host genuinely has no usable adapter (see `crates/gpu-wgpu/src/tests.rs`).
     pub fn has_device(&self) -> bool {
         #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
-        if matches!(self.backing, Backing::Device(_)) {
-            return true;
+        {
+            matches!(self.backing, Backing::Device(_))
         }
-        false
+
+        #[cfg(not(all(not(target_arch = "wasm32"), feature = "adapter-probe")))]
+        {
+            false
+        }
     }
 
     /// True once the device has reported loss. Every [`DeviceCaps`] read before this point is
