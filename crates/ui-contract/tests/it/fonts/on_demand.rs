@@ -348,3 +348,57 @@ fn the_deflated_defaults_are_eguis_default_faces_and_draw_its_icons() {
         }
     }
 }
+
+#[trial]
+fn candidates_with_empty_outlines_are_skipped_for_the_next_usable_font() {
+    let ghost = super::synthetic_ttf("GhostArabic", &[('ع', false)], false);
+    assert_eq!(SystemCandidates.covers(&ghost, 'ع'), None, "mapped glyph without contours must not cover");
+    let ghost_path = write("ghost-arabic.ttf", &ghost);
+    let arabic_path = write("usable-arabic.ttf", ARABIC);
+    let files = Files::new(vec![("Arab", vec![ghost_path, arabic_path.clone()])]);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    show(&mut frames, "ع");
+    assert!(draws(&frames, 'ع'));
+    assert_eq!(registered(&frames), [(arabic_path, 0)]);
+
+    // Collection regional lookup also skips a regional face whose glyph has no outline contours.
+    let ghost_jp = super::synthetic_ttf("Noto Sans CJK JP", &[('日', false)], false);
+    let usable_sc = super::synthetic_ttf("Noto Sans CJK SC", &[('日', true)], false);
+    let ttc = write("ghost-regional.ttc", &collection(&[&ghost_jp, &usable_sc]));
+    let files = Files::new(vec![("Hani", vec![ttc.clone()])]);
+    let mut frames = Frames::new();
+    UiFonts::new(&I18nScripts)
+        .app_face("ui", egui_face("Ubuntu-Light"), &[FontRef::proportional()])
+        .system_fonts(SystemFonts::Off)
+        .ui_language("ja")
+        .on_demand(Arc::clone(&files) as Arc<dyn FontCandidates>)
+        .install(&frames.ctx);
+
+    show(&mut frames, "日");
+    assert_eq!(registered(&frames), [(ttc, 1)], "regional face with empty outline is skipped for the next covering face");
+}
+
+#[trial]
+fn ideographic_space_requires_cmap_coverage_and_allows_zero_contours() {
+    let no_space = super::synthetic_ttf("NoSpace", &[('日', true)], false);
+    let with_space = super::synthetic_ttf("WithSpace", &[('\u{3000}', false)], false);
+    assert_eq!(SystemCandidates.covers(&no_space, '\u{3000}'), None, "whitespace still requires a cmap entry");
+    assert_eq!(SystemCandidates.covers(&with_space, '\u{3000}'), Some(0), "mapped whitespace is allowed with zero contours");
+
+    let no_space_path = write("no-ideographic-space.ttf", &no_space);
+    let with_space_path = write("with-ideographic-space.ttf", &with_space);
+    let files = Files::new(vec![("Hani", vec![no_space_path, with_space_path.clone()])]);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    show(&mut frames, "\u{3000}");
+    assert_eq!(registered(&frames), [(with_space_path, 0)]);
+
+    // Sample check (as used by fontconfig::fc_match) rejects a font if any sample character is a ghost glyph.
+    let partial_sample = super::synthetic_ttf("PartialSample", &[('图', true), ('层', false)], false);
+    let full_sample = super::synthetic_ttf("FullSample", &[('图', true), ('层', true)], false);
+    assert!(!"图层".chars().all(|c| SystemCandidates.covers(&partial_sample, c).is_some()));
+    assert!("图层".chars().all(|c| SystemCandidates.covers(&full_sample, c).is_some()));
+}

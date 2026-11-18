@@ -7,6 +7,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use egui::epaint::text::Tag;
 use egui::{FallbackRequest, FontData, FontFamily, FontInsert, FontPriority, FontProvider, InsertFontFamily};
 use skrifa::MetadataProvider as _;
+use skrifa::raw::TableProvider as _;
 
 use super::FontRef;
 
@@ -220,9 +221,61 @@ impl FontProvider for Installed {
     }
 }
 
-/// Whether the face's character map has `c`.
+/// An [`OutlinePen`](skrifa::outline::OutlinePen) that counts the drawable segments of a glyph.
+#[derive(Default)]
+struct ContourCount(usize);
+
+impl skrifa::outline::OutlinePen for ContourCount {
+    fn move_to(&mut self, _x: f32, _y: f32) {}
+
+    fn line_to(&mut self, _x: f32, _y: f32) {
+        self.0 = self.0.saturating_add(1);
+    }
+
+    fn quad_to(&mut self, _cx0: f32, _cy0: f32, _x: f32, _y: f32) {
+        self.0 = self.0.saturating_add(1);
+    }
+
+    fn curve_to(&mut self, _cx0: f32, _cy0: f32, _cx1: f32, _cy1: f32, _x: f32, _y: f32) {
+        self.0 = self.0.saturating_add(1);
+    }
+
+    fn close(&mut self) {}
+}
+
+/// Whether `font` draws at least one outline segment for `glyph_id`.
+fn has_outline_contour(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    let Some(outline) = font.outline_glyphs().get(glyph_id) else { return false };
+    let mut pen = ContourCount::default();
+    let settings = skrifa::outline::DrawSettings::unhinted(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    outline.draw(settings, &mut pen).is_ok() && pen.0 > 0
+}
+
+/// Whether `font` stores colour, bitmap or SVG glyph data for `glyph_id`.
+fn has_non_outline_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    font.color_glyphs().get(glyph_id).is_some()
+        || font.bitmap_strikes().glyph_for_size(skrifa::instance::Size::unscaled(), glyph_id).is_some()
+        || font.svg().ok().and_then(|svg| svg.glyph_data(glyph_id).ok().flatten()).is_some_and(|data| !data.is_empty())
+}
+
+/// Maps `c` to a non-`.notdef` glyph ID in `font`.
+fn mapped_glyph_id(font: &skrifa::FontRef<'_>, c: char) -> Option<skrifa::GlyphId> {
+    font.charmap().map(c).filter(|&id| id != skrifa::GlyphId::NOTDEF)
+}
+
+/// Whether `font` maps `c` to a non-`.notdef` glyph with a drawable outline (or any mapped glyph
+/// for whitespace, which draws no contours).
+pub(crate) fn font_has_outline(font: &skrifa::FontRef<'_>, c: char) -> bool {
+    let Some(id) = mapped_glyph_id(font, c) else { return false };
+    c.is_whitespace() || has_outline_contour(font, id)
+}
+
+/// Whether the face maps `c` to a non-`.notdef` glyph with a drawable outline (or colour, bitmap
+/// or SVG data, or any mapped glyph for whitespace).
 pub(crate) fn has_char(data: &FontData, c: char) -> bool {
-    skrifa::FontRef::from_index(data.bytes(), data.index).is_ok_and(|font| font.charmap().map(c).is_some())
+    let Ok(font) = skrifa::FontRef::from_index(data.bytes(), data.index) else { return false };
+    let Some(id) = mapped_glyph_id(&font, c) else { return false };
+    c.is_whitespace() || has_non_outline_glyph(&font, id) || has_outline_contour(&font, id)
 }
 
 /// Whether `c` shows a glyph: not whitespace, a control, a format character or another invisible

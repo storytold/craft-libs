@@ -16,7 +16,7 @@ use egui::{Context, FontData, Shape};
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FileRef, TableProvider as _};
 
-use super::faces::{baseline_fallback, set_weight};
+use super::faces::{baseline_fallback, font_has_outline, set_weight};
 use super::script::{EMOJI, MATH, SYMBOLS, script_of};
 use super::stack::is_cjk;
 use crate::runtime::egui::fonts as egui_fonts;
@@ -34,7 +34,8 @@ pub trait FontCandidates: Send + Sync {
     /// Files that may cover `script` (ISO 15924), most preferred first. For Han the `han`
     /// preference orders the regional faces (Japanese before Simplified for a `ja` locale).
     fn files(&self, script: &str, han: Option<Han>) -> Vec<PathBuf>;
-    /// The face index in `data` whose character map has `c`; `None` when none has it.
+    /// The face index in `data` that maps `c` to a drawable glyph (or any mapped glyph for
+    /// whitespace); `None` when none covers it.
     fn covers(&self, data: &[u8], c: char) -> Option<u32>;
     /// A background lookup (fontconfig's CJK scan) is still running: the loader waits for the
     /// preferred script instead of falling through to another one.
@@ -364,18 +365,19 @@ fn face_is_readable(bytes: &[u8], index: u32) -> bool {
     font.head().is_ok() && font.hhea().is_ok() && font.maxp().is_ok() && font.cmap().is_ok()
 }
 
-/// The index of the first face in `bytes` (a font or a collection) whose character map has `c`.
-/// `None` for fonts without it and for data that doesn't parse.
+/// The index of the first face in `bytes` (a font or a collection) that maps `c` to a drawable
+/// glyph (non-empty outline, or any mapped glyph for whitespace). `None` for fonts without it
+/// and for data that doesn't parse.
 fn covering_face(bytes: &[u8], c: char) -> Option<u32> {
     match FileRef::new(bytes).ok()? {
-        FileRef::Font(font) => font.charmap().map(c).map(|_| 0),
+        FileRef::Font(font) => font_has_outline(&font, c).then_some(0),
         FileRef::Collection(collection) => {
-            collection.iter().position(|font| font.is_ok_and(|font| font.charmap().map(c).is_some())).and_then(|i| u32::try_from(i).ok())
+            collection.iter().position(|font| font.is_ok_and(|font| font_has_outline(&font, c))).and_then(|i| u32::try_from(i).ok())
         }
     }
 }
 
-/// In a collection of regional faces (Noto Sans CJK JP, SC, TC, HK, KR), the first face that has
+/// In a collection of regional faces (Noto Sans CJK JP, SC, TC, HK, KR), the first face that draws
 /// `c` and is the `region`'s: its family name ends with the region's code. `None` for a single
 /// font or a collection without such a face, which leaves the first covering face.
 fn regional_face(bytes: &[u8], c: char, region: Han) -> Option<u32> {
@@ -390,7 +392,7 @@ fn regional_face(bytes: &[u8], c: char, region: Han) -> Option<u32> {
     };
     let index = collection.iter().position(|font| {
         font.is_ok_and(|font| {
-            font.charmap().map(c).is_some()
+            font_has_outline(&font, c)
                 && font
                     .localized_strings(skrifa::string::StringId::FAMILY_NAME)
                     .english_or_first()
