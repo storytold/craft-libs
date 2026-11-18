@@ -218,6 +218,7 @@ trait AnyStackDialog: Send {
     fn key(&self) -> Option<String>;
     fn instance(&self) -> Option<DialogId>;
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>>;
+    fn take_child_erased(&mut self) -> Option<ChildDialog>;
     fn held_state(&self) -> Option<HeldOk>;
     fn canvas(&self) -> Option<egui::Id>;
     fn json_fields(&self) -> Option<Value>;
@@ -255,6 +256,10 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>> {
         self.confirm(ctx).map(|result| Box::new(DialogResult::Ok(result)) as Box<dyn Any + Send>)
+    }
+
+    fn take_child_erased(&mut self) -> Option<ChildDialog> {
+        StackDialog::take_child(self)
     }
 
     fn held_state(&self) -> Option<HeldOk> {
@@ -451,7 +456,13 @@ impl DialogHost {
             let Some(at) = self.position_by_id(id) else { continue };
             let stack = &self.stack;
             let dialog = &mut self.open[at];
-            let Some(result) = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack)) else { continue };
+            let Some(result) = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack)) else {
+                // The dialog stays open: a child it asks for opens over it and shows from the next pass.
+                if let Some(ChildDialog(child)) = self.open[at].take_child_erased() {
+                    self.open_with_parent(child, Some(id));
+                }
+                continue;
+            };
             self.remove_tree(id);
             let dialog = self.open.remove(at);
             crate::runtime::overlay::end_stack_dialog(&ctx, id);
