@@ -25,6 +25,7 @@ pub enum FitMode {
     Whole,
     /// The widest tabs shrink to the minimum width, then the rest overflow. With `keep_selected` the selected tab is
     /// not among the tabs that shrink, and the overflow takes the last tabs first.
+    #[non_exhaustive]
     Shrink {
         /// Whether the selected tab keeps its natural width.
         keep_selected: bool,
