@@ -184,8 +184,10 @@ impl<'a> FindBar<'a> {
                 if to_query {
                     let taken = focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
                     eprintln!(
-                        "DIAG asking_for_the_bar_again_selects_its_query_unless_a_composition_runs: request taken {taken} has_focus {}",
-                        edit.response.has_focus()
+                        "DIAG asking_for_the_bar_again_selects_its_query_unless_a_composition_runs: request taken {taken} has_focus {} field {:?} egui focused {:?}",
+                        edit.response.has_focus(),
+                        edit.response.id,
+                        ui.ctx().memory(|memory| memory.focused())
                     );
                     // Asking again each run until the field holds focus keeps the request across the measuring run.
                     if edit.response.has_focus()

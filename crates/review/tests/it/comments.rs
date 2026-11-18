@@ -118,7 +118,6 @@ fn multi_selection_reports_only_threads_with_the_lead_first() {
     let first = card(&fixture, "Note 1.").expect("card 1");
     fixture.click_at(first.center()).settle();
     assert_eq!(last_selection(&edits), Some(vec![ThreadId(1)]), "a click selects its card");
-    eprintln!("DIAG multi_selection_reports_only_threads_with_the_lead_first: rows {:?}", row_names(&fixture));
     let third = card(&fixture, "Note 3.").expect("card 3");
     fixture.hold(Modifiers::SHIFT).click_at(third.center()).hold(Modifiers::NONE).settle();
     let range = last_selection(&edits).expect("the Shift click reports the selection");
@@ -300,11 +299,11 @@ fn long_list() -> (Rc<RefCell<Vec<CommentThread>>>, Rc<RefCell<CommentsPanelStat
     (threads, state, fixture)
 }
 
-/// Card 1, far above the cards in view, grows by two replies: the cards in view move down, not stay where its old
-/// height would put them.
+/// Card 1, far above the cards in view, grows by two replies: the cards in view do not jump, and scrolled back to the
+/// top the card is rebuilt at its grown size with the card below it starting under it.
 #[trial]
-fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
-    let (threads, _state, mut fixture) = long_list();
+fn a_card_out_of_view_that_grows_is_rebuilt_at_its_size_when_scrolled_back() {
+    let (threads, state, mut fixture) = long_list();
     assert!(card(&fixture, "Note 1.").is_none(), "card 1 is out of view");
     let before = card(&fixture, "Note 100.").expect("the revealed card is in view").top();
     if let Some(first) = threads.borrow_mut().first_mut() {
@@ -312,17 +311,30 @@ fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
     }
     fixture.settle();
     let after = card(&fixture, "Note 100.").expect("the revealed card stays in view").top();
-    assert!(after > before, "card 1's growth moves the cards below it: {before} then {after}");
+    assert_eq!(before, after, "the cards in view stay where they are while an out-of-view card grows");
+    state.borrow_mut().reveal(ThreadId(1));
+    fixture.settle();
+    let first = card(&fixture, "Note 1.").expect("card 1 is back in view");
+    let second = card(&fixture, "Note 2.").expect("card 2 is in view below it");
+    assert!(first.height() > second.height(), "card 1 is rebuilt at its grown size: {first:?} then {second:?}");
+    assert!(second.top() >= first.bottom(), "the card below starts under the grown card: {first:?} then {second:?}");
 }
 
-/// An editor opened on card 1, far above the cards in view, makes room: the cards in view move down by it.
+/// An editor opened on card 1, far above the cards in view: the cards in view do not jump, and scrolled back to the
+/// top the card is rebuilt with its editor and the card below it starts under it.
 #[trial]
-fn an_editor_opened_on_an_out_of_view_card_makes_room_below_it() {
+fn an_editor_opened_on_an_out_of_view_card_makes_room_when_scrolled_back() {
     let (_threads, state, mut fixture) = long_list();
     assert!(card(&fixture, "Note 1.").is_none(), "card 1 is out of view");
     let before = card(&fixture, "Note 100.").expect("the revealed card is in view").top();
     state.borrow_mut().editing = Some((ThreadId(1), 0, "Note 1.".to_owned()));
     fixture.settle();
     let after = card(&fixture, "Note 100.").expect("the revealed card stays in view").top();
-    assert!(after > before, "the editor on card 1 moves the cards below it: {before} then {after}");
+    assert_eq!(before, after, "the cards in view stay where they are while an out-of-view card opens an editor");
+    state.borrow_mut().reveal(ThreadId(1));
+    fixture.settle();
+    let first = card(&fixture, "Note 1.").expect("card 1 is back in view");
+    let second = card(&fixture, "Note 2.").expect("card 2 is in view below it");
+    assert!(first.height() > second.height(), "card 1 is rebuilt with its editor: {first:?} then {second:?}");
+    assert!(second.top() >= first.bottom(), "the card below starts under the card with the editor: {first:?} then {second:?}");
 }

@@ -142,7 +142,7 @@ fn text_size_from(story: &Story, base: Shot) -> Result<(), String> {
                 // (the elision rule checks that), so it is not cut; it must still stay inside its part.
                 if !grown.keeps(same.rect, same.clip) {
                     eprintln!(
-                        "DIAG suite ListRow reads text-size {}: {name}: base run {:?} clip {:?} grown run {:?} clip {:?} elided {} shown {:?}",
+                        "DIAG {}: variant {name} base run {:?} clip {:?} grown run {:?} clip {:?} elided {} shown {:?}",
                         story.name, run.rect, run.clip, same.rect, same.clip, same.elided, grown.shown
                     );
                     return Err(format!("{}: under {name} the text `{}` leaves its part", story.name, run.text));
