@@ -194,7 +194,7 @@ where
 {
     let mut bitplane = Bitmap::new(width, height, max_cells)?;
 
-    let size = width as usize * height as usize;
+    let size = value_count(width, height, isize::MAX as u64)?;
     // `GSVALS` - The decoded gray-scale image array.
     let mut values = vec![0_u32; size];
     let mut prev_plane = vec![0; bitplane.data.len()];
@@ -219,6 +219,21 @@ where
 
         Ok(values)
     })
+}
+
+/// Craft patch: the number of values of a `width` by `height` gray-scale image. A limit refuses
+/// the image when the `u32` array of its values would take more than `max_bytes` bytes, which
+/// `decode_bitplanes` sets to `isize::MAX`, the most one allocation may take. With 32-bit
+/// pointers, a caller's raised `Limits` lets a grid reach that size.
+fn value_count(width: u32, height: u32, max_bytes: u64) -> Result<usize> {
+    let count = u64::from(width) * u64::from(height);
+    if count.saturating_mul(size_of::<u32>() as u64) > max_bytes {
+        bail!(OverflowError::BitmapLimit);
+    }
+    match usize::try_from(count) {
+        Ok(count) => Ok(count),
+        Err(_) => bail!(OverflowError::BitmapLimit),
+    }
 }
 
 #[inline(always)]
@@ -323,6 +338,21 @@ mod pdfcraft_limit_tests {
             decode(1 << 13, (1 << 12) + 1),
             limit,
             "the cells, each side within its bound"
+        );
+    }
+
+    /// Craft patch: values whose array would take more bytes than one allocation may are refused
+    /// by a limit instead of panicking. The figure is `isize::MAX` with 32-bit pointers, where a
+    /// raised `Limits` allows a grid of 2^29 cells.
+    #[test]
+    fn gray_scale_values_past_one_allocation_are_refused_by_a_limit() {
+        let max_bytes = i32::MAX as u64;
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(value_count(1 << 15, 1 << 14, max_bytes), limit, "2^31 bytes");
+        assert_eq!(
+            value_count(1 << 15, (1 << 14) - 1, max_bytes),
+            Ok((1 << 15) * ((1 << 14) - 1)),
+            "just under 2^31 bytes"
         );
     }
 }

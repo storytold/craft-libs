@@ -473,8 +473,11 @@ opens and decodes an image within a caller's `Limits`; `Image::new` and `Image::
 keep the defaults. hayro-syntax's JBIG2 filter passes the document's
 `DecodeLimits::max_image_pixels`, and its manifest takes `hayro-jbig2` from `../hayro-jbig2`, so
 `cargo test --manifest-path vendor/hayro-syntax/Cargo.toml` builds against the patched decoder.
-Each side of a bitmap is still at most 65535. Tests:
+Each side of a bitmap is still at most 65535. A halftone grid whose array of gray-scale values
+would take more than `isize::MAX` bytes is refused with `OverflowError::BitmapLimit` before the
+array is allocated; with 32-bit pointers a raised `Limits` can reach that size. Tests:
 `bitmap::pdfcraft_limit_tests::the_pixel_bound_follows_the_limits`,
+`gray_scale::pdfcraft_limit_tests::gray_scale_values_past_one_allocation_are_refused_by_a_limit`,
 `tests::the_page_and_its_regions_follow_the_limits` and
 `tests::a_page_past_the_bounds_is_refused_when_opened` in hayro-jbig2;
 `filter::jbig2::tests::the_pixel_limit_given_is_the_one_applied` and

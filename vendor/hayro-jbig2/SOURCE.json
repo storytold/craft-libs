@@ -122,7 +122,7 @@
       "path": "src/gray_scale.rs",
       "source_sha256": "46f12893f4573610789015ba7036f6afb1d30b1454c0c674fc7ccdd9337d7487",
       "source_git_blob": "2836ec77a7c8d3970b13dd46f576778c64bfe2d9",
-      "sha256": "909276ecd9bbd6f7c489563f7cb795ac088de02dff21f6a8eebbd133d1a96984"
+      "sha256": "8f09ef94125ccc217dfd2a6cc21a4826b6f4e2ace77c9d08e463dd9f0a4f8d49"
     },
     {
       "path": "src/huffman_table.rs",
