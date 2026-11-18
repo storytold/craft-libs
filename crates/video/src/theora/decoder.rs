@@ -35,8 +35,41 @@ impl Decoder {
         let comment = CommentHeader::parse(comment_packet)?;
         let setup = SetupHeader::parse(setup_packet)?;
 
-        let fmbw = (id.info.frame_width / 16) as usize;
-        let fmbh = (id.info.frame_height / 16) as usize;
+        let fmbw_u64 = (id.info.frame_width / 16) as u64;
+        let fmbh_u64 = (id.info.frame_height / 16) as u64;
+        if fmbw_u64 == 0 || fmbh_u64 == 0 {
+            return Err(Error::DimensionMismatch("frame dimensions must be non-zero multiples of 16"));
+        }
+
+        // Validate memory budget (crate::budget::DECODE_MEMORY_BUDGET) before allocating geometry and planes
+        let (cw, ch) = match id.info.pixel_format {
+            PixelFormat::Yuv420 => (fmbw_u64.checked_mul(8).ok_or(Error::OutOfMemory)?, fmbh_u64.checked_mul(8).ok_or(Error::OutOfMemory)?),
+            PixelFormat::Yuv422 => (fmbw_u64.checked_mul(8).ok_or(Error::OutOfMemory)?, fmbh_u64.checked_mul(16).ok_or(Error::OutOfMemory)?),
+            PixelFormat::Yuv444 => (fmbw_u64.checked_mul(16).ok_or(Error::OutOfMemory)?, fmbh_u64.checked_mul(16).ok_or(Error::OutOfMemory)?),
+        };
+
+        let y_bytes = (fmbw_u64.checked_mul(16).ok_or(Error::OutOfMemory)?)
+            .checked_mul(fmbh_u64.checked_mul(16).ok_or(Error::OutOfMemory)?)
+            .ok_or(Error::OutOfMemory)?;
+        let c_bytes = cw.checked_mul(ch).ok_or(Error::OutOfMemory)?;
+        let one_picture_bytes = y_bytes.checked_add(c_bytes.checked_mul(2).ok_or(Error::OutOfMemory)?).ok_or(Error::OutOfMemory)?;
+
+        // 2 reference pictures (golden + previous) and 1 reconstructed scratch picture
+        let pictures_mem = one_picture_bytes.checked_mul(3).ok_or(Error::OutOfMemory)?;
+
+        // Geometry metadata & decode scratch buffers
+        let nmbs = fmbw_u64.checked_mul(fmbh_u64).ok_or(Error::OutOfMemory)?;
+        let blocks_per_mb = id.info.pixel_format.blocks_per_macroblock() as u64;
+        let nbs = nmbs.checked_mul(blocks_per_mb).ok_or(Error::OutOfMemory)?;
+        let meta_and_scratch_mem = nbs.checked_mul(300).ok_or(Error::OutOfMemory)?;
+
+        let total_mem = pictures_mem.checked_add(meta_and_scratch_mem).ok_or(Error::OutOfMemory)?;
+        if total_mem > crate::budget::DECODE_MEMORY_BUDGET {
+            return Err(Error::OutOfMemory);
+        }
+
+        let fmbw = fmbw_u64 as usize;
+        let fmbh = fmbh_u64 as usize;
         let geom = FrameGeometry::new(fmbw, fmbh, id.info.pixel_format);
         let qmat_tables = setup.quant_params.precompute_all_qmat()?;
 

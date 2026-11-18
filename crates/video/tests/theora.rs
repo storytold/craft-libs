@@ -264,3 +264,219 @@ fn test_theora_ffmpeg_oracle_roundtrip() {
     println!("Oracle PSNR against FFmpeg decode: {p:.2} dB");
     assert!(p >= 35.0, "FFmpeg decode differs noticeably: {p:.2} dB");
 }
+
+#[test]
+fn test_theora_encoder_consecutive_calls_roundtrip() {
+    let (w, h) = (32, 32);
+    let cfg = EncoderConfig {
+        width: w as u32,
+        height: h as u32,
+        pic_width: w as u32,
+        pic_height: h as u32,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    let mut enc = Encoder::new(cfg).expect("encoder");
+    let (id_pkt, comm_pkt, setup_pkt) = enc.headers();
+    let mut dec = Decoder::from_headers(&id_pkt, &comm_pkt, &setup_pkt).expect("decoder");
+
+    let pic1 = test_picture(w, h);
+    let pkt1 = enc.encode_frame(&pic1, false).expect("frame 1");
+    let dec1 = dec.decode_packet(&pkt1).expect("decode frame 1");
+    assert!(dec1.keyframe);
+
+    let mut pic2 = test_picture(w, h);
+    pic2.y[0] = 200;
+    let pkt2 = enc.encode_frame(&pic2, false).expect("frame 2 with force_keyframe=false");
+    let dec2 = dec.decode_packet(&pkt2).expect("decode frame 2");
+    assert!(dec2.keyframe);
+}
+
+#[test]
+fn test_theora_comment_header_bounds() {
+    use craft_video::theora::CommentHeader;
+
+    // Truncated vendor string length
+    let truncated = vec![0x81, b't', b'h', b'e', b'o', b'r', b'a', 0x01];
+    assert!(matches!(CommentHeader::parse(&truncated), Err(Error::Truncated(_))));
+
+    // Vendor string length exceeding available bytes (or overflow on 32-bit: 0xFFFFFFFF)
+    let mut overflow_vendor = vec![0x81, b't', b'h', b'e', b'o', b'r', b'a'];
+    overflow_vendor.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+    assert!(matches!(CommentHeader::parse(&overflow_vendor), Err(Error::Truncated(_))));
+
+    // Valid vendor, but comment length overflows
+    let mut overflow_comment = vec![0x81, b't', b'h', b'e', b'o', b'r', b'a'];
+    overflow_comment.extend_from_slice(&4u32.to_le_bytes());
+    overflow_comment.extend_from_slice(b"test");
+    overflow_comment.extend_from_slice(&1u32.to_le_bytes()); // 1 comment
+    overflow_comment.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // comment len overflows
+    assert!(matches!(CommentHeader::parse(&overflow_comment), Err(Error::Truncated(_))));
+}
+
+#[test]
+fn test_theora_hostile_dimensions_rejected() {
+    // Zero dimensions
+    let cfg_zero = EncoderConfig {
+        width: 0,
+        height: 0,
+        pic_width: 0,
+        pic_height: 0,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    assert!(matches!(Encoder::new(cfg_zero), Err(Error::DimensionMismatch(_))));
+
+    // Overflowing dimensions
+    let cfg_overflow = EncoderConfig {
+        width: u32::MAX,
+        height: 16,
+        pic_width: 16,
+        pic_height: 16,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    assert!(matches!(Encoder::new(cfg_overflow), Err(Error::DimensionMismatch(_))));
+
+    // Massive dimensions exceeding memory budget
+    let enc_ok = Encoder::new(EncoderConfig {
+        width: 16,
+        height: 16,
+        pic_width: 16,
+        pic_height: 16,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv444,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    })
+    .expect("encoder");
+    let (_, comm_pkt, setup_pkt) = enc_ok.headers();
+
+    // Create synthetic 16384x16384 YUV444 ID packet (fmbw = 1024, fmbh = 1024)
+    let mut huge_id = vec![0x80, b't', b'h', b'e', b'o', b'r', b'a', 3, 2, 0];
+    huge_id.extend_from_slice(&1024u16.to_be_bytes()); // fmbw = 1024 (16384 px)
+    huge_id.extend_from_slice(&1024u16.to_be_bytes()); // fmbh = 1024 (16384 px)
+    huge_id.extend_from_slice(&[0, 0x40, 0x00]); // picw = 16384
+    huge_id.extend_from_slice(&[0, 0x40, 0x00]); // pich = 16384
+    huge_id.extend_from_slice(&[0, 0]); // picx, picy
+    huge_id.extend_from_slice(&30u32.to_be_bytes()); // frn
+    huge_id.extend_from_slice(&1u32.to_be_bytes()); // frd
+    huge_id.extend_from_slice(&[0, 0, 1]); // parn
+    huge_id.extend_from_slice(&[0, 0, 1]); // pard
+    huge_id.push(0); // color space
+    huge_id.extend_from_slice(&[0, 0, 0]); // nombr
+    // last two bytes: quality=0, kfgshift=6, pf_bits=3 (Yuv444), reserved=0
+    // (0 << 10) | (6 << 5) | (3 << 3) = 0 | 192 | 24 = 216 = 0x00D8
+    huge_id.extend_from_slice(&0x00D8u16.to_be_bytes());
+
+    assert!(matches!(Decoder::from_headers(&huge_id, &comm_pkt, &setup_pkt), Err(Error::OutOfMemory)));
+}
+
+#[test]
+fn test_theora_encoder_picture_strides() {
+    let (w, h) = (32, 32);
+    let cfg = EncoderConfig {
+        width: w as u32,
+        height: h as u32,
+        pic_width: w as u32,
+        pic_height: h as u32,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 50,
+        keyframe_distance: 64,
+    };
+    let mut enc = Encoder::new(cfg).expect("encoder");
+    let (id_pkt, comm_pkt, setup_pkt) = enc.headers();
+    let mut dec = Decoder::from_headers(&id_pkt, &comm_pkt, &setup_pkt).expect("decoder");
+
+    let y_stride = 64; // stride > width
+    let uv_stride = 32; // stride > cw (16)
+    let mut y = vec![0u8; y_stride * h];
+    let _cw = w / 2;
+    let ch = h / 2;
+    let u = vec![128u8; uv_stride * ch];
+    let v = vec![128u8; uv_stride * ch];
+
+    for r in 0..h {
+        for c in 0..w {
+            y[r * y_stride + c] = ((r * 255 / h) ^ (c * 255 / w)) as u8;
+        }
+        // Fill stride padding with garbage to ensure encoder does not read it
+        for c in w..y_stride {
+            y[r * y_stride + c] = 255;
+        }
+    }
+
+    let pic = Picture {
+        width: w as u32,
+        height: h as u32,
+        pic_width: w as u32,
+        pic_height: h as u32,
+        pic_x: 0,
+        pic_y: 0,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        keyframe: true,
+        pts: None,
+        y,
+        u,
+        v,
+        y_stride,
+        uv_stride,
+    };
+
+    let pkt = enc.encode_frame(&pic, true).expect("encode with stride");
+    let decoded = dec.decode_packet(&pkt).expect("decode");
+    assert_eq!(decoded.width, w as u32);
+    assert_eq!(decoded.height, h as u32);
+}
+
+#[test]
+fn test_theora_yuv444_chroma_motion_vector_half_pixel() {
+    use craft_video::theora::reconstruct::compute_block_predictor;
+
+    let plane_w = 16;
+    let plane_h = 16;
+    let ref_y = vec![0u8; plane_w * plane_h];
+    let mut ref_cb = vec![0u8; plane_w * plane_h];
+    let ref_cr = vec![0u8; plane_w * plane_h];
+
+    // Set pixel (1, 0) to 200, pixel (2, 0) to 100
+    ref_cb[1] = 200;
+    ref_cb[2] = 100;
+
+    let mut pred = [[0u8; 8]; 8];
+
+    // For Yuv444, motion vector (2, 0) is 1 full pixel in half-pixel units (rfi=1: previous reference frame)
+    compute_block_predictor(1, 0, 0, 1, (2, 0), PixelFormat::Yuv444, &ref_y, &ref_cb, &ref_cr, plane_w, plane_h, &mut pred);
+
+    // In Yuv444 without subsampling, (2, 0) moves by 1 full pixel, so pred[0][0] must be ref_cb[0 * plane_w + 1] = 200!
+    // (If quarter-pixel units were used erroneously, it would have averaged ref_cb[0] and ref_cb[1] giving (0 + 200)/2 = 100)
+    assert_eq!(pred[0][0], 200);
+}

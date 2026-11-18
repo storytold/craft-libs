@@ -364,7 +364,7 @@ pub fn compute_block_predictor(
         _ => ref_y,
     };
 
-    let is_chroma_subsampled_x = pli > 0;
+    let is_chroma_subsampled_x = pli > 0 && pixel_format != PixelFormat::Yuv444;
     let is_chroma_subsampled_y = pli > 0 && pixel_format == PixelFormat::Yuv420;
 
     let (mvx1, mvx2) = split_mv_component(mv.0 as i32, is_chroma_subsampled_x);

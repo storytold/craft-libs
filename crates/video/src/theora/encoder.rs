@@ -4,7 +4,7 @@ use super::header::{CommentHeader, IdentificationHeader, SetupHeader};
 use super::idct::fdct_1d;
 use super::reconstruct::{FrameGeometry, apply_loop_filter, reconstruct_block, undo_dc_prediction};
 use super::tables::ZIGZAG;
-use super::{ColorSpace, Info, Picture, PixelFormat, Result};
+use super::{ColorSpace, Error, Info, Picture, PixelFormat, Result};
 use craft_media::bitstream::BitWriter;
 
 /// Configuration for creating a Theora video encoder.
@@ -45,12 +45,12 @@ impl Default for EncoderConfig {
 
 /// A conformant Theora video keyframe and interframe encoder.
 pub struct Encoder {
-    pub config: EncoderConfig,
-    pub id_header: IdentificationHeader,
-    pub comment_header: CommentHeader,
-    pub setup_header: SetupHeader,
-    pub geom: FrameGeometry,
-    pub qmat_tables: [[[[u16; 64]; 64]; 3]; 2],
+    config: EncoderConfig,
+    id_header: IdentificationHeader,
+    comment_header: CommentHeader,
+    setup_header: SetupHeader,
+    geom: FrameGeometry,
+    qmat_tables: [[[[u16; 64]; 64]; 3]; 2],
 
     // Reference frames
     ref_golden_y: Vec<u8>,
@@ -68,10 +68,42 @@ pub struct Encoder {
 impl Encoder {
     /// Create a new encoder with the given configuration.
     pub fn new(config: EncoderConfig) -> Result<Self> {
-        let frame_width = (config.width + 15) & !15;
-        let frame_height = (config.height + 15) & !15;
-        let fmbw = (frame_width / 16) as usize;
-        let fmbh = (frame_height / 16) as usize;
+        if config.width == 0 || config.height == 0 {
+            return Err(Error::DimensionMismatch("dimensions cannot be zero"));
+        }
+        let frame_width = config.width.checked_add(15).map(|w| w & !15).ok_or(Error::DimensionMismatch("width overflows"))?;
+        let frame_height = config.height.checked_add(15).map(|h| h & !15).ok_or(Error::DimensionMismatch("height overflows"))?;
+        let fmbw_u64 = (frame_width / 16) as u64;
+        let fmbh_u64 = (frame_height / 16) as u64;
+        if fmbw_u64 == 0 || fmbh_u64 == 0 || fmbw_u64 > u16::MAX as u64 || fmbh_u64 > u16::MAX as u64 {
+            return Err(Error::DimensionMismatch("macroblock dimensions must fit in u16"));
+        }
+        let fmbw = fmbw_u64 as usize;
+        let fmbh = fmbh_u64 as usize;
+
+        // Validate memory budget before allocating geometry and planes
+        let (cw, ch) = match config.pixel_format {
+            PixelFormat::Yuv420 => (fmbw_u64.checked_mul(8).ok_or(Error::OutOfMemory)?, fmbh_u64.checked_mul(8).ok_or(Error::OutOfMemory)?),
+            PixelFormat::Yuv422 => (fmbw_u64.checked_mul(8).ok_or(Error::OutOfMemory)?, fmbh_u64.checked_mul(16).ok_or(Error::OutOfMemory)?),
+            PixelFormat::Yuv444 => (fmbw_u64.checked_mul(16).ok_or(Error::OutOfMemory)?, fmbh_u64.checked_mul(16).ok_or(Error::OutOfMemory)?),
+        };
+
+        let y_bytes = (fmbw_u64.checked_mul(16).ok_or(Error::OutOfMemory)?)
+            .checked_mul(fmbh_u64.checked_mul(16).ok_or(Error::OutOfMemory)?)
+            .ok_or(Error::OutOfMemory)?;
+        let c_bytes = cw.checked_mul(ch).ok_or(Error::OutOfMemory)?;
+        let one_picture_bytes = y_bytes.checked_add(c_bytes.checked_mul(2).ok_or(Error::OutOfMemory)?).ok_or(Error::OutOfMemory)?;
+
+        let pictures_mem = one_picture_bytes.checked_mul(3).ok_or(Error::OutOfMemory)?;
+        let nmbs = fmbw_u64.checked_mul(fmbh_u64).ok_or(Error::OutOfMemory)?;
+        let blocks_per_mb = config.pixel_format.blocks_per_macroblock() as u64;
+        let nbs = nmbs.checked_mul(blocks_per_mb).ok_or(Error::OutOfMemory)?;
+        let meta_mem = nbs.checked_mul(300).ok_or(Error::OutOfMemory)?;
+
+        let total_mem = pictures_mem.checked_add(meta_mem).ok_or(Error::OutOfMemory)?;
+        if total_mem > crate::budget::DECODE_MEMORY_BUDGET {
+            return Err(Error::OutOfMemory);
+        }
 
         let info = Info {
             version_major: 3,
@@ -131,29 +163,49 @@ impl Encoder {
         })
     }
 
+    /// Returns the encoder configuration.
+    pub fn config(&self) -> &EncoderConfig {
+        &self.config
+    }
+
+    /// Returns the stream identification header.
+    pub fn id_header(&self) -> &IdentificationHeader {
+        &self.id_header
+    }
+
+    /// Returns the comment header.
+    pub fn comment_header(&self) -> &CommentHeader {
+        &self.comment_header
+    }
+
+    /// Returns the setup header.
+    pub fn setup_header(&self) -> &SetupHeader {
+        &self.setup_header
+    }
+
     /// Serialize the three mandatory stream headers in order: `(id, comment, setup)`.
     pub fn headers(&self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         (self.id_header.serialize(), self.comment_header.serialize(), self.setup_header.serialize())
     }
 
     /// Encode a single picture into a conformant Theora packet.
-    pub fn encode_frame(&mut self, pic: &Picture, force_keyframe: bool) -> Result<Vec<u8>> {
-        let is_keyframe = force_keyframe || self.frame_count == 0 || (self.frame_count - self.last_keyframe >= self.config.keyframe_distance as u64);
-
+    ///
+    /// Currently produces intra keyframes for every frame, ensuring all packets are independent
+    /// self-contained keyframes that decode reliably.
+    pub fn encode_frame(&mut self, pic: &Picture, _force_keyframe: bool) -> Result<Vec<u8>> {
         let mut w = BitWriter::new();
 
         // 1. Frame Header (Section 7.1)
         w.write_bit(false); // data packet bit = 0
-        w.write_bit(!is_keyframe); // FTYPE: 0: Intra, 1: Inter
+        w.write_bit(false); // FTYPE: 0: Intra (keyframe)
 
-        // qi: map quality (0..=63) to qi index (63 - quality)
-        let qi = (63 - self.config.quality.min(63)) as usize;
+        // qi: map quality (0..=63) directly to quantization index (0 = coarsest, 63 = finest)
+        let qi = self.config.quality.min(63) as usize;
         w.write_bits(qi as u32, 6);
         w.write_bit(false); // MOREQIS = 0 (1 qi value)
 
-        if is_keyframe {
-            w.write_bits(0, 3); // 3 reserved bits = 000
-        }
+        // 3 reserved bits for intra keyframe = 000
+        w.write_bits(0, 3);
 
         let nbs = self.geom.nbs;
         let (y_pw, y_ph, _, _, _, _, _, _) = self.geom.planes[0];
@@ -174,12 +226,11 @@ impl Encoder {
         for bi in 0..nbs {
             let meta = &self.geom.blocks[bi];
             let pli = meta.pli;
-            let (pw, _, _, _, _, _, _, _) = self.geom.planes[pli];
-            let src_plane = match pli {
-                0 => &pic.y,
-                1 => &pic.u,
-                2 => &pic.v,
-                _ => &pic.y,
+            let (src_plane, stride) = match pli {
+                0 => (&pic.y, pic.y_stride),
+                1 => (&pic.u, pic.uv_stride),
+                2 => (&pic.v, pic.uv_stride),
+                _ => (&pic.y, pic.y_stride),
             };
 
             // Read 8x8 block from source picture (origin at lower-left!)
@@ -189,7 +240,7 @@ impl Encoder {
                 let py = meta.pixel_y + row;
                 for col in 0..8 {
                     let px = meta.pixel_x + col;
-                    let sample = if py * pw + px < src_plane.len() { src_plane[py * pw + px] as i16 } else { 128 };
+                    let sample = if py * stride + px < src_plane.len() { src_plane[py * stride + px] as i16 } else { 128 };
                     // Subtract 128 (intra predictor)
                     block_samples[row * 8 + col] = sample - 128;
                 }
@@ -319,7 +370,7 @@ impl Encoder {
                     // Count how many consecutive blocks also have remaining all zero at ti
                     let mut eob_run = 0usize;
                     let mut lookahead = bi;
-                    while lookahead < nbs {
+                    while lookahead < nbs && eob_run < 4095 {
                         if tis[lookahead] == ti {
                             if (ti..64).all(|idx| stored_coeffs[lookahead][idx] == 0) {
                                 eob_run += 1;
@@ -487,13 +538,11 @@ impl Encoder {
         let lflim_l = self.setup_header.lflims[qi];
         apply_loop_filter(&self.geom, &bcoded, lflim_l, &mut rec_y, &mut rec_cb, &mut rec_cr);
 
-        // Update local reference frames
-        if is_keyframe {
-            self.ref_golden_y.copy_from_slice(&rec_y);
-            self.ref_golden_cb.copy_from_slice(&rec_cb);
-            self.ref_golden_cr.copy_from_slice(&rec_cr);
-            self.last_keyframe = self.frame_count;
-        }
+        // Update local reference frames (all frames are intra keyframes)
+        self.ref_golden_y.copy_from_slice(&rec_y);
+        self.ref_golden_cb.copy_from_slice(&rec_cb);
+        self.ref_golden_cr.copy_from_slice(&rec_cr);
+        self.last_keyframe = self.frame_count;
         self.ref_prev_y.copy_from_slice(&rec_y);
         self.ref_prev_cb.copy_from_slice(&rec_cb);
         self.ref_prev_cr.copy_from_slice(&rec_cr);

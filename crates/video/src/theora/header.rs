@@ -185,11 +185,12 @@ impl CommentHeader {
         let vendor_len = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         pos += 4;
 
-        if data.len() < pos + vendor_len {
+        let vendor_end = pos.checked_add(vendor_len).ok_or(Error::Truncated("vendor string"))?;
+        if data.len() < vendor_end {
             return Err(Error::Truncated("vendor string"));
         }
-        let vendor = String::from_utf8_lossy(&data[pos..pos + vendor_len]).into_owned();
-        pos += vendor_len;
+        let vendor = String::from_utf8_lossy(&data[pos..vendor_end]).into_owned();
+        pos = vendor_end;
 
         if data.len() < pos + 4 {
             return Err(Error::Truncated("comment count"));
@@ -209,11 +210,12 @@ impl CommentHeader {
             }
             let len = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
             pos += 4;
-            if data.len() < pos + len {
+            let comment_end = pos.checked_add(len).ok_or(Error::Truncated("user comment string"))?;
+            if data.len() < comment_end {
                 return Err(Error::Truncated("user comment string"));
             }
-            let s = String::from_utf8_lossy(&data[pos..pos + len]).into_owned();
-            pos += len;
+            let s = String::from_utf8_lossy(&data[pos..comment_end]).into_owned();
+            pos = comment_end;
             comments.push(s);
         }
 
