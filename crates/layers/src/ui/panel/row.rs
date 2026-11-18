@@ -369,7 +369,9 @@ fn sub_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id, group: Sub
         row = row.ink(RowInk::Dimmed);
     }
     if sub.eye_shown {
-        row = row.toggle(ToggleCell::eye(EYE, sub.on).name(named(&words.visibility, &sub.label)));
+        let eye = ToggleCell::eye(EYE, sub.on).name(named(&words.visibility, &sub.label));
+        let eye = if group == SubRowGroup::Effects { eye.row_icon_size() } else { eye };
+        row = row.toggle(eye);
     }
     let size = cx.options.thumbnail_size;
     let header_mask = group == SubRowGroup::SmartFilters && index.is_none() && sub.mask && size != ThumbSize::None;

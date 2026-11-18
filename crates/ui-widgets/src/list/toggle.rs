@@ -74,6 +74,7 @@ pub struct ToggleCell {
     /// The state it shows.
     pub state: ToggleState,
     name: CellName,
+    row_icon_size: bool,
     /// The tooltip, the same in every row.
     pub tooltip: Option<Label>,
     /// A fill under the icon (a layer's label colour).
@@ -96,6 +97,7 @@ impl ToggleCell {
             face,
             state,
             name: CellName::Given(name.into()),
+            row_icon_size: false,
             tooltip: None,
             fill: None,
             always_visible: false,
@@ -162,10 +164,37 @@ impl ToggleCell {
         self
     }
 
+    /// Draws the icon at the regular row size, including in a compact sub-row.
+    #[must_use]
+    pub fn row_icon_size(mut self) -> Self {
+        self.row_icon_size = true;
+        self
+    }
+
+    pub(super) fn icon_side(&self, regular: f32, mark: f32) -> f32 {
+        if self.row_icon_size { regular } else { mark }
+    }
+
     /// A press on the row's own area shows on the cell, for a row whose click turns on what the cell shows.
     #[must_use]
     pub fn row_press(mut self) -> Self {
         self.row_press = true;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sub_row_toggle_can_match_the_regular_row_icon() {
+        let eye = ToggleCell::eye(ColumnKey::new("eye"), true);
+        let regular = 16.0;
+        let compact = 12.0;
+
+        assert_eq!(eye.icon_side(regular, compact), compact);
+        let regular_eye = eye.icon_side(regular, regular);
+        assert_eq!(eye.row_icon_size().icon_side(regular, compact), regular_eye);
     }
 }
