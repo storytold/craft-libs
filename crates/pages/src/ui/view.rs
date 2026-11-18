@@ -32,8 +32,8 @@ use crate::layout::{
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, ZoomLadder};
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass,
-    canvas_space, tool_pass,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
+    tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::PaintSlot;
@@ -634,6 +634,13 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     {
         state.offset = offset;
     }
+    eprintln!(
+        "DIAG a_changed_zoom_keeps_the_point_at_the_centre_in_place: unmoved {unmoved} scale {} offset {:?} mem {:?} go_to {}",
+        geo.scale,
+        state.offset,
+        mem.offset,
+        state.go_to.is_some()
+    );
     state.zoom = geo.scale / SCREEN_POINTS_PER_POINT;
 
     // The canvas folded the wheel, a pinch and the view commands into the view it settled on: a different zoom is the
@@ -665,6 +672,15 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let wheel_turned = wheel
         .filter(|_| !state.continuous)
         .and_then(|wheel| wheel_turn(&wheel, edge_ahead(&geo, state.offset.1, vh, wheel.scroll.y < 0.0), f64::from(navigation.wheel_line)));
+    if let Some(wheel) = wheel.filter(|_| !state.continuous) {
+        let ahead = edge_ahead(&geo, state.offset.1, vh, wheel.scroll.y < 0.0);
+        let line = format!(
+            "scroll {:?} gathered {:?} unit {:?} moved {} edge {ahead:?} offset {:?} notch {} turned {wheel_turned:?}",
+            wheel.scroll, wheel.gathered, wheel.unit, wheel.moved, state.offset, navigation.wheel_line
+        );
+        eprintln!("DIAG half_notches_past_the_bottom_turn_once_they_add_up_within_one_gesture_and_never_across_two: {line}");
+        eprintln!("DIAG every_notch_turns_one_page_and_a_swipe_with_its_momentum_turns_once: {line}");
+    }
     let step = state.turn.take();
     let mut go_to = keys.go_to;
     if let Some(forward) = keys.turn.or(step).or(wheel_turned) {
@@ -735,6 +751,10 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         })
         .collect();
     let near = near_pages(&drawn, state.continuous, &visible, count, &build.layout_options(&state), travel);
+    eprintln!(
+        "DIAG prefetch_asks_for_the_rows_ahead_of_the_motion_and_none_behind: travel {travel} last {:?} want {want:?} visible {visible:?} near {near:?}",
+        mem.offset
+    );
     let kept = keep.iter().copied().filter(|page| *page < count && !rows.contains(page) && !near.contains(page));
     for page in near.iter().copied().chain(kept) {
         let size = drawn.layout.rects[page].size();
@@ -752,6 +772,10 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let bars =
         CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(shown), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
     let bar_drag = bars.view.value().is_some();
+    eprintln!(
+        "DIAG a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass: bar_drag {bar_drag} travel {travel} pointer_zoom {pointer_zoom} events {:?}",
+        bars.view.events
+    );
     if let Some(moved) = bars.view.value() {
         want = drawn_frame.offset_of(moved.center, vw, vh);
     }
@@ -790,7 +814,6 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     })
 }
 
-
 /// Which way the view travels this pass along the page column: `1.0` down the document, `-1.0` up, `0.0` still. The
 /// sign of the offset change against the offset the last pass ended with, or with no change and a wheel gesture
 /// running, of the gesture's gathered scroll (a negative scroll moves down). Nothing of it is kept between passes.
@@ -809,11 +832,7 @@ fn travel_of(last: Option<(f64, f64)>, want: (f64, f64), wheel: Option<&craft_be
 /// `Some(false)` the start, going back, `None` when the row still has room that way. A row that fits sits at both.
 fn edge_ahead(geo: &Placed, y: f64, view_height: f64, forward: bool) -> Option<bool> {
     let (lo, hi) = offset_range(geo.doc.y0, geo.doc.y1, view_height);
-    if forward {
-        (y >= hi - EDGE).then_some(true)
-    } else {
-        (y <= lo + EDGE).then_some(false)
-    }
+    if forward { (y >= hi - EDGE).then_some(true) } else { (y <= lo + EDGE).then_some(false) }
 }
 
 /// How near the edge of a row, in screen points, the view counts as at it: the offset a pass ends with is clamped
@@ -823,11 +842,7 @@ const EDGE: f64 = 0.5;
 /// The first page of the row after (`forward`) or before `row`, `None` past either end. With a cover, forward from
 /// the cover goes to page 1 and back from the first spread to the cover, as `shown_row` groups the pages.
 fn turned_row(count: usize, row: &Range<usize>, options: &LayoutOptions, forward: bool) -> Option<usize> {
-    if forward {
-        (row.end < count).then_some(row.end)
-    } else {
-        row.start.checked_sub(1).map(|before| shown_row(count, before, options).start)
-    }
+    if forward { (row.end < count).then_some(row.end) } else { row.start.checked_sub(1).map(|before| shown_row(count, before, options).start) }
 }
 
 /// Makes `go_to`'s page current and, for a [`GoTo::Rect`], sets the zoom that fits its rect and margin into the
