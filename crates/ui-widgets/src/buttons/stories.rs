@@ -296,7 +296,7 @@ fn paste_rows(ui: &mut Ui, _: &mut BodyCx<'_>) {
 }
 
 /// A split button whose arrow opens a menu the caller draws, open.
-#[story(SplitButton<'static, u8>, covers = [], drive = Drive::Custom(open_menu), title = "Body")]
+#[story(SplitButton<'static, u8>, covers = [Open], drive = Drive::Custom(open_menu), title = "Body")]
 fn split_button_body(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     SplitButton::<u8>::body("Paste", paste_rows).icon(IconId::new("copy")).show(ui).into()
 }

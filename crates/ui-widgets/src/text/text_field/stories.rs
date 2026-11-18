@@ -199,7 +199,7 @@ fn open_functions(fixture: &mut Fixture) {
 }
 
 /// A formula cell: the marked list with the highlighted function's description; Enter commits the cell, Tab completes.
-#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Custom(open_functions))]
+#[story(TextField<'static, PlainText>, covers = [Open], drive = Drive::Custom(open_functions))]
 fn text_field_formula(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TextField::new("Formula", Bind::given(String::new())).complete(Functions).show(ui).into()
 }
