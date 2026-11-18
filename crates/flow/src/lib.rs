@@ -242,6 +242,34 @@ mod tests {
         out
     }
 
+    #[test]
+    fn character_indents_set_the_list_continuation_baseline() {
+        let mut doc = craft_wordmodel::Document::new();
+        let num = std::sync::Arc::make_mut(&mut doc.numbering).add_list(craft_wordmodel::ListKind::Numbered);
+        let numbered = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(0.0);
+            p.indent_left_chars = Some(6.0);
+        };
+        let outdented = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(0.0);
+        };
+        doc.body = doc_of(&[("One", &numbered), ("Out", &outdented)]).body;
+        let got = items(&from_doc(&doc).blocks);
+        assert_eq!(got.iter().find(|r| r.0 == "Out").map(|r| r.1), Some(None));
+    }
+
+    #[test]
+    fn a_zero_indent_header_keeps_its_explicit_list_membership() {
+        let header = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(0.0);
+        };
+        let doc = doc_of(&[("Header", &header)]);
+        assert_eq!(items(&from_doc(&doc).blocks), [("Header".into(), Some(0))]);
+    }
+
     /// A list item's further paragraph cut by a page break is that paragraph on both pages: the
     /// text after the break stays in the item too.
     #[test]

@@ -201,6 +201,7 @@ fn a_list_items_further_paragraphs_are_paragraphs_with_no_number() {
     for saved in [crate::text::tests::export_model(&d).unwrap(), export(&d).unwrap()] {
         let back = import(&saved).unwrap();
         want(&shape(&back));
+        assert_eq!(back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Header").unwrap().props.list_item, Some(0));
         let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
         assert_eq!(nums[0], nums[1], "{nums:?}");
     }
@@ -406,4 +407,24 @@ fn a_heading_in_a_list_item_stays_in_it() {
     );
     let head = back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Head").unwrap();
     assert_eq!(head.props.style.as_deref(), Some("Heading2"), "{c}");
+}
+
+#[test]
+fn zero_indent_multi_paragraph_header_survives_model_export() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment fo:margin-left="0in" fo:text-indent="0in"/></style:list-level-properties></text:list-level-style-number></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:list text:style-name="L"><text:list-header><text:p>Header</text:p><text:p>More header</text:p></text:list-header><text:list-item><text:p>One</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let bytes = crate::text::tests::export_model(&doc).unwrap();
+    let xml = crate::text::tests::entry(&bytes, "content.xml");
+    assert_eq!(xml.matches("<text:list-header>").count(), 1);
+    let back = import(&bytes).unwrap();
+    for text in ["Header", "More header"] {
+        let p = back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == text).unwrap();
+        assert_eq!(p.props.list_item, Some(0));
+        assert!(p.props.numbering.is_none());
+    }
 }

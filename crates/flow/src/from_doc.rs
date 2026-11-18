@@ -957,15 +957,16 @@ fn flow_paras_at(doc: &Document, p: &Paragraph, opts: FlowOpts, at: &mut ItemTex
     if let Some(n) = rp.numbering.filter(|n| n.num != 0) {
         // The paragraph's own indent, else its level's, else its style's (as Word places it).
         let level = doc.numbering.level(n.num, n.level).map(|l| l.indent);
-        let text = p.props.indent_left.or(level).unwrap_or(left);
+        // Nonzero character indents override point indents, including an explicit zero.
+        let text = if rp.indent_chars[0] != 0.0 { left } else { p.props.indent_left.or(level).unwrap_or(left) };
         if let Some(t) = at.get_mut(usize::from(n.level)) {
             *t = Some(text);
         }
     } else if let Some(l) = p.props.list_item {
-        // Before any numbered paragraph at its level (a list header), anywhere off the margin.
+        // Before any numbered paragraph, an explicit header has no prior baseline to outdent from.
         let kept = match at.get(usize::from(l)).copied().flatten() {
             Some(text) => left >= text - 0.5,
-            None => left > 0.5,
+            None => true,
         };
         if !kept {
             for q in &mut paras {
