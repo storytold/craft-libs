@@ -1,6 +1,6 @@
 //! `CanvasSize`: the Canvas Size dialog.
 
-use super::{CanvasExtension, Hold, Kit, LinkedSize, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
+use super::{CanvasExtension, Kit, LinkedSize, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
@@ -181,31 +181,18 @@ impl<'a> CanvasSize<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> CanvasSizeOutput {
-        let CanvasSize { values, open, bytes_per_pixel, mut held } = self;
+        let CanvasSize { values, open, bytes_per_pixel, held } = self;
         let kit = Kit::new(ui);
         let words = kit.words();
 
         let title = words.canvas_size_title.clone();
-        let hold = match held.as_deref() {
-            Some(held) => Hold {
-                on: true,
-                finish: held.is_accepted(),
-                waiting: held.is_waiting(),
-                refusal: held.refusal().map(|(reason, at)| (reason.clone(), at.clone())),
-            },
-            None => Hold::default(),
-        };
-        let finish = hold.finish;
-        let mut current: Option<CanvasSizeValues> = None;
-        // PLAN: `show_form` still takes a `Hold` here; dialogs-w5 moves it onto `Option<&mut HeldAnswer<S>>`, and this call then passes `held` directly.
-        let shown = show_form(
+        show_form(
             ui,
             title,
             open,
             values,
-            hold,
+            held,
             |ui, state| {
-                current = Some(state.clone());
                 let size = state.size.original();
                 let has_background = state.has_background;
                 state.extension = state.fill();
@@ -237,24 +224,8 @@ impl<'a> CanvasSize<'a> {
                     }
                 });
             },
-            CanvasSizeValues::clone,
-        );
-        let SizingOutput { response, closed, result, held: filed } = shown;
-        let mut result = result.map(|values| values.result());
-        if let Some(held) = held.as_deref_mut() {
-            if let Some(values) = filed {
-                held.file(values);
-            }
-            // The refusal ends once the values differ from the ones it refused.
-            if held.refusal().is_some_and(|(_, at)| Some(at) != current.as_ref()) {
-                held.clear_refusal();
-            }
-            // The host accepted the held answer: the pass that closes the dialog answers it.
-            if finish && result.is_none() && matches!(closed, Some(CloseReason::Activated)) {
-                result = held.finish().map(|values| values.result());
-            }
-        }
-        SizingOutput { response, closed, result, held: None }
+            CanvasSizeValues::result,
+        )
     }
 }
 
