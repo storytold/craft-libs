@@ -422,7 +422,8 @@ pub(crate) fn run<C: Component>(
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
-    if std::mem::take(&mut state.select_all) {
+    let select_all = std::mem::take(&mut state.select_all);
+    if select_all {
         let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();
         adapter::select(&ctx, widget, 0, len);
     }
@@ -465,11 +466,13 @@ pub(crate) fn run<C: Component>(
     let commit_now = (step.commit_now || (was_focused && left_for_part)) && !window_blur;
     // Focus back from the edit menu finds the selection the part held for it, which the adapter put back.
     let back_from_menu = menu_held && state.held_selection.is_none();
+    // A select asked for in the pass that brings focus (`Cx::select_all_text`) is kept, as `select_on_focus` keeps it.
     if out.focused && !left_for_part && !was_focused && !back_from_menu {
         let len = decl.shown.chars().count();
-        match decl.caret {
-            Caret::All => adapter::select(&ctx, widget, 0, len),
-            _ => adapter::select(&ctx, widget, len, len),
+        if select_all || matches!(decl.caret, Caret::All) {
+            adapter::select(&ctx, widget, 0, len);
+        } else {
+            adapter::select(&ctx, widget, len, len);
         }
     }
     if decl.options.complete.is_some() {

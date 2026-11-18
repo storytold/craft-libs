@@ -239,7 +239,7 @@ impl<'a> FindBar<'a> {
                     let edit = TextField::new(words.replace_with.clone(), Bind::given(with.clone())).submits().select_all(to_with).show(ui);
                     if to_with {
                         focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
-                        if edit.response.has_focus()
+                        if focus::is_focused(ui.ctx(), edit.response.id)
                             && let Some(state) = state.as_deref_mut()
                         {
                             state.served();
