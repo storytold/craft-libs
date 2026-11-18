@@ -32,10 +32,14 @@ struct Rig {
     passes: Rc<RefCell<Vec<Seen>>>,
 }
 
-/// Document points are screen points doubled, as a canvas at 50 % shows them.
-// P3(platform-w6): S-L162
-fn map(_page: usize, at: Pos2) -> Option<Pos2> {
-    Some(pos2(at.x / 2.0, at.y / 2.0))
+/// Screen points between one page's top and the next's, in a canvas that stacks its pages down the screen.
+const PAGE_STEP: f32 = 200.0;
+
+/// Document points are screen points doubled, as a canvas at 50 % shows them, with each page [`PAGE_STEP`] below
+/// the one before.
+fn map(page: usize, at: Pos2) -> Option<Pos2> {
+    let page = u16::try_from(page).ok()?;
+    Some(pos2(at.x / 2.0, at.y / 2.0 + f32::from(page) * PAGE_STEP))
 }
 
 impl Rig {
@@ -110,6 +114,8 @@ fn a_held_press_stays_down_until_its_release() {
     assert_eq!(rig.now().pos, Some(pos2(100.0, 50.0)), "the document point is mapped");
     rig.send("ui.move", json!({"x": 300, "y": 100, "coordinates": "document"}));
     assert!(rig.now().primary_down && rig.now().pos == Some(pos2(150.0, 50.0)), "a move while held drags");
+    rig.send("ui.move", json!({"x": 300, "y": 100, "coordinates": "document", "page": 1}));
+    assert_eq!(rig.now().pos, Some(pos2(150.0, 50.0 + PAGE_STEP)), "a document point is mapped on the page it names");
     rig.send("ui.release", json!({}));
     assert!(!rig.now().primary_down, "the release lets it go");
     rig.send("ui.click", json!({"x": 10, "y": 10}));
@@ -209,7 +215,6 @@ fn injected_passes_are_the_passes_that_carry_a_step() {
 fn document_points_need_a_canvas() {
     let rig = Rig::new();
     let host = rig.host();
-    // P3(platform-w6): S-L162
     let none = |_: usize, _: Pos2| None;
     let refused = input_method("ui.move", &json!({"x": 1, "y": 1, "coordinates": "document"}), &host, ViewportId::ROOT, &none);
     assert_eq!(refused, Some(Err(NO_DOCUMENT.to_owned())));

@@ -57,7 +57,7 @@ impl ControlClient {
         stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(io)?;
         let reader = BufReader::new(stream.try_clone().map_err(io)?);
         let mut client = Self { stream, broken: false, reader, next_id: 2 };
-        // P3(platform-w6): pf.C-A2 — the failure kind is told from the `broken` flag.
+        // `exchange` marks the client broken on a transport failure only, so an error reply is a refusal.
         let auth = client.exchange(1, AUTH_METHOD, json!({"token": token}));
         auth.map_err(|e| if client.broken { ConnectError::Transport(e) } else { ConnectError::Refused(e) })?;
         Ok(client)
