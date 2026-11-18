@@ -240,7 +240,8 @@ impl Encoder {
                 let py = meta.pixel_y + row;
                 for col in 0..8 {
                     let px = meta.pixel_x + col;
-                    let sample = if py * stride + px < src_plane.len() { src_plane[py * stride + px] as i16 } else { 128 };
+                    let offset = py.checked_mul(stride).and_then(|r| r.checked_add(px)).ok_or(Error::DimensionMismatch("sample offset overflow"))?;
+                    let sample = src_plane.get(offset).copied().map(|b| b as i16).unwrap_or(128);
                     // Subtract 128 (intra predictor)
                     block_samples[row * 8 + col] = sample - 128;
                 }

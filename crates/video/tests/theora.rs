@@ -458,6 +458,28 @@ fn test_theora_encoder_picture_strides() {
 }
 
 #[test]
+fn test_theora_encoder_overflowing_stride_rejected() {
+    let cfg = EncoderConfig {
+        width: 32,
+        height: 32,
+        pic_width: 32,
+        pic_height: 32,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    let mut enc = Encoder::new(cfg).expect("encoder");
+    let mut pic = test_picture(32, 32);
+    pic.y_stride = usize::MAX;
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+}
+
+#[test]
 fn test_theora_yuv444_chroma_motion_vector_half_pixel() {
     use craft_video::theora::reconstruct::compute_block_predictor;
 
