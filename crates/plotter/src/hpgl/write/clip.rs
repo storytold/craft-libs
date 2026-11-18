@@ -6,7 +6,7 @@ use kurbo::{Point, Rect};
 use crate::hpgl::plot::FillRule;
 
 /// A clipping region: closed rings (each closes implicitly) and the rule that decides inside.
-pub(super) struct Region {
+pub struct Region {
     rings: Vec<Vec<Point>>,
     rule: FillRule,
     bounds: Rect,

@@ -2,7 +2,7 @@
 //! inner paths first.
 
 /// The box of `p`: `[x0, y0, x1, y1]`.
-pub(super) fn bounds(p: &[(i64, i64)]) -> [i64; 4] {
+pub fn bounds(p: &[(i64, i64)]) -> [i64; 4] {
     p.iter().fold([i64::MAX, i64::MAX, i64::MIN, i64::MIN], |b, q| [b[0].min(q.0), b[1].min(q.1), b[2].max(q.0), b[3].max(q.1)])
 }
 
@@ -16,7 +16,7 @@ pub(super) fn bounds(p: &[(i64, i64)]) -> [i64; 4] {
 /// [`Grid`] cell of its box's first corner. `None` once `work` is spent: a grid cell filled and a
 /// box compared cost one each, and each segment tested costs the closed path's points for its
 /// crossings and again for each part of it.
-pub(super) fn outer(paths: &[Vec<(i64, i64)>], boxes: &[[i64; 4]], work: &mut u64) -> Option<Vec<Vec<usize>>> {
+pub fn outer(paths: &[Vec<(i64, i64)>], boxes: &[[i64; 4]], work: &mut u64) -> Option<Vec<Vec<usize>>> {
     let size: Vec<(i128, i128)> = paths
         .iter()
         .zip(boxes)
