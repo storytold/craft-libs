@@ -64,9 +64,6 @@ impl HostRequests {
         if let Some(request) = rows.listing.take() {
             self.request_listing(request);
         }
-        if let Some(id) = rows.action.take() {
-            self.request_action(id);
-        }
     }
 
     /// Files a colour request; it replaces one not taken yet.
