@@ -644,13 +644,9 @@ impl Keymap {
     }
 
     fn find(&self, command: &CommandRef) -> Option<usize> {
-        // A command without parameters is keyed by its id (`CommandRef::key`): look it up without building the key.
-        // Menu rows, tooltips and buttons ask for their chords on every frame.
-        match &command.params {
-            serde_json::Value::Null => self.index.get(command.id.as_str()).copied(),
-            serde_json::Value::Object(params) if params.is_empty() => self.index.get(command.id.as_str()).copied(),
-            _ => self.index.get(&command.key()).copied(),
-        }
+        // Menu rows, tooltips and buttons ask for their chords on every frame: a command without parameters is looked
+        // up without building its key.
+        self.index.get(command.key_text().as_ref()).copied()
     }
 
     fn resolve_key(&self, key: &str) -> Option<usize> {
