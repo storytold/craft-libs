@@ -578,6 +578,19 @@ fn a_public_key_rc4_filter_keeps_its_40_bit_length() {
 }
 
 #[test]
+fn a_public_key_rc4_filter_for_only_the_embedded_files_keeps_its_40_bit_length() {
+    // The key comes from /EFF's filter when strings and streams are left as they are; the
+    // dictionary's /Length (128 here) is not that filter's.
+    let file = with_encrypt(
+        "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s4 /V 4 /Length 128 /StmF /Identity /StrF /Identity /EFF /EmbeddedFiles \
+         /CF << /EmbeddedFiles << /CFM /V2 /Length 40 /Recipients [<BB>] >> >> >>",
+    );
+    let doc = Document::open_with_credential(Arc::new(file), &Credential::Certificate { seed: [3; 20], permissions: -1 }).unwrap();
+    let handler = doc.security().unwrap();
+    assert_eq!((handler.dict().length_bits, handler.file_key().len()), (40, 5));
+}
+
+#[test]
 fn a_public_key_file_with_only_its_embedded_files_encrypted_opens_without_a_certificate() {
     let file = with_encrypt(
         "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /StmF /Identity /StrF /Identity /EFF /EmbeddedFiles \
