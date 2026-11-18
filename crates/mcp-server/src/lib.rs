@@ -15,7 +15,7 @@ mod server;
 
 pub use content::{Contents, base64, image_result, text_result};
 pub use schema::{Effect, check_arguments, object, string, tool};
-pub use server::{Incoming, Info, PROTOCOL_VERSION, Reference, SUPPORTED_VERSIONS, Server, Tools, read_message, response};
+pub use server::{Incoming, Info, Options, PROTOCOL_VERSION, Reference, SUPPORTED_VERSIONS, Server, Tools, read_message, response};
 
 #[cfg(test)]
 mod tests;
