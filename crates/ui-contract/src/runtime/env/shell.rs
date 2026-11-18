@@ -128,14 +128,16 @@ struct Inner {
     page_band: Option<PageBandRoom>,
 }
 
-/// The room of the page band while a full-window page shows.
+/// The room of the page band while a full-window page shows: the title-bar-high strip at the window's top and the room
+/// the window's ends take in it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PageBandRoom {
     /// The band's rect.
     pub rect: Rect,
-    /// Where the band starts along its axis.
+    /// The width the window's start end takes (the traffic lights' inset or the caption buttons), from the band's
+    /// reading start.
     pub start: f32,
-    /// Where the band ends along its axis.
+    /// The width the window's end end takes, from the band's reading end.
     pub end: f32,
 }
 
@@ -326,13 +328,13 @@ impl ShellCx {
 
     /// The page band's room while a full-window page shows, else `None`.
     pub fn page_band(&self) -> Option<PageBandRoom> {
-        todo!("ch.C5a")
+        self.inner.page_band
     }
 
-    /// Sets the page band's room.
-    pub fn with_page_band(self, room: Option<PageBandRoom>) -> Self {
-        let _ = room;
-        todo!("ch.C5a")
+    /// The page band's room while a full-window page shows; `None` when no page shows or the window is full screen.
+    pub fn with_page_band(mut self, room: Option<PageBandRoom>) -> Self {
+        Arc::make_mut(&mut self.inner).page_band = room;
+        self
     }
 }
 

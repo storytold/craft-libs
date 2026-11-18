@@ -28,5 +28,6 @@ mod style;
 mod title;
 
 pub use bar::{TitleBar, TitleBarOutput};
+pub(super) use page_band::{PageBand, room as page_band_room};
 pub use style::TitleBarStyle;
 pub use title::Title;

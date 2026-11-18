@@ -52,6 +52,7 @@ impl<'a> RecentList<'a> {
     /// Shows the rows and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
         let _ = (self.recent, self.max_recent, self.empty, self.now, self.thumbnails, ui);
+
         todo!("ch.C7")
     }
 }

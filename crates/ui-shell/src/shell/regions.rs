@@ -56,13 +56,15 @@ pub struct Slot {
     reveal: bool,
     label: Option<Label>,
     content: Option<u64>,
+    screen_bar: bool,
+    drops: bool,
 }
 
 impl Slot {
     /// A slot with a key that is stable and unique in the window. It is visible and does not show in a reveal. Without a
     /// [`size`](Self::size) it takes the default of its edge: the title bar, options bar, status bar or rail width.
     pub fn new(key: SlotKey) -> Self {
-        Self { key, size: None, visible: true, reveal: false, label: None, content: None }
+        Self { key, size: None, visible: true, reveal: false, label: None, content: None, screen_bar: false, drops: false }
     }
 
     /// The size along the slot's edge, in place of the default of the edge.
@@ -90,14 +92,29 @@ impl Slot {
         self
     }
 
-    /// Marks the slot as the screen bar: it shows in Focus and Immersive and claims room as a non-overlay claim.
-    pub fn screen_bar(self) -> Self {
-        todo!("ch.C3")
+    /// Marks the slot as the screen bar: it shows in Focus and Immersive, and only there, whatever its `visible` flag,
+    /// and takes its room from the body although those modes show the body only. It needs no
+    /// [`reveal`](Self::reveal).
+    pub fn screen_bar(mut self) -> Self {
+        self.screen_bar = true;
+        self
     }
 
-    /// Marks the slot as the drop-down slot of Focus: it shows while the shell's `dropped` flag is set.
-    pub fn drops(self) -> Self {
-        todo!("ch.C3")
+    /// Marks the slot as the drop-down slot of Focus: in Focus it shows while the shell's `dropped` flag is set and
+    /// covers the body, leaving the body's rect as it is. A press in the body or a mode change clears the flag.
+    pub fn drops(mut self) -> Self {
+        self.drops = true;
+        self
+    }
+
+    /// Whether the slot is the screen bar ([`screen_bar`](Self::screen_bar)).
+    pub fn is_screen_bar(&self) -> bool {
+        self.screen_bar
+    }
+
+    /// Whether the slot is the drop-down slot of Focus ([`drops`](Self::drops)).
+    pub fn drops_down(&self) -> bool {
+        self.drops
     }
 
     /// The name of the slot's AccessKit region ("Options", "Tools", "Status").

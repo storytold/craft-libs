@@ -10,8 +10,9 @@ use craft_host::target::{Os, WindowState};
 use egui::Context;
 use std::sync::Arc;
 
-/// The three screen modes. The shell keeps the current one in its `screen_mode` binding and maps it to the body mode,
-/// the document tabs and the scroll bars. Saved as `"standard"`, `"fullScreenWithMenuBar"` and `"fullScreen"`.
+/// The screen modes. The shell keeps the current one in its `screen_mode` binding and maps it to the body mode,
+/// the document tabs and the scroll bars; its [`ScreenModeSet`] says which of them the F key cycles through. Saved as
+/// `"standard"`, `"fullScreenWithMenuBar"`, `"fullScreen"`, `"focus"` and `"immersive"`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -44,19 +45,28 @@ pub enum ScreenModeSet {
 impl ScreenModeSet {
     /// The modes the set cycles through, in order.
     pub fn modes(self) -> &'static [ScreenMode] {
-        todo!("ch.C2")
+        match self {
+            ScreenModeSet::Panels => &[ScreenMode::Standard, ScreenMode::FullScreenWithMenuBar, ScreenMode::FullScreen],
+            ScreenModeSet::Document => &[ScreenMode::Standard, ScreenMode::FullScreenWithMenuBar, ScreenMode::Focus, ScreenMode::Immersive],
+        }
     }
 }
 
 impl ScreenMode {
     /// The surface around the body in this mode: `Some(Scrim)` for `Focus` only, `None` for every other mode.
+    /// Immersive fills the room with the body's own canvas, so it paints nothing behind it.
     pub fn surround(self) -> Option<SurfaceKind> {
-        todo!("ch.C2")
+        (self == Self::Focus).then_some(SurfaceKind::Scrim)
     }
 
-    /// Whether the shell shows the body only.
+    /// Whether the shell shows the body only: Full Screen, Focus and Immersive.
     pub fn body_only(self) -> bool {
-        self == Self::FullScreen
+        matches!(self, Self::FullScreen | Self::Focus | Self::Immersive)
+    }
+
+    /// Whether the mode shows the screen bar: Focus and Immersive.
+    pub(super) fn has_screen_bar(self) -> bool {
+        matches!(self, Self::Focus | Self::Immersive)
     }
 
     /// Whether the document tabs show.
@@ -69,30 +79,29 @@ impl ScreenMode {
         self != Self::Standard
     }
 
-    /// The mode the F key selects: Standard, Full Screen With Menu Bar, Full Screen, Standard.
+    /// The mode the F key selects: the one after this in `set`'s order, wrapping to the first. A mode outside the set
+    /// steps to Standard.
     pub fn next(self, set: ScreenModeSet) -> Self {
-        let _ = set; // P3(chrome-w1): ch.C2
-        match self {
-            Self::Standard => Self::FullScreenWithMenuBar,
-            Self::FullScreenWithMenuBar => Self::FullScreen,
-            Self::FullScreen => Self::Standard,
-            Self::Focus | Self::Immersive => todo!("ch.C2"),
-        }
+        self.step(set, 1)
     }
 
-    /// The mode Shift+F selects.
+    /// The mode Shift+F selects: the one before this in `set`'s order, wrapping to the last. A mode outside the set
+    /// steps to Standard.
     pub fn previous(self, set: ScreenModeSet) -> Self {
-        let _ = set; // P3(chrome-w1): ch.C2
-        match self {
-            Self::Standard => Self::FullScreen,
-            Self::FullScreenWithMenuBar => Self::Standard,
-            Self::FullScreen => Self::FullScreenWithMenuBar,
-            Self::Focus | Self::Immersive => todo!("ch.C2"),
+        self.step(set, set.modes().len().saturating_sub(1))
+    }
+
+    /// The mode `by` places after this one in `set`'s order, wrapping.
+    fn step(self, set: ScreenModeSet, by: usize) -> Self {
+        let modes = set.modes();
+        match modes.iter().position(|mode| *mode == self) {
+            Some(at) => modes.get((at + by) % modes.len()).copied().unwrap_or_default(),
+            None => Self::Standard,
         }
     }
 }
 
-/// The screen-mode commands of a window. The three modes are radio rows of View > Screen Mode; the cycle commands are
+/// The screen-mode commands of a window. The modes are radio rows of View > Screen Mode; the cycle commands are
 /// the F key and Shift+F. The window's shell takes them and writes its `screen_mode` binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "screenMode", scope = "window")]

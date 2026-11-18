@@ -157,10 +157,16 @@ impl Reveal {
         }
     }
 
-    /// Whether `slot` on `edge` shows: its `visible` flag in normal mode; in body-only mode, if it reveals and a Tab
-    /// or edge reveal shows it.
+    /// Whether `slot` on `edge` shows in `mode`. The screen bar shows in Focus and Immersive only; the drop-down slot in
+    /// Focus while `dropped` is set. Any other slot: its `visible` flag in normal mode; in body-only mode, if it
+    /// reveals and a Tab or edge reveal shows it.
     pub(crate) fn shows(&self, slot: &Slot, edge: PaneEdge, only: bool, allow_reveal: bool, mode: ScreenMode, dropped: bool) -> bool {
-        let _ = (mode, dropped); // P3(chrome-w1): ch.C3
+        if slot.is_screen_bar() {
+            return mode.has_screen_bar();
+        }
+        if slot.drops_down() {
+            return mode == ScreenMode::Focus && dropped;
+        }
         if !only {
             return slot.is_visible();
         }
