@@ -968,6 +968,41 @@ fn a_thumbnails_frame_is_square_and_lies_outside_its_picture() {
     assert!(row.contains_rect(frame.rect), "the row holds the frame: {row:?} {frame:?}");
 }
 
+/// A row whose label comes from styled spans draws its match, and nothing else of the label, on the highlight, and the
+/// joined text names the row. A row that dropped the spans would draw the label as one plain span.
+#[trial]
+fn a_row_labelled_from_spans_highlights_only_its_match_and_is_named_by_the_joined_text() {
+    use craft_ui::primitives::Span;
+    const JOINED: &str = "over the harbour at dusk";
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|_| std::borrow::Cow::Borrowed(JOINED));
+        let _ = List::new("Results").show_items(ui, &source, &mut |_, _| {
+            let spans = vec![Span::new("over the "), Span::new("harbour").highlight(), Span::new(" at dusk")];
+            ListRow::new(JOINED).label_spans(spans)
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    assert!(fixture.by_label(JOINED).is_some(), "the joined text names the row");
+    let shapes = fixture.frame_shapes();
+    let galley = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(shown) if shown.galley.text() == JOINED => Some(shown.galley.clone()),
+            _ => None,
+        })
+        .expect("the row draws its label whole");
+    let marked: Vec<&str> = galley
+        .job
+        .sections
+        .iter()
+        .filter(|section| section.format.background != egui::Color32::TRANSPARENT)
+        .filter_map(|section| galley.job.text.get(section.byte_range.clone()))
+        .collect();
+    assert_eq!(marked, ["harbour"], "only the match is drawn on the highlight");
+}
+
 /// What a double click on the second row of a list with `select` and `allow_empty`, nothing selected, reports, and the
 /// selection it leaves with a host that keeps every selection the list reports.
 fn double_clicked(

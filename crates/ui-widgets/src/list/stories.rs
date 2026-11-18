@@ -2,7 +2,7 @@
 
 use super::{ListRow, RowInk, TrailingFace, TrailingPart};
 use crate::contract::Show as _;
-use crate::primitives::IconSpec;
+use crate::primitives::{IconSpec, Span};
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::{ColumnKey, IconId};
 use egui::{Pos2, Rect, Ui};
@@ -39,6 +39,14 @@ fn list_row_text_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         (SIZE, Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(left + width, height))),
     ];
     show_as_only_item(ui, ListRow::new("report.pdf").cells(&cells).cell(SIZE, "2.4 MB")).into()
+}
+
+/// A search result: the match in the label reads in the highlight look.
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_match_highlight(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let spans = vec![Span::new("…the light over the "), Span::new("harbour").highlight(), Span::new(" turned grey…")];
+    let joined: String = spans.iter().map(|span| span.text.as_ref()).collect();
+    show_as_only_item(ui, ListRow::new(joined).label_spans(spans).detail("Page 4")).into()
 }
 
 fn trailing_row() -> ListRow<'static> {
