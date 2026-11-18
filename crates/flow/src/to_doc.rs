@@ -907,6 +907,41 @@ impl<'a> Builder<'a> {
             }
             tb.rows.push(row);
         }
+        let starts: Vec<(usize, usize)> = (0..tb.rows.first().map_or(0, |row| row.cells.len()))
+            .filter(|&ci| tb.rows.first().and_then(|row| row.cells.get(ci)).is_some_and(|c| c.props.vmerge == VMerge::Continue))
+            .map(|ci| (ci, tb.grid_col(0, ci)))
+            .collect();
+        for (ci, g) in starts {
+            let span = tb.rows.first().map_or(1, |r| r.cells[ci].props.span);
+            let more = tb
+                .cell_at_grid(1, g)
+                .filter(|&i| tb.grid_col(1, i) == g)
+                .and_then(|i| tb.rows.get(1)?.cells.get(i))
+                .is_some_and(|c| c.props.vmerge == VMerge::Continue && c.props.span == span);
+            if let Some(cell) = tb.rows.first_mut().and_then(|r| r.cells.get_mut(ci)) {
+                cell.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
+            }
+        }
+        for r in 1..tb.rows.len() {
+            for ci in 0..tb.rows[r].cells.len() {
+                if tb.rows[r].cells[ci].props.vmerge == VMerge::Continue {
+                    let g = tb.grid_col(r, ci);
+                    let span = tb.rows[r].cells[ci].props.span;
+                    let prev_r = r - 1;
+                    if let Some(up_ci) = tb.cell_at_grid(prev_r, g)
+                        && tb.grid_col(prev_r, up_ci) == g
+                        && tb.rows[prev_r].cells[up_ci].props.span == span
+                    {
+                        let up_cell = &mut tb.rows[prev_r].cells[up_ci];
+                        if up_cell.props.vmerge == VMerge::None {
+                            up_cell.props.vmerge = VMerge::Restart;
+                        }
+                    } else {
+                        tb.rows[r].cells[ci].props.vmerge = VMerge::None;
+                    }
+                }
+            }
+        }
         // Its markup kept for the writer, by its place among the top's tables.
         if depth == 0 {
             if t.kept.is_some() || t.wrap.is_some() {
