@@ -101,7 +101,9 @@ impl GamutCheck {
     /// ```
     ///
     /// # Errors
-    /// [`CmsError`] when either profile can't be linked to Lab.
+    /// [`CmsError`] when a conversion the check needs can't be built: `src` to Lab, `src` to
+    /// `proof`, or `proof` back to Lab. A proof profile with a usable device-to-PCS transform but
+    /// no usable reverse one fails at the second.
     pub fn with_metric(src: &Profile, proof: &Profile, metric: Metric, threshold: f32) -> Result<GamutCheck, CmsError> {
         let lab = crate::Builtin::LabD50.profile();
         let direct = Pipeline::new(src.channels(), link_stages(src, lab, Intent::RelativeColorimetric, false)?)?;
