@@ -4,7 +4,7 @@
 use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, StackDialog as _};
 use craft_ui::patterns::form_dialogs::{AboutAppTab, AboutDialog, AboutInfo, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, access, trial};
 use egui::Vec2;
 use serde_json::json;
 use std::cell::RefCell;
@@ -86,7 +86,7 @@ fn an_app_tab_shows_after_models_and_is_a_tab_field_value() {
     assert_eq!(drawn.load(Ordering::Relaxed), 0, "the dialog opens on About");
 
     let tabs: Vec<String> =
-        fixture.by_role(Role::TAB).iter().filter_map(|tab| fixture.tree().name_of(tab.node).map(str::to_owned)).collect();
+        fixture.by_role(Role::TAB).iter().filter_map(|tab| access::name(fixture.tree(), tab.node).map(str::to_owned)).collect();
     let models = tabs.iter().position(|name| name == "Models").expect("the strip lists Models");
     assert_eq!(tabs.get(models + 1).map(String::as_str), Some("Languages"), "the app tab follows Models: {tabs:?}");
 
