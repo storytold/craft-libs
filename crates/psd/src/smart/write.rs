@@ -206,8 +206,9 @@ impl SmartObject {
                 }
                 set(&mut d, "warp", Value::Descriptor(warp.to_descriptor()));
                 // The imported `quiltWarp` stays while it still says what the warp is.
-                let kept =
-                    t.get_object("quiltWarp").is_some_and(|q| Warp::try_from_descriptor(q).is_ok_and(|parsed| parsed.as_ref() == self.warp.as_ref()));
+                let kept = t
+                    .get_object("quiltWarp")
+                    .is_some_and(|q| Warp::try_from_descriptor_kind(q, true).is_ok_and(|parsed| parsed.as_ref() == self.warp.as_ref()));
                 if !kept {
                     match quilt {
                         Some(q) => set_before(&mut d, "quiltWarp", Value::Descriptor(q), "warp"),
@@ -404,7 +405,8 @@ mod tests {
         assert!(Warp::try_from_descriptor(&unequal).is_err());
         let valid_none = Warp::none(bounds).to_descriptor();
         assert!(matches!(Warp::try_from_descriptor(&valid_none), Ok(None)));
-        for (quilt, keep) in [(unequal, false), (valid_none, true)] {
+        let invalid_none = Warp::none([0.0, 10.0, 20.0, 10.0]).to_descriptor();
+        for (quilt, keep) in [(unequal, false), (valid_none, true), (invalid_none, false)] {
             let template = Descriptor::new("null").with("quiltWarp", Value::Descriptor(quilt.clone()));
             let bytes = placed(None).to_placed_layer_data(&PlacedLayerOptions {
                 placed: "layer",
