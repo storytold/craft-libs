@@ -108,6 +108,9 @@ fn in_a_short_room_the_rows_scroll_above_the_footer_that_stays_in_view() {
         let first = rect(&fixture, "Move");
         assert!(first.top() < foot.top(), "{height}: the first button is above the footer: {first:?}");
         assert!(rect(&fixture, "Clone Stamp").bottom() > foot.top(), "{height}: the last button starts out of view");
+        // The bar lies in the end padding, so the buttons keep the middle of the rail.
+        let rail = rect(&fixture, "Tools");
+        assert!(near(first.center().x, rail.center().x), "{height}: the buttons stay centred in a rail that scrolls: {first:?} in {rail:?}");
 
         fixture.frame(vec![moved(first.center())]);
         for _ in 0..10 {

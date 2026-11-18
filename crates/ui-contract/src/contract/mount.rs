@@ -373,6 +373,7 @@ impl Host for ViewportHost {
             // The full-window overlay has no grips (it covers the window), but its OS window is one the user sizes. A
             // window its caller sizes takes no resize from the OS: the app runs its grips.
             resizable: full_window || (self.overlay.resize.edges != ResizeEdges::NONE && !self.overlay.resize.by_caller),
+            moved_by_app: self.overlay.moved_by_app,
         };
         let dismissed = &mut self.dismissed;
         windows::show_viewport(&ctx, &open, |ui| {

@@ -329,6 +329,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
             unnamed,
             inner_stop: None,
             disabled: !own.enabled,
+            display: own.display,
         },
     );
 }

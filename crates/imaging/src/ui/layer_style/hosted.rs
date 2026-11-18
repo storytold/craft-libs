@@ -10,7 +10,7 @@ use craft_ui::choice::SwatchMetrics;
 use craft_ui::contract::{
     Bind, CanvasGesture, Common, Component, Cx, DisabledLook, Entry, MeasureCx, PaintUi, Props as _, Role, Sampler as _, Show as _,
 };
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::patterns::presets::{PresetRow, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
@@ -363,7 +363,7 @@ impl StackDialog for HostedLayerStyle {
         let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft))
             .opened(Bind::bound(open))
             .preview(Some(Bind::bound(&mut preview)))
-            .side_buttons(true)
+            .button_place(ButtonPlace::Side)
             .extra_buttons([FooterButton::new(new_style, DialogRole::Other)])
             .footer_extra(|ui| {
                 if let (Some(paint), Some(draft)) = (preview_thumb.as_deref(), snapshot.as_ref()) {

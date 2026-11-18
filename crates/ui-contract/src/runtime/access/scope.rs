@@ -127,8 +127,14 @@ struct Scope {
     /// The component whose eviction takes the facts the scope records.
     owner: Id,
     kind: Kind,
-    /// The direct controls: node components inside this scope that sit in no other node component of it.
+    /// The direct controls, decided when the scope closes: node components inside this scope that sit in no other
+    /// component that has a node.
     nodes: Vec<ScopeNode>,
+    /// Every node component that reported inside this scope, with the node components that were open around it.
+    reported: Vec<(ScopeNode, Vec<Id>)>,
+    /// Node components that began as a node at step 8 and turned out to have none at step 16 (a layout container
+    /// with no label): the controls inside them are direct controls of the scope.
+    hollow: Vec<Id>,
     /// Node components inside this scope whose step 16 has not come yet, outermost first, with the number of focus stops
     /// registered before they began.
     open: Vec<(Id, usize)>,
@@ -168,6 +174,8 @@ pub(crate) struct ScopeNode {
     pub inner_stop: Option<crate::runtime::focus::FocusTarget>,
     /// The control is disabled: a label that names only disabled controls is disabled too.
     pub disabled: bool,
+    /// The node is static display (a text): it is no control of the scope.
+    pub display: bool,
 }
 
 /// What a control tells its label scope about its reset (10.2).
@@ -206,6 +214,8 @@ pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
             owner,
             kind,
             nodes: Vec::new(),
+            reported: Vec::new(),
+            hollow: Vec::new(),
             open: Vec::new(),
             control_top: 0.0,
             first_bottom: None,
@@ -240,27 +250,37 @@ pub(crate) fn enter(ctx: &Context, id: Id) {
     });
 }
 
-/// Registers the node `id` with the innermost scope at its step 16, when no other node component of the scope
-/// holds it. Children reach step 16 first, so they find their parent still open.
+/// Registers the node `id` with the innermost scope at its step 16. Children reach step 16 first, so they find their
+/// parent still open. Whether it is a direct control is decided when the scope closes, once every node component
+/// around it has said whether it has a node (`leave`).
 pub(crate) fn register(ctx: &Context, mut node: ScopeNode) {
     let unnamed = pass_state::with::<Stack, _>(ctx, |stack| {
         let Some(scope) = stack.0.last_mut() else { return node.unnamed.take() };
-        let direct = match scope.open.iter().rposition(|(open, _)| *open == node.id) {
+        let around = match scope.open.iter().rposition(|(open, _)| *open == node.id) {
             Some(at) => {
                 node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].1);
+                let around = scope.open[..at].iter().map(|(open, _)| *open).collect();
                 scope.open.truncate(at);
-                at == 0
+                around
             }
-            None => scope.open.is_empty(),
+            None => scope.open.iter().map(|(open, _)| *open).collect(),
         };
-        if direct {
-            scope.nodes.push(node);
-            None
-        } else {
-            node.unnamed.take()
-        }
+        scope.reported.push((node, around));
+        None
     });
     report_unnamed(ctx, unnamed);
+}
+
+/// Notes that the node component `id`, which began as a node at step 8, reports none at step 16.
+pub(crate) fn leave(ctx: &Context, id: Id) {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        if let Some(scope) = stack.0.last_mut()
+            && let Some(at) = scope.open.iter().rposition(|(open, _)| *open == id)
+        {
+            scope.open.truncate(at);
+            scope.hollow.push(id);
+        }
+    });
 }
 
 fn report_unnamed(ctx: &Context, unnamed: Option<Finding>) {
@@ -549,7 +569,16 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
     let scope = pass_state::with::<Stack, _>(ctx, |stack| {
         (stack.0.last().is_some_and(|scope| scope.container == container)).then(|| stack.0.pop()).flatten()
     });
-    let Some(scope) = scope else { return };
+    let Some(mut scope) = scope else { return };
+    for (node, around) in std::mem::take(&mut scope.reported) {
+        // A label scope's controls are not its static texts; a merged container shows whatever one component it has.
+        let counts = !node.display || matches!(scope.kind, Kind::Merge);
+        if counts && around.iter().all(|id| scope.hollow.contains(id)) {
+            scope.nodes.push(node);
+        } else {
+            report_unnamed(ctx, node.unnamed);
+        }
+    }
     match scope.kind {
         Kind::Label(label) => {
             let patches = label_patches(scope.container, &label, &scope.nodes);

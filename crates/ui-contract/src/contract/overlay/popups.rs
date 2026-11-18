@@ -214,7 +214,7 @@ impl PopupHandle {
     /// Toggles or opens the popup from `trigger` at step 9, as the pass's pending open change.
     pub fn trigger<C: Component>(self, trigger: Trigger, cx: &mut Cx<'_, C>) {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.registered(&cx.core);
+        self.registered(cx.core);
         let core = &mut cx.core;
         let ctx = core.ctx.clone();
         let resting = core.response.hovered() || core.focus.visible;
@@ -253,7 +253,7 @@ impl PopupHandle {
     /// Queues an open that step 15 writes. For `Trigger::Manual` this and the binding are the only ways it opens.
     pub fn open<C: Component>(self, cx: &mut Cx<'_, C>) {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.open_in(&cx.core);
+        self.open_in(cx.core);
     }
 
     pub(super) fn open_in(self, core: &CxCore<'_>) {
@@ -264,7 +264,7 @@ impl PopupHandle {
     /// Queues a close; step 15 writes the slot, so this pass still shows the popup open.
     pub fn close<C: Component>(self, cx: &mut Cx<'_, C>) {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.close_in(&cx.core);
+        self.close_in(cx.core);
     }
 
     pub(super) fn close_in(self, core: &CxCore<'_>) {
@@ -275,7 +275,7 @@ impl PopupHandle {
     /// Whether a toggle, `open` or `close` queued in this pass leaves the popup's open state different from the
     /// state the pass began with. Valid from step 9.
     pub fn changed<C: Component>(self, cx: &mut Cx<'_, C>) -> bool {
-        self.registered(&cx.core);
+        self.registered(cx.core);
         let began = cx.core.memory.shown::<OpenSlot>(self.id).0;
         open_now(cx.core.memory, self.id) != began
     }
@@ -285,7 +285,7 @@ impl PopupHandle {
     /// open state that differs from the bound value is written to it. A value the bind refuses to take (a given one)
     /// never forces the popup. Returns whether the popup is open in this pass.
     pub fn bind_open<C: Component>(self, cx: &mut Cx<'_, C>, mut open: BindMut<'_, bool>) -> bool {
-        self.registered(&cx.core);
+        self.registered(cx.core);
         let began = cx.core.memory.shown::<OpenSlot>(self.id).0;
         let seen = cx.core.memory.session::<BoundOpen>(sub(self.id, "bound")).0.unwrap_or(began);
         let held = match open.read(cx) {
@@ -314,7 +314,7 @@ impl PopupHandle {
     /// Whether the popup is open in this pass: valid from step 8, with the changes queued so far applied.
     pub fn is_open<C: Component>(self, cx: &mut Cx<'_, C>) -> bool {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.is_open_in(&mut cx.core)
+        self.is_open_in(cx.core)
     }
 
     pub(crate) fn is_open_in(self, core: &mut CxCore<'_>) -> bool {

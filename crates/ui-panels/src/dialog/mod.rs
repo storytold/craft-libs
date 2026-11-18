@@ -29,7 +29,7 @@ pub use held::{HeldAnswer, HeldOk};
 #[doc(hidden)]
 pub use host::dialog_probe;
 pub use host::{DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, StartupStage};
-pub use modal::{Dialog, DialogStyle};
+pub use modal::{ButtonPlace, Dialog, DialogStyle};
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};
 pub use recovery::{RecoveredDocument, RecoveryAnswer, RecoveryDialog, RecoveryOutput};

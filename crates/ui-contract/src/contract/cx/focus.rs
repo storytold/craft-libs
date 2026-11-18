@@ -100,7 +100,7 @@ impl Focus for CxCore<'_> {
     }
 
     fn register_menu_bar(&mut self) {
-        focus::register_menu_bar(&self.ctx);
+        focus::register_menu_bar(&self.ctx, self.id);
     }
 
     fn take_menu_keys(&mut self) -> Vec<MenuKey> {

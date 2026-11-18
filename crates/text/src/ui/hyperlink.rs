@@ -6,7 +6,7 @@ use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Bind, FieldLayout, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SideLabel, Sizing,
 };
-use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
@@ -347,13 +347,16 @@ impl HyperlinkDialog {
         if editing {
             buttons.push(FooterButton::new(words.remove.clone(), DialogRole::Destructive));
         }
-        let dialog = Dialog::new(title).side_buttons(true).buttons(buttons).initial_focus(Initial::Default).opened(Bind::bound(open)).settle_buttons(
-            |_, buttons| {
+        let dialog = Dialog::new(title)
+            .button_place(ButtonPlace::Side)
+            .buttons(buttons)
+            .initial_focus(Initial::Default)
+            .opened(Bind::bound(open))
+            .settle_buttons(|_, buttons| {
                 if let Some(accept) = buttons.get_mut(OK) {
                     accept.set_enabled(valid.get());
                 }
-            },
-        );
+            });
         let given_ref = &*given;
         let shown = dialog.show(ui, |ui, _| {
             body(ui, given_ref, form, &words);

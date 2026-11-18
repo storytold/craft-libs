@@ -96,6 +96,7 @@ pass_state! {
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,
         cursors: crate::layout::body::Cursors,
+        footer_slots: crate::contract::footer_slot::Slots,
         column_groups: crate::layout::column_group::Open,
         popups: crate::contract::overlay::popups::Popups,
         access_reported: crate::runtime::egui::access::Reported,
