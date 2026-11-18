@@ -474,17 +474,30 @@ pub struct PageSetupDialog<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
+    /// OK files the setup in the held answer and the dialog stays open until the app answers it (`FormDialog::held`).
+    #[prop(into)]
+    #[allow(dead_code)] // P3(dialogs-w6): dg.F18
+    held: Option<&'a mut craft_ui::dialog::HeldAnswer<PageSetup>>,
 }
 
 impl<'a> PageSetupDialog<'a> {
     /// A dialog that edits `setup`, with every paper size, in inches and with no layout group.
     pub fn new(setup: Bind<'a, PageSetup>) -> Self {
-        PageSetupDialog { setup, papers: PAPER_SIZES, unit: UnitKind::Inches, document_setup: false, layout: false, direction: false, open: None }
+        PageSetupDialog {
+            setup,
+            papers: PAPER_SIZES,
+            unit: UnitKind::Inches,
+            document_setup: false,
+            layout: false,
+            direction: false,
+            open: None,
+            held: None,
+        }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> FormOutput<PageSetup> {
-        let PageSetupDialog { setup, papers, unit, document_setup, layout, direction, open } = self;
+        let PageSetupDialog { setup, papers, unit, document_setup, layout, direction, open, .. } = self;
         let env = Env::of(ui);
         let words = env.words::<PageSetupDialogWords>();
         let rows = Rows { words: &words, units: env.units(), unit };

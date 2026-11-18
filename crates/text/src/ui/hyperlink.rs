@@ -308,6 +308,55 @@ pub struct HyperlinkDialog {
     given: Given,
     form: Form,
     open: bool,
+    #[allow(dead_code)] // P3(dialogs-w4): dg.F24
+    parts: HyperlinkParts,
+}
+
+/// One place in the document a link may go to.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LinkPlace {
+    /// The place's name.
+    pub name: String,
+    /// How deep it is nested under its group's title; the list indents each level.
+    pub level: u8,
+}
+
+impl LinkPlace {
+    /// A place named `name` at nesting `level`.
+    pub fn new(name: impl Into<String>, level: u8) -> Self {
+        let _ = (name.into(), level);
+        todo!("dg.F24")
+    }
+}
+
+/// Places under a heading row in the Place in This Document list (Headings, Bookmarks).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LinkPlaceGroup {
+    /// The heading row.
+    pub title: Label,
+    /// The group's places.
+    pub places: Vec<LinkPlace>,
+}
+
+impl LinkPlaceGroup {
+    /// A group of `places` under `title`.
+    pub fn new(title: impl Into<Label>, places: Vec<LinkPlace>) -> Self {
+        let _ = (title.into(), places);
+        todo!("dg.F24")
+    }
+}
+
+/// Which parts of the hyperlink dialog show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HyperlinkParts {
+    /// Every part.
+    #[default]
+    All,
+    /// Without the ScreenTip row.
+    NoScreenTip,
 }
 
 impl HyperlinkDialog {
@@ -315,7 +364,12 @@ impl HyperlinkDialog {
     /// the field: a shape's click action).
     pub fn new(current: CurrentLink, text: Option<String>) -> Self {
         let form = Form::of(&current, text.as_deref());
-        HyperlinkDialog { given: Given { current, text, places: Vec::new(), highlight: false, seed: form.clone() }, form, open: true }
+        HyperlinkDialog {
+            given: Given { current, text, places: Vec::new(), highlight: false, seed: form.clone() },
+            form,
+            open: true,
+            parts: HyperlinkParts::default(),
+        }
     }
 
     /// The places in the document a link may go to, after Top of the Document (which the dialog always lists, as
@@ -323,6 +377,21 @@ impl HyperlinkDialog {
     #[must_use]
     pub fn places(mut self, places: Vec<String>) -> Self {
         self.given.places = places;
+        self
+    }
+
+    /// The places in the document a link may go to, in groups under a heading each, after Top of the Document.
+    /// [`LinkTarget::Place`] indexes the places in group order.
+    #[must_use]
+    pub fn place_groups(self, groups: Vec<LinkPlaceGroup>) -> Self {
+        let _ = groups;
+        todo!("dg.F24")
+    }
+
+    /// Which parts of the dialog show.
+    #[must_use]
+    pub fn parts(mut self, parts: HyperlinkParts) -> Self {
+        self.parts = parts;
         self
     }
 
@@ -335,7 +404,7 @@ impl HyperlinkDialog {
 
     /// Shows the dialog.
     pub fn show(&mut self, ui: &mut Ui) -> HyperlinkOutput {
-        let HyperlinkDialog { given, form, open } = self;
+        let HyperlinkDialog { given, form, open, .. } = self;
         let env = Env::of(ui);
         let words = env.words::<HyperlinkWords>();
         let common = env.words::<CommonWords>();
@@ -425,6 +494,25 @@ fn place_list(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWord
             Spot::Top => ListRow::new(words.top_of_document.clone()),
             Spot::Place(place) => ListRow::new(given.places[*place].clone()),
         });
+}
+
+impl HyperlinkDialog {
+    /// OK files its answer for the app to accept or refuse before the dialog closes.
+    #[must_use]
+    pub fn held_ok(self) -> Self {
+        todo!("dg.F12")
+    }
+
+    /// The answer OK filed, once, for the app to judge.
+    pub fn take_ok(&mut self) -> Option<HyperlinkAnswer> {
+        todo!("dg.F12")
+    }
+
+    /// The app's answer to the filed answer: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        let _ = answer;
+        todo!("dg.F12")
+    }
 }
 
 impl StackDialog for HyperlinkDialog {

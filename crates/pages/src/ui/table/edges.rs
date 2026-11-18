@@ -194,6 +194,37 @@ pub struct EdgePicker<'a> {
     #[style_key]
     #[prop(flag)]
     paragraph: bool,
+    /// How the picture is drawn: the proxy diagram, or a sample of the borders on text, a paragraph or a page.
+    #[prop]
+    #[allow(dead_code)] // P3(dialogs-w6): dg.F19
+    look: EdgeLook,
+}
+
+/// How the borders preview is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum EdgeLook {
+    /// The six-line proxy diagram.
+    #[default]
+    Proxy,
+    /// The borders drawn as a sample.
+    Sample {
+        /// What the sample's borders surround.
+        area: SampleArea,
+        /// The fill inside the borders; none leaves the area unfilled.
+        fill: Option<craft_theme::Srgba>,
+    },
+}
+
+/// What a sample of borders surrounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SampleArea {
+    /// A run of text.
+    Text,
+    /// A paragraph.
+    Paragraph,
+    /// A page.
+    Page,
 }
 
 /// The click run on the picker: the line the last click hit and the choice before the run's first click.
@@ -206,7 +237,7 @@ struct ClickRun {
 impl<'a> EdgePicker<'a> {
     /// A picker named `label` editing `edges`.
     pub fn new(label: impl Into<Label>, edges: Bind<'a, BorderEdges>) -> Self {
-        EdgePicker { common: Common::new(), edges, paragraph: false }.label(label).ltr_axis()
+        EdgePicker { common: Common::new(), edges, paragraph: false, look: EdgeLook::default() }.label(label).ltr_axis()
     }
 
     /// The name of `edge`.

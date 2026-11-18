@@ -59,6 +59,8 @@ craft_ui::words! {
         clear: "tabs.clear" = "Clear";
         clear_all: "tabs.clearAll" = "Clear All";
         to_be_cleared: "tabs.toBeCleared" = "Tab stops to be cleared:";
+        /// The empty tab stop list's text.
+        no_stops: "tabStops.none" = "(none)";
     }
 }
 
@@ -242,6 +244,25 @@ impl DisplayOrder<usize> for Stops<'_> {
 }
 
 impl ItemSource<usize> for Stops<'_> {}
+
+impl TabStopsDialog {
+    /// OK files its result for the app to accept or refuse before the dialog closes.
+    #[must_use]
+    pub fn held_ok(self) -> Self {
+        todo!("dg.F12")
+    }
+
+    /// The result OK filed, once, for the app to judge.
+    pub fn take_ok(&mut self) -> Option<TabStopsResult> {
+        todo!("dg.F12")
+    }
+
+    /// The app's answer to the filed result: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
+    pub fn answer_ok(&mut self, answer: Result<(), craft_ui::runtime::env::Label>) {
+        let _ = answer;
+        todo!("dg.F12")
+    }
+}
 
 impl StackDialog for TabStopsDialog {
     type Result = TabStopsResult;

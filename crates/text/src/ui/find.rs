@@ -10,7 +10,7 @@ mod bar;
 mod dialog;
 
 pub use bar::{FindBar, FindBarOutput, FindBarState, FindStep};
-pub use dialog::{FindReplaceDialog, FindRequest, FindTab};
+pub use dialog::{FindReplaceDialog, FindRequest, FindTab, GoToKind, GoToTarget};
 
 use crate::find::{FindError, MAX_COUNT, MAX_PATTERN, RegexError, WildcardError};
 

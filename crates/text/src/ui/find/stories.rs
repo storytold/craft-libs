@@ -4,7 +4,7 @@ use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{FindBar, FindReplaceDialog, FindTab};
+use super::{FindBar, FindReplaceDialog, FindTab, GoToKind, GoToTarget};
 use crate::find::{FindMatches, FindOptions, FindPattern, MAX_COUNT};
 
 fn matches(text: &str, query: &str) -> FindMatches {
@@ -42,7 +42,9 @@ fn refused_pattern(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The Word layout of the dialog on `tab`, with "craft" in Find what, while `open`. The dialog keeps what is typed
 /// in it until it closes; the card's Show dialog opens a fresh one.
 fn dialog(ui: &mut Ui, data: &mut StoryData, tab: FindTab) -> StoryOutput {
-    let fresh = || FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(vec!["Page".into(), "Line".into()]);
+    // P3(dialogs-w4): dg.F25 (`GoToKind::typed` is a `todo!`, so the kinds are built as the struct)
+    let kind = |label: &str| GoToKind { label: label.to_owned(), target: GoToTarget::Typed { hint: "".into(), steps: false } };
+    let fresh = || FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(vec![kind("Page"), kind("Line")]);
     if !*data.value("open", true) {
         return StoryOutput::default();
     }

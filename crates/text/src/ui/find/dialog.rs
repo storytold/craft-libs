@@ -82,6 +82,60 @@ pub enum FindRequest {
         /// The typed target, such as a page number.
         target: String,
     },
+    /// Next or Previous on an empty Go To target of a [`GoToTarget::Typed`] kind that steps.
+    #[non_exhaustive]
+    GoToStep {
+        /// Index into the Go To kinds.
+        kind: usize,
+        /// `true` for Next, `false` for Previous.
+        forward: bool,
+    },
+}
+
+/// One Go To kind and its target.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct GoToKind {
+    /// The kind's name in the Go to what list.
+    pub label: String,
+    /// What the target field is.
+    pub target: GoToTarget,
+}
+
+impl GoToKind {
+    /// A kind whose target is typed, with `hint` as the field's help line; with `steps`, an empty field turns the
+    /// accept button into Next and adds Previous.
+    pub fn typed(label: impl Into<String>, hint: impl Into<Label>, steps: bool) -> Self {
+        let _ = (label.into(), hint.into(), steps);
+        todo!("dg.F25")
+    }
+
+    /// A kind whose target is picked from `names`; with none, `empty` shows as the help line and Go To is disabled.
+    pub fn named(label: impl Into<String>, names: Vec<String>, empty: impl Into<Label>) -> Self {
+        let _ = (label.into(), names, empty.into());
+        todo!("dg.F25")
+    }
+}
+
+/// What a Go To kind's target is.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum GoToTarget {
+    /// A text field with `hint` as its help line; with `steps`, an empty field turns the accept button into Next and
+    /// adds Previous.
+    Typed {
+        /// The help line.
+        hint: Label,
+        /// Whether an empty target steps.
+        steps: bool,
+    },
+    /// A `Select` over `names`; with none, `empty` shows as the help line and Go To is disabled.
+    Named {
+        /// The names to pick from.
+        names: Vec<String>,
+        /// The help line when there are no names.
+        empty: Label,
+    },
 }
 
 impl FindRequest {
@@ -108,6 +162,11 @@ impl FindRequest {
     /// Go To the `target` of the Go To kind at index `kind`.
     pub fn go_to(kind: usize, target: impl Into<String>) -> Self {
         FindRequest::GoTo { kind, target: target.into() }
+    }
+
+    /// Step Go To to the next (`forward`) or previous target of the kind at index `kind`.
+    pub fn go_to_step(kind: usize, forward: bool) -> Self {
+        FindRequest::GoToStep { kind, forward }
     }
 }
 
@@ -146,7 +205,9 @@ pub struct FindReplaceDialog {
     tab: FindTab,
     word: bool,
     more: bool,
-    go_to_kinds: Vec<String>,
+    go_to_kinds: Vec<GoToKind>,
+    #[allow(dead_code)] // P3(dialogs-w4): dg.F25
+    highlighted: bool,
     message: String,
     request: Option<FindRequest>,
     /// The field that last had the keyboard: where Special inserts.
@@ -168,6 +229,7 @@ impl FindReplaceDialog {
             word: false,
             more: false,
             go_to_kinds: Vec::new(),
+            highlighted: false,
             message: String::new(),
             request: None,
             last_field: Field::Find,
@@ -194,8 +256,15 @@ impl FindReplaceDialog {
 
     /// Go To's kinds (Page, Section, Line, Bookmark, Comment, …), the app's.
     #[must_use]
-    pub fn go_to_kinds(mut self, kinds: Vec<String>) -> Self {
+    pub fn go_to_kinds(mut self, kinds: Vec<GoToKind>) -> Self {
         self.go_to_kinds = kinds;
+        self
+    }
+
+    /// The Find tab opens with Reading Highlight on (Clear highlight enabled); the app passes its session state.
+    #[must_use]
+    pub fn highlighted(mut self, on: bool) -> Self {
+        self.highlighted = on;
         self
     }
 
@@ -215,6 +284,19 @@ impl StackDialog for FindReplaceDialog {
 
     fn id(&self) -> DialogId {
         dialog_id("find-replace")
+    }
+
+    fn modeless(&self) -> bool {
+        true
+    }
+
+    fn json_fields(&self) -> Option<serde_json::Value> {
+        todo!("dg.F25")
+    }
+
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        let _ = (field, value);
+        todo!("dg.F25")
     }
 
     fn show(&mut self, ui: &mut Ui, _stack: &DialogStack) -> Option<DialogResult<()>> {
@@ -271,7 +353,7 @@ impl StackDialog for FindReplaceDialog {
             }
             if tab == FindTab::GoTo {
                 Text::new(words.go_to_what.clone()).show(ui);
-                let entries: Vec<Entry<usize>> = kinds.iter().enumerate().map(|(at, kind)| Entry::new(at, kind.clone())).collect();
+                let entries: Vec<Entry<usize>> = kinds.iter().enumerate().map(|(at, kind)| Entry::new(at, kind.label.clone())).collect();
                 let edit = Select::new(words.go_to_what.clone(), Bind::given(go_kind.min(kinds.len().saturating_sub(1))), &entries).show(ui);
                 if let Some(value) = edit.events.value() {
                     go_kind = *value;
@@ -336,7 +418,7 @@ impl StackDialog for FindReplaceDialog {
             check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
             check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
             check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
-            let entries = special_entries(&words, tab == FindTab::Replace);
+            let entries = special_entries(&words, tab == FindTab::Replace, options.wildcards);
             let button = Button::new(words.special.clone()).show(ui);
             if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
                 let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
@@ -382,7 +464,8 @@ impl StackDialog for FindReplaceDialog {
 }
 
 /// The Special menu: the `^` codes of Find what, or of Replace with.
-fn special_entries(words: &FindLabels, replacing: bool) -> Vec<Entry<&'static str>> {
+fn special_entries(words: &FindLabels, replacing: bool, wildcards: bool) -> Vec<Entry<&'static str>> {
+    let _ = wildcards; // P3(dialogs-w4): dg.F25
     let find: [(&str, &'static str); 14] = [
         (words.paragraph_mark.as_str(), "^p"),
         (words.tab_character.as_str(), "^t"),

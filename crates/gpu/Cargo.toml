@@ -1,0 +1,18 @@
+[package]
+name = "craft-gpu"
+description = "GPU start-up choices per platform for Craft apps on eframe's wgpu backend: backends, power preference, DX12 compiler and the Linux DRM device pick."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# A `[patch.crates-io]` row at the framework root points egui-wgpu at the pinned egui fork; it is not a workspace dependency.
+egui-wgpu = "0.37"
+
+[target.'cfg(windows)'.dependencies]
+pollster = "0.4"
+
+[lints]
+workspace = true

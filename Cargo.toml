@@ -173,6 +173,7 @@ craft-dds = { path = "crates/dds" }
 craft-psd = { path = "crates/psd" }
 craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
+craft-gpu = { path = "crates/gpu" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
 craft-sheet = { path = "crates/sheet" }

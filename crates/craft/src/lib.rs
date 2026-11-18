@@ -129,6 +129,8 @@ pub use craft_gainmap as gainmap;
 pub use craft_gcode as gcode;
 #[cfg(feature = "gif")]
 pub use craft_gif as gif;
+#[cfg(feature = "gpu")]
+pub use craft_gpu as gpu;
 #[cfg(feature = "gridcraft-format")]
 pub use craft_gridcraft_format as gridcraft_format;
 #[cfg(feature = "gzip")]

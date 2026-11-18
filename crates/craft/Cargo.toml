@@ -94,6 +94,7 @@ craft-flow = { workspace = true, optional = true }
 craft-gainmap = { workspace = true, optional = true }
 craft-gcode = { workspace = true, optional = true }
 craft-gif = { workspace = true, optional = true }
+craft-gpu = { workspace = true, optional = true }
 craft-hdr = { workspace = true, optional = true }
 craft-heif = { workspace = true, optional = true }
 craft-html = { workspace = true, optional = true }
@@ -414,6 +415,8 @@ gcode = ["dep:craft-gcode"]
 
 gif = ["dep:craft-gif"]
 gif-frames = ["gif", "craft-gif/frames"]
+
+gpu = ["dep:craft-gpu"]
 
 gridcraft-format = ["dep:craft-gridcraft-format"]
 

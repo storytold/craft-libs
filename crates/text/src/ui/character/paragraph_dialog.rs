@@ -158,6 +158,62 @@ pub struct ParagraphFormat {
     pub space_after_kind: SpacingKind,
     /// The line spacing rule and its value.
     pub line_spacing: Option<LineSpacing>,
+    /// The paragraph's direction. The outer `None` hides the row; `Some(None)` shows it empty, for paragraphs that
+    /// differ.
+    pub direction: Option<Option<super::ParagraphDirection>>,
+    /// Mirror indents: Left and Right read Inside and Outside when on. The outer `None` hides it; `Some(None)` is mixed.
+    pub mirror_indents: Option<Option<bool>>,
+    /// The Line and Page Breaks check boxes. `None` hides the page.
+    pub breaks: Option<LineBreakOptions>,
+    /// The Asian Typography check boxes. `None` hides the page.
+    pub asian: Option<AsianTypography>,
+}
+
+/// The Line and Page Breaks check boxes of Word's Paragraph dialog; `None` is a box whose paragraphs differ, shown
+/// mixed, and a click makes it checked.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LineBreakOptions {
+    /// Widow/orphan control.
+    pub widow_control: Option<bool>,
+    /// Keep with next.
+    pub keep_with_next: Option<bool>,
+    /// Keep lines together.
+    pub keep_lines_together: Option<bool>,
+    /// Page break before.
+    pub page_break_before: Option<bool>,
+    /// Suppress line numbers.
+    pub suppress_line_numbers: Option<bool>,
+    /// Don't hyphenate.
+    pub dont_hyphenate: Option<bool>,
+}
+
+/// The Asian Typography check boxes of Word's Paragraph dialog, mixed as [`LineBreakOptions`] is.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AsianTypography {
+    /// Apply East Asian line-break rules (kinsoku).
+    pub kinsoku: Option<bool>,
+    /// Allow Latin text to wrap in the middle of a word.
+    pub word_wrap: Option<bool>,
+    /// Allow punctuation to hang past the margin.
+    pub overflow_punct: Option<bool>,
+    /// Allow punctuation at the start of a line.
+    pub top_line_punct: Option<bool>,
+    /// Automatically space East Asian and Latin text.
+    pub auto_space_de: Option<bool>,
+    /// Automatically space East Asian text and numbers.
+    pub auto_space_dn: Option<bool>,
+}
+
+/// The page of Word's Paragraph dialog the dialog opens on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ParagraphTab {
+    /// Indents and Spacing.
+    #[default]
+    IndentsAndSpacing,
+    /// Line and Page Breaks.
+    LineAndPageBreaks,
+    /// Asian Typography.
+    AsianTypography,
 }
 
 /// OK's answer: the format, and whether Tabs… was pressed (the app applies the format, then opens
@@ -193,12 +249,27 @@ pub struct ParagraphDialog {
     word: bool,
     /// The format the dialog opened with: a spacing that returns to its value takes its kind back.
     opened: ParagraphFormat,
+    #[allow(dead_code)] // P3(dialogs-w3): dg.F9
+    tab: ParagraphTab,
 }
 
 impl ParagraphDialog {
     /// A dialog editing `format`, with lengths in inches.
     pub fn new(format: ParagraphFormat) -> Self {
-        ParagraphDialog { opened: format.clone(), format, unit: DocUnit::new(UnitKind::Inches, UnitKind::POINTS_PER_INCH), word: false }
+        ParagraphDialog {
+            opened: format.clone(),
+            format,
+            unit: DocUnit::new(UnitKind::Inches, UnitKind::POINTS_PER_INCH),
+            word: false,
+            tab: ParagraphTab::default(),
+        }
+    }
+
+    /// Opens the dialog on `tab`; Word's form with line-break and Asian typography options shows the three pages.
+    #[must_use]
+    pub fn tab(mut self, tab: ParagraphTab) -> Self {
+        self.tab = tab;
+        self
     }
 
     /// Sets the unit the length fields show.
@@ -577,6 +648,25 @@ impl ParagraphDialog {
 
     fn answer(&self, open_tabs: bool) -> ParagraphAnswer {
         ParagraphAnswer { format: self.format.clone(), open_tabs }
+    }
+}
+
+impl ParagraphDialog {
+    /// OK files its answer for the app to accept or refuse before the dialog closes.
+    #[must_use]
+    pub fn held_ok(self) -> Self {
+        todo!("dg.F12")
+    }
+
+    /// The answer OK filed, once, for the app to judge.
+    pub fn take_ok(&mut self) -> Option<ParagraphAnswer> {
+        todo!("dg.F12")
+    }
+
+    /// The app's answer to the filed answer: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        let _ = answer;
+        todo!("dg.F12")
     }
 }
 

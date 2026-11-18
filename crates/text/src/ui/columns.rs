@@ -593,6 +593,25 @@ fn bare(caption: &str) -> &str {
     caption.trim_end_matches([':', '\u{ff1a}'])
 }
 
+impl TextColumnsDialog {
+    /// OK files its result for the app to accept or refuse before the dialog closes.
+    #[must_use]
+    pub fn held_ok(self) -> Self {
+        todo!("dg.F12")
+    }
+
+    /// The result OK filed, once, for the app to judge.
+    pub fn take_ok(&mut self) -> Option<Option<TextColumns>> {
+        todo!("dg.F12")
+    }
+
+    /// The app's answer to the filed result: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        let _ = answer;
+        todo!("dg.F12")
+    }
+}
+
 impl StackDialog for TextColumnsDialog {
     /// The fields that changed; `None` when none did (OK applies nothing).
     type Result = Option<TextColumns>;

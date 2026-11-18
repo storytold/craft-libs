@@ -30,10 +30,11 @@ use crate::layout::{
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
-    tool_pass,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, Snap, ToolPass,
+    ToolRegion, canvas_space, tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
+use craft_ui::primitives::EditorPurpose;
 use craft_ui::primitives::textures::ThumbSource;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::memory::Remember as _;
@@ -167,6 +168,18 @@ impl PlacedPage {
     pub fn to_page(&self, p: egui::Pos2) -> Point {
         Point::new(f64::from(p.x - self.rect.min.x) / self.scale, f64::from(p.y - self.rect.min.y) / self.scale)
     }
+
+    /// Page point `p` to document coordinates of `view`.
+    pub fn to_doc(&self, view: &CanvasView, p: Point) -> Point {
+        let _ = (view, p);
+        todo!("cv.K19")
+    }
+
+    /// Document point `d` of `view` to page coordinates.
+    pub fn from_doc(&self, view: &CanvasView, d: Point) -> Point {
+        let _ = (view, d);
+        todo!("cv.K19")
+    }
 }
 
 /// What the page view's canvas body hands the app's canvas controls (margins, zones, marks, grids, cell overlay,
@@ -183,6 +196,14 @@ pub struct PageBody<'b> {
     /// The canvas's tool input of this pass, which the app's tool host runs on; `None` in a measuring run, where no
     /// tool runs.
     pub pass: Option<&'b ToolPass>,
+}
+
+impl PageBody<'_> {
+    /// The page under document point `d` and the point in its coordinates; the nearest page when `d` is outside all.
+    pub fn page_at_doc(&self, d: Point) -> Option<(&PlacedPage, Point)> {
+        let _ = d;
+        todo!("cv.K19")
+    }
 }
 
 /// What the view did this pass.
@@ -251,6 +272,14 @@ pub struct PageView<'a> {
     bodies: Option<&'a [(f64, f64)]>,
     describer: Option<&'a dyn AccessDescriber>,
     paper: DataColor,
+    #[allow(dead_code)] // P3(canvas-w5): cv.K14
+    editor: Option<EditorPurpose>,
+    #[allow(dead_code)] // P3(canvas-w5): cv.K18
+    snap: Option<Snap>,
+    #[allow(dead_code)] // P3(canvas-w5): cv.K18
+    tool_regions: Vec<ToolRegion>,
+    #[allow(dead_code)] // P3(canvas-w5): cv.K20
+    rulers: bool,
 }
 
 impl<'a> PageView<'a> {
@@ -266,6 +295,10 @@ impl<'a> PageView<'a> {
             bodies: None,
             describer: None,
             paper,
+            editor: None,
+            snap: None,
+            tool_regions: Vec::new(),
+            rulers: false,
         }
     }
 
@@ -297,6 +330,33 @@ impl<'a> PageView<'a> {
         self
     }
 
+    /// Registers the canvas's editor part of `purpose`; the view's keys give it none.
+    #[must_use]
+    pub fn editor(mut self, purpose: EditorPurpose) -> Self {
+        self.editor = Some(purpose);
+        self
+    }
+
+    /// The snapping of the coordinates the pointer sets on the view, passed to the inner canvas.
+    #[must_use]
+    pub fn snap(mut self, snap: Option<Snap>) -> Self {
+        self.snap = snap;
+        self
+    }
+
+    /// The areas where the active tool takes a press over the canvas controls, passed to the inner canvas.
+    #[must_use]
+    pub fn tool_regions(mut self, regions: Vec<ToolRegion>) -> Self {
+        self.tool_regions = regions;
+        self
+    }
+
+    /// Shows the rulers along the top and left edges: the inner canvas's `show_rulers`, which insets the view.
+    pub fn rulers(mut self, on: bool) -> Self {
+        self.rulers = on;
+        self
+    }
+
     /// Shows the view in the room left in `ui`, and runs `body` for the app's canvas controls (margins, zones,
     /// marks, grids), which it shows with `show_at(ui, body.rect)`, and its tool host, which runs on `body.pass`.
     /// `body` runs on every run of the canvas body (the measuring run and the real one), so it builds what it shows
@@ -312,7 +372,7 @@ impl<'a> PageView<'a> {
     }
 
     fn run(self, ui: &mut Ui, rect: Rect, take_room: bool, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
-        let PageView { label, source, state, options, navigation, bodies, describer, paper } = self;
+        let PageView { label, source, state, options, navigation, bodies, describer, paper, .. } = self;
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
         let sizes: Vec<Size> = (0..count).map(|page| source.page_size(page)).collect();
@@ -650,6 +710,8 @@ craft_ui::words! {
         scroll_bars: "pageView.scrollBars" = "Scroll bars";
         edit: "pageView.edit" = "Change view";
         text: "pageView.text" = "Page text";
+        /// The tip beside the vertical scroll bar's thumb while it is dragged.
+        page_of: template "pageView.pageOf" = "Page {page} of {count}";
     }
 }
 

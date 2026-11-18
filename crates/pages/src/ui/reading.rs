@@ -442,6 +442,8 @@ pub struct ReadingNavOutput {
     pub response: Response,
     /// The state's column changed: a button turned the screen.
     pub turned: bool,
+    /// The trailing button ([`ReadingNav::action`]) was clicked.
+    pub action: bool,
 }
 
 impl Outcome for ReadingNavOutput {
@@ -459,12 +461,30 @@ impl Outcome for ReadingNavOutput {
 pub struct ReadingNav<'a> {
     state: &'a mut ReadingState,
     count: usize,
+    #[allow(dead_code)] // P3(canvas-w5): cv.K16
+    position: bool,
+    #[allow(dead_code)] // P3(canvas-w5): cv.K16
+    action: Option<craft_ui::runtime::env::Label>,
 }
 
 impl<'a> ReadingNav<'a> {
     /// The buttons for a view of `count` columns in `state`.
     pub fn new(state: &'a mut ReadingState, count: usize) -> Self {
-        ReadingNav { state, count }
+        ReadingNav { state, count, position: false, action: None }
+    }
+
+    /// Shows the "n / m" position between the buttons.
+    #[must_use]
+    pub fn position(mut self, shown: bool) -> Self {
+        self.position = shown;
+        self
+    }
+
+    /// Adds one trailing button named `label`, reported as [`ReadingNavOutput::action`].
+    #[must_use]
+    pub fn action(mut self, label: impl Into<craft_ui::runtime::env::Label>) -> Self {
+        self.action = Some(label.into());
+        self
     }
 
     /// Shows the row.
@@ -478,6 +498,6 @@ impl<'a> ReadingNav<'a> {
             by = i32::from(clicked(&next)) - i32::from(clicked(&previous));
         });
         self.state.turn(by, count);
-        ReadingNavOutput { response: row.output, turned: by != 0 }
+        ReadingNavOutput { response: row.output, turned: by != 0, action: false }
     }
 }

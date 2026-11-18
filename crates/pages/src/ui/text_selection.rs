@@ -501,12 +501,55 @@ pub struct TextMarks<'a> {
     /// The text selection to paint with the marks.
     #[prop]
     selection: Option<TextSelection>,
+    /// The areas to mark, in page points: selection, find and Read Aloud marks that are not glyph ranges.
+    #[prop]
+    areas: &'a [MarkArea],
+}
+
+/// What a [`MarkArea`] marks; each kind has its [`MarkLook`] fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MarkKind {
+    /// A selection.
+    Selection,
+    /// A find match.
+    Found,
+    /// The current find match.
+    Current,
+    /// The text Read Aloud speaks.
+    Spoken,
+}
+
+/// A rectangle of a page to mark, in page points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MarkArea {
+    /// The page index, 0-based.
+    pub page: usize,
+    /// The area in page points.
+    pub rect: craft_behavior::kurbo::Rect,
+    /// What it marks.
+    pub kind: MarkKind,
+}
+
+impl MarkArea {
+    /// The area `rect` of `page`, marking `kind`.
+    pub fn new(page: usize, rect: craft_behavior::kurbo::Rect, kind: MarkKind) -> Self {
+        let _ = (page, rect, kind);
+        todo!("cv.K17")
+    }
 }
 
 impl<'a> TextMarks<'a> {
     /// The `marks` over the placed `pages`, whose text `texts` gives.
     pub fn new(pages: &'a [PlacedPage], texts: &'a dyn PageTexts, marks: &'a [TextMark]) -> Self {
-        TextMarks { common: Common::new(), pages, texts, marks, selection: None }
+        TextMarks { common: Common::new(), pages, texts, marks, selection: None, areas: &[] }
+    }
+
+    /// Marks for [`areas`](Self::areas) alone over the placed `pages`, with no text source.
+    pub fn over(pages: &'a [PlacedPage]) -> Self {
+        let _ = pages;
+        todo!("cv.K17")
     }
 }
 

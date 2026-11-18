@@ -1776,6 +1776,7 @@ dependencies = [
  "craft-gainmap",
  "craft-gcode",
  "craft-gif",
+ "craft-gpu",
  "craft-gridcraft-format",
  "craft-gzip",
  "craft-hdr",
@@ -2652,6 +2653,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu"
+version = "0.1.0"
+dependencies = [
+ "egui-wgpu",
+ "pollster 0.4.0",
+]
+
+[[package]]
 name = "craft-gridcraft-format"
 version = "0.1.0"
 dependencies = [
@@ -3197,6 +3206,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-i18n",
+ "craft-keymap",
  "craft-text",
  "craft-theme",
  "craft-ui",

@@ -204,6 +204,31 @@ pub struct ColumnDrag {
     pub phase: GesturePhase,
     /// The border and the position the pointer gives it.
     pub border: ColumnBorder,
+    /// The drag pass's modifiers.
+    pub mods: craft_keymap::Mods,
+}
+
+/// Which edge of a column gap a [`GapDrag`] moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GapEdge {
+    /// The end edge of the column before the gap.
+    End,
+    /// The start edge of the column after the gap.
+    Start,
+}
+
+/// A column gap edge drag: one gesture per drag, reported with its phase.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct GapDrag {
+    /// Where the gesture stands.
+    pub phase: GesturePhase,
+    /// The gap in [`TextRuler::gaps`] being dragged.
+    pub index: usize,
+    /// The edge of the gap the pointer moves.
+    pub edge: GapEdge,
+    /// The position the pointer gives the edge, points from the column's start edge.
+    pub position: f32,
 }
 
 /// What the ruler did this pass.
@@ -217,6 +242,8 @@ pub struct TextRulerOutput {
     pub open_tabs_dialog: bool,
     /// A table column border dragged ([`TextRuler::columns`]).
     pub column: Option<ColumnDrag>,
+    /// A column gap edge dragged ([`TextRuler::gaps`]).
+    pub gap: Option<GapDrag>,
     /// The kind the tab selector was clicked to: the next kind, the previous one for a secondary click.
     pub kind: Option<TabAlign>,
 }
@@ -240,6 +267,7 @@ pub(super) struct Report {
     pub(super) picked: Option<usize>,
     pub(super) open_tabs_dialog: bool,
     pub(super) column: Option<ColumnDrag>,
+    pub(super) gap: Option<GapDrag>,
     pub(super) kind: Option<TabAlign>,
 }
 
@@ -325,6 +353,16 @@ pub struct TextRuler<'a> {
     /// the right edge of each cell. Empty (the default) when the caret is not in a table.
     #[prop]
     columns: &'a [f32],
+    /// The column gaps as (start, end) points from the column's start edge, painted and dragged by their edges.
+    #[prop]
+    gaps: &'a [(f32, f32)],
+    /// Where the ruler's zero sits, points from the strip's start edge: a page-wide ruler is measured from the page's
+    /// text origin.
+    #[prop]
+    origin: f32,
+    /// The part of the strip the ruler covers, points from the strip's start edge; the ruler is cut to it.
+    #[prop]
+    extent: Option<egui::Rangef>,
     /// The unit the markers' values and the ticks show.
     #[prop]
     unit: DocUnit,
@@ -353,6 +391,9 @@ impl<'a> TextRuler<'a> {
             value,
             width: if width.is_finite() { width.max(0.0) } else { 0.0 },
             columns: &[],
+            gaps: &[],
+            origin: 0.0,
+            extent: None,
             unit: DocUnit::points(),
             kind: None,
             scale: None,
@@ -545,7 +586,7 @@ impl Component for TextRuler<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TextRulerOutput {
-        let Report { picked, open_tabs_dialog, column, kind } = self.report;
-        TextRulerOutput { edit: cx.edit_response(), picked, open_tabs_dialog, column, kind }
+        let Report { picked, open_tabs_dialog, column, gap, kind } = self.report;
+        TextRulerOutput { edit: cx.edit_response(), picked, open_tabs_dialog, column, gap, kind }
     }
 }

@@ -37,7 +37,10 @@ pub use layout::{
 };
 pub use numbering::{NumberStyle, PAGE_NUMBER_STYLES, PageNumbering};
 pub use range::{PageRange, PageRangeError, Subset, format_pages, parse_pages};
-pub use setup::{MARGIN_PRESETS, MarginPreset, Margins, Orientation, PAPER_SIZES, PageSetup, PageVerticalAlign, PaperSize, paper_named};
+pub use setup::{
+    DocumentGrid, GridKind, MARGIN_PRESETS, MAX_GRID_COUNT, MarginPreset, Margins, Orientation, PAPER_SIZES, PageSetup, PageVerticalAlign, PaperSize,
+    paper_named,
+};
 
 /// The stories and trials this crate registers.
 #[cfg(feature = "screen-testing")]
