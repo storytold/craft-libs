@@ -187,7 +187,7 @@ impl<'a> Archive<'a> {
     /// Only the bytes of a read that succeeds are charged to the total.
     pub fn read(&mut self, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
         let Some(index) = self.zip.index_for_name(name) else { return Ok(None) };
-        self.read_index(index, max)
+        self.read_index_named(index, name, max)
     }
 
     /// Read the entry at `index` under the same size, checksum and aggregate budget
@@ -197,6 +197,10 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let name = self.entry_name(index)?.unwrap_or_default();
+        self.read_index_named(index, &name, max)
+    }
+
+    fn read_index_named(&mut self, index: usize, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
         let entry = |msg: String| Error::Entry { name: name.to_string(), msg };
         let f = self.zip.by_index(index).map_err(|e| entry(e.to_string()))?;
         let declared = f.size();
@@ -231,6 +235,17 @@ impl Archive<'static> {
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+
+    #[test]
+    fn named_read_preserves_entry_error_for_a_corrupt_local_header() {
+        let mut writer = crate::Writer::new();
+        writer.add("a", b"abc", crate::Compression::Stored).unwrap();
+        let mut bytes = writer.finish().unwrap();
+        bytes[0] = 0; // The central directory remains valid; the local signature does not.
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 1, max_total_bytes: 3 }).unwrap();
+        assert!(matches!(archive.read("a", 3), Err(Error::Entry { name, .. }) if name == "a"));
+        assert_eq!(archive.budget().remaining(), 3);
+    }
 
     #[test]
     fn indexed_reads_charge_the_same_budget_and_enforce_entry_limits() {
