@@ -123,6 +123,7 @@ fn detail(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
         .id_salt("keys")
         .select(SelectMode::Single)
         .sizing(Sizing::Content)
+        .natural_height(true)
         .selection(Bind::bound(&mut selection))
         .empty(words.none.clone())
         .show_items(ui, &Titles(&texts), &mut |key, _| ListRow::new(texts[*key].clone()));
