@@ -11,8 +11,17 @@
 //! Fixtures are generated into `$CRAFT_MEDIA_FIXTURES_DIR` or `<workspace>/target/fixtures`, one
 //! directory per crate or format, and never committed.
 //!
+//! [`hostile::hammer`] runs a parser over every truncation and mutations of a valid input and fails
+//! on a panic or a case that does not finish in time; `CRAFT_MEDIA_HOSTILE_MULT=10` runs ten times
+//! the iterations and `CRAFT_HOSTILE_DIVISOR=8` an eighth of them. It and [`with_deadline`] call
+//! `craft_testkit`.
+//! [`vmd`] writes Sierra VMD fixtures, which ffmpeg can read but not write.
+//!
 //! Failing loudly is what a test helper is for: a wrong `CRAFT_MEDIA_*` setting or an unwritable
 //! fixture directory panics, which fails the test that asked.
+
+pub mod hostile;
+pub mod vmd;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -131,6 +140,25 @@ pub fn fixture_subdir(name: &str) -> PathBuf {
     d
 }
 
+/// A new, empty directory in the system temporary directory that only this call created: made with
+/// `create_dir`, which fails rather than follow a pre-planted name or symlink, so a test can write
+/// fixed file names inside it. The caller removes it.
+#[allow(clippy::panic)]
+pub fn private_dir(tag: &str) -> PathBuf {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    for _ in 0..100 {
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("craft-media-{tag}-{}-{nanos:x}-{n}", std::process::id()));
+        match std::fs::create_dir(&d) {
+            Ok(()) => return d,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => panic!("cannot create {}: {e}", d.display()),
+        }
+    }
+    panic!("no free scratch directory name for {tag}");
+}
+
 /// A temporary sibling of `out` that no other thread or process will pick; the extension is kept
 /// because ffmpeg chooses the muxer from it.
 pub fn temp_path(out: &Path) -> PathBuf {
@@ -156,4 +184,174 @@ pub fn generate_and_report<T>(name: &str, outputs: &[PathBuf], generate: impl Fn
     };
     println!("FIXTURE {status} {name}");
     r
+}
+
+/// Check if ffmpeg has a specific encoder compiled in.
+pub fn ffmpeg_has_encoder(ff: &Path, encoder: &str) -> bool {
+    let Ok(output) = Command::new(ff).args(["-hide_banner", "-encoders"]).output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    parse_has_encoder(&String::from_utf8_lossy(&output.stdout), encoder)
+}
+
+fn parse_has_encoder(stdout: &str, encoder: &str) -> bool {
+    stdout.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        if let (Some(_flags), Some(name)) = (parts.next(), parts.next()) { name == encoder } else { false }
+    })
+}
+
+/// Report a skipped test that is not an oracle check (an unsupported platform or an optional
+/// encoder capability). Unlike [`skip`], this never fails under `CRAFT_MEDIA_REQUIRE_ORACLES=1`.
+pub fn skip_test(what: &str, reason: &str) {
+    eprintln!("SKIPPED ({what}): {reason}");
+}
+
+/// Find ffmpeg, or print a skip message and return None.
+pub fn ffmpeg_or_skip(reason: &str) -> Option<PathBuf> {
+    tool("ffmpeg").or_else(|| skip(&format!("{reason}: ffmpeg not found (set {} or put ffmpeg on PATH)", env_var("ffmpeg"))))
+}
+
+/// Log progress of long tests.
+pub fn set_progress(label: &str) {
+    eprintln!("PROGRESS: {label}");
+}
+
+/// Run closure with an execution deadline of `secs` seconds, which `CRAFT_TEST_TIMEOUT_SECS`
+/// replaces, through [`craft_testkit::with_deadline`]. Panics when the closure does not finish in
+/// time, when `secs` is zero, or when the variable is not a whole number of seconds above zero.
+#[cfg(not(target_arch = "wasm32"))]
+#[track_caller]
+pub fn with_deadline<F: FnOnce() + Send + 'static>(secs: u64, f: F) {
+    with_limit(craft_testkit::DeadlineLimit::new(std::time::Duration::from_secs(secs)), f);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[track_caller]
+fn with_limit<F: FnOnce() + Send + 'static>(limit: craft_testkit::DeadlineLimit<'_>, f: F) {
+    craft_testkit::with_deadline(limit, "the test body", f);
+}
+
+/// Return fixture directory for a crate/category, creating it if needed.
+pub fn fixtures_dir(subdir: &str) -> PathBuf {
+    fixture_subdir(subdir)
+}
+
+pub mod fixtures {
+    use super::temp_path;
+    use std::path::{Path, PathBuf};
+
+    /// Atomically publish a fixture by renaming `tmp` to `path`.
+    pub fn publish(tmp: &Path, path: &Path) -> std::io::Result<()> {
+        std::fs::rename(tmp, path)
+    }
+
+    /// Generate fixture `out` using generator closure if it does not already exist. A generator
+    /// that returns `false`, or whose output cannot be moved into place, skips (see
+    /// [`skip`](super::skip)): a failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`, so a required
+    /// oracle run cannot pass with a fixture missing.
+    pub fn generate<F: FnOnce(&Path) -> bool>(out: &Path, f: F) -> Option<PathBuf> {
+        generate_with(out, super::oracles_required(), f)
+    }
+
+    /// [`generate`] with `required` explicit, so tests can set it without touching the process
+    /// environment.
+    pub fn generate_with<F: FnOnce(&Path) -> bool>(out: &Path, required: bool, f: F) -> Option<PathBuf> {
+        if out.exists() {
+            return Some(out.to_path_buf());
+        }
+        let tmp = temp_path(out);
+        let reason = if f(&tmp) {
+            match std::fs::rename(&tmp, out) {
+                Ok(()) => return Some(out.to_path_buf()),
+                Err(e) => format!("could not move {} into place: {e}", tmp.display()),
+            }
+        } else {
+            format!("fixture generator failed for {}", out.display())
+        };
+        let _ = std::fs::remove_file(&tmp);
+        super::skip_with(required, &reason)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_generator_skips_when_optional() {
+        let dir = private_dir("testkit-gen-opt");
+        let out = dir.join("fixture");
+        assert!(fixtures::generate_with(&out, false, |_| false).is_none());
+        assert!(!out.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "forbids skipping oracle tests")]
+    fn failed_generator_fails_when_required() {
+        let dir = private_dir("testkit-gen-req");
+        let out = dir.join("fixture");
+        let result = std::panic::catch_unwind(|| fixtures::generate_with(&out, true, |_| false));
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    #[test]
+    fn parse_has_encoder_exact_match() {
+        let sample = "\
+Encoders:
+ V..... = Video
+ ------
+ V....D libvpx-vp9          libvpx VP9 (codec vp9)
+ V....D libvpx              libvpx VP8 (codec vp8)
+ A....D flac                FLAC (Free Lossless Audio Codec)
+";
+        assert!(parse_has_encoder(sample, "libvpx"));
+        assert!(parse_has_encoder(sample, "libvpx-vp9"));
+        assert!(parse_has_encoder(sample, "flac"));
+        assert!(!parse_has_encoder(sample, "vp8"));
+        assert!(!parse_has_encoder(sample, "libvp"));
+    }
+
+    #[test]
+    fn with_deadline_completes() {
+        with_deadline(5, || {
+            // fast operation
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "the test body did not finish within 1s")]
+    fn with_deadline_times_out() {
+        let (_keep, rx) = std::sync::mpsc::channel::<()>();
+        let limit = craft_testkit::DeadlineLimit::new(std::time::Duration::from_secs(1)).with_variable("CRAFT_MEDIA_TESTKIT_UNSET_IN_TESTS");
+        with_limit(limit, move || {
+            let _ = rx.recv();
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "the default limit is zero")]
+    fn with_deadline_of_zero_fails() {
+        with_deadline(0, || {});
+    }
+
+    #[test]
+    fn with_deadline_names_a_bad_timeout_variable() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::with_deadline_completes", "--nocapture", "--test-threads=1"])
+            .env("CRAFT_TEST_TIMEOUT_SECS", "soon")
+            .output()
+            .unwrap();
+        let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(printed.contains("running 1 test"), "the child did not run the test:\n{printed}");
+        assert!(!out.status.success(), "the child passed:\n{printed}");
+        assert!(printed.contains(r#"CRAFT_TEST_TIMEOUT_SECS="soon" is not a whole number of seconds"#), "{printed}");
+    }
 }

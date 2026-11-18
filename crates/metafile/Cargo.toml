@@ -1,0 +1,23 @@
+[package]
+name = "craft-metafile"
+description = "Windows Metafile (WMF), Enhanced Metafile (EMF) and EMF+ reader into a neutral vector model, and EMF and WMF writers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The EMF and WMF writers.
+write = []
+
+[dependencies]
+kurbo = { workspace = true }
+thiserror = { workspace = true }
+# The Windows code pages of 8-bit text.
+encoding_rs = { workspace = true }
+# JPEG and PNG bitmaps (BI_JPEG, BI_PNG) and the image files EMF+ carries.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "tiff", "bmp"] }

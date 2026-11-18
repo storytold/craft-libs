@@ -10,32 +10,49 @@
 //! * [`builtin`] ships sRGB, Display P3, Adobe RGB (1998)-compatible, ProPhoto-compatible,
 //!   linear sRGB, Rec. 2020, Gray 2.2, sGray, Lab D50, a synthetic coated CMYK profile and a
 //!   Coated FOGRA39 profile fitted to Fogra's characterisation data.
+//! * [`NamedColors`] reads a named-colour profile's spot colours and converts them into a
+//!   destination profile.
 //! * [`Lut3d`] samples a display transform into a 3D texture for the GPU canvas.
+//! * [`GpuMatrixShaper`] preserves near-black precision for separable RGB display transforms.
 //!
 //! Implemented from the public ICC.1:2010 (v4.3) and ICC.1:2001-04 (v2) specifications,
 //! CIE 15, and Adobe's published black point compensation paper.
 #![forbid(unsafe_code)]
 
+pub mod black;
 pub mod builtin;
+mod builtin_v2;
 pub mod clut;
 pub mod curve;
 pub mod gamut;
+mod gpu_matrix_shaper;
 pub mod lut3d;
 pub mod lutfile;
 pub mod math;
+pub mod named;
+mod normalize;
 pub mod pipeline;
 pub mod profile;
+pub mod sony_lut;
+pub mod spi1d;
 pub mod synth;
 pub mod transform;
 mod write;
+pub mod write_v2;
 
+pub use black::BlackPreserving;
 pub use builtin::Builtin;
 pub use clut::Clut;
 pub use curve::Curve;
 pub use gamut::GamutCheck;
+pub use gpu_matrix_shaper::GpuMatrixShaper;
 pub use lut3d::Lut3d;
+pub use math::Mat3;
+pub use named::{NamedColor, NamedColors};
+pub use normalize::normalize_for_embedding;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
 pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
+pub use write::profile_id;
 
 /// ICC rendering intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

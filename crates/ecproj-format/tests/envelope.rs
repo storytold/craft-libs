@@ -121,6 +121,56 @@ fn a_project_saved_before_saved_by_has_a_head_without_it() {
 }
 
 #[test]
+fn reader_heads_preserve_string_reader_behavior() {
+    for text in [
+        r#"{"schema":2,"savedBy":"writer","items":{}}"#,
+        r#"{"schema":99,"savedBy":"new writer"}"#,
+        r#"{"schema":2,"savedBy":"first","savedBy":"second"}"#,
+        r#"{"schema":2,"schema":2}"#,
+        r#"{"schema":"bad"}"#,
+        "[]",
+        "",
+    ] {
+        match (Head::read_from(text.as_bytes()), Head::read(text)) {
+            (Ok(from_reader), Ok(from_str)) => assert_eq!(from_reader, from_str),
+            (Err(ReadError::Json(from_reader)), Err(ReadError::Json(from_str))) => {
+                assert_eq!(from_reader.classify(), from_str.classify());
+                // serde's reader may consume lookahead before reporting the same error.
+                assert_eq!(from_reader.to_string().split(" at line ").next(), from_str.to_string().split(" at line ").next());
+            }
+            (Err(ReadError::TooNew { too_new: a, saved_by: a_writer, .. }), Err(ReadError::TooNew { too_new: b, saved_by: b_writer, .. })) => {
+                assert_eq!(a.schema, b.schema);
+                assert_eq!(a_writer, b_writer);
+            }
+            (from_reader, from_str) => panic!("different header results: {from_reader:?}, {from_str:?}"),
+        }
+    }
+}
+
+#[test]
+fn reader_heads_propagate_an_interruption_before_consuming_all_input() {
+    struct Interrupted {
+        input: std::io::Cursor<Vec<u8>>,
+        left: usize,
+    }
+    impl std::io::Read for Interrupted {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if self.left == 0 {
+                return Err(std::io::Error::other("stopped"));
+            }
+            let len = bytes.len().min(self.left);
+            let n = std::io::Read::read(&mut self.input, &mut bytes[..len])?;
+            self.left -= n;
+            Ok(n)
+        }
+    }
+    let json = format!(r#"{{"schema":2,"padding":"{}"}}"#, "x".repeat(128 * 1024));
+    let mut reader = Interrupted { input: std::io::Cursor::new(json.into_bytes()), left: 32 * 1024 };
+    assert!(matches!(Head::read_from(&mut reader), Err(ReadError::Json(e)) if e.is_io()));
+    assert_eq!(reader.input.position(), 32 * 1024);
+}
+
+#[test]
 fn a_head_needs_a_schema() {
     assert!(Head::read(r#"{"savedBy": "0.12.0", "items": {}}"#).is_err());
     assert!(Head::read(r#"{"savedBy": "0.12.0", "schema": "2"}"#).is_err());

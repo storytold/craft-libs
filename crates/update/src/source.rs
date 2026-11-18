@@ -130,7 +130,8 @@ impl GitHubSource {
         {
             return Ok(Answer { latest: LatestRelease::Found(r.clone()), source: Source::GitHubPages });
         }
-        let sums_url = format!("{}{tag}/SHA256SUMS.txt", release::download_prefix(repo));
+        // The same link `release_from_sums` stores and the check before the download accepts.
+        let sums_url = release::expected_download_url(repo, &tag, "SHA256SUMS.txt").ok_or("the latest release's tag isn't one we'd fetch")?;
         let sums = self.http.get_text(&sums_url)?.map(|t| release::parse_sha256sums(&t)).unwrap_or_default();
         let r = release::release_from_sums(repo, &tag, &sums);
         self.store(repo, Entry { etag: None, release: Some(r.clone()), prereleases: false, fetched_at: crate::now() });

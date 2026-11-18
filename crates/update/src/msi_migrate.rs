@@ -143,6 +143,14 @@ pub(crate) mod windows {
         Ok(plan(resolved, &dir, app.name, &profile, env_path("ProgramFiles").as_deref()))
     }
 
+    /// Quiet is limited to in-place per-user updates; migrations retain their permission UI.
+    pub(crate) fn run_with_ui(msi: &Path, step: &Step, quiet: bool) -> Result<(), String> {
+        if let Step::Update(context) = step {
+            return crate::install::windows::reinstall_with_ui(msi, context, None, quiet);
+        }
+        run(msi, step)
+    }
+
     /// Runs `step` with the downloaded package `msi`.
     pub(crate) fn run(msi: &Path, step: &Step) -> Result<(), String> {
         match step {

@@ -7,12 +7,15 @@
 //! samples, row by row, the color channels first and then the alpha channel when the format has
 //! one; the hash is the BLAKE3 hash of those samples. Pixels without a tile hold the default
 //! pixel.
+//!
+//! The same bounded blob decoder reads a document's declared ICC payload without interpreting it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 
 use craft_pcraft_format::TileRef;
-use serde::Deserialize;
+use serde::de::{self, IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 
 use crate::zip::{Entry, Zip};
 use crate::{Budget, Error, Kind, Limits, counted, malformed, pcraft, sniff};
@@ -20,7 +23,7 @@ use crate::{Budget, Error, Kind, Limits, counted, malformed, pcraft, sniff};
 /// The side of a tile, in pixels.
 const TILE: usize = 256;
 
-/// The largest zstd window a tile's frame may declare: 8 MiB, eight times the largest tile
+/// The largest zstd window a tile or ICC frame may declare: 8 MiB, eight times the largest tile
 /// (256 × 256 pixels of four 32-bit samples). The decoder's buffer grows as it decodes, up to the
 /// window the frame declares; a frame that declares a larger window is refused before decoding
 /// starts.
@@ -143,6 +146,110 @@ pub fn pcraft_layer_rgba(bytes: &[u8], layer: &[usize], limits: &Limits) -> Resu
         None => None,
     };
     Ok(Some(LayerPixels { width: canvas.width, height: canvas.height, rgba, mask }))
+}
+
+/// The raw ICC payload declared by a PhotoCraft document, verified against its BLAKE3 hash.
+///
+/// A missing or null `document.icc_profile` gives `Ok(None)`. A declared profile whose hash,
+/// entry or compressed payload is invalid gives an error. These bytes are not checked for ICC
+/// semantics, interpreted, converted or rendered; even an empty verified blob is returned.
+/// Previews, tiles and other blobs are not read. The normal manifest envelope is still checked.
+///
+/// The manifest, its selected zstd frame and the decoded payload count against `max_total`;
+/// each is bounded by `max_entry`, and the manifest also by `max_json`. The frame window is at
+/// most 8 MiB. One frame is accepted, with no trailing bytes. Unlike the layer reader's counted
+/// lists, this call checks `max_items` against structural JSON items throughout the manifest,
+/// including skipped values: objects/arrays opened and commas outside strings, at most
+/// [`craft_pcraft_format::MAX_MANIFEST_ITEMS`]. The check precedes metadata deserialization.
+pub fn pcraft_icc_profile(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<u8>>, Error> {
+    match sniff(bytes).ok_or(Error::Unrecognized)? {
+        Kind::PhotoCraft => {}
+        kind => return Err(Error::Unsupported(format!("ICC payloads are read from .pcraft bundles, not .{}", kind.extension()))),
+    }
+    let mut budget = Budget::new(limits);
+    let (zip, head) = pcraft::document_with_items::<ProfileHead>(bytes, &mut budget)?;
+    let Some(ProfileHash(hash)) = head.profile else { return Ok(None) };
+    let path = craft_pcraft_format::blob_path(&hash).ok_or_else(|| malformed("invalid ICC blob hash"))?;
+    let entry = zip.find(&path, budget.control)?.ok_or_else(|| malformed(format!("the manifest names `{path}`, which the bundle does not have")))?;
+    let frame = zip.read(entry, limits.max_entry, &mut budget, &path)?;
+    let cap = limits.max_entry.min(budget.left());
+    let cap = usize::try_from(cap).unwrap_or(usize::MAX);
+    let profile = unzstd_bounded(&frame, DecodedSize::AtMost(cap), &path)?;
+    budget.take_entry(profile.len() as u64, &path)?;
+    if blake3::hash(&profile).to_hex().as_str() != hash {
+        return Err(malformed(format!("{path}: the payload does not match its hash")));
+    }
+    Ok(Some(profile))
+}
+
+/// A document object that retains only its declared profile reference.
+struct ProfileHead {
+    profile: Option<ProfileHash>,
+}
+
+impl<'de> Deserialize<'de> for ProfileHead {
+    /// Read an object while skipping all metadata unrelated to the profile reference.
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            IccProfile,
+            #[serde(other)]
+            Other,
+        }
+        struct Head;
+        impl<'de> Visitor<'de> for Head {
+            type Value = ProfileHead;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a PhotoCraft document object")
+            }
+            /// Track presence separately from value so null cannot conceal a duplicate field.
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ProfileHead, A::Error> {
+                let mut seen = false;
+                let mut profile = None;
+                while let Some(field) = map.next_key::<Field>()? {
+                    match field {
+                        Field::IccProfile => {
+                            if seen {
+                                return Err(de::Error::duplicate_field("icc_profile"));
+                            }
+                            seen = true;
+                            profile = map.next_value()?;
+                        }
+                        Field::Other => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ProfileHead { profile })
+            }
+        }
+        d.deserialize_map(Head)
+    }
+}
+
+/// A canonical blob hash; invalid references are refused before building an entry name.
+struct ProfileHash(String);
+
+impl<'de> Deserialize<'de> for ProfileHash {
+    /// Retain only a canonical reference, without accepting a caller-supplied archive path.
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Hash;
+        impl Visitor<'_> for Hash {
+            type Value = ProfileHash;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a 64-digit lowercase BLAKE3 hash")
+            }
+            /// Check the decoded string before copying the 64 hash digits into owned metadata.
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<ProfileHash, E> {
+                if !craft_pcraft_format::is_valid_hash(value) {
+                    return Err(E::custom("invalid ICC blob hash"));
+                }
+                Ok(ProfileHash(value.to_owned()))
+            }
+        }
+        d.deserialize_str(Hash)
+    }
 }
 
 /// [`Error::Unsupported`] unless `surface` is stored as RGB or grayscale.
@@ -435,15 +542,71 @@ fn decode_as<S: Sample>(tiles: &mut Tiles, surface: &SurfaceP, canvas: Canvas, o
 /// One zstd frame that decodes to exactly `len` bytes. Decoding stops one byte past `len`, so a
 /// frame that expands further is refused without being decoded.
 fn unzstd(frame: &[u8], len: usize, what: &str) -> Result<Vec<u8>, Error> {
+    unzstd_bounded(frame, DecodedSize::Exact(len), what)
+}
+
+/// An exact tile length or an admitted upper bound for a variable-length payload.
+#[derive(Clone, Copy)]
+enum DecodedSize {
+    Exact(usize),
+    AtMost(usize),
+}
+
+/// Decode one bounded frame without allocating the destination from an untrusted header.
+/// Exact lengths retain the tile reader's malformed-length errors; upper bounds admit only
+/// remaining profile bytes. Destination growth stays within that bound, and the window is
+/// limited before the decoder allocates it. Neither mode accepts a second frame or trailing data.
+fn unzstd_bounded(frame: &[u8], size: DecodedSize, what: &str) -> Result<Vec<u8>, Error> {
     let zstd = |e: &dyn std::fmt::Display| malformed(format!("{what}: zstd: {e}"));
-    let mut dec = ruzstd::decoding::StreamingDecoder::new_with_max_window_size(frame, MAX_WINDOW).map_err(|e| zstd(&e))?;
-    let mut out = Vec::with_capacity(len);
-    (&mut dec).take(len as u64 + 1).read_to_end(&mut out).map_err(|e| zstd(&e))?;
-    if out.len() > len {
-        return Err(malformed(format!("{what} decodes to more than {len} bytes")));
+    let mut dec = ruzstd::decoding::StreamingDecoder::new_with_max_window_size(frame, MAX_WINDOW).map_err(|e| {
+        if matches!(size, DecodedSize::AtMost(_)) && matches!(e, ruzstd::decoding::errors::FrameDecoderError::WindowSizeTooBig { .. }) {
+            Error::LimitExceeded(format!("{what}: zstd window exceeds {MAX_WINDOW} bytes"))
+        } else {
+            zstd(&e)
+        }
+    })?;
+    let len = match size {
+        DecodedSize::Exact(n) | DecodedSize::AtMost(n) => n,
+    };
+    let declared = dec.decoder.content_size();
+    // After header validation, descriptor bits 7-6 (FCS flag) or 5 (single segment) mean
+    // the size is present, even when zero. See RFC 8878, section 3.1.1.1.1.1.
+    let has_content_size = frame.get(4).is_some_and(|descriptor| descriptor & 0xe0 != 0);
+    if matches!(size, DecodedSize::AtMost(_)) && declared > len as u64 {
+        return Err(Error::LimitExceeded(format!("{what}: declared payload exceeds {len} bytes")));
     }
-    if out.len() < len {
+    let mut out = Vec::new();
+    if let DecodedSize::Exact(n) = size {
+        out.try_reserve_exact(n).map_err(|_| Error::LimitExceeded(format!("{what} does not fit in memory")))?;
+    }
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = len.saturating_sub(out.len()).saturating_add(1).min(chunk.len());
+        let read = dec.read(&mut chunk[..n]).map_err(|e| zstd(&e))?;
+        if read == 0 {
+            break;
+        }
+        let next = out.len().checked_add(read).ok_or_else(|| Error::LimitExceeded(format!("{what} does not fit in memory")))?;
+        if next > len {
+            return Err(match size {
+                DecodedSize::Exact(_) => malformed(format!("{what} decodes to more than {len} bytes")),
+                DecodedSize::AtMost(_) => Error::LimitExceeded(format!("{what} decodes to more than {len} admitted bytes")),
+            });
+        }
+        if next > out.capacity() {
+            let target = out.capacity().max(chunk.len()).saturating_mul(2).min(len).max(next);
+            out.try_reserve_exact(target - out.len()).map_err(|_| Error::LimitExceeded(format!("{what} does not fit in memory")))?;
+        }
+        out.extend_from_slice(&chunk[..read]);
+    }
+    if matches!(size, DecodedSize::Exact(_)) && out.len() < len {
         return Err(malformed(format!("{what} decodes to {} bytes, not {len}", out.len())));
+    }
+    if matches!(size, DecodedSize::AtMost(_)) && has_content_size && declared != out.len() as u64 {
+        return Err(malformed(format!("{what}: declared payload size {declared} differs from {} decoded bytes", out.len())));
+    }
+    if !dec.decoder.is_finished() {
+        return Err(malformed(format!("{what} has an incomplete zstd frame")));
     }
     if !dec.get_ref().is_empty() {
         return Err(malformed(format!("{what} has bytes after its zstd frame")));

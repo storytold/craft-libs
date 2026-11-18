@@ -4,6 +4,11 @@ use super::{Item, Kind, Line, Params, Sums, clamp_measure, fitness_class};
 
 /// Give up (return `None`) beyond this many active breaks.
 const MAX_ACTIVE: usize = 4096;
+/// Give up (return `None`) after this much work, counted as one for each break considered and one
+/// for each active break it is tried against. A paragraph of 400,000 items with 30 active breaks
+/// takes some 12,000,000 on a pass; the limit is where a pass runs for seconds, and past it the
+/// caller falls back to [`super::greedy`], which keeps every item.
+pub(super) const MAX_WORK: u64 = 1 << 27;
 /// Ratios beyond this are rated as this (an unstretchable line is infinitely loose).
 const MAX_RATIO: f64 = 10_000.0;
 /// Demerits of an overfull line accepted because nothing else reaches a break.
@@ -37,8 +42,14 @@ struct Candidate {
 
 /// One total-fit pass over `items`. `width(k)` is the measure of line `k`; set
 /// [`Params::uniform_from`] when it varies. Returns `None` when no set of breaks keeps every line
-/// within [`Params::tolerance`] (unless [`Params::overfull`]), or past the active-break limit.
+/// within [`Params::tolerance`] (unless [`Params::overfull`]), or past the active-break or work limit.
 pub fn knuth_plass(items: &[Item], width: &dyn Fn(usize) -> f64, p: &Params) -> Option<Vec<Line>> {
+    knuth_plass_within(items, width, p, &mut MAX_WORK.clone())
+}
+
+/// [`knuth_plass`] spending at most `work` (left over on return), so that the passes of one
+/// paragraph share a budget.
+pub(super) fn knuth_plass_within(items: &[Item], width: &dyn Fn(usize) -> f64, p: &Params, work: &mut u64) -> Option<Vec<Line>> {
     let p = &p.sanitized();
     let width = |k: usize| clamp_measure(width(k));
     let s = Sums::new(items);
@@ -57,6 +68,7 @@ pub fn knuth_plass(items: &[Item], width: &dyn Fn(usize) -> f64, p: &Params) -> 
         if !s.is_break(b) {
             continue;
         }
+        *work = work.checked_sub(active.len() as u64 + 1)?;
         let item = items.get(b);
         let forced = s.forced(b);
         let flagged = item.is_some_and(Item::is_flagged);

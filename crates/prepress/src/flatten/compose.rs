@@ -105,7 +105,13 @@ pub enum ComplexReason {
     Degenerate,
     /// More regions than [`FlattenOptions::max_regions`].
     TooManyRegions(usize),
+    /// More path segments than [`MAX_GROUP_SEGMENTS`], so the arrangement was not built.
+    TooManySegments(usize),
 }
+
+/// Path segments (shapes and clips together) a group may hold before it is rasterized whole
+/// without building its arrangement, whose crossings grow with the square of the segment count.
+pub const MAX_GROUP_SEGMENTS: usize = 200_000;
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -180,6 +186,20 @@ fn flatten_group(
         out.complex.push(ComplexRegion { path, items: members.to_vec(), at: out.items.len(), whole: Some(reason) });
         out.report.complex_groups.push(ComplexGroup { items: members.to_vec(), reason });
     };
+    let segments =
+        b.shapes.iter().map(|s| s.path.elements().len()).chain(b.clips.iter().map(|c| c.path.elements().len())).fold(0_usize, usize::saturating_add);
+    if segments > MAX_GROUP_SEGMENTS {
+        geom::check_finite(&b.shapes, &b.clips)?;
+        let mut path = BezPath::new();
+        for &i in members {
+            if !bounds[i].is_nan() {
+                path.extend(bounds[i].abs().path_elements(0.1));
+            }
+        }
+        whole(out, path, ComplexReason::TooManySegments(segments));
+        out.report.flattened += members.len();
+        return Ok(());
+    }
     let regions = match geom::regions_with(&b.shapes, &b.clips, opts.sliver) {
         Ok(r) => r,
         Err(GeomError::Degenerate) => {
@@ -283,6 +303,7 @@ fn flatten_group(
             isolated: false,
             knockout: false,
             clip: None,
+            clip_rule: FillRule::NonZero,
             mask: None,
             actual_text: Some(text),
             children,
@@ -594,7 +615,7 @@ impl<'a> Builder<'a> {
                 let outer = self.push_tag(g.actual_text.as_deref());
                 if let Some(clip) = &g.clip {
                     self.clip_stack.push(self.clips.len());
-                    self.clips.push(ClipPath { path: clip.clone(), rule: FillRule::NonZero });
+                    self.clips.push(ClipPath { path: clip.clone(), rule: g.clip_rule });
                 }
                 let masked = masked || g.mask.is_some();
                 let (plain_path, knockout_path) = (self.plain_path, self.knockout_path);
@@ -880,7 +901,17 @@ mod tests {
     }
 
     fn group(opacity: f32, blend: BlendMode, children: Vec<Item>) -> GroupItem {
-        GroupItem { opacity, blend, isolated: false, knockout: false, clip: None, mask: None, actual_text: None, children }
+        GroupItem {
+            opacity,
+            blend,
+            isolated: false,
+            knockout: false,
+            clip: None,
+            clip_rule: FillRule::NonZero,
+            mask: None,
+            actual_text: None,
+            children,
+        }
     }
 
     fn list(inks: InkSet, items: Vec<Item>) -> DisplayList {
@@ -998,6 +1029,18 @@ mod tests {
     }
 
     #[test]
+    fn even_odd_clip_leaves_its_hole_unpainted() {
+        // Two nested squares drawn in the same direction: filled even-odd, the inner one is a hole.
+        let mut ring = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.1);
+        ring.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.1));
+        let half_black = Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(K, 1.0)])]));
+        let clip = GroupItem { clip: Some(ring), clip_rule: FillRule::EvenOdd, ..group(1.0, BlendMode::Normal, vec![half_black]) };
+        let f = flat(&list(InkSet::new(), vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), Item::Group(clip)]));
+        assert_eq!(at(&f, 10.0, 50.0, &[C, K]).1, [0.5, 0.5]);
+        assert_eq!(at(&f, 50.0, 50.0, &[C, K]).1, [1.0, 0.0], "the hole shows the cyan under it");
+    }
+
+    #[test]
     fn isolated_group_blends_without_the_backdrop() {
         let scene = |isolated| {
             let multiply = Item::Group(group(1.0, BlendMode::Multiply, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(M, 1.0)])]));
@@ -1087,6 +1130,45 @@ mod tests {
         assert_eq!(f.report.fills, 3, "{:?}", f.items);
         assert_eq!(at(&f, 15.0, 50.0, &[C, K]).1, [1.0, 0.0]);
         assert_eq!(at(&f, 65.0, 50.0, &[C, M, K]).1, [0.5, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn a_group_with_too_many_segments_goes_to_complex_unbuilt() {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        for i in 0..=MAX_GROUP_SEGMENTS {
+            path.line_to(Point::new((i % 100) as f64, (i / 100) as f64));
+        }
+        path.close_path();
+        let crowded = Item::Fill(FillItem {
+            path,
+            rule: FillRule::NonZero,
+            paint: Paint::Solid(InkColor::Tints(vec![(C, 1.0)])),
+            overprint: Overprint::default(),
+        });
+        let f = flat(&list(InkSet::new(), vec![Item::Group(group(0.5, BlendMode::Normal, vec![crowded]))]));
+        assert_eq!(f.report.complex_groups.len(), 1);
+        assert!(matches!(f.report.complex_groups[0].reason, ComplexReason::TooManySegments(n) if n > MAX_GROUP_SEGMENTS), "{:?}", f.report);
+        assert_eq!(f.report.regions, 0, "the arrangement was not built");
+    }
+
+    #[test]
+    fn a_group_with_too_many_segments_still_rejects_non_finite_points() {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        for i in 0..=MAX_GROUP_SEGMENTS {
+            path.line_to(Point::new((i % 100) as f64, (i / 100) as f64));
+        }
+        path.line_to(Point::new(f64::NAN, 0.0));
+        path.close_path();
+        let crowded = Item::Fill(FillItem {
+            path,
+            rule: FillRule::NonZero,
+            paint: Paint::Solid(InkColor::Tints(vec![(C, 1.0)])),
+            overprint: Overprint::default(),
+        });
+        let l = list(InkSet::new(), vec![Item::Group(group(0.5, BlendMode::Normal, vec![crowded]))]);
+        assert!(flatten(&l, &FlattenOptions::default()).is_err());
     }
 
     #[test]

@@ -139,7 +139,16 @@ impl Head {
     /// members are skipped, and two `schema` members are refused. A schema newer than
     /// [`SCHEMA_VERSION`] is refused with [`ReadError::TooNew`], which holds the file's `savedBy`.
     pub fn read(text: &str) -> Result<Head, ReadError> {
-        let mut deserializer = serde_json::Deserializer::from_str(text);
+        Self::read_deserializer(serde_json::Deserializer::from_str(text))
+    }
+
+    /// [`Head::read`] from a reader, which may enforce input limits or cooperative
+    /// interruption. Buffer file or network readers to avoid one-byte I/O requests.
+    pub fn read_from(reader: impl std::io::Read) -> Result<Head, ReadError> {
+        Self::read_deserializer(serde_json::Deserializer::from_reader(reader))
+    }
+
+    fn read_deserializer<'de, R: serde_json::de::Read<'de>>(mut deserializer: serde_json::Deserializer<R>) -> Result<Head, ReadError> {
         let head = deserializer.deserialize_map(HeadVisitor)?;
         deserializer.end()?;
         if let Err(too_new) = check_schema(head.schema) {

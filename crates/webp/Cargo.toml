@@ -1,0 +1,26 @@
+[package]
+name = "craft-webp"
+description = "WebP container (RIFF) reader and writer: canvas, alpha and animation frames from the chunk headers, and the container around an encoded VP8 frame with alpha and metadata chunks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Decoding every frame through the `image` crate's WebP decoder, with bounded memory.
+frames = ["dep:image"]
+# Lossy animations from RGBA frames through craft-video's VP8 key-frame encoder.
+vp8 = ["dep:craft-video"]
+
+[dependencies]
+thiserror = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["webp"], optional = true }
+craft-video = { workspace = true, optional = true, features = ["vp8-encode"] }
+
+[dev-dependencies]
+# Decodes the files the writer makes and writes still test files; not a product dependency.
+image = { version = "0.25", default-features = false, features = ["webp"] }

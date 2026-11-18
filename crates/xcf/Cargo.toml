@@ -1,0 +1,15 @@
+[package]
+name = "craft-xcf"
+description = "GIMP XCF images (.xcf, .xcf.gz): the header, properties, parasites, layers with their item paths, channels, and tiled pixels (uncompressed, RLE, zlib) at every precision, read with bounded sizes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+thiserror = { workspace = true }

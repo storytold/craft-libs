@@ -13,7 +13,7 @@ use crate::{Alternate, InkId, Plates, Process};
 /// Pixels converted per call into the CMYK profile, to bound the scratch buffers.
 const CHUNK: usize = 16 * 1024;
 
-fn on(enabled: &[bool], index: usize) -> bool {
+pub(crate) fn on(enabled: &[bool], index: usize) -> bool {
     enabled.get(index).copied().unwrap_or(true)
 }
 
@@ -32,23 +32,27 @@ fn to_srgb(cms: &dyn CmykConversion, cmyk: &[u8], rgb: &mut [u8]) {
 pub fn appearance(alternate: Alternate, cms: &dyn CmykConversion) -> Option<Vec<[u8; 3]>> {
     let mut rgb = vec![0_u8; 256 * 3];
     match alternate {
-        Alternate::Lab([l, a, b]) => {
-            let lab: Vec<f32> = (0..=255_u8)
-                .flat_map(|t| {
-                    let t = f32::from(t) / 255.0;
-                    [100.0 + t * (l - 100.0), t * a, t * b]
-                })
-                .collect();
-            lab_to_srgb8(&lab, &mut rgb)?;
-        }
-        Alternate::Cmyk(solid) => {
-            let cmyk: Vec<u8> = (0..=255_u8)
-                .flat_map(|t| solid.map(|c| (f32::from(t) * if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }).round() as u8))
-                .collect();
-            to_srgb(cms, &cmyk, &mut rgb);
-        }
+        Alternate::Lab(lab) => lab_to_srgb8(&lab_ramp(lab), &mut rgb)?,
+        Alternate::Cmyk(solid) => to_srgb(cms, &cmyk_ramp(solid), &mut rgb),
     }
     Some(rgb.as_chunks::<3>().0.to_vec())
+}
+
+/// A Lab spot alternate at each tint byte, three values per tint, from paper white (L\* 100)
+/// to the solid in a straight line.
+pub(crate) fn lab_ramp([l, a, b]: [f32; 3]) -> Vec<f32> {
+    (0..=255_u8)
+        .flat_map(|t| {
+            let t = f32::from(t) / 255.0;
+            [100.0 + t * (l - 100.0), t * a, t * b]
+        })
+        .collect()
+}
+
+/// A CMYK spot alternate at each tint byte, four bytes per tint, its components scaled by the
+/// tint.
+pub(crate) fn cmyk_ramp(solid: [f32; 4]) -> Vec<u8> {
+    (0..=255_u8).flat_map(|t| solid.map(|c| (f32::from(t) * if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }).round() as u8)).collect()
 }
 
 impl Plates {
