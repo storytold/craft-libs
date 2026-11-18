@@ -7,7 +7,7 @@ use egui::{Rect, Ui, pos2, vec2};
 
 use super::pins::{Face, PinBubble};
 use super::{CommentComposer, CommentPin, CommentPins, ComposerClose, ComposerDraft, NoteDrafts, NotePopup, NotePopupMessage, ThreadPopover};
-use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ThreadId};
+use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ThreadId};
 
 const NOW: i64 = 90_000;
 
@@ -26,7 +26,6 @@ fn thread() -> CommentThread {
         kind: None,
         color: None,
         messages: vec![message("Ana", "Check @Bo before we ship.", NOW - 7_200), message("Bo", "On it.", NOW - 600)],
-        status: ReviewStatus::None,
         statuses: Vec::new(),
         marked: false,
         locked: false,

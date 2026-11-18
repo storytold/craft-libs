@@ -3202,6 +3202,7 @@ dependencies = [
  "egui",
  "kurbo",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
