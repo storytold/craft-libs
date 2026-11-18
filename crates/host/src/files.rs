@@ -192,6 +192,16 @@ impl Picked {
         }
     }
 
+    /// Whether the page now holds the document as the file a finished save wrote: true for a
+    /// path the service wrote (native hosts, the in-memory fake), false for a browser download
+    /// and for every answer that is not a written path. The app sets its session path only when
+    /// this is true.
+    pub fn records_file(&self) -> bool {
+        // P3(platform-w4): S-L159 a hosted browser page that holds the file answers true too; the
+        // variants cannot say so yet.
+        matches!(self, Picked::Paths(paths) if !paths.is_empty())
+    }
+
     /// Every chosen path; on wasm the files' names. Empty when cancelled or unavailable.
     pub fn paths(&self) -> Vec<PathBuf> {
         match self {

@@ -33,7 +33,8 @@ struct Rig {
 }
 
 /// Document points are screen points doubled, as a canvas at 50 % shows them.
-fn map(at: Pos2) -> Option<Pos2> {
+// P3(platform-w6): S-L162
+fn map(_page: usize, at: Pos2) -> Option<Pos2> {
     Some(pos2(at.x / 2.0, at.y / 2.0))
 }
 
@@ -208,7 +209,8 @@ fn injected_passes_are_the_passes_that_carry_a_step() {
 fn document_points_need_a_canvas() {
     let rig = Rig::new();
     let host = rig.host();
-    let none = |_: Pos2| None;
+    // P3(platform-w6): S-L162
+    let none = |_: usize, _: Pos2| None;
     let refused = input_method("ui.move", &json!({"x": 1, "y": 1, "coordinates": "document"}), &host, ViewportId::ROOT, &none);
     assert_eq!(refused, Some(Err(NO_DOCUMENT.to_owned())));
     assert!(host.injected_idle());
@@ -341,9 +343,9 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
 #[trial]
 fn a_point_that_is_not_finite_is_refused() {
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0))] {
-            assert_eq!(at.resolve(&|p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
+        for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0), 0)] {
+            assert_eq!(at.resolve(&|_, p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
         }
     }
-    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None), Ok(pos2(3.0, 4.0)));
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_, _| None), Ok(pos2(3.0, 4.0)));
 }
