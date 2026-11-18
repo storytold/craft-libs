@@ -55,6 +55,8 @@ struct Config {
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
+    /// egui runs each frame twice and gives the frame's input to its first pass only.
+    twice: bool,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -99,6 +101,7 @@ fn defaults() -> Config {
         centre_mark: false,
         line: None,
         targets: Vec::new(),
+        twice: false,
     }
 }
 
@@ -183,6 +186,9 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             }
             (control.show_at(ui, body.rect), guide_edits)
         });
+        if config.twice && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the frame runs twice");
+        }
         if let Some((output, guide_edits)) = canvas.inner {
             let mut host = shown_host.borrow_mut();
             host.guide_events += guide_edits;
@@ -439,6 +445,27 @@ fn a_text_frame_fed_back_through_an_f32_host_follows_every_move_to_the_commit() 
     assert!(!events.contains(&Seen::Cancel), "the rounded write-back cancels nothing: {events:?}");
     assert!((first - 250.0).abs() < 0.01 && (second - 280.0).abs() < 0.01, "each move reaches the host: {first} {second}");
     assert!((h.state().quad[2].y - 280.0).abs() < 0.01 && events.last() == Some(&Seen::Commit), "the commit holds the last move");
+}
+
+/// A frame egui runs twice reports each move of a drag once: its second pass proposes the box the first did, and an
+/// equal proposal reports no `Update` again, so a host that applies each `Update` (a text layer's box) applies it once
+/// per move.
+#[trial]
+fn a_frame_run_twice_reports_each_move_of_a_drag_once() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.text_frame = true);
+    let (start, mid, end) = (h.screen(Point::new(200.0, 220.0)), h.screen(Point::new(200.0, 250.0)), h.screen(Point::new(200.0, 280.0)));
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    h.config.borrow_mut().twice = true;
+    h.host.borrow_mut().events.clear();
+    frame(&mut h, vec![pointer::moved(mid)]);
+    assert_eq!(h.fixture.passes(), 2, "the frame ran twice");
+    frame(&mut h, vec![pointer::moved(end)]);
+    frame(&mut h, Vec::new());
+    let events = h.host.borrow().events.clone();
+    let updates = events.iter().filter(|seen| **seen == Seen::Update).count();
+    assert_eq!(updates, 2, "two moves report two updates, a held frame none: {events:?}");
+    assert!((h.state().quad[2].y - 280.0).abs() < 0.01, "the last move reached the host");
 }
 
 #[trial]
