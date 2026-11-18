@@ -54,7 +54,8 @@ fn picture_source() -> FakeThumbSource<ThumbKey> {
 
 /// Six files and three templates, none with a picture: every tile shows the placeholder.
 fn plain_files() -> Vec<RecentFile> {
-    let file = |name: &str, age: i64| RecentFile::new(PathBuf::from("/home/user/Pictures").join(name), name).opened(NOW - age).created(NOW - age - DAY);
+    let file =
+        |name: &str, age: i64| RecentFile::new(PathBuf::from("/home/user/Pictures").join(name), name).opened(NOW - age).created(NOW - age - DAY);
     vec![
         file("Harbour.psd", 30),
         file("Poster draft.psd", 2 * HOUR),
