@@ -112,3 +112,92 @@ fn a_repository_without_checksums_or_release_is_refused() {
     fake.files.insert(API.into(), release(true));
     assert!(resolve_repo(&mut fake, &repo).unwrap_err().contains("wasn't found"));
 }
+
+/// A client that may read local files only under `root`, and records what it was asked for.
+struct Confined {
+    root: std::path::PathBuf,
+    read: Vec<std::path::PathBuf>,
+}
+
+impl Fetch for Confined {
+    fn get(&mut self, url: &str, _max: usize) -> Result<Option<Vec<u8>>, String> {
+        Err(format!("no network in this test ({url})"))
+    }
+
+    fn read_local(&mut self, path: &std::path::Path, max: usize) -> Result<Vec<u8>, String> {
+        self.read.push(path.to_path_buf());
+        if !path.starts_with(&self.root) {
+            return Err(format!("{} is outside the automation roots", path.display()));
+        }
+        crate::fetch::read_local_file(path, max)
+    }
+}
+
+/// A local catalog in `dir` that names `bundle` (a local file) at `bundle_path`.
+fn local_catalog(dir: &std::path::Path, bundle: &[u8], bundle_path: &std::path::Path) -> String {
+    let url = format!("file://{}", bundle_path.display());
+    let catalog = json!({"schema": 1, "packages": [{"id": "org.example.tools", "name": "Tools",
+        "versions": [{"version": "1.0.0", "apps": {"figcraft": {"api": 6}}, "url": url, "sha256": sha256_hex(bundle), "size": bundle.len()}]}]});
+    std::fs::write(dir.join("index.json"), catalog.to_string()).unwrap();
+    format!("file://{}", dir.join("index.json").display())
+}
+
+#[cfg(unix)]
+#[test]
+fn local_catalogs_are_read_through_the_apps_file_policy() {
+    let inside = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let bytes = bundle_bytes("org.example.tools", "1.0.0", "read");
+    std::fs::write(inside.path().join("tools.craftplugin"), &bytes).unwrap();
+    std::fs::write(outside.path().join("tools.craftplugin"), &bytes).unwrap();
+
+    // The default reads the disk.
+    let url = local_catalog(inside.path(), &bytes, &inside.path().join("tools.craftplugin"));
+    let (c, warnings) = fetch_catalog(&mut Fake::default(), &url).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(download_release(&mut Fake::default(), &url, &c.packages[0], &c.packages[0].versions[0]).unwrap(), bytes);
+
+    // A confined client reads only under its root: the catalog and a release inside pass…
+    let mut confined = Confined { root: inside.path().to_path_buf(), read: vec![] };
+    let (c, _) = fetch_catalog(&mut confined, &url).unwrap();
+    assert_eq!(download_release(&mut confined, &url, &c.packages[0], &c.packages[0].versions[0]).unwrap(), bytes);
+    assert_eq!(confined.read, [inside.path().join("index.json"), inside.path().join("tools.craftplugin")]);
+    // …a release a local catalog names outside it is refused…
+    let url = local_catalog(inside.path(), &bytes, &outside.path().join("tools.craftplugin"));
+    let (c, _) = fetch_catalog(&mut confined, &url).unwrap();
+    let e = download_release(&mut confined, &url, &c.packages[0], &c.packages[0].versions[0]).unwrap_err();
+    assert!(e.contains("outside the automation roots"), "{e}");
+    // …and so is a catalog outside it.
+    let url = local_catalog(outside.path(), &bytes, &outside.path().join("tools.craftplugin"));
+    assert!(fetch_catalog(&mut confined, &url).unwrap_err().contains("outside the automation roots"));
+}
+
+#[test]
+fn redirects_are_checked_hop_by_hop() {
+    use crate::fetch::{MAX_REDIRECTS, follow_redirects};
+    let hops: HashMap<&str, &str> = HashMap::from([
+        (ASSET, "https://release-assets.githubusercontent.com/github-production-release-asset/1?sig=x"),
+        ("https://github.com/a/b/releases/download/v1/rel", "/a/b/releases/download/v1/abs"),
+        ("https://github.com/a/b/releases/download/v1/abs", "//objects.githubusercontent.com/x"),
+        ("https://github.com/a/b/releases/download/v1/evil", "https://evil.example/x"),
+        ("https://github.com/a/b/releases/download/v1/plain", "http://objects.githubusercontent.com/x"),
+        ("https://github.com/a/b/releases/download/v1/odd", "x/y"),
+        ("https://github.com/a/b/releases/download/v1/loop", "https://github.com/a/b/releases/download/v1/loop"),
+    ]);
+    let mut asked = vec![];
+    let mut probe = |u: &str| {
+        asked.push(u.to_string());
+        hops.get(u).map(|s| s.to_string())
+    };
+    assert_eq!(follow_redirects(ASSET, &mut probe).unwrap(), "https://release-assets.githubusercontent.com/github-production-release-asset/1?sig=x");
+    assert_eq!(follow_redirects("https://github.com/a/b/releases/download/v1/rel", &mut probe).unwrap(), "https://objects.githubusercontent.com/x");
+    for bad in ["evil", "plain", "odd"] {
+        let e = follow_redirects(&format!("https://github.com/a/b/releases/download/v1/{bad}"), &mut probe).unwrap_err();
+        assert!(e.contains("redirected"), "{bad}: {e}");
+    }
+    let e = follow_redirects("https://github.com/a/b/releases/download/v1/loop", &mut probe).unwrap_err();
+    assert!(e.contains(&format!("more than {MAX_REDIRECTS}")), "{e}");
+    assert!(follow_redirects("https://example.com/x", &mut probe).is_err(), "the start is checked too");
+    assert!(follow_redirects(CATALOG, &mut |_| None).is_ok());
+    assert_eq!(asked.iter().filter(|u| u.ends_with("/loop")).count(), MAX_REDIRECTS);
+}

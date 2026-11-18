@@ -14,11 +14,11 @@ workspace = true
 default = []
 # `Fetch` for craft-update's HTTPS client, so an app can install from catalogs and GitHub
 # releases with the client (proxies, TLS) it already uses for its own updates. The rest of the
-# crate does no network I/O.
+# crate does no network I/O. Native builds only: on wasm32 the feature does nothing, so an app may
+# enable it for every target.
 http = ["dep:craft-update"]
 
 [dependencies]
-craft-update = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Bundle SHA-256s (catalogs pin them; SHA256SUMS lists them; the store records them).
@@ -29,6 +29,7 @@ wasmi = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The per-user plug-in store writes its files crash-safely.
 craft-atomic = { workspace = true }
+craft-update = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

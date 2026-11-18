@@ -3,37 +3,100 @@
 //! every check of [`crate::catalog`] and [`crate::github`] around it. Nothing here writes to disk:
 //! the caller shows the bundle it gets back to the person ([`crate::bundle::open`] reads its
 //! manifest) and installs it into the [`crate::store`] once they agree.
+//!
+//! A local (`file://`) catalog, and the files it names, are read through [`Fetch::read_local`]:
+//! by default straight from the disk, or wherever the app confines file access (automation roots)
+//! when it overrides that method.
+//!
+//! The functions here block until their requests finish. Call them on a worker thread (or a task
+//! of the app's own) and hand the result back to the UI; to cancel, let the app's [`Fetch`]
+//! return an error once the person cancels, and to show progress, report it from the app's
+//! [`Fetch::get`].
+
+use std::path::Path;
 
 use crate::bundle::MAX_BUNDLE_BYTES;
-use crate::catalog::{Catalog, Location, MAX_CATALOG_BYTES, Package, Release, check_url, parse_catalog, release_url_problem};
+use crate::catalog::{Catalog, Location, MAX_CATALOG_BYTES, Package, Release, check_redirect, check_url, parse_catalog, release_url_problem};
 use crate::github::{MAX_API_BYTES, MAX_SUMS_BYTES, RepoDownload, RepoRef, parse_release, plan_download, verify_sha256};
 
 /// An HTTPS client.
 pub trait Fetch {
     /// GET `url`, following redirects, and return the body: `Ok(None)` when the server answers 404
     /// Not Found. A body of more than `max` bytes is an error, refused as it arrives (not read
-    /// whole first). `url` is `https://` on GitHub's hosts or `https://api.github.com/`. A client
-    /// that can tell where redirects ended should refuse an end that
-    /// [`crate::catalog::check_redirect`] refuses; the SHA-256 check guards the bytes either way.
+    /// whole first). `url` is `https://` on GitHub's hosts or `https://api.github.com/`. Each
+    /// redirect should stay where [`crate::catalog::check_redirect`] allows: a client that can
+    /// look at a redirect before following it walks them with [`follow_redirects`] (as the `http`
+    /// feature's client does); the SHA-256 check guards a bundle's bytes either way.
     fn get(&mut self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String>;
+
+    /// Read a local file a `file://` catalog URL names (the catalog, or a release it lists), of at
+    /// most `max` bytes. `path` is what [`crate::catalog::file_url_path`] made of the URL: absolute,
+    /// percent-decoded, never a network share. The default reads the disk ([`read_local_file`]);
+    /// an app that confines file access (MCP automation roots) overrides it to check `path` first
+    /// and then call [`read_local_file`], or to refuse local catalogs altogether.
+    fn read_local(&mut self, path: &Path, max: usize) -> Result<Vec<u8>, String> {
+        read_local_file(path, max)
+    }
 }
 
-/// Read `location`: over `fetch`, or from the disk for a local catalog's files.
+/// Read at most `max` bytes of the local file `path` (what [`Fetch::read_local`] does unless the
+/// app overrides it). A web build has no files and gets an error.
+pub fn read_local_file(path: &Path, max: usize) -> Result<Vec<u8>, String> {
+    let shown = path.display();
+    let len = std::fs::metadata(path).map_err(|e| format!("cannot read {shown}: {e}"))?.len();
+    if len > max as u64 {
+        return Err(format!("{shown} is larger than {} KB", max / 1024));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {shown}: {e}"))?;
+    if bytes.len() > max {
+        return Err(format!("{shown} is larger than {} KB", max / 1024));
+    }
+    Ok(bytes)
+}
+
+/// Most redirects [`follow_redirects`] follows.
+pub const MAX_REDIRECTS: usize = 10;
+
+/// Walk `url`'s redirects with `probe` (where a URL redirects to, without following it: `None`
+/// when it doesn't, or when that can't be told) and return where they end. Every hop, `url`
+/// included, must pass [`check_redirect`] (`https://` on [`crate::catalog::HOSTS`]); a relative
+/// `Location` (`/path`, `//host/path`) is resolved against the hop before it. More than
+/// [`MAX_REDIRECTS`] hops is an error. The caller then GETs the end it returns.
+pub fn follow_redirects(url: &str, probe: &mut dyn FnMut(&str) -> Option<String>) -> Result<String, String> {
+    check_redirect(url)?;
+    let mut here = url.to_string();
+    for _ in 0..MAX_REDIRECTS {
+        let Some(next) = probe(&here) else { return Ok(here) };
+        let next = resolve_location(&here, next.trim())?;
+        check_redirect(&next)?;
+        here = next;
+    }
+    Err(format!("the download was redirected more than {MAX_REDIRECTS} times"))
+}
+
+/// A redirect's `Location` as an absolute URL, resolved against `base` (an `https://` URL).
+fn resolve_location(base: &str, location: &str) -> Result<String, String> {
+    let shown: String = location.chars().take(120).collect();
+    if location.contains("://") {
+        return Ok(location.to_string());
+    }
+    if let Some(rest) = location.strip_prefix("//") {
+        return Ok(format!("https://{rest}"));
+    }
+    if location.starts_with('/') {
+        let after = base.get("https://".len()..).unwrap_or_default();
+        let host = after.split(['/', '?', '#']).next().unwrap_or_default();
+        return Ok(format!("https://{host}{location}"));
+    }
+    Err(format!("the download was redirected to `{shown}`, which isn't a URL this app follows"))
+}
+
+/// Read `location`: over [`Fetch::get`], or through [`Fetch::read_local`] for a local catalog's
+/// files.
 pub fn read_location(fetch: &mut dyn Fetch, location: &Location, max: usize) -> Result<Vec<u8>, String> {
     match location {
         Location::Https(url) => fetch.get(url, max)?.ok_or_else(|| format!("{url} wasn't found")),
-        Location::File(path) => {
-            let shown = path.display();
-            let len = std::fs::metadata(path).map_err(|e| format!("cannot read {shown}: {e}"))?.len();
-            if len > max as u64 {
-                return Err(format!("{shown} is larger than {} KB", max / 1024));
-            }
-            let bytes = std::fs::read(path).map_err(|e| format!("cannot read {shown}: {e}"))?;
-            if bytes.len() > max {
-                return Err(format!("{shown} is larger than {} KB", max / 1024));
-            }
-            Ok(bytes)
-        }
+        Location::File(path) => fetch.read_local(path, max),
     }
 }
 
@@ -95,7 +158,16 @@ pub fn download_repo(fetch: &mut dyn Fetch, plan: &RepoDownload) -> Result<Vec<u
     Ok(bytes)
 }
 
-#[cfg(feature = "http")]
+/// craft-update's client. API requests (`https://api.github.com/`) go through `get_api`, which
+/// follows GitHub's redirects itself (a renamed repository) without re-checking them: its answer
+/// is only read as release JSON, whose asset URLs are checked like any other, and the GitHub token
+/// is never sent on a redirect (ureq's default). Every other request first walks its redirects
+/// with `redirect_target` (a HEAD request per hop) through [`follow_redirects`], so a hop off
+/// GitHub's hosts is refused before anything is downloaded, then GETs where they end. Not
+/// checked: a server on GitHub's hosts that answers that GET with another redirect than it gave
+/// the HEAD request (followed, on HTTPS only, as ureq is told). Bundles are pinned by SHA-256 and
+/// size either way; a catalog's entries are checked whatever served it.
+#[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 impl Fetch for craft_update::Http {
     fn get(&mut self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
         if url.starts_with("https://api.github.com/") {
@@ -107,6 +179,8 @@ impl Fetch for craft_update::Http {
                 craft_update::http::Fetched::NotModified => Err("GitHub answered 304 Not Modified to a request without a cache".into()),
             };
         }
-        self.get_bytes(url, max)
+        // A HEAD that fails (no redirect, or a signed URL that only answers GET) ends the walk.
+        let end = follow_redirects(url, &mut |u| self.redirect_target(u).ok().flatten())?;
+        self.get_bytes(&end, max)
     }
 }
