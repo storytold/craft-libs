@@ -1614,8 +1614,8 @@ fn a_custom_note_mark_is_the_references_run() {
     let spec = StructSpec {
         text,
         chpx_runs: vec![(0, Vec::new()), (4, sup), (6, Vec::new())],
-        note_stories: vec!["ab Note\r"],
-        extra_pairs: vec![(2, plc(&[4, ccp], &0u16.to_le_bytes())), (3, plc(&[0, 8], &[]))],
+        note_stories: vec!["ab Note\r\r"],
+        extra_pairs: vec![(2, plc(&[4, ccp], &0u16.to_le_bytes())), (3, plc(&[0, 8, 9], &[]))],
         ..structured_spec(text, ccp)
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
@@ -1627,6 +1627,8 @@ fn a_custom_note_mark_is_the_references_run() {
     assert_eq!((*kind, custom.as_str()), (craft_wordmodel::para::NoteKind::Footnote, "ab"));
     let part = doc.parts.get(id).expect("note part");
     assert_eq!(part.blocks.first().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("ab Note"));
+    // The guard paragraph, paired with the reference PLC's limit, is no second note.
+    assert_eq!(doc.parts.iter().filter(|(_, p)| p.kind == craft_wordmodel::PartKind::Footnote).count(), 1);
 }
 
 #[test]
@@ -1639,8 +1641,8 @@ fn a_custom_note_mark_can_be_a_symbol() {
     let spec = StructSpec {
         text,
         chpx_runs: vec![(0, Vec::new()), (4, symbol), (5, Vec::new())],
-        note_stories: vec!["( Note\r"],
-        extra_pairs: vec![(2, plc(&[4, ccp], &0u16.to_le_bytes())), (3, plc(&[0, 7], &[]))],
+        note_stories: vec!["( Note\r\r"],
+        extra_pairs: vec![(2, plc(&[4, ccp], &0u16.to_le_bytes())), (3, plc(&[0, 7, 8], &[]))],
         ..structured_spec(text, ccp)
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
