@@ -768,7 +768,7 @@ impl PanePager {
         Row::new().show(ui, |ui, _| {
             let back = IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(self.back).show(ui);
             // An empty pager has no position to report: its caption says so.
-            let text = Text::new(caption);
+            let text = Text::new(caption.clone());
             if self.count > 0 { text.numeric(self.shown as f64) } else { text }.show(ui);
             let next = IconButton::new(IconId::new("chevron_right")).label(words.next.clone()).enabled(self.next).show(ui);
             if crate::contract::clicked(&back) {
