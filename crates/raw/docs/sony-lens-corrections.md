@@ -230,7 +230,12 @@ x=0, and the standard origin is the one that aligns with Sony's exports. The ima
 way: Sony's crop tags place it only along an axis they narrow (an in-camera aspect ratio), and along
 the other the default crop's origin stands. On the A7R III, IIIA, IV and IVA, whose Sony tag records
 x=0 for the full width, the frame therefore starts at the default origin (8 or 32), where the camera
-JPEG, Imaging Edge and Adobe DNG Converter put it. The opcode's centre is in active-area coordinates,
+JPEG, Imaging Edge and Adobe DNG Converter put it. A body from before Sony's crop tags and the default
+crop (about 2017 and earlier) records only the image size: the image is centred on the spare rows and
+starts as many columns in from the left, the rest of the spare columns being padding at the right. That
+is Adobe DNG Converter's origin on 33 of 53 such bodies and 2 to 8 columns from it on the others, whose
+horizontal origin no tag records; registered on the camera JPEG, the mean offset over 50 bodies is
+2.6 px (12.6 px with the image at the frame's top-left). The opcode's centre is in active-area coordinates,
 so the warp stays on the optical centre either way.
 
 The main raw-IFD table is important: the similarly named MakerNote table has different values and

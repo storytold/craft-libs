@@ -568,23 +568,10 @@ fn dng_default_crop(raw: &Ifd, w: usize, h: usize) -> Option<Rect> {
     None
 }
 
-/// The optical reference rectangle the lens tables address: the DNG-style default crop when the file records one.
-/// Same-storage A7R II files place their origin at (8,8) although they carry no crop tags; a partial or malformed
-/// crop record must not trigger that.
-fn lens_reference(raw: &Ifd, model: &str, crop: Rect, w: usize, h: usize, compression: u16) -> Rect {
-    if let Some(reference) = dng_default_crop(raw, w, h) {
-        return reference;
-    }
-    if model == "ILCE-7RM2"
-        && matches!(compression, 1 | 32767)
-        && (w, h) == (8000, 5320)
-        && crop == Rect::new(0, 0, 7952, 5304)
-        && [CROP_TOP_LEFT, CROP_SIZE, t::DEFAULT_CROP_ORIGIN, t::DEFAULT_CROP_SIZE].iter().all(|&tag| raw.get(tag).is_none())
-    {
-        Rect::new(8, 8, 7952, 5304)
-    } else {
-        crop
-    }
+/// The optical reference rectangle the lens tables address: the DNG-style default crop when the file records one,
+/// else the image crop (for a body without crop tags, the inset [`recorded_size_crop`] gives: (8,8) on the A7R II).
+fn lens_reference(raw: &Ifd, crop: Rect, w: usize, h: usize) -> Rect {
+    dng_default_crop(raw, w, h).unwrap_or(crop)
 }
 
 /// A rectangle exactly as an origin tag and a size tag record it (two values each), when both exist and fit `usize`.
@@ -614,14 +601,16 @@ fn default_crop(raw: &Ifd, mn: Option<&makernote::MakerNote>, exif_size: Option<
 
 /// The crop for the maker note's `FullImageSize` `full` (width, height: the camera JPEG's size) and the Exif image
 /// size `exif` (`PixelXDimension` × `PixelYDimension`) in a `w × h` frame; `None` when they don't describe a crop of
-/// it. Older bodies store a few columns of padding at the right edge of the raw frame (constant values, 8–32 columns
-/// on the samples we checked) inside a frame 16–48 pixels wider than `FullImageSize`, so the crop is anchored at
-/// the left, which removes them while keeping the CFA phase. In the camera's 3:2 mode it is also anchored at the
-/// top. An in-camera aspect ratio narrower than the frame (16:9) is centred vertically, as measured by registering
+/// it. The frame is 8–24 rows taller and 16–48 columns wider than `FullImageSize`. The image sits in the middle of
+/// the rows, and the same number of columns in from the left: the rest of the spare columns are padding at the right
+/// edge (constant values, 8–32 columns on the samples we checked). That is where Adobe DNG Converter's default crop
+/// puts it on 33 of 53 bodies without crop tags and within 2–8 columns on the others, whose horizontal origin no
+/// tag records. Offsets stay even, keeping the CFA phase. An in-camera aspect ratio narrower than the frame (16:9)
+/// is centred vertically, as measured by registering
 /// each camera JPEG on its raw (the ILCE-7SM2's 4240 × 2384 at y 228–232 of 2848; the DSLR-A580's 4912 × 2760 at
 /// y 258–262 of 3280; storytold/lightcraft#535): its height comes from `FullImageSize` (ILCE-7SM2) or, when that still says
-/// 3:2, from an Exif image size of the same width (DSLR-A580). `centred` centres the window in both directions
-/// instead (see [`default_crop`]).
+/// 3:2, from an Exif image size of the same width (DSLR-A580); only the latter still tells the 3:2 inset, so the
+/// former stays at the left. `centred` centres the window in both directions instead (see [`default_crop`]).
 fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: usize, centred: bool) -> Option<Rect> {
     let (fw, fh) = (usize::try_from(full.0).ok()?, usize::try_from(full.1).ok()?);
     // only a plausible trim of the width: never more than 64 pixels, never an enlargement
@@ -632,10 +621,11 @@ fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: u
         Some((ew, eh)) if ew == fw && eh > 0 && eh < fh => eh,
         _ => fh,
     };
-    // even offsets keep the CFA phase
-    let x = if centred { ((w - fw) / 2) & !1 } else { 0 };
+    // even offsets keep the CFA phase; the inset is that of the 3:2 image `FullImageSize` names, when it names one
+    let inset = if fh.saturating_add(64) >= h { ((h - fh) / 2) & !1 } else { 0 };
+    let x = if centred { ((w - fw) / 2) & !1 } else { inset.min(w - fw) & !1 };
     if height.saturating_add(64) >= h {
-        return Some(Rect::new(x, if centred { ((h - height) / 2) & !1 } else { 0 }, fw, height));
+        return Some(Rect::new(x, if centred { ((h - height) / 2) & !1 } else { inset }, fw, height));
     }
     // an in-camera aspect ratio: at least half the frame's height, centred
     (height * 2 >= h).then(|| Rect::new(x, ((h - height) / 2) & !1, fw, height))
@@ -955,7 +945,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // against Sony's exports with that centre (the image crop takes the same origin, see `sony_crop_on_default`).
     // The opcode's centre is in active-area coordinates, so it stays on the optical centre whichever crop frames
     // the image.
-    let reference = high_res_crop.unwrap_or_else(|| lens_reference(raw, &model, crop, w, h, info.compression));
+    let reference = high_res_crop.unwrap_or_else(|| lens_reference(raw, crop, w, h));
     let geometry = SonyLensGeometry {
         storage_width: w,
         storage_height: h,
@@ -1166,13 +1156,20 @@ mod tests {
 
     #[test]
     fn recorded_size_crops_in_camera_aspect_ratios() {
-        // 3:2: anchored at the top-left, as before (ILCE-7S, DSLR-A700 whose Exif size is the whole frame)
-        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 2832)), 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
-        assert_eq!(recorded_size_crop((4272, 2848), Some((4288, 2856)), 4288, 2856, false), Some(Rect::new(0, 0, 4272, 2848)));
-        assert_eq!(recorded_size_crop((4240, 2832), None, 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
-        // 16:9 from FullImageSize (ILCE-7SM2) and from the Exif size when FullImageSize says 3:2 (DSLR-A580): centred
+        // 3:2: in the middle of the rows and as far in from the left (ILCE-7S; DSLR-A700, whose Exif size is the whole
+        // frame; ILCE-6000; ILCE-7R), the origins Adobe DNG Converter's default crop has for these bodies
+        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 2832)), 4288, 2848, false), Some(Rect::new(8, 8, 4240, 2832)));
+        assert_eq!(recorded_size_crop((4272, 2848), Some((4288, 2856)), 4288, 2856, false), Some(Rect::new(4, 4, 4272, 2848)));
+        assert_eq!(recorded_size_crop((4240, 2832), None, 4288, 2848, false), Some(Rect::new(8, 8, 4240, 2832)));
+        assert_eq!(recorded_size_crop((6000, 4000), None, 6048, 4024, false), Some(Rect::new(12, 12, 6000, 4000)));
+        assert_eq!(recorded_size_crop((7360, 4912), None, 7392, 4920, false), Some(Rect::new(4, 4, 7360, 4912)));
+        // never past the right edge, and on even offsets (a 10-row margin gives 4, not 5)
+        assert_eq!(recorded_size_crop((4284, 2832), None, 4288, 2848, false), Some(Rect::new(4, 8, 4284, 2832)));
+        assert_eq!(recorded_size_crop((4272, 2848), None, 4288, 2858, false), Some(Rect::new(4, 4, 4272, 2848)));
+        // 16:9 from FullImageSize (ILCE-7SM2), which no longer tells the 3:2 inset, and from the Exif size when
+        // FullImageSize says 3:2 (DSLR-A580): centred vertically
         assert_eq!(recorded_size_crop((4240, 2384), Some((4240, 2384)), 4288, 2848, false), Some(Rect::new(0, 232, 4240, 2384)));
-        assert_eq!(recorded_size_crop((4912, 3264), Some((4912, 2760)), 4928, 3280, false), Some(Rect::new(0, 260, 4912, 2760)));
+        assert_eq!(recorded_size_crop((4912, 3264), Some((4912, 2760)), 4928, 3280, false), Some(Rect::new(8, 260, 4912, 2760)));
         // offsets stay even (CFA phase)
         assert_eq!(recorded_size_crop((4240, 2386), None, 4288, 2848, false).map(|r| r.y), Some(230));
         // not a crop of this frame: wider than it, far narrower, under half its height, empty, hostile values
@@ -1181,7 +1178,7 @@ mod tests {
         assert_eq!(recorded_size_crop((4240, 1000), None, 4288, 2848, false), None);
         assert_eq!(recorded_size_crop((0, 2832), None, 4288, 2848, false), None);
         assert_eq!(recorded_size_crop((u64::MAX, u64::MAX), Some((u64::MAX, 1)), 4288, 2848, false), None);
-        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 0)), 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
+        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 0)), 4288, 2848, false), Some(Rect::new(8, 8, 4240, 2832)));
         // centred (packed 12-bit DSLR-A900: 6048 x 4032 in the middle of 6080 x 4048)
         assert_eq!(recorded_size_crop((6048, 4032), Some((6048, 4032)), 6080, 4048, true), Some(Rect::new(16, 8, 6048, 4032)));
         assert_eq!(recorded_size_crop((6046, 4030), None, 6080, 4048, true), Some(Rect::new(16, 8, 6046, 4030)));
