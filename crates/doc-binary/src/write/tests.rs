@@ -705,3 +705,20 @@ fn compound_border_lines_round_trip() {
     let got: Vec<_> = r.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.borders.as_ref()?.bottom.map(|b| b.style)).collect();
     assert_eq!(got, styles);
 }
+
+/// A document read from a DOCX that leaves `w:pPrDefault` out lays out on Word's own paragraph
+/// defaults (8 pt after) under any it set since; a `.doc` keeps them, written into Normal, where
+/// this format's defaults go.
+#[test]
+fn paragraph_defaults_left_to_word_survive_a_doc_round_trip() {
+    let mut d = doc_of(vec![para("Body")]);
+    let s = Arc::make_mut(&mut d.styles);
+    s.default_para = ParaProps { space_before: Some(6.0), ..ParaProps::default() };
+    s.default_para_present = false;
+    let spacing = |d: &Document| {
+        let r = d.styles.resolve_para(&d.body[0].as_para().unwrap().props);
+        (r.space_before, r.space_after)
+    };
+    assert_eq!(spacing(&d), (6.0, 8.0));
+    assert_eq!(spacing(&round(&d)), (6.0, 8.0));
+}

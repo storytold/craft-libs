@@ -5495,3 +5495,40 @@ fn extreme_chart_with_text_fallback_uses_the_package_order_map() {
         assert_eq!(other.frame().unwrap().2.z, shape_raw);
     }
 }
+
+/// Run defaults the file has that name no font: Times New Roman in each slot, but a theme slot is
+/// the theme's font (Word for Windows, Thai in a `w:cs` run, Latin text, and the slots read through
+/// the object model). `w:cstheme="minorBidi"` alone draws Thai in the theme's Thai font, with the
+/// settings naming a bidi language or not; an East Asian theme slot stays a theme slot.
+#[test]
+fn run_defaults_naming_only_theme_slots_take_the_themes_fonts() {
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Thai" typeface="Leelawadee UI"/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/><a:ea typeface="SimSun"/><a:cs typeface=""/><a:font script="Thai" typeface="Tahoma"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+    let read = |fonts: &str, bidi: bool| {
+        let styles = format!(
+            r#"<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr>{fonts}<w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+        );
+        let settings = format!(r#"<w:settings {W_NS}><w:themeFontLang w:val="en-US"{}/></w:settings>"#, if bidi { r#" w:bidi="th-TH""# } else { "" });
+        let rels = [("rId1", "styles", "styles.xml"), ("rId2", "theme", "theme/theme1.xml"), ("rId3", "settings", "settings.xml")];
+        let parts = [("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme), ("word/settings.xml", settings.as_str())];
+        let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>ไทย</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+        let c = d.styles.default_chr.clone();
+        (c.font, c.font_ea, c.font_cs, c.font_ea_theme)
+    };
+    let s = |f: &str| Some(f.to_string());
+    let tnr = s("Times New Roman");
+    for bidi in [true, false] {
+        assert_eq!(read(r#"<w:rFonts w:cstheme="minorBidi"/>"#, bidi), (tnr.clone(), tnr.clone(), s("Tahoma"), None), "bidi language {bidi}");
+        assert_eq!(read(r#"<w:rFonts w:cstheme="majorBidi"/>"#, bidi), (tnr.clone(), tnr.clone(), s("Leelawadee UI"), None), "bidi language {bidi}");
+    }
+    let ea = read(r#"<w:rFonts w:eastAsiaTheme="minorEastAsia"/>"#, true);
+    assert_eq!(ea, (tnr.clone(), None, tnr.clone(), Some(craft_wordmodel::props::ThemeFont::MinorEastAsia)));
+    assert_eq!(read("", true), (tnr.clone(), tnr.clone(), tnr.clone(), None));
+    // Drawn: the Thai in the theme's Thai font.
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:cstheme="minorBidi"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+    );
+    let rels = [("rId1", "styles", "styles.xml"), ("rId2", "theme", "theme/theme1.xml")];
+    let parts = [("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme)];
+    let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>ไทย</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).complex().font, "Tahoma");
+}

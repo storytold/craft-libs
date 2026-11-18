@@ -176,7 +176,7 @@ impl PropCtx {
         self.alias.get(id).cloned().unwrap_or_else(|| id.to_string())
     }
 
-    fn theme_font(&self, t: &str) -> Option<String> {
+    pub(super) fn theme_font(&self, t: &str) -> Option<String> {
         let major = t.starts_with("major");
         let latin = if major { &self.major_font } else { &self.minor_font };
         if t.ends_with("Bidi") {
@@ -205,21 +205,28 @@ impl PropCtx {
     /// `APP_RPR_DEFAULT`); else the theme's `a:cs`. With no font for Thai, Angsana New; with no
     /// theme at all, Word's own theme's Thai font, Cordia New.
     pub(super) fn app_default_cs_font(&self) -> String {
+        self.default_bidi_theme_font(false)
+    }
+
+    /// The font a `minorBidi` (`major` false) or `majorBidi` slot names in the run defaults, as Word
+    /// for Windows resolves it there: see [`PropCtx::app_default_cs_font`]; also with the file's own
+    /// run defaults naming the slot, and with no bidi language in the settings (measured, minor).
+    /// Word's own theme's major Thai font is Angsana New.
+    pub(super) fn default_bidi_theme_font(&self, major: bool) -> String {
         let script = self.bidi_script.unwrap_or("Thai");
+        let (latin, cs, scripts) =
+            if major { (&self.major_font, &self.major_cs, &self.major_scripts) } else { (&self.minor_font, &self.minor_cs, &self.minor_scripts) };
         let named = |f: &String| (!f.is_empty()).then(|| f.clone());
         if script == "Latn"
-            && let Some(f) = named(&self.minor_font)
+            && let Some(f) = named(latin)
         {
             return f;
         }
-        let themed = self
-            .theme_fonts
-            .then(|| self.minor_scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)).or_else(|| named(&self.minor_cs)))
-            .flatten();
+        let themed = self.theme_fonts.then(|| scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)).or_else(|| named(cs))).flatten();
         themed.unwrap_or_else(|| {
-            match (script, self.theme_fonts) {
-                ("Thai", false) => "Cordia New",
-                ("Thai", true) => "Angsana New",
+            match (script, self.theme_fonts, major) {
+                ("Thai", false, false) => "Cordia New",
+                ("Thai", _, _) => "Angsana New",
                 _ => BIDI_THEME_FALLBACK_FONT,
             }
             .to_string()

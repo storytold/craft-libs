@@ -3,7 +3,7 @@ use super::{
     TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
-use craft_wordmodel::props::{CharProps, PropChange};
+use craft_wordmodel::props::{CharProps, PropChange, ThemeFont};
 use std::sync::Arc;
 
 /// The run defaults Word gives a document whose `w:docDefaults` has no `w:rPrDefault`. Word fills
@@ -75,8 +75,11 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
 
 impl Reader<'_> {
     /// The document's run defaults: its `w:rPrDefault`, or Word's own when it has none (see
-    /// `APP_RPR_DEFAULT`). Run defaults that name no font at all are Times New Roman in every
-    /// slot, as in Word. (A slot left unset beside others that are set isn't measured.)
+    /// `APP_RPR_DEFAULT`). Run defaults the file has that name no font are Times New Roman in each
+    /// slot, but a theme slot is the theme's font (measured in Word for Windows: `w:cstheme=
+    /// "minorBidi"` alone draws Thai in the theme's Thai font, and Latin and East Asian text in
+    /// Times New Roman). An East Asian theme slot is kept for the save and left to inherit, as in
+    /// runs: the theme's East Asian fonts aren't read.
     fn run_defaults(&mut self, rpr_default: Option<&El>) -> CharProps {
         let mut c = CharProps::default();
         match rpr_default {
@@ -92,8 +95,15 @@ impl Reader<'_> {
                     c = self.pc.rpr(r);
                 }
                 if c.font.is_none() && c.font_ea.is_none() && c.font_cs.is_none() {
-                    for f in [&mut c.font, &mut c.font_ea, &mut c.font_cs] {
-                        *f = Some(SPEC_DEFAULT_FONT.to_string());
+                    let unset = || Some(SPEC_DEFAULT_FONT.to_string());
+                    c.font = unset();
+                    c.font_cs = match c.font_cs_theme {
+                        Some(t @ (ThemeFont::MajorBidi | ThemeFont::MinorBidi)) => Some(self.pc.default_bidi_theme_font(t.is_major())),
+                        Some(t) => self.pc.theme_font(t.as_str()).or_else(unset),
+                        None => unset(),
+                    };
+                    if c.font_ea_theme.is_none() {
+                        c.font_ea = unset();
                     }
                 }
             }
