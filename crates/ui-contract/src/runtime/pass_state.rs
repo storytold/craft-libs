@@ -87,6 +87,7 @@ pass_state! {
         gestures: crate::runtime::edit::Gestures,
         reveals: crate::contract::steps::scroll_owner::Reveals,
         scroll_moves: crate::contract::steps::scroll_owner::ScrollMoves,
+        editor_records: crate::contract::steps::report::EditorRecords,
         jumps: crate::contract::body::scroll::Jumps,
         shrink_reports: crate::layout::body::ShrinkReports,
         least_reports: crate::layout::body::LeastReports,

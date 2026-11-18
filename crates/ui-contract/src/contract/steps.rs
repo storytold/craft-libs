@@ -13,7 +13,7 @@ mod measure;
 mod paint;
 mod parts;
 mod place;
-mod report;
+pub(crate) mod report;
 pub(crate) mod scroll_owner;
 mod sense;
 mod settle;

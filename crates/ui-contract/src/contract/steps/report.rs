@@ -10,6 +10,7 @@ use crate::runtime::commands::{self, ResolvedCommand};
 use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
 use crate::runtime::keys;
+use crate::runtime::pass_state;
 use crate::style::Flags;
 use craft_behavior::Sense;
 use egui::Id;
@@ -174,7 +175,11 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if let Some(folded) = &folded {
         keys::register_node(ctx, id, folded.inner, None, focusable);
     }
-    if let Some(facts) = core.text_access.take() {
+    let editor_record = || {
+        let widget = core.editor.as_ref()?.widget;
+        pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
+    };
+    if let Some(facts) = core.text_access.take().or_else(editor_record) {
         crate::runtime::access::text::report_text(ctx, id, &facts);
     }
     if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
@@ -279,4 +284,16 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             ltr_axis: core.resolved.ltr_axis,
         },
     );
+}
+
+/// The text facts an editor body reported through its `EditorHandle` in the running pass, by editor widget: the
+/// owning component's report step reads its own (owed by ribbon-w5, S-L168). Pass-local, so nothing outlives the pass.
+#[derive(Default)]
+pub(crate) struct EditorRecords(std::collections::HashMap<egui::Id, crate::runtime::access::text::TextFacts>);
+
+/// Puts `facts` in the running pass's record for the editor part `widget`.
+pub(crate) fn note_editor_facts(ctx: &egui::Context, widget: egui::Id, facts: crate::runtime::access::text::TextFacts) {
+    pass_state::with::<EditorRecords, _>(ctx, |records| {
+        records.0.insert(widget, facts);
+    });
 }
