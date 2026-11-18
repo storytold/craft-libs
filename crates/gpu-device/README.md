@@ -20,7 +20,7 @@ Licensed under MIT OR Apache-2.0.
 | `select(candidates, preference)` | the adapter to draw with, as a `Selection` with its `Notice`s |
 | `ranked(candidates, preference)` | the order in which to try opening a device: the selection, then the other usable adapters by type with software after hardware, never an older version of a driver listed twice, or the Vulkan entry of an Intel Gen 9 to Gen 11 GPU on Intel's Windows driver |
 | `open(instance, surface, preference, request)` | native only, like `list`: opens a device through `ranked`, then wgpu's fallback adapter; returns `Opened` (adapter, device, queue, `Capabilities`, `DeviceHealth`, notices) or `OpenError` |
-| `pick(adapters, surface, preference)` | `select` over listed adapters, for egui-wgpu's `native_adapter_selector` |
+| `pick(adapters, surface, preference)` | `select` over listed adapters, for egui-wgpu's `native_adapter_selector`; the error is an `OpenError` (convert it with `map_err(\|e\| e.to_string())` for that selector) |
 | `Capabilities`, `Vendor` | NV12 and P010 (sampled only in wgpu 30), 16-bit norm, `f16` and timestamp support, the largest texture and buffer, the vendor, and whether the adapter is a software one |
 | `DeviceHealth`, `Fault`, `WaitOutcome` | records a device loss or an uncaptured error instead of panicking; polls and bounded waits that do not touch a lost device |
 | `Recovery`, `RecoveryPolicy` | the preference to open after a loss: the user's own, and `Software` once the device was lost 3 times in 10 minutes (both values can be set) |
@@ -28,7 +28,14 @@ Licensed under MIT OR Apache-2.0.
 
 ## Failure cases
 
-- With no usable adapter, `select` returns `None` and `open` returns `OpenError::NoAdapter`.
+- With no usable adapter, `select` returns `None`, and `open` and `pick` return
+  `OpenError::NoAdapter`, or `OpenError::UnsafeDriver` when only a driver that can end the
+  process can draw.
+- In a browser, WebGPU lists only the adapter the browser offers, so a named adapter cannot be
+  chosen. A web build requests the adapter with `Preference::power()` as the power preference
+  and opens the device itself. `Capabilities` and `Recovery` work there as they do on native,
+  and so does `DeviceHealth` apart from `wait`, `wait_timeout` and `wait_timeout_cancelable`,
+  which are native only.
 - An adapter that lacks `Request::required_features`, or whose `request_device` fails, adds a
   `Notice::DeviceFailed`, and `open` tries the next one. When every adapter fails, the error lists
   each failure.

@@ -10,7 +10,11 @@
 //!   ([`choose`]); [`Notice`] says when the choice was not the one asked for.
 //! - [`open`] opens a device, moving to the next adapter and last to a software one when a device
 //!   fails to open. [`pick`] fits egui-wgpu's adapter selector for a window. `list` and `open`
-//!   block on wgpu's futures and are native only; a browser build picks with [`pick`].
+//!   block on wgpu's futures and are native only.
+//! - In a browser, WebGPU lists only the adapter the browser offers, so a named adapter cannot be
+//!   chosen. A web build requests the adapter with [`Preference::power`] as the power preference
+//!   and opens the device itself. [`Capabilities`] and [`Recovery`] work there as they do on
+//!   native, and so does [`DeviceHealth`] apart from its blocking waits, which are native only.
 //! - [`Capabilities`] reports what the device can do (NV12 and P010 textures, 16-bit norm
 //!   formats, `f16`, timestamps, sizes).
 //! - [`DeviceHealth`] records a device loss or an uncaptured error instead of panicking, and

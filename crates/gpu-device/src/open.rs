@@ -88,24 +88,33 @@ pub fn list(instance: &Instance, surface: Option<&Surface<'_>>) -> (Vec<Adapter>
 
 /// The adapter to draw with for `preference`, from adapters already listed, with the choice in the
 /// log. This fits egui-wgpu's `native_adapter_selector` for a window, which then opens the device
-/// itself.
-pub fn pick(adapters: &[Adapter], surface: Option<&Surface<'_>>, preference: &Preference) -> Result<(Adapter, Selection), String> {
+/// itself; that selector takes a `String` error, so convert with `map_err(|e| e.to_string())`.
+/// With no usable adapter the error is [`OpenError::UnsafeDriver`] when only adapters that
+/// [`choose`](crate::choose) never draws with can draw, and [`OpenError::NoAdapter`] otherwise,
+/// with the listed adapters in the log.
+pub fn pick(adapters: &[Adapter], surface: Option<&Surface<'_>>, preference: &Preference) -> Result<(Adapter, Selection), OpenError> {
     let candidates: Vec<Candidate> = adapters.iter().map(|a| Candidate::of(a, surface)).collect();
     let Some(selection) = select(&candidates, preference) else {
-        let left_out = left_out(&candidates);
-        if !left_out.is_empty() {
-            return Err(OpenError::UnsafeDriver(left_out).to_string());
-        }
-        let listed = candidates.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
-        return Err(format!("no usable graphics adapter among {}: {listed}", candidates.len()));
+        return Err(unselected(&candidates));
     };
     log_choice(&candidates, selection.index, preference.power());
     for notice in &selection.notices {
         log::warn!("{notice}");
     }
-    let adapter =
-        adapters.get(selection.index).cloned().ok_or_else(|| format!("graphics adapter {} of {} is missing", selection.index, adapters.len()))?;
+    let adapter = adapters.get(selection.index).cloned().ok_or(OpenError::NoAdapter)?;
     Ok((adapter, selection))
+}
+
+/// The error for `candidates` among which `select` found no adapter, with the list in the log
+/// when it is not [`OpenError::UnsafeDriver`].
+fn unselected(candidates: &[Candidate]) -> OpenError {
+    let left_out = left_out(candidates);
+    if !left_out.is_empty() {
+        return OpenError::UnsafeDriver(left_out);
+    }
+    let listed = candidates.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+    log::warn!("no usable graphics adapter among {}: {listed}", candidates.len());
+    OpenError::NoAdapter
 }
 
 /// Open a device for `preference`: the selected adapter first, then the others in [`ranked`]
@@ -263,7 +272,15 @@ mod tests {
             OpenError::UnsafeDriver(vec!["Intel(R) UHD Graphics 630".into()]).to_string(),
             "the only graphics adapters that can draw (\"Intel(R) UHD Graphics 630\") use a driver that can crash; update the graphics driver"
         );
-        assert!(pick(&[], None, &Preference::Auto).is_err());
+        assert_eq!(pick(&[], None, &Preference::Auto).unwrap_err(), OpenError::NoAdapter);
+    }
+
+    #[test]
+    fn pick_says_when_only_a_driver_that_can_crash_can_draw() {
+        let vulkan_only: Vec<Candidate> = crate::adapter::tests::uhd_630().into_iter().take(1).collect();
+        assert_eq!(select(&vulkan_only, &Preference::Auto), None);
+        assert_eq!(unselected(&vulkan_only), OpenError::UnsafeDriver(vec!["Intel(R) UHD Graphics 630".into()]));
+        assert_eq!(unselected(&[]), OpenError::NoAdapter);
     }
 
     #[test]
