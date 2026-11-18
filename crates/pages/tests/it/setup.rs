@@ -6,7 +6,7 @@ use craft_pages::{DocumentGrid, GridKind, MAX_GRID_COUNT, PageSetup};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::dialog::HeldAnswer;
 use craft_ui::runtime::env::Label;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, Room, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -51,7 +51,8 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
         let (setup, held) = &mut *state;
         PageSetupDialog::new(Bind::bound(setup)).opened(Bind::given(true)).held(held).show(ui);
     });
-    fixture.settle();
+    // The dialog is taller than the default room: there the grid section lies below the window and cannot be pressed.
+    fixture.in_room(Room::Window).settle();
     let disabled = |fixture: &Fixture, label: &str| {
         let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
         fixture.tree().is_disabled_key(field.node)
@@ -59,13 +60,6 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
     let pick = |fixture: &mut Fixture, label: &str| {
         let radio = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} radio"));
         fixture.click(&radio).settle();
-        let both = (fixture.by_label("Characters per line"), fixture.by_label("Lines per page"));
-        eprintln!(
-            "DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: clicked {label} chars disabled {:?} lines disabled {:?} held kind {:?}",
-            both.0.as_ref().map(|f| fixture.tree().is_disabled_key(f.node)),
-            both.1.as_ref().map(|f| fixture.tree().is_disabled_key(f.node)),
-            state.borrow().0.grid.map(|grid| grid.kind)
-        );
     };
     assert!(disabled(&fixture, "Characters per line") && disabled(&fixture, "Lines per page"), "no grid: both counts disabled");
     pick(&mut fixture, "Line grid only");
