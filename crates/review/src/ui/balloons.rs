@@ -325,6 +325,11 @@ impl Component for Leaders {
         LeadersStyle { metrics: Metrics::new(), on_page: cx.color(lines.divider), to_card: cx.color(lines.border) }
     }
 
+    /// The leaders are paint only: the cards and the anchors take the pointer and the keys.
+    fn sense(&self) -> craft_behavior::Sense {
+        craft_behavior::Sense::empty()
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let draw = ui.draw();
         for leader in &self.lines {
