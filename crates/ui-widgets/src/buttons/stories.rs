@@ -233,8 +233,10 @@ fn click_and_stay(fixture: &mut Fixture) {
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Custom(click_and_stay), title = "Clicked under the pointer")]
 fn toggle_button_clicked_under_pointer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = ToggleButton::new("Snap to grid", Bind::bound(data.value("snap_hover", false))).icon(IconId::new("eye")).show(ui);
-    *data.value("clicked_over", false) = shown.hover.clicked;
-    shown.into()
+    // The hold is the component's own state, which a measuring run does not carry: the story words it in its readout,
+    // not in its data, which the purity probe compares.
+    let clicked = shown.hover.clicked;
+    StoryOutput::from(shown).readout(if clicked { "Clicked, pointer still over" } else { "Not clicked" })
 }
 
 #[story(ToggleButton<'static>, covers = [Mixed], drive = Drive::Never)]
