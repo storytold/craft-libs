@@ -37,7 +37,12 @@ pub(crate) fn to_egui(sense: Sense) -> egui::Sense {
 pub(crate) fn widget(ui: &Ui, id: Id, rect: Rect, sense: Sense) -> Response {
     let ctx = ui.ctx();
     let held = ctx.memory(|memory| memory.has_focus(id));
-    let response = ui.interact(rect, id, to_egui(sense));
+    // Enter activates the focused widget; Space does not. egui makes Space the keyboard's activation of
+    // whatever widget holds the focus, and it drops that focus as it does, so a canvas's Hand key would press
+    // a toolbar button or a panel row that was clicked last instead of taking the key — and only sometimes,
+    // depending on what was clicked before. Enter keeps every control reachable from the keyboard.
+    let options = egui::InteractOptions { activate_on_space: false, ..Default::default() };
+    let response = ui.interact_opt(rect, id, to_egui(sense), options);
     if sense.contains(Sense::FOCUS) && !ui.is_enabled() {
         ctx.memory_mut(|memory| {
             memory.interested_in_focus(id, ui.layer_id());
@@ -180,4 +185,42 @@ pub(crate) fn inert(ui: &Ui, id: Id) -> Response {
 /// Marks the response as changed: the component's value changed in this pass.
 pub(crate) fn mark_changed(response: &mut Response) {
     response.mark_changed();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::Fixture;
+    use craft_behavior::Sense;
+    use egui::{Event, Key, Modifiers, Pos2, Rect, Vec2};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn key(key: Key) -> Event {
+        Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+    }
+
+    /// Space belongs to the canvas (its Hand tool), never to the widget that holds the focus: egui
+    /// would make it a click on that widget and drop the focus doing so, so a toolbar button or a
+    /// panel row clicked before would take the key instead of the canvas — and only sometimes,
+    /// depending on what was clicked before. Enter keeps activating the focused widget, so every
+    /// control stays reachable from the keyboard.
+    #[test]
+    fn space_does_not_activate_a_focused_widget_and_enter_does() {
+        let id = egui::Id::new("focused control");
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(120.0, 40.0));
+        let clicked = Rc::new(Cell::new(false));
+        let seen = Rc::clone(&clicked);
+        let mut fixture = Fixture::new(move |ui| {
+            let response = widget(ui, id, rect, Sense::CLICK);
+            seen.set(super::clicked(&response));
+        });
+        fixture.settle();
+        fixture.ctx().memory_mut(|memory| memory.request_focus(id));
+        fixture.frame(vec![key(Key::Space)]);
+        assert!(!clicked.get(), "Space is the canvas's, not the widget's activation");
+        assert_eq!(fixture.ctx().memory(|memory| memory.focused()), Some(id), "the widget keeps the focus");
+        fixture.frame(vec![key(Key::Enter)]);
+        assert!(clicked.get(), "Enter still activates the focused widget");
+    }
 }
