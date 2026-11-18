@@ -25,6 +25,21 @@ craft_ui::words! {
         sort_created: "startScreen.sortCreated" = "Created";
         pinned: "startScreen.pinned" = "Pinned Folders";
         no_pinned: "startScreen.noPinned" = "Pin the folders you open often.";
+        /// The note on a pinned folder the app is still listing.
+        looking_for_files: "startScreen.lookingForFiles" = "Looking for files…";
+        /// The note on a pinned folder the app cannot list.
+        folder_unavailable: "startScreen.folderUnavailable" = "Folder unavailable";
+        /// The note on a pinned folder that holds no files.
+        folder_empty: "startScreen.folderEmpty" = "No files";
+        /// The row under a pinned folder's first files that lists the rest.
+        show_more: "startScreen.showMore" = "Show more";
+        /// The row under an expanded pinned folder's files that lists only the first again.
+        show_less: "startScreen.showLess" = "Show less";
+        /// The note on a pinned folder the app kept only the newest files of.
+        newest_of: template "startScreen.newestOf" = "The newest {shown} of {total}";
+        /// The accessible name of a pinned folder's Unpin part.
+        unpin_folder: template "startScreen.unpinFolder" = "Unpin {name}";
+
         pin_folder: "startScreen.pinFolder" = "Pin Folder…";
         templates: "startScreen.templates" = "Templates";
         recent_menu: "startScreen.recentMenu" = "Recent file";

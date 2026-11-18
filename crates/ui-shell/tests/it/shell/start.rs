@@ -1,9 +1,17 @@
-//! `StartScreen`: which part of the page takes a double click, and what a recent file's menu offers.
+//! `StartScreen`: which part of the page takes a double click, what a recent file's menu offers, where host sections
+//! sit, and how a pinned folder lists its files.
 
-use craft_ui::contract::Bind;
-use craft_ui::shell::{RecentFile, RecentSort, RecentView, StartAction, StartLink, StartScreen};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, Show as _};
+use craft_ui::display::Text;
+use craft_ui::runtime::env::{Env, Label};
+use craft_ui::shell::{
+    FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, RecentFile, RecentSort, RecentView, ShellWords, StartAction, StartLink, StartPlace,
+    StartScreen, Template,
+};
 use craft_ui::testing::pointer::{moved, secondary};
 use craft_ui::testing::{Fixture, Target, trial};
+use egui::{Key, Modifiers};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -76,7 +84,8 @@ fn a_double_click_on_the_empty_room_opens_and_one_on_a_card_opens_only_its_file(
     assert_eq!(opens(&log), 0, "a double click on a rail link opens no file: {:?}", log.borrow());
 }
 
-/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file.
+/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file, and the menu key and
+/// Shift+F10 open it from the focused card.
 #[trial]
 fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     let (mut fixture, _log) = screen();
@@ -89,4 +98,170 @@ fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     fixture.idle(3);
     assert!(fixture.by_label("Remove from Recent").is_some(), "a right click on a recent file opens its menu");
     assert_eq!(fixture.by_label("Show in Folder").is_some(), craft_platform::open::CAN_REVEAL);
+
+    for (key, modifiers) in [(Key::Menu, Modifiers::NONE), (Key::F10, Modifiers::SHIFT)] {
+        fixture.key(Key::Escape, Modifiers::NONE).idle(3);
+        assert!(fixture.by_label("Remove from Recent").is_none(), "Escape closes the menu before {key:?}");
+        let card = fixture.by_label("Poster.psd").expect("the card shows");
+        fixture.click(&card).idle(2);
+        fixture.key(key, modifiers).idle(3);
+        assert!(fixture.by_label("Remove from Recent").is_some(), "{key:?} with {modifiers:?} opens the focused card's menu");
+    }
+}
+
+/// How often the host section before Recent repeats its line. The line is one unwrapped run, so the section's least
+/// width is wider than the room where the plain page has its rail beside.
+const HOST_TEXT_REPEATS: usize = 14;
+
+/// A start screen of one recent file, a template and a link, with `offers_new`; with `sections`, a host section before
+/// Recent (labelled "Before", with a long line) and one after the built-in sections ("After").
+fn host_screen(sections: bool, offers_new: bool) -> Fixture {
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
+    let templates = vec![Template::new("a4", "A4", "210 × 297 mm")];
+    let links = vec![StartLink::url("Docs", None, "https://example.test/docs")];
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut start =
+            StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).templates(&templates).links(&links).offers_new(offers_new);
+        if sections {
+            start = start
+                .section(StartPlace::BeforeRecent, |ui, _| {
+                    let _ = Button::new("Before").show(ui);
+                    let _ = Text::new("Before the recent files ".repeat(HOST_TEXT_REPEATS)).show(ui);
+                })
+                .section(StartPlace::AfterSections, |ui, _| {
+                    let _ = Button::new("After").show(ui);
+                });
+        }
+        let _ = start.show(ui);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 2400.0)).settle();
+    fixture
+}
+
+fn target(fixture: &Fixture, label: &str) -> Target {
+    fixture.by_label(label).unwrap_or_else(|| panic!("{label} shows"))
+}
+
+/// Whether the rail's link stands beside the page: left of the recent card.
+fn rail_beside(fixture: &Fixture) -> bool {
+    target(fixture, "Docs").rect.max.x <= target(fixture, "Poster.psd").rect.min.x
+}
+
+/// Host sections sit at their place, count in the least width that decides whether the rail fits beside the page,
+/// and `offers_new(false)` leaves out both New buttons with Open as the first Tab stop.
+#[trial]
+fn host_sections_sit_at_their_place_and_count_in_the_rail_decision() {
+    let mut plain = host_screen(false, true);
+    let mut hosted = host_screen(true, true);
+    assert!(rail_beside(&plain), "the plain page has its rail beside it at 1100 points");
+    assert!(!rail_beside(&hosted), "the host section's least width does not fit beside the rail at 1100 points");
+    let after = target(&hosted, "After");
+    assert!(target(&hosted, "Docs").rect.min.y >= after.rect.max.y, "without the rail the links follow the host sections");
+
+    for fixture in [&mut plain, &mut hosted] {
+        fixture.room(egui::Vec2::new(2600.0, 2400.0)).settle();
+    }
+    assert!(rail_beside(&hosted), "a room that holds the host section's least width has the rail beside the page");
+    let before = target(&hosted, "Before");
+    assert!(before.rect.max.y <= target(&hosted, "Poster.psd").rect.min.y, "BeforeRecent sits above Recent");
+    let after = target(&hosted, "After");
+    assert!(after.rect.min.y >= target(&hosted, "A4").rect.max.y, "AfterSections sits below Templates");
+
+    let mut no_new = host_screen(false, false);
+    assert!(no_new.by_label("New…").is_none(), "without New the page row has no New");
+    no_new.room(egui::Vec2::new(2600.0, 2400.0)).settle();
+    assert!(rail_beside(&no_new), "the wide room has the rail");
+    assert!(no_new.by_label("New…").is_none(), "without New the rail has no New");
+    no_new.key(Key::Tab, Modifiers::NONE).idle(2);
+    let open = target(&no_new, "Open…");
+    assert!(no_new.tree().focused_key() == open.node, "Open is the first Tab stop");
+}
+
+type Pins = Rc<RefCell<Vec<PinnedFolder>>>;
+
+/// The notes a pending and an unavailable folder show, as the screen's words give them.
+type Notes = Rc<RefCell<Vec<String>>>;
+
+/// A start screen of the pinned folders the test holds, read every pass, in a room tall enough for all of them. The
+/// notes are the screen's own words for a pending and an unavailable folder.
+fn pinned_screen(folders: Vec<PinnedFolder>) -> (Fixture, Log, Pins, Notes) {
+    let log: Log = Rc::default();
+    let seen = Rc::clone(&log);
+    let pins: Pins = Rc::new(RefCell::new(folders));
+    let held = Rc::clone(&pins);
+    let notes: Notes = Rc::default();
+    let words_seen = Rc::clone(&notes);
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let folders = held.borrow().clone();
+        let env = Env::of(ui);
+        let words = env.words::<ShellWords>();
+        *words_seen.borrow_mut() =
+            [&words.looking_for_files, &words.folder_unavailable].map(|word| env.view().resolve(&Label::from(word.clone())).as_str().to_owned()).to_vec();
+        let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &[]).pinned(&folders).show(ui);
+        seen.borrow_mut().extend(out.actions);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 2400.0)).settle();
+    log.borrow_mut().clear();
+    (fixture, log, pins, notes)
+}
+
+fn file_name(n: usize) -> String {
+    format!("File {n}.pdf")
+}
+
+/// A listed folder shows its first files and a More row; the app's `expanded` and `folded` decide what shows, and
+/// the More row, the disclosure keys and a file row report what the app does.
+#[trial]
+fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
+    let work = PathBuf::from("/tmp/Work");
+    let count = PINNED_FILES_SHOWN + 2;
+    let files = (0..count).map(|n| PinnedFile::new(work.join(file_name(n)), file_name(n))).collect();
+    let folders = vec![
+        PinnedFolder::new(&work, "Work").listing(FolderListing::Listed { files, total: count }),
+        PinnedFolder::new("/tmp/Inbox", "Inbox").listing(FolderListing::Pending),
+        PinnedFolder::new("/mnt/Gone", "Gone").listing(FolderListing::Unavailable),
+    ];
+    let (mut fixture, log, pins, notes) = pinned_screen(folders);
+
+    for n in 0..count {
+        assert_eq!(fixture.by_label(&file_name(n)).is_some(), n < PINNED_FILES_SHOWN, "only the first {PINNED_FILES_SHOWN} files show: {n}");
+    }
+    let painted = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|painted| painted.text == text);
+    let notes = notes.borrow();
+    assert!(painted(&fixture, &notes[0]), "a pending folder says it is still listing");
+    assert!(painted(&fixture, &notes[1]), "an unavailable folder says so");
+
+    let more = target(&fixture, "Show more");
+    fixture.click(&more).idle(2);
+    assert!(log.borrow().contains(&StartAction::ExpandPinned(work.clone())), "More asks to expand: {:?}", log.borrow());
+
+    log.borrow_mut().clear();
+    pins.borrow_mut()[0].expanded = true;
+    fixture.settle();
+    for n in 0..count {
+        assert!(fixture.by_label(&file_name(n)).is_some(), "an expanded folder lists every file: {n}");
+    }
+    let less = target(&fixture, "Show less");
+    fixture.click(&less).idle(2);
+    assert!(log.borrow().contains(&StartAction::ExpandPinned(work.clone())), "Show less reports the same toggle: {:?}", log.borrow());
+
+    log.borrow_mut().clear();
+    let last = target(&fixture, &file_name(count - 1));
+    fixture.click(&last).idle(2);
+    assert!(log.borrow().contains(&StartAction::OpenPinnedFile(work.join(file_name(count - 1)))), "a file row opens its file: {:?}", log.borrow());
+
+    // Left on the open heading is the disclosure's close.
+    let heading = target(&fixture, "Work");
+    fixture.click(&heading).idle(2);
+    log.borrow_mut().clear();
+    fixture.key(Key::ArrowLeft, Modifiers::NONE).idle(2);
+    assert_eq!(*log.borrow(), vec![StartAction::FoldPinned(work.clone())], "the disclosure asks the app to fold the folder");
+
+    pins.borrow_mut()[0].folded = true;
+    fixture.settle();
+    assert!((0..count).all(|n| fixture.by_label(&file_name(n)).is_none()), "a folded folder shows no file row");
+    assert!(fixture.by_label("Show less").is_none(), "a folded folder shows no More row");
+    assert!(fixture.by_label("Work").is_some(), "a folded folder keeps its heading");
 }

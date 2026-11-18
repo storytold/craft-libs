@@ -27,7 +27,7 @@ pub struct RecentFile {
     pub opened: Option<i64>,
     /// Created, in seconds since the Unix epoch, for sorting by Created.
     pub created: Option<i64>,
-    /// A second line under the name.
+    /// A note the app gives ("12 pages · 2.4 MB"), shown in place of the age line.
     pub note: Option<String>,
 }
 
@@ -38,26 +38,24 @@ impl RecentFile {
     }
 
     /// This file last opened at `opened`, in seconds since the Unix epoch.
-    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
     #[must_use]
-    pub fn opened(self, opened: i64) -> Self {
-        let _ = opened;
-        todo!("L-165")
+    pub fn opened(mut self, opened: i64) -> Self {
+        self.opened = Some(opened);
+        self
     }
 
     /// This file created at `created`, in seconds since the Unix epoch.
-    #[allow(dead_code)] // P3(pdf-chrome-w2): L-165
     #[must_use]
-    pub fn created(self, created: i64) -> Self {
-        let _ = created;
-        todo!("L-165")
+    pub fn created(mut self, created: i64) -> Self {
+        self.created = Some(created);
+        self
     }
 
-    /// This file with a second line, `note`, under its name.
+    /// This file with `note` shown in place of its age line.
     #[must_use]
-    pub fn note(self, note: impl Into<String>) -> Self {
-        let _ = note;
-        todo!("CH-C17")
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
     }
 }
 
