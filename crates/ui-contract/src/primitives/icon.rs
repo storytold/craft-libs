@@ -2,7 +2,7 @@
 
 use super::svg_set;
 use super::textures::TextureCache;
-use crate::style::{DataColor, Ink, StyleColor, UiTokens, ink_color};
+use crate::style::{DataColor, Ink, StyleColor, UiTokens, ink_color, log_once};
 use craft_behavior::IconId;
 use craft_i18n::Direction;
 use craft_theme::{IconPackId, Srgba};
@@ -220,15 +220,6 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
     }
 }
 
-/// Runs `log` the first time `key` is seen: lookups repeat on every repaint and every resolve.
-fn log_once(key: String, log: impl FnOnce()) {
-    static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
-    let mut reported = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if reported.get_or_insert_with(Default::default).insert(key) {
-        log();
-    }
-}
-
 impl IconSet {
     /// The built-in set a theme's `icon_pack` names: `craft.` and the set's [`id`](IconSet::id), such as
     /// `craft.tabler`; `None` for any other id.
@@ -236,16 +227,6 @@ impl IconSet {
         let name = id.as_str().strip_prefix(craft_theme::RESERVED_PREFIX)?;
         IconSet::ALL.into_iter().find(|set| set.id() == name)
     }
-}
-
-/// The set SVG icons draw from under a theme that names `pack`: the default set when it names none, and, with a log
-/// line the first time, when it names one that is not installed.
-pub(crate) fn theme_icons(pack: Option<&IconPackId>) -> IconSet {
-    let Some(pack) = pack else { return IconSet::default() };
-    IconSet::of_pack(pack).unwrap_or_else(|| {
-        log_once(format!("pack:{pack}"), || log::warn!("icon pack {pack:?} is not installed; the default icons are drawn"));
-        IconSet::default()
-    })
 }
 
 /// A catalog or app icon as it is drawn: its entry and set, whether it is mirrored, and its stroke width in points.

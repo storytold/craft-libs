@@ -1,12 +1,31 @@
 //! `UiTokens`: the runtime's egui-ready view of one resolved token set.
 
 use crate::fonts::{SEMIBOLD, StackFacts};
-use crate::primitives::{IconSet, theme_icons};
-use craft_theme::{AppSizes, Appearance, Contrast, GroupValues, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
+use crate::primitives::IconSet;
+use craft_theme::{AppSizes, Appearance, Contrast, GroupValues, IconPackId, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
 use egui::{CornerRadius, FontFamily, FontId};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
+
+/// Runs `log` the first time `key` is seen: lookups repeat on every repaint and every resolve.
+pub(crate) fn log_once(key: String, log: impl FnOnce()) {
+    static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    let mut reported = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if reported.get_or_insert_with(Default::default).insert(key) {
+        log();
+    }
+}
+
+/// The set SVG icons draw from under a theme that names `pack`: the default set when it names none, and, with a log
+/// line the first time, when it names one that is not installed.
+fn theme_icons(pack: Option<&IconPackId>) -> IconSet {
+    let Some(pack) = pack else { return IconSet::default() };
+    IconSet::of_pack(pack).unwrap_or_else(|| {
+        log_once(format!("pack:{pack}"), || log::warn!("icon pack {pack:?} is not installed; the default icons are drawn"));
+        IconSet::default()
+    })
+}
 
 /// One resolved token set with the theme's token-group values and a key of their content. Each theme scope
 /// (mode, contrast, theme, density, text size) resolves its own; equal sets share a key, so the caches keyed by

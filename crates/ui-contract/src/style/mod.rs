@@ -35,6 +35,7 @@ pub use state::StateSet;
 pub use surface::{BandFill, SurfaceEdge, SurfaceStyle};
 pub use surround::SurroundLook;
 pub use tokens::UiTokens;
+pub(crate) use tokens::log_once;
 
 #[doc(hidden)]
 pub use cache::resolve_style;
