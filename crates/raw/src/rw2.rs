@@ -122,6 +122,8 @@ const COMPRESSION: u16 = 0x000b;
 const LINEARITY_LIMIT: [u16; 3] = [0x000e, 0x000f, 0x0010];
 const BLACK_RGB: [u16; 3] = [0x001c, 0x001d, 0x001e];
 const WB_RGB: [u16; 3] = [0x0024, 0x0025, 0x0026];
+/// The table of the white balance types (see [`panasonic_kelvin_presets`]).
+const WB_TABLE: u16 = 0x0027;
 const RAW_FORMAT: u16 = 0x002d;
 /// The in-camera aspect-ratio crop: top, left, bottom, right in sensor coordinates.
 const CROP: [u16; 4] = [0x002f, 0x0030, 0x0031, 0x0032];
@@ -339,6 +341,28 @@ fn decode_words(src: &[u8], shift: u32, out: &mut [u16]) {
             *v = src.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map_or(0, |b| u16::from_le_bytes(b) >> shift);
         }
     });
+}
+
+/// CIE daylight D55, CIE 1931 (x, y).
+const D55_XY: [f64; 2] = [0.33242, 0.34743];
+/// The 3200 K Planckian light (the ISO 7589 studio tungsten lamp), CIE 1931 (x, y) from Kim et al.'s (2002) cubic
+/// approximation of the Planckian locus.
+const TUNGSTEN_3200_XY: [f64; 2] = [0.423_181_806_762_695_35, 0.399_077_685_165_656_9];
+
+/// The Kelvin scale of a body without colour matrices, from tag `0x0027` (`WBInfo2`; tag number and entry layout
+/// from `exiftool -v3` run as a black-box tool on the files): a count, then that many entries of the white
+/// balance type and the camera's red, green and blue multipliers for it. Types 20 and 24 are the cameras' "D55" and
+/// "ISO studio tungsten" whites: CIE daylight D55 (5500 K) and the ISO 7589 studio tungsten lamp, a 3200 K
+/// Planckian light. Those two give a neutral pair ([`crate::kelvin::KelvinPresets::from_neutral_lights`]).
+fn panasonic_kelvin_presets(ifd: &Ifd, order: ByteOrder) -> Option<crate::kelvin::KelvinPresets> {
+    let v = u16_array(ifd, WB_TABLE, order)?;
+    let n = (*v.first()? as usize).min(v.len() / 4);
+    let entry = |code: u16| {
+        let e = v.get(1..)?.as_chunks::<4>().0.iter().take(n).find(|e| e[0] == code)?;
+        Some([f32::from(e[1]), f32::from(e[2]), f32::from(e[3])])
+    };
+    let (tungsten, d55) = (entry(24)?, entry(20)?);
+    crate::kelvin::KelvinPresets::from_neutral_lights([TUNGSTEN_3200_XY, D55_XY], tungsten, d55)
 }
 
 /// A tag as a `u16` array: SHORT values, or the little-endian contents of an UNDEFINED / BYTE value.
@@ -669,7 +693,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: panasonic_kelvin_presets(ifd0, tiff.order), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
         linearization_table: None,
@@ -941,6 +965,35 @@ mod tests {
             RawData::U16(d) => d,
             RawData::F32(_) => panic!("float samples"),
         }
+    }
+
+    #[test]
+    fn white_balance_table_gives_kelvin_presets() {
+        let (w, h) = (70usize, 20usize);
+        let target = image(w, h, 200, 4000);
+        let mut stream = vec![];
+        for px in target.chunks(14) {
+            stream.extend_from_slice(&encode_block(px, None).0);
+        }
+        let payload = rotate(stream);
+        let mut tags = vec![short(CFA_PATTERN, 1), short(BITS, 12), short(RAW_FORMAT, 4)];
+        tags.extend(BLACK_RGB.iter().map(|&tag| short(tag, 128)));
+        tags.extend(WB_RGB.iter().zip([512, 256, 384]).map(|(&tag, v)| short(tag, v)));
+        let decode = |table: Option<Vec<u16>>| {
+            let mut tags = tags.clone();
+            tags.extend(table.map(|t| (WB_TABLE, Value::Short(t))));
+            crate::decode(&file(w as u16, h as u16, &tags, &payload, &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))])).unwrap()
+        };
+        assert!(decode(None).color.kelvin_presets.is_none());
+        // three entries: Fine Weather (ignored), D55 and ISO studio tungsten, as red/green/blue multipliers
+        let table = vec![3, 9, 480, 256, 400, 20, 380, 256, 500, 24, 250, 256, 700];
+        let p = decode(Some(table)).color.kelvin_presets.unwrap();
+        let unit = |r: f32, b: f32| [r / 256.0, 1.0, b / 256.0];
+        assert_eq!(p.neutral_pair(), Some([unit(250.0, 700.0), unit(380.0, 500.0)]));
+        assert_eq!(p.neutral_lights(), Some([TUNGSTEN_3200_XY, D55_XY]));
+        // a missing light, or a count beyond the data, gives none
+        assert!(decode(Some(vec![1, 20, 500, 256, 380])).color.kelvin_presets.is_none());
+        assert!(decode(Some(vec![9, 20, 500, 256, 380, 24, 700, 256])).color.kelvin_presets.is_none());
     }
 
     #[test]
