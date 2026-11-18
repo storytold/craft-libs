@@ -2,14 +2,16 @@
 
 use super::common;
 
+use std::any::Any;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::{Prefs, Theme, config_path, empty_probe, open_in, open_keyed, read_config, write_config};
 use craft_settings::store::{FIRST_RETRY_DELAY, MAX_RETRY_DELAY};
 use craft_settings::testing::MemoryFiles;
-use craft_settings::{Location, OpenOptions, SaveStatus, SettingsStore};
+use craft_settings::{Location, OpenOptions, SaveStatus, SettingsFiles, SettingsStore};
 
 #[test]
 fn comments_unknown_keys_and_order_survive_a_save() {
@@ -217,4 +219,123 @@ fn a_read_falls_back_to_the_platform_folder_like_an_open() {
     assert_eq!(prefs.general.language, "platform");
     assert!(report.warning.is_some());
     assert_eq!(store.get().general.language, "platform", "an open takes the same folder");
+}
+
+/// A call the store made on its files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Call {
+    Lock,
+    Read,
+    Backup,
+    Write,
+    /// The lock's guard was dropped.
+    Unlock,
+}
+
+type Calls = Arc<Mutex<Vec<Call>>>;
+
+/// [`MemoryFiles`] that records the order of the store's calls, with a lock whose release is recorded too.
+#[derive(Default)]
+struct Recording {
+    inner: MemoryFiles,
+    calls: Calls,
+}
+
+impl Recording {
+    fn record(&self, call: Call) {
+        self.calls.lock().unwrap().push(call);
+    }
+
+    /// The calls since the last take.
+    fn take(&self) -> Vec<Call> {
+        std::mem::take(&mut *self.calls.lock().unwrap())
+    }
+}
+
+struct Guard(Calls);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().push(Call::Unlock);
+    }
+}
+
+impl SettingsFiles for Recording {
+    fn read(&self, path: &Path) -> io::Result<Option<String>> {
+        self.record(Call::Read);
+        self.inner.read(path)
+    }
+
+    fn write(&self, path: &Path, text: &str) -> io::Result<()> {
+        self.record(Call::Write);
+        self.inner.write(path, text)
+    }
+
+    fn move_aside(&self, path: &Path) -> io::Result<PathBuf> {
+        self.inner.move_aside(path)
+    }
+
+    fn write_backup(&self, path: &Path, text: &str) -> io::Result<()> {
+        self.record(Call::Backup);
+        self.inner.write_backup(path, text)
+    }
+
+    fn check_writable(&self, dir: &Path) -> io::Result<()> {
+        self.inner.check_writable(dir)
+    }
+
+    fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
+        let _ = path;
+        self.record(Call::Lock);
+        Some(Box::new(Guard(self.calls.clone())))
+    }
+}
+
+// SG-41: two processes saving at once must take turns from the disk check to the write, or the later one writes over
+// what the earlier one just merged in.
+#[test]
+fn a_save_holds_the_files_lock_from_the_disk_check_to_the_write() {
+    let dir = Path::new("/memory");
+    let files = Arc::new(Recording::default());
+    let options = OpenOptions::new(Location::Dir(PathBuf::from(dir))).probe(empty_probe()).files(files.clone());
+    let (mut store, _) = SettingsStore::<Prefs>::open_with(options);
+    files.take();
+
+    // The first save: no file yet, so no backup.
+    store.update(|p| p.general.language = "fr".into());
+    store.flush().unwrap();
+    assert_eq!(files.take(), [Call::Lock, Call::Read, Call::Write, Call::Unlock]);
+
+    // A save over an existing file keeps its backup inside the lock too.
+    store.update(|p| p.general.language = "de".into());
+    store.flush().unwrap();
+    assert_eq!(files.take(), [Call::Lock, Call::Read, Call::Backup, Call::Write, Call::Unlock]);
+
+    // A save that fails partway releases the lock.
+    files.inner.fail_writes(true);
+    store.update(|p| p.general.language = "nl".into());
+    assert!(store.flush().is_err());
+    let calls = files.take();
+    assert_eq!(calls.first(), Some(&Call::Lock), "{calls:?}");
+    assert_eq!(calls.last(), Some(&Call::Unlock), "{calls:?}");
+    assert!(!calls.contains(&Call::Write), "{calls:?}");
+    files.inner.fail_writes(false);
+
+    // A store with no file takes no lock.
+    let options = OpenOptions::new(Location::Memory).probe(empty_probe()).files(files.clone());
+    let (mut memory, _) = SettingsStore::<Prefs>::open_with(options);
+    memory.update(|p| p.general.language = "fr".into());
+    memory.flush().unwrap();
+    assert!(!files.take().contains(&Call::Lock));
+
+    // Nor does a read-only one: this file comes from a newer build.
+    let newer = Path::new("/newer");
+    files.inner.write(&config_path(newer), "schema_version = 99\n").unwrap();
+    let options = OpenOptions::new(Location::Dir(PathBuf::from(newer))).probe(empty_probe()).files(files.clone());
+    let (mut read_only, _) = SettingsStore::<Prefs>::open_with(options);
+    assert!(read_only.is_read_only());
+    files.take();
+    read_only.update(|p| p.general.language = "fr".into());
+    assert!(read_only.flush().is_err());
+    assert!(!files.take().contains(&Call::Lock));
 }

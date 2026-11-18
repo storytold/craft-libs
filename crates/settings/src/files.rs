@@ -83,11 +83,41 @@ impl SettingsFiles for DiskFiles {
         crate::recovery::check_writable(dir)
     }
 
+    /// An advisory lock on `.<file>.lock` beside `path`, so two processes saving at once (logging out closes every
+    /// window together) take turns at checking, merging and replacing the file instead of one losing the other's
+    /// changes. `None` (save unlocked) when the lock file cannot be opened or is not free within [`LOCK_WAIT`].
     fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
-        let _ = path;
-        todo!("pf.C-S3")
+        let name = path.file_name().map_or_else(|| "config.toml".into(), |n| n.to_string_lossy().into_owned());
+        let lock = path.with_file_name(format!(".{name}.lock"));
+        let file = match std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock) {
+            Ok(file) => file,
+            Err(e) => {
+                log::warn!("settings: cannot open {}, saving without it: {e}", lock.display());
+                return None;
+            }
+        };
+        let start = std::time::Instant::now();
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Some(Box::new(file)),
+                Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < LOCK_WAIT => std::thread::sleep(LOCK_POLL),
+                Err(e) => {
+                    log::warn!("settings: {} is held, saving without it: {e}", lock.display());
+                    return None;
+                }
+            }
+        }
     }
 }
+
+/// How long a save waits for another process's save to finish before going ahead anyway: a save takes
+/// milliseconds, and a process stuck holding the lock must not stop this one from saving.
+#[cfg(not(target_arch = "wasm32"))]
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How often a waiting save tries the lock again.
+#[cfg(not(target_arch = "wasm32"))]
+const LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// New files are owner-only; on a replace `craft-atomic` keeps the existing file's mode.
 #[cfg(all(unix, not(target_arch = "wasm32")))]

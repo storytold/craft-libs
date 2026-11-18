@@ -32,7 +32,7 @@
 //!
 //! let (mut store, report) = SettingsStore::<Prefs>::open(Location::Auto);
 //! store.update(|p| p.appearance.theme = "dark".into());
-//! // Call `store.tick(Instant::now())` every frame and `store.flush()` on exit.
+//! // Call `store.tick(web_time::Instant::now())` every frame and `store.flush()` on exit.
 //! ```
 #![warn(missing_docs)]
 
@@ -56,6 +56,8 @@ pub use document::MergeRule;
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
 #[cfg(not(target_arch = "wasm32"))]
 pub use files::DiskFiles;
+#[cfg(target_arch = "wasm32")]
+pub use files::LocalStorageFiles;
 pub use files::SettingsFiles;
 pub use migrate::LegacyFile;
 pub use paths::{Location, Portable, Probe, Resolved, Rule};

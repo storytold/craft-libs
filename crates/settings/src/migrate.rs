@@ -75,12 +75,11 @@ impl<T> std::fmt::Debug for LegacyFile<T> {
     }
 }
 
-/// Tries each legacy file in order and returns the first one that parses, with the values it
-/// reset and its path.
+/// Tries each legacy file in order, read through `files` (the store's, so a browser store reads its old
+/// localStorage item), and returns the first one that parses, with the values it reset and its path.
 pub fn import_legacy<T>(files: &dyn SettingsFiles, legacy: &[LegacyFile<T>]) -> Option<Imported<T>> {
-    let _ = files; // P3(platform-w8): pf.C-S5
     legacy.iter().find_map(|f| {
-        let bytes = std::fs::read(&f.path).ok()?;
-        (f.parse)(&bytes).ok().map(|(v, errors)| (v, errors, f.path.clone()))
+        let text = files.read(&f.path).ok()??;
+        (f.parse)(text.as_bytes()).ok().map(|(v, errors)| (v, errors, f.path.clone()))
     })
 }

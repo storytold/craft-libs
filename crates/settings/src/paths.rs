@@ -100,16 +100,22 @@ pub struct Probe {
     pub platform_config_dir: Option<PathBuf>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for Probe {
     fn default() -> Self {
         Self {
             env: Box::new(|name| std::env::var_os(name)),
             exe_dir: std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)),
-            #[cfg(not(target_arch = "wasm32"))]
             platform_config_dir: dirs::config_dir(),
-            #[cfg(target_arch = "wasm32")]
-            platform_config_dir: None,
         }
+    }
+}
+
+/// A browser has no environment, executable or config folder.
+#[cfg(target_arch = "wasm32")]
+impl Default for Probe {
+    fn default() -> Self {
+        Self { env: Box::new(|_| None), exe_dir: None, platform_config_dir: None }
     }
 }
 
@@ -199,11 +205,17 @@ fn resolve_checked(
 
 /// Creates `dir` and proves a file can be written in it: a folder can exist and still be read-only.
 fn ensure_writable(dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
     #[cfg(not(target_arch = "wasm32"))]
-    return crate::recovery::check_writable(dir);
+    {
+        std::fs::create_dir_all(dir)?;
+        crate::recovery::check_writable(dir)
+    }
+    // Only `Location::Auto` asks, and a browser resolves it to memory before any folder is judged.
     #[cfg(target_arch = "wasm32")]
-    Ok(())
+    {
+        let _ = dir;
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "a browser has no folders"))
+    }
 }
 
 /// Whether `dir`, or for a folder that doesn't exist yet its nearest existing ancestor (where
@@ -247,7 +259,9 @@ fn bundle_parent(exe_dir: &Path) -> Option<&Path> {
 /// The platform cache folder for `app_id` (`%LOCALAPPDATA%` on Windows, so it does not roam).
 pub fn cache_dir(app_id: &str) -> Option<PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
-    return dirs::cache_dir().map(|d| d.join(app_id));
+    {
+        dirs::cache_dir().map(|d| d.join(app_id))
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = app_id;
@@ -258,7 +272,9 @@ pub fn cache_dir(app_id: &str) -> Option<PathBuf> {
 /// The platform data folder for `app_id`, for recovery files and other non-settings state.
 pub fn data_dir(app_id: &str) -> Option<PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
-    return dirs::data_local_dir().map(|d| d.join(app_id));
+    {
+        dirs::data_local_dir().map(|d| d.join(app_id))
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = app_id;

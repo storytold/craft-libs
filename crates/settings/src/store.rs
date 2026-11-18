@@ -381,7 +381,6 @@ impl<T: Settings> SettingsStore<T> {
             Ok(Some(text)) => self.load_text(path, &text, damaged, report),
             Ok(None) => {
                 if let Some((value, errors, from)) = migrate::import_legacy(&*self.files, legacy) {
-                    // P3(platform-w8): pf.C-S5
                     self.value = value;
                     self.dirty = true;
                     report.source = Source::Legacy(from);
@@ -440,6 +439,9 @@ impl<T: Settings> SettingsStore<T> {
             self.dirty = false;
             return Ok(());
         };
+        // Held from the disk check to the write, so another process saving at the same moment waits instead of
+        // writing over the changes this save merges in. An early return releases it.
+        let lock = self.files.lock(&path);
         let (backup, theirs) = self.check_disk(&path)?;
         if let Some(on_disk) = backup {
             self.files.write_backup(&path, &on_disk)?;
@@ -460,6 +462,7 @@ impl<T: Settings> SettingsStore<T> {
         }
         let text = document::render(&self.doc);
         self.files.write(&path, &text)?;
+        drop(lock);
         self.base = self.doc.clone();
         self.seen_text = Some(text);
         self.dirty = false;
@@ -473,9 +476,10 @@ impl<T: Settings> SettingsStore<T> {
     /// (it parses and is not blank), and its document, upgraded to this build's schema, when
     /// another instance or a hand edit changed it since this store last read or wrote it.
     ///
-    /// The contract is best effort, not multi-process locking: `save` merges this store's changes
-    /// since its base into that document ([`merge_changes`]), so the other writer's comments,
-    /// unknown keys and settings survive. A file that no longer parses is moved aside (the edit
+    /// `save` holds the files' lock ([`SettingsFiles::lock`]) around this check and its write, so two
+    /// processes saving at once take turns, and merges this store's changes since its base into that
+    /// document ([`merge_changes`]), so the other writer's comments, unknown keys and settings survive.
+    /// The lock is advisory and waits a bounded time; past that the save goes ahead. A file that no longer parses is moved aside (the edit
     /// is kept, the previous backup stays), and a file from a newer build, or one whose migration
     /// fails, makes the store read-only instead of overwriting it, the same as at startup.
     fn check_disk(&mut self, path: &Path) -> Result<(Option<String>, Option<DocumentMut>), SettingsError> {
