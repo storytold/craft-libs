@@ -64,7 +64,12 @@ jobs:
           python3 scripts/test-workspace-concurrency.py
           python3 scripts/test-workspace-tests.py
         fi
-        cargo fmt --check
+        # One rustfmt call gets every source root of the workspace, which is longer than
+        # Windows allows for a command line (os error 206). rustfmt's result is the same on
+        # every system, so the Linux and macOS legs check it.
+        if [ "$RUNNER_OS" != Windows ]; then
+          cargo fmt --check
+        fi
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       command: |
