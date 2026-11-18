@@ -50,7 +50,6 @@ impl PointerLooks {
                                     }
                                     None => ColorImage::new([1, 1], vec![Color32::TRANSPARENT]),
                                 };
-                                // PLAN: assumed PictureSize::DevicePixels (ribbon-w6): the image at its own device-pixel size.
                                 Picture::new(name, hasher.finish(), &image).extent(PictureSize::DevicePixels).show(ui);
                                 Text::new(format!("{scale}×")).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
                             });

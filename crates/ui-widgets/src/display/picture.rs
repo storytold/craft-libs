@@ -24,6 +24,9 @@ pub enum PictureSize {
     /// The sample of a thumbnail step in a panel's options dialog (`size.thumb.sample.*`); `ThumbSize::None` shows no
     /// picture.
     Sample(ThumbSize),
+    /// The texture at its own size in device pixels: one image pixel to one screen pixel at every scale (owed by
+    /// ribbon-w6, S-L172). A picture without pixels of its own takes the icon side.
+    DevicePixels,
 }
 
 /// The style of a picture.
@@ -112,7 +115,7 @@ impl Component for Picture<'_> {
     fn style(cx: &StyleCx<'_>, key: PictureStyleKey) -> PictureStyle {
         let thumbs = &cx.tokens.size.thumb;
         let height = match key.extent {
-            PictureSize::Icon => cx.control().icon,
+            PictureSize::Icon | PictureSize::DevicePixels => cx.control().icon,
             PictureSize::Thumb(step) => step.pick([thumbs.sm, thumbs.md, thumbs.lg]),
             PictureSize::Sample(step) => step.pick([thumbs.sample.sm, thumbs.sample.md, thumbs.sample.lg]),
         };
@@ -120,6 +123,12 @@ impl Component for Picture<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if let (PictureSize::DevicePixels, Source::Image { key, image }) = (self.extent, &self.source) {
+            let ctx = cx.ui.ctx();
+            let store = TextureStore::<(Id, u64)>::in_context(ctx, "picture", TextureStoreOptions::thumbnails());
+            let texture = store.get_or_put(ctx, (cx.resolved.id, *key), self.revision, *image);
+            return texture.size_vec2() / ctx.pixels_per_point();
+        }
         let height = cx.style.height;
         Vec2::new(self.aspect.of(height), height)
     }
