@@ -447,8 +447,9 @@ impl<'a> Encoder<'a> {
         let lambda = u64::from((self.q.y_ac * self.q.y_ac) as u32) / 8;
         let whole_cost = best_sse + 3 * lambda;
 
-        // B_PRED: sub-blocks in raster order, each predicted from the reconstruction so far.
-        let saved_y = self.rec_y.data.clone();
+        // B_PRED: sub-blocks in raster order, each predicted from the reconstruction so far. The
+        // trial writes only this macroblock's 16 × 16 pixels of `rec_y`, and the whole-block path
+        // below writes every one of them again, so nothing needs saving.
         let mut b_modes = [B_DC_PRED; 16];
         let mut b_blocks: Vec<Block> = Vec::with_capacity(16);
         let mut b_sse = 0u64;
@@ -489,8 +490,7 @@ impl<'a> Encoder<'a> {
         let (y_mode, y2, y_blocks) = if b_cost < whole_cost {
             (B_PRED, None, b_blocks)
         } else {
-            // Whole-block mode: undo the B_PRED reconstruction, code 16 blocks + Y2.
-            self.rec_y.data = saved_y;
+            // Whole-block mode: code 16 blocks + Y2; their reconstruction replaces the B_PRED trial's.
             let mut dcs = [0i32; 16];
             let mut ac_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
             let mut deq_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
