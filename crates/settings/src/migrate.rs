@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use toml_edit::DocumentMut;
 
-use crate::Settings;
 use crate::document::{schema_version, set_schema_version};
 use crate::error::{MigrateError, SectionError};
+use crate::{Settings, SettingsFiles};
 
 /// What [`upgrade`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,9 +77,9 @@ impl<T> std::fmt::Debug for LegacyFile<T> {
 
 /// Tries each legacy file in order and returns the first one that parses, with the values it
 /// reset and its path.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn import_legacy<T>(files: &[LegacyFile<T>]) -> Option<Imported<T>> {
-    files.iter().find_map(|f| {
+pub fn import_legacy<T>(files: &dyn SettingsFiles, legacy: &[LegacyFile<T>]) -> Option<Imported<T>> {
+    let _ = files; // P3(platform-w8): pf.C-S5
+    legacy.iter().find_map(|f| {
         let bytes = std::fs::read(&f.path).ok()?;
         (f.parse)(&bytes).ok().map(|(v, errors)| (v, errors, f.path.clone()))
     })

@@ -33,7 +33,7 @@ use bidi::{FSI, has_bidi_control, has_rtl, is_one_isolate, unwrap_isolate, wrap}
 use negotiation::posix_env_tags;
 use negotiation::{bare, candidates, is_region, marked, plural_rules};
 
-pub use bidi::{isolate, ltr, strip_isolates};
+pub use bidi::{file_name, isolate, ltr, path, strip_isolates};
 
 /// The CLDR number, plural and date data for every CLDR locale, from `data/generate.sh`.
 mod data {

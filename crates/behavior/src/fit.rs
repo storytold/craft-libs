@@ -208,12 +208,20 @@ pub struct FitItem {
     pub section: u16,
     /// Whether the item may overflow.
     pub keep: FitKeep,
+    /// The extent of the item's shorter form, if it has one.
+    pub short: Option<f32>,
 }
 
 impl FitItem {
     /// An item `extent` long in `section`.
     pub const fn new(extent: f32, section: u16, keep: FitKeep) -> Self {
-        FitItem { extent, section, keep }
+        FitItem { extent, section, keep, short: None }
+    }
+
+    /// The item with a shorter form `extent` long, which it takes before any free item leaves.
+    pub const fn short(mut self, extent: f32) -> Self {
+        self.short = Some(extent);
+        self
     }
 }
 
@@ -225,6 +233,8 @@ pub struct Fit {
     pub shown: Vec<usize>,
     /// The items in the overflow menu; empty when everything fits.
     pub overflow: Vec<usize>,
+    /// The shown items that take their shorter form, as indexes into the input.
+    pub short: Vec<usize>,
 }
 
 fn item_extent(value: f32) -> f64 {
@@ -255,7 +265,7 @@ pub fn fit_items(items: &[FitItem], available: f32, gap: f32, section_gap: f32, 
         (item_extent(available), item_extent(gap), item_extent(section_gap), item_extent(overflow_extent));
     let mut shown: Vec<bool> = items.iter().map(|item| item.keep != FitKeep::Menu).collect();
     if shown.iter().all(|shown| *shown) && run_extent(items, &shown, gap, section_gap) <= available {
-        return Fit { shown: (0..items.len()).collect(), overflow: Vec::new() };
+        return Fit { shown: (0..items.len()).collect(), overflow: Vec::new(), short: Vec::new() };
     }
     let fits = |shown: &[bool]| {
         let before_control = if shown.iter().any(|shown| *shown) { gap } else { 0.0 };
@@ -266,5 +276,5 @@ pub fn fit_items(items: &[FitItem], available: f32, gap: f32, section_gap: f32, 
         shown[last] = false;
     }
     let (kept, left): (Vec<usize>, Vec<usize>) = (0..items.len()).partition(|&at| shown[at]);
-    Fit { shown: kept, overflow: left }
+    Fit { shown: kept, overflow: left, short: Vec::new() }
 }

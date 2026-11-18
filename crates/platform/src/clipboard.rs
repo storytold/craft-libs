@@ -17,12 +17,16 @@ mod backend;
 mod convert;
 mod event;
 mod facade;
+mod memory;
+#[cfg(all(feature = "clipboard", not(target_arch = "wasm32")))]
+mod offer;
 mod probe;
 mod types;
 
 pub use backend::*;
 pub use event::*;
 pub use facade::*;
+pub use memory::MemoryClipboard;
 pub use probe::*;
 pub use types::*;
 

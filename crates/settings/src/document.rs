@@ -5,6 +5,29 @@ use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 use crate::Settings;
 use crate::error::SectionError;
 
+/// How [`merge_changes`] merges one item path when another process wrote the file meanwhile. The app names the
+/// rule per path in [`Settings::merge_rule`].
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum MergeRule {
+    /// Key by key: today's merge.
+    ByKey,
+    /// The item as a whole: ours replaces theirs.
+    Whole,
+    /// A most-recently-used list of at most `cap` entries; `key` names an entry for de-duplication.
+    Recent {
+        /// The most entries kept.
+        cap: usize,
+        /// The identity of an entry; `None` for an entry without one.
+        key: fn(&toml_edit::Value) -> Option<String>,
+    },
+    /// A list of entries merged by identity: `key` names an entry.
+    Entries {
+        /// The identity of an entry; `None` for an entry without one.
+        key: fn(&toml_edit::Value) -> Option<String>,
+    },
+}
+
 /// The key written first in every `config.toml`.
 pub const SCHEMA_VERSION_KEY: &str = "schema_version";
 
@@ -261,7 +284,7 @@ pub fn merge_changes<T: Settings>(base: &DocumentMut, ours: &DocumentMut, theirs
         return;
     }
     let base = as_read::<T>(&migrated_base::<T>(base, theirs));
-    merge_changed_tables(base.as_table(), ours.as_table(), theirs.as_table_mut());
+    merge_changed_tables::<T>(base.as_table(), ours.as_table(), theirs.as_table_mut(), &mut Vec::new());
 }
 
 /// `doc` with each key `T` reads and `doc` lacks filled in as `T` reads it.
@@ -288,15 +311,16 @@ fn migrated_base<T: Settings>(base: &DocumentMut, theirs: &DocumentMut) -> Docum
     migrated
 }
 
-fn merge_changed_tables(base: &dyn TableLike, ours: &dyn TableLike, theirs: &mut dyn TableLike) {
+// P3(platform-w8): pf.C-S1 (`path` is carried but no rule is asked yet)
+fn merge_changed_tables<T: Settings>(base: &dyn TableLike, ours: &dyn TableLike, theirs: &mut dyn TableLike, path: &mut Vec<String>) {
     for (key, our_item) in ours.iter() {
         match (base.get(key), theirs.get_mut(key)) {
-            (Some(base_item), Some(their_item)) => merge_changed_items(base_item, our_item, their_item),
+            (Some(base_item), Some(their_item)) => merge_changed_items::<T>(base_item, our_item, their_item, path),
             // Removed on disk and unchanged here: it stays removed.
             (Some(base_item), None) if same_item(base_item, our_item) => {}
             // A key neither `base` nor `T`'s defaults have (a map entry both instances added): every leaf of ours is ours.
             (None, Some(their_item)) => match (their_item.as_table_like_mut(), our_item.as_table_like()) {
-                (Some(their_table), Some(our_table)) => merge_changed_tables(&Table::new(), our_table, their_table),
+                (Some(their_table), Some(our_table)) => merge_changed_tables::<T>(&Table::new(), our_table, their_table, path),
                 _ => replace_item(their_item, our_item),
             },
             (_, None) => {
@@ -310,12 +334,13 @@ fn merge_changed_tables(base: &dyn TableLike, ours: &dyn TableLike, theirs: &mut
     }
 }
 
-fn merge_changed_items(base: &Item, ours: &Item, theirs: &mut Item) {
+// P3(platform-w8): pf.C-S1
+fn merge_changed_items<T: Settings>(base: &Item, ours: &Item, theirs: &mut Item, path: &mut Vec<String>) {
     if same_item(base, ours) {
         return;
     }
     match (base.as_table_like(), ours.as_table_like(), theirs.as_table_like_mut()) {
-        (Some(base), Some(ours), Some(theirs)) => merge_changed_tables(base, ours, theirs),
+        (Some(base), Some(ours), Some(theirs)) => merge_changed_tables::<T>(base, ours, theirs, path),
         _ => replace_item(theirs, ours),
     }
 }

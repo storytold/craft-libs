@@ -21,6 +21,20 @@ pub struct EventClipboard {
     out: CopyOut,
 }
 
+/// The queue of an [`EventClipboard`] for a paste the browser delivers outside a pass; `Send + Sync`.
+#[derive(Clone)]
+pub struct LateOffers {
+    _queued: (),
+}
+
+impl LateOffers {
+    /// Queues a paste's flavours and wakes the app.
+    pub fn offer(&self, flavors: Vec<Flavor>) {
+        let _ = flavors;
+        todo!("pf.C-P9")
+    }
+}
+
 /// The number of the host's current pass; it changes when a pass ends.
 pub(super) type PassClock = Box<dyn Fn() -> u64 + Send>;
 
@@ -33,6 +47,17 @@ impl EventClipboard {
     /// ([`ClipboardBackend::write`]).
     pub fn new(pass: impl Fn() -> u64 + Send + 'static, out: impl FnMut(&[Flavor]) -> Result<usize, ClipboardError> + Send + 'static) -> Self {
         Self { pasted: Vec::new(), offered_in: 0, pass: Box::new(pass), out: Box::new(out) }
+    }
+
+    /// The handle a thread outside the pass queues a late paste through.
+    pub fn late_offers(&self) -> LateOffers {
+        todo!("pf.C-P9")
+    }
+
+    /// Runs `wake` when a late paste is queued, so the app takes it on its next pass.
+    pub fn with_wake(self, wake: impl Fn() + Send + Sync + 'static) -> Self {
+        let _ = (&self, wake);
+        todo!("pf.C-P9")
     }
 
     /// The first of `mimes` this pass's paste offered; [`BITMAP`] is any offered `image/*`.

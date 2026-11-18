@@ -100,6 +100,9 @@ pub enum ScaleRule {
     /// A shape or path bounds box: a corner scales by the projection of the drag on the anchor-corner diagonal,
     /// keeping the proportions; an edge stretches its one axis.
     Shape,
+    /// A corner keeps the proportions (⇧ frees them) and an edge stretches its one axis; distinct from
+    /// [`ScaleRule::Shape`] and [`ScaleRule::Proportional`].
+    Corners,
 }
 
 /// What the box's content allows. PhotoCraft: editable type refuses distort and perspective
@@ -285,6 +288,7 @@ impl BoxRules {
         }
         match self.scale {
             ScaleRule::Shape => shape_mods(part, mods),
+            ScaleRule::Corners => corners_mods(part, mods),
             scale => {
                 let legacy = scale == ScaleRule::Free;
                 legacy_mods(legacy, part, unlinked_mods(!self.aspect_linked, legacy, part, mods))
@@ -311,6 +315,12 @@ pub fn drag(start: &BoxState, last: &BoxState, part: BoxPart, from: Point, to: P
     let mods = rules.drag_modifiers(part, mods);
     let g = Gesture { part, start: from, quad0: start.quad, pivot0: start.pivot, last: last.quad[0] - start.quad[0] };
     apply_mode_drag(&g, to, rules, mods)
+}
+
+/// The [`ScaleRule::Corners`] rule: a corner keeps the proportions unless ⇧ frees it, an edge stretches its one axis.
+fn corners_mods(part: BoxPart, mods: Mods) -> Mods {
+    let _ = (part, mods);
+    todo!("cv.K34")
 }
 
 /// The shape bounds box's rule: a corner keeps the proportions along the diagonal and an edge

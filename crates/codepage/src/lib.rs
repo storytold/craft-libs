@@ -282,6 +282,29 @@ pub fn is_text_code_page(code_page: u16) -> bool {
     is_byte_code_page(code_page) || is_multibyte_code_page(code_page)
 }
 
+/// The character an Alt+numpad `code` types: a decimal code read as an ANSI (`ansi`) or, with a
+/// leading zero, OEM (`oem`) code page byte; `None` when it names no insertable character.
+#[allow(dead_code)] // P3(shell-w1): sh.K7
+pub fn alt_code_char(code: &str, ansi: u16, oem: u16) -> Option<char> {
+    let _ = (code, ansi, oem);
+    todo!("sh.K7")
+}
+
+/// The Windows ANSI and OEM code pages of `locale` (a BCP 47 tag; `None` for the system's), as
+/// `(ansi, oem)`.
+#[allow(dead_code)] // P3(shell-w1): sh.K7
+pub fn windows_code_pages(locale: Option<&str>) -> (u16, u16) {
+    let _ = locale;
+    todo!("sh.K7")
+}
+
+/// Characters Alt+numpad accepts: not control characters, breaks or object placeholders.
+#[allow(dead_code)] // P3(shell-w1): sh.K7
+fn codeable(c: char) -> bool {
+    let _ = c;
+    todo!("sh.K7")
+}
+
 /// The code page of an RTF or Word font charset (`\fcharset`): 204 Russian → 1251, 238 Eastern
 /// European → 1250, 77 Mac → 10000, 254 PC / 255 OEM → 437, 128 Japanese → 932, 129 Korean → 949,
 /// 134 Simplified Chinese → 936, 136 Traditional Chinese → 950, 2 Symbol → [`SYMBOL_CODE_PAGE`]…

@@ -44,28 +44,24 @@ mod names;
 pub mod presets;
 pub mod remember;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiles;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod recovery;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 #[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
 pub mod testing;
 
+pub use document::MergeRule;
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
 #[cfg(not(target_arch = "wasm32"))]
 pub use files::DiskFiles;
 pub use files::SettingsFiles;
 pub use migrate::LegacyFile;
-#[cfg(not(target_arch = "wasm32"))]
 pub use paths::{Location, Portable, Probe, Resolved, Rule};
 #[cfg(not(target_arch = "wasm32"))]
 pub use profiles::{ProfileError, Profiles};
 pub use remember::{Remembered, RememberedSection};
-#[cfg(not(target_arch = "wasm32"))]
 pub use store::{OpenOptions, SettingsStore, SharedSettings};
 pub use toml_edit::DocumentMut;
 
@@ -106,6 +102,13 @@ pub trait Settings: Serialize + DeserializeOwned + Default + Clone + PartialEq {
     fn migrate(from: u32, doc: &mut DocumentMut) -> Result<(), MigrateError> {
         let _ = (from, doc);
         Ok(())
+    }
+
+    /// The rule for merging the item at `path` when another process wrote the file meanwhile. The default
+    /// merges key by key.
+    fn merge_rule(path: &[&str]) -> MergeRule {
+        let _ = path;
+        MergeRule::ByKey
     }
 }
 

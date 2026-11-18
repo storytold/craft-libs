@@ -65,6 +65,10 @@ pub struct PickRequest {
     pub file_name: Option<String>,
     /// The extension a Save answer gets when the user typed none (`"png"`), lowercase.
     pub suggested_extension: Option<String>,
+    /// Forces the in-app chooser for this request.
+    pub fallback: bool,
+    /// The save makes the document a new file on the host page; other services ignore it.
+    pub save_as: bool,
 }
 
 impl PickRequest {
@@ -79,6 +83,8 @@ impl PickRequest {
             default_directory: None,
             file_name: None,
             suggested_extension: None,
+            fallback: false,
+            save_as: false,
         }
     }
 
@@ -138,6 +144,19 @@ impl PickRequest {
         self.suggested_extension = Some(extension.into().trim_start_matches('.').to_ascii_lowercase());
         self
     }
+
+    /// Forces the in-app chooser for this request.
+    pub fn fallback(mut self, on: bool) -> Self {
+        let _ = (&mut self, on);
+        todo!("sh.K12")
+    }
+
+    /// Makes the save a new file on the host page: a Save As, or a Save under a name the page
+    /// never sent.
+    pub fn save_as(mut self, on: bool) -> Self {
+        let _ = (&mut self, on);
+        todo!("pf.C-F8")
+    }
 }
 
 /// The ticket of a pending pick; the answer carries it back.
@@ -159,6 +178,8 @@ pub enum Picked {
     /// the text is the technical cause, not a sentence for the user. A feature without a status
     /// line to report on treats it as nothing chosen.
     Unavailable(String),
+    /// A chosen save path that could not be written; the message is the system's.
+    Failed(String),
 }
 
 impl Picked {
@@ -167,7 +188,7 @@ impl Picked {
         match self {
             Picked::Paths(paths) => paths.first().cloned(),
             Picked::Contents(files) => files.first().map(|(name, _)| PathBuf::from(name)),
-            Picked::Cancelled | Picked::Unavailable(_) => None,
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) => None,
         }
     }
 
@@ -176,7 +197,7 @@ impl Picked {
         match self {
             Picked::Paths(paths) => paths.clone(),
             Picked::Contents(files) => files.iter().map(|(name, _)| PathBuf::from(name)).collect(),
-            Picked::Cancelled | Picked::Unavailable(_) => Vec::new(),
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) => Vec::new(),
         }
     }
 }
@@ -249,6 +270,15 @@ pub trait Files: Send + Sync {
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError>;
     /// The folder the last answered pick of `purpose` chose.
     fn last_folder(&self, purpose: &str) -> Option<PathBuf>;
+    /// Queues a save of `bytes` as ticket `request`'s answer, taken with
+    /// [`take_answer`](Files::take_answer): the desktop service asks for the path, then writes
+    /// atomically; the browser service opens the save picker or makes one download. Counted in
+    /// [`pick_pending`](Files::pick_pending).
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId;
+    /// Whether a pick can answer paths that [`read`](Files::read) opens again.
+    fn can_pick(&self) -> bool;
+    /// Whether [`save`](Files::save) hands the bytes to the browser instead of writing a path.
+    fn browser_saves(&self) -> bool;
 }
 
 /// No pickers (every pick answers `Cancelled`); reads and writes go to the file system. The
@@ -306,6 +336,19 @@ impl Files for NoPickFiles {
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
         None
+    }
+
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
+        let _ = (request, bytes);
+        todo!("pf.C-F1")
+    }
+
+    fn can_pick(&self) -> bool {
+        false
+    }
+
+    fn browser_saves(&self) -> bool {
+        false
     }
 }
 
@@ -365,6 +408,12 @@ impl ScriptedFiles {
     pub fn saving_suggested(self) -> Self {
         self.state().save_suggested = true;
         self
+    }
+
+    /// A service that stands in for a browser host: [`Files::can_pick`] answers false and
+    /// [`Files::browser_saves`] true.
+    pub fn in_browser(self) -> Self {
+        todo!("pf.C-F7")
     }
 
     /// Puts a file in memory, for [`Files::read`].
@@ -464,6 +513,19 @@ impl Files for ScriptedFiles {
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
         None
+    }
+
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
+        let _ = (request, bytes);
+        todo!("pf.C-F1")
+    }
+
+    fn can_pick(&self) -> bool {
+        todo!("pf.C-F7")
+    }
+
+    fn browser_saves(&self) -> bool {
+        todo!("pf.C-F7")
     }
 }
 

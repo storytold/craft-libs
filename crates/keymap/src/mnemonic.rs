@@ -61,6 +61,13 @@ pub fn assign(labels: &[&str], folder: &Folder) -> Vec<Option<(char, usize)>> {
     out
 }
 
+/// The keytip badge of each `(label, requested badge)` in a bar, in three passes; `reserved` letters are never
+/// assigned and no badge is a prefix of another.
+pub fn assign_keytips(labels: &[(&str, Option<&str>)], reserved: &[char], folder: &Folder) -> Vec<String> {
+    let _ = (labels, reserved, folder);
+    todo!("rb.R16")
+}
+
 fn first_unused(text: &str, used: &[char], turkic: bool) -> Option<(char, usize)> {
     let mut previous_alnum = false;
     let mut starts = Vec::new();

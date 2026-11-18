@@ -1,6 +1,13 @@
 //! [`SettingsFiles`]: the file access a [`SettingsStore`](crate::SettingsStore) goes through, so an
 //! app can route its settings elsewhere (PhotoCraft's `Services` file closures, browser storage).
 
+#[cfg(target_arch = "wasm32")]
+mod local_storage;
+
+#[cfg(target_arch = "wasm32")]
+pub use local_storage::LocalStorageFiles;
+
+use std::any::Any;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +35,12 @@ pub trait SettingsFiles: Send + Sync {
     }
     /// Whether `dir` accepts a new file.
     fn check_writable(&self, dir: &Path) -> io::Result<()>;
+    /// Takes a `.lock` file beside the settings file at `path`, held from the disk check to the write; dropping the
+    /// box releases it. Files with nothing to lock keep the default, which holds none.
+    fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
+        let _ = path;
+        None
+    }
 }
 
 /// The file system, through `craft-atomic` and [`recovery`](crate::recovery): what the store does
@@ -68,6 +81,11 @@ impl SettingsFiles for DiskFiles {
 
     fn check_writable(&self, dir: &Path) -> io::Result<()> {
         crate::recovery::check_writable(dir)
+    }
+
+    fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
+        let _ = path;
+        todo!("pf.C-S3")
     }
 }
 

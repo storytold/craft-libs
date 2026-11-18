@@ -1,0 +1,1 @@
+//! The offer on macOS.

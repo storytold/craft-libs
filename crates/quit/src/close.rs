@@ -176,6 +176,12 @@ impl<D: Clone + PartialEq> CloseGuard<D> {
         self.cancel()
     }
 
+    /// The save failed for real: the saving document returns to the front of the pending ones,
+    /// the apply-to-all answer clears, and the guard asks about that document again.
+    pub fn retry_after_failure(&mut self) -> GuardStep<D> {
+        todo!("sh.K11")
+    }
+
     /// A document closed elsewhere while the guard ran (a script): it is no longer asked about.
     pub fn forget(&mut self, doc: &D) {
         self.pending.retain(|d| d != doc);

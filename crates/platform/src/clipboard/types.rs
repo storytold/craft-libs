@@ -9,6 +9,8 @@ pub const TEXT: &str = "text/plain";
 pub const HTML: &str = "text/html";
 /// `text/rtf`.
 pub const RTF: &str = "text/rtf";
+/// `application/mathml+xml`: one equation as MathML.
+pub const MATHML: &str = "application/mathml+xml";
 /// `image/png`.
 pub const PNG: &str = "image/png";
 /// `image/svg+xml`.
@@ -39,6 +41,12 @@ impl Flavor {
     /// A flavor of `data` with the given MIME type.
     pub fn new(mime: impl Into<Cow<'static, str>>, data: Vec<u8>) -> Self {
         Self { mime: mime.into(), data }
+    }
+
+    /// `image` as an [`RGBA8`] flavor.
+    pub fn rgba8(image: &ClipboardImage) -> Flavor {
+        let _ = image;
+        todo!("pf.C-P3")
     }
 
     /// `text/plain` with `text`.

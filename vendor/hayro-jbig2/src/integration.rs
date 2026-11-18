@@ -80,11 +80,7 @@ impl Jbig2Decoder {
 
         let image = Image::new(&input)?;
 
-        Ok(Self {
-            width: image.width(),
-            height: image.height(),
-            input,
-        })
+        Ok(Self { width: image.width(), height: image.height(), input })
     }
 }
 
@@ -140,10 +136,7 @@ pub fn register_decoding_hook() -> bool {
     }
 
     for extension in ["jbig2", "jb2"] {
-        image::hooks::register_decoding_hook(
-            extension.into(),
-            Box::new(|r| Ok(Box::new(Jbig2Decoder::new(r)?))),
-        );
+        image::hooks::register_decoding_hook(extension.into(), Box::new(|r| Ok(Box::new(Jbig2Decoder::new(r)?))));
         register_format_detection_hook(extension.into(), JBIG2_MAGIC, None);
     }
 

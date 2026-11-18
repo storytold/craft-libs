@@ -2,6 +2,8 @@
 
 use unicode_bidi::{BidiClass, bidi_class};
 
+use crate::scripts::Direction;
+
 pub(super) const LRI: char = '\u{2066}';
 pub(super) const RLI: char = '\u{2067}';
 pub(super) const FSI: char = '\u{2068}';
@@ -28,6 +30,20 @@ pub fn isolate(value: &str) -> String {
 /// again in text with no right-to-left letter.
 pub fn ltr(value: &str) -> String {
     wrap(LRI, value)
+}
+
+/// A file name for display in an interface of `direction`: unchanged for left-to-right, an
+/// isolate with a left-to-right mark before a short extension for right-to-left.
+pub fn file_name(name: &str, direction: Direction) -> String {
+    let _ = (name, direction);
+    todo!("sh.K18")
+}
+
+/// A path for display in an interface of `direction`: unchanged for left-to-right, a left-to-right
+/// isolate with marks after every separator and before a short extension for right-to-left.
+pub fn path(value: &str, direction: Direction) -> String {
+    let _ = (value, direction);
+    todo!("sh.K18")
 }
 
 /// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`crate::fmt`] or [`crate::I18n::trn`] result made fit

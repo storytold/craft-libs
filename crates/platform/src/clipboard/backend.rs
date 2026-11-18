@@ -5,6 +5,8 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use super::convert::{rgba8_flavor, rgba8_image, trim_cr, uri_list};
+#[cfg(all(feature = "clipboard", not(target_arch = "wasm32")))]
+use super::offer;
 use super::types::{BITMAP, ClipboardError, ClipboardImage, Flavor, HTML, PNG, RGBA8, TEXT, URI_LIST};
 
 /// What a write did.
@@ -40,6 +42,18 @@ pub trait ClipboardBackend: Send {
     /// The flavours of a paste the host delivered as an event (the browser's Paste). Only
     /// [`EventClipboard`] keeps them; the system clipboard ignores them.
     fn offer(&mut self, _flavors: Vec<Flavor>) {}
+    /// The MIME names of the formats on offer.
+    fn formats(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Whether this process owns the clipboard; `None` when the backend cannot tell.
+    fn owns(&mut self) -> Option<bool> {
+        None
+    }
+    /// Whether a late paste arrived since the last call.
+    fn take_arrived(&mut self) -> bool {
+        false
+    }
 }
 
 /// The desktop's clipboard through arboard: X11 and Wayland, macOS, Windows. Not on wasm.
@@ -58,6 +72,10 @@ pub struct SystemClipboard {
     unreadable: bool,
     decode: Option<Decode>,
     presence: presence::Presence,
+    #[allow(dead_code)] // P3(platform-w1): pf.C-P6
+    offer: offer::Offer,
+    #[allow(dead_code)] // P3(platform-w1): pf.C-P6
+    owner: [u8; 16],
 }
 
 /// The app's decoder for encoded bitmaps ([`SystemClipboard::decoder`]).
@@ -68,7 +86,7 @@ pub(crate) type Decode = Box<dyn Fn(&[u8]) -> Option<ClipboardImage> + Send>;
 impl SystemClipboard {
     /// A clipboard that connects to the system clipboard on first use.
     pub fn new() -> Self {
-        Self { handle: None, unreadable: false, decode: None, presence: presence::Presence::new() }
+        Self { handle: None, unreadable: false, decode: None, presence: presence::Presence::new(), offer: offer::Offer::new(), owner: [0; 16] }
     }
 
     /// Decodes a [`PNG`] flavor to pixels for [`ClipboardBackend::write`], which hands the

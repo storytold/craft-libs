@@ -344,4 +344,6 @@ fn is_gnome_session(var: &dyn Fn(&str) -> Option<String>) -> bool {
 }
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod files;
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 mod portal;

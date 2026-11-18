@@ -2,14 +2,20 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use toml_edit::DocumentMut;
 
 use crate::Settings;
 use crate::document::{self, merge_changes, merge_into, set_schema_version};
 use crate::error::{LoadReport, ReadOnlyReason, SaveStatus, SettingsError, Source, TickResult};
-use crate::files::{DiskFiles, SettingsFiles};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::files::DiskFiles;
+#[cfg(target_arch = "wasm32")]
+use crate::files::LocalStorageFiles;
+use crate::files::SettingsFiles;
 use crate::migrate::{self, LegacyFile, Upgrade};
 use crate::paths::{self, Location, Portable, Probe};
 
@@ -55,7 +61,12 @@ pub struct OpenOptions<T> {
 
 impl<T> Default for OpenOptions<T> {
     fn default() -> Self {
-        Self { location: Location::Auto, legacy: Vec::new(), debounce: DEFAULT_DEBOUNCE, probe: Probe::default(), files: Arc::new(DiskFiles) }
+        #[cfg(not(target_arch = "wasm32"))]
+        let files: Arc<dyn SettingsFiles> = Arc::new(DiskFiles);
+        // localStorage holds about 5 MB per site.
+        #[cfg(target_arch = "wasm32")]
+        let files: Arc<dyn SettingsFiles> = Arc::new(LocalStorageFiles::new(4 << 20));
+        Self { location: Location::Auto, legacy: Vec::new(), debounce: DEFAULT_DEBOUNCE, probe: Probe::default(), files }
     }
 }
 
@@ -369,7 +380,8 @@ impl<T: Settings> SettingsStore<T> {
         match self.files.read(path) {
             Ok(Some(text)) => self.load_text(path, &text, damaged, report),
             Ok(None) => {
-                if let Some((value, errors, from)) = migrate::import_legacy(legacy) {
+                if let Some((value, errors, from)) = migrate::import_legacy(&*self.files, legacy) {
+                    // P3(platform-w8): pf.C-S5
                     self.value = value;
                     self.dirty = true;
                     report.source = Source::Legacy(from);

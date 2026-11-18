@@ -127,6 +127,16 @@ impl Clipboard {
         self.backend.has(mimes)
     }
 
+    /// The MIME names of the formats on offer.
+    pub fn formats(&mut self) -> Vec<String> {
+        todo!("pf.C-P8")
+    }
+
+    /// Whether a late paste arrived since the last call.
+    pub fn take_arrived_paste(&mut self) -> bool {
+        todo!("pf.C-P8")
+    }
+
     /// Does the clipboard still hold what this app wrote last (nothing copied since, here or in
     /// another app)? Reads the clipboard's flavour of the type the backend wrote last and compares
     /// it with what was written (an image by [`image_signature`]); for a pasted image the app

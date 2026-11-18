@@ -105,6 +105,13 @@ pub fn install(app: &'static str, version: &'static str, dir: Option<PathBuf>) {
     });
 }
 
+/// `message` with each backticked span replaced by `…`, so a panic text carries no quoted user data.
+#[allow(dead_code)] // P3(platform-w6): pf.C-O5
+fn redact_quoted(message: &str) -> String {
+    let _ = message;
+    todo!("pf.C-O5")
+}
+
 /// Write a fatal error that isn't a panic (the window could not be created) to the crash log.
 pub fn record(message: &str) {
     // filmcraft: crates/ui-egui/src/crash.rs:45

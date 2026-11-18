@@ -82,6 +82,8 @@ pub enum Intake {
         /// Where they landed.
         target: DropTarget,
     },
+    /// The OS asked the app to quit.
+    Quit,
 }
 
 /// The sending side of a [`FileIntake`]: `Send + Clone`, for the threads that hear the OS (the
@@ -108,6 +110,17 @@ impl IntakeSender {
         paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
         push(&self.queue, Intake::Open(paths));
         self.wake.wake();
+    }
+
+    /// Queues files dropped on the window and wakes the UI; an empty list is ignored.
+    pub fn dropped(&self, files: Vec<DroppedFile>, target: DropTarget) {
+        let _ = (files, target);
+        todo!("pf.C-O1")
+    }
+
+    /// Queues an OS quit request and wakes the UI.
+    pub fn quit(&self) {
+        todo!("pf.C-O1")
     }
 }
 

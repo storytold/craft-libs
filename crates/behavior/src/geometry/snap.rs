@@ -158,13 +158,35 @@ pub struct SnapOptions {
     pub selection: bool,
     /// View › Show › Smart Guides.
     pub smart_guides: bool,
+    /// The key that suspends snapping.
+    pub suspend: SnapSuspend,
 }
 
 impl Default for SnapOptions {
     /// Photoshop's defaults: everything on.
     fn default() -> Self {
-        Self { on: true, guides: true, grid: true, layers: true, document_bounds: true, selection: true, smart_guides: true }
+        Self {
+            on: true,
+            guides: true,
+            grid: true,
+            layers: true,
+            document_bounds: true,
+            selection: true,
+            smart_guides: true,
+            suspend: SnapSuspend::default(),
+        }
     }
+}
+
+/// The key that suspends snapping.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SnapSuspend {
+    /// The Control key.
+    #[default]
+    Control,
+    /// The Alt key.
+    Alt,
 }
 
 /// How the host snaps a tool's pointer.
@@ -291,6 +313,14 @@ impl SnapTargets {
     /// The nearest target of a kind in `kinds` among the lines that run `along` an axis, within `tolerance` of
     /// `value` across them; [`SnapTargets::nearest`] is this with [`SnapKinds::ALL`].
     pub fn nearest_of(&self, along: Axis, value: f64, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
+        self.nearest_within(along, value, None, tolerance, kinds)
+    }
+
+    /// [`nearest_of`](Self::nearest_of) that also takes the query's extent `across` the other axis: a target with a
+    /// span catches only a point or box overlapping that span there; without `across`, or for a target without a
+    /// span, it is `nearest_of`.
+    pub fn nearest_within(&self, along: Axis, value: f64, across: Option<(f64, f64)>, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
+        let _ = across; // P3(canvas-w4): cv.K36
         let mut best: Option<(f64, SnapTarget)> = None;
         for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind)) {
             let distance = (target.position - value).abs();
