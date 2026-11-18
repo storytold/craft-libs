@@ -2171,7 +2171,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn unshown(response: Response) -> Option<Self> where Self: Sized,`. The output of a layer-like container that shows nothing this pass (closed, past its exit fade): `response` is
   - `fn value_text(&self) -> Option<&str>`. The shown value as the component words it to assistive technology; `None` for a component that gives none.
   - `fn story_facts(&self) -> crate::testing::StoryOutput`. The facts a story reports about this output: its id, click, edit kinds, collection kinds and visible range.
-- `craft_ui::contract::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
+- `craft_ui::contract::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool, pub moved_by_app: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
@@ -2198,6 +2198,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn min_width(mut self, min_width: MinWidth) -> Overlay`. Sets the narrowest width.
   - `pub fn movable(mut self, on: bool) -> Overlay`. Sets whether the user may move it.
   - `pub fn moves_window(mut self, on: bool) -> Overlay`. Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
+  - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
@@ -2446,7 +2447,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::OpenFilter`: re-export of `craft_ui::runtime::overlay::OpenFilter`.
 - `craft_ui::contract::overlay::Opener`: `pub struct Opener { pub id: Id, pub rect: Rect, pub layer: areas::Layer, pub trigger: Trigger, pub enabled: bool, pub anchor: Option<Anchor>, pub others: Vec<Opener> }`. A component that opens a free-standing popup, and how. A layer with several openers keeps the first as its
 - `craft_ui::contract::overlay::Outside`: `pub enum Outside { Close, Keep, Absorb }`. What a press outside the layer and its anchor does.
-- `craft_ui::contract::overlay::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
+- `craft_ui::contract::overlay::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool, pub moved_by_app: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
@@ -2473,6 +2474,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub fn min_width(mut self, min_width: MinWidth) -> Overlay`. Sets the narrowest width.
   - `pub fn movable(mut self, on: bool) -> Overlay`. Sets whether the user may move it.
   - `pub fn moves_window(mut self, on: bool) -> Overlay`. Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
+  - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
@@ -4552,7 +4554,7 @@ The window host's fixtures: install inputs that open no OS windows, and the scri
 - `craft_ui::testing::windows::applied_actions`: `pub fn applied_actions(ctx: &egui::Context) -> Vec<(egui::ViewportId, crate::runtime::windows::WindowAction)>`. The window actions the platform applies out of reach of egui's commands (`SetOpacity`) since the last call.
 - `craft_ui::testing::windows::begin_window_drag`: `pub fn begin_window_drag(ctx: &egui::Context, source: egui::Id)`. Starts the drag of the window container `source` (what the title row of a dock window does), with the pointer
 - `craft_ui::testing::windows::install_spec`: `pub fn install_spec() -> InstallSpec`. An install spec for the running build's shell and a system with no OS services.
-- `craft_ui::testing::windows::keeps_app_drag`: `pub fn keeps_app_drag(ctx: &egui::Context, viewport: egui::ViewportId) -> bool`. Whether the window of `viewport` has a component that runs its own drag from the window's move band.
+- `craft_ui::testing::windows::moved_by_app`: `pub fn moved_by_app(ctx: &egui::Context, viewport: egui::ViewportId) -> bool`. Whether the app runs the move of `viewport`'s window from its move band (`Overlay::moved_by_app`), as the window host knows it in the running pass.
 - `craft_ui::testing::windows::show_drop_mark`: `pub fn show_drop_mark(ctx: &egui::Context, over: Option<egui::Rect>)`. Shows (or removes) the mark of a drop target in another window over the running drag.
 - `craft_ui::testing::windows::FakeSystem`: re-export of `craft_window::system::FakeSystem` (outside these crates).
 - `craft_ui::testing::windows::FullOutput`: re-export of `craft_ui::runtime::egui::fixture::FullOutput` (defined outside these crates).

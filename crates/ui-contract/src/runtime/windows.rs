@@ -35,8 +35,6 @@ pub(crate) use hit::{hit_sink_installed, note_exclusive};
 use hit::{publish_regions, replay_caption_events};
 pub use host::{KeyEquivalent, WindowFacts, WindowHost};
 pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_pointer};
-#[doc(hidden)]
-pub use native::keeps_app_drag;
 #[cfg(windows)]
 #[doc(hidden)]
 pub use native::route_root;
@@ -132,8 +130,9 @@ pub(crate) struct Record {
     /// The opacity the window was last set to; 1 is opaque.
     opacity: Option<f32>,
     /// The app runs the window's move from its move band (a dock window's title row, whose move docks the window), so a
-    /// press on the band must reach it and the operating system's move loop is not started from the hit test.
-    app_drag: bool,
+    /// press on the band must reach it and the operating system's move loop is not started from the hit test. Set from
+    /// the mount's `ViewportOpen::moved_by_app` before each of the window's passes, its first included.
+    moved_by_app: bool,
     /// While the app moves the window: the desktop pointer, at the pressed point of the window where the move last put
     /// it. The window's reported place lags the move.
     moved_pointer: Option<Pos2>,
@@ -179,9 +178,9 @@ pub(crate) fn take_sent(ctx: &Context) -> Vec<(ViewportId, WindowAction)> {
     shared(ctx, |shared| std::mem::take(&mut shared.sent))
 }
 
-/// Whether the app runs the move of `viewport`'s window ([`keeps_app_drag`]).
+/// Whether the app runs the move of `viewport`'s window (`Overlay::moved_by_app`).
 pub(crate) fn app_moves(ctx: &Context, viewport: ViewportId) -> bool {
-    PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag)
+    PerViewport::<Record>::with(ctx, viewport, |record| record.moved_by_app)
 }
 
 /// Called by `install`: keeps the shell, the app id, the OS services and the placement store.
@@ -411,8 +410,8 @@ pub fn logic(ctx: &Context) {
 /// AppKit's flag is set, after the window's UI has run. A window is told apart by its viewport: the key window is the one
 /// whose viewport has focus, so an unfocused viewport is left as it is. AppKit is only called when the flag changes.
 /// Only a macOS window with a full-size content view has a flag to set; elsewhere this does nothing. A window whose
-/// move the app runs ([`keeps_app_drag`]) keeps AppKit's own flag: AppKit moves it for the move's hand-off and resizes
-/// it from its edges only while it is movable.
+/// move the app runs (`Overlay::moved_by_app`) keeps AppKit's own flag: AppKit moves it for the move's hand-off and
+/// resizes it from its edges only while it is movable.
 fn sync_movable(ctx: &Context) {
     if !viewports::current(ctx).focus_reported {
         return;
@@ -420,7 +419,7 @@ fn sync_movable(ctx: &Context) {
     let movable = viewports::movable(ctx);
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Record>::with(ctx, viewport, |record| {
-        if !record.app_drag && record.movable_applied != Some(movable) {
+        if !record.moved_by_app && record.movable_applied != Some(movable) {
             craft_window::mac::set_movable(movable, &mut record.movable_applied);
         }
     });
