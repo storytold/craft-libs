@@ -8,6 +8,7 @@ use super::paint::{
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;
 use crate::fonts::stack_facts;
+use crate::primitives::{AutoScrollMarkLook, auto_scroll_mark_look};
 use crate::runtime::env::{AppValues, Scale, StyleValue};
 use crate::runtime::pass_state;
 use craft_behavior::ControlMetrics;
@@ -237,8 +238,7 @@ impl<'a> StyleCx<'a> {
     /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
     /// needs: the inverse of [`ink_on`](Self::ink_on).
     pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
-        let _ = (color, on);
-        todo!("CH-C9")
+        self.color(craft_theme::ensure_contrast(Rgba::from(color.0), on, craft_theme::text_contrast_min(self.contrast())))
     }
 
     /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
@@ -447,8 +447,8 @@ impl<'a> StyleCx<'a> {
     }
 
     /// The look of the auto-scroll mark.
-    pub fn auto_scroll_mark(&self) -> crate::primitives::AutoScrollMarkLook {
-        crate::primitives::auto_scroll_mark_look(self.tokens)
+    pub fn auto_scroll_mark(&self) -> AutoScrollMarkLook {
+        auto_scroll_mark_look(self.tokens)
     }
 
     /// The look of the reset mark.

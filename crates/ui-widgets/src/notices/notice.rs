@@ -810,8 +810,8 @@ impl Component for Notice<'_> {
     }
 }
 
-/// The icon that marks `tone`; the neutral tone has none.
-fn tone_icon(tone: Tone) -> Option<&'static str> {
+/// The icon that marks `tone`; the neutral tone has none. A list row's status cell marks its tone with it too.
+pub(crate) fn tone_icon(tone: Tone) -> Option<&'static str> {
     match tone {
         Tone::Info | Tone::Accent => Some("info"),
         Tone::Good => Some("success"),

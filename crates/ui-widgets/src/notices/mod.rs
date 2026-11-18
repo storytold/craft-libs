@@ -12,6 +12,7 @@ mod stories;
 
 pub use center::{NoticeCenter, NoticeCenterOutput, NoticeEnd, PostedNotice};
 pub use notice::{Notice, NoticeAction, NoticeIcon, NoticeLayout, NoticeOutput, NoticeStyle};
+pub(crate) use notice::tone_icon;
 pub use settings::{SaveResult, SettingsLoad, SettingsNoticeState, SettingsNotices, SettingsNoticesOutput, SettingsStatus};
 pub use toasts::ToastStack;
 pub use words::NoticeWords;

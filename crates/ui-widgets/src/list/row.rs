@@ -11,7 +11,7 @@ use super::toggle::ToggleCell;
 use super::view::DocumentRows;
 use super::words::ListWords;
 use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show};
-use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
 use crate::style::DataColor;
 use craft_behavior::{ColumnKey, Cursor};
@@ -114,12 +114,20 @@ pub enum RowLines {
 }
 
 impl RowLines {
-    // P3(pdf-chrome-w3): CH-C11: the text where the body still reads a plain label.
-    /// The text as one string: the label, or the spans joined.
+    /// The text as one string: the label, or the spans joined. A screen reader and the tooltip of cut lines read it.
     pub(super) fn text(&self) -> Cow<'_, str> {
         match self {
             RowLines::Plain(label) => Cow::Borrowed(label.as_str()),
             RowLines::Spans(spans) => Cow::Owned(spans.iter().map(|span| span.text.as_ref()).collect()),
+        }
+    }
+
+    /// The lines as a run without its role, colour or wrap: one span of the label, or the spans as given, so a
+    /// highlighted span paints its match.
+    pub(super) fn run(&self) -> TextRun<'_> {
+        match self {
+            RowLines::Plain(label) => TextRun::new(label.as_str()),
+            RowLines::Spans(spans) => TextRun::spans(spans.clone()),
         }
     }
 }
@@ -177,22 +185,21 @@ pub struct CellStatus {
 impl CellStatus {
     /// A status of `tone` reading `text`.
     pub fn new(tone: Tone, text: impl Into<Label>) -> Self {
-        let _ = (tone, text);
-        todo!("WF-W8")
+        CellStatus { tone, text: text.into(), tip: None, action: None }
     }
 
     /// The multi-line tip shown over the cell.
     #[must_use]
-    pub fn tip(self, tip: impl Into<Label>) -> Self {
-        let _ = tip;
-        todo!("WF-W8")
+    pub fn tip(mut self, tip: impl Into<Label>) -> Self {
+        self.tip = Some(tip.into());
+        self
     }
 
     /// The focusable action link; activating it reports `RowEvent::CellAction`.
     #[must_use]
-    pub fn action(self, action: impl Into<Label>) -> Self {
-        let _ = action;
-        todo!("WF-W8")
+    pub fn action(mut self, action: impl Into<Label>) -> Self {
+        self.action = Some(action.into());
+        self
     }
 }
 
@@ -201,6 +208,12 @@ pub(super) struct TextCell {
     pub column: ColumnKey,
     pub text: Label,
     pub wrap: bool,
+}
+
+/// A status shown in one column of a row ([`ListRow::cell_status`]).
+pub(super) struct StatusCell {
+    pub column: ColumnKey,
+    pub status: CellStatus,
 }
 
 type LeadPaintFn<'a> = Box<dyn FnOnce(&ContentPainterCx, Rect) + 'a>;
@@ -308,11 +321,10 @@ pub struct ListRow<'a> {
     /// the row is no taller than with exactly that many lines. A screen reader reads all of the text.
     #[prop(quantity = "count")]
     pub(super) line_limit: Option<u8>,
-    /// The colour from data that inks a part of the row.
-    #[allow(dead_code)] // P3(pdf-chrome-w3): CH-C10a
+    /// The colour from data that inks a part of the row. It is no style key (`DataColor` has no `Eq` or `Hash`): the
+    /// part's ink is resolved where the row paints it.
     pub(super) hue: Option<(DataColor, HueTarget)>,
-    /// The row's label is document text at the list's font, size and alignment.
-    #[allow(dead_code)] // P3(pdf-chrome-w3): FM-PF11b
+    /// The row's label is document text at the list's font, size and alignment, from `List::document_rows`.
     pub(super) document: Option<DocumentRows>,
     /// A progress bar under the label, `fraction` full (clamped to 0..=1), in a line of its own below the detail. The
     /// row is one caption line taller than its detail makes it, so a list with fixed row heights adds one
@@ -337,6 +349,10 @@ pub struct ListRow<'a> {
     pub(super) toggle_keys: Vec<(ColumnKey, craft_keymap::Chord)>,
     pub(super) toggles: Vec<ToggleCell>,
     pub(super) texts: Vec<TextCell>,
+    /// The status cells (`cell_status`), in the order added.
+    pub(super) statuses: Vec<StatusCell>,
+    /// The tooltips over text cells (`cell_tip`), one per column.
+    pub(super) tips: Vec<(ColumnKey, Label)>,
     /// An icon before the label. A thumbnail takes its place.
     #[prop]
     pub(super) icon: Option<IconSpec<'a>>,
@@ -440,6 +456,8 @@ impl<'a> ListRow<'a> {
             toggle_keys: Vec::new(),
             toggles: Vec::new(),
             texts: Vec::new(),
+            statuses: Vec::new(),
+            tips: Vec::new(),
             icon: None,
             lead_paint: None,
             lead_text: None,
@@ -505,6 +523,14 @@ impl<'a> ListRow<'a> {
         self
     }
 
+    /// The document text the label is laid out as, from the collection's `document_rows`; `None` keeps the label UI
+    /// text.
+    #[must_use]
+    pub(crate) fn document(mut self, rows: Option<DocumentRows>) -> Self {
+        self.document = rows;
+        self
+    }
+
     /// The row state the collection gives the item: the rename editor, the stripe, the app's mark and the press the
     /// collection holds on the row.
     #[must_use]
@@ -520,23 +546,27 @@ impl<'a> ListRow<'a> {
     /// A colour from data inks `target` of the row in place of its tone or ink, read against the row's surface; a
     /// selected row keeps the selection ink and a dimmed or disabled row its ink.
     #[must_use]
-    pub fn hue(self, color: DataColor, target: HueTarget) -> Self {
-        let _ = (color, target);
-        todo!("CH-C10a")
+    pub fn hue(mut self, color: DataColor, target: HueTarget) -> Self {
+        self.hue = Some((color, target));
+        self
     }
 
-    /// A status cell in `column`: a tone icon, toned text, a multi-line tip and a focusable action link.
+    /// A status cell in `column`: a tone icon, toned text, a multi-line tip and a focusable action link. It takes the
+    /// column's cell as a text cell does; activating the link reports [`RowEvent::CellAction`]. A column that
+    /// `cells(..)` does not list shows nothing.
     #[must_use]
-    pub fn cell_status(self, column: ColumnKey, status: CellStatus) -> Self {
-        let _ = (column, status);
-        todo!("WF-W8")
+    pub fn cell_status(mut self, column: ColumnKey, status: CellStatus) -> Self {
+        self.statuses.retain(|held| held.column != column);
+        self.statuses.push(StatusCell { column, status });
+        self
     }
 
     /// A tooltip over the text cell of `column`.
     #[must_use]
-    pub fn cell_tip(self, column: ColumnKey, tip: impl Into<Label>) -> Self {
-        let _ = (column, tip);
-        todo!("WF-W9")
+    pub fn cell_tip(mut self, column: ColumnKey, tip: impl Into<Label>) -> Self {
+        self.tips.retain(|(held, _)| *held != column);
+        self.tips.push((column, tip.into()));
+        self
     }
 
     /// The column `column` reads in the muted look: its text cell, or the label when it is the label column.
