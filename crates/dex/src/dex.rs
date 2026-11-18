@@ -691,7 +691,8 @@ pub struct Reference {
 const MAX_REFERENCE_BYTES: usize = 64 << 20;
 
 /// Every instruction that refers to class `desc` (optionally only its methods named `method`).
-/// Reports truncation when instruction decoding is incomplete or the count or byte budget is exhausted.
+/// Reports truncation for incomplete class data, unreadable nonzero code offsets, incomplete
+/// instruction decoding, or an exhausted count or byte budget.
 pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -> (Vec<Reference>, bool) {
     references_with_byte_limit(dex, desc, method, max, MAX_REFERENCE_BYTES)
 }
@@ -702,8 +703,14 @@ fn references_with_byte_limit(dex: &Dex<'_>, desc: &str, method: Option<&str>, m
     let mut complete = true;
     for c in &dex.classes {
         let cd = dex.class_data(c);
+        complete &= cd.complete;
         for m in cd.direct_methods.iter().chain(&cd.virtual_methods) {
-            let Some(code) = dex.code(m.code_off) else { continue };
+            let Some(code) = dex.code(m.code_off) else {
+                // Zero means no implementation (native/abstract), not damaged code.
+                // A nonzero unreadable body may hide references from this query.
+                complete &= m.code_off == 0;
+                continue;
+            };
             let (insns, decoded) = crate::dex_ops::decode(&code.insns, 200_000);
             complete &= decoded;
             for i in &insns {
@@ -775,6 +782,66 @@ mod tests {
             let (absent, truncated) = references(&dex, "LAbsent;", None, 10);
             assert!(absent.is_empty());
             assert_eq!(truncated, incomplete);
+        }
+    }
+
+    #[test]
+    fn reference_queries_keep_class_data_and_code_parse_failures() {
+        let mut builder = fx::DexBuilder::default();
+        let class = builder.ty("LTest;");
+        let target = builder.method("LTest;", "target", "V", &[]);
+        let caller = builder.method("LTest;", "caller", "V", &[]);
+        builder.classes.push(fx::ClassSpec {
+            class,
+            direct: vec![
+                fx::MethodSpec { method: target, access: 0, code: Some(fx::CodeSpec { insns: vec![0x000e], ..Default::default() }) },
+                fx::MethodSpec {
+                    method: caller,
+                    access: 0,
+                    code: Some(fx::CodeSpec { insns: vec![0x0071, target as u16, 0], ..Default::default() }),
+                },
+            ],
+            ..Default::default()
+        });
+        let bytes = builder.build();
+        let mut dex = parse(&bytes).unwrap();
+        let expected = references(&dex, "LTest;", Some("target"), 10);
+        assert_eq!(expected.0.len(), 1);
+        assert!(!expected.1);
+
+        // A damaged class before a valid one must not hide the valid result or reset truncation.
+        let mut bad = dex.classes[0];
+        bad.class_data_off = bytes.len() as u32;
+        dex.classes.insert(0, bad);
+        assert!(!dex.class_data(&dex.classes[0]).complete);
+        assert_eq!(references(&dex, "LTest;", Some("target"), 10), (expected.0.clone(), true));
+        assert_eq!(references(&dex, "LAbsent;", None, 10), (Vec::new(), true));
+
+        // Locate the first method's code offset, after four counts and its index/access.
+        let original = parse(&bytes).unwrap();
+        let reader = Reader::new(&bytes);
+        let mut at = original.classes[0].class_data_off as usize;
+        for _ in 0..6 {
+            at += reader.uleb128(at).unwrap().1;
+        }
+        let width = reader.uleb128(at).unwrap().1;
+        for missing in [false, true] {
+            let mut changed = bytes.clone();
+            // Preserve the encoded width so the later valid method stays aligned.
+            changed[at..at + width].fill(if missing { 0xff } else { 0x80 });
+            changed[at + width - 1] = if missing { 0x7f } else { 0 };
+            let dex = parse(&changed).unwrap();
+            let methods = dex.class_data(&dex.classes[0]);
+            assert!(methods.complete);
+            let offset = methods.direct_methods[0].code_off;
+            if missing {
+                assert!(offset as usize >= changed.len());
+            } else {
+                assert_eq!(offset, 0);
+            }
+            assert!(dex.code(offset).is_none());
+            assert_eq!(references(&dex, "LTest;", Some("target"), 10), (expected.0.clone(), missing));
+            assert_eq!(references(&dex, "LAbsent;", None, 10), (Vec::new(), missing));
         }
     }
 
