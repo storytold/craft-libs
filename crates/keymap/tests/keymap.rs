@@ -195,3 +195,27 @@ fn the_alt_variant_follows_the_commands_key_and_yields_to_a_bound_alt_chord() {
     let km = Keymap::new(vec![app("layer.new.layer", &["F2"])], Scopes::new(), Platform::Mac);
     assert!(hit(&km, &alt(Key::F2, false, false)).is_none(), "a command that did not opt in has no Alt variant");
 }
+
+/// Tools that share a chord: within one group a press cycles through them, so each shows the chord; across groups the
+/// first in catalog order runs, so only it shows the chord. `shown_chord` decides on catalog positions (#15493) and
+/// must answer as the lookup does.
+#[test]
+fn tools_sharing_a_chord_show_it_as_the_lookup_runs_them() {
+    use craft_keymap::CommandKind;
+    let tool = |id: &str, group: &str, keys: &[&str]| app(id, keys).with_kind(CommandKind::Tool { group: Some(group.into()) });
+    let catalog = vec![
+        tool("tool.marquee", "select", &["M"]),
+        tool("tool.ellipse", "select", &["M"]),
+        tool("tool.move", "move", &["V"]),
+        tool("tool.artboard", "board", &["V"]),
+    ];
+    let km = Keymap::new(catalog, scopes(), Platform::Mac);
+    assert_eq!(press(&km, "M", &Active::NONE), Lookup::Cycle(vec![cmd("tool.marquee"), cmd("tool.ellipse")]));
+    assert_eq!(km.shown_chord(&cmd("tool.marquee")), Some(chord("M")), "a cycle runs its first tool");
+    assert_eq!(km.shown_chord(&cmd("tool.ellipse")), Some(chord("M")), "and its other tools");
+    assert_eq!(press(&km, "V", &Active::NONE), run("tool.move"));
+    assert_eq!(km.shown_chord(&cmd("tool.move")), Some(chord("V")), "of two groups the first runs");
+    assert_eq!(km.shown_chord(&cmd("tool.artboard")), None, "the other group's tool never runs on V");
+    // A command with empty parameters is the same command.
+    assert_eq!(km.shown_chord(&CommandRef::with_params("tool.move", serde_json::json!({}))), Some(chord("V")));
+}
