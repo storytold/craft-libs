@@ -103,7 +103,7 @@ impl Engine {
         let password = password.unwrap_or(kept);
         let report = self.editor.as_mut().filter(|facts| facts.owner == owner).and_then(|facts| facts.surrounding.take());
         // Only a report moves the epoch: an owner that reports nothing this pass stays the same target.
-        let kept_epoch = self.observed.map(|(target, _)| target).filter(|target| target.owner == owner).map_or(0, |target| target.epoch);
+        let kept_epoch = self.observed.map(|(target, _)| target).filter(|target| target.owner == owner).map_or(0, |target| target.replacement_epoch);
         let target = ImeTarget::new(owner, report.as_ref().map_or(kept_epoch, |report| report.epoch));
         let purpose = if password { IMEPurpose::Password } else { IMEPurpose::Normal };
         let mut observation = ImeObservation::new(frame_nr, pass_nr, target).purpose(purpose);
