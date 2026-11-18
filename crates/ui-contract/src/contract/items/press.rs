@@ -277,14 +277,14 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             _ => {}
         }
         // A secondary release on a row asks for its menu (9.2 rule 3); the row joins the selection unless it is in it.
-        // Something over the collection, or a part of a row or of the collection that takes presses and is under the
-        // pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
+        // Something over the collection, or a part of a row or of the collection that takes the secondary click itself
+        // (its own menu, L-198) and is under the pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
         // it.
         let released = crate::runtime::pointer::frame(&ctx);
         let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
         let menu_at = if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()
-            && hover.find(|hit| hit.part.is_some() && hit.sense.takes_press() && !hit.sense.contains(Sense::PICKS_ITEM)).is_none()
+            && hover.find(|hit| hit.part.is_some() && hit.sense.contains(Sense::CONTEXT_CLICK) && !hit.sense.contains(Sense::PICKS_ITEM)).is_none()
         {
             released.pos.filter(|pos| rect.contains(xf.map_or(*pos, |map| map.to_layer(*pos))))
         } else {

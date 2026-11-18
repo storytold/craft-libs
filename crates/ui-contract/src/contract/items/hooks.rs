@@ -891,6 +891,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let item = sub(id, ("key", key_hash(&self.source.key(at))));
             placed.note((named, (false, true)), item, Vec2::new(0.0, row.min.y), row.size());
         }
+        // A zoom reflows the rows, so the anchor's row may lie outside the rows this pass built: the layout still
+        // knows where it is.
+        if let (Some(child), None) = (named, placed.anchor) {
+            let away = (0..source.len()).filter(|&at| scrolling(at)).find(|&at| sub(id, ("key", key_hash(&source.key(at)))) == child);
+            if let Some(at) = away {
+                let row = layout.rect(at, offset);
+                placed.note((named, (false, true)), child, Vec2::new(0.0, row.min.y), row.size());
+            }
+        }
         let moved = Vec2::new(0.0, (self.offset - self.offset_at_read) as f32);
         let room = (Vec2::new(0.0, self.offset as f32), Vec2::new(0.0, (self.max_offset(view.y) - self.offset) as f32));
         if let Some(shift) = lazy::follow(&mut self.anchor, &placed, moved, view, room, (false, true)) {

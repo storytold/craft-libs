@@ -49,16 +49,15 @@ fn an_icon_row_is_one_stop_in_the_menu_left_and_right_move_between_its_icons_and
         }
     });
     fixture.settle();
-    let target = fixture.by_label("Canvas").expect("the menu's target");
-    fixture.click(&target);
     let open = |fixture: &mut Fixture| {
+        // A click does not focus a button, and Shift+F10 asks the focused component for its menu.
+        request(fixture.ctx(), FocusTarget::Id(rows.get().target.expect("the menu's target is shown")));
+        fixture.settle();
         fixture.key(Key::F10, Modifiers::SHIFT);
         fixture.settle();
         eprintln!(
-            "DIAG an_icon_row_is_one_stop_in_the_menu_left_and_right_move_between_its_icons_and_a_pick_closes_the_chain: target {:?} focused {:?} context request {:?} group shown {}",
-            rows.get().target,
+            "DIAG an_icon_row_is_one_stop_in_the_menu_left_and_right_move_between_its_icons_and_a_pick_closes_the_chain: focused {:?} group shown {}",
             fixture.focused_stop(),
-            rows.get().target.and_then(|id| craft_ui::testing::focus::context_request(fixture.ctx(), id)),
             fixture.by_label("Group").is_some()
         );
         assert!(fixture.by_label("Ungroup").is_some(), "Shift+F10 opens the context menu");
