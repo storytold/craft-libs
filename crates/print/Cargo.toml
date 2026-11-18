@@ -66,6 +66,13 @@ roxmltree = "0.21"
 # Inflating the print-ready PDF's cross-reference and object streams (src/sheets.rs).
 miniz_oxide = "0.9"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser's print dialog (src/browser.rs): the PDF as an object URL in a hidden iframe
+# (MIT OR Apache-2.0).
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlElement", "Element", "Node", "Document", "Window", "CssStyleDeclaration"] }
+
 [dev-dependencies]
 craft-ui = { workspace = true, features = ["testing"] }
 tempfile = "3"

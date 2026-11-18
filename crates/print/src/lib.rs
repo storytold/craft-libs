@@ -21,6 +21,8 @@ mod progress;
 #[cfg(any(test, windows))]
 mod sheets;
 #[cfg(test)]
+mod spool_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(any(test, windows))]
 mod ticket;
