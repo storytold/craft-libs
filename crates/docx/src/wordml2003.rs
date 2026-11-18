@@ -246,6 +246,11 @@ impl Conv {
             el.attrs.retain(|(k, _)| k != "r:id");
             el.attrs.push(("r:id".into(), id));
         }
+        // Word 2003 XML says `xml:space="preserve"` once, on its root, and the DOCX reader looks
+        // for it on the text element: every text element here keeps its spaces, as before.
+        if matches!(el.name.as_str(), "w:t" | "w:delText") && el.attr("xml:space").is_none() {
+            el.attrs.push(("xml:space".into(), "preserve".into()));
+        }
         if el.name == "w:style" {
             for (k, v) in &mut el.attrs {
                 if k == "w:default" && v == "on" {
