@@ -80,7 +80,8 @@ pub(crate) struct FocusedRecord {
     pub(crate) menu: Option<Id>,
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
-    pub(crate) menu_bar: bool,
+    /// The window's registered menu bar, by the id that registered it (owed by ribbon-w5).
+    pub(crate) menu_bar: Option<Id>,
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
@@ -150,7 +151,7 @@ pub(crate) struct State {
     pub(super) entered: bool,
     pub(crate) visible: bool,
     pub(crate) record: FocusedRecord,
-    pub(super) menu_bar: bool,
+    pub(super) menu_bar: Option<Id>,
     /// The menu bar that took focus and the stop it took focus from, for the bar or a menu pick to give back.
     pub(super) bar_return: Option<(Id, StopKey)>,
     pub(crate) press: press::PressState,
@@ -428,8 +429,8 @@ pub(crate) fn pop_scope(ctx: &Context) {
 }
 
 /// Registers that a menu bar can take the menu-bar keys of the next input hook (spec 9.7).
-pub(crate) fn register_menu_bar(ctx: &Context) {
-    with(ctx, |state| state.menu_bar = true);
+pub(crate) fn register_menu_bar(ctx: &Context, id: Id) {
+    with(ctx, |state| state.menu_bar = Some(id));
 }
 
 /// A registered menu bar takes the keyboard (F10, a lone Alt): focus moves to `target`, a stop of the bar, in this
