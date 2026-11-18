@@ -1913,6 +1913,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-evm"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ews"
 version = "0.1.0"
 dependencies = [
@@ -2296,6 +2306,7 @@ dependencies = [
 name = "craft-java-class"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -3188,6 +3199,7 @@ dependencies = [
 name = "craft-tar"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
 ]
 
@@ -3378,6 +3390,7 @@ dependencies = [
 name = "craft-wasm"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
  "wasmparser 0.261.0",
