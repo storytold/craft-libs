@@ -140,6 +140,14 @@ pub struct ContextMenuRequest<K> {
     pub part: Option<PartRef>,
 }
 
+impl<K> ContextMenuRequest<K> {
+    /// A request for the menu of `key` that opens at `at`, from the item itself: no column and no part. A component
+    /// that hosts its own parts builds its requests here, since the struct is `non_exhaustive`.
+    pub fn new(key: K, at: Pos2) -> Self {
+        ContextMenuRequest { key, at, column: None, part: None }
+    }
+}
+
 /// A change to the columns.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

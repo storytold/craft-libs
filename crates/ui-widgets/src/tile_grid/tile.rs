@@ -15,7 +15,7 @@ use crate::contract::{
     Access, Bind, Common, Component, Cx, DisabledLook, Focus as _, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Role, Styled as _, WordSetCx as _,
 };
-use crate::display::Badge;
+use crate::display::{Badge, Picture};
 use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
 use crate::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
@@ -359,6 +359,8 @@ pub struct Tile<'a> {
     check: Option<ToggleState>,
     aspect: ThumbAspect,
     first: Option<ThumbPaint<'a>>,
+    /// A picture component shown as the tile's picture, for a face that is more than a painter.
+    picture: Option<Picture<'a>>,
     icon: Option<IconSpec<'static>>,
     badges: Vec<TileBadge>,
     marks: Vec<TileMark>,
@@ -397,6 +399,7 @@ impl<'a> Tile<'a> {
             check: None,
             aspect: ThumbAspect::SQUARE,
             first: None,
+            picture: None,
             badges: Vec::new(),
             marks: Vec::new(),
             pills: Vec::new(),
@@ -414,6 +417,18 @@ impl<'a> Tile<'a> {
     pub fn thumb(mut self, aspect: ThumbAspect, paint: impl FnOnce(&ContentPainterCx, Rect) + 'a) -> Self {
         self.aspect = aspect;
         self.first = Some(Box::new(paint));
+        self.picture = None;
+        self.icon = None;
+        self
+    }
+
+    /// The tile's picture is `picture`, `aspect` times as wide as high, shown in the picture's rect as its own
+    /// component (a stored or off-frame image). The last of `thumb`, `picture` and `icon` called wins.
+    #[must_use]
+    pub fn picture(mut self, aspect: ThumbAspect, picture: Picture<'a>) -> Self {
+        self.aspect = aspect;
+        self.picture = Some(picture);
+        self.first = None;
         self.icon = None;
         self
     }
@@ -424,6 +439,7 @@ impl<'a> Tile<'a> {
     pub fn icon(mut self, icon: impl Into<IconSpec<'static>>) -> Self {
         self.icon = Some(icon.into());
         self.first = None;
+        self.picture = None;
         self
     }
 
@@ -830,6 +846,9 @@ impl Component for Tile<'_> {
         }
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
+        }
+        if let Some(shown) = self.picture.take() {
+            let _ = ui.child("picture", picture, shown);
         }
         {
             let draw = ui.draw();
