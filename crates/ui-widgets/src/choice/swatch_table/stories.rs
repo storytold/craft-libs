@@ -4,7 +4,7 @@ use super::{SwatchTable, SwatchTableOutput};
 use crate::contract::Bind;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use craft_behavior::Selection;
+use craft_behavior::{IconId, Selection};
 use craft_theme::Srgba;
 use egui::Ui;
 
@@ -53,6 +53,19 @@ fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(SwatchTable<'static>, covers = [Empty], drive = Drive::Never)]
 fn swatch_table_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     SwatchTable::new("Color Table", &[]).empty("No colors").show_all(ui).into()
+}
+
+/// Twelve wells and the Other… cell after them, at key 12: selecting or opening it reports that key.
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_trailing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries().into_iter().step_by(21).take(12).collect::<Vec<_>>();
+    let shown = SwatchTable::new("Colors", &entries)
+        .selection(Bind::bound(data.value("selected", Selection::single(0usize))))
+        .wells(true)
+        .tips(true)
+        .trailing("Other colour…", IconId::new("plus"))
+        .show_all(ui);
+    with_readout(data, shown)
 }
 
 #[story(SwatchTable<'static>, covers = [One], drive = Drive::Never)]

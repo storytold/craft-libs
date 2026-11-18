@@ -217,9 +217,9 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
 
     /// The key that submits a multi-line field (`TextOptions::submit_key`).
     #[must_use]
-    pub fn submit_key(self, key: SubmitKey) -> Self {
-        let _ = key;
-        todo!("CM-C24b")
+    pub fn submit_key(mut self, key: SubmitKey) -> Self {
+        self.options.submit_key = key;
+        self
     }
 
     /// Completion candidates for the text before the caret. The text adapter owns the list and the keys it takes.

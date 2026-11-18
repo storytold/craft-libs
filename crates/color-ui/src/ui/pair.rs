@@ -8,7 +8,7 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Meta as _, Outcome, Overlay, OverlayUi,
     Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth};
+use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth, WellFill};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle, UiTokens};
@@ -496,12 +496,7 @@ impl Component for SwatchPair<'_> {
                 match shown.color.same() {
                     Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
                     color => {
-                        // P3(pdf-comments-w5): CM-C25 (`swatch_well` takes a `WellFill`)
-                        draw.swatch_well(
-                            at,
-                            style.radius,
-                            color.copied().map_or(craft_ui::primitives::WellFill::Mixed, craft_ui::primitives::WellFill::Color),
-                        );
+                        draw.swatch_well(at, style.radius, color.copied().map_or(WellFill::Mixed, WellFill::Color));
                         draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.mark);
                         draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
                     }

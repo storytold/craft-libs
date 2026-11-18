@@ -452,8 +452,7 @@ impl<M: Value> Pass<'_, M> {
     fn mixer_load(&mut self, ui: &mut Ui, words: &PaintBarWords) {
         let color = self.values.mixer.load_color;
         let solid = self.values.mixer.solid_colors_only;
-        // `Swatch` has no empty face, so a brush with no load shows the mixed face.
-        let swatch = Swatch::new(words.load_swatch.clone(), color.map_or(Mixed::Mixed, Mixed::Same)).show(ui).response;
+        let swatch = Swatch::optional(words.load_swatch.clone(), color).show(ui).response;
         let (mut load, mut clean, mut next_solid) = (false, false, None);
         let _ = Menu::new(words.load_swatch.clone()).opened_by(&swatch, Trigger::Click).show(ui, |ui, _| {
             load = MenuItem::new(words.load_brush.clone()).show(ui).ran;

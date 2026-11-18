@@ -7,10 +7,10 @@ use crate::contract::{
     Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
     Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth, WellFill};
+use crate::primitives::{ContentPainterCx, Draw, IconSpec, PaintShape, StrokeWidth, WellFill};
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
-use craft_behavior::{Metrics, Mixed, Sense, Value};
+use craft_behavior::{IconId, Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
 use egui::{Color32, CornerRadius, Rect, Response, Vec2};
 
@@ -56,8 +56,10 @@ pub struct SwatchStyle {
     edge: Stateful<StyleColor>,
     /// The ring inside the outline of a selected or checked well; clear while it is off.
     ring: Stateful<StyleColor>,
-    /// The thin edge just inside the outline of a marked well.
+    /// The thin edge just inside the outline of a marked well, and the glyph of an icon cell.
     mark: StyleColor,
+    /// The side of an icon cell's glyph: `size.icon.sm`, cut to the well.
+    glyph: f32,
     /// The checkerboard behind a translucent colour: the colours of its corners and its other cells.
     checker: [Rgba; 2],
     /// The mixed well's colour, which `inner_edge` contrasts with.
@@ -112,7 +114,9 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 /// A colour well that shows a colour from data and reports its activation; it edits nothing.
 ///
 /// The colour fills the well over a checkerboard where it has alpha, inside a thin ring that separates it from the
-/// panel. A `Mixed` colour shows a neutral well with a dash and has no colour value. A click reports `clicked` and the
+/// panel. A `Mixed` colour shows a neutral well with a dash and has no colour value; an [`optional`](Swatch::optional)
+/// swatch of no colour shows the sunken well with a diagonal and reads "None". An [`icon`](Swatch::icon) swatch shows
+/// its glyph on the empty well, as a palette's Other… cell does. A click reports `clicked` and the
 /// `activation`. A swatch with a `picker` key also files a `ColorRequest` for that key, opened at the swatch's colour
 /// and titled with its label, as `pick_color`; the host opens its colour picker and answers with the picked colour. A
 /// `Mixed` swatch files a request with no colour: the host's picker opens empty and the first pick sets the colour.
@@ -146,6 +150,8 @@ pub struct Swatch<T: Value + 'static = ()> {
     /// The key of the `ColorRequest` a click files.
     #[prop(into)]
     picker: Option<String>,
+    /// The glyph an icon cell paints over its empty well, in place of a colour.
+    icon: Option<IconId>,
     checked: bool,
     activation: Option<Activation>,
 }
@@ -161,6 +167,7 @@ impl Swatch<()> {
             well: false,
             marked: false,
             picker: None,
+            icon: None,
             checked: false,
             activation: None,
         }
@@ -169,14 +176,12 @@ impl Swatch<()> {
 
     /// A swatch that can be "no colour": `None` paints the empty well and reads as "None".
     pub fn optional(label: impl Into<crate::runtime::env::Label>, color: impl Into<Mixed<Option<Srgba>>>) -> Swatch<()> {
-        let _ = (label, color);
-        todo!("CM-C25b")
+        Swatch { color: color.into(), ..Swatch::new(label, Mixed::<Srgba>::Mixed) }
     }
 
     /// A well with the catalogue glyph `icon` on top; its access node is an option named `label` with no colour value.
-    pub fn icon(label: impl Into<crate::runtime::env::Label>, icon: craft_behavior::IconId) -> Swatch<()> {
-        let _ = (label, icon);
-        todo!("CM-C25b")
+    pub fn icon(label: impl Into<crate::runtime::env::Label>, icon: IconId) -> Swatch<()> {
+        Swatch { icon: Some(icon), ..Swatch::new(label, Mixed::<Srgba>::Mixed) }
     }
 }
 
@@ -199,6 +204,7 @@ impl<T: Value + 'static> Swatch<T> {
             well: self.well,
             marked: self.marked,
             picker: self.picker,
+            icon: self.icon,
             checked: false,
             activation: None,
         }
@@ -228,6 +234,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
             edge: Stateful::new(rest),
             ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)),
             mark: cx.color(colors.text.normal),
+            glyph: cx.tokens.size.icon.sm,
             checker: [colors.overlay.checker_light, colors.overlay.checker_dark],
             mixed_rgba: colors.surface.sunken,
         }
@@ -267,8 +274,11 @@ impl<T: Value + 'static> Component for Swatch<T> {
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         if self.member.is_some() {
             access.role(Role::RADIO_BUTTON);
-        } else if self.cell {
+        } else if self.cell || self.icon.is_some() {
             access.role(Role::LIST_BOX_OPTION);
+        }
+        if self.icon.is_some() {
+            return;
         }
         match self.color.same().copied() {
             Some(Some(color)) => {
@@ -285,7 +295,8 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked);
+        let fill = if self.icon.is_some() { WellFill::Empty } else { well_fill(self.color) };
+        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), fill, self.icon.as_ref(), self.marked);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
@@ -297,17 +308,25 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 }
 
-/// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
-/// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Option<Srgba>>, marked: bool) {
-    let shape = PaintShape::Rect(well, style.radius);
-    // P3(pdf-comments-w5): CM-C25a
-    let fill = match color {
+/// What the well of a swatch of `color` shows: the colour, the "no colour" diagonal, or the mixed dash.
+fn well_fill(color: Mixed<Option<Srgba>>) -> WellFill {
+    match color {
         Mixed::Same(Some(color)) => WellFill::Color(color),
         Mixed::Same(None) => WellFill::None,
         Mixed::Mixed => WellFill::Mixed,
-    };
+    }
+}
+
+/// The one swatch face painter: the well `fill` in `well` (a checkerboard behind a translucent colour, the dash of a
+/// mixed one, the diagonal of none), the `glyph` of an icon cell in the text colour, then the outline ring, the mark
+/// when `marked`, and the selection ring, in `state`.
+fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, fill: WellFill, glyph: Option<&IconId>, marked: bool) {
+    let shape = PaintShape::Rect(well, style.radius);
     draw.swatch_well(well, style.radius, fill);
+    if let Some(glyph) = glyph {
+        let side = style.glyph.min(well.width()).min(well.height());
+        draw.icon(Rect::from_center_size(well.center(), Vec2::splat(side)), &IconSpec::svg(glyph.clone()).color(style.mark));
+    }
     draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge));
     if marked {
         let inside = PaintShape::Rect(well.shrink(draw.width(StrokeWidth::Thin)), style.radius);
@@ -333,8 +352,7 @@ impl SwatchFace {
 
     /// The face of a colour that can be "no colour": `None` paints the empty well.
     pub fn optional(color: impl Into<Mixed<Option<Srgba>>>) -> SwatchFace {
-        let _ = color;
-        todo!("CM-C25b")
+        SwatchFace { color: color.into(), selected: false }
     }
 
     /// Whether the selected ring shows.
@@ -346,12 +364,11 @@ impl SwatchFace {
 
     /// Paints the face filling `rect`.
     pub fn paint(&self, cx: &ContentPainterCx<'_>, rect: Rect) {
-        // P3(pdf-comments-w5): CM-C25b: the key does not read the colour.
-        let key = Swatch::new("", Mixed::<Srgba>::Mixed).style_key();
+        let key = Swatch::optional("", self.color).style_key();
         let scope = cx.style_cx();
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false));
+        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, well_fill(self.color), None, false));
     }
 }

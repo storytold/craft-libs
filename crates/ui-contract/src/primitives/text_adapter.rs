@@ -3,7 +3,7 @@
 
 mod completion;
 
-use crate::primitives::{TextLayout, TextOptions};
+use crate::primitives::{SubmitKey, TextLayout, TextOptions};
 use crate::runtime::access::text::{Line, Run};
 use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, text_edit};
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// How a typing run ended, as the adapter saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum End {
-    /// Enter, or Cmd/Ctrl+Enter in a multi-line field that submits.
+    /// Enter, or the `TextOptions::submit_key` chord in a multi-line field that submits.
     Submit,
     /// A commit-on character was typed.
     Separator,
@@ -425,6 +425,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         underline: input.underline,
         galley: None,
         baseline,
+        submit_key: input.options.submit_key,
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
@@ -464,8 +465,17 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && state.preedit.is_none()
         && state.draft.is_some()
         && egui_input::step_key_pressed(ctx);
-    let submitted =
-        (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| !input.options.multiline() || (input.options.submits && mods.cmd));
+    // `entered` is any Enter; which chord submits a multi-line text is decided here, from the held modifiers. Under
+    // `Enter` the widget broke no line on a submitting chord (`text_edit::show` gives it Shift+Enter alone).
+    let submit_key = input.options.submit_key;
+    let submitted = (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| {
+        !input.options.multiline()
+            || (input.options.submits
+                && match submit_key {
+                    SubmitKey::CommandEnter => mods.cmd,
+                    SubmitKey::Enter => !mods.shift,
+                })
+    });
     if let Some(mods) = submitted {
         state.end = Some(End::Submit);
         state.submit_mods = mods;
@@ -540,6 +550,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             underline: 0.0,
             galley: Some(layout.galley.clone()),
             baseline: None,
+            submit_key: SubmitKey::default(),
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);

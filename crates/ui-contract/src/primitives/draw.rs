@@ -13,6 +13,9 @@ use egui::epaint::{CircleShape, RectShape};
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, TextureId, Vec2};
 use std::cell::RefCell;
 
+/// The "no colour" diagonal of a well stops this share of the well's height short of its edges.
+const NONE_DIAGONAL_INSET: f32 = 0.15;
+
 /// What a swatch well shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WellFill {
@@ -375,7 +378,8 @@ impl<'a> Draw<'a> {
         let square = Rect::from_center_size(rect.center(), Vec2::splat(side));
         match icon.source {
             super::IconSource::Swatch(swatch) => {
-                self.swatch_well(square, CornerRadius::ZERO, swatch.map_or(WellFill::Mixed, WellFill::Color)); // P3(pdf-comments-w5): CM-C25a
+                // The icon's `None` is its own empty swatch (a mixed or theme-decided colour), so it keeps the dash.
+                self.swatch_well(square, CornerRadius::ZERO, swatch.map_or(WellFill::Mixed, WellFill::Color));
                 self.paint(&PaintShape::Rect(square, CornerRadius::ZERO), None, Some(Stroke::new(self.width(StrokeWidth::Thin), color)));
                 return;
             }
@@ -395,6 +399,12 @@ impl<'a> Draw<'a> {
             let ring = Stroke::new(self.width(StrokeWidth::Thin), color);
             self.paint(&PaintShape::Circle(centre, radius), Some(self.data_color(badge)), Some(ring));
         }
+    }
+
+    /// Paints `icon` as `icon` does, in the data colour `color` in place of the icon's own colour or ink: an icon drawn in
+    /// document content. The colour paints as `data_fill` paints one (dimmed or inactive with the component).
+    pub fn data_icon(&self, rect: Rect, icon: &super::IconSpec<'_>, color: DataColor) {
+        self.icon(rect, &icon.clone().data_color(DataColor::new(self.data_color(color))));
     }
 
     /// `letter` in caption text centred in an outlined box that fills the square of `rect`'s shorter side.
@@ -517,27 +527,37 @@ impl<'a> Draw<'a> {
     }
 
     /// Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is
-    /// translucent, or for `None` (no colour of its own, or a mixed one) the empty well, `surface.sunken` with a
-    /// `text.muted` dash. `Swatch` and swatch icons paint their wells with it and add their own edges.
+    /// translucent; else the empty well in `surface.sunken`, with a `text.muted` dash for `Mixed`, a `status.bad`
+    /// diagonal from the bottom start to the top end for `None`, and nothing for `Empty`. `Swatch`, swatch icons and
+    /// the paint chip paint their wells with it and add their own edges.
     pub fn swatch_well(&self, well: Rect, radius: CornerRadius, fill: WellFill) {
-        let color = match fill {
-            WellFill::Color(color) => Some(color),
-            WellFill::Mixed | WellFill::None | WellFill::Empty => None, // P3(pdf-comments-w5): CM-C25a
-        };
         let shape = PaintShape::Rect(well, radius);
-        match color {
-            None => {
-                let colors = &self.env.tokens.color;
-                self.paint(&shape, Some(crate::style::rgba_color(colors.surface.sunken)), None);
-                let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
-                self.paint(&super::glyph::dash(well), None, Some(dash));
-            }
-            Some(color) => {
+        let colors = &self.env.tokens.color;
+        let sunken = Some(crate::style::rgba_color(colors.surface.sunken));
+        match fill {
+            WellFill::Color(color) => {
                 if color.a < 1.0 {
                     self.checker(&super::Checker::new(), well, radius);
                 }
                 self.data_fill(&shape, DataColor::new(Color32::from(color)));
             }
+            WellFill::Mixed => {
+                self.paint(&shape, sunken, None);
+                let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
+                self.paint(&super::glyph::dash(well), None, Some(dash));
+            }
+            WellFill::None => {
+                self.paint(&shape, sunken, None);
+                let inner = well.shrink(well.height() * NONE_DIAGONAL_INSET);
+                let (from, to) = if self.env.direction == Direction::Rtl {
+                    (inner.right_bottom(), inner.left_top())
+                } else {
+                    (inner.left_bottom(), inner.right_top())
+                };
+                let mark = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.status.bad.solid));
+                self.paint(&PaintShape::Path(vec![from, to]), None, Some(mark));
+            }
+            WellFill::Empty => self.paint(&shape, sunken, None),
         }
     }
 

@@ -1,5 +1,6 @@
 //! Building `TextEdit` and its state: the one caller of egui's text editing.
 
+use crate::primitives::SubmitKey;
 use craft_theme::TypeRole;
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
 use egui::text_edit::TextEditState;
@@ -43,6 +44,8 @@ pub(crate) struct Edit<'a> {
     /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
     /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
     pub baseline: Option<f32>,
+    /// The Enter chord that submits a multi-line text; the line break takes the other one.
+    pub submit_key: SubmitKey,
 }
 
 /// What the widget did in one pass.
@@ -85,7 +88,14 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         underline,
         galley,
         baseline,
+        submit_key,
     } = edit;
+    // egui inserts the line break itself before the adapter sees the Enter, so the chord that submits must not be the
+    // one egui breaks the line on: under `Enter` the line break is Shift+Enter and plain Enter reaches `entered` untaken.
+    let line_break = match submit_key {
+        SubmitKey::Enter => egui::Modifiers::SHIFT,
+        SubmitKey::CommandEnter => egui::Modifiers::NONE,
+    };
     // The same font and optical size as a label of the same role: one text path.
     let env = crate::runtime::env::Env::of(ui);
     let tokens = &env.tokens;
@@ -186,7 +196,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .desired_rows(1)
                     .password(password)
                     .event_filter(filter)
-                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
+                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(line_break, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
                     // A laid-out galley sits at the rect's corner, as a painted run does.
                     .align(match (centred, rtl) {

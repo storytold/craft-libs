@@ -4,7 +4,7 @@ use super::TextField;
 use crate::contract::LabelScheme;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::form::{Field, FieldGroup};
-use crate::primitives::{Completer, Completion, IconSpec};
+use crate::primitives::{Completer, Completion, IconSpec, SubmitKey};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Mixed, PlainText};
@@ -82,6 +82,20 @@ fn text_field_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     TextField::new("Name", Bind::bound(data.value("name", "Locked".to_owned()))).read_only(true).show(ui).into()
+}
+
+/// A reply box: Enter submits and Shift+Enter breaks the line; the readout counts the submits.
+#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
+fn text_field_submits_on_enter(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = TextField::new("Reply", Bind::bound(data.value("reply", String::from("Looks good"))))
+        .lines(3)
+        .submits()
+        .submit_key(SubmitKey::Enter)
+        .show(ui);
+    let submits = data.note("submits", 0u32);
+    *submits += u32::from(shown.submitted);
+    let readout = format!("Submitted {submits} times");
+    StoryOutput::from(shown).readout(readout)
 }
 
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
