@@ -1579,6 +1579,79 @@ fn idct_block(blk: &[i32; 64], q: &[u16; 64], idct: &Idct, max: f32, out: &mut [
     }
 }
 
+/// The largest reduction [`decode_reduced`] reads straight from a JPEG's 8×8 blocks: 1/8.
+pub const MAX_SHRINK: u8 = 3;
+
+fn idct_basis_n(n: usize) -> Vec<Vec<f32>> {
+    let mut t = vec![vec![0f32; n]; n];
+    for (x, row) in t.iter_mut().enumerate() {
+        for (u, v) in row.iter_mut().enumerate() {
+            let c = if u == 0 { std::f32::consts::FRAC_1_SQRT_2 } else { 1.0 };
+            *v = c / 2.0 * (((2 * x + 1) * u) as f32 * std::f32::consts::PI / (2 * n) as f32).cos();
+        }
+    }
+    t
+}
+
+/// One block's reduced `n × n` samples (`n` is 4, 2 or 1), dequantized with `q`, inverse
+/// transformed, level-shifted and clamped to `0..=max`, written to `n` rows of `n` at `out`
+/// that are `stride` apart.
+fn idct_block_scaled(blk: &[i32; 64], q: &[u16; 64], basis: &[Vec<f32>], max: f32, out: &mut [f32], stride: usize, n: usize) {
+    let shift = (max + 1.0) / 2.0;
+    if n == 1 || blk[1..].iter().all(|&c| c == 0) {
+        let t = basis[0][0];
+        let v = (t * (t * (blk[0] as f32 * f32::from(q[0]))) + shift).clamp(0.0, max);
+        for y in 0..n {
+            if let Some(row) = out.get_mut(y * stride..y * stride + n) {
+                row.fill(v);
+            }
+        }
+        return;
+    }
+    let mut f = [[0f32; 8]; 8];
+    for (k, (&c, &z)) in blk.iter().zip(&ZIGZAG).enumerate() {
+        if c != 0 {
+            let (v, u) = (z / 8, z % 8);
+            if v < n && u < n {
+                f[v][u] = c as f32 * f32::from(q[k]);
+            }
+        }
+    }
+    let mut r = vec![vec![0f32; n]; n];
+    for v in 0..n {
+        for x in 0..n {
+            let mut acc = 0.0f32;
+            for u in 0..n {
+                acc += basis[x][u] * f[v][u];
+            }
+            r[v][x] = acc;
+        }
+    }
+    for (y, basis_row) in basis.iter().enumerate().take(n) {
+        if let Some(row) = out.get_mut(y * stride..y * stride + n) {
+            for (x, o) in row.iter_mut().enumerate() {
+                let mut acc = 0.0f32;
+                for v in 0..n {
+                    acc += basis_row[v] * r[v][x];
+                }
+                *o = (acc + shift).clamp(0.0, max);
+            }
+        }
+    }
+}
+
+fn reconstruct_scaled(comp: &Component, q: &[u16; 64], basis: &[Vec<f32>], max: f32, n: usize) -> Vec<f32> {
+    let stride = comp.bw * n;
+    let mut plane = vec![0f32; stride * comp.bh * n];
+    for (idx, blk) in comp.coefs.iter().enumerate() {
+        let (bx, by) = (idx % comp.bw, idx / comp.bw);
+        if let Some(out) = plane.get_mut(by * n * stride + bx * n..) {
+            idct_block_scaled(blk, q, basis, max, out, stride, n);
+        }
+    }
+    plane
+}
+
 /// The component's samples (padded to whole blocks, row stride `bw * 8`), level-shifted and
 /// clamped to `0..=max`.
 fn reconstruct(comp: &Component, q: &[u16; 64], idct: &Idct, max: f32) -> Vec<f32> {
@@ -1706,6 +1779,120 @@ fn render(frame: Frame, tables: &Tables, adobe_transform: Option<u8>) -> Result<
     }
     let samples = if sixteen { Samples::U16(wide) } else { Samples::U8(narrow) };
     Ok((nc as u8, samples))
+}
+
+fn render_scaled(frame: Frame, tables: &Tables, adobe_transform: Option<u8>, shrink: u8) -> Result<(u32, u32, u8, Samples), Error> {
+    let n = 8usize >> shrink;
+    let max = if frame.precision > 8 { 4095.0 } else { 255.0 };
+    let basis = idct_basis_n(n);
+    let w = frame.width.div_ceil(1 << shrink);
+    let h = frame.height.div_ceil(1 << shrink);
+    let mut planes = Vec::with_capacity(frame.comps.len());
+    for comp in &frame.comps {
+        let q = comp.quant.or_else(|| tables.quant.get(comp.tq).copied().flatten());
+        let q = q.ok_or_else(|| err("component uses an undefined quantization table"))?;
+        let plane = reconstruct_scaled(comp, &q, &basis, max, n);
+        let cw = comp.cw.div_ceil(1 << shrink);
+        let ch = comp.ch.div_ceil(1 << shrink);
+        let xs = upsample_map(w, cw, comp.h, frame.hmax);
+        let ys = upsample_map(h, ch, comp.v, frame.vmax);
+        planes.push((plane, comp.bw * n, xs, ys));
+    }
+    let nc = planes.len();
+    let sixteen = frame.precision > 8;
+    let ycc = is_ycc(frame.comps.iter().map(|c| c.id), adobe_transform);
+    let (mut wide, mut narrow) = (Vec::new(), Vec::new());
+    if sixteen {
+        wide.reserve_exact(w * h * nc);
+    } else {
+        narrow.reserve_exact(w * h * nc);
+    }
+    let mut px = [0f32; 4];
+    for y in 0..h {
+        for x in 0..w {
+            for (c, (plane, stride, xs, ys)) in planes.iter().enumerate() {
+                let (Some(&(x0, x1, fx)), Some(&(y0, y1, fy))) = (xs.get(x), ys.get(y)) else {
+                    return Err(err("sample map out of range"));
+                };
+                let at = |xx: usize, yy: usize| plane.get(yy * stride + xx).copied().unwrap_or(0.0);
+                let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * fx;
+                let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * fx;
+                if let Some(p) = px.get_mut(c) {
+                    *p = top + (bottom - top) * fy;
+                }
+            }
+            to_color(&mut px, nc, ycc, max);
+            for &p in px.iter().take(nc) {
+                let p = p.clamp(0.0, max);
+                if sixteen {
+                    wide.push((p * 65535.0 / max).round() as u16);
+                } else {
+                    narrow.push(to_u8(p));
+                }
+            }
+        }
+    }
+    let samples = if sixteen { Samples::U16(wide) } else { Samples::U8(narrow) };
+    Ok((w as u32, h as u32, nc as u8, samples))
+}
+
+/// Output size `(width, height, estimated_bytes)` of a JPEG reduction without decoding pixels.
+///
+/// `shrink` must be in `1..=MAX_SHRINK` (1/2, 1/4, or 1/8). Checks `limits` against the
+/// full-size frame header.
+pub fn reduced_estimate(bytes: &[u8], limits: &Limits, shrink: u8) -> Result<(u32, u32, usize), Error> {
+    if shrink == 0 || shrink > MAX_SHRINK {
+        return Err(err("shrink must be 1..=3"));
+    }
+    if bytes.get(..2) != Some(&[0xFF, 0xD8]) {
+        return Err(err("not a JPEG stream"));
+    }
+    let mut i = 2usize;
+    while let Some(&v) = bytes.get(i) {
+        if v != 0xFF {
+            i += 1;
+            continue;
+        }
+        let Some(&m) = bytes.get(i + 1) else { break };
+        match m {
+            0xFF => {
+                i += 1;
+                continue;
+            }
+            0x00 | 0x01 | 0xD0..=0xD8 => {
+                i += 2;
+                continue;
+            }
+            0xD9 | 0xDA => return Err(err("no frame header before scan")),
+            _ => {}
+        }
+        let len = usize::from(be16(bytes, i + 2)?);
+        if len < 2 {
+            return Err(err("bad marker segment length"));
+        }
+        let seg = bytes.get(i + 4..i + 2 + len).ok_or_else(|| err("marker segment runs past the end of the file"))?;
+        if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+            let f = parse_frame(m, seg, limits)?;
+            let w = (f.width as u32).div_ceil(1 << shrink);
+            let h = (f.height as u32).div_ceil(1 << shrink);
+            let output_bytes = (w as usize).saturating_mul(h as usize).saturating_mul(f.comps.len().saturating_mul(4).saturating_add(4));
+            let coef_bytes = if f.progressive { f.comps.iter().map(|c| c.bw.saturating_mul(c.bh)).sum::<usize>().saturating_mul(256) } else { 0 };
+            return Ok((w, h, coef_bytes.saturating_add(output_bytes)));
+        }
+        i += 2 + len;
+    }
+    Err(err("no frame header found"))
+}
+
+/// Decode a JPEG stream at `1 / 2^shrink` of its size (each side rounded up), for `shrink` in
+/// `1..=MAX_SHRINK` (1/2, 1/4, or 1/8) using reduced-size IDCTs on the 8×8 DCT blocks.
+pub fn decode_reduced(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>, shrink: u8) -> Result<Decoded, Error> {
+    if shrink == 0 || shrink > MAX_SHRINK {
+        return Err(err("shrink must be 1..=3"));
+    }
+    let (frame, tables, damaged) = decode_coefficients(bytes, limits)?;
+    let (width, height, components, samples) = render_scaled(frame, &tables, adobe_transform, shrink)?;
+    Ok(Decoded { width, height, components, samples, damaged })
 }
 
 /// Decode a JPEG stream of one of the frame types listed in the [crate docs](crate).
