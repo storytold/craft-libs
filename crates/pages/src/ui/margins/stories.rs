@@ -23,7 +23,7 @@ fn drag_left_edge(fixture: &mut Fixture) {
         return;
     };
     let travel = DRAG_THRESHOLDS * craft_ui::testing::input::slop(fixture.ctx());
-    eprintln!("DIAG drives: margin_handles_on_rulers: dragging Left Margin by {travel}");
+    eprintln!("DIAG drives: margin_handles_on_rulers: dragging Left Margin at {:?} by {travel}", target.rect);
     fixture.drag(&target, Vec2::new(travel, 0.0));
 }
 

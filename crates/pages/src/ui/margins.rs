@@ -474,7 +474,11 @@ impl Component for MarginHandles<'_> {
             let press = cx.part(EDGE.at(visible.index())).press;
             let snap = if press.mods.alt { 0.0 } else { self.snap };
             let origin = if visible.horizontal() { self.page.rect.min.x } else { self.page.rect.min.y };
-            match divider::pointer(cx, EDGE, visible.index(), &divider) {
+            let dragged = divider::pointer(cx, EDGE, visible.index(), &divider);
+            if visible == MarginEdge::Left && (press.phase.is_press() || dragged.is_some()) {
+                eprintln!("DIAG drives: margin left edge: phase {:?}, pointer {dragged:?}, rect {:?}", press.phase, cx.rect);
+            }
+            match dragged {
                 Some(Drag::Start) => {
                     *cx.press_slot::<Anchor>() = Some(Anchor(edges));
                     cx.begin();
