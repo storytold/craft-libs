@@ -22,7 +22,7 @@ fn margins_and_columns_with_a_baseline_grid(ui: &mut Ui, _: &mut StoryData) -> S
         rect: Rect::from_min_size(pos2(room.min.x + 20.0, room.min.y + 10.0), Vec2::new(page.width() as f32, page.height() as f32) * SCALE as f32),
         scale: SCALE,
         band: (0.0, page.height() as f32 * SCALE as f32),
-        picture: TextureState::Missing, // P3(pdf-canvas-w4): CV-C23
+        picture: TextureState::Missing,
     }];
     let grids = [PageGrid {
         index: 0,

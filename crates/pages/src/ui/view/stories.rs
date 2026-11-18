@@ -9,20 +9,35 @@ use craft_behavior::kurbo::Point;
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
-use egui::{Pos2, Ui, Vec2};
+use egui::{Pos2, Ui};
 
 /// Pages in the story document: enough to scroll.
 const PAGES: usize = 6;
 
 fn view(ui: &mut Ui, data: &mut StoryData, change: impl FnOnce(&mut PageViewState)) -> StoryOutput {
+    view_of(ui, data, &DemoPages::new(PAGES), change)
+}
+
+fn view_of(ui: &mut Ui, data: &mut StoryData, pages: &DemoPages, change: impl FnOnce(&mut PageViewState)) -> StoryOutput {
     let state = data.value("view", {
         let mut state = PageViewState::default();
         change(&mut state);
         state
     });
-    let pages = DemoPages::new(PAGES);
-    let out = PageView::new("Pages", &pages, state, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, _| ());
+    let out = PageView::new("Pages", pages, state, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, _| ());
     out.canvas.response.into()
+}
+
+/// The pages while their pictures render: each page is captioned in place of its picture.
+#[story(PageView<'static>, covers = [], drive = Drive::Never)]
+fn captioned_loading(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    view_of(ui, data, &DemoPages::rendering(PAGES), |state| state.continuous = false)
+}
+
+/// The pages when their pictures fail to render: each page is captioned with the failure.
+#[story(PageView<'static>, covers = [], drive = Drive::Never)]
+fn captioned_failed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    view_of(ui, data, &DemoPages::failing(PAGES), |state| state.continuous = false)
 }
 
 #[story(PageView<'static>, covers = [], drive = Drive::Never)]
@@ -54,8 +69,8 @@ fn page_pictures(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let pages = DemoPages::new(1);
     let placed = demo_placed(1, Pos2::new(room.min.x + 20.0, room.min.y + 10.0));
     let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
-    let near: [(usize, Vec2); 0] = [];
+    let owner = ui.id().with("page_pictures");
     let shown =
-        Canvas::new("Document").view(view).show_at(ui, room, |ui, body| PagePictures::new(&pages, &placed, &near, PAPER).show_at(ui, body.rect));
+        Canvas::new("Document").view(view).show_at(ui, room, |ui, body| PagePictures::new(&pages, &placed, owner, PAPER).show_at(ui, body.rect));
     shown.inner.map(StoryOutput::from).unwrap_or_default()
 }

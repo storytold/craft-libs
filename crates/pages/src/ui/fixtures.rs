@@ -29,6 +29,17 @@ impl DemoPages {
     pub fn new(count: usize) -> Self {
         DemoPages { count, fake: FakeThumbSource::new().aspect(612, 792) }
     }
+
+    /// A document of `count` pages whose pictures render as jobs on the loader's queue, so a page shows its loading
+    /// state until its job lands.
+    pub fn rendering(count: usize) -> Self {
+        DemoPages { count, fake: FakeThumbSource::new().aspect(612, 792).later(true) }
+    }
+
+    /// A document of `count` pages whose every picture fails to render.
+    pub fn failing(count: usize) -> Self {
+        DemoPages { count, fake: FakeThumbSource::new().aspect(612, 792).failing(0..count) }
+    }
 }
 
 impl ThumbSource<usize> for DemoPages {
@@ -58,13 +69,14 @@ pub fn demo_placed(count: usize, origin: Pos2) -> Vec<PlacedPage> {
     (0..count)
         .map(|page| {
             let top = origin.y + page as f32 * (height + GAP);
+            // A fixture has no texture to show, so its pages have no picture yet.
             PlacedPage {
                 page,
                 rect: Rect::from_min_size(pos2(origin.x, top), Vec2::new(width, height)),
                 scale: 1.0,
                 band: (0.0, height),
                 picture: TextureState::Missing,
-            } // P3(pdf-canvas-w4): CV-C23
+            }
         })
         .collect()
 }
