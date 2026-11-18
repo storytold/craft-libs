@@ -52,7 +52,12 @@ pub fn parse_pages(text: &str, count: usize) -> Result<Vec<usize>, PageRangeErro
         return Ok(Vec::new());
     }
     let number = |token: &str| {
-        let page = token.trim().parse::<usize>().map_err(|_| PageRangeError::NotAPage(token.into()))?;
+        // `usize::from_str` takes a leading `+`; a page number is digits only, as PdfCraft reads it.
+        let digits = token.trim();
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(PageRangeError::NotAPage(token.into()));
+        }
+        let page = digits.parse::<usize>().map_err(|_| PageRangeError::NotAPage(token.into()))?;
         if page == 0 || page > count { Err(PageRangeError::OutOfRange { page, count }) } else { Ok(page - 1) }
     };
     let mut pages = BTreeSet::new();
@@ -105,6 +110,7 @@ pub enum Subset {
 
 /// Which pages a [`PageRange`] starts from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum PageScope {
     /// All pages; `from` and `to` are kept but not applied.
@@ -142,18 +148,29 @@ impl Default for PageRange {
 
 impl PageRange {
     /// The pages (0-based) the range selects in a document of `count` pages, with `current` the current page and
-    /// `selection` the selected pages.
+    /// `selection` the selected pages (all 0-based). The scope picks the pages, then the subset keeps the even or odd
+    /// page numbers among them; a page past the document is never returned.
     // pdfcraft: crates/ui-egui/src/dialogs/marks_ui.rs:46 `PageRange::pages`.
     pub fn pages(&self, count: usize, current: usize, selection: &[usize]) -> Vec<usize> {
-        let _ = (current, selection); // P3(pdf-dialogs-w3): DG-C17
-        let (from, to) = if self.scope == PageScope::All { (1, count) } else { (self.from.max(1), self.to.map_or(count, |to| to.min(count))) };
-        (from..=to)
+        let picked: Vec<usize> = match self.scope {
+            PageScope::All => (0..count).collect(),
+            PageScope::Current => vec![current],
+            PageScope::Selection if selection.is_empty() => vec![current],
+            PageScope::Selection => {
+                let mut seen = BTreeSet::new();
+                selection.iter().copied().filter(|page| seen.insert(*page)).collect()
+            }
+            // `from` and `to` are 1-based and inclusive: pages `from - 1` up to, not including, `to`.
+            PageScope::Range => (self.from.max(1) - 1..self.to.map_or(count, |to| to.min(count))).collect(),
+        };
+        picked
+            .into_iter()
+            .filter(|&page| page < count)
             .filter(|page| match self.subset {
                 Subset::All => true,
-                Subset::Even => page % 2 == 0,
-                Subset::Odd => page % 2 == 1,
+                Subset::Even => (page + 1) % 2 == 0,
+                Subset::Odd => (page + 1) % 2 == 1,
             })
-            .map(|page| page - 1)
             .collect()
     }
 }

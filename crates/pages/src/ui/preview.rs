@@ -6,15 +6,14 @@
 mod stories;
 
 use super::view::PageSource;
-use craft_behavior::IconId;
 use craft_behavior::{Input, Metrics, PartKey, Proposal, Sense};
-use craft_ui::buttons::{Button, IconButton};
+use craft_ui::buttons::Button;
 use craft_ui::contract::{
     Bind, BindMut, BodyCx, CommandSet, Common, Component, Container, ContainerProps, Cx, DisabledLook, FooterRegion, MeasureCx, Mount, NoValue,
     Outcome, Pad, PaintUi, PartsCx, Props as _, Role, RowAlign, Show as _, ShowContainer, clicked,
 };
-use craft_ui::display::Text;
 use craft_ui::layout_components::Row;
+use craft_ui::patterns::form_dialogs::{PagerStep, PanePager};
 use craft_ui::primitives::textures::{
     MAX_TEXTURE, Priority, TextureState, TextureStoreOptions, TextureWords, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails,
 };
@@ -30,9 +29,6 @@ use std::cell::Cell;
 craft_ui::words! {
     /// The preview's words (PdfCraft's strings).
     pub struct PagePreviewWords {
-        page_of: template "pagePreview.pageOf" = "Page {p} of {n}";
-        previous: "pagePreview.previous" = "Previous page";
-        next: "pagePreview.next" = "Next page";
         close: "pagePreview.close" = "Close";
         unavailable: "pagePreview.unavailable" = "Preview unavailable";
     }
@@ -114,14 +110,21 @@ impl<'a> PagePreview<'a> {
         *at = (*at).min(last);
         let env = Env::of(ui);
         let words = env.words::<PagePreviewWords>();
-        let format = env.format();
         let page = pages[*at];
-        let title =
-            Label::from(words.page_of.fill(&[("p", source.page_label(page).as_str()), ("n", format.integer(source.page_count() as u64).as_str())]));
+        // The pager counts the document's pages, as the caption names the page shown, though it steps through `pages`.
+        let pager = PanePager {
+            shown: page + 1,
+            count: source.page_count(),
+            shown_label: Some(Label::from(source.page_label(page))),
+            back: *at > 0,
+            next: *at < last,
+            ..PanePager::default()
+        };
+        let title = pager.caption(&env);
         let step = Cell::new(0_isize);
         let side = if env.direction.is_rtl() { -1 } else { 1 };
         let mut open = true;
-        let layer = PreviewLayer::new(&words, title.clone(), *at, last, &step, Bind::bound(&mut open));
+        let layer = PreviewLayer::new(&words, title, pager, &step, Bind::bound(&mut open));
         let shown = ShowContainer::show(layer, ui, |ui, cx| {
             while let Some((command, _)) = cx.take_command::<PagePreviewCommands>() {
                 let by = match command {
@@ -173,16 +176,15 @@ struct PreviewLayer<'b> {
     #[container()]
     props: ContainerProps,
     words: &'b PagePreviewWords,
-    title: Label,
-    shown: usize,
-    last: usize,
+    pager: PanePager,
     step: &'b Cell<isize>,
     open: Bind<'b, bool>,
     closed: Option<CloseReason>,
 }
 
 impl<'b> PreviewLayer<'b> {
-    fn new(words: &'b PagePreviewWords, title: Label, shown: usize, last: usize, step: &'b Cell<isize>, open: Bind<'b, bool>) -> Self {
+    /// The layer named `title` (the pager's caption) with `pager` under the page; a pager press adds to `step`.
+    fn new(words: &'b PagePreviewWords, title: Label, pager: PanePager, step: &'b Cell<isize>, open: Bind<'b, bool>) -> Self {
         let props = ContainerProps::new()
             .mount(Mount::FullWindow)
             .surface(SurfaceKind::Scrim)
@@ -190,7 +192,7 @@ impl<'b> PreviewLayer<'b> {
             .footer(FooterRegion::new())
             .focus(FocusPolicy::DIALOG.initial(Initial::Default))
             .command_scope(PagePreviewCommands::SCOPE);
-        PreviewLayer { common: Common::new(), props, words, title: title.clone(), shown, last, step, open, closed: None }.label(title)
+        PreviewLayer { common: Common::new(), props, words, pager, step, open, closed: None }.label(title)
     }
 }
 
@@ -221,15 +223,14 @@ impl Container for PreviewLayer<'_> {
 
     /// Previous, the page's place, next and Close, centred under the page.
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        let (words, shown, last, step) = (self.words, self.shown, self.last, self.step);
+        let (words, step) = (self.words, self.step);
+        let pager = self.pager.clone();
         let mut close = false;
         Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
-            if clicked(&IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(shown > 0).show(ui)) {
-                step.set(step.get() - 1);
-            }
-            Text::new(self.title.clone()).show(ui);
-            if clicked(&IconButton::new(IconId::new("chevron_right")).label(words.next.clone()).enabled(shown < last).show(ui)) {
-                step.set(step.get() + 1);
+            match pager.show(ui) {
+                Some(PagerStep::Back) => step.set(step.get() - 1),
+                Some(PagerStep::Next) => step.set(step.get() + 1),
+                None => {}
             }
             close = clicked(&Button::new(words.close.clone()).default_stop().show(ui));
         });

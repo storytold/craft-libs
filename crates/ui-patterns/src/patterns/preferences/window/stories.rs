@@ -2,7 +2,7 @@
 
 use super::{PreferencesState, PreferencesWindow};
 use crate::contract::{Bind, Entry};
-use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
+use crate::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
 use crate::runtime::env::UnitKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
@@ -17,11 +17,22 @@ struct Values {
     size: i64,
     opacity: f64,
     tint: Rgba,
+    load_plugins: bool,
+    plugin_folder: String,
 }
 
 impl Default for Values {
     fn default() -> Self {
-        Values { snap: true, language: "en".to_owned(), name: "Poster".to_owned(), size: 24, opacity: 0.5, tint: Rgba([0xff, 0x88, 0x00, 0xff]) }
+        Values {
+            snap: true,
+            language: "en".to_owned(),
+            name: "Poster".to_owned(),
+            size: 24,
+            opacity: 0.5,
+            tint: Rgba([0xff, 0x88, 0x00, 0xff]),
+            load_plugins: true,
+            plugin_folder: "Plug-ins".to_owned(),
+        }
     }
 }
 
@@ -57,7 +68,14 @@ impl PreferencesModel for Demo {
                 ],
             )
             .footnote("Canvas settings apply to new documents."),
-            PageSpec::new("plugins", "Plug-ins", Vec::new()),
+            // The host draws the page's own part (nothing here); the group under it is drawn and searched as rows.
+            PageSpec::custom("plugins", "Plug-ins").group(GroupSpec::new(
+                Some("Loading"),
+                vec![
+                    RowSpec::new("plugins.load", "Load plug-ins at launch", RowKind::Bool(draft.load_plugins)),
+                    RowSpec::new("plugins.folder", "Plug-in folder", RowKind::Text(&draft.plugin_folder)),
+                ],
+            )),
         ]
     }
 
@@ -69,6 +87,8 @@ impl PreferencesModel for Demo {
             ("canvas.size", PrefValue::Int(size)) => self.draft.size = size,
             ("canvas.opacity", PrefValue::Float(opacity)) => self.draft.opacity = opacity,
             ("canvas.tint", PrefValue::Color(tint)) => self.draft.tint = tint,
+            ("plugins.load", PrefValue::Bool(on)) => self.draft.load_plugins = on,
+            ("plugins.folder", PrefValue::Text(text)) => self.draft.plugin_folder = text,
             _ => {}
         }
     }
@@ -98,6 +118,7 @@ impl PreferencesModel for Demo {
         match page {
             "general" => (self.draft.snap, self.draft.language, self.draft.name) = (defaults.snap, defaults.language, defaults.name),
             "canvas" => (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint),
+            "plugins" => (self.draft.load_plugins, self.draft.plugin_folder) = (defaults.load_plugins, defaults.plugin_folder),
             _ => {}
         }
     }
@@ -121,6 +142,13 @@ fn preferences_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
 fn preferences_window_without_matches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let state = PreferencesState { search: "zzz".to_owned(), ..PreferencesState::default() };
+    window(ui, data, state, Demo::default())
+}
+
+/// The custom Plug-ins page: the host's part, then the page's own titled group.
+#[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
+fn preferences_window_custom_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = PreferencesState { selected: "plugins".to_owned(), ..PreferencesState::default() };
     window(ui, data, state, Demo::default())
 }
 

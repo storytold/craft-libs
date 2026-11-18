@@ -36,15 +36,19 @@ pub struct AboutImage {
 impl AboutImage {
     /// The picture `svg` draws, named `label`.
     pub fn svg(label: impl Into<Label>, svg: &'static [u8]) -> Self {
-        let _ = (label, svg);
-        todo!("DG-C20")
+        AboutImage { label: label.into(), svg, dark: None }
     }
 
     /// The SVG that replaces the picture when the theme mode is dark.
     #[must_use]
-    pub fn dark(self, svg: &'static [u8]) -> Self {
-        let _ = svg;
-        todo!("DG-C20")
+    pub fn dark(mut self, svg: &'static [u8]) -> Self {
+        self.dark = Some(svg);
+        self
+    }
+
+    /// The SVG source to draw: `dark` in a dark theme mode when there is one, else `svg`.
+    pub(super) fn source(&self, dark: bool) -> &'static [u8] {
+        self.dark.filter(|_| dark).unwrap_or(self.svg)
     }
 }
 
@@ -93,16 +97,16 @@ impl AboutInfo {
 
     /// The application's mark, centred above the blurb.
     #[must_use]
-    pub fn mark(self, image: AboutImage) -> Self {
-        let _ = image;
-        todo!("DG-C20")
+    pub fn mark(mut self, image: AboutImage) -> Self {
+        self.mark = Some(image);
+        self
     }
 
     /// The suite's logo on a centred "Part of" line above the built-with line.
     #[must_use]
-    pub fn part_of(self, logo: AboutImage) -> Self {
-        let _ = logo;
-        todo!("DG-C20")
+    pub fn part_of(mut self, logo: AboutImage) -> Self {
+        self.part_of = Some(logo);
+        self
     }
 
     /// The prominent button under the blurb.

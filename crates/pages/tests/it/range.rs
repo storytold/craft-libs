@@ -1,8 +1,12 @@
-//! The page range field's menu of the app's page choices.
+//! The page range field's menu of the app's page choices, and the page-range row of a parameter dialog.
 
-use craft_pages::ui::PageRangeField;
-use craft_ui::contract::Entry;
+use craft_pages::ui::{PageRangeChoices, PageRangeField, PageRangeOptions};
+use craft_pages::{PageRange, PageScope, Subset};
+use craft_ui::contract::{Bind, Entry};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamRows, set_param_field};
 use craft_ui::testing::{Fixture, trial};
+use egui::{Key, Modifiers};
+use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -30,4 +34,45 @@ fn the_menu_lists_the_apps_entries_and_a_field_without_entries_has_no_button() {
     });
     bare.settle();
     assert!(bare.by_label("Select pages").is_none(), "no entries, no button");
+}
+
+/// The page-range row of a parameter dialog, over a document of 12 pages.
+fn page_range_row() -> Vec<Param> {
+    vec![PageRangeOptions::param("pages", "Page range", 12, 2, PageRangeChoices::FromTo)]
+}
+
+/// The page-range row keeps the range the user picks in the dialog's fields as JSON and reads back what automation
+/// sets there; an absent or unreadable value is no range. A slip in the stored form loses the user's range silently.
+#[trial]
+fn a_page_range_row_keeps_its_range_as_json_and_reads_it_back() {
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let rows = page_range_row();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Form", &rows, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+
+    let range = fixture.by_label("Pages from").expect("the from-to radio");
+    fixture.click(&range).settle();
+    let to = fixture.by_label("to").expect("the To field");
+    fixture.click(&to).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("5").key(Key::Enter, Modifiers::NONE).settle();
+    assert!(matches!(values.borrow().get("pages"), Some(FieldValue::Json(_))), "the row keeps its range as JSON");
+    let typed = PageRangeOptions::value(&values.borrow(), "pages").expect("the row's value reads back as a range");
+    assert_eq!((typed.scope, typed.from, typed.to), (PageScope::Range, 1, Some(5)), "the typed To lands in the fields");
+    assert_eq!(typed.pages(12, 2, &[]), vec![0, 1, 2, 3, 4]);
+
+    let set = PageRange { scope: PageScope::Range, from: 3, to: Some(7), subset: Subset::Odd };
+    let automation = json!({"scope": "range", "from": 3, "to": 7, "subset": "odd"});
+    set_param_field(&page_range_row(), &mut values.borrow_mut(), "pages", automation).expect("the row takes a JSON value");
+    fixture.settle();
+    assert_eq!(PageRangeOptions::value(&values.borrow(), "pages"), Some(set), "a range set by automation reads back");
+    let stored = DialogFields::from_pairs([("pages", PageRangeOptions::field_value(&set))]);
+    assert_eq!(PageRangeOptions::value(&stored, "pages"), Some(set), "the row's stored form reads back as the same range");
+
+    assert_eq!(PageRangeOptions::value(&DialogFields::new(), "pages"), None, "no value is no range");
+    set_param_field(&page_range_row(), &mut values.borrow_mut(), "pages", json!("all pages")).expect("a custom row keeps any JSON");
+    fixture.settle();
+    assert_eq!(PageRangeOptions::value(&values.borrow(), "pages"), None, "a value that is not a range reads as none");
 }

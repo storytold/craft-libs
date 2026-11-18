@@ -17,10 +17,10 @@ use crate::contract::{
     ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
-use crate::display::{Divider, Shade, Text};
+use crate::display::{Divider, Picture, PictureSize, Shade, Text};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
-use crate::list::ListRow;
+use crate::list::{ListRow, ThumbSize};
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -31,7 +31,7 @@ use crate::table::Table;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use contributors::{Writer, sorted_indices};
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, SelectionChange, keyed};
-use craft_theme::Variant;
+use craft_theme::{Mode, Variant};
 use egui::{Response, Ui};
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -195,7 +195,8 @@ impl Outcome for AboutOutput {
 
 /// Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button.
 ///
-/// - **About.** The blurb, the version, the community button and the link row centred, the built-with line faint.
+/// - **About.** The app's mark when it has one, the blurb, the version, the community button and the link row
+///   centred, then "Part of" with the suite's logo when it has one, the built-with line faint.
 /// - **Contributors.** Show (Username, Display name, Real name), Sort (the list, with a button to reverse) and View
 ///   (Grab bag or Table). The grab bag flows the names as links: a click reports the contributor's profile URL as the
 ///   link (nothing for one without a profile), and the link's tooltip is the summary. The table has every figure; a
@@ -312,7 +313,13 @@ impl Shown<'_> {
     /// The About tab.
     fn about(&self, ui: &mut Ui, link: &RefCell<Option<String>>) {
         let (words, info) = (self.words, self.info);
+        let dark = Env::of(ui).view().mode() == Mode::Dark;
         Stack::new().show(ui, |ui, _| {
+            if let Some(mark) = &info.mark {
+                Row::new().align(RowAlign::Center).show(ui, |ui, _| {
+                    Picture::svg(mark.label.clone(), mark.source(dark)).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui);
+                });
+            }
             Text::new(info.blurb.clone()).show(ui);
             Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
             Row::new().align(RowAlign::Center).show(ui, |ui, _| {
@@ -332,6 +339,12 @@ impl Shown<'_> {
                     }
                 }
             });
+            if let Some(logo) = &info.part_of {
+                Row::new().align(RowAlign::Center).show(ui, |ui, _| {
+                    Text::new(words.part_of.clone()).shade(Shade::Muted).show(ui);
+                    Picture::svg(logo.label.clone(), logo.source(dark)).show(ui);
+                });
+            }
             Text::new(info.built_with.clone()).shade(Shade::Faint).show(ui);
         });
     }

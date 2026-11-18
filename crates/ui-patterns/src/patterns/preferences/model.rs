@@ -51,16 +51,17 @@ impl<'a> PageSpec<'a> {
         Self { id, title, groups: vec![GroupSpec::new(None, rows)], footnote: None, keywords: "", custom: false }
     }
 
-    /// A page the host draws.
+    /// A page the host draws ([`PreferencesModel::custom_page`]). Its [`group`](PageSpec::group)s follow the host's
+    /// part, drawn and searched as a plain page's groups are.
     pub fn custom(id: &'a str, title: &'a str) -> Self {
         Self { id, title, groups: Vec::new(), footnote: None, keywords: "", custom: true }
     }
 
     /// Adds `group` under a custom page's own part, where the search sees its rows.
     #[must_use]
-    pub fn group(self, group: GroupSpec<'a>) -> Self {
-        let _ = group;
-        todo!("DG-C21")
+    pub fn group(mut self, group: GroupSpec<'a>) -> Self {
+        self.groups.push(group);
+        self
     }
 
     /// Sets the note shown under the last group.

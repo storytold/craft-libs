@@ -5,6 +5,7 @@ use crate::ui::fixtures::{DemoPages, PAPER};
 use crate::ui::thumbnails::PageThumbnails;
 use craft_behavior::Selection;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer};
+use craft_ui::patterns::form_dialogs::PanePager;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -53,7 +54,8 @@ fn preview_layer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<PagePreviewWords>();
     let step = Cell::new(0);
     let pages = DemoPages::new(5);
-    let layer = PreviewLayer::new(&words, Label::from("Page 2 of 5"), 1, 4, &step, Bind::bound(data.value("open", true)));
+    let pager = PanePager { shown: 2, count: 5, back: true, next: true, ..PanePager::default() };
+    let layer = PreviewLayer::new(&words, Label::from("Page 2 of 5"), pager, &step, Bind::bound(data.value("open", true)));
     ShowContainer::show(layer, ui, |ui, cx| {
         PagePicture::new(&pages, 1, "Page unavailable", PAPER).label("Page 2").show_at(ui, cx.rect);
     })
