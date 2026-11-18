@@ -2,7 +2,7 @@
 
 use crate::sha256_hex;
 use crate::store::{PLUGINS_DIR, SOURCE_FILE, Source, Store, folder_name, plugins_dir};
-use crate::test_support::bundle_bytes;
+use crate::test_support::{bundle_bytes, bundle_for};
 
 fn github() -> Source {
     Source::Github { repo: "example/tools".into(), tag: "v1.0.0".into(), asset: "tools.craftplugin".into() }
@@ -98,4 +98,76 @@ fn damaged_folders_are_reported_not_loaded() {
     assert_eq!(problems.len(), 4, "{problems:?}");
     assert!(store.load("org.example.a").unwrap_err().contains("changed"));
     assert!(store.load("org.example.b").is_err());
+}
+
+const FIGCRAFT: crate::AppInfo<'static> =
+    crate::AppInfo { id: "figcraft", version: "1.0.0", api: 1..=6, kinds: &["command"], accept_legacy: false, kind_api: &[] };
+
+#[test]
+fn install_for_refuses_another_apps_plugin_before_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::new(tmp.path().join(PLUGINS_DIR));
+    let theirs = bundle_for("org.example.d", "1.0.0", "read", r#"{"designcraft": {"api": 6}}"#);
+    let e = store.install_for(&FIGCRAFT, &theirs, github()).unwrap_err();
+    assert!(e.contains("designcraft") && e.contains("not figcraft"), "{e}");
+    let newer_api = bundle_for("org.example.n", "1.0.0", "read", r#"{"figcraft": {"api": 7}}"#);
+    assert!(store.install_for(&FIGCRAFT, &newer_api, github()).unwrap_err().contains("API 7"));
+    let newer_app = bundle_for("org.example.m", "1.0.0", "read", r#"{"figcraft": {"api": 6, "minApp": "2.0.0"}}"#);
+    assert!(store.install_for(&FIGCRAFT, &newer_app, github()).unwrap_err().contains("2.0.0 or later"));
+    assert!(!store.root().exists(), "nothing written");
+
+    let (installed, target) = store.install_for(&FIGCRAFT, &bundle_bytes("org.example.a", "1.0.0", "read"), github()).unwrap();
+    assert_eq!((installed.manifest.id.as_str(), target), ("org.example.a", crate::Target::Named { api: 6 }));
+    assert_eq!(store.load_for(&FIGCRAFT, "org.example.a").unwrap().map(|(i, _)| i), Some(installed));
+    assert_eq!(store.load_for(&FIGCRAFT, "org.example.zz"), Ok(None));
+}
+
+#[test]
+fn install_with_for_checks_the_apps_own_kinds() {
+    const FILTER_API: &[crate::KindApi<'static>] = &[crate::KindApi { kind: "filter", api: 1..=1 }];
+    let photocraft = crate::AppInfo { id: "photocraft", kinds: &["command", "filter"], kind_api: FILTER_API, ..FIGCRAFT };
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::new(tmp.path());
+    let filter = |api: u32| {
+        let manifest = format!(
+            r#"{{"id": "org.example.f", "name": "F", "version": "1.0.0", "main": "f.wasm", "kind": "filter", "apps": {{"photocraft": {{"api": {api}}}}}}}"#
+        );
+        crate::bundle::Bundle { manifest, wasm: b"\0asm".to_vec(), assets: vec![] }.encode()
+    };
+    let check =
+        |m: &crate::Manifest, wasm: &[u8]| if m.kind == "filter" && wasm.starts_with(b"\0asm") { Ok(()) } else { Err("not a filter".to_string()) };
+    assert!(store.install_with_for(&photocraft, &filter(2), github(), &check).unwrap_err().contains("`filter` plug-in API 2"));
+    let (_, target) = store.install_with_for(&photocraft, &filter(1), github(), &check).unwrap();
+    assert_eq!(target.api(), 1);
+}
+
+#[test]
+fn list_for_sorts_what_the_app_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::new(tmp.path());
+    store.install(&bundle_bytes("org.example.a", "1.0.0", "read"), github()).unwrap();
+    store.install(&bundle_for("org.example.b", "1.0.0", "read", r#"{"figcraft": {"api": 6, "minApp": "2.0.0"}}"#), github()).unwrap();
+    let c = store.install(&bundle_bytes("org.example.c", "1.0.0", "read"), github()).unwrap();
+    std::fs::write(c.dir.join(SOURCE_FILE), "{").unwrap();
+
+    let listing = store.list_for(&FIGCRAFT);
+    let ids = |v: Vec<&crate::manifest::Manifest>| v.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(listing.runnable.iter().map(|(i, _)| &i.manifest).collect()), ["org.example.a"]);
+    assert_eq!(ids(listing.not_runnable.iter().map(|(i, _)| &i.manifest).collect()), ["org.example.b"]);
+    assert!(listing.not_runnable[0].1.contains("2.0.0 or later"), "{:?}", listing.not_runnable[0].1);
+    assert_eq!(listing.problems.len(), 1);
+    assert!(store.load_for(&FIGCRAFT, "org.example.b").unwrap_err().contains("can't run here"));
+    let newer = crate::AppInfo { version: "2.1.0", ..FIGCRAFT };
+    assert_eq!(store.list_for(&newer).runnable.len(), 2);
+}
+
+#[test]
+fn an_apps_own_source_is_recorded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::new(tmp.path());
+    let source = Source::Other { kind: "figcraft-server".into(), location: "team/plugins/a".into() };
+    store.install_for(&FIGCRAFT, &bundle_bytes("org.example.a", "1.0.0", "read"), source.clone()).unwrap();
+    assert_eq!(store.load("org.example.a").unwrap().unwrap().record.source, source);
+    let bad = Source::Other { kind: "Bad Kind".into(), location: String::new() };
+    assert!(store.install_for(&FIGCRAFT, &bundle_bytes("org.example.b", "1.0.0", "read"), bad).is_err());
 }

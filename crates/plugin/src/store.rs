@@ -14,6 +14,10 @@
 //! update writes the new bundle beside the old one before `source.json` switches to it, so a crash
 //! leaves either installation whole. Native builds only; the web builds keep plug-ins in browser
 //! storage, with the same [`Source`] and [`SourceRecord`] ([`crate::source`]).
+//!
+//! An app installs with [`Store::install_for`] (or [`Store::install_with_for`] for its own kinds)
+//! and lists with [`Store::list_for`]: both check [`Manifest::target`] against the app, so another
+//! app's plug-in is never written and one the app no longer runs is listed apart.
 
 use std::path::{Path, PathBuf};
 
@@ -24,6 +28,7 @@ use crate::github::is_hex64;
 use crate::manifest::Manifest;
 /// [`Source`] and [`SourceRecord`] live in [`crate::source`] (every target); named here too.
 pub use crate::source::{Source, SourceRecord};
+use crate::target::{AppInfo, Target};
 
 /// The store's folder name inside the app's settings folder.
 pub const PLUGINS_DIR: &str = "Plug-ins";
@@ -62,6 +67,17 @@ pub struct Problem {
     pub error: String,
 }
 
+/// The installed plug-ins as [`Store::list_for`] sorts them for one app, each list by folder name.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Listing {
+    /// The plug-ins the app runs, and how each targets it.
+    pub runnable: Vec<(Installed, Target)>,
+    /// The plug-ins it doesn't run, and why, in a sentence (show them so they can be removed).
+    pub not_runnable: Vec<(Installed, String)>,
+    /// The folders that couldn't be read.
+    pub problems: Vec<Problem>,
+}
+
 /// The plug-ins installed under one root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Store {
@@ -84,16 +100,60 @@ impl Store {
         self.root.join(folder_name(id))
     }
 
-    /// Install a command plug-in's bundle (replacing an installed version of the same id): the
-    /// bundle is decoded and fully checked ([`crate::bundle::open`]) before anything is written.
+    /// Install a plug-in for `app` (replacing an installed version of the same id): the bundle is
+    /// decoded and fully checked ([`crate::bundle::open`]), and [`Manifest::target`] must accept
+    /// `app`, before anything is written. What an app should call for a command plug-in; its own
+    /// kinds use [`Store::install_with_for`].
+    pub fn install_for(&self, app: &AppInfo<'_>, bytes: &[u8], source: Source) -> Result<(Installed, Target), String> {
+        self.install_with_for(app, bytes, source, &check_command_module)
+    }
+
+    /// [`Store::install_for`] for an app that runs its own kinds: `check_module` checks the module
+    /// of every kind the app runs (it gets the manifest, so it can tell them apart).
+    pub fn install_with_for(
+        &self,
+        app: &AppInfo<'_>,
+        bytes: &[u8],
+        source: Source,
+        check_module: &ModuleCheck,
+    ) -> Result<(Installed, Target), String> {
+        let mut target = None;
+        let installed = self.install_checked(
+            bytes,
+            source,
+            &mut |manifest: &Manifest| {
+                target = Some(manifest.target(app).map_err(|why| format!("{} can't be installed: {why}", manifest.name))?);
+                Ok(())
+            },
+            check_module,
+        )?;
+        let target = target.ok_or_else(|| "the plug-in's target wasn't checked".to_string())?;
+        Ok((installed, target))
+    }
+
+    /// Install a command plug-in's bundle without asking whether it was written for the app:
+    /// prefer [`Store::install_for`], which refuses another app's plug-in before writing it.
     pub fn install(&self, bytes: &[u8], source: Source) -> Result<Installed, String> {
         self.install_with(bytes, source, &check_command_module)
     }
 
-    /// [`Store::install`] for an app's own kind of plug-in, whose module `check_module` checks.
+    /// [`Store::install`] for an app's own kind of plug-in, whose module `check_module` checks;
+    /// prefer [`Store::install_with_for`].
     pub fn install_with(&self, bytes: &[u8], source: Source, check_module: &ModuleCheck) -> Result<Installed, String> {
+        self.install_checked(bytes, source, &mut |_: &Manifest| Ok(()), check_module)
+    }
+
+    /// Check the source and the bundle, run `accept` on its manifest, then write.
+    fn install_checked(
+        &self,
+        bytes: &[u8],
+        source: Source,
+        accept: &mut dyn FnMut(&Manifest) -> Result<(), String>,
+        check_module: &ModuleCheck,
+    ) -> Result<Installed, String> {
         source.check()?;
         let (bundle, manifest) = open_with(bytes, check_module)?;
+        accept(&manifest)?;
         let sha256 = sha256_hex(bytes);
         let dir = self.dir_of(&manifest.id);
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -122,7 +182,33 @@ impl Store {
         Ok(Some(installed))
     }
 
-    /// Every installed plug-in, by folder name, and the folders that couldn't be read.
+    /// The installed plug-in `id` when `app` can run it: `Ok(None)` when it isn't installed, an
+    /// error when its folder is damaged or [`Manifest::target`] refuses it (installed by another
+    /// version of the app, say).
+    pub fn load_for(&self, app: &AppInfo<'_>, id: &str) -> Result<Option<(Installed, Target)>, String> {
+        let Some(installed) = self.load(id)? else { return Ok(None) };
+        let target = installed.manifest.target(app).map_err(|why| format!("{} can't run here: {why}", installed.manifest.name))?;
+        Ok(Some((installed, target)))
+    }
+
+    /// The installed plug-ins sorted for `app`: those it runs, those it doesn't (another app's,
+    /// a newer API, a newer `minApp`: the store is the app's own, but a plug-in installed by a
+    /// newer version of it stays when it is downgraded) and the folders that couldn't be read.
+    /// What an app should list; [`Store::list`] doesn't look at targets.
+    pub fn list_for(&self, app: &AppInfo<'_>) -> Listing {
+        let (all, problems) = self.list();
+        let mut listing = Listing { runnable: vec![], not_runnable: vec![], problems };
+        for installed in all {
+            match installed.manifest.target(app) {
+                Ok(target) => listing.runnable.push((installed, target)),
+                Err(why) => listing.not_runnable.push((installed, why)),
+            }
+        }
+        listing
+    }
+
+    /// Every installed plug-in, by folder name, and the folders that couldn't be read, whatever
+    /// app they were written for: prefer [`Store::list_for`].
     pub fn list(&self) -> (Vec<Installed>, Vec<Problem>) {
         let (mut ok, mut bad) = (vec![], vec![]);
         let Ok(entries) = std::fs::read_dir(&self.root) else { return (ok, bad) };

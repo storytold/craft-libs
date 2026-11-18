@@ -11,7 +11,8 @@
 //! - [`permissions`]: the allowlist, the refused list every app shares and the app's own.
 //! - [`bundle`]: the `.craftplugin` file, its SHA-256 and version comparison.
 //! - [`source`]: where an installed plug-in came from ([`Source`]) and its record, on every target.
-//! - [`store`] (native builds): the per-user `Plug-ins` folder.
+//! - [`store`] (native builds): the per-user `Plug-ins` folder. Apps install and list through
+//!   `Store::install_for` and `Store::list_for`, which check the target for them.
 //! - [`catalog`] and [`github`]: catalogs (`index.json`) and installing from a repository's
 //!   releases, as pure functions; [`fetch`] runs them over the app's HTTP client.
 //! - [`widget`]: FigCraft's widget descriptions, which share the ABI.
