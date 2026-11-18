@@ -484,7 +484,7 @@ impl FooterButton {
     }
 
     /// Whether the button can be activated.
-    pub(crate) const fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
 }

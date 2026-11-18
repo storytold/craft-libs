@@ -80,6 +80,7 @@ craft_ui::words! {
         left_to_right: "paragraphDialog.leftToRight" = "Left-to-right";
         right_to_left: "paragraphDialog.rightToLeft" = "Right-to-left";
         mirror_indents: "paragraphDialog.mirrorIndents" = "Mirror indents";
+        contextual_spacing: "paragraphDialog.contextualSpacing" = "Don't add space between paragraphs of the same style";
         inside: "paragraphDialog.inside" = "Inside";
         outside: "paragraphDialog.outside" = "Outside";
         exceptions: "paragraphDialog.exceptions" = "Formatting exceptions";
@@ -215,6 +216,10 @@ pub struct ParagraphFormat {
     /// Mirror indents: Left and Right read Inside and Outside when on. The outer `None` hides it; `Some(None)` is mixed.
     #[serde(default, skip_serializing_if = "Option::is_none", with = "shown_or_hidden")]
     pub mirror_indents: Option<Option<bool>>,
+    /// Don't add space between paragraphs of the same style (Word's contextual spacing): the spacing before and after
+    /// is left out between two paragraphs of one style. The outer `None` hides it; `Some(None)` is mixed.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "shown_or_hidden")]
+    pub contextual_spacing: Option<Option<bool>>,
     /// The Line and Page Breaks check boxes. `None` hides the page.
     pub breaks: Option<LineBreakOptions>,
     /// The Asian Typography check boxes. `None` hides the page.
@@ -809,6 +814,11 @@ impl ParagraphDialog {
         }
 
         self.field(ui, scope, Row::At, &words.at, valid);
+        if let Some(current) = self.format.contextual_spacing
+            && let Some(on) = check(ui, &words.contextual_spacing, current)
+        {
+            self.format.contextual_spacing = Some(Some(on));
+        }
     }
 
     fn answer(&self, open_tabs: bool) -> ParagraphAnswer {
