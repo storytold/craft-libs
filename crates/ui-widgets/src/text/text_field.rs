@@ -328,12 +328,6 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             let tall = cx.layout(&TextRun::new(shown).role(self.options.role).wrap(Wrap::Wrap)).size().y;
             let rows = if line > 0.0 { (tall / line).round() as usize } else { 1 };
             size.y = size.y.max(height(lines.max(rows)));
-            if self.max_lines.is_some() {
-                eprintln!(
-                    "DIAG a_capped_field_grows_to_its_lines_then_scrolls_with_the_caret_in_view: measure line={line} tall={tall} rows={rows} room={:?} size_y={}",
-                    cx.room, size.y
-                );
-            }
             if let Some(most) = self.max_lines {
                 size.y = size.y.min(height(most.max(lines)));
             }
