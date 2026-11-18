@@ -70,7 +70,7 @@ impl Focus for CxCore<'_> {
 
     fn focus_arrived_by_key(&self) -> Option<PartRef> {
         let facts = if focus::writes() == self.focus.at { self.focus } else { focus::facts(&self.ctx, self.id) };
-        self.focus_arrived().filter(|_| facts.arrived_origin == Some(focus::FocusOrigin::Request))
+        self.focus_arrived().filter(|_| matches!(facts.arrived_origin, Some(focus::FocusOrigin::Request | focus::FocusOrigin::Open)))
     }
 
     fn is_focused(&self) -> bool {
