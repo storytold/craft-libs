@@ -45,6 +45,7 @@ pub mod guards;
 pub mod hostile;
 #[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
 pub mod mcp;
+pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};
