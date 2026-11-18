@@ -118,3 +118,19 @@ fn dsf_audio_stops_at_the_declared_data_chunk() {
         assert_eq!(read_raw(&bytes).unwrap().channel_bytes, expected.channel_bytes);
     }
 }
+
+#[test]
+fn dsdiff_odd_payload_receives_pad_byte() {
+    let input = [&[0xaau8; 3][..]];
+    let bytes = encode_dsdiff(2_822_400, &input, 24).unwrap();
+    let raw = read_raw(&bytes).unwrap();
+    assert_eq!(raw.channel_bytes[0].len(), 3);
+}
+
+#[test]
+#[cfg(target_pointer_width = "32")]
+fn dsdiff_32bit_padding_overflow_is_rejected() {
+    let dummy = [&[][..]];
+    let result = encode_dsdiff(2_822_400, &dummy, 34_359_738_360);
+    assert_eq!(result, Err(Error::MemoryLimitExceeded));
+}

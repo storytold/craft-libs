@@ -285,7 +285,8 @@ pub fn write_dsdiff(sample_rate: u32, channels: &[&[u8]], sample_count: u64) -> 
     // Fixed headers plus four bytes for each channel identifier.
     // An odd-sized chunk payload is followed by a pad byte that its size field does not count.
     let data_pad = data_size & 1;
-    let file_size = super::encoded_size(data_size + data_pad, 110 + 4 * num_channels)?;
+    let padded_size = data_size.checked_add(data_pad).ok_or(Error::MemoryLimitExceeded)?;
+    let file_size = super::encoded_size(padded_size, 110 + 4 * num_channels)?;
 
     // Build PROP subchunks:
     // 1. 'FS  ' (4 bytes + 12 chunk header)
