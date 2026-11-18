@@ -79,7 +79,10 @@ fn a_table_style_indent_without_a_width_is_zero_and_overrides_its_base() {
     // `CT_TblWidth`'s `w:w` defaults to 0, so a based-on style's indent is reset, not inherited.
     let styles = r#"<w:style w:type="table" w:styleId="Base"><w:name w:val="Base"/><w:tblPr><w:tblInd w:w="720" w:type="dxa"/></w:tblPr></w:style><w:style w:type="table" w:styleId="Indented"><w:name w:val="Indented"/><w:basedOn w:val="Base"/><w:tblPr><w:tblInd w:type="dxa"/></w:tblPr></w:style>"#;
     let d = craft_docx::read(&docx(BODY, styles)).unwrap();
-    let own = |d: &craft_wordmodel::Document| d.styles.get("Indented").and_then(|s| s.table.clone()).unwrap_or_default().indent;
+    let own_of = |d: &craft_wordmodel::Document, id: &str| d.styles.get(id).and_then(|s| s.table.clone()).unwrap_or_default().indent;
+    let own = |d: &craft_wordmodel::Document| own_of(d, "Indented");
+    assert_eq!(own_of(&d, "Base"), Some(36.0), "the base sets an indent to override");
+    assert_eq!(d.styles.table_style("Base").map(|s| s.parts.indent), Some(Some(36.0)));
     assert_eq!(own(&d), Some(0.0));
     assert_eq!(d.styles.table_style("Indented").map(|s| s.parts.indent), Some(Some(0.0)), "the base's 36 pt is overridden");
 
