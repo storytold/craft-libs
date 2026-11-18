@@ -1,11 +1,15 @@
-//! `SplitViews`: the panes of the arrangements in reading order, the divider lists that do not fit, and the dividers'
-//! bounds and spans as the pointer drags them.
+//! `SplitViews`: the panes of the arrangements in reading order, the divider lists that do not fit, the dividers'
+//! bounds and spans as the pointer drags them, and the document tabs dropped on the views.
 
 use craft_behavior::PartKey;
-use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews};
+use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews, TabDrop, TabDropTarget};
 use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::runtime::env::Direction;
+use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Pos2, Rect, Vec2};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// The area the geometry rows lay out in, in points.
 const FULL: Rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(600.0, 400.0));
@@ -62,6 +66,85 @@ fn drag_divider(fixture: &mut Fixture, index: u64, by: Vec2) {
     let id = fixture.root_id().unwrap_or_else(|| panic!("the split views were shown"));
     let grip = fixture.part(id, DIVIDER.at(index)).unwrap_or_else(|| panic!("divider {index} is shown"));
     fixture.drag(&grip, by);
+}
+
+/// What the tab-drop host reported since the last drag.
+#[derive(Default)]
+struct Seen {
+    drops: Vec<TabDrop<usize>>,
+    torn: usize,
+    views: Rect,
+}
+
+/// A document strip above split views in `layout` with `count` documents that take every drop but at `refused`.
+fn tab_host(layout: SplitLayout, count: usize, refused: Option<TabDropTarget>, direction: Direction) -> (Fixture, Rc<RefCell<Seen>>) {
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let held = seen.clone();
+    let mut at = SplitAt::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two")];
+        let strip = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).tear_off(true).show(ui);
+        let views = SplitViews::new("Views", layout, Bind::bound(&mut at))
+            .count(count)
+            .takes_tabs(move |_: &[usize], target| Some(target) != refused)
+            .show(ui, |_, _| ());
+        let mut seen = held.borrow_mut();
+        seen.torn += strip.events.iter().filter(|event| matches!(event, DocumentTabsEvent::TornOff { .. })).count();
+        seen.drops.extend(views.output.tab_drop);
+        seen.views = views.output.edit.response.rect;
+    });
+    fixture.direction(direction).room(ROOM).settle();
+    (fixture, seen)
+}
+
+/// Drags the tab "One" to the point `across` of the views' width at their middle height and lets it go there: the
+/// drops the views reported, as documents and target, and how many tear-offs the strip reported.
+fn drop_tab(fixture: &mut Fixture, seen: &RefCell<Seen>, across: f32) -> (Vec<(Vec<usize>, TabDropTarget)>, usize) {
+    let tab = fixture.by_label("One").unwrap_or_else(|| panic!("the tab is shown"));
+    let views = seen.borrow().views;
+    let to = Pos2::new(views.left() + views.width() * across, views.center().y);
+    {
+        let mut seen = seen.borrow_mut();
+        seen.drops.clear();
+        seen.torn = 0;
+    }
+    fixture.drag_at(tab.center(), to - tab.center()).settle();
+    let seen = seen.borrow();
+    (seen.drops.iter().map(|drop| (drop.documents.clone(), drop.target)).collect(), seen.torn)
+}
+
+#[trial]
+fn a_tab_dropped_on_the_views_splits_or_moves_to_the_other_pane() {
+    // An unsplit view takes the tab on its reading-end half, and the strip does not tear it off there.
+    let (mut fixture, seen) = tab_host(SplitLayout::Tile, 1, None, Direction::Ltr);
+    let (drops, torn) = drop_tab(&mut fixture, &seen, 0.75);
+    assert_eq!(drops, vec![(vec![0], TabDropTarget::SplitEnd)], "a drop on the right half splits the view");
+    assert_eq!(torn, 0, "over the views the drop is theirs, not a tear-off");
+    let (drops, _) = drop_tab(&mut fixture, &seen, 0.25);
+    assert!(drops.is_empty(), "the reading-start half takes nothing: {drops:?}");
+
+    // Under right-to-left the reading end is the left half.
+    let (mut fixture, seen) = tab_host(SplitLayout::Tile, 1, None, Direction::Rtl);
+    let (drops, torn) = drop_tab(&mut fixture, &seen, 0.25);
+    assert_eq!(drops, vec![(vec![0], TabDropTarget::SplitEnd)], "under right-to-left the left half splits the view");
+    assert_eq!(torn, 0, "over the views the drop is theirs, not a tear-off");
+    let (drops, _) = drop_tab(&mut fixture, &seen, 0.75);
+    assert!(drops.is_empty(), "under right-to-left the right half takes nothing: {drops:?}");
+
+    // A split view reports the pane under the pointer, in reading order.
+    let (mut fixture, seen) = tab_host(SplitLayout::TwoUpVertical, 2, None, Direction::Ltr);
+    let (drops, torn) = drop_tab(&mut fixture, &seen, 0.75);
+    assert_eq!(drops, vec![(vec![0], TabDropTarget::Pane(1))], "a drop on the right pane moves the tab there");
+    assert_eq!(torn, 0, "over the views the drop is theirs, not a tear-off");
+    let (drops, _) = drop_tab(&mut fixture, &seen, 0.25);
+    assert_eq!(drops, vec![(vec![0], TabDropTarget::Pane(0))], "a drop on the left pane moves the tab there");
+
+    // A pane the caller's rule refuses takes nothing; the others still do.
+    let (mut fixture, seen) = tab_host(SplitLayout::TwoUpVertical, 2, Some(TabDropTarget::Pane(0)), Direction::Ltr);
+    let (drops, _) = drop_tab(&mut fixture, &seen, 0.25);
+    assert!(drops.is_empty(), "a refused pane takes nothing: {drops:?}");
+    let (drops, _) = drop_tab(&mut fixture, &seen, 0.75);
+    assert_eq!(drops, vec![(vec![0], TabDropTarget::Pane(1))], "the pane the rule takes still reports the drop");
 }
 
 #[trial]

@@ -6,14 +6,17 @@
 //! The panes are the cells [`arrange_rects`] gives for the arrangement the caller names, with the dividers moved to
 //! the [`SplitAt`] the caller binds ([`SplitAt::placed`]). A linked pane follows the active view's zoom and position
 //! ([`SplitViews::follow`]).
+//!
+//! With [`SplitViews::takes_tabs`] the views take a dragged document strip tab: an unsplit body offers its reading-end
+//! half, a split body each whole pane, and the drop comes back in [`SplitViewsOutput::tab_drop`].
 
 #[cfg(feature = "testing")]
 mod stories;
 
 use super::words::SplitWords;
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Name, Outcome, Pad, PaintUi, PartsCx,
-    Pointer as _, Props as _, Role, Sizing, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, Edit as _, EditResponse, ListDrag,
+    Name, Outcome, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing, WordSetCx as _,
 };
 use crate::docking::divider::{self, Divider, Drag};
 use crate::docking::{DockSizes, Splitter};
@@ -273,6 +276,41 @@ pub struct TabDrop<D> {
     pub target: TabDropTarget,
 }
 
+/// Where a dragged tab may land on `laid` in `rect`, in physical space: each pane of a split body, numbered as `laid`
+/// numbers them, or the reading-end half of an unsplit body (the left half under right-to-left).
+fn tab_areas(laid: &Laid, rect: Rect, rtl: bool) -> Vec<(TabDropTarget, Rect)> {
+    let flow = Flow::new(rect, rtl);
+    if laid.panes.len() > 1 {
+        laid.panes.iter().enumerate().map(|(pane, area)| (TabDropTarget::Pane(pane), flow.to_physical(*area))).collect()
+    } else {
+        let end = Rect::from_min_max(Pos2::new(rect.center().x, rect.top()), rect.max);
+        vec![(TabDropTarget::SplitEnd, flow.to_physical(end))]
+    }
+}
+
+/// The views' target for a dragged document strip tab: the area under the pointer, when the caller's rule takes the
+/// dragged documents there. The drop carries the area, which the ghost layer marks.
+struct TabTarget<'t, D> {
+    areas: Vec<(TabDropTarget, Rect)>,
+    accepts: &'t dyn Fn(&[D], TabDropTarget) -> bool,
+}
+
+impl<D: Clone> DropTarget<ListDrag<D>> for TabTarget<'_, D> {
+    type Drop = (TabDrop<D>, Rect);
+
+    fn accept(&self, payload: &ListDrag<D>, at: Pos2, _: DropOperation) -> Option<Self::Drop> {
+        let &(target, area) = self.areas.iter().find(|(_, area)| area.contains(at))?;
+        (self.accepts)(&payload.keys, target).then(|| (TabDrop { documents: payload.keys.clone(), target }, area))
+    }
+
+    fn mark(&self, (drop, area): &Self::Drop) -> DropMark {
+        match drop.target {
+            TabDropTarget::SplitEnd => DropMark::Split(*area),
+            TabDropTarget::Pane(_) => DropMark::Into(*area),
+        }
+    }
+}
+
 impl<D> Outcome for SplitViewsOutput<D> {
     type Value = SplitAt;
 
@@ -289,7 +327,8 @@ impl<D> Outcome for SplitViewsOutput<D> {
 /// One canvas area shown as views of one document, or a grid of panes the caller fills (one document each), in the
 /// panes of a [`SplitLayout`]. The active pane is the app's: it routes tools and keys there. An inactive pane is a
 /// Tab stop over its view: a press, Enter or Space on it reports it in [`SplitViewsOutput::activated`] and its view
-/// gets no press.
+/// gets no press. With [`takes_tabs`](SplitViews::takes_tabs) a document strip tab dropped on the views is reported in
+/// [`SplitViewsOutput::tab_drop`].
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, probe(SplitViews<'static, ()>))]
 pub struct SplitViews<'a, D: Clone + Send + Sync + 'static = ()> {
@@ -307,8 +346,9 @@ pub struct SplitViews<'a, D: Clone + Send + Sync + 'static = ()> {
     #[prop]
     count: usize,
     activated: Option<usize>,
-    #[allow(dead_code)] // P3(pdf-chrome-w7): CH-C21
     accepts: Option<Box<dyn Fn(&[D], TabDropTarget) -> bool + 'a>>,
+    /// The tab drop released over the views in this pass.
+    tab_drop: Option<TabDrop<D>>,
 }
 
 impl<'a> SplitViews<'a> {
@@ -316,15 +356,15 @@ impl<'a> SplitViews<'a> {
     /// active until [`active`](Self::active) says otherwise.
     pub fn new(label: impl Into<Label>, layout: SplitLayout, at: Bind<'a, SplitAt>) -> Self {
         let props = ContainerProps::new().arena(true).sizing(Sizing::Fill).pad(Pad::None);
-        SplitViews { common: Common::new(), props, layout, at, active: 0, count: 0, activated: None, accepts: None }.label(label)
+        SplitViews { common: Common::new(), props, layout, at, active: 0, count: 0, activated: None, accepts: None, tab_drop: None }.label(label)
     }
 
     /// Takes a dragged document strip tab over the views: an unsplit body offers its reading-end half, a split body
     /// each whole pane, each only when `accepts` returns true.
     #[must_use]
     pub fn takes_tabs<D: Clone + Send + Sync + 'static>(self, accepts: impl Fn(&[D], TabDropTarget) -> bool + 'a) -> SplitViews<'a, D> {
-        let _ = accepts;
-        todo!("CH-C21")
+        let SplitViews { common, props, layout, at, active, count, activated, accepts: _, tab_drop: _ } = self;
+        SplitViews { common, props, layout, at, active, count, activated, accepts: Some(Box::new(accepts)), tab_drop: None }
     }
 
     /// Copies the main view's centre and zoom into the linked panes, each keeping its own rect and rotation.
@@ -437,6 +477,13 @@ impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
                 || cx.part_activated(part).is_some()
         };
         self.activated = (0..pane_count(self.layout, self.count)).filter(|&pane| pane != active).find(chosen);
+        // The views' own target over their rect; it ranks above a strip's tear-off, which takes the window.
+        if let Some(accepts) = self.accepts.as_deref() {
+            let at = cx.value().cloned().unwrap_or_default();
+            let areas = tab_areas(&self.laid(&at, cx.rect), cx.rect, cx.flow.is_rtl());
+            let target = TabTarget { areas, accepts };
+            self.tab_drop = cx.drop_target::<ListDrag<D>, _>(&target).map(|(drop, _)| drop);
+        }
     }
 
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -471,7 +518,7 @@ impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SplitViewsOutput<D> {
-        SplitViewsOutput { edit: cx.edit_response(), activated: self.activated, tab_drop: None } // P3(pdf-chrome-w7): CH-C21
+        SplitViewsOutput { edit: cx.edit_response(), activated: self.activated, tab_drop: self.tab_drop }
     }
 }
 
