@@ -115,7 +115,7 @@ use crate::style::{ComponentStyle, Stateful, StyleColor, StyleCx, SurfaceKind, S
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
-    CanvasTransform, CanvasView, CursorPriority, EditEvent, EditorInput, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, PartKey,
+    CanvasTransform, CanvasView, CursorPriority, EditEvent, EditorInput, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, Mixed, PartKey,
     PointerButton, PressPhase, PressState, Sense, WheelNotch,
 };
 use navigate::MiddleAutoscroll;
@@ -783,6 +783,16 @@ impl Component for Canvas<'_> {
             rulers: Rulers::content_rect(cx, Rect::ZERO).min.to_vec2(),
             mark: Some((cx.color(overlay.handle_fill), cx.color(overlay.stroke))),
             ..CanvasStyle::default()
+        }
+    }
+
+    /// With an editor part the canvas keeps an editor's keys: typed text, the arrows as moves and Delete reach the part
+    /// as editor input, where the canvas's own keys would leave the text unrouted and make the arrows the tool's
+    /// nudges. It still marks its window as showing a document.
+    fn keys(&self) -> KeyUse {
+        match self.editor {
+            Some(_) => KeyUse::of(Input::Editor).with_chrome_key(true).with_moves(),
+            None => Self::KEYS,
         }
     }
 
