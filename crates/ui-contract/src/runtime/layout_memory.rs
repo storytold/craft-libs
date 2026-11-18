@@ -1212,6 +1212,7 @@ pub(crate) mod guard {
             "lazy extents: the kept extent of content out of view, its own mechanism; a pass a kept transcript serves decides in its real run, which compares each row by its backstop",
         ),
         ("contract::steps::scroll_owner::", "scroll reveals and moves: read; taken through take_queued"),
+        ("contract::items::request::RenameRequests", "rename requests: peeked by the items read so the renamed row stays in the view; taken in real runs only"),
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
         ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
