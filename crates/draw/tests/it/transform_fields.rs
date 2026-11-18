@@ -176,3 +176,23 @@ fn typing_50_into_w_of_a_distorted_box_equals_typing_50_once_from_the_start_box(
     let (a, b) = (once.row(), by_digit.row());
     assert!(a.state.quad.iter().zip(&b.state.quad).all(|(p, q)| p.distance(*q) < 1e-6), "{a:?} {b:?}");
 }
+
+/// The bar's Interpolation select shows each of the six methods by its name.
+#[trial]
+fn the_interpolation_select_names_each_of_the_six_methods() {
+    use craft_draw::ui::transform::Interpolation;
+    let names = ["Nearest Neighbor", "Bilinear", "Bicubic", "Bicubic Smoother", "Bicubic Sharper", "Bicubic Automatic"];
+    for (choice, name) in Interpolation::ALL.into_iter().zip(names) {
+        let mut row = TransformRow::new(BoxState::from_rect(START), 0.0);
+        let (mut linked, mut held) = (true, choice);
+        let mut fixture = Fixture::new(move |ui| {
+            TransformFields::new("Transform", Bind::bound(&mut row), START, Bind::bound(&mut linked))
+                .bar()
+                .interpolation(Bind::bound(&mut held))
+                .show(ui);
+        });
+        fixture.settle();
+        let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+        assert_eq!(texts.last().map(String::as_str), Some(name), "{choice:?}: {texts:?}");
+    }
+}
