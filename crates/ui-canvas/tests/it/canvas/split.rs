@@ -69,11 +69,17 @@ fn drag_divider(fixture: &mut Fixture, index: u64, by: Vec2) {
 }
 
 /// What the tab-drop host reported since the last drag.
-#[derive(Default)]
 struct Seen {
     drops: Vec<TabDrop<usize>>,
     torn: usize,
     views: Rect,
+}
+
+// `egui::Rect` has no `Default`; nothing is shown before the first frame.
+impl Default for Seen {
+    fn default() -> Self {
+        Seen { drops: Vec::new(), torn: 0, views: Rect::NOTHING }
+    }
 }
 
 /// A document strip above split views in `layout` with `count` documents that take every drop but at `refused`.
