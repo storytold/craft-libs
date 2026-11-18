@@ -1,6 +1,9 @@
 //! PCM helpers shared by the WAV, AIFF and FLAC writers: quantization (with optional TPDF
 //! dither), interleaving and layout checks.
 
+// The coded formats use the layout check, and of those only ALAC the quantizer.
+#![cfg_attr(not(any(feature = "pcm-encode", feature = "flac-encode")), allow(dead_code))]
+
 use crate::{AudioBuffer, AudioError, Result};
 #[cfg(feature = "pcm-encode")]
 use {crate::BitDepth, std::io::Write};

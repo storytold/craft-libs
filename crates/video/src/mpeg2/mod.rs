@@ -1,5 +1,5 @@
 //! Clean-room MPEG-2 video (ITU-T H.262 | ISO/IEC 13818-2) and MPEG-1 video (ISO/IEC 11172-2)
-//! decoder, and the start of an MPEG-2 encoder ([`encode`], feature `mpeg2-encode`: I and P
+//! decoder, and the start of an MPEG-2 encoder ([`encode`], feature `mpeg2-encode`: I, P and B
 //! pictures).
 //!
 //! - Main Profile at Low/Main/High-1440/High Level, 4:2:2 Profile (XDCAM HD422, IMX / D-10),
