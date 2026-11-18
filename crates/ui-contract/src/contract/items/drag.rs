@@ -401,7 +401,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
         self.emit_toggle(cx, at, &column, on, mods);
         if toggle.exclusive && on {
-            for other in (0..self.source.len()).filter(|&other| other != at && self.source.toggled(other, &column)) {
+            // Collected first: emitting needs `self` mutably while the source is read through it.
+            let others: Vec<usize> = (0..self.source.len()).filter(|&other| other != at && self.source.toggled(other, &column)).collect();
+            for other in others {
                 self.emit_toggle(cx, other, &column, false, mods);
             }
         }

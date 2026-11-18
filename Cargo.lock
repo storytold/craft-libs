@@ -3571,6 +3571,7 @@ dependencies = [
 name = "craft-review"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "craft-behavior",
  "craft-host",
  "craft-i18n",
