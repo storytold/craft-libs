@@ -70,6 +70,19 @@ pub struct TaskBar<'a> {
     label: Label,
     anchor: &'a [Point],
     place: Bind<'a, TaskBarPlace>,
+    #[allow(dead_code)] // P3(pdf-canvas-w3): CV-C15
+    kind: TaskBarKind,
+}
+
+/// Whether a task bar follows its anchor and moves, or stays where it hangs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarKind {
+    /// The bar follows its anchor and the user moves it.
+    #[default]
+    Movable,
+    /// The bar hangs where it is placed: no grip, no move band and no More menu.
+    Fixed,
 }
 
 /// What the task bar reports.
@@ -148,12 +161,29 @@ impl MoreMenu {
 impl<'a> TaskBar<'a> {
     /// A bar named `label` hung below the screen bounds of `anchor` (document points) until `place` moves it.
     pub fn new(label: impl Into<Label>, anchor: &'a [Point], place: Bind<'a, TaskBarPlace>) -> Self {
-        TaskBar { label: label.into(), anchor, place }
+        TaskBar { label: label.into(), anchor, place, kind: TaskBarKind::Movable }
+    }
+
+    /// A fixed bar named `label` hung below the screen bounds of `anchor`, above them when there is no room below.
+    pub fn fixed(label: impl Into<Label>, anchor: &'a [Point]) -> Self {
+        let _ = (label, anchor);
+        todo!("CV-C15")
+    }
+
+    /// A fixed bar at the canvas view's top edge, aligned `edge` in reading direction and inset by the regular pad.
+    pub fn at_edge(label: impl Into<Label>, edge: Align) -> Self {
+        let _ = (label, edge);
+        todo!("CV-C15")
+    }
+
+    /// Whether the bar is movable or fixed.
+    pub fn kind(&self) -> TaskBarKind {
+        todo!("CV-C15")
     }
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, anchor, mut place } = self;
+        let TaskBar { label, anchor, mut place, .. } = self; // P3(pdf-canvas-w3): CV-C15
         let env = Env::of(ui);
         let words = env.words::<CanvasControlWords>();
         // The anchor maps through this pass's view, so the bar follows a scroll or zoom in the same pass.

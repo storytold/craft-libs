@@ -278,7 +278,7 @@ impl Container for FullWindowDialog<'_> {
         if self.props.outer_edit {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable));
+        frame::header(ui, cx, frame::close_action(self.closable), None); // P3(pdf-comments-w6): CM-C27
     }
 
     fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

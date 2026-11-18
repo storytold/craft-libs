@@ -55,6 +55,8 @@ pub enum SelectionOutlineLook {
     Solid,
     /// A medium line in dashes: a CAD app's selection effect.
     Dashed,
+    /// A thin line with no halo, in the overlay grid colour: every editable object in an edit mode.
+    Faint,
 }
 
 /// The style of the hover and selection outlines.
@@ -72,6 +74,9 @@ pub struct OutlineStyle {
     /// The length of a dash and of the gap after it.
     dash: f32,
     gap: f32,
+    /// The line colour of a faint outline.
+    #[allow(dead_code)] // P3(pdf-edit-w5): ED-F10
+    faint: StyleColor,
 }
 
 fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
@@ -83,6 +88,7 @@ fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
         thin: stroke.thin,
         dash: stroke.dash,
         gap: stroke.dash_gap,
+        faint: cx.color(cx.tokens.color.overlay.grid),
     }
 }
 
@@ -284,6 +290,13 @@ impl<'a> SelectionOutline<'a> {
         SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Solid, color: None }.label(label)
     }
 
+    /// A thin outline of `paths` (document units) with no halo, for every editable object in an edit mode, named
+    /// `label`.
+    pub fn faint(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
+        let _ = (label, paths);
+        todo!("ED-F10")
+    }
+
     /// A dashed outline of `paths` (document units), named `label`.
     pub fn dashed(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
         SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Dashed, color: None }.label(label)
@@ -316,6 +329,7 @@ impl Component for SelectionOutline<'_> {
             for (mut points, closed) in path_runs(&space.view, path) {
                 match self.look {
                     SelectionOutlineLook::Solid => stroke_run(&painter, points, closed, self.color, style.thin),
+                    SelectionOutlineLook::Faint => todo!("ED-F10"),
                     SelectionOutlineLook::Dashed => {
                         if closed {
                             points.extend(points.first().copied());

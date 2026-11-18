@@ -97,8 +97,13 @@ fn screen(
 ) -> StoryOutput {
     let mut choice = data.value("choice", choice).clone();
     let thumbnails = Thumbnails::<ThumbKey>::in_context(ui.ctx(), "start-stories", ThumbnailOptions::new());
+    // P3(pdf-chrome-w5): CH-C18
+    let folders: Vec<super::PinnedFolder> = pinned
+        .iter()
+        .map(|path| super::PinnedFolder { path: path.clone(), name: String::new(), listing: None, folded: false, expanded: false })
+        .collect();
     let mut start = StartScreen::new(Bind::bound(&mut choice.view), Bind::bound(&mut choice.sort), files)
-        .pinned(pinned)
+        .pinned(&folders)
         .templates(templates)
         .now(NOW)
         .links(extras.links);

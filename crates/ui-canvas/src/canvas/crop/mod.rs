@@ -171,7 +171,31 @@ pub struct CropOverlay<'a> {
     /// Nothing is painted and a press anywhere on the canvas draws a new frame.
     #[prop(flag)]
     hidden: bool,
+    /// What a press outside the frame does: turns it, applies the crop, or draws a new frame.
+    #[prop]
+    #[allow(dead_code)] // P3(pdf-edit-w4): ED-F8
+    outside: CropOutside,
+    /// The quad the frame is bounded to, drawn as an outline in the guide colour.
+    #[prop]
+    #[allow(dead_code)] // P3(pdf-edit-w4): ED-F8
+    area: Option<[Point; 4]>,
+    /// The smallest side a drawn frame keeps.
+    #[prop(quantity = "document units")]
+    min_side: f64,
     report: Report,
+}
+
+/// What a press outside a crop frame does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CropOutside {
+    /// The press turns the frame.
+    #[default]
+    Turn,
+    /// The press applies the crop.
+    Apply,
+    /// The press draws a new frame.
+    NewFrame,
 }
 
 impl<'a> CropOverlay<'a> {
@@ -192,6 +216,9 @@ impl<'a> CropOverlay<'a> {
             auto_center: false,
             fills_uncovered: false,
             hidden: false,
+            outside: CropOutside::default(),
+            area: None,
+            min_side: 0.0,
             report: Report::default(),
         }
         .label(label)
@@ -360,7 +387,8 @@ impl CropOverlay<'_> {
             }
             return;
         }
-        if drag.last.is_finite() && drag.last.size_ok() {
+        if drag.last.is_finite() && drag.last.size_ok(self.min_side) {
+            // P3(pdf-edit-w4): ED-F9
             if let Some(view) = gesture::centred(&drag, self.auto_center, &space.view, &drag.last) {
                 self.report.view = Some(view);
             }

@@ -243,15 +243,37 @@ pub struct SplitStyle {
 /// What split views report: the dividers' edits and the pane the user chose.
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct SplitViewsOutput {
+pub struct SplitViewsOutput<D = ()> {
     /// The divider edits and the area's response.
     pub edit: EditResponse<SplitAt>,
     /// The pane pressed, or activated by key or assistive technology, this pass that was not the active one: the app
     /// makes it active.
     pub activated: Option<usize>,
+    /// The documents dropped on the views this pass, and where.
+    pub tab_drop: Option<TabDrop<D>>,
 }
 
-impl Outcome for SplitViewsOutput {
+/// Where a dragged document strip tab lands on split views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TabDropTarget {
+    /// A whole pane of a split body.
+    Pane(usize),
+    /// The reading-end half of an unsplit body.
+    SplitEnd,
+}
+
+/// The documents of a dragged tab group and the target they were dropped on.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TabDrop<D> {
+    /// The dragged documents.
+    pub documents: Vec<D>,
+    /// Where they were dropped.
+    pub target: TabDropTarget,
+}
+
+impl<D> Outcome for SplitViewsOutput<D> {
     type Value = SplitAt;
 
     fn response(&self) -> &Response {
@@ -269,8 +291,8 @@ impl Outcome for SplitViewsOutput {
 /// Tab stop over its view: a press, Enter or Space on it reports it in [`SplitViewsOutput::activated`] and its view
 /// gets no press.
 #[derive(crate::contract::Component, crate::contract::Props)]
-#[component(container)]
-pub struct SplitViews<'a> {
+#[component(container, probe(SplitViews<'static, ()>))]
+pub struct SplitViews<'a, D: Clone + Send + Sync + 'static = ()> {
     #[common]
     common: Common,
     #[container]
@@ -285,6 +307,8 @@ pub struct SplitViews<'a> {
     #[prop]
     count: usize,
     activated: Option<usize>,
+    #[allow(dead_code)] // P3(pdf-chrome-w7): CH-C21
+    accepts: Option<Box<dyn Fn(&[D], TabDropTarget) -> bool + 'a>>,
 }
 
 impl<'a> SplitViews<'a> {
@@ -292,7 +316,15 @@ impl<'a> SplitViews<'a> {
     /// active until [`active`](Self::active) says otherwise.
     pub fn new(label: impl Into<Label>, layout: SplitLayout, at: Bind<'a, SplitAt>) -> Self {
         let props = ContainerProps::new().arena(true).sizing(Sizing::Fill).pad(Pad::None);
-        SplitViews { common: Common::new(), props, layout, at, active: 0, count: 0, activated: None }.label(label)
+        SplitViews { common: Common::new(), props, layout, at, active: 0, count: 0, activated: None, accepts: None }.label(label)
+    }
+
+    /// Takes a dragged document strip tab over the views: an unsplit body offers its reading-end half, a split body
+    /// each whole pane, each only when `accepts` returns true.
+    #[must_use]
+    pub fn takes_tabs<D: Clone + Send + Sync + 'static>(self, accepts: impl Fn(&[D], TabDropTarget) -> bool + 'a) -> SplitViews<'a, D> {
+        let _ = accepts;
+        todo!("CH-C21")
     }
 
     /// Copies the main view's centre and zoom into the linked panes, each keeping its own rect and rotation.
@@ -302,7 +334,9 @@ impl<'a> SplitViews<'a> {
             pane.view.zoom = main.zoom;
         }
     }
+}
 
+impl<D: Clone + Send + Sync + 'static> SplitViews<'_, D> {
     fn active_pane(&self) -> usize {
         self.active.min(pane_count(self.layout, self.count).saturating_sub(1))
     }
@@ -315,7 +349,7 @@ impl<'a> SplitViews<'a> {
 
 /// Dragging a divider moves its boundary (one gesture from the drag's start to its release), the arrow keys move the
 /// focused divider by a step, Shift or Page by a jump, and assistive technology sets it to a value.
-fn resize(cx: &mut Cx<'_, SplitViews<'_>>, at: &SplitAt, laid: &Laid, dividers: &[Divider]) {
+fn resize<D: Clone + Send + Sync + 'static>(cx: &mut Cx<'_, SplitViews<'_, D>>, at: &SplitAt, laid: &Laid, dividers: &[Divider]) {
     let rect = cx.rect;
     for (index, divider) in dividers.iter().enumerate() {
         match divider::pointer(cx, DIVIDER, index as u64, divider) {
@@ -337,13 +371,13 @@ fn resize(cx: &mut Cx<'_, SplitViews<'_>>, at: &SplitAt, laid: &Laid, dividers: 
     }
 }
 
-impl Component for SplitViews<'_> {
+impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
     const ROLE: Role = Role::GROUP;
     const KEYS: KeyUse = KeyUse::SPLITTER;
     type Style = SplitStyle;
-    type Output = SplitViewsOutput;
+    type Output = SplitViewsOutput<D>;
 
-    fn style(cx: &StyleCx<'_>, _: SplitViewsStyleKey) -> SplitStyle {
+    fn style(cx: &StyleCx<'_>, _: SplitViewsStyleKey<D>) -> SplitStyle {
         SplitStyle {
             metrics: Metrics::new(),
             sizes: DockSizes::style(cx),
@@ -436,9 +470,9 @@ impl Component for SplitViews<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> SplitViewsOutput {
-        SplitViewsOutput { edit: cx.edit_response(), activated: self.activated }
+    fn finish(self, cx: Cx<'_, Self>) -> SplitViewsOutput<D> {
+        SplitViewsOutput { edit: cx.edit_response(), activated: self.activated, tab_drop: None } // P3(pdf-chrome-w7): CH-C21
     }
 }
 
-impl Container for SplitViews<'_> {}
+impl<D: Clone + Send + Sync + 'static> Container for SplitViews<'_, D> {}

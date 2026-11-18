@@ -1,8 +1,10 @@
 //! `NavigationOptions`: the user's navigation choices (Photoshop's Preferences, General, Tools and Enhanced Controls
 //! rows), which the app owns and hands to the navigation pieces and the view tools.
 
+use super::PageKey;
+
 /// The navigation choices, with Photoshop's defaults.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct NavigationOptions {
     /// General, Zoom with Scroll Wheel: the wheel zooms and Alt + wheel scrolls. Off.
@@ -28,6 +30,38 @@ pub struct NavigationOptions {
     pub trackpad_rotate: bool,
     /// Enhanced Controls, Enable Gestures: a touch screen's two-finger pinch and twist. On.
     pub touch_gestures: bool,
+    /// What a plain and a modified wheel do. `Scroll`.
+    pub wheel: WheelScheme,
+    /// How many points a wheel line moves the view. 16.
+    pub wheel_line: f32,
+    /// How many points a key move of the view steps. [`PageKey::SMALL_STEP`].
+    pub key_line: f32,
+    /// A wheel pan eases to its target through the wheel service instead of jumping. Off.
+    pub eased_wheel: bool,
+    /// A touchpad's scroll glides on after the fingers lift. Off.
+    pub touchpad_glide: bool,
+    /// What the middle button does over the canvas background. `Pan`.
+    pub middle_button: craft_behavior::MiddleButton,
+    /// The middle-button scroll runs the other way. Off.
+    pub invert_middle: bool,
+}
+
+/// What a plain and a modified wheel do over a canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WheelScheme {
+    /// The wheel scrolls; Alt and the zoom modifiers zoom.
+    #[default]
+    Scroll,
+    /// The wheel zooms; Alt scrolls.
+    Zoom,
+    /// Cmd or Ctrl zooms about the pointer by [`ACROBAT_NOTCH`](Self::ACROBAT_NOTCH) per line; Shift scrolls sideways.
+    Acrobat,
+}
+
+impl WheelScheme {
+    /// The zoom factor of one wheel line under [`Acrobat`](Self::Acrobat).
+    pub const ACROBAT_NOTCH: f64 = 1.221_402_758;
 }
 
 impl Default for NavigationOptions {
@@ -44,6 +78,13 @@ impl Default for NavigationOptions {
             pinch_zooms: true,
             trackpad_rotate: false,
             touch_gestures: true,
+            wheel: WheelScheme::default(),
+            wheel_line: 16.0,
+            key_line: PageKey::SMALL_STEP,
+            eased_wheel: false,
+            touchpad_glide: false,
+            middle_button: craft_behavior::MiddleButton::default(),
+            invert_middle: false,
         }
     }
 }

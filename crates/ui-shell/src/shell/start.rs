@@ -24,7 +24,7 @@ use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
 use crate::sections::Section;
 use crate::style::{Corners, SurfaceKind, SurroundLook};
-use crate::tile_grid::{CaptionPlace, Tile, TileGrid, TilePartEvent};
+use crate::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid, TilePartEvent};
 use craft_behavior::{IconId, Proposal, SelectionChange, keyed};
 use craft_theme::Variant;
 use craft_theme::variant::Tone;
@@ -104,6 +104,70 @@ pub enum StartAction {
     UnpinFolder(PathBuf),
     /// A template card was chosen; the string is [`Template::id`].
     UseTemplate(String),
+    /// A file listed under a pinned folder was opened: the app opens that path.
+    OpenPinnedFile(PathBuf),
+    /// A pinned folder was folded: the app keeps it folded.
+    FoldPinned(PathBuf),
+    /// A pinned folder's More row was chosen: the app lists all of its files.
+    ExpandPinned(PathBuf),
+}
+
+/// Where a host section sits on the start screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StartPlace {
+    /// Before the Recent section.
+    BeforeRecent,
+    /// After the last built-in section.
+    AfterSections,
+}
+
+/// The most files a pinned folder lists before its More row.
+pub const PINNED_FILES_SHOWN: usize = 8;
+
+/// A pinned folder as the start screen lists it, with the files the app found in it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PinnedFolder {
+    /// The folder's path; also the identity of the entry.
+    pub path: PathBuf,
+    /// The name shown.
+    pub name: String,
+    /// The folder's files, once the app has listed them.
+    pub listing: Option<FolderListing>,
+    /// The folder shows no files.
+    pub folded: bool,
+    /// The folder lists all of its files, not the first [`PINNED_FILES_SHOWN`].
+    pub expanded: bool,
+}
+
+/// What the app knows of a pinned folder's files.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum FolderListing {
+    /// The app is still listing the folder.
+    Pending,
+    /// The folder cannot be listed.
+    Unavailable,
+    /// The folder's files, and how many it holds in all.
+    Listed {
+        /// The files to show.
+        files: Vec<PinnedFile>,
+        /// The number of files in the folder.
+        total: usize,
+    },
+}
+
+/// A file listed under a pinned folder.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PinnedFile {
+    /// The file's full path.
+    pub path: PathBuf,
+    /// The name shown.
+    pub name: String,
+    /// A second line under the name.
+    pub note: Option<String>,
 }
 
 /// What a start screen pass reports.
@@ -154,7 +218,7 @@ pub struct StartScreen<'a> {
     /// The pinned folders in the app's order. The section shows once this is given; an app that cannot pin leaves it
     /// out.
     #[prop]
-    pinned: Option<&'a [PathBuf]>,
+    pinned: Option<&'a [PinnedFolder]>,
     /// The template cards; the section is left out when there are none.
     #[prop]
     templates: &'a [Template],
@@ -172,6 +236,9 @@ pub struct StartScreen<'a> {
     /// With no recent files, the Recent body is a drop card with this hint that opens a file on a click.
     #[prop(into)]
     drop_hint: Option<Label>,
+    /// The New… button shows (true by default).
+    #[prop]
+    offers_new: bool,
 }
 
 /// A link on the start screen's rail.
@@ -222,7 +289,15 @@ impl<'a> StartScreen<'a> {
             thumbnails: None,
             links: &[],
             drop_hint: None,
+            offers_new: true,
         }
+    }
+
+    /// Shows `body` as a host section at `place` on the start screen.
+    #[must_use]
+    pub fn section(self, place: StartPlace, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
+        let _ = (place, body);
+        todo!("CH-C17")
     }
 
     /// Cards, rows and templates ask `thumbnails.state(..)` for what they show; `source` gives each key's revision.
@@ -290,7 +365,7 @@ impl<'p> Page<'p> {
             .detail_line()
             .card()
             .aspect(f32::from(PICTURE_WIDE) / f32::from(PICTURE_HIGH))
-            .zoom(CARD_ZOOM)
+            .zoom(GridZoom::Fixed(f64::from(CARD_ZOOM))) // P3(pdf-chrome-w5): WF-W12
             .fill_row()
             .sizing(Sizing::FillWidth)
             .natural_height(true)
@@ -341,7 +416,7 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint } = self;
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, offers_new: _ } = self; // P3(pdf-chrome-w5): CH-C17
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
@@ -374,7 +449,8 @@ impl StartScreen<'_> {
             }
             recent_section(&page, ui, &view, &sort, current_view, &files);
             if let Some(pinned) = pinned {
-                pinned_section(&page, ui, pinned);
+                let paths: Vec<PathBuf> = pinned.iter().map(|folder| folder.path.clone()).collect(); // P3(pdf-chrome-w5): CH-C18
+                pinned_section(&page, ui, &paths);
             }
             if !templates.is_empty() {
                 templates_section(&page, ui, templates);

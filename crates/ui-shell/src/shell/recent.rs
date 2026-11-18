@@ -27,12 +27,21 @@ pub struct RecentFile {
     pub opened: Option<i64>,
     /// Created, in seconds since the Unix epoch, for sorting by Created.
     pub created: Option<i64>,
+    /// A second line under the name.
+    pub note: Option<String>,
 }
 
 impl RecentFile {
     /// A recent file at `path` shown as `name`, with no dates.
     pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
-        RecentFile { path: path.into(), name: name.into(), opened: None, created: None }
+        RecentFile { path: path.into(), name: name.into(), opened: None, created: None, note: None }
+    }
+
+    /// This file with a second line, `note`, under its name.
+    #[must_use]
+    pub fn note(self, note: impl Into<String>) -> Self {
+        let _ = note;
+        todo!("CH-C17")
     }
 }
 

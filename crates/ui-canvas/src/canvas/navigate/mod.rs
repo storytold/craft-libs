@@ -15,7 +15,7 @@ mod wheel;
 
 pub use bar::{NavigateBar, NavigateBarOutput};
 pub use keys::PageKey;
-pub use options::NavigationOptions;
+pub use options::{NavigationOptions, WheelScheme};
 pub use wheel::{WheelAction, WheelInput, WheelNavigation};
 
 use super::frame_step;
