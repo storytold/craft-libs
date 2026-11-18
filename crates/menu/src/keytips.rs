@@ -7,7 +7,6 @@ mod stories;
 use std::sync::Arc;
 
 use craft_behavior::{Insets, Metrics, Sense};
-use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic::assign_keytips;
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_ui::contract::{Common, Component, Cx, Focus as _, MeasureCx, MenuKey, NoValue, Outcome, PaintUi, Remember as _, Role, Styled as _};
@@ -127,7 +126,8 @@ struct Reported {
 ///   focused document, and the letters of one frame apply in the order they arrived; a letter no badge has is not
 ///   taken.
 /// - Off while a text field or a shortcut recorder has focus, under a modal layer, while the window is in the
-///   background, and while the window shows an in-window menu bar, which takes Alt and F10 itself.
+///   background, and when the app passes `false` to [`Keytips::new`] because its window shows an in-window menu bar,
+///   which takes Alt and F10 itself.
 ///
 /// The badges paint in the layer of the `Ui` the keytips show in, over its whole clip rect, so the keytips show after
 /// the ribbon, in a `Ui` that covers it and any other recorded region.
@@ -396,9 +396,7 @@ impl Component for Keytips<'_> {
     /// a second pass of the frame keeps the state the first one wrote and reports nothing new.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let ctx = cx.response.ctx.clone();
-        // An in-window menu bar takes Alt and F10 itself.
-        let owns_keys = self.enabled && cx.env.shell().menu() != MenuPlacement::InWindow;
-        if !owns_keys || suppressed(&ctx) {
+        if !self.enabled || suppressed(&ctx) {
             *cx.memory::<State>() = State::default();
             return;
         }
