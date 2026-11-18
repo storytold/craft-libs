@@ -6,11 +6,13 @@ use std::rc::Rc;
 
 use craft_behavior::Selection;
 use craft_review::AnnotationKind;
-use craft_review::comments::{CommentAnchor, CommentFilter, CommentMessage, CommentSort, CommentThread, PageOrder, ReviewStatus, ReviewerStatus, ThreadId};
+use craft_review::comments::{
+    CommentAnchor, CommentFilter, CommentMessage, CommentSort, CommentThread, PageOrder, ReviewStatus, ReviewerStatus, ThreadId,
+};
 use craft_review::ui::{CommentEdit, CommentsHeader, CommentsPanel, CommentsPanelState, comments_more_menu};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Entry, Role, SelectMode, Show as _};
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, Room, trial};
 use egui::{Key, Modifiers, Rect};
 
 fn message(author: &str, text: &str) -> CommentMessage {
@@ -42,7 +44,11 @@ fn row_names(fixture: &Fixture) -> Vec<String> {
 
 /// The rect of the built card whose name holds `text`.
 fn card(fixture: &Fixture, text: &str) -> Option<Rect> {
-    fixture.by_role(Role::TREE_ITEM).into_iter().find(|row| fixture.tree().name_of(row.node).is_some_and(|name| name.contains(text))).map(|row| row.rect)
+    fixture
+        .by_role(Role::TREE_ITEM)
+        .into_iter()
+        .find(|row| fixture.tree().name_of(row.node).is_some_and(|name| name.contains(text)))
+        .map(|row| row.rect)
 }
 
 /// The rect of the built heading named `title`.
@@ -107,10 +113,12 @@ fn multi_selection_reports_only_threads_with_the_lead_first() {
         let out = CommentsPanel::new("Comments", &threads, &mut state).select_mode(SelectMode::Multi).show(ui);
         shown_edits.borrow_mut().extend(out.edits);
     });
-    fixture.settle();
+    // The panel's room: both pages' headings and cards are in view, so each is built and can be clicked.
+    fixture.in_room(Room::Panel).settle();
     let first = card(&fixture, "Note 1.").expect("card 1");
     fixture.click_at(first.center()).settle();
     assert_eq!(last_selection(&edits), Some(vec![ThreadId(1)]), "a click selects its card");
+    eprintln!("DIAG multi_selection_reports_only_threads_with_the_lead_first: rows {:?}", row_names(&fixture));
     let third = card(&fixture, "Note 3.").expect("card 3");
     fixture.hold(Modifiers::SHIFT).click_at(third.center()).hold(Modifiers::NONE).settle();
     let range = last_selection(&edits).expect("the Shift click reports the selection");
@@ -246,7 +254,8 @@ fn host_rows_follow_the_cards_rows_and_report_their_value() {
                 shown_ran.borrow_mut().push(value);
             }
         }
-        let out = CommentsPanel::new("Comments", &threads, &mut state).header(header).card_rows(|_, _| vec![Entry::new(7_u32, "Flag message")]).show(ui);
+        let out =
+            CommentsPanel::new("Comments", &threads, &mut state).header(header).card_rows(|_, _| vec![Entry::new(7_u32, "Flag message")]).show(ui);
         shown_picked.borrow_mut().extend(out.host);
     });
     fixture.settle();

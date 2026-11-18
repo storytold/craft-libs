@@ -287,6 +287,14 @@ fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
             .recent("Recent colours", &RECENT)
             .show(ui);
         c.set(current);
+        if let Some(request) = &shown.pick_color {
+            eprintln!(
+                "DIAG the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it: request {:?} edit {} picked {:?}",
+                request.key,
+                shown.edit.is_some(),
+                shown.picked
+            );
+        }
         collect(&r, shown);
     });
     fixture.room(PALETTE_WIDE).settle();

@@ -663,7 +663,7 @@ impl<'a> TransformBox<'a> {
             if self.has_knob() {
                 parts.push((KNOB.at(0), BoxPart::Outside));
             }
-        } else {
+        } else if self.rules.allows(BoxPart::Outside) {
             parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
         }
         parts
@@ -1066,7 +1066,7 @@ impl Component for TransformBox<'_> {
             cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
         }
         match self.rotate_zone {
-            RotateZone::Outside | RotateZone::Border { .. } => {
+            RotateZone::Outside | RotateZone::Border { .. } if self.rules.allows(BoxPart::Outside) => {
                 for (corner, region) in outside_regions(&quad, rect).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(region))
                         .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
@@ -1082,7 +1082,7 @@ impl Component for TransformBox<'_> {
                         .pointer_only(ROTATE_BY_KEY);
                 }
             }
-            RotateZone::Band => {}
+            RotateZone::Outside | RotateZone::Border { .. } | RotateZone::Band => {}
             // The knob alone turns the box; the rest of the outside is the tool's.
             RotateZone::Knob => {
                 if self.has_knob() {

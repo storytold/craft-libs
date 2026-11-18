@@ -2,8 +2,8 @@
 
 use super::{Swatch, SwatchMetrics};
 use crate::contract::{
-    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, NoValue, Outcome, Props, Role,
-    SelectMode, ShowCollection as _, Sizing,
+    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, LeadOnOpen, NoValue, Outcome,
+    Props, Role, SelectMode, ShowCollection as _, Sizing,
 };
 use crate::list::RowTest;
 use crate::runtime::env::Label;
@@ -138,7 +138,12 @@ impl<'a> SwatchTable<'a> {
         SwatchTable {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::FillWidth),
-            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::DoubleClick).arrows_select(false).natural_height(true),
+            items: CollectionProps::new()
+                .select(SelectMode::Single)
+                .activate(ActivateOn::DoubleClick)
+                .arrows_select(false)
+                .lead_on_open(LeadOnOpen::First)
+                .natural_height(true),
             swatches,
             selection: None,
             per_row: None,
