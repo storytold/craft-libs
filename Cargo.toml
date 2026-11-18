@@ -58,6 +58,8 @@ craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
+# The ArtCraft Launcher's app list for AI agents (storytold/craft-ai-integrations, crates/ai-agents).
+craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "35e0352666a117407d62230a6c6c2366f3e21a3b" }
 craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
