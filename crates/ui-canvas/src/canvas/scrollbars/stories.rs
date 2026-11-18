@@ -45,13 +45,13 @@ fn drag_thumb(fixture: &mut Fixture) {
     fixture.drag(&grip, Vec2::new(DRAG_THRESHOLDS * threshold, 0.0));
 }
 
-/// Presses the vertical thumb and drags it down, holding the button at the end so the tip stays up.
+/// Presses the vertical thumb, drags it down and releases it: the gesture the shared drive cases expect to end once.
 fn drag_vertical_thumb(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
     let Some(track) = fixture.part(id, VERTICAL) else { return };
     let threshold = crate::testing::input::slop(fixture.ctx());
     let grip = track.rect.center_top() + vec2(0.0, GRIP_THRESHOLDS * threshold);
-    fixture.drag_hold_at(grip, Vec2::new(0.0, DRAG_THRESHOLDS * threshold));
+    fixture.drag_at(grip, Vec2::new(0.0, DRAG_THRESHOLDS * threshold));
 }
 
 /// The tip beside a dragged vertical thumb: the bars show it on the reading-start side while the thumb drags.
