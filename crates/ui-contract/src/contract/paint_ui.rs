@@ -219,6 +219,18 @@ impl PaintUi<'_> {
         self.face_with(part.into(), face, Some(ink));
     }
 
+    /// [`face`](Self::face) painted `share` as opaque as it would be (1 paints as `face` does, 0 paints nothing): a
+    /// component fading in or out as the one component that draws it. A share outside 0 to 1 is clamped and a
+    /// non-finite one leaves the opacity as it was; fades stack with the opacity already in force.
+    pub fn face_faded<C: Show>(&mut self, part: impl Into<PartRef>, face: C, share: f32) {
+        let kept = self.ui.opacity();
+        if share.is_finite() {
+            self.ui.set_opacity(kept * share.clamp(0.0, 1.0));
+        }
+        self.face_with(part.into(), face, self.text);
+        self.ui.set_opacity(kept);
+    }
+
     fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>) {
         let Some(result) = self.results.get(&(part.key, part.index)) else {
             debug_assert!(false, "face for a part `parts` did not declare");

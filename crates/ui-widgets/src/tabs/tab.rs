@@ -15,7 +15,7 @@ use crate::contract::{
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun, Wrap};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook};
+use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
 use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -24,7 +24,7 @@ use egui::{Pos2, Rect, Response, Vec2};
 mod stories;
 
 /// The role of a tab in its strip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TabRole {
     /// An ordinary tab.
@@ -103,9 +103,12 @@ pub struct TabStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
-    /// The label: the text colour on the selected tab, muted on the others, also under the pointer.
+    /// The label: the text colour on the selected tab, muted on the others, also under the pointer. A ribbon tab's
+    /// label is in the accent text colour when shown or contextual, and measures at the shown tab's semibold type.
     #[style(text)]
     label: TextLook,
+    /// The label's type on a tab that is not shown: the ribbon's regular weight, the label's own type elsewhere.
+    idle_role: TypeRole,
     /// The detail, which stays readable while the label is cut.
     #[style(text)]
     detail: TextLook,
@@ -143,7 +146,8 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop]
     kind: TabKind,
-    /// Whether the tab is a standard one or a contextual one.
+    /// Whether the tab is a standard one or a contextual one; a contextual ribbon tab takes the accent text colour.
+    #[style_key]
     #[prop]
     role: TabRole,
     /// Large Tabs: the strip's taller form with the body type.
@@ -238,9 +242,18 @@ impl Component for Tab<'_> {
         let tokens = cx.tokens;
         let (colors, space, size, stroke) = (&tokens.color, &tokens.space, &tokens.size, &tokens.stroke);
         let text_only = key.kind.text_only();
+        let ribbon = key.kind == TabKind::Ribbon;
         let c = |rgba: Rgba| cx.color(rgba);
         let clear = Rgba::TRANSPARENT;
-        let role = if text_only || key.large { TypeRole::Body } else { TypeRole::Label };
+        // A ribbon tab measures at the shown tab's semibold type, so showing a tab does not move its neighbours.
+        let role = if ribbon {
+            TypeRole::BodyStrong
+        } else if text_only || key.large {
+            TypeRole::Body
+        } else {
+            TypeRole::Label
+        };
+        let idle_role = if ribbon { TypeRole::Body } else { role };
         let line = |role: TypeRole| tokens.typography.get(role).line_height;
         let height = if text_only {
             line(role) + space.gap.tight + stroke.thick
@@ -253,15 +266,23 @@ impl Component for Tab<'_> {
         };
         let pad_x = if text_only { 0.0 } else { 2.0 * space.pad.control };
         let panel = colors.surface.panel;
-        let fill = if text_only {
+        let hover = c(colors.state.hover);
+        let fill = if ribbon {
+            Stateful::new(c(clear)).off(States::new(c(clear), hover, c(clear), c(clear))).on(States::new(c(clear), c(clear), c(clear), c(clear)))
+        } else if text_only {
             Stateful::new(c(clear))
         } else {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };
-        let surface = SurfaceLook::new(fill);
+        let surface = if ribbon { SurfaceLook::new(fill).radius(UiTokens::corner(tokens.shape.radius.sm)) } else { SurfaceLook::new(fill) };
         let disabled = c(colors.text.disabled);
         let ink = |off: Rgba, on: Rgba| {
             Stateful::new(c(off)).off(States::new(c(off), c(off), c(off), disabled)).on(States::new(c(on), c(on), c(on), disabled))
+        };
+        let label_ink = match (ribbon, key.role) {
+            (true, TabRole::Contextual) => ink(colors.accent.text, colors.accent.text),
+            (true, _) => ink(colors.text.muted, colors.accent.text),
+            _ => ink(colors.text.muted, colors.text.normal),
         };
         let sizes = Sizes {
             gap: space.gap.inline,
@@ -277,9 +298,10 @@ impl Component for Tab<'_> {
         TabStyle {
             surface,
             metrics: Metrics::new().padding(Insets::new(pad_x, pad_x, 0.0, 0.0)).min_size(Vec2::new(0.0, height)).gap(sizes.gap),
-            label: TextLook::new(role, ink(colors.text.muted, colors.text.normal)),
+            label: TextLook::new(role, label_ink.clone()),
+            idle_role,
             detail: TextLook::new(TypeRole::Caption, ink(colors.text.faint, colors.text.faint)),
-            icon: IconLook::new(sizes.icon, ink(colors.text.muted, colors.text.normal)),
+            icon: IconLook::new(sizes.icon, label_ink),
             underline: c(colors.text.normal),
             indicator: (!text_only && cx.contrast() == Contrast::High).then(|| c(colors.accent.solid)),
             divider: key.kind.trailing_divider(),
@@ -427,12 +449,14 @@ impl Component for Tab<'_> {
             let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), sizes.indicator.min(rect.height())));
             draw.fill(&PaintShape::Rect(bar, egui::CornerRadius::ZERO), color);
         }
-        if sizes.text_only && selected {
+        // A strip that slides its underline paints the one underline itself.
+        if sizes.text_only && selected && !self.kind.slides_underline() {
             let y = placed.label.bottom() + sizes.underline_gap;
             let line = PaintShape::Path(vec![Pos2::new(placed.label.left(), y), Pos2::new(placed.label.right(), y)]);
             draw.stroke(&line, StrokeWidth::Thick, style.underline);
         }
-        let label = self.label_run(style, cx.resolved.label).color(cx.resolve(&style.label.color));
+        let role = if selected { style.label.role } else { style.idle_role };
+        let label = TextRun::new(cx.resolved.label).role(role).color(cx.resolve(&style.label.color));
         draw.text(placed.label, &if self.kind.clips_label() { label.wrap(Wrap::Clip) } else { label.elide() });
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());

@@ -35,11 +35,12 @@ pub enum FitMode {
 }
 
 impl FitMode {
-    /// Fits tabs of the `natural` widths into `available`, keeping the `selected` tab. `minimum` is the narrowest a
-    /// shrinking tab becomes and `overflow` the width of the overflow button.
-    pub fn fit(self, natural: &[f32], selected: usize, available: f32, minimum: f32, overflow: f32) -> TabFit {
+    /// Fits tabs of the `natural` widths into `available`, keeping the `selected` tab. Whole widths give the tabs
+    /// marked in `kept` the room before the other tabs (`fit_whole`); shrinking tabs have no kept tabs. `minimum` is
+    /// the narrowest a shrinking tab becomes and `overflow` the width of the overflow button.
+    pub fn fit(self, natural: &[f32], selected: usize, kept: &[bool], available: f32, minimum: f32, overflow: f32) -> TabFit {
         match self {
-            FitMode::Whole => fit_whole(natural, selected, &[], available, overflow), // P3(ribbon-w1): rb.R2
+            FitMode::Whole => fit_whole(natural, selected, kept, available, overflow),
             FitMode::Shrink { keep_selected } => fit(natural, selected, available, minimum, overflow, keep_selected),
         }
     }
@@ -66,7 +67,7 @@ pub enum OverflowMenu {
 }
 
 impl TabKind {
-    /// How tab widths are fitted: whole titles for document and text tabs, shrinking for panel tabs.
+    /// How tab widths are fitted: whole titles for document, text and ribbon tabs, shrinking for panel tabs.
     pub fn fit_mode(self) -> FitMode {
         match self {
             Self::Document | Self::Text | Self::Ribbon => FitMode::Whole,
@@ -107,14 +108,14 @@ impl TabKind {
         self == Self::Document
     }
 
-    /// Whether tabs draw only their label, with no surface, indicator or strip fill.
+    /// Whether tabs draw only their label, with no surface, indicator or strip fill: text and ribbon tabs.
     pub fn text_only(self) -> bool {
-        self == Self::Text
+        matches!(self, Self::Text | Self::Ribbon)
     }
 
     /// Whether the shown tab is marked by one accent underline that slides to the newly shown tab (ribbon tabs).
     pub fn slides_underline(self) -> bool {
-        todo!("rb.R1")
+        self == Self::Ribbon
     }
 
     /// Whether a middle click closes a closable tab.
