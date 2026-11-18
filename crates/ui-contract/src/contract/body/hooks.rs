@@ -751,7 +751,7 @@ impl BodyHooks<'_> {
 
     /// Opens the measuring run of `cx`'s container: its rect at the room's start edge, which `cx` takes, and the layer
     /// the run lays the regions out on.
-    fn begin_measure_run<C: Container>(&mut self, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> (egui::LayerId, Rect) {
+    fn begin_measure_run<C: Container>(&mut self, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> (areas::LayerKey, Rect) {
         let (id, ctx) = (cx.core.id, at.ui.ctx());
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_body(ctx, id);
@@ -786,7 +786,7 @@ impl BodyHooks<'_> {
         comp: &mut C,
         at: &Measuring<'_, '_>,
         cx: &mut Cx<'_, C>,
-        (layer, rect): (egui::LayerId, Rect),
+        (layer, rect): (areas::LayerKey, Rect),
         values: &AppValues,
     ) {
         let ctx = at.ui.ctx();
@@ -1549,7 +1549,7 @@ impl BodyHooks<'_> {
 }
 
 /// The invisible sizing-pass `Ui` a measuring sweep of container `id` lays its regions out in.
-fn measure_ui(ctx: &Context, id: Id, layer: egui::LayerId, rect: Rect) -> Ui {
+fn measure_ui(ctx: &Context, id: Id, layer: areas::LayerKey, rect: Rect) -> Ui {
     Ui::new(ctx.clone(), sub(id, "measure"), UiBuilder::new().layer_id(layer).max_rect(rect).sizing_pass().invisible())
 }
 
