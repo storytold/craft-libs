@@ -120,7 +120,17 @@ impl Reader<'_> {
             .ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
         let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, ..self.chunks };
-        let (doc, left, bytes, graphic, elements) = match super::read_opened_in(&pkg, state) {
+        let read = super::read_opened_in(&pkg, state);
+        // A parsed main part can still fail semantic validation (for example, a non-Word
+        // root). Charge its elements before returning that error, so later siblings cannot
+        // reuse the reservation. On success this is the same single charge as before.
+        let elements = pkg.elements_left();
+        self.chunks.elements = elements;
+        let spent = cap.saturating_sub(elements);
+        if let Err(e) = self.pkg.charge(spent) {
+            log::warn!("docx: nested document chunk outspent the container's element budget: {e}");
+        }
+        let (doc, left, bytes, graphic, _) = match read {
             Ok(read) => read,
             Err(e) => {
                 log::warn!("docx: unreadable nested document chunk: {e}");
@@ -131,16 +141,6 @@ impl Reader<'_> {
         self.chunks.left = left;
         self.chunks.bytes = bytes;
         self.chunks.graphic = graphic;
-        self.chunks.elements = elements;
-        // The nested document's XML usage comes out of the container's budget too: a later
-        // sibling chunk and the container's own remaining parts parse against what is left
-        // of it. The charge can't refuse: the cap is the lesser of the file's remaining
-        // elements and what the container has left, and the container's budget doesn't move
-        // while the nested read goes.
-        let spent = cap.saturating_sub(elements);
-        if let Err(e) = self.pkg.charge(spent) {
-            log::warn!("docx: nested document chunk outspent the container's element budget: {e}");
-        }
         Some(doc)
     }
 }
@@ -186,7 +186,7 @@ mod tests {
     use craft_wordmodel::{Block, Document, InlineObject};
 
     use super::ChunkState;
-    use crate::package::Package;
+    use crate::package::{MAX_PART, MAX_TOTAL, Package};
 
     /// A package whose body is `body`, with the document relationship `rel` (id, type, target) to
     /// the part `(name, bytes)`.
@@ -359,5 +359,27 @@ mod tests {
         // The grandchild chunk and the header fit the file's budget; the sibling document's
         // XML (8 paragraphs) doesn't, so it's left out instead of getting a fresh cap.
         assert_eq!(read(40), (true, true, false));
+    }
+
+    #[test]
+    fn a_rejected_nested_root_still_charges_the_siblings_budget() {
+        // Four outer elements, sixty rejected elements, five sibling elements: 69 in total.
+        let bad_xml = format!("<notword>{}</notword>", "<a/>".repeat(59));
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(bad_xml.as_bytes()).unwrap();
+        let bad = zip.finish().unwrap().into_inner();
+        let sibling = package_parts(r#"<w:p><w:r><w:t>sibling</w:t></w:r></w:p>"#, &[], &[]);
+        let outer = package_parts(
+            r#"<w:altChunk r:id="bad"/><w:altChunk r:id="good"/>"#,
+            &[("bad", "aFChunk", "bad.docx"), ("good", "aFChunk", "good.docx")],
+            &[("word/bad.docx", &bad), ("word/good.docx", &sibling)],
+        );
+        for (cap, included, remaining) in [(69, true, 0), (68, false, 4)] {
+            let pkg = Package::open_limited_within(&outer, MAX_PART, MAX_TOTAL, cap).unwrap();
+            let doc = super::super::read_opened(&pkg, None).unwrap();
+            assert_eq!(has(&doc, "sibling"), included, "budget {cap}");
+            assert_eq!(pkg.elements_left(), remaining, "budget {cap}");
+        }
     }
 }
