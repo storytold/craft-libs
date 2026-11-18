@@ -163,11 +163,6 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
             let side = if cx.env.direction().is_rtl() { -1.0 } else { 1.0 };
             let distance = cx.style::<Region>().map_or(0.0, |style| style.slide);
             let lead = gap.clamp(-1.0, 1.0) * side * distance;
-            if gap != 0.0 {
-                eprintln!(
-                    "DIAG a_tab_change_slides_the_row_in_from_the_new_tabs_side_and_shows_at_rest_under_reduced_motion: place {place} gap {gap} distance {distance} lead {lead}"
-                );
-            }
             let chevron = cx.style::<Region>().map_or(0.0, |style| style.chevron);
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
             let shown = Region::slide(lead)
