@@ -61,6 +61,7 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
         let radio = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} radio"));
         fixture.click(&radio).settle();
     };
+    eprintln!("DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: start ok disabled={}", disabled(&fixture, "OK"));
     assert!(disabled(&fixture, "Characters per line") && disabled(&fixture, "Lines per page"), "no grid: both counts disabled");
     pick(&mut fixture, "Line grid only");
     assert!(disabled(&fixture, "Characters per line") && !disabled(&fixture, "Lines per page"), "lines only: just the lines count");
