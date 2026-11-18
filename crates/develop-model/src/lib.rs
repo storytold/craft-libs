@@ -134,7 +134,9 @@ impl DevelopSettings {
             g.rect = g.rect.intersect(&craft_geom::Rect::UNIT);
         }
         if g.rect.is_empty() {
+            // the rectangle it had, which under another angle may have reached outside the photo
             let old = before.crop.geometry.rect;
+            let old = if g.angle == 0.0 { old.intersect(&craft_geom::Rect::UNIT) } else { old };
             g.rect = if old.is_empty() { craft_geom::Rect::UNIT } else { old };
         }
     }
@@ -481,6 +483,12 @@ mod tests {
             let m = base.merged(&json!({"crop": {"geometry": {"rect": rect}}})).unwrap();
             assert_eq!(m.crop.geometry.rect, base.crop.geometry.rect, "{rect}");
         }
+        // a turned crop may reach outside; put back under no angle, it is clipped like any unrotated crop
+        let mut turned = base.clone();
+        turned.crop.geometry.angle = 10.0;
+        turned.crop.geometry.rect = craft_geom::Rect::new(-0.1, 0.2, 0.8, 0.9);
+        let m = turned.merged(&json!({"crop": {"geometry": {"angle": 0, "rect": {"x0": 0.5, "x1": 0.5}}}})).unwrap();
+        assert_eq!((m.crop.geometry.angle, m.crop.geometry.rect), (0.0, craft_geom::Rect::new(0.0, 0.2, 0.8, 0.9)));
         // unrotated, the crop stays inside the photo
         let m = base.merged(&json!({"crop": {"geometry": {"rect": {"x0": -1e308, "y0": 0.25, "x1": 1e308, "y1": 0.75}}}})).unwrap();
         assert_eq!(m.crop.geometry.rect, craft_geom::Rect::new(0.0, 0.25, 1.0, 0.75));

@@ -41,7 +41,11 @@ pub struct SegMask {
 impl SegMask {
     /// From `side × side` logits over the whole image.
     pub fn from_logits(side: usize, logits: &[f32]) -> SegMask {
-        // `side` is the caller's: a product past `usize` would panic in a debug build
+        // `side` is the caller's. One no mask may have (see [`MAX_SIDE`]) gives a mask without data, which reads as
+        // damaged, instead of a `side` cut down to 32 bits that some other grid would fit.
+        if side > MAX_SIDE {
+            return SegMask { side: 0, data: String::new(), rect: None, grid: None };
+        }
         let q: Vec<u8> = logits.iter().take(side.saturating_mul(side)).map(|l| ((l * SCALE).round().clamp(-127.0, 127.0) as i8) as u8).collect();
         let z = miniz_oxide::deflate::compress_to_vec(&q, 8);
         SegMask { side: side as u32, data: base64_encode(&z), rect: None, grid: None }
@@ -62,6 +66,12 @@ impl SegMask {
     pub fn logits(&self) -> Option<Vec<f32>> {
         let side = self.side as usize;
         if side == 0 || side > MAX_SIDE {
+            return None;
+        }
+        // Deflate's worst case is the bytes stored plus a few per block, and base64 adds a third. Text longer than
+        // that (with room for line breaks) is not this grid, so it is turned away before it is decoded.
+        let cells = side * side;
+        if self.data.len() > (cells + cells / 8 + 64) * 2 {
             return None;
         }
         let z = base64_decode(&self.data)?;
@@ -252,6 +262,22 @@ mod tests {
         let back: crate::DevelopSettings = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
         let crate::MaskShape::Prompt { detail, .. } = &back.masks[0].components[0].shape else { panic!("a Prompt") };
         assert_eq!(detail.len(), MAX_DETAIL);
+    }
+
+    #[test]
+    fn a_side_no_mask_may_have_makes_no_mask() {
+        // 2³² + 1 cut down to 32 bits is 1, which one logit would fit
+        for side in [MAX_SIDE + 1, u32::MAX as usize + 2, usize::MAX] {
+            let m = SegMask::from_logits(side, &[1.0]);
+            assert_eq!((m.side, m.logits()), (0, None), "side {side}");
+        }
+        // the largest grid, with data deflate cannot shrink, still reads back
+        let noise: Vec<f32> = (0..MAX_SIDE * MAX_SIDE).map(|i| ((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as i8 as f32 / SCALE).collect();
+        let m = SegMask::from_logits(MAX_SIDE, &noise);
+        assert_eq!(m.logits().map(|l| l.len()), Some(MAX_SIDE * MAX_SIDE));
+        // text far longer than any grid of this side deflates to is turned away
+        let long = SegMask { side: 2, data: "A".repeat(1 << 20), rect: None, grid: None };
+        assert!(long.logits().is_none());
     }
 
     #[test]

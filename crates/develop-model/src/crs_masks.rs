@@ -121,6 +121,13 @@ fn lightness_to_range(l: f64) -> f64 {
     ((y.log2() + 8.0) / 12.0).clamp(0.0, 1.0)
 }
 
+/// A range mask's four numbers (`"0 0.2 0.8 1"`; everything when the field is absent). `None` unless there are
+/// exactly four and all are finite: a `NaN` would become `null` in the JSON and fail the whole merge.
+fn range(s: Option<&str>) -> Option<[f64; 4]> {
+    let q: Vec<f64> = s.unwrap_or("0 0 1 1").split_whitespace().map(|v| v.parse().ok().filter(|v: &f64| v.is_finite())).collect::<Option<_>>()?;
+    q.try_into().ok()
+}
+
 /// The point of one `crs:Dabs` entry (`"d x y"`), or `None` when it has no two finite numbers: `"nan"` and
 /// `"inf"` parse as numbers, and a point of them is JSON `null`, which no settings accept, so one damaged dab
 /// would keep every adjustment in the packet from applying.
@@ -227,8 +234,7 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
             let r = m.field("crs:CorrectionRangeMask").unwrap_or(m);
             match text(r, "crs:Type") {
                 Some("2") => {
-                    let q: Vec<f64> = text(r, "crs:LumRange").unwrap_or("0 0 1 1").split_whitespace().filter_map(|v| v.parse().ok()).collect();
-                    let [a, b, c, d] = q[..] else { return Err("luminance range".into()) };
+                    let Some([a, b, c, d]) = range(text(r, "crs:LumRange")) else { return Err("luminance range".into()) };
                     // full strength at white (1, the top of their scale) takes in everything brighter: ours
                     // goes on above scene white, so that end stays open instead of cutting off at 0 EV
                     let open_top = c >= 1.0;
@@ -237,8 +243,7 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
                     json!({"kind": "luminanceRange", "lo": b, "hi": hi, "lo_feather": (b - a).max(0.0), "hi_feather": hi_feather})
                 }
                 Some("3") => {
-                    let q: Vec<f64> = text(r, "crs:DepthRange").unwrap_or("0 0 1 1").split_whitespace().filter_map(|v| v.parse().ok()).collect();
-                    let [a, b, c, _] = q[..] else { return Err("depth range".into()) };
+                    let Some([a, b, c, _]) = range(text(r, "crs:DepthRange")) else { return Err("depth range".into()) };
                     json!({"kind": "depthRange", "lo": b, "hi": c, "feather": (b - a).max(0.0)})
                 }
                 _ => return Err("colour range".into()),

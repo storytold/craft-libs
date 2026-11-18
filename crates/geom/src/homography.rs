@@ -80,12 +80,19 @@ impl Homography {
         if src.iter().chain(dst.iter()).any(|p| !p.x.is_finite() || !p.y.is_finite()) {
             return None;
         }
-        Self::solve_h33_one(src, dst).or_else(|| {
-            let (cx, cy) = (src.iter().map(|p| p.x).sum::<f64>() / 4.0, src.iter().map(|p| p.y).sum::<f64>() / 4.0);
-            let moved = src.map(|p| Point::new(p.x - cx, p.y - cy));
-            let h = Self::solve_h33_one(&moved, dst)?.mul(&Homography([1.0, 0.0, -cx, 0.0, 1.0, -cy, 0.0, 0.0, 1.0]));
-            h.0.iter().all(|v| v.is_finite()).then_some(h)
-        })
+        Self::solve_h33_one(src, dst)
+            .or_else(|| {
+                let (cx, cy) = (src.iter().map(|p| p.x).sum::<f64>() / 4.0, src.iter().map(|p| p.y).sum::<f64>() / 4.0);
+                let moved = src.map(|p| Point::new(p.x - cx, p.y - cy));
+                let h = Self::solve_h33_one(&moved, dst)?.mul(&Homography([1.0, 0.0, -cx, 0.0, 1.0, -cy, 0.0, 0.0, 1.0]));
+                h.0.iter().all(|v| v.is_finite()).then_some(h)
+            })
+            // A destination with corners on top of each other or in a line can still solve, to a matrix that sends a
+            // corner to infinity or flattens the plane. Such a matrix does not map the quads and has no inverse.
+            .filter(|h| {
+                let scale = dst.iter().fold(1.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+                h.inverse().is_some() && src.iter().zip(dst).all(|(s, d)| h.apply(*s).dist(*d) <= 1e-6 * scale)
+            })
     }
 
     /// [`Self::from_quads`] for finite points, with h33 fixed at 1.
@@ -148,6 +155,14 @@ mod tests {
         let p = Point::new(0.3, 0.7);
         assert!(inv.apply(h.apply(p)).dist(p) < 1e-9);
         assert!(h.mul(&inv).apply(p).dist(p) < 1e-9);
+    }
+
+    /// Two destination corners in one place: the system solves, to a matrix that maps (1, 0) to (0, 0).
+    #[test]
+    fn degenerate_destination_quad_rejected() {
+        let src = [Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(1.0, 1.0), Point::new(0.0, 1.0)];
+        let dst = [Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(0.0, 0.0), Point::new(0.0, 1.0)];
+        assert!(Homography::from_quads(&src, &dst).is_none());
     }
 
     #[test]
