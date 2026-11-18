@@ -7,7 +7,7 @@ use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
 
 /// A recognised line of a scanned page.
-const LINE: &str = "The quick brown fox jumps over the lazy dog near the riverbank";
+const LINE: &str = "The quick brown fox jumps over the lazy dog";
 
 /// A width the line's words wrap in, with the longest word wider than a line.
 const NARROW: f32 = 120.0;
@@ -54,10 +54,10 @@ fn word_run_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     WordRun::new("Recognised text", &line, Bind::bound(data.value("picked", None::<usize>))).show(ui).into()
 }
 
-
 #[story(WordRun<'static, usize>, covers = [Invalid], drive = Drive::Never)]
 fn word_run_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let line = words(LINE, |_| WordState::Normal);
-    let refuse_dog = |picked: &Option<usize>| if *picked == Some(8) { Validity::Refuse(Message::new("Pick a recognised word")) } else { Validity::Ok };
+    let refuse_dog =
+        |picked: &Option<usize>| if *picked == Some(8) { Validity::Refuse(Message::new("Pick a recognised word")) } else { Validity::Ok };
     WordRun::new("Recognised text", &line, Bind::bound(data.value("refused", Some(8usize))).check(refuse_dog)).show(ui).into()
 }
