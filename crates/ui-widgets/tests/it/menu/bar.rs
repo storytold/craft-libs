@@ -1,5 +1,6 @@
 //! The menu bar: what the help search finds.
 
+use craft_host::target::Os;
 use craft_i18n::Direction;
 use craft_ui::contract::Show as _;
 use craft_ui::menu::MenuItem;
@@ -40,6 +41,8 @@ fn rig(direction: Direction) -> Rig {
         let help = entries();
         MenuBar::new("Main menu", titles).help(MenuHelp::new(2, &help)).show(ui);
     });
+    // The in-window menu bar and its Alt, F10 and letter keys are PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
     fixture.direction(direction).settle();
     Rig { fixture }
 }
@@ -83,6 +86,7 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
         })];
         MenuBar::new("Main menu", titles).show(ui);
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let file = fixture.by_label("File").expect("the File title");
     fixture.click(&file);
@@ -123,6 +127,7 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
             })];
             MenuBar::new("Main menu", titles).show(ui);
         });
+        fixture.os(Os::Linux);
         fixture.room(egui::vec2(480.0, 320.0)).scale(Scale::new(scale)).motion(MotionMode::Off).settle();
         let file = fixture.by_label("File").expect("the File title");
         fixture.click(&file);

@@ -19,12 +19,15 @@ fn identity_for(bytes: &[u8], secs: u64) -> LinkIdentity {
     identity_of(&mut Cursor::new(bytes), bytes.len() as u64, Some(stamp(secs))).unwrap()
 }
 
+/// An absolute path on every platform: Windows needs a drive.
+const FILE: &str = if cfg!(windows) { r"C:\m\a.png" } else { "/m/a.png" };
+
 // Same stamp: Ok without `identity`; new mtime, same fingerprint: Ok; new bytes: Modified; read error: Unreadable.
 #[test]
 fn a_touched_file_is_ok_and_a_changed_file_is_modified() {
     let recorded = identity_for(b"hello world", 10);
-    let l = link("/m/a.png", Some(recorded));
-    let at = |bytes: &[u8], secs: u64| FakeLinkFiles::new().with("/m/a.png", bytes, secs);
+    let l = link(FILE, Some(recorded));
+    let at = |bytes: &[u8], secs: u64| FakeLinkFiles::new().with(FILE, bytes, secs);
 
     let same = at(b"hello world", 10);
     assert_eq!(status(&l, None, &same), LinkStatus::Ok);
@@ -32,10 +35,10 @@ fn a_touched_file_is_ok_and_a_changed_file_is_modified() {
     assert_eq!(status(&l, None, &at(b"hello world", 99)), LinkStatus::Ok);
     assert_eq!(status(&l, None, &at(b"hello w0rld", 99)), LinkStatus::Modified);
     assert_eq!(status(&l, None, &at(b"hello", 99)), LinkStatus::Modified);
-    let locked = at(b"hello world", 99).unreadable("/m/a.png");
+    let locked = at(b"hello world", 99).unreadable(FILE);
     assert_eq!(status(&l, None, &locked), LinkStatus::Unreadable);
     assert_eq!(status(&l, None, &FakeLinkFiles::new()), LinkStatus::Missing);
-    assert_eq!(status(&link("/m/a.png", None), None, &at(b"x", 1)), LinkStatus::Ok);
+    assert_eq!(status(&link(FILE, None), None, &at(b"x", 1)), LinkStatus::Ok);
     let embedded = Link { embedded: true, ..l };
     assert_eq!(status(&embedded, None, &FakeLinkFiles::new()), LinkStatus::Embedded);
 }
