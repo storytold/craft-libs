@@ -34,7 +34,7 @@ pub use hit::{CaptionRegions, HitSink, ResizeEdge, WindowHit};
 pub(crate) use hit::{hit_sink_installed, note_exclusive};
 use hit::{publish_regions, replay_caption_events};
 pub use host::{KeyEquivalent, WindowFacts, WindowHost};
-pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_pointer};
+pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_pointer, system_pointer};
 #[cfg(windows)]
 #[doc(hidden)]
 pub use native::route_root;
@@ -229,6 +229,16 @@ pub(crate) fn set_input(ctx: &Context) {
     });
 }
 
+/// The least change of an inner size, in points, that counts as a resize: far under one physical pixel at any scale
+/// (a quarter point at 400 %), far over the float rounding of a size the platform reports again in points from its
+/// pixels as the window moves (290.4 coming back as 290.40002 at 125 %).
+const RESIZE_LEAST: f32 = 0.05;
+
+/// Whether a window's inner size changed from `before` to `now` by more than float rounding.
+fn size_changed(before: egui::Vec2, now: egui::Vec2) -> bool {
+    (before.x - now.x).abs() > RESIZE_LEAST || (before.y - now.y).abs() > RESIZE_LEAST
+}
+
 /// H4, in the input hook. The OS takes the button release of a move or resize it runs, so the press stays down in
 /// egui and every later press is lost. Two cases end it with a release of the primary button, in any chrome: a move
 /// or resize [`act`] handed the OS, when the input brings no release of its own (where the OS sends one, a second
@@ -257,7 +267,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         input.events.push(egui::Event::ModifiersChanged(modifiers));
     }
     let (released, handed_off) = PerViewport::<Record>::with(ctx, viewport, |record| {
-        let resized = record.resizable != Some(false) && matches!((record.last_inner_size, size), (Some(before), Some(now)) if before != now);
+        let resized =
+            record.resizable != Some(false) && matches!((record.last_inner_size, size), (Some(before), Some(now)) if size_changed(before, now));
         record.last_inner_size = size.or(record.last_inner_size);
         let handed_off = record.handoff.is_some_and(|handoff| handoff.released.is_none() && handoff.pass < pass) && held != Some(true);
         if handed_off {

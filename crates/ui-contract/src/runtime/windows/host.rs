@@ -409,6 +409,13 @@ pub(crate) fn note_source_pointer(ctx: &Context, viewport: ViewportId, local: Op
 
 /// Records the desktop pointer of a move the app runs of `viewport`'s window: the pressed point of the window where the
 /// move last put it. `None` once the move ends.
+/// The system's pointer in desktop points as the pass began, `None` where the platform does not tell it. Unlike
+/// [`WindowHost::desktop_pointer`] it never falls back to a drag's own pointer, so a window moved after it does not
+/// feed its own place back into the move.
+pub(crate) fn system_pointer(ctx: &Context) -> Option<Pos2> {
+    shared(ctx, |shared| shared.system_pointer)
+}
+
 pub(crate) fn note_moved_pointer(ctx: &Context, viewport: ViewportId, desktop: Option<Pos2>) {
     PerViewport::<Record>::with(ctx, viewport, |record| record.moved_pointer = desktop);
 }
