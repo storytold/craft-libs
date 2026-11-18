@@ -3,7 +3,8 @@
 //! request to the window ([`server`]), the client that talks to it ([`client`]), the request the
 //! window answers ([`ControlRequest`]), the document watch subscribed connections wait on
 //! ([`DocumentWatch`]), what a request still running does when it finishes ([`Effect`]), and AI
-//! agents in the open window behind the ArtCraft Launcher's switch ([`agents`], feature `agents`). It
+//! agents in the open window behind the ArtCraft Launcher's switch ([`agents`]: its settings on
+//! every target, the switch, the connection file and the CLI's side with feature `agents`). It
 //! needs no UI toolkit; the window's own requests over egui (`ui.screenshot`, `ui.resize`) are
 //! `craft-control-egui`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]

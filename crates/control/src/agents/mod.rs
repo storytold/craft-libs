@@ -14,7 +14,7 @@
 //! reads that file before every tool call ([`Live`]), so an MCP client's configuration never holds
 //! a port or a token. The file holds no secret. A crashed app can leave it behind; nothing then
 //! listens on its port ([`probe`]), and the app's next launch removes it
-//! ([`remove_stale_connection`]).
+//! ([`remove_stale_connection`]). An app that quits removes its own ([`remove_connection`]).
 //!
 //! | Part | Names | Builds |
 //! |---|---|---|
@@ -37,13 +37,16 @@
 //!    launcher's switch wakes the app and when the person changes the setting. When it turns true,
 //!    listen on loopback with a token, the token in an owner-only file
 //!    ([`crate::auth::App::write_token_file`]), and [`write_connection`] with [`Connection::new`];
-//!    when it turns false, stop listening and [`remove_connection`] with the app's process id. No
-//!    restart, no agents switch of its own.
+//!    when it turns false, and when the app quits, stop listening and [`remove_connection`] with
+//!    the app's process id. No restart, no agents switch of its own. There is one connection file
+//!    per settings folder: an app that runs more than one process on one folder lets only one of
+//!    them accept agents.
 //!
 //! Its `gridcraft-cli mcp`:
 //!
 //! 1. A [`LiveConfig`] with the app's settings folder; `consent` reads its saved
-//!    [`AgentSettings`] and asks [`launcher_allows`]; `connect` makes the app's client for a
+//!    [`AgentSettings`] and answers `agents_allowed(mcp_flag(), launcher_allows("gridcraft"), legacy)`
+//!    ([`agents_allowed`], [`mcp_flag`], [`launcher_allows`]); `connect` makes the app's client for a
 //!    [`Window`] (its address and token); `headless` makes its session without a window for
 //!    [`HeadlessFolders`]. [`launcher`] starts the app beside the CLI.
 //! 2. Before every tool call, [`Live::resolve`] (from a blocking thread in an async server), then

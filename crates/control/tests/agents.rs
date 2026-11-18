@@ -246,7 +246,11 @@ fn an_open_app_takes_the_call_and_keeps_its_client_until_it_restarts() {
     // Even without consent: an app publishes its connection only while it accepts agents.
     let live = TestLive::new(config(dir.path(), Consent::default(), &made));
     let w = window(live.resolve());
-    assert_eq!((w.port, w.pid, w.token.as_str(), w.addr()), (c.port, c.pid, TOKEN, c.addr()), "the token is trimmed and lower-cased");
+    assert_eq!(
+        (w.port, w.pid, w.token.as_str(), w.addr()),
+        (c.port, c.pid, TOKEN.to_ascii_uppercase().as_str(), c.addr()),
+        "the token is trimmed, otherwise as written"
+    );
     window(live.resolve());
     assert_eq!(made.connects.load(Ordering::Relaxed), 1, "the same window keeps its client");
     assert!(matches!(live.current(), Some(Route::Window(_))));
@@ -333,8 +337,8 @@ fn a_crashed_apps_connection_file_counts_as_closed() {
     assert_eq!(find_window(dir.path(), "Test").unwrap(), None);
 }
 
-/// A token file that isn't a token, is too big or is missing fails the call and names the app;
-/// nothing is sent to the window.
+/// A token file that isn't a token, is too big, is missing, isn't a regular file or (on Unix)
+/// others can read fails the call and names the app; nothing is sent to the window.
 #[test]
 fn a_bad_token_file_fails_the_call() {
     let dir = temp_dir("token");
@@ -344,6 +348,23 @@ fn a_bad_token_file_fails_the_call() {
         write_token(&dir.path().join(TOKEN_FILE), bad);
         let err = TestLive::new(config(dir.path(), Consent::default(), &made)).resolve().err().unwrap();
         assert!(err.starts_with("Test's agent token: "), "{err}");
+    }
+    // Any token the app's server accepts is passed on: upper case, dashes.
+    write_token(&dir.path().join(TOKEN_FILE), "AB12-cd34-EF56-0000-1111-2222-3333-4444");
+    assert_eq!(find_window(dir.path(), "Test").unwrap().unwrap().token, "AB12-cd34-EF56-0000-1111-2222-3333-4444");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let token = dir.path().join(TOKEN_FILE);
+        write_token(&token, TOKEN);
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = find_window(dir.path(), "Test").err().unwrap();
+        assert!(err.contains("readable by group or others"), "{err}");
+        // A FIFO would block a plain open until something writes to it.
+        std::fs::remove_file(&token).unwrap();
+        assert!(std::process::Command::new("mkfifo").arg(&token).status().unwrap().success());
+        let err = find_window(dir.path(), "Test").err().unwrap();
+        assert!(err.contains("not a regular file"), "{err}");
     }
     std::fs::remove_file(dir.path().join(TOKEN_FILE)).unwrap();
     assert!(find_window(dir.path(), "Test").is_err());
@@ -362,7 +383,7 @@ fn the_apps_errors_reach_the_agent() {
         |w: &Window| Ok(w.clone()),
         |_: &HeadlessFolders| Err("no such folder".into()),
     );
-    assert_eq!(TestLive::new(cfg).resolve().err().unwrap(), "the automation roots can't be used: no such folder");
+    assert_eq!(TestLive::new(cfg).resolve().err().unwrap(), "Test can't use the automation roots: no such folder");
 
     let (_listener, _c) = publish(dir.path());
     let cfg: LiveConfig<Window, HeadlessFolders> = LiveConfig::new(
@@ -373,7 +394,7 @@ fn the_apps_errors_reach_the_agent() {
         |f: &HeadlessFolders| Ok(f.clone()),
     );
     let live = TestLive::new(cfg);
-    assert_eq!(live.resolve().err().unwrap(), "refused");
+    assert_eq!(live.resolve().err().unwrap(), "couldn't reach Test's window: refused");
     assert!(live.current().is_none(), "a failed connect leaves no route");
 }
 
@@ -438,18 +459,26 @@ fn calls_queued_behind_a_failed_start_share_its_error() {
     let made = Arc::new(Made::default());
     let launches = Arc::new(AtomicUsize::new(0));
     let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
-    let n = launches.clone();
-    // The app is started but never accepts agents within the timeout.
+    let entered = Arc::new(AtomicUsize::new(0));
+    let (n, e) = (launches.clone(), entered.clone());
+    // The app is started but never accepts agents within the timeout. The start waits until every
+    // call is under way and then a while longer, so a call that hasn't reached its lookup by the
+    // time the start ends is very unlikely (there is no hook between the two).
     cfg.launch = Some(Box::new(move || {
         n.fetch_add(1, Ordering::Relaxed);
+        assert!(wait_for(|| e.load(Ordering::Relaxed) == 4), "every call starts");
+        std::thread::sleep(Duration::from_millis(250));
         Ok(())
     }));
     cfg.launch_timeout = Duration::from_millis(150);
     let live = Arc::new(TestLive::new(cfg));
     let calls: Vec<_> = (0..4)
         .map(|_| {
-            let live = live.clone();
-            std::thread::spawn(move || live.resolve())
+            let (live, entered) = (live.clone(), entered.clone());
+            std::thread::spawn(move || {
+                entered.fetch_add(1, Ordering::Relaxed);
+                live.resolve()
+            })
         })
         .collect();
     let answers: Vec<_> = calls.into_iter().map(|c| c.join().unwrap()).collect();
@@ -460,4 +489,84 @@ fn calls_queued_behind_a_failed_start_share_its_error() {
     }
     assert!(live.resolve().is_err());
     assert_eq!(launches.load(Ordering::Relaxed), 2, "a later call starts the app again");
+}
+
+/// Allow Agent Control off refuses agents on the CLI's side too, as the app does by not
+/// listening: no start, and only the command's folders.
+#[test]
+fn allow_agent_control_off_counts_as_not_allowed() {
+    let dir = temp_dir("aac-off");
+    let made = Arc::new(Made::default());
+    let mut s = settings(WhenAppClosed::Launch, "/app-in", "/app-out");
+    s.allow_agent_control = false;
+    let mut cfg = config(dir.path(), Consent::new(true, s), &made);
+    cfg.launch = Some(Box::new(|| panic!("nothing may start the app")));
+    cfg.read_roots = paths(&["/cli-in"]);
+    let f = headless_folders(TestLive::new(cfg).resolve());
+    assert_eq!((f.read, f.write), (paths(&["/cli-in"]), None));
+}
+
+/// A window route is dropped once no app accepts agents, so a dead client isn't kept or handed
+/// back.
+#[test]
+fn a_window_that_went_away_is_forgotten() {
+    let dir = temp_dir("gone");
+    let made = Arc::new(Made::default());
+    let live = TestLive::new(config(dir.path(), allowed(WhenAppClosed::Error), &made));
+    let (listener, c) = publish(dir.path());
+    window(live.resolve());
+    drop(listener);
+    remove_connection(dir.path(), c.pid);
+    assert!(live.resolve().is_err(), "the app is closed and the choice is an error");
+    assert!(live.current().is_none(), "the dead window is gone");
+}
+
+/// A headless session with the app's agent folders ends when the person stops letting agents in;
+/// one with only the command's folders stays.
+#[test]
+fn a_headless_session_with_the_apps_folders_ends_with_consent() {
+    let dir = temp_dir("revoke");
+    let made = Arc::new(Made::default());
+    let on = Arc::new(AtomicBool::new(true));
+    let gate = on.clone();
+    let (b, c) = (made.clone(), made.clone());
+    let cfg: LiveConfig<Window, HeadlessFolders> = LiveConfig::new(
+        "Test",
+        dir.path().to_path_buf(),
+        move |_: &Path| Consent::new(gate.load(Ordering::Relaxed), settings(WhenAppClosed::Headless, "/app-in", "/app-out")),
+        move |w: &Window| {
+            b.connects.fetch_add(1, Ordering::Relaxed);
+            Ok(w.clone())
+        },
+        move |f: &HeadlessFolders| {
+            c.sessions.fetch_add(1, Ordering::Relaxed);
+            Ok(f.clone())
+        },
+    );
+    let live = TestLive::new(cfg);
+    assert_eq!(headless_folders(live.resolve()).read, paths(&["/app-in"]));
+    on.store(false, Ordering::Relaxed);
+    assert_eq!(headless_folders(live.resolve()), HeadlessFolders::default(), "the app's folders went with the consent");
+    on.store(true, Ordering::Relaxed);
+    assert_eq!(headless_folders(live.resolve()), HeadlessFolders::default(), "a session without the app's folders stays");
+    assert_eq!(made.sessions.load(Ordering::Relaxed), 2);
+}
+
+/// A huge launch timeout or poll is cut down rather than overflowing the deadline or blocking.
+#[test]
+fn a_huge_launch_timeout_or_poll_neither_panics_nor_hangs() {
+    let dir = temp_dir("huge");
+    let made = Arc::new(Made::default());
+    let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
+    let (d, app) = (dir.path().to_path_buf(), Arc::new(Mutex::new(None)));
+    let slot = app.clone();
+    cfg.launch = Some(Box::new(move || {
+        *slot.lock().unwrap() = Some(publish(&d).0);
+        Ok(())
+    }));
+    cfg.launch_timeout = Duration::MAX;
+    cfg.poll = Duration::MAX;
+    let started = Instant::now();
+    window(TestLive::new(cfg).resolve());
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
 }

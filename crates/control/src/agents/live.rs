@@ -7,15 +7,20 @@
 //!
 //! - An app that accepts agents: the call goes to its open window ([`Route::Window`]). The same
 //!   port, token and process id keep the window client the app made; any change makes a new one.
-//! - No app accepts agents, and the person doesn't let agents use it: a session without a window
-//!   with only the folders given to the command ([`LiveConfig::read_roots`], [`LiveConfig::write_root`]),
-//!   as `mcp` always worked. The app's own folders are for agents the person let in.
+//! - No app accepts agents, and the person doesn't let agents use it ([`Consent::allowed`] off, or
+//!   [`AgentSettings::allow_agent_control`] off, under which the app doesn't listen either): a
+//!   session without a window with only the folders given to the command
+//!   ([`LiveConfig::read_roots`], [`LiveConfig::write_root`]), as `mcp` always worked. The app's own
+//!   folders are for agents the person let in.
 //! - No app accepts agents, but agents are allowed: the closed-app choice decides
 //!   ([`LiveConfig::when_closed`], otherwise [`AgentSettings::when_app_closed`]): start the app and
 //!   wait until it accepts agents, a headless session with the app's agent folders (the command's
 //!   folders win), or an error that says what to do.
 //!
-//! Once headless, the session stays headless: documents don't move under the agent. Lookups are
+//! Once headless, the session stays headless: documents don't move under the agent. Only a session
+//! made with the app's agent folders ends when the person stops letting agents in; the next call
+//! gets one with the command's folders. A window route is dropped as soon as no app accepts agents.
+//! Lookups are
 //! serialised, so concurrent calls start the app once: calls that queued while a start was under
 //! way and found no window get that start's error rather than starting the app again; a call made
 //! after it tries again.
@@ -49,6 +54,10 @@ pub type HeadlessFn<H> = Box<dyn Fn(&HeadlessFolders) -> Result<H, String> + Sen
 pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(45);
 /// How often a starting app's connection file is looked for.
 pub const LAUNCH_POLL: Duration = Duration::from_millis(250);
+/// The longest [`LiveConfig::launch_timeout`] used; a longer one is cut to this.
+const MAX_LAUNCH_TIMEOUT: Duration = Duration::from_secs(600);
+/// The range [`LiveConfig::poll`] is kept in.
+const POLL_RANGE: (Duration, Duration) = (Duration::from_millis(1), Duration::from_secs(1));
 
 /// The open window a call goes to: from the connection file, with the token from its token file.
 #[derive(Clone, PartialEq, Eq)]
@@ -58,7 +67,7 @@ pub struct Window {
     pub port: u16,
     /// The app's process id.
     pub pid: u32,
-    /// The control token (hex digits, lower case).
+    /// The control token, as its token file holds it (trimmed).
     pub token: String,
 }
 
@@ -80,8 +89,9 @@ impl fmt::Debug for Window {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Consent {
-    /// Agents may use the app ([`super::agents_allowed`]: with the suite's `AI-MCP` flag, the
-    /// ArtCraft Launcher's switch).
+    /// Agents may use the app: `agents_allowed(mcp_flag(), launcher_allows("<id>"), legacy)`
+    /// ([`super::agents_allowed`]), with the suite's `AI-MCP` flag the ArtCraft Launcher's switch.
+    /// [`Live`] also requires [`AgentSettings::allow_agent_control`].
     pub allowed: bool,
     /// The app's agent settings (closed-app choice, folders).
     pub settings: AgentSettings,
@@ -130,9 +140,9 @@ pub struct LiveConfig<W, H> {
     pub write_root: Option<PathBuf>,
     /// Starts the app; `None` when this install can't ([`launcher`] found nothing to start).
     pub launch: Option<LaunchFn>,
-    /// How long a started app gets to accept agents ([`LAUNCH_TIMEOUT`]).
+    /// How long a started app gets to accept agents ([`LAUNCH_TIMEOUT`]; at most 10 minutes).
     pub launch_timeout: Duration,
-    /// How often a starting app is looked for ([`LAUNCH_POLL`]).
+    /// How often a starting app is looked for ([`LAUNCH_POLL`]; kept between 1 ms and 1 s).
     pub poll: Duration,
     consent: ConsentFn,
     connect: ConnectFn<W>,
@@ -168,8 +178,15 @@ impl<W, H> LiveConfig<W, H> {
 /// The port, token and process id a window client was made for: a restarted app may keep its
 /// port and token, but its old socket is gone.
 type WindowKey = (u16, String, u32);
-/// The current route, and for a window the key it was made for.
-type Current<W, H> = Option<(Route<W, H>, Option<WindowKey>)>;
+/// The route the last call took.
+struct Current<W, H> {
+    route: Route<W, H>,
+    /// For a window, the key its client was made for.
+    key: Option<WindowKey>,
+    /// A headless session that holds folders of the app's agent settings: it lasts only while
+    /// the person lets agents in.
+    app_folders: bool,
+}
 
 /// Resolves each tool call of one MCP session; see the module docs.
 pub struct Live<W, H> {
@@ -178,7 +195,7 @@ pub struct Live<W, H> {
     lookup: Mutex<Option<String>>,
     /// How many starts have finished, read before a call queues for `lookup`.
     finished: AtomicU64,
-    current: Mutex<Current<W, H>>,
+    current: Mutex<Option<Current<W, H>>>,
 }
 
 impl<W: Clone, H: Clone> Live<W, H> {
@@ -189,12 +206,35 @@ impl<W: Clone, H: Clone> Live<W, H> {
 
     /// The route the last [`Self::resolve`] chose, if any.
     pub fn current(&self) -> Option<Route<W, H>> {
-        self.current.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|(r, _)| r.clone())
+        self.current.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|c| c.route.clone())
     }
 
-    fn set(&self, route: Route<W, H>, key: Option<WindowKey>) -> Route<W, H> {
-        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some((route.clone(), key));
+    fn set(&self, route: Route<W, H>, key: Option<WindowKey>, app_folders: bool) -> Route<W, H> {
+        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some(Current { route: route.clone(), key, app_folders });
         route
+    }
+
+    /// The headless session to keep using, if any: one made with the app's folders only while
+    /// agents are still `allowed`. A route that may not be kept is dropped.
+    fn sticky_headless(&self, allowed: bool) -> Option<Route<W, H>> {
+        let mut current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
+        match current.as_ref() {
+            Some(c) if matches!(c.route, Route::Headless(_)) && (allowed || !c.app_folders) => Some(c.route.clone()),
+            Some(c) if matches!(c.route, Route::Headless(_)) => {
+                *current = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Forgets a window route: no app accepts agents any more, so its client is for a socket
+    /// that is gone.
+    fn drop_window(&self) {
+        let mut current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
+        if current.as_ref().is_some_and(|c| matches!(c.route, Route::Window(_))) {
+            *current = None;
+        }
     }
 
     /// Where the next tool call goes. Blocks; see the module docs. The error is the tool call's
@@ -202,25 +242,31 @@ impl<W: Clone, H: Clone> Live<W, H> {
     pub fn resolve(&self) -> Result<Route<W, H>, String> {
         let queued_at = self.finished.load(Ordering::Acquire);
         let mut last_failure = self.lookup.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(route @ Route::Headless(_)) = self.current() {
+        let consent = (self.cfg.consent)(&self.cfg.config_dir);
+        // Allow Agent Control off refuses agents, as the app does: it doesn't listen then.
+        let allowed = consent.allowed && consent.settings.allow_agent_control;
+        if let Some(route) = self.sticky_headless(allowed) {
             return Ok(route);
         }
-        let consent = (self.cfg.consent)(&self.cfg.config_dir);
         if let Some(window) = self.find_app()? {
             return self.use_window(window);
         }
-        if !consent.allowed {
-            let folders = HeadlessFolders { read: self.cfg.read_roots.clone(), write: self.cfg.write_root.clone() };
-            return self.headless(&folders, "the automation roots can't be used");
-        }
+        self.drop_window();
         let app = &self.cfg.app_name;
+        if !allowed {
+            let folders = HeadlessFolders { read: self.cfg.read_roots.clone(), write: self.cfg.write_root.clone() };
+            return self.headless(&folders, false, &format!("{app} can't use the automation roots"));
+        }
         match self.cfg.when_closed.unwrap_or(consent.settings.when_app_closed) {
             WhenAppClosed::Error => Err(format!("{app} isn't running: open it, then try again.")),
             WhenAppClosed::Headless => {
+                let app_read = self.cfg.read_roots.is_empty() && consent.settings.read_folder().is_some();
+                let app_write = self.cfg.write_root.is_none() && consent.settings.write_folder().is_some();
                 let read =
                     if self.cfg.read_roots.is_empty() { consent.settings.read_folder().into_iter().collect() } else { self.cfg.read_roots.clone() };
                 let write = self.cfg.write_root.clone().or_else(|| consent.settings.write_folder());
-                self.headless(&HeadlessFolders { read, write }, &format!("{app} isn't running and its agent folders can't be used"))
+                let why = format!("{app} isn't running and its agent folders can't be used");
+                self.headless(&HeadlessFolders { read, write }, app_read || app_write, &why)
             }
             WhenAppClosed::Launch => {
                 // A start finished while this call waited and the app still isn't there: its answer
@@ -238,44 +284,51 @@ impl<W: Clone, H: Clone> Live<W, H> {
         }
     }
 
-    fn headless(&self, folders: &HeadlessFolders, why: &str) -> Result<Route<W, H>, String> {
+    /// A headless session with `folders` from now on; `app_folders` when some of them are the
+    /// app's agent folders. `why` leads its error.
+    fn headless(&self, folders: &HeadlessFolders, app_folders: bool, why: &str) -> Result<Route<W, H>, String> {
         let session = (self.cfg.headless)(folders).map_err(|e| format!("{why}: {e}"))?;
-        Ok(self.set(Route::Headless(session), None))
+        Ok(self.set(Route::Headless(session), None, app_folders))
     }
 
+    /// Starts the app and waits until it accepts agents, at most the launch timeout.
     fn launch_and_wait(&self) -> Result<Route<W, H>, String> {
         let app = &self.cfg.app_name;
         let Some(launch) = &self.cfg.launch else {
             return Err(format!("{app} isn't running, and this install can't start it from here: open {app}, then try again."));
         };
         launch().map_err(|e| format!("couldn't start {app}: {e}"))?;
-        let deadline = Instant::now() + self.cfg.launch_timeout;
+        let timeout = self.cfg.launch_timeout.min(MAX_LAUNCH_TIMEOUT);
+        let started = Instant::now();
+        let deadline = started.checked_add(timeout).unwrap_or(started);
+        let poll = self.cfg.poll.clamp(POLL_RANGE.0, POLL_RANGE.1);
         loop {
-            std::thread::sleep(self.cfg.poll);
+            std::thread::sleep(poll);
             if let Some(window) = self.find_app()? {
                 return self.use_window(window);
             }
             if Instant::now() >= deadline {
                 return Err(format!(
                     "{app} didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check that AI agents are on in ArtCraft Launcher › Settings › AI agents.",
-                    self.cfg.launch_timeout.as_secs()
+                    timeout.as_secs()
                 ));
             }
         }
     }
 
+    /// The client for `window`: the one made for the same port, token and process, or a new one.
     fn use_window(&self, window: Window) -> Result<Route<W, H>, String> {
         let key: WindowKey = (window.port, window.token.clone(), window.pid);
         {
             let current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some((route, Some(k))) = current.as_ref()
-                && *k == key
+            if let Some(c) = current.as_ref()
+                && c.key.as_ref() == Some(&key)
             {
-                return Ok(route.clone());
+                return Ok(c.route.clone());
             }
         }
-        let client = (self.cfg.connect)(&window)?;
-        Ok(self.set(Route::Window(client), Some(key)))
+        let client = (self.cfg.connect)(&window).map_err(|e| format!("couldn't reach {}'s window: {e}", self.cfg.app_name))?;
+        Ok(self.set(Route::Window(client), Some(key), false))
     }
 
     /// The app accepting agents now: `None` when there is no connection file, or one left by an
@@ -299,12 +352,17 @@ pub fn find_window(dir: &Path, app_name: &str) -> Result<Option<Window>, String>
 /// The largest token file read; a token is far shorter.
 const MAX_TOKEN_FILE: u64 = 4096;
 
-/// The token in the token file at `path`, trimmed. The file must be a regular file of at most
-/// [`MAX_TOKEN_FILE`] bytes holding a non-empty token of hex digits, and on Unix readable by its
-/// owner only: a token others could read is refused rather than used.
+/// The token in the token file at `path`, trimmed and otherwise as written: the app's server
+/// compares it exactly ([`crate::auth::tokens_match`]). The file must be a regular file of at most
+/// [`MAX_TOKEN_FILE`] bytes holding one token (no spaces or control characters in it), and on Unix
+/// readable by its owner only: a token others could read is refused rather than used.
 fn read_token(path: &Path) -> Result<String, String> {
     use std::io::Read;
     let shown = |e: &dyn fmt::Display| format!("{}: {e}", path.display());
+    // Before opening: opening a FIFO for reading blocks until something writes to it.
+    if !std::fs::metadata(path).map_err(|e| shown(&e))?.is_file() {
+        return Err(shown(&"not a regular file"));
+    }
     let file = std::fs::File::open(path).map_err(|e| shown(&e))?;
     let meta = file.metadata().map_err(|e| shown(&e))?;
     if !meta.is_file() {
@@ -323,10 +381,10 @@ fn read_token(path: &Path) -> Result<String, String> {
         return Err(shown(&format!("larger than {MAX_TOKEN_FILE} bytes")));
     }
     let token = text.trim();
-    if token.is_empty() || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if token.is_empty() || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(shown(&"not a control token"));
     }
-    Ok(token.to_ascii_lowercase())
+    Ok(token.to_owned())
 }
 
 /// How to start the desktop app `exe` (its file name without `.exe`) that ships beside the CLI at
@@ -336,14 +394,16 @@ fn read_token(path: &Path) -> Result<String, String> {
 pub fn launcher(cli: &Path, exe: &str) -> Option<LaunchFn> {
     use std::process::{Command, Stdio};
     let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    // Both sides resolved, so a mount reached through a symlink (`$TMPDIR`) still matches.
+    let resolved = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let install = Install {
         platform: Platform::current(),
         flatpak: env("FLATPAK_ID").is_some(),
         appimage: env("APPIMAGE"),
-        appdir: env("APPDIR"),
+        appdir: env("APPDIR").map(|d| resolved(Path::new(&d)).into_os_string()),
         system_root: env("SystemRoot"),
     };
-    let (program, args) = launch_command(cli, exe, &install, &|p| p.is_file())?;
+    let (program, args) = launch_command(&resolved(cli), exe, &install, &|p| p.is_file())?;
     let mut command = Command::new(program);
     command.args(args);
     let command = Mutex::new(command);
@@ -391,6 +451,7 @@ enum Platform {
 }
 
 impl Platform {
+    /// The platform this build runs on.
     fn current() -> Self {
         if cfg!(windows) {
             Self::Windows
