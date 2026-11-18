@@ -268,13 +268,11 @@ fn a_header_field_edits_and_a_header_remove_reports_its_column() {
     // Tab enters the rows; Shift+Tab goes back to the header's roving group.
     fixture.key(Key::Tab, Modifiers::NONE).key(Key::Tab, Modifiers::SHIFT).settle();
     let first = fixture.focused_stop().expect("Shift+Tab reaches the header's group");
-    eprintln!("DIAG a_header_field_edits_and_a_header_remove_reports_its_column: Shift+Tab lands on {first:?}");
     // The hosted field joins the header's roving group beside the header parts, so arrows reach both kinds of stop.
     let mut stops = vec![first];
     for _ in 0..4 {
         fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
         if let Some(stop) = fixture.focused_stop() {
-            eprintln!("DIAG a_header_field_edits_and_a_header_remove_reports_its_column: arrow lands on {stop:?}");
             if !stops.contains(&stop) {
                 stops.push(stop);
             }
