@@ -69,8 +69,8 @@ fn row(content: &str) -> String {
     format!("<w:tr>{content}</w:tr>")
 }
 
-/// A bookmark marker: parent, preceding structural child count, tag and sorted attributes.
-type Marker = (String, usize, String, Vec<(String, String)>);
+/// A marker includes its parent, local position, tag, attributes and ancestor sibling positions.
+type Marker = (String, usize, String, Vec<(String, String)>, Vec<(String, usize)>);
 
 /// Collect bookmark markers in XML order.
 fn markers(xml: &str) -> Vec<Marker> {
@@ -93,7 +93,7 @@ fn markers(xml: &str) -> Vec<Marker> {
                     })
                     .collect();
                 attrs.sort();
-                result.push((parent, at, String::from_utf8(e.name().as_ref().to_vec()).unwrap(), attrs));
+                result.push((parent, at, String::from_utf8(e.name().as_ref().to_vec()).unwrap(), attrs, stack.clone()));
             }
             Event::Start(e) => {
                 if matches!(e.name().as_ref(), b"w:tr" | b"w:tc" | b"w:tbl" | b"w:p")
@@ -208,7 +208,7 @@ fn newly_created_bookmarks_do_not_reuse_imported_or_allocated_ids() {
     let output = craft_docx::write(&d).unwrap();
     let actual = markers(&xml(&output, "word/document.xml"));
     let mut ids = std::collections::BTreeSet::new();
-    for (_, _, tag, attrs) in &actual {
+    for (_, _, tag, attrs, _) in &actual {
         if tag != "w:bookmarkStart" {
             continue;
         }
@@ -243,7 +243,7 @@ fn newly_created_bookmarks_reserve_numeric_values_but_keep_imported_id_spelling(
         let actual = markers(&xml(&output, "word/document.xml"));
         let mut ids = std::collections::BTreeSet::new();
         let mut ends = std::collections::BTreeSet::new();
-        for (_, _, tag, attrs) in &actual {
+        for (_, _, tag, attrs, _) in &actual {
             let value = |key| attrs.iter().find(|a| a.0 == key).unwrap().1.as_str();
             let id = value("w:id");
             if tag == "w:bookmarkEnd" {
