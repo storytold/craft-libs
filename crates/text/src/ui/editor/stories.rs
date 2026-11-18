@@ -14,7 +14,7 @@ use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, stage_fitting, story};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
-use super::{CaretLine, EditKind, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
+use super::{CaretLine, EditKind, EditorMode, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
 
 /// The width of a char's cell, in document units.
 const CELL: f64 = 10.0;
@@ -192,6 +192,8 @@ struct MonoText {
     #[common]
     common: Common,
     rows: Vec<String>,
+    /// Each char is painted as a bullet, as a password field's host lays it out.
+    masked: bool,
 }
 
 impl Component for MonoText {
@@ -223,6 +225,7 @@ impl Component for MonoText {
         let size = TEXT_SIZE * space.view.zoom as f32;
         for (line, text) in self.rows.iter().enumerate() {
             for (column, c) in text.chars().enumerate() {
+                let c = if self.masked { '•' } else { c };
                 let centre = space.view.to_screen(Point::new((column as f64 + 0.5) * CELL, (line as f64 + 0.5) * LINE));
                 let run = [DocRun::new(c.to_string(), FontRef::monospace(), size, ink)];
                 let layout = cx.layout_doc(&DocText::new(&run));
@@ -239,10 +242,10 @@ impl Component for MonoText {
 /// The text the stories edit.
 const SAMPLE: &str = "The quick brown fox\njumps over the lazy dog";
 
-/// The editor over `text` with the selection bound to `bind`, on a canvas as tall as the text wrapped at the stage's
-/// width, whose view puts document (0, 0) at its top left. The host's edits (typed, pasted and composed text) are
-/// written back to `text`, which the story keeps between passes.
-fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>) -> StoryOutput {
+/// The editor in `mode` (`masked` for a password field) over `text` with the selection bound to `bind`, on a canvas
+/// as tall as the text wrapped at the stage's width, whose view puts document (0, 0) at its top left. The host's
+/// edits (typed, pasted and composed text) are written back to `text`, which the story keeps between passes.
+fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>, mode: EditorMode, masked: bool) -> StoryOutput {
     let mut host = MonoHost { text: std::mem::take(text), columns: 1 };
     let room = stage_fitting(ui, |width| {
         // One cell stays free at the end of a row for the caret after its last char.
@@ -252,18 +255,24 @@ fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>
     let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
     let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, _| {
         let bounds = Rect::from_min_size(view.to_screen(Point::ZERO), host.extent_with_caret_cell());
-        MonoText { common: Common::new(), rows: host.row_texts() }.show_at(ui, bounds);
-        TextEditor::new("Text", &mut host, bind.reborrowed()).show_at(ui, bounds)
+        MonoText { common: Common::new(), rows: host.row_texts(), masked }.show_at(ui, bounds);
+        let editor = TextEditor::new("Text", &mut host, bind.reborrowed()).mode(mode);
+        if masked { editor.masked() } else { editor }.show_at(ui, bounds)
     });
     *text = host.text;
     shown.inner.map(StoryOutput::from).unwrap_or_default()
 }
 
-/// The editor over `text` with `selection` on a canvas.
+/// The canvas editor over `text` with `selection` on a canvas.
 fn on_canvas(ui: &mut Ui, data: &mut StoryData, text: &str, selection: TextSelection) -> StoryOutput {
+    as_field(ui, data, text, selection, EditorMode::Canvas, false)
+}
+
+/// The editor in `mode` (`masked` for a password field) over `text` with `selection` on a canvas.
+fn as_field(ui: &mut Ui, data: &mut StoryData, text: &str, selection: TextSelection, mode: EditorMode, masked: bool) -> StoryOutput {
     let mut host = data.value("text", text.to_owned()).clone();
     let selection = data.value("selection", selection);
-    let out = over_canvas(ui, &mut host, Bind::bound(&mut *selection));
+    let out = over_canvas(ui, &mut host, Bind::bound(&mut *selection), mode, masked);
     *data.value("text", String::new()) = host;
     out
 }
@@ -298,7 +307,7 @@ fn composing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn selections_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut host = data.value("text", SAMPLE.to_owned()).clone();
     let selection = data.value("selection", Mixed::<TextSelection>::Mixed);
-    over_canvas(ui, &mut host, Bind::bound_mixed(&mut *selection))
+    over_canvas(ui, &mut host, Bind::bound_mixed(&mut *selection), EditorMode::Canvas, false)
 }
 
 #[story(TextEditor<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -309,5 +318,23 @@ fn selection_past_the_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let inside = move |selection: &TextSelection| {
         if selection.caret > end { Validity::Refuse(Message::new("The selection is past the text")) } else { Validity::Ok }
     };
-    over_canvas(ui, &mut host, Bind::bound(&mut *selection).check(inside))
+    over_canvas(ui, &mut host, Bind::bound(&mut *selection).check(inside), EditorMode::Canvas, false)
+}
+
+/// A one-line form field with the caret after its text.
+#[story(TextEditor<'static>, covers = [], drive = Drive::Never)]
+fn editor_field_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    as_field(ui, data, "Jane Doe", TextSelection::caret_at(8), EditorMode::FieldLine, false)
+}
+
+/// A multi-line form field with "quick" selected.
+#[story(TextEditor<'static>, covers = [], drive = Drive::Never)]
+fn editor_field_lines(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    as_field(ui, data, SAMPLE, TextSelection::new(4, 9), EditorMode::FieldLines, false)
+}
+
+/// A password field: the host lays its text out as bullets.
+#[story(TextEditor<'static>, covers = [], drive = Drive::Never)]
+fn editor_masked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    as_field(ui, data, "hunter22", TextSelection::caret_at(8), EditorMode::FieldLine, true)
 }

@@ -7,7 +7,7 @@ use std::rc::Rc;
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_text::quotes::QuoteStyle;
-use craft_text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
+use craft_text::ui::editor::{CaretLine, EditKind, EditorEnd, EditorMode, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -99,11 +99,12 @@ struct Session {
 }
 
 fn session(text: &str, quotes: Option<QuoteStyle>) -> Session {
-    session_on(Host { text: text.to_owned(), ..Host::default() }, quotes, false)
+    session_on(Host { text: text.to_owned(), ..Host::default() }, quotes, false, EditorMode::Canvas, false)
 }
 
-/// A session on `host`; with `beside`, a second editor on its own text is shown after the session's.
-fn session_on(host: Host, quotes: Option<QuoteStyle>, beside: bool) -> Session {
+/// A session on `host` of an editor in `mode`, `masked` or not; with `beside`, a second editor on its own text is
+/// shown after the session's.
+fn session_on(host: Host, quotes: Option<QuoteStyle>, beside: bool, mode: EditorMode, masked: bool) -> Session {
     let text = host.text.clone();
     let host = Rc::new(RefCell::new(host));
     let selection = Rc::new(RefCell::new(TextSelection::caret_at(text.chars().count())));
@@ -126,7 +127,8 @@ fn session_on(host: Host, quotes: Option<QuoteStyle>, beside: bool) -> Session {
         Canvas::new("Document").view(view).show(ui, |ui, body| {
             let bounds = Rect::from_min_size(body.rect.min, vec2(200.0, 20.0));
             let esc_commits = !host.esc_cancels;
-            let editor = TextEditor::new("Text", &mut *host, Bind::bound(&mut *selection)).esc_commits(esc_commits);
+            let editor = TextEditor::new("Text", &mut *host, Bind::bound(&mut *selection)).esc_commits(esc_commits).mode(mode);
+            let editor = if masked { editor.masked() } else { editor };
             let output = if let Some(style) = quotes { editor.smart_quotes(style) } else { editor }.show_at(ui, bounds);
             let commits = output.edit.events.iter().filter(|event| matches!(event, craft_behavior::EditEvent::Commit { .. })).count() as u32;
             shown_commits.set(shown_commits.get() + commits);
@@ -223,7 +225,7 @@ fn preedit(text: &str) -> Event {
 /// shown after the composing one leaves the composing editor's report standing.
 #[trial]
 fn a_click_during_composition_keeps_the_marked_text_and_interrupts_the_composition_once() {
-    let mut editor = session_on(Host { text: "abc".to_owned(), ..Host::default() }, None, true);
+    let mut editor = session_on(Host { text: "abc".to_owned(), ..Host::default() }, None, true, EditorMode::Canvas, false);
     editor.focus();
     editor.fixture.frame(vec![preedit("kzk")]).settle();
     assert_eq!(editor.text(), "abckzk", "the marked text is written at the caret");
@@ -319,7 +321,7 @@ fn escape_ends_an_untouched_session_and_a_typed_one() {
     assert_eq!(*editor.ends.borrow(), [EditorEnd::Commit], "Esc commits an untouched session");
     assert_eq!((editor.commits.get(), editor.cancels.get()), (0, 0), "no text changed, so no gesture ends");
 
-    let mut editor = session_on(Host { text: "abc".to_owned(), esc_cancels: true, ..Host::default() }, None, false);
+    let mut editor = session_on(Host { text: "abc".to_owned(), esc_cancels: true, ..Host::default() }, None, false, EditorMode::Canvas, false);
     editor.focus();
     editor.fixture.key(Key::Escape, Modifiers::NONE).settle();
     assert_eq!(*editor.ends.borrow(), [EditorEnd::Cancel], "Esc cancels an untouched session where it does not commit");
@@ -332,17 +334,77 @@ fn escape_ends_an_untouched_session_and_a_typed_one() {
 /// Alt+Up to move the caret a line up.
 #[trial]
 fn formatting_keys_follow_the_flow_and_fall_back_to_caret_moves() {
-    let mut vertical = session_on(Host { text: "abcdefgh".to_owned(), vertical: true, formats: true, ..Host::default() }, None, false);
+    let mut vertical =
+        session_on(Host { text: "abcdefgh".to_owned(), vertical: true, formats: true, ..Host::default() }, None, false, EditorMode::Canvas, false);
     vertical.focus();
     vertical.fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
     let asked = vertical.host.borrow().styles.last().copied();
     assert!(matches!(asked, Some(StyleKey::Kern(by) | StyleKey::Tracking(by)) if by > 0.0), "Alt+Down tracks in vertical text: {asked:?}");
 
-    let mut plain = session_on(Host { text: "abcdefgh".to_owned(), ..Host::default() }, None, false);
+    let mut plain = session_on(Host { text: "abcdefgh".to_owned(), ..Host::default() }, None, false, EditorMode::Canvas, false);
     plain.focus();
     let before = plain.selection.borrow().caret;
     assert!(before >= LINE, "the click left the caret past the first line");
     plain.fixture.key(Key::ArrowUp, Modifiers::ALT).settle();
     assert!(!plain.host.borrow().styles.is_empty(), "the host was asked for the leading step");
     assert_eq!(plain.selection.borrow().caret, before.saturating_sub(LINE), "the step the host did not take moved the caret a line up");
+}
+
+/// A focused editor in `mode` over "abc", `masked` or not, with the caret after the text.
+fn field(mode: EditorMode, masked: bool) -> Session {
+    let mut editor = session_on(Host { text: "abc".to_owned(), ..Host::default() }, None, false, mode, masked);
+    editor.focus();
+    editor
+}
+
+/// A one-line field ends its session on Enter (commit), Tab (next) and Shift+Tab (previous) and pastes line breaks as
+/// spaces; a multi-line field takes Enter as a line break and ends on Tab; while a composition is open no key ends a
+/// field's session; the canvas editor still types Tab as a tab character.
+#[trial]
+fn field_modes_end_on_enter_tab_and_shift_tab_but_not_while_composing() {
+    let mut line = field(EditorMode::FieldLine, false);
+    line.fixture.key(Key::Enter, Modifiers::NONE).settle();
+    line.fixture.key(Key::Tab, Modifiers::NONE).settle();
+    line.fixture.key(Key::Tab, Modifiers::SHIFT).settle();
+    assert_eq!(*line.ends.borrow(), [EditorEnd::Commit, EditorEnd::Next, EditorEnd::Previous], "Enter, Tab and Shift+Tab end the session");
+    assert_eq!(line.text(), "abc", "the keys that end the session type nothing");
+    line.fixture.frame(vec![Event::Paste("d\r\ne\nf\rg".to_owned())]).settle();
+    assert_eq!(line.text(), "abcd e f g", "each pasted line ending becomes one space");
+    line.fixture.frame(vec![preedit("k")]).settle();
+    line.fixture.key(Key::Enter, Modifiers::NONE).settle();
+    line.fixture.key(Key::Tab, Modifiers::NONE).settle();
+    line.fixture.key(Key::Tab, Modifiers::SHIFT).settle();
+    assert_eq!(line.ends.borrow().len(), 3, "while composing the keys belong to the input method: {:?}", line.ends.borrow());
+
+    let mut lines = field(EditorMode::FieldLines, false);
+    lines.fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(lines.text(), "abc\n", "Enter is a line break in a multi-line field");
+    assert!(lines.ends.borrow().is_empty(), "Enter does not end a multi-line field's session");
+    lines.fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(*lines.ends.borrow(), [EditorEnd::Next], "Tab moves on from a multi-line field");
+    assert_eq!(lines.text(), "abc\n", "Tab types nothing in a field");
+
+    let mut canvas = field(EditorMode::Canvas, false);
+    canvas.fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(canvas.text(), "abc\t", "the canvas editor types Tab");
+    assert!(canvas.ends.borrow().is_empty(), "Tab does not end a canvas session");
+}
+
+/// A masked editor puts nothing on the clipboard for Copy or Cut, and a Cut keeps the text; the same editor
+/// unmasked copies the selection.
+#[trial]
+fn a_masked_editor_copies_and_cuts_nothing() {
+    let mut plain = field(EditorMode::FieldLine, false);
+    plain.fixture.key(Key::A, Modifiers::COMMAND).settle();
+    plain.fixture.frame(vec![Event::Copy]);
+    assert_eq!(plain.fixture.copied().to_vec(), vec!["abc".to_owned()], "an unmasked editor copies its selection");
+
+    let mut masked = field(EditorMode::FieldLine, true);
+    masked.fixture.key(Key::A, Modifiers::COMMAND).settle();
+    masked.fixture.frame(vec![Event::Copy]);
+    assert!(masked.fixture.copied().is_empty(), "Copy puts nothing on the clipboard: {:?}", masked.fixture.copied());
+    masked.fixture.frame(vec![Event::Cut]);
+    assert!(masked.fixture.copied().is_empty(), "Cut puts nothing on the clipboard: {:?}", masked.fixture.copied());
+    masked.fixture.settle();
+    assert_eq!(masked.text(), "abc", "Cut keeps the text");
 }

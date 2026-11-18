@@ -49,10 +49,18 @@ pub use commands::TextEditorCommand;
 pub use edits::{click_count, click_selection, word_boundary};
 
 use crate::quotes::QuoteStyle;
-use craft_keymap::{Chord, Key};
+use craft_keymap::{Chord, Key, Mods};
 use edits::{Edits, Session, char_slice, fingerprint};
 
 const ESCAPE: Chord = Chord::plain(Key::Escape);
+const ENTER: Chord = Chord::plain(Key::Enter);
+const TAB: Chord = Chord::plain(Key::Tab);
+const SHIFT_TAB: Chord = Chord::new(Mods::SHIFT, Key::Tab);
+
+/// The keys that end a one-line field's session: Enter keeps the text, Tab and Shift+Tab keep it and move on.
+static FIELD_LINE_ENDS: [(Chord, EditorEnd); 3] = [(ENTER, EditorEnd::Commit), (TAB, EditorEnd::Next), (SHIFT_TAB, EditorEnd::Previous)];
+/// The keys that end a multi-line field's session; Enter is a line break there.
+static FIELD_LINES_ENDS: [(Chord, EditorEnd); 2] = [(TAB, EditorEnd::Next), (SHIFT_TAB, EditorEnd::Previous)];
 
 /// The selection: `anchor` stays where it started, `caret` moves. Equal: a caret with nothing selected. Char
 /// offsets.
@@ -282,17 +290,35 @@ pub enum EditorEnd {
     Previous,
 }
 
-/// What the editor is.
+/// What the editor is: which keys end its session and which are text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EditorMode {
-    /// The canvas text editor.
+    /// The canvas text editor: Enter is a line break and Tab a tab character.
     #[default]
     Canvas,
-    /// A one-line form field.
+    /// A one-line form field: Enter commits, Tab and Shift+Tab move to the next or previous field, and pasted line
+    /// breaks become spaces.
     FieldLine,
-    /// A multi-line form field.
+    /// A multi-line form field: Enter is a line break, Tab and Shift+Tab move to the next or previous field.
     FieldLines,
+}
+
+impl EditorMode {
+    /// The chords that end a session in this mode and how each ends it. The editor claims them while focused, so
+    /// they reach it rather than focus navigation or its own text.
+    fn ending_keys(self) -> &'static [(Chord, EditorEnd)] {
+        match self {
+            EditorMode::Canvas => &[],
+            EditorMode::FieldLine => &FIELD_LINE_ENDS,
+            EditorMode::FieldLines => &FIELD_LINES_ENDS,
+        }
+    }
+}
+
+/// `text` on one line: each line ending (`\r\n`, `\r` or `\n`) becomes one space.
+fn one_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }
 
 /// What the editor did this pass.
@@ -309,11 +335,13 @@ pub struct TextEditorOutput {
     /// The text changes of the session as one gesture over the selection. The first text change gives `Begin`, later
     /// changes `Update`; the session's end ([`ended`](Self::ended)) commits or cancels the gesture when one runs.
     pub edit: EditResponse<TextSelection>,
-    /// The session ended this pass, whether or not its text changed. `Commit` is Cmd+Enter, a primary press on the
-    /// canvas background, or Esc when Esc commits ([`TextEditor::esc_commits`], Photoshop's Use ESC Key to Commit
-    /// Text, on by default): the app ends the session, keeps the text and records one undo step when it changed.
+    /// The session ended this pass, whether or not its text changed. `Commit` is Cmd+Enter, Enter in a
+    /// [`EditorMode::FieldLine`], a primary press on the canvas background, or Esc when Esc commits
+    /// ([`TextEditor::esc_commits`], Photoshop's Use ESC Key to Commit Text, on by default): the app ends the
+    /// session, keeps the text and records one undo step when it changed. `Next` and `Previous` are Tab and
+    /// Shift+Tab in a field mode: the app keeps the text as for `Commit` and moves to the next or previous field.
     /// `Cancel` is Cmd+., or Esc when it doesn't commit: the app ends the session and undoes it. While a composition
-    /// is open the keys give neither.
+    /// is open the keys give none of them.
     pub ended: Option<EditorEnd>,
     /// The Character panel command was pressed: the host shows or hides the panel. Set for the one pass.
     pub character_panel: bool,
@@ -350,12 +378,15 @@ impl Outcome for TextEditorOutput {
 ///   line, Cmd+Up and Cmd+Down to the text's start or end, Home and End to the line's edges, Shift extends any of
 ///   them. Backspace and Delete by char, Alt by word, Cmd+Backspace to the line start. Cmd+A all, Cmd+C, Cmd+X and
 ///   Cmd+V the clipboard. Enter a line break; Cmd+Enter commits; Esc commits or cancels; Cmd+. cancels;
-///   Cmd+T asks the host for its Character panel. The
+///   Cmd+T asks the host for its Character panel. In a form field ([`mode`](Self::mode)) Tab and Shift+Tab end the
+///   session toward the next or previous field, and in a one-line field Enter commits. The
 ///   [`TextEditorCommand`]s format. In vertical text the arrows turn with the flow, the formatting keys too: Alt+Up
 ///   and Alt+Down track, Alt+Left and Alt+Right set the leading. A formatting key the host does not take moves the
 ///   caret as its arrow does: a line, a word, or with Cmd to the text's start or end; Shift extends.
 /// - Typed straight quotes become the language's marks while [`smart_quotes`](Self::smart_quotes) is set; pasted
-///   text is kept as it is. Pasted line endings become `\n`.
+///   text is kept as it is. Pasted line endings become `\n`, in a one-line field a space.
+/// - A [`masked`](Self::masked) editor is a password field: the host draws its text as bullets, and Copy and Cut
+///   put nothing on the clipboard.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct TextEditor<'a> {
     #[common]
@@ -371,11 +402,10 @@ pub struct TextEditor<'a> {
     esc_commits: bool,
     /// What the editor is: the canvas text editor, or a one-line or multi-line form field.
     #[prop]
-    #[allow(dead_code)] // P3(pdf-forms-w2): FM-PF6
     mode: EditorMode,
-    /// Whether the text is drawn as bullets, for a password field.
+    /// Whether the text is a secret, for a password field: the host draws it as bullets, the input method and
+    /// assistive technology treat it as a password, and Copy and Cut put nothing on the clipboard.
     #[prop(flag)]
-    #[allow(dead_code)] // P3(pdf-forms-w2): FM-PF7
     masked: bool,
     changed: bool,
     selection_changed: bool,
@@ -515,7 +545,7 @@ impl Component for TextEditor<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        cx.editor(EDITOR, rect, EditorPurpose::Text);
+        cx.editor(EDITOR, rect, if self.masked { EditorPurpose::Password } else { EditorPurpose::Text });
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -529,6 +559,7 @@ impl Component for TextEditor<'_> {
         let press = *cx.press();
         let now = cx.now();
         let pasted = pasted_text(cx, &inputs);
+        let (mode, masked) = (self.mode, self.masked);
         let mut copied: Option<String> = None;
         let mut session = std::mem::take(cx.memory::<Session>());
         let mut edits = Edits {
@@ -561,8 +592,11 @@ impl Component for TextEditor<'_> {
                 }
                 EditorInput::ImeCommit => ending = edits.session.preedit.take(),
                 EditorInput::Text(text) => edits.done.changed |= edits.insert_typed(&text),
-                EditorInput::Newline if edits.session.preedit.is_none() => edits.done.changed |= edits.insert_text("\n", EditKind::Typed),
-                EditorInput::Tab => edits.done.changed |= edits.insert_text("\t", EditKind::Typed),
+                // In a field mode Enter (one-line) and Tab are the claimed keys that end the session, never text.
+                EditorInput::Newline if edits.session.preedit.is_none() && mode != EditorMode::FieldLine => {
+                    edits.done.changed |= edits.insert_text("\n", EditKind::Typed);
+                }
+                EditorInput::Tab if mode == EditorMode::Canvas => edits.done.changed |= edits.insert_text("\t", EditKind::Typed),
                 EditorInput::Move(step, mods) => edits.motion(step, mods),
                 EditorInput::Delete { forward, by, .. } => edits.done.changed |= edits.delete(forward, by),
                 EditorInput::DeleteSurrounding { before, after, unit, .. } => edits.done.changed |= edits.delete_around(before, after, unit),
@@ -572,14 +606,16 @@ impl Component for TextEditor<'_> {
                     edits.selection = TextSelection { anchor: char_at(&lines, anchor), caret: char_at(&lines, focus) };
                 }
                 EditorInput::Edit(EditCommand::SelectAll) => edits.select_all(),
-                EditorInput::Edit(EditCommand::Copy) => copied = edits.selected_text(),
-                EditorInput::Edit(EditCommand::Cut) => {
+                // A masked text never reaches the clipboard, and a Cut that cannot copy keeps the text.
+                EditorInput::Edit(EditCommand::Copy) if !masked => copied = edits.selected_text(),
+                EditorInput::Edit(EditCommand::Cut) if !masked => {
                     copied = edits.selected_text();
                     edits.done.changed |= edits.delete_selection();
                 }
                 EditorInput::Edit(EditCommand::Paste) => {
                     if let Some(text) = &pasted {
-                        edits.done.changed |= edits.insert_text(text, EditKind::Pasted);
+                        let text = if mode == EditorMode::FieldLine { one_line(text) } else { text.to_string() };
+                        edits.done.changed |= edits.insert_text(&text, EditKind::Pasted);
                     }
                 }
                 _ => {}
@@ -605,14 +641,25 @@ impl Component for TextEditor<'_> {
             edits.done.commit = true;
         }
 
-        // Commands and the claimed Escape arrive with the pass's own input: a second pass of the frame takes none, so
-        // a commit, a cancel or the panel toggle is reported by one pass only. Commit and Cancel wait while a
-        // composition is open: the key belongs to the input method then.
+        // Commands and the claimed keys arrive with the pass's own input: a second pass of the frame takes none, so
+        // a commit, a cancel, a move to another field or the panel toggle is reported by one pass only. No key ends
+        // the session while a composition is open: the key belongs to the input method then.
         if cx.take_claimed(ESCAPE) && edits.session.preedit.is_none() {
             if edits.esc_commits {
                 edits.done.commit = true;
             } else {
                 edits.done.cancel = true;
+            }
+        }
+        for &(chord, end) in mode.ending_keys() {
+            cx.claim(chord);
+            if cx.take_claimed(chord) && edits.session.preedit.is_none() {
+                match end {
+                    EditorEnd::Commit => edits.done.commit = true,
+                    EditorEnd::Next => edits.done.next = true,
+                    EditorEnd::Previous => edits.done.previous = true,
+                    EditorEnd::Cancel => edits.done.cancel = true,
+                }
             }
         }
         let mut character_panel = false;
@@ -655,19 +702,19 @@ impl Component for TextEditor<'_> {
                 cx.set(selection);
             }
         }
-        if done.commit {
+        if done.commit || done.next || done.previous {
             cx.commit();
         } else if done.cancel {
             cx.cancel(CancelReason::Escape);
         }
         self.ended = if done.commit {
             Some(EditorEnd::Commit)
+        } else if done.next {
+            Some(EditorEnd::Next)
+        } else if done.previous {
+            Some(EditorEnd::Previous)
         } else if done.cancel {
             Some(EditorEnd::Cancel)
-        } else if done.next {
-            Some(EditorEnd::Next) // P3(pdf-forms-w2): FM-PF8
-        } else if done.previous {
-            Some(EditorEnd::Previous) // P3(pdf-forms-w2): FM-PF8
         } else {
             None
         };
