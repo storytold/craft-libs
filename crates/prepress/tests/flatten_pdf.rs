@@ -717,6 +717,26 @@ fn mesh_functions_are_vectors_only_where_their_pieces_are_known() {
 }
 
 #[test]
+fn a_mesh_function_clamped_by_its_space_is_split_where_it_clamps() {
+    // Gray -0.5 to 1.5 over t: clamped to 0 below t = 0.25 and to 1 above t = 0.75, the two
+    // bends cancelling at t = 0.5, the only t the unsplit patch samples between its corners.
+    let ramp = "/Function << /FunctionType 2 /Domain [0 1] /C0 [-0.5] /C1 [1.5] /N 1 >>";
+    let mesh = coons_square(&format!("/DeviceGray {ramp}"), "0 1", "00 FF FF 00");
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[mesh]);
+    let (list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert!(meshes(&list)[0].patches.len() > 1);
+    assert!(!separates_like_the_source(&pdf), "no image");
+
+    // The same ramp inside the space's range stays one patch.
+    let ramp = "/Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>";
+    let mesh = coons_square(&format!("/DeviceGray {ramp}"), "0 1", "00 FF FF 00");
+    let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert_eq!(meshes(&list)[0].patches.len(), 1);
+}
+
+#[test]
 fn spots_aliased_onto_one_ink_combine_across_the_mesh() {
     // Gold and Silver both run 0 to 1 along v; on one plate they combine as overlapping
     // halftones, 1 - (1 - v)^2, which a single patch's bilinear blend doesn't follow.

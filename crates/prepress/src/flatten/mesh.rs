@@ -9,7 +9,8 @@
 //! boundary implies. Each piece is written as the Coons patch of its boundary.
 //!
 //! A parametric mesh (one with a function) needs the function's breaks: inputs between which
-//! every output is affine in the parameter t (`ShadingFunction::linear_breaks`). A function
+//! every output is affine in the parameter t (`ShadingFunction::linear_breaks`), and the inputs
+//! where an output crosses 0 or 1, where the reading clamps it ([`clamp_breaks`]). A function
 //! without them, such as a PostScript one, leaves the mesh an image. A piece's t is the
 //! bilinear blend of its corners' t, so it spans `[t_lo, t_hi]`, its lowest and highest
 //! corners'. Let L be the line through the converted colors at `t_lo` and `t_hi`.
@@ -61,6 +62,46 @@ const LINE_TOLERANCE: f32 = TOLERANCE / 2.0;
 
 /// The most breaks a parametric piece's range holds and is probed at; more split it.
 const MAX_PROBED_BREAKS: usize = 8;
+
+/// The most breaks [`clamp_breaks`] gives, as many as `linear_breaks` does.
+const MAX_BREAKS: usize = 1 << 12;
+
+/// `breaks` (a function's, sorted, with the function affine between neighbors) with the inputs
+/// between them where an output of `eval` crosses 0 or 1, sorted. `ColorSpace::ink_values`
+/// clamps the components of gray, separation, DeviceN, CMYK and RGB colors to `0.0..=1.0`, so
+/// the reading bends there; between the breaks this gives, a function read in a space whose
+/// conversion is affine (all of those but RGB, without a CMYK simulation) is affine too. Other
+/// spaces bend anyway, and the crossings only split them more. `None` past [`MAX_BREAKS`],
+/// when a piece's inner points aren't finite, or when `eval` fails.
+pub(super) fn clamp_breaks(breaks: &[f32], eval: &mut dyn FnMut(f32) -> Option<Vec<f32>>) -> Option<Vec<f32>> {
+    let mut out = breaks.to_vec();
+    for pair in breaks.windows(2) {
+        let [a, b] = pair else { continue };
+        // Inner points, as the function may jump at a break.
+        let (p, q) = (a + (b - a) / 4.0, a + (b - a) * 0.75);
+        if !(p.is_finite() && q.is_finite()) {
+            return None;
+        }
+        if p >= q {
+            continue;
+        }
+        let (fp, fq) = (eval(p)?, eval(q)?);
+        for (x, y) in fp.iter().zip(&fq) {
+            for bound in [0.0, 1.0] {
+                let t = p + (bound - x) * ((q - p) / (y - x));
+                if t > *a && t < *b {
+                    out.push(t);
+                }
+            }
+        }
+        if out.len() > MAX_BREAKS {
+            return None;
+        }
+    }
+    out.sort_by(f32::total_cmp);
+    out.dedup();
+    Some(out)
+}
 
 /// Control points `net[i][j]`: `i` steps along u, `j` along v.
 type Net = [[Point; 4]; 4];
@@ -493,6 +534,18 @@ mod tests {
     fn ramp_piece(f: fn(f32) -> f32) -> Piece {
         let source = [0.0, 1.0, 1.0, 0.0].map(|t| vec![t]);
         Piece { net: implied_net(&square(10.0)), ink: source.clone().map(|v| vec![f(v[0])]), source, depth: 0 }
+    }
+
+    #[test]
+    fn clamp_breaks_are_where_each_affine_piece_leaves_the_unit_range() {
+        // Gray rising past both ends, a second output on the bound and one inside the range,
+        // then a jump to a piece that falls through 1.
+        let eval = &mut |t: f32| Some(if t < 0.5 { vec![4.0 * t - 0.5, 1.0, 0.5] } else { vec![4.0 - 4.0 * t, 1.0, 0.5] });
+        assert_eq!(clamp_breaks(&[0.0, 0.5, 1.0], eval), Some(vec![0.0, 0.125, 0.375, 0.5, 0.75, 1.0]));
+        // A crossing in each of more than half the cap's pieces passes it.
+        let many: Vec<f32> = (0..=MAX_BREAKS / 2 + 1).map(|k| k as f32).collect();
+        let saw = &mut |t: f32| Some(vec![t.fract() * 2.0]);
+        assert!(clamp_breaks(&many, saw).is_none());
     }
 
     #[test]

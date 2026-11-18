@@ -707,7 +707,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         };
         // A parametric mesh is a vector only where its function's pieces are known.
         let breaks = match function {
-            Some(f) => Some(f.linear_breaks()?),
+            Some(f) => Some(mesh::clamp_breaks(&f.linear_breaks()?, &mut |t| shade::eval(f, &[t]))?),
             None => None,
         };
         let mesh = mesh::mesh(sp.shading.shading_type.as_ref(), sp.matrix, &inks.stop_inks(), breaks.as_deref(), &mut convert)?;

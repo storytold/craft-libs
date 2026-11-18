@@ -35,7 +35,8 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
   half an 8-bit level; one still out after 8 halvings, one that would need too many pieces, and
   one in a tiling cell are read as images, as function-based shadings are. A mesh with a
   function is kept only where the function's pieces are known (sampled, exponential with N 1
-  and stitched functions), and is split at their bounds; a PostScript function, or a jump of
+  and stitched functions), and is split at their bounds and where an output leaves 0 to 1,
+  which the color space clamps; a PostScript function, or a jump of
   more than half a level between pieces, sends it to the image path. Regions a gradient, image
   or soft mask reaches are listed for rasterizing. `flatten::raster` rasterizes them: each region's items are written alone,
   separated with `plates` and written back as a DeviceN image of the page's inks, clipped to the
