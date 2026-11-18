@@ -15,6 +15,7 @@ workspace = true
 serde = ["dep:serde"]
 
 [dependencies]
+craft-xml.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 
