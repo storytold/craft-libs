@@ -8,6 +8,7 @@ use crate::{
     BlackLevel, Camera, Cfa, CinemaTags, ColorData, LevelSource, LevelSources, Limits, Matrix3, Mode, Orientation, RawData, RawError, RawFormat,
     RawImage, RawNotices, Rect, Result, Timecode, opcodes,
 };
+use craft_tiff::image::{ImageInfo, Layout};
 use craft_tiff::tags::{self as t, photometric};
 use craft_tiff::{ByteOrder, Ifd, Tiff, Value};
 
@@ -273,7 +274,10 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     {
         return Err(RawError::Unsupported(format!("DNG compression {c} (GoPro VC-5) is not decoded yet")));
     }
-    let info = pixels.image()?;
+    let mut info = pixels.image()?;
+    if std::ptr::eq(pixels, raw) {
+        extend_understated_strip(bytes, &mut info, raw);
+    }
     let (w, h, cpp) = (info.width as usize, info.height as usize, info.samples_per_pixel as usize);
     // one sample (CFA or monochrome), RGB or four colours; two are neither and can't be developed (storytold/lightcraft#1511)
     if !matches!(cpp, 1 | 3 | 4) {
@@ -519,6 +523,37 @@ fn cinema_tags(ifd0: &Ifd, raw: &Ifd) -> CinemaTags {
         frame_rate: frame_rate.filter(|&(n, d)| plausible_frame_rate(n, d)),
         timecode: pick(TIME_CODES).bytes(TIME_CODES).and_then(Timecode::from_bytes),
         reel_name: pick(REEL_NAME).string(REEL_NAME).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
+    }
+}
+
+/// Trust the file over `StripByteCounts` for an uncompressed single-strip image whose byte count is exactly
+/// `ActiveArea` columns by `ImageLength` rows while the file holds the whole `ImageWidth` by `ImageLength` raster from
+/// the strip's offset on. DJI Mavic 3 DNGs write the count of the active columns (5280) for a strip of full 5376-wide
+/// rows that ends at the end of the file, so reading only the counted bytes refuses a complete image
+/// (storytold/craft-libs#2040). The strip is lengthened only then, so every other short strip is still refused, and
+/// it never reaches past the end of the file. The active area has to start at column 0, so it is the stored rows'
+/// leading columns.
+fn extend_understated_strip(bytes: &[u8], info: &mut ImageInfo, raw: &Ifd) {
+    let bits = u64::from(info.bits());
+    if !matches!(info.layout, Layout::Strips { .. })
+        || info.compression != t::compression::NONE
+        || info.samples_per_pixel != 1
+        || info.planar == 2
+        || !matches!(info.sample_format, 1 | 2)
+        || !matches!(bits, 8 | 16)
+    {
+        return;
+    }
+    let ([offset], [count]) = (&info.offsets[..], &info.byte_counts[..]) else { return };
+    let Some([top, left, bottom, right]) = raw.u64s(t::ACTIVE_AREA).and_then(|a| <[u64; 4]>::try_from(a).ok()) else { return };
+    if left != 0 || bottom <= top || bottom > u64::from(info.height) || right == 0 || right >= u64::from(info.width) {
+        return;
+    }
+    let row_bytes = |width: u64| width.checked_mul(u64::from(info.height))?.checked_mul(bits / 8);
+    let (Some(counted), Some(needed)) = (row_bytes(right), row_bytes(u64::from(info.width))) else { return };
+    let fits = offset.checked_add(needed).is_some_and(|end| end <= bytes.len() as u64);
+    if *count == counted && fits {
+        info.byte_counts = vec![needed];
     }
 }
 
