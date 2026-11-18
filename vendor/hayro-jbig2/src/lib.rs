@@ -649,7 +649,7 @@ fn decode_segments(
 }
 
 /// PdfCraft patch: the words a stored item costs in its list, at least, apart from what it holds.
-const ENTRY_WORDS: u64 = 32;
+pub(crate) const ENTRY_WORDS: u64 = 32;
 
 /// PdfCraft patch: the most words a page's segments may hold for later ones, 64 MiB: two square
 /// bitmaps of 16,384 a side (`bitmap::MAX_PIXELS`). Each stored item is bounded on its own, but without a
@@ -1182,6 +1182,30 @@ mod tests {
         page.limits = Limits::with_max_pixels(1 << 30);
         assert_eq!(page.retained_room(), max_retained_words(1 << 30) - MAX_RETAINED_WORDS);
         assert!(max_retained_words(1 << 30) > 4 * ((1 << 28) / 32));
+    }
+
+    /// Craft patch: a pattern dictionary keeps its shifted copies only when the page can store
+    /// them with the entry charge. One word short of that, it is decoded without them and stored.
+    #[test]
+    fn shifted_copies_leave_room_for_the_entry_charge() {
+        let header = pattern::PatternDictionaryHeader {
+            mmr: false,
+            template: decode::Template::Template0,
+            pattern_width: 8,
+            pattern_height: 8,
+            num_patterns: 1,
+            data: &[],
+        };
+        let decode_within = |room| pattern::decode(&header, &mut ScratchBuffers::default(), room, bitmap::MAX_PIXELS).unwrap();
+        let cached = decode_within(u64::MAX);
+        assert!(cached.shifted_pattern(0, 0).is_some());
+        let needed = cached.words() as u64 + ENTRY_WORDS;
+        for (room, keeps_copies) in [(needed - 1, false), (needed, true)] {
+            let mut page = PageState { retained_words: MAX_RETAINED_WORDS - room, ..Default::default() };
+            let dictionary = decode_within(page.retained_room());
+            assert_eq!(dictionary.shifted_pattern(0, 0).is_some(), keeps_copies, "room {room}");
+            assert!(page.store_pattern_dictionary(0, dictionary).is_ok(), "room {room}");
+        }
     }
 
     /// Craft patch: a region of one column within a low limit takes a word a row, and the page

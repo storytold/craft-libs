@@ -1,11 +1,11 @@
 //! Pattern dictionary segment parsing and decoding (7.4.4, 6.7).
 
 use super::{AdaptiveTemplatePixel, Template, generic};
-use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
 use crate::bitmap::{Bitmap, WORD_BITS, Word, copy_work};
 use crate::error::{OverflowError, ParseError, Result};
 use crate::reader::Reader;
+use crate::{ENTRY_WORDS, ScratchBuffers};
 use alloc::vec::Vec;
 
 /// PdfCraft patch: the most words of shifted copies a dictionary keeps, 16 MiB, where 256 patterns
@@ -142,8 +142,10 @@ pub(crate) fn decode(
     // the whole process.
     //
     // PdfCraft patch: only when the table is small, and fits what the page may still hold
-    // (`room`), so that a speed-up never gets an image refused. It can be left out:
-    // `shifted_pattern` then returns `None` and the patterns are combined the slow way.
+    // (`room`), so that a speed-up never gets an image refused. The page charges a stored
+    // dictionary `ENTRY_WORDS` on top of its words, so the check counts that charge too. It can
+    // be left out: `shifted_pattern` then returns `None` and the patterns are combined the slow
+    // way.
     let shifted_words = (patterns.len() as u64)
         .saturating_mul(32 * 2)
         .saturating_mul(u64::from(pattern_height));
@@ -151,7 +153,7 @@ pub(crate) fn decode(
     let shifted_patterns = if pattern_width <= WORD_BITS
         && pattern_height <= WORD_BITS
         && shifted_words <= MAX_SHIFTED_WORDS
-        && shifted_words.saturating_add(pattern_words) <= room
+        && shifted_words.saturating_add(pattern_words).saturating_add(ENTRY_WORDS) <= room
     {
         let h = pattern_height as usize;
         let mut data = Vec::with_capacity(patterns.len() * 32 * h * 2);

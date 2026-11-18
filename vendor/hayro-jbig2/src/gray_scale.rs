@@ -248,8 +248,9 @@ where
 /// Craft patch: the number of values of a `width` by `height` gray-scale image. A limit refuses
 /// the image when the `u32` array of its values would take more than `max_bytes` bytes, which
 /// `decode_bitplanes` sets to `isize::MAX`, the most one allocation may take. With 32-bit
-/// pointers, a caller's raised `Limits` lets a grid reach that size.
-fn value_count(width: u32, height: u32, max_bytes: u64) -> Result<usize> {
+/// pointers, a caller's raised `Limits` lets a grid reach that size. A halftone region runs the
+/// same check before it builds its skip mask.
+pub(crate) fn value_count(width: u32, height: u32, max_bytes: u64) -> Result<usize> {
     let count = u64::from(width) * u64::from(height);
     if count.saturating_mul(size_of::<u32>() as u64) > max_bytes {
         bail!(OverflowError::BitmapLimit);
