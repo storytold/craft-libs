@@ -22,6 +22,8 @@ pub struct Span<'a> {
     pub highlight: bool,
     /// Underlined in the span's colour, `stroke.thin` wide, along the bottom of the line box.
     pub underline: bool,
+    /// Struck through in the span's colour, `stroke.thin` wide, across the middle of the line box.
+    pub strikethrough: bool,
     /// The role's semibold face, at the role's size.
     pub strong: bool,
 }
@@ -38,6 +40,7 @@ impl<'a> Span<'a> {
             shortcut: false,
             highlight: false,
             underline: false,
+            strikethrough: false,
             strong: false,
         }
     }
@@ -81,6 +84,12 @@ impl<'a> Span<'a> {
     /// Underlined: a link, or the mnemonic letter of a menu title.
     pub fn underline(mut self) -> Self {
         self.underline = true;
+        self
+    }
+
+    /// Struck through: a word marked for removal.
+    pub fn strikethrough(mut self) -> Self {
+        self.strikethrough = true;
         self
     }
 
