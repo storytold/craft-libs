@@ -133,7 +133,7 @@ fn lookup_falls_back_to_english_and_context_never_borrows_the_plain_row() {
     assert_eq!(i.tc(fr, "menu", "Open"), "Ouvrir le menu");
     assert_eq!(i.tid(fr, "file.save", "Save file"), "Enregistrer le fichier");
     assert_eq!(i.t(fr, "Not translated"), "Not translated");
-    assert_eq!(i.tc(fr, "menu", "Save"), "Save", "a context row is not the plain row");
+    assert_eq!(i.get(fr, "menu", "Save"), None, "a context row is not the plain row");
     assert_eq!(i.t(Lang::EN, "Save"), "Save");
 }
 
