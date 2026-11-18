@@ -36,6 +36,11 @@ const ARROW_HEAD: f32 = 3.5 / 12.0;
 /// The head's half width, as a share of the arrow's extent.
 const ARROW_HEAD_HALF_WIDTH: f32 = 3.5 / 12.0;
 
+/// The length of an alignment cell's short bar, as a share of the long bar.
+const BAR_SHORT: f32 = 0.6;
+/// The distance between an alignment cell's bars, as a share of the long bar.
+const BAR_GAP: f32 = 0.25;
+
 /// The style of a reference point picker.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -60,11 +65,17 @@ pub struct ReferencePointStyle {
     arrow: f32,
     /// The unpicked dots and the growth arrows.
     arrow_ink: Stateful<StyleColor>,
-    /// The length of a text bar of an alignment cell.
-    #[allow(dead_code)] // P3(dialogs-w12): dg.F30
+    /// The length of a long text bar of an alignment cell.
     bar: f32,
+    /// The length of an alignment cell's short text bar.
+    bar_short: f32,
+    /// The distance between an alignment cell's text bars.
+    bar_gap: f32,
+    /// The fill of the picked alignment cell.
+    picked_fill: Stateful<StyleColor>,
+    /// The corner radius of the picked alignment cell's fill.
+    fill_radius: egui::CornerRadius,
     /// The ink of an alignment cell's text bars.
-    #[allow(dead_code)] // P3(dialogs-w12): dg.F30
     bar_ink: Stateful<StyleColor>,
 }
 
@@ -130,7 +141,7 @@ impl<'a> ReferencePoint<'a> {
     }
 
     fn position_of(value: Option<&Option<Anchor9>>) -> Option<usize> {
-        let value = value.and_then(Option::as_ref); // P3(dialogs-w12): dg.F30
+        let value = value.and_then(Option::as_ref);
         value.and_then(|value| Anchor9::ALL.iter().position(|point| point == value))
     }
 
@@ -186,6 +197,10 @@ impl Component for ReferencePoint<'_> {
             arrow: cx.tokens.size.icon.sm,
             arrow_ink: look(cx.color(colors.text.muted)),
             bar: cx.tokens.size.icon.sm,
+            bar_short: cx.tokens.size.icon.sm * BAR_SHORT,
+            bar_gap: cx.tokens.size.icon.sm * BAR_GAP,
+            picked_fill: look(cx.color(colors.state.selected)),
+            fill_radius: UiTokens::corner(cx.tokens.shape.radius.control),
             bar_ink: look(cx.color(colors.text.muted)),
         }
     }
@@ -219,8 +234,12 @@ impl Component for ReferencePoint<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let current = Self::position_of(cx.value());
         let activated = (0..Anchor9::ALL.len()).find(|at| cx.part_activated(Self::part(*at)).is_some());
-        if let Some(at) = activated.filter(|at| current != Some(*at)) {
-            cx.set(Some(Anchor9::ALL[at])); // P3(dialogs-w12): dg.F30
+        if let Some(at) = activated {
+            if current != Some(at) {
+                cx.set(Some(Anchor9::ALL[at]));
+            } else if self.kind == ReferencePointKind::Alignment {
+                cx.set(None);
+            }
         }
     }
 
@@ -236,7 +255,40 @@ impl Component for ReferencePoint<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let current = Self::position_of(cx.value());
         debug_assert!(!(self.compact && self.growth.is_some()), "the compact picker shows no growth arrows");
+        debug_assert!(
+            self.kind == ReferencePointKind::Point || (!self.compact && self.growth.is_none()),
+            "only the point picker has growth arrows and a compact size"
+        );
         let draw = ui.draw();
+        if self.kind == ReferencePointKind::Alignment {
+            let color = cx.resolve(&cx.style.bar_ink);
+            let gap = cx.style.bar_gap;
+            for (at, point) in Anchor9::ALL.iter().enumerate() {
+                let cell = Self::cell_rect(cx.rect, at);
+                if current == Some(at) {
+                    draw.fill(&PaintShape::Rect(cell, cx.style.fill_radius), cx.resolve(&cx.style.picked_fill));
+                }
+                let inset = ((cell.width() - cx.style.bar) / 2.0).max(0.0);
+                let inner = cell.shrink(inset);
+                let (column, row) = point.cell();
+                // The middle bar's height; the other two sit one gap above and below it.
+                let middle = match row {
+                    0 => inner.top() + gap,
+                    1 => inner.center().y,
+                    _ => inner.bottom() - gap,
+                };
+                for (line, length) in [cx.style.bar, cx.style.bar_short, cx.style.bar].into_iter().enumerate() {
+                    let start = match column {
+                        0 => inner.left(),
+                        1 => inner.center().x - length / 2.0,
+                        _ => inner.right() - length,
+                    };
+                    let y = middle + (line as f32 - 1.0) * gap;
+                    draw.stroke(&PaintShape::Path(vec![Pos2::new(start, y), Pos2::new(start + length, y)]), StrokeWidth::Medium, color);
+                }
+            }
+            return;
+        }
         for (at, point) in Anchor9::ALL.iter().enumerate() {
             let cell = Self::cell_rect(cx.rect, at);
             let (side, ink) = if current == Some(at) { (cx.style.picked_dot, &cx.style.ink) } else { (cx.style.dot, &cx.style.arrow_ink) };

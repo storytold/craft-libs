@@ -1,6 +1,6 @@
 //! Stories of `ReferencePoint`.
 
-use super::ReferencePoint;
+use super::{ReferencePoint, ReferencePointKind};
 use crate::contract::{Bind, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -37,6 +37,18 @@ fn reference_point_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
 fn reference_point_growth(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ReferencePoint::new("Reference point", Bind::bound(data.value("grown", Some(Anchor9::TopLeft)))).growth((200.0, -100.0)).show(ui).into()
+}
+
+/// The alignment of text in a cell: three bars in each cell, the pick's cell filled; a click on the pick clears it.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Custom(pick_top_left))]
+fn reference_point_alignment(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ReferencePoint::new("Alignment", Bind::bound(data.value("alignment", Some(Anchor9::Centre)))).kind(ReferencePointKind::Alignment).show(ui).into()
+}
+
+/// The alignment picker with no alignment picked: no cell is filled.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_alignment_unset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ReferencePoint::new("Alignment", Bind::bound(data.value("alignment_unset", None::<Anchor9>))).kind(ReferencePointKind::Alignment).show(ui).into()
 }
 
 /// The options bar's size: the grid is an icon square and every point is a dot.

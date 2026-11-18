@@ -485,12 +485,12 @@ impl Cells<'_> {
     /// The reference point picker; a pick moves the reference point to that point of the box.
     fn reference(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &Pass, compact: bool) {
         let anchor = pass.before.state.anchor_of_pivot().unwrap_or(Anchor9::Centre);
-        let mut picker = ReferencePoint::new(self.words.reference.clone(), Bind::given(Some(anchor))).enabled(self.enabled); // P3(dialogs-w12): dg.F30
+        let mut picker = ReferencePoint::new(self.words.reference.clone(), Bind::given(Some(anchor))).enabled(self.enabled);
         if compact {
             picker = picker.compact();
         }
         let shown = picker.show(ui);
-        let Some(picked) = shown.value().copied().flatten() else { return }; // P3(dialogs-w12): dg.F30
+        let Some(picked) = shown.value().copied().flatten() else { return };
         let before = pass.before;
         let state = BoxState::new(before.state.quad, before.state.point_at(picked));
         let event = EditEvent::set(Mixed::Same(before), TransformRow { state, skew_v: before.skew_v }, self.name.clone(), None);
