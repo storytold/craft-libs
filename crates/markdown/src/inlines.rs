@@ -342,16 +342,24 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs, images: Images<'_>) 
                 match parsed {
                     Some((inner, dest, end)) if img => {
                         flush!();
-                        let alt: String = parse_inlines_with(inner, &Fmt::default(), depth + 1, refs, images)
+                        // The description is plain text: an image inside it gives its own alt
+                        // text, and no picture is loaded for it.
+                        let alt: String = parse_inlines_with(inner, &Fmt::default(), depth + 1, refs, None)
                             .iter()
-                            .filter_map(|x| if let Inline::Text(t, _) = x { Some(t.as_str()) } else { None })
+                            .filter_map(|x| match x {
+                                Inline::Text(t, _) => Some(t.as_str()),
+                                Inline::Image(im) => Some(im.alt.as_str()),
+                                _ => None,
+                            })
                             .collect();
-                        // A `data:` URI carries its picture; another destination is loaded by
-                        // `images`, when the caller gave one (a path beside the Markdown file).
-                        let data = match model::data_uri(&dest) {
-                            Some(d) => Some(Arc::new(d)),
-                            None if !dest.trim_start().starts_with("data:") => images.and_then(|load| load(&dest)),
-                            None => None,
+                        // A `data:` URI (the scheme in any case) carries its picture; another
+                        // destination is loaded by `images`, when the caller gave one (a path
+                        // beside the Markdown file), and kept only if it can be measured, so a
+                        // truncated file stays its alt text.
+                        let trimmed = dest.trim_start();
+                        let data = match trimmed.get(..5).filter(|p| p.eq_ignore_ascii_case("data:")) {
+                            Some(_) => trimmed.get(5..).and_then(|rest| model::data_uri(&format!("data:{rest}"))).map(Arc::new),
+                            None => images.and_then(|load| load(&dest)).filter(|d| model::image_px(d).is_some()),
                         };
                         match data.and_then(|d| make_img(d, None, None, &alt)) {
                             Some(im) => nodes.push(Node::Inl(Inline::Image(im))),

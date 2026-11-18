@@ -40,7 +40,9 @@ fn decode_entity(body: &str) -> Option<String> {
 
 pub use blocks::{Refs, import, import_on, import_on_with, import_with, parse, parse_with};
 /// Reads the bytes of the picture an image names (`![alt](path)`), or `None`: the same shape as
-/// `craft_html::doc::ImageLoader`, so one loader serves both importers.
+/// `craft_html::doc::ImageLoader`, so one loader serves both importers. It is called while an
+/// import is under way, so it should read bytes and not start another import on the same
+/// thread: an import begins by clearing the thread's record of the warnings already logged.
 pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
 
 /// The loader pictures are read with, when there is one.

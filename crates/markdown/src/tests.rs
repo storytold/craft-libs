@@ -846,3 +846,26 @@ fn images_load_through_the_loader_the_caller_gives() {
     assert!(md.contains("![A red rectangle]("), "{md}");
     assert!(!export(&import("![A red rectangle](img.png)\n")).contains("!["), "without a loader, the alt text");
 }
+
+/// An image description is plain text, so an image inside it is its alt text and is not
+/// loaded; a `data:` scheme in capitals is still a data URI, not a path to load; and bytes the
+/// loader returns that only start like a picture (a truncated file) stay the alt text.
+#[test]
+fn image_descriptions_data_schemes_and_truncated_files() {
+    let asked = std::cell::RefCell::new(Vec::new());
+    let load = |src: &str| -> Option<Arc<Vec<u8>>> {
+        asked.borrow_mut().push(src.to_string());
+        match src {
+            "img.png" => Some(Arc::new(PNG.to_vec())),
+            "cut.png" => Some(Arc::new(PNG[..8].to_vec())),
+            _ => None,
+        }
+    };
+    let upper = format!("![upper](DATA:image/png;base64,{})", model::base64_encode(&PNG));
+    let text = format!("![foo ![bar](img.png)](gone.png)\n\n{upper}\n\n![cut](cut.png)\n");
+    let got = pictures(&parse_with(&text, Some(&load)));
+    assert_eq!(got[0], (Vec::<String>::new(), "foo bar".to_string()), "the inner image's alt text is in the description");
+    assert_eq!(got[1].0, vec!["upper".to_string()], "{got:?}");
+    assert_eq!(got[2], (Vec::<String>::new(), "cut".to_string()), "a truncated picture stays its alt text");
+    assert_eq!(*asked.borrow(), ["gone.png", "cut.png"], "neither the inner image nor the DATA: URI is asked for");
+}
