@@ -285,7 +285,9 @@ impl Reader<'_> {
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
             // Only a twips indent (`dxa`, the default) is a length: `nil` is no indent, and `pct`
             // or `auto` have no meaning for an indent (ECMA-376 §17.4.50), so the style sets none.
+            // A `w:w` left out is 0 (`CT_TblWidth`), which still overrides a based-on style's.
             t.indent = tp.child("w:tblInd").and_then(|e| match e.attr("w:type").unwrap_or("dxa") {
+                "dxa" if e.attr("w:w").is_none() => Some(0.0),
                 "dxa" => tw(e, "w:w").map(|i| i.clamp(-1584.0, 1584.0)),
                 "nil" => Some(0.0),
                 _ => None,

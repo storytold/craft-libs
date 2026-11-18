@@ -33,7 +33,8 @@ fn style_xml(bytes: &[u8], id: &str) -> String {
     let mut s = String::new();
     z.by_name("word/styles.xml").unwrap().read_to_string(&mut s).unwrap();
     let key = format!(r#"w:styleId="{id}""#);
-    s.split("<w:style ").find(|x| x.contains(&key)).and_then(|x| x.split("</w:style>").next()).unwrap_or_default().to_string()
+    let style = s.split("<w:style ").find(|x| x.contains(&key)).unwrap_or_else(|| panic!("style {id} missing from the saved styles.xml"));
+    style.split("</w:style>").next().unwrap_or(style).to_string()
 }
 
 const BODY: &str = r#"<w:tbl><w:tblPr><w:tblStyle w:val="Indented"/><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#;
@@ -71,4 +72,19 @@ fn a_table_style_indent_that_is_no_length_sets_none() {
         let got = d.styles.get("Indented").and_then(|s| s.table.clone()).unwrap_or_default().indent;
         assert_eq!(got, want, "w:type={ty}");
     }
+}
+
+#[test]
+fn a_table_style_indent_without_a_width_is_zero_and_overrides_its_base() {
+    // `CT_TblWidth`'s `w:w` defaults to 0, so a based-on style's indent is reset, not inherited.
+    let styles = r#"<w:style w:type="table" w:styleId="Base"><w:name w:val="Base"/><w:tblPr><w:tblInd w:w="720" w:type="dxa"/></w:tblPr></w:style><w:style w:type="table" w:styleId="Indented"><w:name w:val="Indented"/><w:basedOn w:val="Base"/><w:tblPr><w:tblInd w:type="dxa"/></w:tblPr></w:style>"#;
+    let d = craft_docx::read(&docx(BODY, styles)).unwrap();
+    let own = |d: &craft_wordmodel::Document| d.styles.get("Indented").and_then(|s| s.table.clone()).unwrap_or_default().indent;
+    assert_eq!(own(&d), Some(0.0));
+    assert_eq!(d.styles.table_style("Indented").map(|s| s.parts.indent), Some(Some(0.0)), "the base's 36 pt is overridden");
+
+    let out = craft_docx::write(&d).unwrap();
+    let indented = style_xml(&out, "Indented");
+    assert!(indented.contains(r#"<w:tblInd w:w="0" w:type="dxa"/>"#), "{indented}");
+    assert_eq!(own(&craft_docx::read(&out).unwrap()), Some(0.0));
 }
