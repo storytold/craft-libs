@@ -3,6 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use craft_behavior::{IconId, MotionMode};
 use craft_keymap::CommandRef;
@@ -10,6 +11,7 @@ use craft_menu::{GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonRow, Ribbon
 use craft_ui::buttons::{Arrangement, Button, SplitButton};
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft_ui::runtime::env::{Direction, Env};
+use craft_ui::runtime::inspect::{Element, Recorded};
 use craft_ui::testing::{Fixture, is_measuring, last_pass_measuring_runs, trial};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 
@@ -142,6 +144,13 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
     assert!(fixture.by_label("Paste").is_none(), "the group is collapsed");
     let button = fixture.by_label("Clipboard").expect("the collapsed group's button");
     fixture.click(&button).idle(3);
+    eprintln!(
+        "DIAG a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used: clicked {:?}; after: Clipboard {:?} Paste {:?} Wide {:?}",
+        button.rect,
+        fixture.by_label("Clipboard").map(|target| target.rect),
+        fixture.by_label("Paste").map(|target| target.rect),
+        fixture.by_label("Wide").map(|target| target.rect)
+    );
     assert!(fixture.by_label("Paste").is_some(), "the button opens the group's popover");
     fixture.key(Key::ArrowDown, Modifiers::ALT).idle(3);
     fixture.key(Key::Enter, Modifiers::NONE).idle(3);
@@ -151,14 +160,22 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
     assert!(fixture.by_label("Paste").is_none(), "a press outside closes the popover");
 }
 
-/// The painted x of the group titled `title`, once the fixture has run a frame.
-fn group_x(fixture: &Fixture, title: &str) -> f32 {
-    fixture.by_label(title).map_or(f32::NAN, |target| target.rect.left())
+/// The ribbon's inspected record of the latest real run.
+type Controls = Rc<RefCell<Option<Arc<Recorded>>>>;
+
+/// The x at which the latest frame painted the group titled `title`: its rect in the ribbon's record, which maps each
+/// element through the layer it shows on (the slide's), unlike its access bounds, which stay in that layer's points.
+fn group_x(controls: &Controls, title: &str) -> f32 {
+    let recorded = controls.borrow();
+    let named = |element: &&Element| element.part.is_none() && element.facts.as_ref().and_then(|facts| facts.name.as_deref()) == Some(title);
+    let elements: &[Element] = recorded.as_deref().map_or(&[], |recorded| recorded.elements.as_slice());
+    elements.iter().filter(named).min_by_key(|element| element.depth).map_or(f32::NAN, |element| element.rect.left())
 }
 
-/// A ribbon of three tabs with one group each, showing the tab `shown` holds.
-fn slide_rig(shown: &Rc<Cell<usize>>, direction: Direction, motion: MotionMode) -> Fixture {
+/// A ribbon of three tabs with one group each, showing the tab `shown` holds; `controls` takes its record.
+fn slide_rig(shown: &Rc<Cell<usize>>, controls: &Controls, direction: Direction, motion: MotionMode) -> Fixture {
     let state = shown.clone();
+    let record = controls.clone();
     let mut fixture = Fixture::new(move |ui| {
         let tabs = [RibbonTab::new(0_usize, "One"), RibbonTab::new(1, "Two"), RibbonTab::new(2, "Three")];
         let out = Ribbon::new("Ribbon", &tabs, Bind::given(state.get())).show(ui, |row, tab| match tab {
@@ -168,6 +185,9 @@ fn slide_rig(shown: &Rc<Cell<usize>>, direction: Direction, motion: MotionMode) 
         });
         if let Some(next) = out.shown {
             state.set(next);
+        }
+        if let Some(controls) = out.controls {
+            *record.borrow_mut() = Some(controls);
         }
     });
     fixture.direction(direction).motion(motion).room(vec2(600.0, 300.0));
@@ -180,14 +200,21 @@ fn slide_rig(shown: &Rc<Cell<usize>>, direction: Direction, motion: MotionMode) 
 /// the release (the click's idle frame) is the first that shows the new row.
 fn slide(direction: Direction, motion: MotionMode, from: usize, to: usize) -> (f32, f32) {
     let shown = Rc::new(Cell::new(from));
-    let mut fixture = slide_rig(&shown, direction, motion);
+    let controls: Controls = Rc::new(RefCell::new(None));
+    let mut fixture = slide_rig(&shown, &controls, direction, motion);
     let tab = fixture.by_label(["One", "Two", "Three"][to]).expect("the tab to change to");
     fixture.click(&tab);
     assert_eq!(shown.get(), to, "the click on the tab showed it");
     let title = ["Alpha", "Beta", "Gamma"][to];
-    let first = group_x(&fixture, title);
+    let first = group_x(&controls, title);
     fixture.idle(120);
-    (first, group_x(&fixture, title))
+    let rest = group_x(&controls, title);
+    eprintln!(
+        "DIAG a_tab_change_slides_the_row_in_from_the_new_tabs_side_and_shows_at_rest_under_reduced_motion: {from}->{to} rtl {} first {first} rest {rest} access {:?}",
+        direction.is_rtl(),
+        fixture.by_label(title).map(|target| target.rect)
+    );
+    (first, rest)
 }
 
 /// A tab change slides the new group row in from the side of the new tab (mirrored in right-to-left) and reaches
@@ -269,6 +296,11 @@ fn a_settled_ribbon_runs_no_group_body_again_and_a_level_change_runs_only_that_g
     assert!(KEYS.iter().all(|key| level(&runs, key) == GroupLevel::Full), "every group shows in full in a wide room");
     clear(&runs);
     fixture.idle(1);
+    eprintln!(
+        "DIAG a_settled_ribbon_runs_no_group_body_again_and_a_level_change_runs_only_that_group: idle pass runs {:?}, measuring bodies {:?}",
+        runs.borrow(),
+        last_pass_measuring_runs(fixture.ctx())
+    );
     assert!(KEYS.iter().all(|key| measured(&runs, key) == 0), "a pass with unchanged inputs measures no group: {:?}", runs.borrow());
     assert!(last_pass_measuring_runs(fixture.ctx()).is_empty(), "a pass with unchanged inputs runs no measuring run");
 
