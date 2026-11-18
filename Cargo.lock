@@ -3467,6 +3467,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xfdf"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-xfl"
 version = "0.1.0"
 dependencies = [
