@@ -16,6 +16,10 @@ pub const MAX_DECODED_ELEMENTS: usize = 1 << 24;
 /// one PRC stream run together.
 pub const MAX_SCHEMA_STEPS: u64 = 1 << 22;
 
+/// The most triangle steps the searches rebuilding `TESS_3D_Compressed` meshes of one PRC
+/// stream take together.
+pub const MAX_REBUILD_STEPS: u64 = 1 << 24;
+
 /// What the readers of one stream may still spend, carried from each reader to the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Budget {
@@ -23,11 +27,13 @@ pub(crate) struct Budget {
     pub(crate) elements: usize,
     /// Schema-program steps still to run.
     pub(crate) steps: u64,
+    /// Compressed-mesh search steps still to take.
+    pub(crate) rebuild: u64,
 }
 
 impl Budget {
     /// A whole stream's allowance.
-    pub(crate) const FULL: Self = Self { elements: MAX_DECODED_ELEMENTS, steps: MAX_SCHEMA_STEPS };
+    pub(crate) const FULL: Self = Self { elements: MAX_DECODED_ELEMENTS, steps: MAX_SCHEMA_STEPS, rebuild: MAX_REBUILD_STEPS };
 }
 
 /// A cursor over one inflated section.
@@ -80,6 +86,16 @@ impl<'a> BitReader<'a> {
     pub(crate) fn take_elements(&mut self, n: usize) -> Result<(), PrcError> {
         self.budget.elements = self.budget.elements.checked_sub(n).ok_or(PrcError::TooManyElements { limit: MAX_DECODED_ELEMENTS })?;
         Ok(())
+    }
+
+    /// Compressed-mesh search steps this reader may still take.
+    pub(crate) fn rebuild_steps_left(&self) -> u64 {
+        self.budget.rebuild
+    }
+
+    /// Charge `n` compressed-mesh search steps, at most what is left.
+    pub(crate) fn take_rebuild_steps(&mut self, n: u64) {
+        self.budget.rebuild = self.budget.rebuild.saturating_sub(n);
     }
 
     /// Charge one schema-program step; false when none is left.
