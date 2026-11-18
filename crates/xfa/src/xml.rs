@@ -191,7 +191,11 @@ impl Document {
         opts.limits.max_nodes = options.nodes_limit as usize;
         opts.limits.max_depth = crate::MAX_XML_DEPTH;
 
-        let mut events = opts.events(text.as_bytes());
+        // quick-xml excludes a leading UTF-8 BOM from its buffer positions.
+        // Parse it explicitly so every stored range still addresses the original input.
+        let input = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let source_offset = text.len() - input.len();
+        let mut events = opts.events(input.as_bytes());
         let mut nodes: Vec<NodeData> = Vec::new();
         let mut open: Vec<(usize, usize)> = Vec::new(); // (node_id, scope_len_before)
         let mut scope: Vec<(String, String)> = Vec::new();
@@ -199,6 +203,7 @@ impl Document {
 
         while let Some(ev) = events.next().map_err(|e| e.to_string())? {
             let span = events.span();
+            let span = span.start + source_offset..span.end + source_offset;
             match ev {
                 craft_xml::Event::Start { name, attrs } => {
                     if nodes.len() >= options.nodes_limit as usize {
