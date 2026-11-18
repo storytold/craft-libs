@@ -758,6 +758,11 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                 samples.try_reserve_exact(f.width * f.height).map_err(|_| bad("pixel buffer is too large"))?;
                 samples.resize(f.width * f.height, 0u16);
                 decode_scan(&b[start..end], f.width, f.height, &params, &mut samples)?;
+                // A restart marker comes only between two intervals, so none follows a scan that
+                // fits in one. Fill bytes (`0xFF`) may come before the marker.
+                if restart_interval != 0 && b[end..].iter().find(|&&v| v != 0xFF).is_some_and(|m| (0xD0..=0xD7).contains(m)) {
+                    return Err(bad("a restart marker after the last restart interval"));
+                }
                 planes[idx] = samples;
                 scans_done += 1;
                 pos = end;

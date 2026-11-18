@@ -397,6 +397,24 @@ fn the_restart_interval_in_effect_at_the_scan_decides_decoding() {
 }
 
 #[test]
+fn a_restart_marker_after_a_scan_of_one_interval_is_an_error() {
+    // With an interval of 3 lines the 5x3 scan is one interval, which no restart marker follows.
+    let (img, plain) = jpeg_ls_file();
+    assert_eq!(plain[plain.len() - 2..], [0xFF, 0xD9]);
+    let mut bytes = plain[..15].to_vec();
+    bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, 3]);
+    bytes.extend_from_slice(&plain[15..]);
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    let eoi = bytes.len() - 2;
+    let mut marked = bytes.clone();
+    marked.splice(eoi..eoi, [0xFF, 0xD0]);
+    assert!(decode(&marked).is_err());
+    // Fill bytes before the restart marker do not hide it.
+    bytes.splice(eoi..eoi, [0xFF, 0xFF, 0xFF, 0xD3]);
+    assert!(decode(&bytes).is_err());
+}
+
+#[test]
 fn a_stuffed_zero_where_a_marker_should_be_is_jpeg() {
     // `FF 00` is not a marker, so the walk ends there without asking for a length field.
     assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0x00]), Detection::Format(Format::Jpeg));
@@ -415,6 +433,21 @@ fn a_detector_that_found_a_jpeg_frame_does_not_walk_again() {
     changed[3] = 0xF7;
     assert_eq!(detect_prefix(&changed), Detection::Format(Format::JpegLs));
     assert_eq!(detector.detect(&changed), Detection::Format(Format::Jpeg));
+}
+
+#[test]
+fn a_detector_keeps_its_place_between_calls() {
+    // SOI, a comment with two bytes of text, then an SOF55 frame header.
+    let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xF7, 0, 11];
+    let mut detector = PrefixDetector::new();
+    assert_eq!(detector.detect(&file[..9]), Detection::NeedBytes(10));
+    // The next call starts at the frame header's marker and does not read the bytes before it
+    // again: with them cleared, the detector still finds JPEG-LS, while a walk from the start
+    // finds no SOI.
+    let mut cleared = file;
+    cleared[..8].fill(0);
+    assert_ne!(detect_prefix(&cleared), Detection::Format(Format::JpegLs));
+    assert_eq!(detector.detect(&cleared), Detection::Format(Format::JpegLs));
 }
 
 #[cfg(feature = "sunraster")]
