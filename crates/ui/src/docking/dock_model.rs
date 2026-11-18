@@ -423,7 +423,11 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     columns: columns
                         .iter()
                         .map(|c| Column {
-                            groups: c.groups.iter().map(|g| Group { height: None, ..g.clone() }).collect(),
+                            groups: c
+                                .groups
+                                .iter()
+                                .map(|g| Group { height: None, flyout_height: None, flyout_width: None, flyout_offset: None, ..g.clone() })
+                                .collect(),
                             width: 0.0,
                             iconic: c.iconic,
                             iconic_width: None,
@@ -443,7 +447,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
     }
 
     /// Whether `other` arranges the panels as this layout does: equal apart from split sizes,
-    /// column widths, group heights and window rectangles. A drop that leads from one to the
+    /// column widths, group heights, flyout geometry and window rectangles. A drop that leads from one to the
     /// other changes nothing the user would see as a move.
     pub(super) fn same_arrangement(&self, other: &Self) -> bool {
         self.shape() == other.shape()

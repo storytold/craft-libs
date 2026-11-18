@@ -907,3 +907,23 @@ fn floating_windows_stay_inside_the_float_bounds() {
     let title = hit(&d, Hit::Title(5));
     assert!(title.top() >= 30.0, "{title:?}");
 }
+
+/// Size-only changes must not turn a geometrically identical drop into a move.
+#[test]
+fn arrangement_ignores_flyout_geometry_without_forgetting_saved_sizes() {
+    let original = docked(&[&[1], &[2]], true);
+    for action in [
+        Action::ResizeFlyoutHeight { panel: 1, height: Some(320.0) },
+        Action::ResizeFlyoutWidth { panel: 1, width: Some(260.0) },
+        Action::MoveFlyoutTop { panel: 1, offset: Some(-30.0) },
+        Action::ResizeGroup { panel: 1, height: Some(80.0) },
+    ] {
+        let mut resized = original.clone();
+        resized.apply(action).unwrap();
+        let saved = first_column(&resized);
+        assert!(original.same_arrangement(&resized));
+        assert!(resized.same_arrangement(&original));
+        assert_eq!(first_column(&resized), saved);
+        assert!(!resized.same_arrangement(&docked(&[&[2], &[1]], true)));
+    }
+}
