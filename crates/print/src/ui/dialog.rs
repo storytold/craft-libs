@@ -413,18 +413,20 @@ impl Component for PrintPreview<'_> {
 
     fn style(cx: &StyleCx<'_>, _: PrintPreviewStyleKey) -> PrintPreviewStyle {
         let tokens = cx.tokens;
-        PrintPreviewStyle {
-            metrics: Metrics::new(),
-            stand_in: cx.color(tokens.color.surface.sunken),
-            ink: cx.color(tokens.color.text.muted),
-        }
+        PrintPreviewStyle { metrics: Metrics::new(), stand_in: cx.color(tokens.color.surface.sunken), ink: cx.color(tokens.color.text.muted) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let width = cx.tokens.size.plot.width;
         let paper = self.sheet.paper;
         let aspect = if paper.x > 0.0 && paper.y > 0.0 { paper.y / paper.x } else { 1.0 };
-        Vec2::new(width, width * aspect)
+        // A message takes the lines it wraps to at this width, so a larger text size grows the part instead of
+        // overflowing it.
+        let message = match &self.sheet.content {
+            SheetContent::Message(message) => cx.layout_at(&TextRun::new(cx.env.resolve(message).as_str()), width).size().y,
+            _ => 0.0,
+        };
+        Vec2::new(width, (width * aspect).max(message))
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Pos2>> {
@@ -488,6 +490,10 @@ impl Component for PrintPreview<'_> {
             painter.surface(cx.rect, SurfaceKind::Well, Corners::None);
             let shown = cx.env.resolve(message);
             let run = TextRun::new(shown.as_str()).color(style.ink);
+            painter.with_draw(|draw| {
+                let layout = draw.layout(&run, cx.rect.width());
+                eprintln!("DIAG suite::craft_print::ui::dialog::PrintPreview<'_>::reads: rect {:?} text {:?}", cx.rect, layout.size());
+            });
             centred_text(&painter, &run, cx.rect.center(), cx.rect.width());
             return;
         }
@@ -847,7 +853,8 @@ impl<'a> PrintDialog<'a> {
             }
             // The host's refusal of the held OK stays until a setting or a value changes.
             let now = settings.reborrow().get();
-            let refused = refusal.as_ref().filter(|(_, refused, fields)| *fields == *values && matches!(&now, Some(Mixed::Same(now)) if now == refused));
+            let refused =
+                refusal.as_ref().filter(|(_, refused, fields)| *fields == *values && matches!(&now, Some(Mixed::Same(now)) if now == refused));
             if let Some((reason, ..)) = refused {
                 Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
             }

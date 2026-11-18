@@ -182,7 +182,11 @@ impl<'a> FindBar<'a> {
                     .select_all(to_query)
                     .show(ui);
                 if to_query {
-                    focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                    let taken = focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                    eprintln!(
+                        "DIAG asking_for_the_bar_again_selects_its_query_unless_a_composition_runs: request taken {taken} has_focus {}",
+                        edit.response.has_focus()
+                    );
                     // Asking again each run until the field holds focus keeps the request across the measuring run.
                     if edit.response.has_focus()
                         && let Some(state) = state.as_deref_mut()
@@ -213,8 +217,7 @@ impl<'a> FindBar<'a> {
                     *open = !*open;
                 }
                 let active = options.match_case || options.whole_word;
-                let button =
-                    IconButton::new(IconId::new("settings")).label(words.options.clone()).popup(PopupKind::Menu).selected(active).show(ui);
+                let button = IconButton::new(IconId::new("settings")).label(words.options.clone()).popup(PopupKind::Menu).selected(active).show(ui);
                 let entries = [
                     Entry::new(BarOption::WholeWords, words.whole_words_only.clone()).checked(options.whole_word),
                     Entry::new(BarOption::MatchCase, words.case_sensitive.clone()).checked(options.match_case),
