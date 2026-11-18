@@ -147,8 +147,8 @@ fn a_dragged_vertical_thumb_shows_the_tip_beside_it_and_nothing_when_it_is_not_d
     assert!(tip.right() <= bar.left() + 0.5, "the tip is beside the bar on the reading-start side: {tip:?} by {bar:?}");
     assert!(tip.bottom() > bar.top() && tip.top() < bar.bottom(), "level with the track: {tip:?}");
     fixture.release_at(from + by);
-    // The tip leaves as every popup does, through its exit fade.
-    fixture.settle();
+    // The tip leaves as every popup does, through its exit fade; the fixture's clock moves only when told to.
+    fixture.advance(1.0).settle();
     assert_eq!(shows_tip(&fixture), None, "the release ends the tip");
     fixture.idle(2);
     assert_eq!(shows_tip(&fixture), None, "nothing is kept after it");
