@@ -99,7 +99,7 @@ fn the_gate_may_resolve_commands() {
         Tap::new().id_salt("go").command(AppCommand::Save).show(ui);
     };
     frames.idle(2, &mut show);
-    frames.frame(vec![key_press(Key::K, Modifiers::COMMAND)], &mut show);
+    frames.frame(vec![key_press(Key::K, Modifiers::COMMAND | Modifiers::ALT | Modifiers::SHIFT)], &mut show);
     assert_eq!(ids(&take_output(&frames.ctx).fired), ["trial.save"]);
 }
 
@@ -122,7 +122,7 @@ fn a_disabled_commands_key_is_declined_and_a_gated_one_is_not() {
     let keys = vec![
         key_press(Key::F8, Modifiers::NONE),
         key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT),
-        key_press(Key::K, Modifiers::COMMAND),
+        key_press(Key::K, Modifiers::COMMAND | Modifiers::ALT | Modifiers::SHIFT),
     ];
     let mut first = true;
     frames.frame(keys, |ui| {
