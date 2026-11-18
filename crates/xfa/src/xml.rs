@@ -191,7 +191,11 @@ impl Document {
         opts.limits.max_nodes = options.nodes_limit as usize;
         opts.limits.max_depth = crate::MAX_XML_DEPTH;
 
-        let mut events = opts.events(text.as_bytes());
+        // quick-xml excludes a leading UTF-8 BOM from its buffer positions.
+        // Parse it explicitly so every stored range still addresses the original input.
+        let input = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let source_offset = text.len() - input.len();
+        let mut events = opts.events(input.as_bytes());
         let mut nodes: Vec<NodeData> = Vec::new();
         let mut open: Vec<(usize, usize)> = Vec::new(); // (node_id, scope_len_before)
         let mut scope: Vec<(String, String)> = Vec::new();
@@ -199,6 +203,7 @@ impl Document {
 
         while let Some(ev) = events.next().map_err(|e| e.to_string())? {
             let span = events.span();
+            let span = span.start + source_offset..span.end + source_offset;
             match ev {
                 craft_xml::Event::Start { name, attrs } => {
                     if nodes.len() >= options.nodes_limit as usize {
@@ -412,6 +417,23 @@ impl<'a> Node<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn element_ranges_slice_original_input_with_utf8_bom() {
+        for prefix in ["", "\u{feff}", "\u{feff}<?xml version='1.0'?>"] {
+            for child_xml in ["<é/>", "<é>text</é>"] {
+                let root_xml = format!("<r>{child_xml}</r>");
+                let input = format!("{prefix}{root_xml}");
+                let doc = Document::parse(&input).unwrap();
+                let root = doc.root_element();
+                let child = root.children().next().unwrap();
+                assert_eq!(input.get(root.range()), Some(root_xml.as_str()));
+                assert_eq!(input.get(child.range()), Some(child_xml));
+                assert_eq!(root.range(), prefix.len()..input.len());
+                assert_eq!(child.range(), prefix.len() + 3..prefix.len() + 3 + child_xml.len());
+            }
+        }
+    }
 
     #[test]
     fn inherited_namespace_copies_obey_aggregate_byte_admission() {
