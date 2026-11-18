@@ -85,7 +85,7 @@ fn balloons_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(CommentBalloons<'static>, covers = [], drive = Drive::Never)]
 fn balloons_right_to_left(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let threads = [thread(1, "منى", "الهامش ضيق جدا في هذه الصفحة.", false)];
+    let threads = [thread(1, "מיכל", "השוליים צרים מדי בעמוד הזה.", false)];
     beside_page(ui, data, &threads, &[], None, BalloonPlace::Column)
 }
 

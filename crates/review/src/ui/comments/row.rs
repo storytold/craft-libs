@@ -7,7 +7,7 @@ use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, WordSetCx as _, clicked};
 use craft_ui::controls::disclosure::DisclosureGlyph;
-use craft_ui::primitives::{HAlign, IconSpec, PaintShape, TextRun, Wrap};
+use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::style::{ComponentStyle, DataColor, Ink, StyleColor, StyleCx, TypeRole};
@@ -33,6 +33,10 @@ pub(crate) struct CommentRowStyle {
     faint: StyleColor,
     highlight: StyleColor,
     bar: StyleColor,
+    /// The surface of a balloon card.
+    card: StyleColor,
+    /// The border of a balloon card.
+    border: StyleColor,
     avatar: StyleColor,
     avatar_ink: StyleColor,
     /// The disc behind a card's kind icon.
@@ -677,6 +681,8 @@ impl Component for CommentRow<'_> {
             faint: cx.color(color.text.faint),
             highlight: cx.color(color.state.selected),
             bar: cx.color(color.accent.solid),
+            card: cx.color(color.surface.raised),
+            border: cx.color(color.line.border),
             avatar: cx.color(color.accent.strong),
             avatar_ink: cx.color(color.text.on_strong),
             sunken: cx.color(color.surface.sunken),
@@ -726,6 +732,12 @@ impl Component for CommentRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         let now = self.now;
         let age = |then: i64| age_text(&cx.env, then, now);
+        // A balloon card sits over the page, so it carries its own surface and border.
+        if self.actions == CardActions::Buttons {
+            let shape = PaintShape::Rect(rect, CornerRadius::ZERO);
+            ui.draw().fill(&shape, st.card);
+            ui.draw().stroke(&shape, StrokeWidth::Thin, st.border);
+        }
         if self.selected {
             ui.draw().fill(&PaintShape::Rect(rect, CornerRadius::ZERO), st.highlight);
             let bar = if rtl {

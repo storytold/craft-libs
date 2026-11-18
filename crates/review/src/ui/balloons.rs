@@ -153,14 +153,15 @@ impl<'a> CommentBalloons<'a> {
         } else {
             pages.iter().map(|page| page.rect.right()).fold(f32::NEG_INFINITY, f32::max) + gap
         };
-        let x_of = |page: &PlacedPage| match place {
-            BalloonPlace::Column => column,
-            BalloonPlace::Floating if rtl => (page.rect.left() - gap - width).max(room.left()),
-            BalloonPlace::Floating => {
-                let beside = page.rect.right() + gap;
-                // Without room beside the page the card floats over the page's edge, inside the room.
-                if beside + width <= room.right() { beside } else { (room.right() - width).max(room.left()) }
-            }
+        // A card always lies whole inside the room: without room beside the pages it floats over their edge, so
+        // its text is never cut off by the room's clip.
+        let x_of = |page: &PlacedPage| {
+            let preferred = match place {
+                BalloonPlace::Column => column,
+                BalloonPlace::Floating if rtl => page.rect.left() - gap - width,
+                BalloonPlace::Floating => page.rect.right() + gap,
+            };
+            preferred.min(room.right() - width).max(room.left())
         };
 
         let count = order.len();
