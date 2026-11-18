@@ -21,6 +21,7 @@ mod runtime;
 
 mod style;
 mod text;
+mod textures;
 
 use craft_ui::testing::registered;
 

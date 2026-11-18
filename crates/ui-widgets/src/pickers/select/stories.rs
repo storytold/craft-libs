@@ -114,6 +114,19 @@ fn select_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Select::new("Blend mode", Bind::bound(data.value("open", 1u8)), &entries).show(ui).into()
 }
 
+/// Entries that say what they do: an enabled entry's description is its row's tooltip and accessible description,
+/// and a disabled entry shows its reason in its place.
+#[story(Select<'static, u8>, covers = [], drive = Drive::Custom(open_listbox))]
+fn select_described_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = [
+        Entry::new(0u8, "Fast").description("Recognises printed text quickly; handwriting is skipped"),
+        Entry::new(1, "Accurate").description("Reads each page twice and keeps the likelier text"),
+        Entry::new(2, "Handwriting").description("Reads handwritten notes as well as print").disabled_reason("No handwriting model is installed"),
+        Entry::new(3, "Plain"),
+    ];
+    Select::new("Engine", Bind::bound(data.value("engine", 0u8)), &entries).show(ui).into()
+}
+
 #[story(Select<'static, u8>, covers = [], disabled_text = "Pick a layer first")]
 fn select_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();

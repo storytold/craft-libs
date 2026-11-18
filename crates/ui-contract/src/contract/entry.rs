@@ -30,7 +30,6 @@ struct Item<T> {
     icon: Option<IconSpec<'static>>,
     enabled: bool,
     reason: Option<Label>,
-    #[allow(dead_code)] // P3(pdf-print-ocr-w2): PO-P10
     description: Option<Label>,
     checked: bool,
     stepped: bool,
@@ -182,14 +181,20 @@ impl<T> Entry<T> {
 
     /// An enabled entry's hover text and accessible description, beside the reason a disabled entry shows.
     #[must_use]
-    pub fn description(self, text: impl Into<Label>) -> Self {
-        let _ = text;
-        todo!("PO-P10")
+    pub fn description(mut self, text: impl Into<Label>) -> Self {
+        if let Row::Item(item) = &mut self.row {
+            item.description = Some(text.into());
+        }
+        self
     }
 
-    /// The entry's description, when it has one.
+    /// The entry's description, when it has one, whether the entry is enabled or not: a disabled entry shows
+    /// [`Entry::why_disabled`] first. A heading or separator has none.
     pub fn description_text(&self) -> Option<&Label> {
-        todo!("PO-P10")
+        match &self.row {
+            Row::Item(item) => item.description.as_ref(),
+            Row::Heading(_) | Row::Separator => None,
+        }
     }
 
     /// Why the entry is disabled, while it is.
