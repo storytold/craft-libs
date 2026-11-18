@@ -353,6 +353,9 @@ pub struct DialogHost {
     opens: u64,
     /// The number of each dialog's last open, by id; read only while the dialog is open.
     serials: Vec<(DialogId, u64)>,
+    /// Dialogs [`close_by_id`](DialogHost::close_by_id) asked to close, closed by the next `run`
+    /// (which has the `Context` a close needs).
+    closing: Vec<DialogId>,
 }
 
 /// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
@@ -446,6 +449,9 @@ impl DialogHost {
     pub fn run(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.release_replaced(&ctx);
+        for id in std::mem::take(&mut self.closing) {
+            self.cancel_by_id(&ctx, id);
+        }
         self.open_next_queued();
         let ids: Vec<DialogId> = self.stack.ids().collect();
         for (place, id) in ids.into_iter().enumerate() {
@@ -584,6 +590,16 @@ impl DialogHost {
         match self.position_by_id(id) {
             Some(at) => self.cancel_at(ctx, at),
             None => false,
+        }
+    }
+
+    /// Asks for the open dialog `id` names to close as a cancel, for a caller with no `Context`
+    /// (a service that drops the request the dialog answers). The close lands at the next
+    /// [`run`](DialogHost::run); asking again before then, or for a dialog that is not open, does
+    /// nothing more.
+    pub fn close_by_id(&mut self, id: DialogId) {
+        if self.position_by_id(id).is_some() && !self.closing.contains(&id) {
+            self.closing.push(id);
         }
     }
 

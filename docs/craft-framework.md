@@ -306,7 +306,7 @@ match event {
 
 **Interrupted gesture.** Besides Esc, other events end a gesture with `Cancel`; the `CancelReason` says which: `Refused`, `Dismissed`, `Escape`, `Blur`, `Removed`, `HostChanged`, `UndoDuringGesture`. For `HostChanged` and `UndoDuringGesture`, `reason.document_moved()` is true: the document changed under the gesture, so the app keeps it as it is, because a restore would also take back that change. The handler above covers all of them.
 
-**Error.** A failing service call returns a typed error, and the feature shows it in its own UI without an edit. File calls return `Result<_, FileError>`. A dismissed picker answers `Picked::Cancelled`, not an error; a picker that cannot open answers `Picked::Unavailable(cause)`.
+**Error.** A failing service call returns a typed error, and the feature shows it in its own UI without an edit. File calls return `Result<_, FileError>`. A dismissed picker answers `Picked::Cancelled`, not an error; a picker that cannot open answers `Picked::Unavailable(cause)`; a save whose write failed answers `Picked::Failed(message)`.
 
 **Async job.** Work runs on the host's `Jobs`, never on a thread a feature starts. `JobQueue` adds priorities, one job per key, replacement and cancellation. Dropping a key sets the job's cancel flag, and a cancelled job's result is never delivered.
 

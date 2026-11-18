@@ -445,8 +445,7 @@ impl SignaturePadDialog {
         {
             self.pick = None;
             let source = match picked {
-                // P3(platform-w4): pf.C-F1
-                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) => None,
+                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => None,
                 Picked::Contents(files) => files.into_iter().next().map(|(_, bytes)| Source::Bytes(bytes)),
                 Picked::Paths(paths) => paths.into_iter().next().map(Source::Path),
             };

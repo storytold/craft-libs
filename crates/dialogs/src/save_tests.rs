@@ -59,18 +59,14 @@ impl Files for ScriptedFiles {
         Err(FileError::Unsupported)
     }
 
-    // P3(platform-w4): pf.C-F5
-    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
-        let _ = (request, bytes);
-        todo!("pf.C-F5")
+    fn save(&self, request: PickRequest, _bytes: Vec<u8>) -> PickId {
+        self.pick(request)
     }
 
-    // P3(platform-w4): pf.C-F7
     fn can_pick(&self) -> bool {
         true
     }
 
-    // P3(platform-w4): pf.C-F7
     fn browser_saves(&self) -> bool {
         false
     }
