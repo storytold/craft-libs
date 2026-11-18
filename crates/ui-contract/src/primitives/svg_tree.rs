@@ -36,12 +36,12 @@ pub fn parse(svg: &[u8]) -> Result<usvg::Tree, String> {
 /// parser, so a layer by class is read by the SVG engine's own selectors.
 #[doc(hidden)]
 pub fn parse_styled(svg: &[u8], style_sheet: Option<&str>) -> Result<usvg::Tree, String> {
-    let _ = style_sheet; // P3(ribbon-w6): rb.R19
     if svg.starts_with(&GZIP_MAGIC) {
         return Err("compressed SVG".to_owned());
     }
     let options = usvg::Options {
         image_href_resolver: usvg::ImageHrefResolver { resolve_data: Box::new(|_, _, _| None), resolve_string: Box::new(|_, _| None) },
+        style_sheet: style_sheet.map(str::to_owned),
         ..usvg::Options::default()
     };
     tree::parse(svg, &icon_limits(), &options).map_err(|e| e.to_string())
