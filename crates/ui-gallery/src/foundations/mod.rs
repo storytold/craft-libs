@@ -2,10 +2,11 @@
 
 mod colours;
 mod edit_policy;
-// owed by chrome-w2 (canvas-w3's card, cv.K29)
 mod pointers;
 mod stories;
+mod surfaces;
 
 pub use colours::Colours;
 pub use edit_policy::EditPolicy;
 pub use pointers::PointerLooks;
+pub use surfaces::Surfaces;

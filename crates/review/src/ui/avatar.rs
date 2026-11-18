@@ -14,16 +14,26 @@ mod stories;
 
 /// Paints a round face filling `rect`: `fill` with the initials of `name` centred on it, in the ink that reads on `fill`.
 pub fn paint_avatar(ui: &PaintUi<'_>, rect: Rect, name: &str, fill: DataColor) {
+    paint_avatar_letters(ui, rect, initials(name), fill);
+}
+
+/// Paints a round face filling `rect`: `fill` with `letters` centred on it, in the ink that reads on `fill`.
+fn paint_avatar_letters(ui: &PaintUi<'_>, rect: Rect, letters: String, fill: DataColor) {
     let draw = ui.draw();
     draw.data_fill(&circle(rect), fill);
     let ink = ui.with_style(Variant::SECONDARY, |cx| cx.ink_on(fill));
-    paint_initials(&draw, rect, initials(name), ink);
+    paint_initials(&draw, rect, letters, ink);
 }
 
 /// Paints a round face in a theme colour `fill` with the initials of `name` in `ink`.
 pub(super) fn paint_face(draw: &Draw<'_>, rect: Rect, name: &str, fill: StyleColor, ink: StyleColor) {
+    paint_face_letters(draw, rect, initials(name), fill, ink);
+}
+
+/// Paints a round face in a theme colour `fill` with `letters` in `ink`.
+fn paint_face_letters(draw: &Draw<'_>, rect: Rect, letters: String, fill: StyleColor, ink: StyleColor) {
     draw.fill(&circle(rect), fill);
-    paint_initials(draw, rect, initials(name), ink);
+    paint_initials(draw, rect, letters, ink);
 }
 
 fn circle(rect: Rect) -> PaintShape {
@@ -87,7 +97,6 @@ pub struct Avatar {
     pressable: bool,
     /// The letters shown, cut to two, in place of the initials of the name; the name stays the accessible name.
     #[prop(into)]
-    #[allow(dead_code)] // P3(chrome-w2): ch.C8
     initials: Option<String>,
 }
 
@@ -137,9 +146,13 @@ impl Component for Avatar {
         let style = cx.style;
         let side = cx.content_rect.width().min(cx.content_rect.height());
         let face = Rect::from_center_size(cx.content_rect.center(), Vec2::splat(side));
+        let letters = match &self.initials {
+            Some(letters) => letters.chars().take(2).collect(),
+            None => initials(cx.resolved.label),
+        };
         match self.fill {
-            Some([r, g, b]) => paint_avatar(ui, face, cx.resolved.label, DataColor::new(Color32::from_rgb(r, g, b))),
-            None => paint_face(&ui.draw(), face, cx.resolved.label, style.accent, style.on_accent),
+            Some([r, g, b]) => paint_avatar_letters(ui, face, letters, DataColor::new(Color32::from_rgb(r, g, b))),
+            None => paint_face_letters(&ui.draw(), face, letters, style.accent, style.on_accent),
         }
         let draw = ui.draw();
         if cx.resolved.selected == Some(true) || (self.pressable && cx.response.hovered()) {
