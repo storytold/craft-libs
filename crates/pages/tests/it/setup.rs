@@ -72,6 +72,7 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
     fixture.key(Key::A, Modifiers::COMMAND).type_text("5000");
     fixture.key(Key::Tab, Modifiers::NONE).settle();
     let ok = fixture.by_label("OK").expect("the OK button");
+    eprintln!("DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: ok rect={:?} disabled={}", ok.rect, fixture.tree().is_disabled_key(ok.node));
     fixture.click(&ok).settle();
     let filed = state.borrow_mut().1.take().expect("OK files the setup in the held answer");
     assert_eq!(filed.grid.map(|grid| grid.chars_per_line), Some(MAX_GRID_COUNT), "a count past the range is held to it");
