@@ -27,7 +27,8 @@ fn picture(ui: &Ui, unfiltered: bool) -> SizedTexture {
     SizedTexture::new(id, Vec2::new(PICTURE[0] as f32, PICTURE[1] as f32))
 }
 
-const LAYOUTS: [(&str, ParamLayout); 3] = [("Beside", ParamLayout::Beside), ("Below", ParamLayout::Below), ("Stacked", ParamLayout::Stacked)];
+const LAYOUTS: [(&str, ParamLayout); 4] =
+    [("Beside", ParamLayout::Beside), ("Below", ParamLayout::Below), ("Stacked", ParamLayout::Stacked), ("Workspace", ParamLayout::Workspace)];
 
 /// A blur dialog with the `preview` and `layout` values of the story.
 fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLayout) -> StoryOutput {

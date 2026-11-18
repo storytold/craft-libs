@@ -676,3 +676,46 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "text that is no number leaves the value");
     assert!(!alert(), "and raises no alert");
 }
+
+/// The rects of the preview pane and the radius slider, and the zoom the pane opens at in percent, in a previewing
+/// dialog of a 2000 × 1500 picture laid out as `layout` in a 900 × 600 frame.
+fn pane_in(layout: ParamLayout) -> (egui::Rect, egui::Rect, f32) {
+    let mut fixture = Fixture::new(move |ui| {
+        let picture = SizedTexture::new(TextureId::default(), vec2(2000.0, 1500.0));
+        ParamDialog::new("lensBlur", "Lens Blur", Param::parse_list(SPEC))
+            .previews(true)
+            .preview(picture)
+            .layout(layout)
+            .shaped(|d| d.resizable(true).overlay(|o| o.size(vec2(900.0, 600.0))))
+            .show(ui);
+    });
+    fixture.settle();
+    let pane = fixture
+        .by_role(Role::GROUP)
+        .into_iter()
+        .find(|target| fixture.tree().name_of(target.node) == Some("Preview"))
+        .expect("the dialog shows the preview pane");
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the radius row has a slider");
+    let zoom = fixture
+        .by_role(Role::SPIN_BUTTON)
+        .into_iter()
+        .filter_map(|target| fixture.tree().value_of(target.node)?.parse::<f32>().ok())
+        .find(|value| *value != 10.0)
+        .expect("the zoom row shows a percentage beside the radius of 10");
+    (pane.rect, slider.rect, zoom)
+}
+
+// photocraft#15267: Workspace gives the preview the dialog's room beside the rows, as Photoshop's Lens Blur does, and
+// opens on the whole picture; the other layouts keep a small pane at 100 %.
+#[trial]
+fn the_workspace_layout_fills_the_dialog_with_the_whole_picture() {
+    let (pane, slider, zoom) = pane_in(ParamLayout::Workspace);
+    assert!(left_of(pane, slider), "the rows stand beside the pane");
+    assert!(pane.height() > 400.0, "the pane takes the frame's height: {pane:?}");
+    assert!(zoom < 25.0, "the 2000 px picture opens fitting a pane under 500 px wide: {zoom} %");
+    for layout in [ParamLayout::Beside, ParamLayout::Stacked] {
+        let (small, _, zoom) = pane_in(layout);
+        assert!(pane.area() > 1.5 * small.area(), "{layout:?} keeps a smaller pane: {small:?}");
+        assert_eq!(zoom, 100.0, "{layout:?} opens at 100 %");
+    }
+}
