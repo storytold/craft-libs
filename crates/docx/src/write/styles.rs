@@ -66,7 +66,13 @@ pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
 /// corresponding property element as `w:pPrChange` / `w:rPrChange`.
 /// A table style's own table properties (`w:tblPr`), in ECMA-376 order.
 fn table_style_tblpr(w: &mut W, t: &TableStyleParts) {
-    if t.borders.is_none() && t.table_shading.is_none() && t.cell_margins.is_none() && t.indent.is_none() && t.band_size.is_none() && t.col_band_size.is_none() {
+    if t.borders.is_none()
+        && t.table_shading.is_none()
+        && t.cell_margins.is_none()
+        && t.indent.is_none()
+        && t.band_size.is_none()
+        && t.col_band_size.is_none()
+    {
         return;
     }
     w.open("w:tblPr", &[]);
