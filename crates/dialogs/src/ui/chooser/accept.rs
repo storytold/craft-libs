@@ -39,14 +39,7 @@ pub(crate) enum Accept {
 /// - Otherwise the typed text, trimmed: `~` stands for `home`; a path outside `folder` is a [`Accept::Look`]; a
 ///   name in `folder` is entered when it is a listed folder, opened (or asked about on Save) when it is a listed
 ///   file, saved to when nothing is listed under it, and refused as not found on Open.
-pub(crate) fn accept(
-    request: &PickRequest,
-    typed: &str,
-    folder: &Path,
-    entries: &[Entry],
-    selected: &[Entry],
-    home: Option<&Path>,
-) -> Accept {
+pub(crate) fn accept(request: &PickRequest, typed: &str, folder: &Path, entries: &[Entry], selected: &[Entry], home: Option<&Path>) -> Accept {
     // ui-egui: crates/ui-egui/src/file_browser.rs:228 (`FileBrowser::accept`), :93 (`resolve`).
     let listed = |path: &Path| entries.iter().find(|e| e.path == path);
     if let [one] = selected

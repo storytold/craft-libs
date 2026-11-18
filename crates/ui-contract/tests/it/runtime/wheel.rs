@@ -2,11 +2,11 @@
 
 use craft_behavior::{GESTURE_GAP, Sense, Wheel, WheelPhase, WheelTaker};
 use craft_host::target::Os;
+use craft_ui::runtime::env::{RootEnv, WheelSpeed};
 use craft_ui::testing::pointer;
 use craft_ui::testing::sensing::{ProbeRoot, show};
 use craft_ui::testing::wheel::{register, take, take_share};
 use craft_ui::testing::{Fixture, Frames, trial};
-use craft_ui::runtime::env::{RootEnv, WheelSpeed};
 use egui::{Event, Id, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2, ViewportId};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -281,12 +281,18 @@ fn the_users_wheel_speed_scales_each_delta_once_and_leaves_zoom_alone() {
         for (name, took) in [("line", fast_line), ("point", fast_point), ("zoom", fast_zoom), ("second window", fast_secondary)] {
             assert_eq!(took.shares, 1, "{os:?} {name}: one share over the frame's two passes and the frame after: {took:?}");
         }
-        assert!(line.scroll.y != 0.0 && close(fast_line.scroll, line.scroll * speed.line), "{os:?}: a notch scrolls `line` times as far: {fast_line:?} against {line:?}");
+        assert!(
+            line.scroll.y != 0.0 && close(fast_line.scroll, line.scroll * speed.line),
+            "{os:?}: a notch scrolls `line` times as far: {fast_line:?} against {line:?}"
+        );
         assert!(
             point.scroll.y != 0.0 && close(fast_point.scroll, point.scroll * speed.point),
             "{os:?}: a point delta scrolls `point` times as far: {fast_point:?} against {point:?}"
         );
-        assert!(zoom.zoom != 1.0 && (fast_zoom.zoom - zoom.zoom).abs() < 1e-4, "{os:?}: a zoom notch zooms as far at any speed: {fast_zoom:?} against {zoom:?}");
+        assert!(
+            zoom.zoom != 1.0 && (fast_zoom.zoom - zoom.zoom).abs() < 1e-4,
+            "{os:?}: a zoom notch zooms as far at any speed: {fast_zoom:?} against {zoom:?}"
+        );
         assert!(close(fast_zoom.scroll, Vec2::ZERO), "{os:?}: a zoom notch scrolls nothing: {fast_zoom:?}");
         assert!(
             secondary.scroll.y != 0.0 && close(fast_secondary.scroll, secondary.scroll * speed.point),

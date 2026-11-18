@@ -15,9 +15,7 @@ use craft_behavior::{IconId, Selection, SelectionChange, keyed};
 use craft_browse::places::{Entries, Entry, FolderCache, StandardFolder, folder_within};
 use craft_host::{FileFilter, PickKind, PickRequest};
 use craft_ui::bars::{BreadcrumbBar, path_crumbs};
-use craft_ui::contract::{
-    Bind, CollectionEvent, Entry as Choice, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-};
+use craft_ui::contract::{Bind, CollectionEvent, Entry as Choice, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::dialog::{
     ChildDialog, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, PromptChoice, StackDialog, StandardPrompt, dialog_id,
 };
@@ -401,7 +399,8 @@ impl FileChooser {
             PickKind::Folder => (words.folder_title.clone(), words.choose.clone()),
         };
         let title = self.request.title.clone().map_or_else(|| title.into(), craft_ui::runtime::env::Label::from);
-        let mut types: Vec<Choice<usize>> = self.request.filters.iter().enumerate().map(|(at, filter)| Choice::new(at, filter.name.clone())).collect();
+        let mut types: Vec<Choice<usize>> =
+            self.request.filters.iter().enumerate().map(|(at, filter)| Choice::new(at, filter.name.clone())).collect();
         types.push(Choice::new(self.request.filters.len(), words.all_files.clone()));
         let offers_types = self.offers_types();
         let names_file = kind != PickKind::Folder;

@@ -68,7 +68,8 @@ fn chooser_story(ui: &mut Ui, data: &mut StoryData, name: &'static str, request:
 
 #[story(FileChooser, covers = [Default], drive = Drive::Never)]
 fn file_chooser_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let request = PickRequest::open("document").filter("Documents", &["docx", "txt"]).filter("Pictures", &["png", "jpg"]).directory("/home/u/Documents");
+    let request =
+        PickRequest::open("document").filter("Documents", &["docx", "txt"]).filter("Pictures", &["png", "jpg"]).directory("/home/u/Documents");
     chooser_story(ui, data, "open", request, None)
 }
 

@@ -313,9 +313,8 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
     let injected_pen = super::injected::pen(ctx);
     let pen = crate::runtime::pen::source(ctx).filter(|_| injected_pen.is_none());
     let pointed = ctx.input(|input| input.raw.events.iter().any(|event| matches!(event, Event::PointerMoved(_) | Event::PointerButton { .. })));
-    let (zoom_modifier, line, zoom_speed) = ctx.options(|options| {
-        (options.input_options.zoom_modifier, options.input_options.line_scroll_speed, options.input_options.scroll_zoom_speed)
-    });
+    let (zoom_modifier, line, zoom_speed) = ctx
+        .options(|options| (options.input_options.zoom_modifier, options.input_options.line_scroll_speed, options.input_options.scroll_zoom_speed));
     let page = ctx.content_rect().height();
     let tablet = match injected_pen {
         Some(sample) => Some(PenPass::injected(sample)),

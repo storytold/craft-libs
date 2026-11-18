@@ -141,7 +141,8 @@ fn lookup_falls_back_to_english_and_context_never_borrows_the_plain_row() {
 fn plurals_take_the_languages_categories() {
     let i = all(P).0;
     let ru = lang(&i, "ru");
-    for (n, want) in [(1, "1 файл"), (2, "2 файла"), (5, "5 файлов"), (11, "11 файлов"), (21, "21 файл"), (22, "22 файла")] {
+    for (n, want) in [(1, "1 файл"), (2, "2 файла"), (5, "5 файлов"), (11, "11 файлов"), (21, "21 файл"), (22, "22 файла")]
+    {
         assert_eq!(i.trn(ru, n, "{n} file", "{n} files"), want, "{n}");
     }
 }
