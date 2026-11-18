@@ -193,7 +193,8 @@ impl<K: TextureKey> TextureLoader<K> {
                     let ctx = ctx.clone();
                     Wake::new(move || repaint::request(&ctx))
                 };
-                let queue = Arc::new(JobQueue::new(jobs, wake, QueueOptions { lanes: options.lanes, name: "craft-textures" }));
+                let queue =
+                    Arc::new(JobQueue::new(jobs, wake, QueueOptions { lanes: options.lanes, name: "craft-textures", ..QueueOptions::default() })); // P3(pdf-canvas-w7): SH-C32
                 memory::with(ctx, |pools: &mut Pools<K>| {
                     let pool = pools.by_salt.entry(id).or_insert_with(|| Pool::new(queue, options.lanes));
                     (Arc::clone(&pool.queue), pool.lanes)

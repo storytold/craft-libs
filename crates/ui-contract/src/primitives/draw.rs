@@ -13,6 +13,17 @@ use egui::epaint::{CircleShape, RectShape};
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, TextureId, Vec2};
 use std::cell::RefCell;
 
+/// What a swatch well shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WellFill {
+    /// A colour.
+    Color(Srgba),
+    /// The mixed mark: the values differ.
+    Mixed,
+    /// The sunken "no colour" diagonal in `status.bad`.
+    None,
+}
+
 /// A shape `Draw::fill` and `Draw::stroke` paint.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -362,7 +373,7 @@ impl<'a> Draw<'a> {
         let square = Rect::from_center_size(rect.center(), Vec2::splat(side));
         match icon.source {
             super::IconSource::Swatch(swatch) => {
-                self.swatch_well(square, CornerRadius::ZERO, swatch);
+                self.swatch_well(square, CornerRadius::ZERO, swatch.map_or(WellFill::Mixed, WellFill::Color)); // P3(pdf-comments-w5): CM-C25a
                 self.paint(&PaintShape::Rect(square, CornerRadius::ZERO), None, Some(Stroke::new(self.width(StrokeWidth::Thin), color)));
                 return;
             }
@@ -394,6 +405,11 @@ impl<'a> Draw<'a> {
         let run = TextRun::new(letter.to_string()).role(TypeRole::Caption).color(color);
         let layout = self.layout(&run, f32::INFINITY);
         self.galley(square.center() - layout.size() / 2.0, &layout);
+    }
+
+    /// Paints the auto-scroll mark of `look` at `anchor`.
+    pub fn auto_scroll_mark(&self, look: &super::AutoScrollMarkLook, anchor: Pos2) {
+        self.painter.extend(super::AutoScrollMark::shapes(look, anchor));
     }
 
     /// Paints the reset mark of `look` centred on `center`: the dot while the value `differs`, else the ring.
@@ -501,7 +517,11 @@ impl<'a> Draw<'a> {
     /// Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is
     /// translucent, or for `None` (no colour of its own, or a mixed one) the empty well, `surface.sunken` with a
     /// `text.muted` dash. `Swatch` and swatch icons paint their wells with it and add their own edges.
-    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, color: Option<Srgba>) {
+    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, fill: WellFill) {
+        let color = match fill {
+            WellFill::Color(color) => Some(color),
+            WellFill::Mixed | WellFill::None => None, // P3(pdf-comments-w5): CM-C25a
+        };
         let shape = PaintShape::Rect(well, radius);
         match color {
             None => {

@@ -203,6 +203,7 @@ const COLLECTION: &[Forwarded] = &[
         "How tall the rows are: text rows for a read-only display table, control-high rows for a list the user picks from.",
     ),
     ("notch", "$ui::contract::Notch", "The distance one wheel notch scrolls the rows."),
+    ("middle_button", "$ui::contract::MiddleButton", "What a middle press does: pan or latched auto-scroll."),
     ("command_click", "bool", "A Cmd/Ctrl click on an item is a command (`CollectionEvent::CommandClick`), not a pick."),
     (
         "current",

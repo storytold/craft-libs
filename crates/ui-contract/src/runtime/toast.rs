@@ -69,6 +69,8 @@ pub struct Toast {
     pub lines: Vec<Label>,
     /// The actions after the message, in reading order.
     pub actions: Vec<ToastAction>,
+    /// The fraction done, `0..=1`; a card with progress has no timer and is never the one the cap drops.
+    pub progress: Option<f32>,
 }
 
 impl Toast {
@@ -82,6 +84,7 @@ impl Toast {
             title: None,
             lines: Vec::new(),
             actions: Vec::new(),
+            progress: Default::default(),
         }
     }
 
@@ -120,6 +123,18 @@ impl Toast {
         self.politeness = politeness;
         self
     }
+
+    /// Sets the fraction done, clamped to `0..=1`.
+    pub fn progress(self, fraction: f32) -> Self {
+        let _ = fraction;
+        todo!("CH-C14")
+    }
+}
+
+/// Sets the fraction done of the toast `id` and, when given, its message.
+pub fn set_progress(ctx: &Context, id: ToastId, fraction: f32, message: Option<Label>) {
+    let _ = (ctx, id, fraction, message);
+    todo!("CH-C14")
 }
 
 /// A posted toast's handle.

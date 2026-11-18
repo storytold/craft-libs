@@ -235,7 +235,7 @@ impl UiFonts<'_> {
         }
         for family in self.app_faces.iter().flat_map(|f| &f.families) {
             if !specs.iter().any(|s| s.family == *family) {
-                specs.push(Family { family: family.clone(), weight: super::REGULAR, lead: None, monospaced: false });
+                specs.push(Family { family: family.clone(), weight: super::REGULAR, lead: None, monospaced: false, lead_role: None });
             }
         }
         for declared in &self.families {

@@ -397,6 +397,7 @@ impl Board {
         let chord = self.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command));
         let resolved = ResolvedCommand {
             label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
+            catalog_label: Default::default(), // P3(pdf-chrome-w1): CH-C25
             icon: def.and_then(|def| def.icon.clone()),
             chord,
             enabled: flags.enabled && modal && live && !matches!(declaring, Some(Declaration::Focused { inactive: true })),
@@ -672,6 +673,14 @@ pub(crate) fn window_shortcuts(ctx: &Context) -> Arc<[(WindowShortcut, Chord)]> 
 /// The app-scope commands fired since the last call.
 pub(crate) fn take_fired(ctx: &Context) -> Vec<Fired> {
     with(ctx, |board| std::mem::take(&mut board.out))
+}
+
+/// The app-scope commands a key press fired while only the app's own command state disabled them, since the last
+/// call.
+#[allow(dead_code)] // P3(pdf-chrome-w1): CH-C2
+pub(crate) fn take_declined(ctx: &Context) -> Vec<Fired> {
+    let _ = ctx;
+    todo!("CH-C2")
 }
 
 /// The commands instances took since the last call.

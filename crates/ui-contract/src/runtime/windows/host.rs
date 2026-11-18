@@ -6,6 +6,7 @@ use super::placement::placement_of;
 use super::shell::{base_shell, shell_of, window_info};
 use super::spec::frame_of;
 use super::{Record, shared};
+use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
 use crate::runtime::egui::injected::{self, InjectedPointer, Released};
 use crate::runtime::egui::input_filter;
 use crate::runtime::egui::screenshot::{ScreenshotFacts, ScreenshotSlot};
@@ -205,6 +206,37 @@ impl WindowHost {
     /// injected input.
     pub fn inject_ime(&self, viewport: ViewportId, event: egui::ImeEvent) {
         injected::inject_ime(&self.ctx, viewport, event);
+    }
+
+    /// Hovers the files over `at` and, with `drop`, drops them in the following injected step, through the same
+    /// hovered and dropped file input a window's drag session fills.
+    pub fn inject_files(&self, viewport: ViewportId, at: Option<Pos2>, paths: Vec<std::path::PathBuf>, drop: bool) {
+        injected::inject_files(&self.ctx, viewport, at, paths, drop);
+    }
+
+    /// Queues one AccessKit action request (click, focus or context menu) on `node` as one injected step behind
+    /// earlier injected input.
+    pub fn inject_access(&self, viewport: ViewportId, node: NodeKey, action: Declared) {
+        injected::inject_access(&self.ctx, viewport, node, action);
+    }
+
+    /// Turns AccessKit output on and, from then on, keeps each viewport's tree from the last presented frame.
+    pub fn keep_access_tree(&self) {
+        todo!("SH-C7")
+    }
+
+    /// The kept AccessKit tree of `viewport`: `None` before its first presented frame or without
+    /// [`keep_access_tree`](Self::keep_access_tree).
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<AccessTree> {
+        let _ = viewport;
+        todo!("SH-C8")
+    }
+
+    /// Changes the open root window's frame to `decision`'s and returns true; a change to or from the inset frame
+    /// cannot reach an open window, keeps the current decision and returns false.
+    pub fn set_root_frame(&self, decision: craft_window::policy::Decision) -> bool {
+        let _ = decision;
+        todo!("SH-C1")
     }
 
     /// Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass

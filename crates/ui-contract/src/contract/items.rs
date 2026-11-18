@@ -171,6 +171,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     visible: Range<usize>,
     /// The rows built this pass with their rects, for `collection_response`.
     shown: Vec<ShownRow<C::Key>>,
+    /// The row under the pointer this pass, for `collection_response`.
+    hovered: Option<C::Key>,
     offset: f64,
     offset_at_read: f64,
     offset_x: f64,
@@ -242,6 +244,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             keyed_activation: None,
             visible: 0..0,
             shown: Vec::new(),
+            hovered: None,
             offset: 0.0,
             offset_at_read: 0.0,
             offset_x: 0.0,

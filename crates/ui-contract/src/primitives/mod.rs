@@ -1,5 +1,6 @@
 //! Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 
+mod auto_scroll_mark;
 pub mod backdrop;
 mod content;
 mod draw;
@@ -31,8 +32,10 @@ mod text_input;
 pub mod textures;
 mod tool;
 
+pub(crate) use auto_scroll_mark::auto_scroll_mark_look;
+pub use auto_scroll_mark::{AutoScrollMark, AutoScrollMarkLook};
 pub use content::{ContentPainterCx, DocRun, DocText};
-pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokeWidth};
+pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokeWidth, WellFill};
 pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};
 pub use handle::{Handle, HandleShape};
@@ -55,16 +58,16 @@ pub(crate) use surface::SurfaceSlot;
 pub use surround::paint_surround;
 pub use svg_set::{AppIcons, register_app_icons};
 pub use text::{ChordText, HAlign, LayoutRun, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
-pub use text_input::{Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, TextKey, TextOptions};
+pub use text_input::{Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, SubmitKey, TextKey, TextOptions};
 pub use textures::TextureCache;
 pub use tool::ToolIcon;
 
 #[cfg(feature = "testing")]
 pub use textures::FakeThumbSource;
 pub use textures::{
-    CachedTexture, LoadFailure, LoadResult, LoadedPicture, LoaderOptions, MAX_TEXTURE, Priority, Revision, TextureBudget, TextureKey, TextureLoader,
-    TextureState, TextureStatistics, TextureStore, TextureStoreOptions, TextureWords, ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest,
-    ThumbSource, ThumbnailOptions, Thumbnails, fit_image, fit_rect, reduce_image, texture_factor, texture_side, thumb_image,
+    CachedTexture, LoadFailure, LoadResult, LoadedPicture, LoaderOptions, MAX_TEXTURE, Priority, Revision, StateLook, TextureBudget, TextureKey,
+    TextureLoader, TextureState, TextureStatistics, TextureStore, TextureStoreOptions, TextureWords, ThumbFit, ThumbJob, ThumbPaint, ThumbRender,
+    ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_image, fit_rect, reduce_image, texture_factor, texture_side, thumb_image,
 };
 
 pub(crate) use draw::DataMode;

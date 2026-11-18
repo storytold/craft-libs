@@ -234,6 +234,13 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
+    /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
+    /// needs: the inverse of [`ink_on`](Self::ink_on).
+    pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
+        let _ = (color, on);
+        todo!("CH-C9")
+    }
+
     /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
     pub fn focus_look(&self) -> FocusLook {
         FocusLook::new(egui::Stroke::new(self.tokens.stroke.medium, self.color(self.tokens.color.line.focus).egui()), 0.0)
@@ -437,6 +444,11 @@ impl<'a> StyleCx<'a> {
     /// `PartBuilder::state_layer` gets it from the paint step; a look built over it reads it here.
     pub fn state_layer(&self) -> Stateful<StyleColor> {
         super::paint::state_layer_look(self.tokens)
+    }
+
+    /// The look of the auto-scroll mark.
+    pub fn auto_scroll_mark(&self) -> crate::primitives::AutoScrollMarkLook {
+        crate::primitives::auto_scroll_mark_look(self.tokens)
     }
 
     /// The look of the reset mark.

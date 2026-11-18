@@ -6,7 +6,6 @@ mod node;
 mod patch;
 mod roles;
 mod text;
-#[cfg(feature = "testing")]
 mod tree;
 
 use crate::runtime::pass_state;
@@ -22,7 +21,6 @@ pub(crate) use patch::{write_label_patch, write_merge_patch, write_status};
 pub(crate) use text::{
     NodeEnd, RunLink, RunNode, TextNode, fold_widget, is_text_request, requested_selection, requested_value, write_run, write_selection, write_text,
 };
-#[cfg(feature = "testing")]
 pub use tree::{AccessTree, Declared, NodeKey};
 
 /// The rect `id`'s response had in the last finished pass, converted as the node's bounds are; `None` when absent,
@@ -111,6 +109,9 @@ struct Emitted {
     folded: IdMap<Id>,
     /// Whether the runtime reported a focused node this pass.
     focus_set: bool,
+    /// Components that offer a context menu this pass (a `Trigger::Context` opener on them).
+    #[allow(dead_code)] // P3(pdf-shell-w1): SH-C6
+    context: IdSet,
 }
 
 impl Emitted {
@@ -193,6 +194,21 @@ fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &IdSet) {
             hide(ctx, *id);
         }
     }
+}
+
+/// Records that the component `id` has a `Trigger::Context` opener in this pass, so its node declares the context
+/// menu action.
+#[allow(dead_code)] // P3(pdf-shell-w1): SH-C6
+pub(crate) fn offer_context_menu(ctx: &Context, id: Id) {
+    let _ = (ctx, id);
+    todo!("SH-C6")
+}
+
+/// Whether `id` has a `Trigger::Context` opener recorded in this pass.
+#[allow(dead_code)] // P3(pdf-shell-w1): SH-C6
+pub(crate) fn offers_context_menu(ctx: &Context, id: Id) -> bool {
+    let _ = (ctx, id);
+    todo!("SH-C6")
 }
 
 /// The tree update of a finished frame.

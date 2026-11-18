@@ -117,6 +117,7 @@ pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFi
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
+pub use craft_behavior::MiddleButton;
 pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]

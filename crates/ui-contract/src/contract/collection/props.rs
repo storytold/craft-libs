@@ -34,12 +34,21 @@ pub struct ReorderRule {
     /// In a tree, a drop or a stacking-key move may land inside a group, and `ReorderMove::parent` names the group. A row
     /// that `has_children` is a group; an open group without visible children takes items through the middle of its row.
     pub into_groups: bool,
+    /// The key scheme that reorders the collection's items; default `Stacking`.
+    pub keys: craft_behavior::ReorderKeys,
 }
 
 impl ReorderRule {
     /// A rule that only moves.
     pub const fn new() -> Self {
-        ReorderRule { copy_with_alt: false, into_groups: false }
+        ReorderRule { copy_with_alt: false, into_groups: false, keys: craft_behavior::ReorderKeys::Stacking }
+    }
+
+    /// The key scheme that reorders the items.
+    #[must_use]
+    pub const fn keys(mut self, keys: craft_behavior::ReorderKeys) -> Self {
+        self.keys = keys;
+        self
     }
 
     /// Items may land inside the groups of a tree.
@@ -229,6 +238,8 @@ pub struct CollectionProps {
     pub command_click: bool,
     /// The distance one wheel notch scrolls the rows; unset, the default notch.
     pub notch: Option<Notch>,
+    /// What a middle press does: pan or latched auto-scroll.
+    pub middle_button: craft_behavior::MiddleButton,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
     /// that does not scroll along it too: a strip of tabs (`Axis::X`) sits in a page that scrolls vertically.
     pub overflow: Axis,
@@ -320,6 +331,7 @@ impl CollectionProps {
             row_height: RowHeight::Control,
             command_click: false,
             notch: None,
+            middle_button: craft_behavior::MiddleButton::Pan,
             overflow: Axis::Y,
             pages: false,
             current: None,
@@ -564,6 +576,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn notch(mut self, notch: Notch) -> Self {
         self.notch = Some(notch);
+        self
+    }
+
+    /// What a middle press does: pan, or latched auto-scroll (see [`CollectionProps::middle_button`]).
+    #[must_use]
+    pub const fn middle_button(mut self, button: craft_behavior::MiddleButton) -> Self {
+        self.middle_button = button;
         self
     }
 

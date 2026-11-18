@@ -154,6 +154,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         read_only: resolved.read_only,
         focusable,
         clickable: resolved.enabled && input.sense.contains(Sense::CLICK),
+        context_menu: false, // P3(pdf-shell-w1): SH-C6
         keeps_name: resolved.keeps_name,
         scrolls: input.scrolls,
         access: &access,
@@ -271,6 +272,7 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             read_only: core.resolved.read_only,
             focusable: false,
             clickable: false,
+            context_menu: false,
             keeps_name: false,
             scrolls: (false, false),
             access: &access,

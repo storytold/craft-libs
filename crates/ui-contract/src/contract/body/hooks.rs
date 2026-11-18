@@ -121,7 +121,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
 
     fn key_role(&self, comp: &C) -> KeyRole {
         let props = comp.props(Internal::new());
-        KeyRole::new().reorderable(props.header.is_some_and(|header| header.band == DragBand::Reorder)).document(props.scroll_owner)
+        KeyRole::new()
+            .reorderable(props.header.is_some_and(|header| header.band == DragBand::Reorder).then_some(craft_behavior::ReorderKeys::Stacking)) // P3(pdf-workflows-w1): WF-W4
+            .document(props.scroll_owner)
     }
 
     fn position(&self, comp: &C) -> Option<SetPosition> {

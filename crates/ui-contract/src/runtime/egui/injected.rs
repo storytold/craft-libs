@@ -19,6 +19,7 @@ use craft_behavior::{PointerButton, PointerSample};
 use craft_keymap::{Key, Mods, Platform};
 use egui::{Context, Event, Id, Modifiers, Pos2, Vec2, ViewportId};
 
+use super::access::{Declared, NodeKey};
 use super::memory::Service;
 use super::{pass, repaint};
 
@@ -160,6 +161,18 @@ struct Step {
     rest: f64,
     pen: Option<PointerSample>,
     hold: Option<Hold>,
+    /// Files the step hovers over the window, or drops.
+    #[allow(dead_code)] // P3(pdf-shell-w1): WF-W7
+    pub files: Option<InjectedFiles>,
+}
+
+/// Files an injected step hovers over a window, and whether the step after it drops them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InjectedFiles {
+    /// The paths of the files.
+    pub paths: Vec<std::path::PathBuf>,
+    /// Whether the files are dropped in the following injected step.
+    pub dropped: bool,
 }
 
 impl From<Frame> for Step {
@@ -642,6 +655,18 @@ pub(crate) fn inject_text(ctx: &Context, viewport: ViewportId, text: &str) {
             request.step(mods, frame);
         }
     });
+}
+
+/// Queues the hover of `paths` over `at` and, with `drop`, their drop in the following step.
+pub(crate) fn inject_files(ctx: &Context, viewport: ViewportId, at: Option<Pos2>, paths: Vec<std::path::PathBuf>, drop: bool) {
+    let _ = (ctx, viewport, at, paths, drop);
+    todo!("WF-W7")
+}
+
+/// Queues one AccessKit action request (click, focus or context menu) on `node`, behind earlier injected input.
+pub(crate) fn inject_access(ctx: &Context, viewport: ViewportId, node: NodeKey, action: Declared) {
+    let _ = (ctx, viewport, node, action);
+    todo!("SH-C9")
 }
 
 /// Queues one IME event (a preedit or a commit) with the held modifiers, behind earlier injected input.

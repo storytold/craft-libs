@@ -70,6 +70,9 @@ pub struct Family {
     weight: u16,
     lead: Option<String>,
     monospaced: bool,
+    /// The craft-fonts face role that leads the family's chain.
+    #[allow(dead_code)] // P3(pdf-forms-w1): FM-PF1a
+    lead_role: Option<&'static str>,
 }
 
 impl Family {
@@ -89,7 +92,7 @@ impl Family {
     }
 
     fn of(family: FontRef, monospaced: bool) -> Self {
-        Self { family: family.family(), weight: REGULAR, lead: None, monospaced }
+        Self { family: family.family(), weight: REGULAR, lead: None, monospaced, lead_role: None }
     }
 
     /// The weight (`wght`) this family's faces draw at: bold craft faces are used from 600 up, and

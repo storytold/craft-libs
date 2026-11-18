@@ -257,6 +257,9 @@ impl CommandState {
 pub struct ResolvedCommand {
     /// The state's title, else the command's label, else its id.
     pub label: Arc<str>,
+    /// The command's catalogue label (the registry's), whatever title the state sets; `None` for a command the
+    /// registry does not define.
+    pub catalog_label: Option<Arc<str>>,
     /// The icon name.
     pub icon: Option<Cow<'static, str>>,
     /// The chord surfaces show: the first single-press binding that runs the command ([`chord`]).

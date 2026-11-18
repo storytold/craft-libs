@@ -180,11 +180,24 @@ pub struct ThumbPaint {
     pub paper: Option<DataColor>,
     /// Multiplies the picture (default untinted): a dimmed row's faint thumbnail.
     pub tint: DataColor,
+    /// What a picture that is not ready, or failed, shows: a glyph or a caption (default `Glyph`).
+    pub states: StateLook,
+}
+
+/// What a thumbnail that is not ready, or failed, shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StateLook {
+    /// The placeholder and the failure glyph.
+    #[default]
+    Glyph,
+    /// "Rendering…", then "Still rendering…" once the wait passes 6 s, then the failure text.
+    Captioned,
 }
 
 impl Default for ThumbPaint {
     fn default() -> Self {
-        Self { fit: ThumbFit::Contain, checker: true, paper: None, tint: DataColor::new(super::UNTINTED) }
+        Self { fit: ThumbFit::Contain, checker: true, paper: None, tint: DataColor::new(super::UNTINTED), states: StateLook::Glyph }
     }
 }
 
@@ -215,6 +228,13 @@ impl ThumbPaint {
     #[must_use]
     pub fn tint(mut self, tint: DataColor) -> Self {
         self.tint = tint;
+        self
+    }
+
+    /// Sets what a picture that is not ready, or failed, shows.
+    #[must_use]
+    pub fn states(mut self, states: StateLook) -> Self {
+        self.states = states;
         self
     }
 }
@@ -284,6 +304,12 @@ const _: () = {
 };
 
 impl<K: TextureKey> Thumbnails<K> {
+    /// Seconds `key` has waited for its picture, `None` when it is not waiting.
+    pub fn waited(&self, key: &K) -> Option<f64> {
+        let _ = key;
+        todo!("CV-C16")
+    }
+
     /// The thumbnails stored in `ctx` under `salt`, made with `options` the first time; the loader and its store
     /// live under the same salt.
     pub fn in_context(ctx: &Context, salt: impl std::hash::Hash + std::fmt::Debug, options: ThumbnailOptions) -> Self {

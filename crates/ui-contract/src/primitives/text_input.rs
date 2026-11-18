@@ -97,6 +97,20 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
+    /// The key that submits a multi-line text: under `Enter`, plain, Cmd and Ctrl+Enter submit and Shift+Enter breaks
+    /// the line.
+    pub submit_key: SubmitKey,
+}
+
+/// Which Enter chord submits a multi-line text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SubmitKey {
+    /// Cmd or Ctrl+Enter submits; plain Enter breaks the line.
+    #[default]
+    CommandEnter,
+    /// Plain, Cmd and Ctrl+Enter submit; Shift+Enter breaks the line.
+    Enter,
 }
 
 impl Default for TextOptions {
@@ -127,6 +141,7 @@ impl Default for TextOptions {
             own_menu: false,
             tab_rewrites: false,
             holds_drafts: false,
+            submit_key: SubmitKey::CommandEnter,
         }
     }
 }

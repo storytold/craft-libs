@@ -28,7 +28,9 @@ impl BodyHooks<'_> {
                 keys::capture(&ctx, id, chord);
             }
             while keys::take_claimed(&ctx, id, chord) {
-                if let Some(intent) = key_table::reorder_intent(chord.key, chord.mods) {
+                if let Some(intent) = key_table::reorder_intent(chord.key, chord.mods, craft_behavior::ReorderKeys::Stacking, craft_behavior::Axis::Y)
+                {
+                    // P3(pdf-workflows-w1): WF-W3
                     cx.core.intents.push(intent);
                 }
             }

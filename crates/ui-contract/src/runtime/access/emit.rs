@@ -36,6 +36,8 @@ pub(crate) struct Own<'a> {
     pub read_only: bool,
     pub focusable: bool,
     pub clickable: bool,
+    /// A `Trigger::Context` opener on the component this pass: the node declares the context menu action.
+    pub context_menu: bool,
     pub keeps_name: bool,
     /// The axes the component's body scrolls on, vertical then horizontal: the node serves the scroll actions.
     pub scrolls: (bool, bool),
@@ -149,7 +151,8 @@ fn write_position(spec: &mut NodeSpec, position: Option<SetPosition>, level: Opt
 }
 
 /// The actions the interaction and the numeric facts declare.
-fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, numeric: Option<&Numeric>) {
+fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, context_menu: bool, numeric: Option<&Numeric>) {
+    let _ = context_menu; // P3(pdf-shell-w1): SH-C6
     // A read-only value offers no action that would change it.
     let numeric = numeric.filter(|_| !spec.read_only);
     if focusable {
@@ -293,7 +296,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     if let Some(expanded) = expanded {
         spec.actions.push(if expanded { NodeAction::Collapse } else { NodeAction::Expand });
     }
-    declare_actions(&mut spec, own.focusable, own.clickable, numeric);
+    declare_actions(&mut spec, own.focusable, own.clickable, own.context_menu, numeric);
     declare_scroll_actions(&mut spec, (own.scrolls.0 || access.pans.0, own.scrolls.1 || access.pans.1));
     custom_actions(&mut spec, &access.custom_actions);
     write_node(ctx, own.id, &spec);
@@ -386,7 +389,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.sort = node.sort;
     spec.sortable = node.sortable;
     write_states(&mut spec, flags, decl.enabled, false);
-    declare_actions(&mut spec, decl.focusable, decl.clickable, numeric);
+    declare_actions(&mut spec, decl.focusable, decl.clickable, false, numeric);
     if node.steps && numeric.is_none() {
         spec.actions.extend([NodeAction::Increment, NodeAction::Decrement]);
     }

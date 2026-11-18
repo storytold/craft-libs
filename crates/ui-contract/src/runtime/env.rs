@@ -46,7 +46,7 @@ pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
 pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
 pub use root::{ResolvedRoot, RootEnv};
-pub use system::{SystemState, system_appearance};
+pub use system::{SystemState, system_appearance, system_text_scale};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;

@@ -55,7 +55,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     fn key_role(&self, comp: &C) -> craft_behavior::KeyRole {
         let props = comp.items();
         craft_behavior::KeyRole::new()
-            .reorderable(props.reorder.is_some())
+            .reorderable(props.reorder.map(|r| r.keys)) // P3(pdf-workflows-w1): WF-W4
+            .reorder_axis(props.overflow)
             .pages(props.pages)
             .rename(props.rename)
             .type_ahead(props.type_ahead)
@@ -823,6 +824,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             shown: std::mem::take(&mut self.shown),
             activation_clicks: self.activation_clicks,
             pending_drop: self.drags.pending.clone(),
+            hovered: self.hovered.take(),
         }));
         cx.core.visible_rows = self.visible.clone();
         cx.core.gestures = Gestures::of(comp.items());

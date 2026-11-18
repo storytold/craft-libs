@@ -30,6 +30,8 @@ struct Item<T> {
     icon: Option<IconSpec<'static>>,
     enabled: bool,
     reason: Option<Label>,
+    #[allow(dead_code)] // P3(pdf-print-ocr-w2): PO-P10
+    description: Option<Label>,
     checked: bool,
     stepped: bool,
 }
@@ -38,7 +40,17 @@ impl<T> Entry<T> {
     /// An entry reporting `value` when picked, shown as `label`: enabled and unchecked, without an icon.
     pub fn new(value: T, label: impl Into<Label>) -> Self {
         Entry {
-            row: Row::Item(Item { value, label: label.into(), closed: None, icon: None, enabled: true, reason: None, checked: false, stepped: true }),
+            row: Row::Item(Item {
+                value,
+                label: label.into(),
+                closed: None,
+                icon: None,
+                enabled: true,
+                reason: None,
+                description: None,
+                checked: false,
+                stepped: true,
+            }),
         }
     }
 
@@ -166,6 +178,18 @@ impl<T> Entry<T> {
     /// Whether a step over the closed control stops on the entry: an enabled, stepped item.
     pub fn is_stepped(&self) -> bool {
         matches!(&self.row, Row::Item(item) if item.enabled && item.stepped)
+    }
+
+    /// An enabled entry's hover text and accessible description, beside the reason a disabled entry shows.
+    #[must_use]
+    pub fn description(self, text: impl Into<Label>) -> Self {
+        let _ = text;
+        todo!("PO-P10")
+    }
+
+    /// The entry's description, when it has one.
+    pub fn description_text(&self) -> Option<&Label> {
+        todo!("PO-P10")
     }
 
     /// Why the entry is disabled, while it is.

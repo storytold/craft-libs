@@ -21,6 +21,33 @@ pub(crate) struct State {
     shares: Vec<(Id, Wheel)>,
     /// The wheel gesture the split tracks across passes.
     gesture: WheelGesture<Id>,
+    /// The running gesture's gathered scroll in its owner's points, reset when the gesture closes.
+    #[allow(dead_code)] // P3(pdf-canvas-w4): CV-C29
+    gathered: Vec2,
+    /// Whether the owner marked the running gesture moved, reset when the gesture closes.
+    #[allow(dead_code)] // P3(pdf-canvas-w4): CV-C29
+    moved: bool,
+    /// The wheel ease each owner holds.
+    #[allow(dead_code)] // P3(pdf-canvas-w4): CV-C2
+    eases: egui::IdMap<craft_behavior::WheelEase>,
+}
+
+/// Marks the wheel gesture `id` owns, while it runs, as moved.
+pub(crate) fn mark_moved(ctx: &Context, id: Id) {
+    let _ = (ctx, id);
+    todo!("CV-C29")
+}
+
+/// Feeds `pan` to the wheel ease of `id` and returns this pass's eased step.
+pub(crate) fn ease(ctx: &Context, id: Id, pan: Vec2) -> Vec2 {
+    let _ = (ctx, id, pan);
+    todo!("CV-C2")
+}
+
+/// Drops the wheel ease of `id`.
+pub(crate) fn stop_ease(ctx: &Context, id: Id) {
+    let _ = (ctx, id);
+    todo!("CV-C2")
 }
 
 /// Registers a taker for next pass's split.

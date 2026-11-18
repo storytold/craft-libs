@@ -36,6 +36,12 @@ pub fn system_appearance(ctx: &Context) -> SystemState {
     })
 }
 
+/// The desktop text scale from the installed [`SystemReader`], `None` where the OS gives none.
+pub fn system_text_scale(ctx: &Context) -> Option<f32> {
+    let _ = ctx;
+    todo!("SH-C4")
+}
+
 pub(crate) fn install(ctx: &Context, reader: SystemReader) {
     Service::<Source>::run(ctx, |source| source.0 = reader);
 }

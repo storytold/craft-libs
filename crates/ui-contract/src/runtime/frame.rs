@@ -104,6 +104,9 @@ pub struct FrameOutput {
     /// The commands components took since the last call, in order, whatever fired them (a key, a menu row, the
     /// palette): what ran inside the framework, for an app that records the commands it runs (an action recorder).
     pub delivered: Vec<Fired>,
+    /// The app-scope commands a key press fired while only the app's own command state disabled them, in order.
+    /// Refusals by the gate or the modal rule are not listed.
+    pub declined: Vec<Fired>,
     /// Text for the live announcement region.
     pub announcements: Vec<String>,
     /// The chrome toggles the windows asked for since the last call, in order: each names its viewport and whether the

@@ -47,6 +47,12 @@ impl FontRef {
         FontRef(FontFamily::Monospace)
     }
 
+    /// The signature face: always a family egui knows. Its chain is the craft-fonts faces of the signature role,
+    /// then the proportional chain; without one in the build, the proportional chain.
+    pub fn signature() -> FontRef {
+        todo!("FM-PF1a")
+    }
+
     /// A family registered under `name`.
     pub fn named(name: &str) -> FontRef {
         FontRef(FontFamily::Name(name.into()))
