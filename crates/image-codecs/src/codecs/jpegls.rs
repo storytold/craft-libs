@@ -32,26 +32,65 @@ fn bad(reason: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, reason)
 }
 
-/// Whether `b` is a JPEG-LS file: an SOI followed by marker segments up to an SOF55 frame header.
-pub(crate) fn looks_like_jpegls(b: &[u8]) -> bool {
-    if !b.starts_with(&[0xFF, 0xD8]) {
-        return false;
+/// What the marker segments after a JPEG SOI lead to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JpegFrame {
+    /// An SOF55 frame header: JPEG-LS.
+    Ls,
+    /// Another frame header, a scan header, an EOI, or a byte that is not a marker where one
+    /// should be.
+    Other,
+    /// The bytes end before a frame or scan header. The next step reads the bytes up to this
+    /// length.
+    Short(usize),
+}
+
+/// Walks the marker segments of `b` from its SOI up to the first frame or scan header. `None`
+/// when `b` does not start with an SOI. Each step moves forward at least one byte, so the walk
+/// takes at most `b.len()` steps and reaches the frame header after any number of segments.
+pub(crate) fn jpeg_frame(b: &[u8]) -> Option<JpegFrame> {
+    jpeg_frame_from(b, &mut 0)
+}
+
+/// [`jpeg_frame`], started at `*pos`. A `*pos` of 0 starts at the SOI. Any other value is the
+/// offset of the marker where an earlier walk of a shorter prefix of the same file stopped, and the
+/// walk does not read the bytes before it. The walk leaves `*pos` at the marker it stopped at, so
+/// walking longer and longer prefixes of one file this way reads each marker segment once.
+pub(crate) fn jpeg_frame_from(b: &[u8], pos: &mut usize) -> Option<JpegFrame> {
+    if *pos == 0 {
+        if !b.starts_with(&[0xFF, 0xD8]) {
+            return None;
+        }
+        *pos = 2;
     }
-    let mut pos = 2;
-    for _ in 0..64 {
-        let (Some(&0xFF), Some(&marker)) = (b.get(pos), b.get(pos + 1)) else { return false };
+    loop {
+        let (Some(&prefix), Some(&marker)) = (b.get(*pos), b.get(*pos + 1)) else {
+            return Some(if b.get(*pos).is_none_or(|&p| p == 0xFF) { JpegFrame::Short(*pos + 2) } else { JpegFrame::Other });
+        };
+        if prefix != 0xFF {
+            return Some(JpegFrame::Other);
+        }
         match marker {
-            SOF55 => return true,
-            0xDA | 0xD9 => return false,
-            0xC0..=0xCF | 0xDB..=0xDF => return false,
-            0x01 | 0xD0..=0xD7 | 0xFF => pos += if marker == 0xFF { 1 } else { 2 },
+            SOF55 => return Some(JpegFrame::Ls),
+            // `FF 00` is a stuffed zero, not a marker.
+            0x00 | 0xDA | 0xD9 => return Some(JpegFrame::Other),
+            // A DRI segment (`0xDD`) may precede an SOF55 frame header, so it takes the
+            // length-prefixed path below.
+            0xC0..=0xCF | 0xDB | 0xDC | 0xDE | 0xDF => return Some(JpegFrame::Other),
+            0x01 | 0xD0..=0xD7 | 0xFF => *pos += if marker == 0xFF { 1 } else { 2 },
             _ => {
-                let Some(len) = b.get(pos + 2..pos + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
-                pos += 2 + len;
+                let Some(len) = b.get(*pos + 2..*pos + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else {
+                    return Some(JpegFrame::Short(*pos + 4));
+                };
+                *pos += 2 + len;
             }
         }
     }
-    false
+}
+
+/// Whether `b` is a JPEG-LS file: an SOI followed by marker segments up to an SOF55 frame header.
+pub(crate) fn looks_like_jpegls(b: &[u8]) -> bool {
+    jpeg_frame(b) == Some(JpegFrame::Ls)
 }
 
 /// The coding parameters of one scan, derived as T.87 section C.2 specifies.
@@ -618,6 +657,7 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let mut preset = [0i32; 5];
     let mut planes: Vec<Vec<u16>> = Vec::new();
     let mut scans_done = 0;
+    let mut restart_interval = 0usize;
     loop {
         // Find the next marker.
         while b.get(pos) != Some(&0xFF) {
@@ -668,8 +708,21 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                     return Err(CodecError::unsupported(F, "mapping tables and colour transforms (LSE)"));
                 }
             }
+            // DRI: a 2-, 3- or 4-byte interval in lines (T.87 C.2.5). An interval of 0 turns
+            // restart markers off. The interval in effect at each scan header applies to that scan.
+            0xDD => {
+                if !(2..=4).contains(&seg.len()) {
+                    return Err(bad("bad restart interval segment"));
+                }
+                restart_interval = seg.iter().fold(0, |ri, &v| (ri << 8) | usize::from(v));
+            }
             0xDA => {
                 let f = frame.as_ref().ok_or_else(|| bad("a scan before the frame header"))?;
+                // A scan of one component has restart markers only when the interval is shorter
+                // than the frame's height.
+                if restart_interval != 0 && restart_interval < f.height {
+                    return Err(CodecError::unsupported(F, "a restart interval"));
+                }
                 let ns = usize::from(*seg.first().ok_or_else(|| bad("empty scan header"))?);
                 if seg.len() < 1 + 2 * ns + 3 || ns != 1 {
                     return Err(CodecError::unsupported(F, "interleaved scans (ILV 1 and 2)"));
@@ -705,6 +758,11 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                 samples.try_reserve_exact(f.width * f.height).map_err(|_| bad("pixel buffer is too large"))?;
                 samples.resize(f.width * f.height, 0u16);
                 decode_scan(&b[start..end], f.width, f.height, &params, &mut samples)?;
+                // A restart marker comes only between two intervals, so none follows a scan that
+                // fits in one. Fill bytes (`0xFF`) may come before the marker.
+                if restart_interval != 0 && b[end..].iter().find(|&&v| v != 0xFF).is_some_and(|m| (0xD0..=0xD7).contains(m)) {
+                    return Err(bad("a restart marker after the last restart interval"));
+                }
                 planes[idx] = samples;
                 scans_done += 1;
                 pos = end;
@@ -845,6 +903,25 @@ mod tests {
         // SOF55 after an application segment still is.
         assert!(looks_like_jpegls(&[0xFF, 0xD8, 0xFF, 0xE8, 0, 4, 0, 0, 0xFF, 0xF7, 0, 11]));
         assert!(!looks_like_jpegls(&[0xFF, 0xD8]));
+    }
+
+    #[test]
+    fn a_resumed_walk_starts_at_the_marker_it_stopped_at() {
+        // SOI, a comment with two bytes of text, then an SOF55 frame header.
+        let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xF7, 0, 11];
+        let mut pos = 0;
+        assert_eq!(jpeg_frame_from(&file[..5], &mut pos), Some(JpegFrame::Short(6)));
+        assert_eq!(pos, 2);
+        assert_eq!(jpeg_frame_from(&file[..9], &mut pos), Some(JpegFrame::Short(10)));
+        assert_eq!(pos, 8);
+        // The resumed walk does not read the bytes before `pos` again: with them cleared, it still
+        // reaches the frame header, while a walk from the start finds no SOI.
+        let mut cleared = file;
+        cleared[..8].fill(0);
+        assert_eq!(jpeg_frame_from(&cleared, &mut pos), Some(JpegFrame::Ls));
+        assert_eq!(pos, 8);
+        assert_eq!(jpeg_frame(&cleared), None);
+        assert_eq!(jpeg_frame(&file), Some(JpegFrame::Ls));
     }
 
     #[test]

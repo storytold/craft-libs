@@ -42,9 +42,10 @@ comes with its codec's feature):
 - Planes are `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]` (`ColorFamily`), plus an optional alpha plane.
   DNx, VP9 and AV1 (identity matrix) store RGB as G, B, R; the conversion reorders them.
 - Samples keep the decoder's storage, `u8` or `u16`, with a bit depth per plane (HEVC chroma may
-  differ from luma). Converting moves the buffers and copies no samples, except for paletted
-  video: VMD holds its picture as palette indices in the decoder, so `VideoFrame::try_from(&decoder)`
-  looks them up and writes new 8-bit R, G, B planes.
+  differ from luma). Converting moves the buffers and copies no samples, except for Motion JPEG,
+  whose decoder returns interleaved samples (they are split into planes), and paletted video: VMD
+  holds its picture as palette indices in the decoder, so `VideoFrame::try_from(&decoder)` looks
+  them up and writes new 8-bit R, G, B planes.
 - Chroma subsampling is a log2 shift per axis, 0 to 3 (FFV1 codes up to 3).
 - Colour is given as ITU-T H.273 code points (`ColorTags`), mapped from each codec's own
   signalling. Codecs that do not signal a value leave it unspecified (2).
