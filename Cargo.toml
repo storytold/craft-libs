@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
 craft-java-class = { path = "crates/java-class" }
 craft-sourcemap = { path = "crates/sourcemap" }
@@ -61,6 +62,7 @@ craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 # The ArtCraft Launcher's app list for AI agents (storytold/craft-ai-integrations, crates/app/ai-agents).
 craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d94a3593adcff504eaaad9e5aee4c84fd2f07a72" }
+craft-dex = { path = "crates/dex" }
 craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }

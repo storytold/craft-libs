@@ -1780,6 +1780,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-dex"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
@@ -3525,6 +3534,13 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xfa"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
 ]
 
 [[package]]

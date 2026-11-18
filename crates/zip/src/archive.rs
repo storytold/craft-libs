@@ -108,6 +108,15 @@ impl<'a> Archive<'a> {
         Ok(Some(file.is_dir()))
     }
 
+    /// Declared decoded and compressed sizes at `index`, without name lookup.
+    pub fn entry_sizes(&mut self, index: usize) -> Result<Option<(u64, u64)>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|e| Error::NotZip(e.to_string()))?;
+        Ok(Some((file.size(), file.compressed_size())))
+    }
+
     /// Do two entries share a name? `zip` then keeps one of them, and which one a writer meant
     /// is not known: a format that must not guess refuses the archive.
     pub fn has_duplicate_names(&self) -> bool {
@@ -178,6 +187,20 @@ impl<'a> Archive<'a> {
     /// Only the bytes of a read that succeeds are charged to the total.
     pub fn read(&mut self, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
         let Some(index) = self.zip.index_for_name(name) else { return Ok(None) };
+        self.read_index_named(index, name, max)
+    }
+
+    /// Read the entry at `index` under the same size, checksum and aggregate budget
+    /// rules as [`Self::read`], without repeating a decoded-name lookup.
+    pub fn read_index(&mut self, index: usize, max: u64) -> Result<Option<Vec<u8>>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let name = self.entry_name(index)?.unwrap_or_default();
+        self.read_index_named(index, &name, max)
+    }
+
+    fn read_index_named(&mut self, index: usize, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
         let entry = |msg: String| Error::Entry { name: name.to_string(), msg };
         let f = self.zip.by_index(index).map_err(|e| entry(e.to_string()))?;
         let declared = f.size();
@@ -212,6 +235,32 @@ impl Archive<'static> {
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+
+    #[test]
+    fn named_read_preserves_entry_error_for_a_corrupt_local_header() {
+        let mut writer = crate::Writer::new();
+        writer.add("a", b"abc", crate::Compression::Stored).unwrap();
+        let mut bytes = writer.finish().unwrap();
+        bytes[0] = 0; // The central directory remains valid; the local signature does not.
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 1, max_total_bytes: 3 }).unwrap();
+        assert!(matches!(archive.read("a", 3), Err(Error::Entry { name, .. }) if name == "a"));
+        assert_eq!(archive.budget().remaining(), 3);
+    }
+
+    #[test]
+    fn indexed_reads_charge_the_same_budget_and_enforce_entry_limits() {
+        let mut writer = crate::Writer::new();
+        writer.add("a", b"abc", crate::Compression::Stored).unwrap();
+        writer.add("b", b"def", crate::Compression::Deflated).unwrap();
+        let bytes = writer.finish().unwrap();
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 2, max_total_bytes: 5 }).unwrap();
+        assert!(archive.read_index(0, 2).is_err());
+        assert_eq!(archive.read_index(0, 3).unwrap().unwrap(), b"abc");
+        assert!(archive.read_index(1, 3).is_err());
+        assert_eq!(archive.read_index(2, 3).unwrap(), None);
+        assert_eq!(archive.entry_sizes(0).unwrap(), Some((3, 3)));
+        assert_eq!(archive.entry_sizes(2).unwrap(), None);
+    }
 
     #[test]
     fn owned_storage_lives_until_last_archive_clone_is_dropped() {
