@@ -14,7 +14,7 @@ pub use range_slider::{RangeSlider, RangeSliderStyle};
 pub use slider::{Slider, SliderStyle, SliderThumb};
 pub use thumb_row::{
     Anchor, Follow, Neighbours, OffThumbs, Order, RowOp, RowRules, SpanInk, Thumb, ThumbHold, ThumbOp, ThumbRow, ThumbRowOutput, ThumbRowStyle,
-    ThumbSpan,
+    ThumbSpan, thumb_size,
 };
 pub use track::{SliderScale, TrackFace};
 pub use words::ValueDragWords;

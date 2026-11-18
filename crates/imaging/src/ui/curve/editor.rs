@@ -118,6 +118,10 @@ pub struct CurveEditor<'a> {
     /// Whether the tone bars show under the plot and beside it.
     #[prop]
     bars: bool,
+    /// A black and a white slider under the graph move the end points' inputs; their outputs stay, and an end point
+    /// keeps 4 levels from its neighbour's input. Points mode only.
+    #[prop(flag)]
+    input_sliders: bool,
     /// Whether the Input and Output fields show.
     #[prop]
     fields: bool,
@@ -159,6 +163,7 @@ impl<'a> CurveEditor<'a> {
             max_points: 16,
             sampler: None,
             bars: true,
+            input_sliders: false,
             fields: true,
             percent: false,
             hint: None,
@@ -188,6 +193,7 @@ impl<'a> CurveEditor<'a> {
             max_points,
             mut sampler,
             bars,
+            input_sliders,
             fields,
             percent,
             hint,
@@ -232,6 +238,9 @@ impl<'a> CurveEditor<'a> {
             }
             if pencil {
                 graph = graph.pencil();
+            }
+            if input_sliders {
+                graph = graph.input_sliders();
             }
             if corners {
                 graph = graph.corners();

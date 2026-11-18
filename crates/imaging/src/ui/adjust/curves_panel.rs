@@ -146,7 +146,8 @@ type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
 /// 3. The mode row: two icon-only toggle buttons ("Edit points to modify the curve", "Draw to modify the curve", the
 ///    current one pressed) and Smooth (enabled in pencil mode only).
 /// 4. The [`CurveEditor`] for the shown channel: in its colour, over its histogram, in pencil mode for a drawn curve,
-///    and, on a composite only, the other channels' curves as overlays (Photoshop; none for an isolated channel).
+///    and, on a composite only, the other channels' curves as overlays (Photoshop; none for an isolated channel). In
+///    points mode the black and white input sliders sit under its gradient bar, in the dialog and in Properties.
 /// 5. The hint line, with the key names from the platform's shortcut words.
 ///
 /// - **Smooth** replaces the shown map with its moving average over 7 levels (radius 3, shrunk at the ends so the
@@ -393,7 +394,8 @@ impl<'a> CurvesPanel<'a> {
                 .hint(hint)
                 .levels(255)
                 .max_points(RULES.max_points)
-                .selection(selection);
+                .selection(selection)
+                .input_sliders();
             if pencil {
                 editor = editor.pencil();
             }

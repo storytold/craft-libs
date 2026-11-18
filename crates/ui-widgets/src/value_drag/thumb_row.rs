@@ -885,6 +885,13 @@ pub struct ThumbRow<'a, const N: usize> {
     track_face: Option<TrackFace<'a>>,
 }
 
+/// The width and height of a row's thumb. A row's thumbs travel along its rect inset by half this width, so a
+/// component that lines a row up with a plot above it widens the row by this width.
+pub fn thumb_size(cx: &StyleCx<'_>) -> Vec2 {
+    let handle = &cx.tokens.size.handle;
+    Vec2::new(handle.md + handle.sm * THUMB_WIDTH_IN_SMALL_HANDLES, handle.md)
+}
+
 /// The values of a row whose binding is mixed as a whole: every part is mixed.
 fn all_mixed<const N: usize>() -> [Mixed<f64>; N] {
     std::array::from_fn(|_| Mixed::Mixed)
@@ -947,7 +954,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
 
     fn style(cx: &StyleCx<'_>, _: ThumbRowStyleKey<N>) -> ThumbRowStyle {
         let control = cx.control();
-        let (colors, handle) = (&cx.tokens.color, &cx.tokens.size.handle);
+        let colors = &cx.tokens.color;
         let length = cx.tokens.size.length.track;
         let fixed = |rest: Rgba, disabled: Rgba| {
             Stateful::new(cx.color(rest)).off(States::new(cx.color(rest), cx.color(rest), cx.color(rest), cx.color(disabled)))
@@ -959,7 +966,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             edge: fixed(colors.text.muted, colors.text.disabled),
             ring: ThumbRing::new(cx),
             hit: cx.tokens.size.hit.target,
-            thumb: Vec2::new(handle.md + handle.sm * THUMB_WIDTH_IN_SMALL_HANDLES, handle.md),
+            thumb: thumb_size(cx),
             track: TrackLook { thickness: cx.tokens.size.ramp.bar, ..cx.track() },
             length,
             span_faint: cx.color(colors.text.faint),

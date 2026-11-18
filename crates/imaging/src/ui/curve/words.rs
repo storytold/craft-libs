@@ -27,5 +27,11 @@ craft_ui::words! {
         percent: template "curve.percent" = "{n}%";
         /// The unit shown after a field in percent.
         percent_unit: "curve.percentUnit" = "%";
+        /// The row of input sliders under the graph.
+        input_sliders: "curve.inputSliders" = "Input levels";
+        /// The slider that moves the black end point's input.
+        black_input: "curve.blackInput" = "Black input";
+        /// The slider that moves the white end point's input.
+        white_input: "curve.whiteInput" = "White input";
     }
 }

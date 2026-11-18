@@ -34,6 +34,29 @@ fn kind(event: &EditEvent<Curve>) -> &'static str {
 }
 
 fn rig(points: &[[f32; 2]]) -> Rig {
+    rig_with(points, Setup::default())
+}
+
+/// How a rig shows its editor.
+#[derive(Clone, Copy)]
+struct Setup {
+    room: Vec2,
+    input_sliders: bool,
+    pencil: bool,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Setup { room: room(), input_sliders: false, pencil: false }
+    }
+}
+
+/// The setup of the Curves adjustment: input sliders, in a room of `room`.
+fn sliders_in(room: Vec2) -> Setup {
+    Setup { room, input_sliders: true, pencil: false }
+}
+
+fn rig_with(points: &[[f32; 2]], setup: Setup) -> Rig {
     let curve = Curve::smooth(points.to_vec());
     let shared = Rc::new(RefCell::new(curve.clone()));
     let selected = Rc::new(Cell::new(None));
@@ -42,17 +65,26 @@ fn rig(points: &[[f32; 2]]) -> Rig {
     let channels = [CurveChannel::new("RGB", ChannelColor::Neutral), CurveChannel::new("Red", ChannelColor::Red)];
     let mut fixture = Fixture::new(move |ui| {
         let mut value = c.borrow().clone();
-        let out = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get()).show(ui);
+        let mut editor = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get());
+        if setup.input_sliders {
+            editor = editor.input_sliders();
+        }
+        if setup.pencil {
+            editor = editor.pencil();
+        }
+        let out = editor.show(ui);
         for event in &out.edit.events {
             k.borrow_mut().push(kind(event));
         }
         s.set(out.selected);
         *c.borrow_mut() = value;
     });
-    fixture.room(room());
+    fixture.room(setup.room);
     fixture.settle();
     let mut rig = Rig { fixture, curve: shared, selected, kinds, origin: Pos2::ZERO, scale: Vec2::ZERO };
-    rig.calibrate(&curve);
+    if !setup.pencil {
+        rig.calibrate(&curve);
+    }
     rig
 }
 
@@ -160,4 +192,69 @@ fn the_fields_and_the_hint_show_under_the_graph_inside_the_editor() {
     for (part, rect) in [("Input", input), ("hint", hint)] {
         assert!(shown.contains_rect(rect), "{part} {rect:?} lies inside the editor's area {shown:?}");
     }
+}
+
+const BLACK_SLIDER: &str = "Input levels, Black input";
+const WHITE_SLIDER: &str = "Input levels, White input";
+const LIFTED: [[f32; 2]; 3] = [[0.0, 30.0], [128.0, 128.0], [255.0, 220.0]];
+
+impl Rig {
+    /// The centre of the input slider named `name`.
+    fn slider(&self, name: &str) -> Pos2 {
+        self.fixture.by_label(name).unwrap_or_else(|| panic!("the {name} slider shows")).center()
+    }
+
+    /// Drags the input slider `name` to input `level`, in steps, and releases it there.
+    fn drag_slider(&mut self, name: &str, level: f32) {
+        let from = self.slider(name);
+        let to = pos2(self.at([level, 0.0]).x, from.y);
+        self.fixture.frame(vec![moved(from)]);
+        self.fixture.frame(vec![press(from)]);
+        for step in 1..=4 {
+            self.fixture.frame(vec![moved(from + (to - from) * step as f32 / 4.0)]);
+        }
+        self.fixture.frame(vec![release(to)]);
+        self.fixture.idle(1);
+    }
+}
+
+/// The black slider moves the black end point's input and keeps its output, as one gesture that selects the point;
+/// the white slider does the same for the white end point.
+#[trial]
+fn the_input_sliders_move_the_end_inputs_and_keep_their_outputs() {
+    let mut rig = rig_with(&LIFTED, sliders_in(room()));
+    rig.drag_slider(BLACK_SLIDER, 40.0);
+    assert_eq!(rig.points(), vec![[40.0, 30.0], [128.0, 128.0], [255.0, 220.0]]);
+    assert_eq!(rig.selected.get(), Some(0), "the black end point is selected, so the Input field follows it");
+    let kinds = rig.kinds();
+    assert_eq!(kinds.iter().filter(|k| **k == "begin").count(), 1, "{kinds:?}");
+    assert!(kinds.contains(&"update"), "the preview follows the drag: {kinds:?}");
+    assert_eq!(kinds.last(), Some(&"commit"), "{kinds:?}");
+    rig.drag_slider(WHITE_SLIDER, 200.0);
+    assert_eq!(rig.points(), vec![[40.0, 30.0], [128.0, 128.0], [200.0, 220.0]]);
+    assert_eq!(rig.selected.get(), Some(2));
+}
+
+/// An end point keeps 4 levels from its neighbour's input: an interior point, or the other end point of a straight curve.
+#[trial]
+fn an_end_point_keeps_four_levels_from_its_neighbour() {
+    let mut rig = rig_with(&LIFTED, sliders_in(room()));
+    rig.drag_slider(BLACK_SLIDER, 200.0);
+    assert_eq!(rig.points()[0], [124.0, 30.0]);
+    rig.drag_slider(WHITE_SLIDER, 20.0);
+    assert_eq!(rig.points()[2], [132.0, 220.0]);
+    let mut rig = rig_with(&IDENTITY, sliders_in(room()));
+    rig.drag_slider(WHITE_SLIDER, 0.0);
+    assert_eq!(rig.points(), vec![[0.0, 0.0], [4.0, 255.0]]);
+    let mut rig = rig_with(&IDENTITY, sliders_in(room()));
+    rig.drag_slider(BLACK_SLIDER, 255.0);
+    assert_eq!(rig.points(), vec![[251.0, 0.0], [255.0, 255.0]]);
+}
+
+/// Pencil mode has no end points to move: no sliders.
+#[trial]
+fn pencil_mode_shows_no_input_sliders() {
+    let rig = rig_with(&IDENTITY, Setup { pencil: true, ..sliders_in(room()) });
+    assert!(rig.fixture.by_label(BLACK_SLIDER).is_none());
+    assert!(rig.fixture.by_label(WHITE_SLIDER).is_none());
 }
