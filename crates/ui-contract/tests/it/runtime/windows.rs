@@ -377,6 +377,41 @@ fn a_content_sized_window_takes_its_content_size_once_it_reported_its_place() {
     );
 }
 
+/// Placing a minimized window below its smallest inner size restores it and lowers that size to the placed one, so the
+/// window takes the place it is given.
+#[trial]
+fn placing_a_minimized_window_below_its_minimum_restores_it_at_the_placed_size() {
+    const PLACED: Rect = Rect { min: Pos2::new(10.0, 20.0), max: Pos2::new(50.0, 50.0) };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+        })
+    };
+    let first = frame();
+    let (id, _) = builder_titled(&first, "tool");
+    let given = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(400.0, 300.0));
+    windows.child_info(ViewportInfo {
+        inner_rect: Some(given),
+        outer_rect: Some(given),
+        native_pixels_per_point: Some(1.0),
+        minimized: Some(true),
+        ..ViewportInfo::default()
+    });
+    frame();
+    frame();
+    assert!(WindowHost::of(&windows.ctx).set_outer(id, PLACED), "the commands went out");
+    let sent: Vec<ViewportCommand> = frame().commands.into_iter().filter(|(window, _)| *window == id).map(|(_, command)| command).collect();
+    assert!(sent.contains(&ViewportCommand::Minimized(false)), "the window is restored: {sent:?}");
+    assert!(sent.contains(&ViewportCommand::InnerSize(PLACED.size())), "the window takes the placed size: {sent:?}");
+    let lowered = sent.iter().find_map(|command| match command {
+        ViewportCommand::MinInnerSize(size) => Some(*size),
+        _ => None,
+    });
+    let lowered = lowered.expect("the minimum went below the placed size");
+    assert!(lowered.x <= PLACED.width() && lowered.y <= PLACED.height(), "the minimum fits the placed size: {lowered:?}");
+}
+
 /// The OS windows the runtime opens carry the app id the app installed, as its main window does: docks and Wayland
 /// compositors find the app's icon and rules by it.
 #[trial]

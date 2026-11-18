@@ -120,8 +120,7 @@ impl WindowHost {
     /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
     /// while AccessKit is off.
     pub fn access_tree(&self, viewport: ViewportId) -> Option<accesskit::TreeUpdate> {
-        let _ = viewport;
-        todo!("ch.C19a")
+        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
     }
 
     /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
@@ -312,12 +311,23 @@ impl WindowHost {
     }
 
     /// Places `viewport`'s outer rect at `outer`: its position, and the inner size that leaves the window's
-    /// decoration as it is. False when a command could not go out.
+    /// decoration as it is. A minimized window is restored first, and a placement below the window's smallest inner
+    /// size lowers that size to the placed one, so the window takes the place it is given. False when a command could
+    /// not go out.
     pub fn set_outer(&self, viewport: ViewportId, outer: Rect) -> bool {
-        let decoration = self.facts(viewport).and_then(|facts| facts.outer.map(|current| current.size() - facts.inner.size())).unwrap_or(Vec2::ZERO);
-        let moved = act(&self.ctx, viewport, WindowAction::SetOuterPosition(outer.min));
-        let sized = act(&self.ctx, viewport, WindowAction::SetInnerSize((outer.size() - decoration).max(Vec2::ZERO)));
-        moved && sized
+        let facts = self.facts(viewport);
+        let decoration = facts.and_then(|facts| facts.outer.map(|current| current.size() - facts.inner.size())).unwrap_or(Vec2::ZERO);
+        let inner = (outer.size() - decoration).max(Vec2::ZERO);
+        let mut sent = true;
+        if facts.is_some_and(|facts| facts.state == WindowState::Minimized) {
+            sent &= act(&self.ctx, viewport, WindowAction::Restore);
+        }
+        let least = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.min_size);
+        if let Some(least) = least.filter(|least| inner.x < least.x || inner.y < least.y) {
+            sent &= act(&self.ctx, viewport, WindowAction::SetMinInnerSize(least.min(inner)));
+        }
+        sent &= act(&self.ctx, viewport, WindowAction::SetOuterPosition(outer.min));
+        sent & act(&self.ctx, viewport, WindowAction::SetInnerSize(inner))
     }
 
     /// The viewport of the container `id` while its window is open.

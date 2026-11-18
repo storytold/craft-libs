@@ -189,7 +189,6 @@ impl Overlay {
         mapped.placed = mapped.placed.map(|rect| to_screen * rect);
         mapped.placed_at = mapped.placed_at.map(|pos| to_screen * pos);
         mapped.bounds = mapped.bounds.map(|rect| to_screen * rect);
-        // P3(chrome-w7): ch.C20a: the pattern ignores the new `corner`.
         if let Place::Float(FloatPlace { pos: Some(pos), .. }) = &mut mapped.place {
             *pos = to_screen * *pos;
         }

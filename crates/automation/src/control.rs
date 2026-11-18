@@ -135,7 +135,7 @@ pub enum Reply {
 impl Reply {
     /// A `ui.accessTree` reply: held until the window's settled access tree is available.
     pub fn access_tree() -> Reply {
-        todo!("ch.C19b")
+        Reply::AccessTree
     }
 
     /// A `ui.screenshot` reply for `token` of `viewport`, writing the PNG to `path` or inlining it
@@ -170,6 +170,7 @@ pub struct ControlChannel {
     rx: Receiver<ControlRequest>,
     input_waiters: Vec<Sender<ControlResponse>>,
     job_waiters: Vec<(JobId, Sender<ControlResponse>)>,
+    tree_waiters: Vec<Sender<ControlResponse>>,
     /// The screenshot queue; the app calls its `issue` and `drain` from its UI and logic phases.
     pub captures: Captures,
 }
@@ -177,7 +178,7 @@ pub struct ControlChannel {
 impl ControlChannel {
     /// Attach a transport's receiver (TCP, stdin, tests).
     pub fn new(rx: Receiver<ControlRequest>) -> Self {
-        Self { rx, input_waiters: Vec::new(), job_waiters: Vec::new(), captures: Captures::default() }
+        Self { rx, input_waiters: Vec::new(), job_waiters: Vec::new(), tree_waiters: Vec::new(), captures: Captures::default() }
     }
 
     /// The next request to run, claimed through [`Dispatch::start`]. Expired or abandoned
@@ -205,7 +206,7 @@ impl ControlChannel {
             }
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
-            Reply::AccessTree => todo!("ch.C19b"),
+            Reply::AccessTree => self.tree_waiters.push(reply),
             Reply::Screenshot { token, path, viewport } => {
                 if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
@@ -249,8 +250,37 @@ impl ControlChannel {
     /// request stays held while the host has none. Runs in the logic phase of every pass, as
     /// [`poll_input`](Self::poll_input) does.
     pub fn poll_access_trees(&mut self, ctx: &egui::Context) {
-        let _ = ctx;
-        todo!("ch.C19b")
+        if self.tree_waiters.is_empty() {
+            return;
+        }
+        // `ui.accessTree` takes no window: it reads the main window's tree.
+        let Some(update) = WindowHost::of(ctx).access_tree(egui::ViewportId::ROOT) else { return };
+        let nodes: Vec<Value> = update
+            .nodes
+            .iter()
+            .map(|(id, node)| {
+                let children: Vec<u64> = node.children().iter().map(|child| child.0).collect();
+                let mut entry = json!({"id": id.0, "role": format!("{:?}", node.role()), "children": children});
+                if let Some(name) = node.label() {
+                    entry["name"] = json!(name);
+                }
+                if let Some(value) = node.value() {
+                    entry["value"] = json!(value);
+                }
+                if let Some(selection) = node.text_selection() {
+                    entry["textSelection"] = json!({
+                        "anchor": {"node": selection.anchor.node.0, "character": selection.anchor.character_index},
+                        "focus": {"node": selection.focus.node.0, "character": selection.focus.character_index},
+                    });
+                }
+                entry
+            })
+            .collect();
+        let root = update.tree.as_ref().map(|tree| tree.root.0);
+        let reply = json!({"ok": true, "result": {"nodes": nodes, "focus": update.focus.0, "root": root}});
+        for waiter in self.tree_waiters.drain(..) {
+            let _ = waiter.send(reply.clone());
+        }
     }
 
     /// Drops the host's queued input and the step in flight, and fails every
@@ -293,6 +323,6 @@ impl ControlChannel {
 
     /// Waiters of every kind, for `ui.inspect`'s `pending` count and tests.
     pub fn waiting(&self) -> usize {
-        self.input_waiters.len() + self.job_waiters.len() + self.captures.pending()
+        self.input_waiters.len() + self.job_waiters.len() + self.tree_waiters.len() + self.captures.pending()
     }
 }

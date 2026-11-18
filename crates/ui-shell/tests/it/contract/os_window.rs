@@ -39,7 +39,7 @@ fn a_modals_strip_stands_for_the_hit_sink() {
                 bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
                 let mut open = true;
                 let shown = Dialog::new("Grid options")
-                    .first_place(at, Align2::LEFT_TOP) // P3(chrome-w7): ch.C20b
+                    .first_place(at, Align2::LEFT_TOP)
                     .opened(Bind::bound(&mut open))
                     .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
                     .show(ui, |ui, _| {

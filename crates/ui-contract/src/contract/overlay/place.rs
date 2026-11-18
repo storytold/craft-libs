@@ -53,6 +53,11 @@ impl FloatPlace {
     pub const fn corner_at(pos: Pos2, corner: Align2) -> Self {
         FloatPlace { pos: Some(pos), corner }
     }
+
+    /// The top left of a layer `size` large whose `corner` sits at `pos`; `None` for a centred layer.
+    pub(crate) fn top_left(&self, size: Vec2) -> Option<Pos2> {
+        self.pos.map(|pos| pos - self.corner.pos_in_rect(&Rect::from_min_size(Pos2::ZERO, size)).to_vec2())
+    }
 }
 
 /// Where an egui layer sits.
