@@ -72,6 +72,9 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// the id the collection is built with (`Props::id`), so a pattern can name a collection it shows after the field.
     #[prop]
     drives: Option<Id>,
+    /// The caret position the caller binds, in characters.
+    #[allow(dead_code)] // P3(chrome-w6): ch.C16b
+    caret: Option<Bind<'a, usize>>,
 }
 
 impl<'a> TextField<'a, PlainText> {
@@ -106,6 +109,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             leading: Vec::new(),
             arrow: false,
             drives: None,
+            caret: None,
         }
         .label(label)
     }
@@ -171,6 +175,20 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// A multi-line field grows with its text up to `lines` lines, then scrolls inside with the caret in view.
+    #[must_use]
+    pub fn max_lines(self, lines: usize) -> Self {
+        let _ = lines;
+        todo!("ch.C16b")
+    }
+
+    /// Binds the caret position, in characters: a changed bound caret is applied at a character boundary and revealed.
+    #[must_use]
+    pub fn caret(self, caret: Bind<'a, usize>) -> Self {
+        let _ = caret;
+        todo!("ch.C16b")
+    }
+
     /// The most characters the text holds; `None` clears the limit. A single-line field holds 1024 characters unless
     /// this is set; a multi-line field has no limit unless this is set.
     #[must_use]
@@ -184,6 +202,13 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     pub fn tab_inserts(mut self, on: bool) -> Self {
         self.options.tab_inserts = on;
         self
+    }
+
+    /// Tab keeps focus and is reported in the edit response: `Some(true)` for Tab, `Some(false)` for Shift+Tab.
+    #[must_use]
+    pub fn tab_reports(self) -> Self {
+        let _ = self;
+        todo!("dg.F20b")
     }
 
     /// The caller hangs a context menu of its own on the field (`Menu::context` over its response): a right click opens

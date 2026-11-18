@@ -18,7 +18,7 @@ pub use switch::{Switch, SwitchStyle};
 pub use words::ChoiceWords;
 
 pub use swatch::{Swatch, SwatchFace, SwatchMetrics, SwatchOutput, SwatchStyle};
-pub use swatch_table::{SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
+pub use swatch_table::{SwatchArrangement, SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
 
 /// The well of a check box, radio button or switch track with `radius` corners: the sunken surface, so a bevelled theme
 /// draws its bevel, filled with the off fill or the on accent. A flat theme draws the outline as its edge, in the failure

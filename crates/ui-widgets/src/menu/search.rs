@@ -65,9 +65,9 @@ impl HelpEntry {
 }
 
 /// The entries matching `query`, best first and in menu order within a rank, at most `MAX_RESULTS`. Each entry is
-/// its `[label, english label, menu path]` texts, matched by `folder` (case and accents folded). A label or English
-/// label that matches ranks before an entry found only through its path; within each, the matcher's rank decides.
-pub fn search_order(folder: &Folder, query: &str, texts: &[[&str; 3]]) -> Vec<usize> {
+/// its `[label, english label, menu path, command id]` texts, matched by `folder` (case and accents folded). A label or
+/// English label that matches ranks before an entry found only through its path; within each, the matcher's rank decides.
+pub fn search_order(folder: &Folder, query: &str, texts: &[[&str; 4]]) -> Vec<usize> {
     let query = query.trim();
     if query.is_empty() {
         return Vec::new();
@@ -76,7 +76,7 @@ pub fn search_order(folder: &Folder, query: &str, texts: &[[&str; 3]]) -> Vec<us
     let mut ranked: Vec<_> = texts
         .iter()
         .enumerate()
-        .filter_map(|(at, [label, english, path])| {
+        .filter_map(|(at, [label, english, path, _id])| {
             let named = [label, english].into_iter().filter_map(|text| matcher.score(text)).map(|found| found.rank).min();
             match named {
                 Some(found) => Some((0_u8, found, at)),

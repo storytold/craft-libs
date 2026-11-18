@@ -31,8 +31,22 @@ pub(super) fn ink(cx: &StyleCx<'_>) -> (TextLook, IconLook) {
     (TextLook::new(TypeRole::Label, color.clone()), IconLook::new(cx.control().icon, color))
 }
 
+/// How a button lays out its icon and label.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Arrangement {
+    /// The icon beside the label; no label where the `GroupLevel` is `Compact`.
+    #[default]
+    Inline,
+    /// The icon over a one- or two-line label.
+    Stacked,
+}
+
 /// What a face shows.
 pub(crate) struct FaceSpec<'a> {
+    /// How the icon and label are laid out.
+    #[allow(dead_code)] // P3(ribbon-w2): rb.R6
+    pub arrangement: Arrangement,
     pub label: &'a str,
     pub role: Option<TypeRole>,
     pub lead: Option<&'a IconSpec<'a>>,

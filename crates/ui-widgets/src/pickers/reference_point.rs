@@ -60,6 +60,23 @@ pub struct ReferencePointStyle {
     arrow: f32,
     /// The unpicked dots and the growth arrows.
     arrow_ink: Stateful<StyleColor>,
+    /// The length of a text bar of an alignment cell.
+    #[allow(dead_code)] // P3(dialogs-w12): dg.F30
+    bar: f32,
+    /// The ink of an alignment cell's text bars.
+    #[allow(dead_code)] // P3(dialogs-w12): dg.F30
+    bar_ink: Stateful<StyleColor>,
+}
+
+/// What a [`ReferencePoint`]'s pick means.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ReferencePointKind {
+    /// A point of a box: a dot in each cell.
+    #[default]
+    Point,
+    /// The alignment of text in a cell: three text bars in each cell, set to its side and edge.
+    Alignment,
 }
 
 /// The 3 by 3 picker of a box's nine points: the point a transform, a resize or a watermark works about. The nine
@@ -74,7 +91,11 @@ pub struct ReferencePointStyle {
 pub struct ReferencePoint<'a> {
     #[common]
     common: Common,
-    value: Bind<'a, Anchor9>,
+    value: Bind<'a, Option<Anchor9>>,
+    /// What the pick means: a point of a box, or the alignment of text in a cell.
+    #[style_key]
+    #[prop]
+    kind: ReferencePointKind,
     /// The change in the box's width and height: the arrows point away from the pick where the box grows and toward
     /// it where the box shrinks. Without it the cells show no arrows.
     #[prop]
@@ -87,8 +108,8 @@ pub struct ReferencePoint<'a> {
 
 impl<'a> ReferencePoint<'a> {
     /// A picker named `label` over `value`.
-    pub fn new(label: impl Into<Label>, value: Bind<'a, Anchor9>) -> Self {
-        ReferencePoint { common: Common::new(), value, growth: None, compact: false }.label(label)
+    pub fn new(label: impl Into<Label>, value: Bind<'a, Option<Anchor9>>) -> Self {
+        ReferencePoint { common: Common::new(), value, kind: ReferencePointKind::default(), growth: None, compact: false }.label(label)
     }
 
     /// The direction of the arrow `cell` shows when the pick is `anchor`, in cell steps (each -1, 0 or 1): away from
@@ -108,7 +129,8 @@ impl<'a> ReferencePoint<'a> {
         CELL.at(at as u64)
     }
 
-    fn position_of(value: Option<&Anchor9>) -> Option<usize> {
+    fn position_of(value: Option<&Option<Anchor9>>) -> Option<usize> {
+        let value = value.and_then(Option::as_ref); // P3(dialogs-w12): dg.F30
         value.and_then(|value| Anchor9::ALL.iter().position(|point| point == value))
     }
 
@@ -141,7 +163,7 @@ impl Component for ReferencePoint<'_> {
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Both);
     type Style = ReferencePointStyle;
-    type Output = EditResponse<Anchor9>;
+    type Output = EditResponse<Option<Anchor9>>;
 
     fn style(cx: &StyleCx<'_>, key: ReferencePointStyleKey) -> ReferencePointStyle {
         let sunken = cx.surface(SurfaceKind::Sunken);
@@ -163,6 +185,8 @@ impl Component for ReferencePoint<'_> {
             ink: look(cx.color(colors.accent.text)),
             arrow: cx.tokens.size.icon.sm,
             arrow_ink: look(cx.color(colors.text.muted)),
+            bar: cx.tokens.size.icon.sm,
+            bar_ink: look(cx.color(colors.text.muted)),
         }
     }
 
@@ -187,7 +211,7 @@ impl Component for ReferencePoint<'_> {
         cx.roving(Roving::new(NavShape::bounded_grid(GRID)));
     }
 
-    fn bind(&mut self) -> Option<BindMut<'_, Anchor9>> {
+    fn bind(&mut self) -> Option<BindMut<'_, Option<Anchor9>>> {
         Some(self.value.reborrow())
     }
 
@@ -196,7 +220,7 @@ impl Component for ReferencePoint<'_> {
         let current = Self::position_of(cx.value());
         let activated = (0..Anchor9::ALL.len()).find(|at| cx.part_activated(Self::part(*at)).is_some());
         if let Some(at) = activated.filter(|at| current != Some(*at)) {
-            cx.set(Anchor9::ALL[at]);
+            cx.set(Some(Anchor9::ALL[at])); // P3(dialogs-w12): dg.F30
         }
     }
 
@@ -230,7 +254,7 @@ impl Component for ReferencePoint<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<Anchor9> {
+    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<Option<Anchor9>> {
         cx.edit_response()
     }
 }

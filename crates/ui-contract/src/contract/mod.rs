@@ -53,10 +53,10 @@ pub use body::pad_of;
 #[doc(hidden)]
 pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
-    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRequest, ColumnSort,
-    ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest, ItemKeys, LeadOnOpen,
-    LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState, SelectMode, ShownRow,
-    SpaceAction, ToggleColumn, ToggleEdit,
+    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
+    ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest,
+    ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState,
+    SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
@@ -649,6 +649,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     /// `name` is the item's name before the rename; the editor is named after it.
     fn rename_editor(&mut self, _ui: &mut Ui, _draft: Bind<'_, String>, _label: Rect, _name: &str) -> Option<EditResponse<String>> {
         None
+    }
+
+    /// Hosts a component in the header cell of `column`, in `rect`, and returns whether it did: the header then paints
+    /// no label for that column.
+    fn header_cell(&mut self, _ui: &mut Ui, _column: &ColumnKey, _rect: Rect) -> bool {
+        false
     }
 
     /// The text the rename field of the item `key` opens with; `None` for the item's own text.

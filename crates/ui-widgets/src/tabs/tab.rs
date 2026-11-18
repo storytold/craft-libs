@@ -23,6 +23,17 @@ use egui::{Pos2, Rect, Response, Vec2};
 #[cfg(feature = "testing")]
 mod stories;
 
+/// The role of a tab in its strip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TabRole {
+    /// An ordinary tab.
+    #[default]
+    Standard,
+    /// A tab that appears with a selection: it takes the accent text colour, enters with motion and leaves through `Presence`.
+    Contextual,
+}
+
 /// What a tab's own parts report, besides what the collection reads from the pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -132,6 +143,9 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop]
     kind: TabKind,
+    /// Whether the tab is a standard one or a contextual one.
+    #[prop]
+    role: TabRole,
     /// Large Tabs: the strip's taller form with the body type.
     #[style_key]
     #[prop(flag)]
@@ -167,6 +181,7 @@ impl<'a> Tab<'a> {
         Tab {
             common: Common::new(),
             kind: TabKind::Document,
+            role: TabRole::default(),
             large: false,
             detail: None,
             icon: None,

@@ -108,6 +108,23 @@ pub struct IconPicker<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     label: Label,
     value: Bind<'a, Option<K>>,
     groups: &'a [IconPickerGroup<K>],
+    /// How the groups show: as headings over their cells, or as a filter row.
+    #[prop]
+    group_display: IconPickerGroups,
+    /// Shown when there are no cells.
+    #[prop(into)]
+    empty: Option<Label>,
+}
+
+/// How an [`IconPicker`] shows its groups.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IconPickerGroups {
+    /// Each group's name is a heading over its cells.
+    #[default]
+    Headings,
+    /// A filter row: All first, then each group.
+    Filter,
 }
 
 /// The visible cells as the grid's source, keyed by position.
@@ -142,12 +159,12 @@ impl<K> ItemSource<usize> for Cells<'_, K> {}
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
     /// A picker named `label` over `value`, choosing among the cells of `groups`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<K>>, groups: &'a [IconPickerGroup<K>]) -> Self {
-        IconPicker { label: label.into(), value, groups }
+        IconPicker { label: label.into(), value, groups, group_display: IconPickerGroups::default(), empty: None }
     }
 
     /// Shows the picker and returns what the user did this pass.
     pub fn show(self, ui: &mut Ui) -> IconPickerOutput<K> {
-        let IconPicker { label, mut value, groups } = self;
+        let IconPicker { label, mut value, groups, .. } = self;
         let shown = Stack::new().show(ui, |ui, cx| Self::body(ui, cx, &label, &mut value, groups));
         shown.inner.unwrap_or_else(|| IconPickerOutput { response: shown.output.clone(), picked: None, search_changed: false })
     }

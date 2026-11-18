@@ -1,7 +1,9 @@
 //! `Button`: a push button with an optional leading and trailing icon and a busy state.
 
-use super::face::{self, FaceLook, FaceSpec};
-use crate::contract::{Common, Component, Cx, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _};
+use super::face::{self, Arrangement, FaceLook, FaceSpec};
+use crate::contract::{
+    Common, Component, Cx, Hover, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _,
+};
 use crate::display::Spinner;
 use crate::primitives::{HAlign, IconSpec, PaintShape};
 use crate::runtime::commands::CommandRef;
@@ -79,6 +81,8 @@ pub struct ButtonOutput {
     /// The modifiers held at the activation (with the click for a pointer one); none when the button was not
     /// activated.
     pub mods: Mods,
+    /// The pointer's stay over the button: hovered, entered, left and clicked under the pointer.
+    pub hover: Hover,
 }
 
 impl ButtonOutput {
@@ -93,7 +97,7 @@ impl ButtonOutput {
             (true, Some(activation)) => activation.mods,
             _ => Mods::NONE,
         };
-        ButtonOutput { response: cx.response.clone(), clicks, mods }
+        ButtonOutput { response: cx.response.clone(), clicks, mods, hover: Hover::default() }
     }
 
     /// Whether the button was clicked this pass, by pointer or by key, by the framework's click rule. It stands in
@@ -152,6 +156,9 @@ pub struct Button<'a> {
     /// that names an item at the reading start).
     #[prop]
     align: HAlign,
+    /// How the icon and label are laid out: beside each other, or the icon over the label.
+    #[prop]
+    arrangement: Arrangement,
 }
 
 impl<'a> Button<'a> {
@@ -166,6 +173,7 @@ impl<'a> Button<'a> {
             tint: None,
             least_width: None,
             align: HAlign::Center,
+            arrangement: Arrangement::default(),
         }
         .label(label)
     }
@@ -178,6 +186,7 @@ impl<'a> Button<'a> {
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
         let label = self.painted.as_ref().map_or(label, Label::as_str);
         FaceSpec {
+            arrangement: self.arrangement,
             label,
             role: None,
             lead: self.icon.as_ref(),

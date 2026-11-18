@@ -18,7 +18,7 @@ use crate::sections::{DialogRole, FooterButton};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{CancelRule, Metrics, Sense};
 use craft_host::target::WindowState;
-use egui::{Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
+use egui::{Align2, Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
 
 /// The style of a dialog: the surface and padding come from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -177,11 +177,19 @@ impl<'a> Dialog<'a> {
         })
     }
 
-    /// Where the dialog first opens, as a screen position of its top-left corner; the middle of the window without
-    /// it. A saved placement comes first.
+    /// Where the dialog first opens, as a screen position of its `corner`; the middle of the window without it. A saved
+    /// placement comes first.
     #[must_use]
-    pub fn first_place(self, at: Pos2) -> Self {
-        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::at(at))))
+    pub fn first_place(self, at: Pos2, corner: Align2) -> Self {
+        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::corner_at(at, corner))))
+    }
+
+    /// Shows `reason` as an inline bad-tone notice at the body's end, above the footer: the one display of a held
+    /// answer's refusal. `None` shows none.
+    #[must_use]
+    pub fn refusal(self, reason: Option<&Label>) -> Self {
+        let _ = reason;
+        todo!("dg.F1")
     }
 
     /// Saves the placement and size under `key`, so a reopened dialog sits where the user left it.

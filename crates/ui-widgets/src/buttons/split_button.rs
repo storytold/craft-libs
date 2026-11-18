@@ -1,12 +1,13 @@
 //! `SplitButton`: an action button whose end part opens a menu of variants or presets.
 
-use super::face::{self, FaceLook, FaceSpec};
+use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{
-    Access, Common, Component, Cx, Entry, Focus as _, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Props as _, Role,
-    ShowContainer as _, Styled as _, WordSetCx as _,
+    Access, BodyCx, Common, Component, Cx, Entry, Focus as _, Hover, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Props as _, Role, ShowContainer as _, Styled as _, WordSetCx as _,
 };
 use crate::menu::{self, Menu};
 use crate::primitives::{IconSpec, PaintShape, RuleKind};
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Corners, FocusLook, IconLook, RuleLook, RuleWidth, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, NavMove, PartKey, Sense, Value};
@@ -14,7 +15,7 @@ use craft_theme::{
     States, Variant,
     variant::{Emphasis, Tone},
 };
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2};
 
 const ARROW: PartKey = PartKey::new("arrow");
 
@@ -59,6 +60,8 @@ pub struct SplitOutput<T> {
     pub response: Response,
     /// The entry the user picked.
     pub chosen: Option<T>,
+    /// The pointer's stay over the main part: hovered, entered, left and clicked under the pointer.
+    pub hover: Hover,
 }
 
 impl<T: Value> Outcome for SplitOutput<T> {
@@ -69,6 +72,15 @@ impl<T: Value> Outcome for SplitOutput<T> {
     }
 }
 
+/// What a split button's arrow opens.
+#[non_exhaustive]
+pub enum SplitMenu<'a, T> {
+    /// A menu of rows, one per entry.
+    Entries(&'a [Entry<T>]),
+    /// A menu whose content the caller draws.
+    Body(Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>),
+}
+
 /// A button whose end opens a menu. A press on the arrow part opens the menu below the button; a press on the main
 /// part runs the action and never opens it. The button is one Tab stop: Space and Enter run the action, Alt+Down and
 /// Down open the menu with its first row active, Escape closes it with focus back on the button.
@@ -77,24 +89,48 @@ impl<T: Value> Outcome for SplitOutput<T> {
 pub struct SplitButton<'a, T: Value + 'static> {
     #[common]
     common: Common,
-    entries: &'a [Entry<T>],
+    menu: SplitMenu<'a, T>,
     /// The arrow's accessible name and tooltip ("Tracing Presets"); the label alone names it without one.
     #[prop(into)]
     arrow_label: Option<Label>,
     /// A leading icon on the main part.
     #[prop(into)]
     icon: Option<IconSpec<'a>>,
+    /// How the icon and label are laid out: beside each other, or the icon over the label.
+    #[prop]
+    arrangement: Arrangement,
     chosen: Option<T>,
 }
 
 impl<'a, T: Value + 'static> SplitButton<'a, T> {
     /// A split button showing `label` whose arrow opens `entries`.
     pub fn new(label: impl Into<Label>, entries: &'a [Entry<T>]) -> Self {
-        SplitButton { common: Common::new(), entries, arrow_label: None, icon: None, chosen: None }.label(label)
+        SplitButton {
+            common: Common::new(),
+            menu: SplitMenu::Entries(entries),
+            arrow_label: None,
+            icon: None,
+            arrangement: Arrangement::default(),
+            chosen: None,
+        }
+        .label(label)
+    }
+
+    /// A split button showing `label` whose arrow opens a menu with `body` as its content.
+    pub fn body(label: impl Into<Label>, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
+        let _ = (label.into(), body);
+        todo!("rb.R7")
+    }
+
+    /// A split button bound to `command`: its main part fires the command, its arrow opens `menu`.
+    pub fn command(command: impl Into<CommandRef>, menu: SplitMenu<'a, T>) -> Self {
+        let _ = (command.into(), menu);
+        todo!("rb.R7")
     }
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
         FaceSpec {
+            arrangement: self.arrangement,
             label,
             role: None,
             lead: self.icon.as_ref(),
@@ -178,7 +214,10 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     /// menu; a disabled entry takes neither focus-run nor a pick.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("menu");
-        let entries = self.entries;
+        let entries = match &self.menu {
+            SplitMenu::Entries(entries) => *entries,
+            SplitMenu::Body(_) => todo!("rb.R7"),
+        };
         let name = cx.label();
         let ran = ui.show(popup, menu::layer(false), |ui, _| {
             Menu::inline(name.clone()).values().show(ui, |ui, _| menu::entry_rows(ui, entries)).inner.flatten()
@@ -218,6 +257,6 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SplitOutput<T> {
-        SplitOutput { response: cx.response.clone(), chosen: self.chosen }
+        SplitOutput { response: cx.response.clone(), chosen: self.chosen, hover: Hover::default() }
     }
 }

@@ -6,8 +6,11 @@
 //! `ItemSource::text` is each tab's name in the overflow menu. The drag payload of a tab is `ListDrag<K>`; a dock that
 //! carries panels reads the same payload with the panel key as `K`.
 
+mod end;
 #[cfg(feature = "testing")]
 mod stories;
+
+pub use end::StripEnd;
 
 use super::rules::{FitMode, OverflowMenu, OverflowPlace, TabKind};
 use super::words::StripWords;

@@ -168,9 +168,20 @@ pub struct Menu<'a> {
     back: bool,
     /// The Left or Right key a top-level level left unhandled.
     step: Option<MenuStep>,
+    /// The bar shown above the menu in its own modeless layer.
+    #[allow(dead_code)] // P3(canvas-w8): cv.K40
+    companion: Option<&'a mut dyn FnMut(&mut Ui)>,
 }
 
 impl<'a> Menu<'a> {
+    /// A modeless bar layer above the menu, in its press family; it closes with the menu, and Escape closes the top
+    /// layer first.
+    #[must_use]
+    pub fn companion(self, bar: &'a mut dyn FnMut(&mut Ui)) -> Self {
+        let _ = bar;
+        todo!("cv.K40")
+    }
+
     /// A menu named `label`. Its open state is the menu's slot until [`open`](Menu::open) binds it.
     pub fn new(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new()
@@ -182,8 +193,19 @@ impl<'a> Menu<'a> {
             .label_column(true)
             .scroll(Scroll::vertical().strips())
             .mount(Mount::Layer(layer(false)));
-        Menu { common: Common::new(), props, open: None, closed: None, submenu: false, values: false, opener: None, back: false, step: None }
-            .label(label)
+        Menu {
+            common: Common::new(),
+            props,
+            open: None,
+            closed: None,
+            submenu: false,
+            values: false,
+            opener: None,
+            back: false,
+            step: None,
+            companion: None,
+        }
+        .label(label)
     }
 
     /// Marks the menu as a value menu: every row is a radio item, whether or not an entry is checked, and the checked
@@ -203,8 +225,19 @@ impl<'a> Menu<'a> {
             .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical).wrap(true))
             .label_column(true)
             .scroll(Scroll::vertical().strips());
-        Menu { common: Common::new(), props, open: None, closed: None, submenu: false, values: false, opener: None, back: false, step: None }
-            .label(label)
+        Menu {
+            common: Common::new(),
+            props,
+            open: None,
+            closed: None,
+            submenu: false,
+            values: false,
+            opener: None,
+            back: false,
+            step: None,
+            companion: None,
+        }
+        .label(label)
     }
 
     /// A context menu named `label`, hanging from where the pointer was when it opened, with `opener` getting the

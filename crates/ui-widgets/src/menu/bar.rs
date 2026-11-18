@@ -114,6 +114,7 @@ impl Component for TitleFace {
         face::measure(
             cx,
             &FaceSpec {
+                arrangement: crate::buttons::Arrangement::Inline, // P3(ribbon-w2): rb.R6
                 label: cx.resolved.label,
                 role: None,
                 lead: None,
@@ -135,6 +136,7 @@ impl Component for TitleFace {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let spec = FaceSpec {
+            arrangement: crate::buttons::Arrangement::Inline, // P3(ribbon-w2): rb.R6
             label: cx.resolved.label,
             role: None,
             lead: None,
@@ -400,13 +402,14 @@ impl<'a> MenuBar<'a> {
     }
 
     /// The help search's entries as `[label, English label, path]` texts.
-    fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 3]> {
+    fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 4]> {
         entries
             .iter()
             .map(|entry| {
                 let path: Vec<String> = entry.path().iter().map(|label| env.resolve(label).as_str().to_owned()).collect();
                 let english = entry.english().map(|label| env.resolve(label).as_str().to_owned());
-                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator)]
+                // P3(dialogs-w9): dg.F26 — the fourth text is the command id.
+                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator), String::new()]
             })
             .collect()
     }
@@ -568,8 +571,11 @@ impl Component for MenuBar<'_> {
                                     }
                                 }
                                 query.1 = query.1.saturating_add(1);
-                                let refs: Vec<[&str; 3]> =
-                                    rows.iter().map(|[label, english, path]| [label.as_str(), english.as_str(), path.as_str()]).collect();
+                                // P3(dialogs-w9): dg.F26
+                                let refs: Vec<[&str; 4]> = rows
+                                    .iter()
+                                    .map(|[label, english, path, id]| [label.as_str(), english.as_str(), path.as_str(), id.as_str()])
+                                    .collect();
                                 let mut seen: Vec<&CommandRef> = Vec::new();
                                 let listed: Vec<usize> = search_order(&folder, &query.0, &refs)
                                     .into_iter()

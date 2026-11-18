@@ -50,6 +50,11 @@ pub trait StackDialog: Any + Send {
     /// ([`dialog_id`](super::dialog_id) of the dialog's key).
     fn id(&self) -> DialogId;
 
+    /// Whether the dialog is modeless now: current state, so a dialog may change it while open.
+    fn modeless(&self) -> bool {
+        false
+    }
+
     /// Shows one pass; `Some` when the dialog finished this pass.
     fn show(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<DialogResult<Self::Result>>;
 
@@ -184,6 +189,8 @@ pub enum StartupStage {
 /// Type-erased [`StackDialog`] the host stores.
 trait AnyStackDialog: Send {
     fn id(&self) -> DialogId;
+    #[allow(dead_code)] // P3(dialogs-w1): dg.F31
+    fn modeless(&self) -> bool;
     fn result_type(&self) -> TypeId;
     fn key(&self) -> Option<String>;
     fn instance(&self) -> Option<DialogId>;
@@ -203,6 +210,10 @@ trait AnyStackDialog: Send {
 }
 
 impl<D: StackDialog> AnyStackDialog for D {
+    fn modeless(&self) -> bool {
+        StackDialog::modeless(self)
+    }
+
     fn id(&self) -> DialogId {
         StackDialog::id(self)
     }
@@ -346,6 +357,11 @@ impl fmt::Debug for DialogHost {
 }
 
 impl DialogHost {
+    /// Whether its open stack holds a dialog that is not modeless; current state, so a dialog opened this pass counts.
+    pub fn shows_modal(&self) -> bool {
+        todo!("dg.F3")
+    }
+
     /// An empty host with no open or queued dialogs.
     pub fn new() -> Self {
         Self::default()

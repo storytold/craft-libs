@@ -97,6 +97,12 @@ impl Text {
         text
     }
 
+    /// Interface text from styled `spans`; the joined text is its accessible name.
+    pub fn styled(spans: Vec<Span<'static>>) -> Self {
+        let _ = spans;
+        todo!("ch.C14b")
+    }
+
     /// Sets the text in italics: a value set apart from the words around it.
     pub fn italic(mut self) -> Self {
         self.italic = true;

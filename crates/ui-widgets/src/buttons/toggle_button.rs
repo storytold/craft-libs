@@ -1,6 +1,6 @@
 //! `ToggleButton`: a button that stays pressed while on.
 
-use super::face::{self, FaceLook, FaceSpec};
+use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, PaintUi, Pointer as _, Props, Role,
 };
@@ -69,6 +69,9 @@ pub struct ToggleButton<'a> {
     /// The name a screen reader hears when it differs from the face (a modifier key's symbol face).
     #[prop]
     spoken: Option<Label>,
+    /// How the icon and label are laid out: beside each other, or the icon over the label.
+    #[prop]
+    arrangement: Arrangement,
 }
 
 impl<'a> ToggleButton<'a> {
@@ -84,6 +87,7 @@ impl<'a> ToggleButton<'a> {
             icon_only: false,
             escape_disarms: false,
             spoken: None,
+            arrangement: Arrangement::default(),
         }
         .label(label)
     }
@@ -100,6 +104,7 @@ impl<'a> ToggleButton<'a> {
             icon_only: false,
             escape_disarms: false,
             spoken: None,
+            arrangement: Arrangement::default(),
         };
         <ToggleButton as Props>::command(button, command)
     }
@@ -107,6 +112,7 @@ impl<'a> ToggleButton<'a> {
     fn spec<'s>(&'s self, label: &'s str, on: bool) -> FaceSpec<'s> {
         let lead = if on { self.on_icon.as_ref().or(self.icon.as_ref()) } else { self.icon.as_ref() };
         FaceSpec {
+            arrangement: self.arrangement,
             label: if self.icon_only { "" } else { label },
             role: self.role,
             lead,

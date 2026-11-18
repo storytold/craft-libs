@@ -14,7 +14,7 @@ use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText};
 use crate::menu::{Menu, MenuItem};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{ItemSource, Metrics, Selection, SpanLayout};
+use craft_behavior::{ColumnKey, ItemSource, Metrics, Selection, SpanLayout};
 use egui::{Rect, Ui};
 use std::hash::Hash;
 
@@ -98,6 +98,14 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
             accepts: None,
         }
         .label(label)
+    }
+
+    /// Hosts `field` in the header cell of `column`, in place of its label; `output` gets what the field returns, once
+    /// per pass.
+    #[must_use]
+    pub fn header_field<C: crate::contract::Show + 'a>(self, column: ColumnKey, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
+        let _ = (column, field, output);
+        todo!("dg.F22")
     }
 
     /// Takes the drops of `kind` from drags that did not start in the table; kinds given earlier come first.

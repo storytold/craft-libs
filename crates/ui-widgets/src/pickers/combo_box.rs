@@ -12,18 +12,18 @@ use super::rows::EntryRows;
 use super::words::PickerWords;
 use crate::buttons::IconButton;
 use crate::contract::{
-    Bind, BindMut, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, Input, LeadSource, MeasureCx, Overlay,
-    OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, ShowCollection as _, WordSetCx as _, step_stop,
-    step_stops,
+    Bind, BindMut, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, Input, LeadSource, MeasureCx, Outcome,
+    Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, ShowCollection as _, WordSetCx as _,
+    step_stop, step_stops,
 };
 use crate::list::{List, ListRow};
 use crate::primitives::{TextKey, TextOptions, TextRun};
 use crate::runtime::env::Label;
 use crate::runtime::overlay::CloseReason;
 use crate::text::{Adornment, place, reserve};
-use craft_behavior::{HitLevel, HitPriority, NavMove, PartKey, PlainText, Selection, Sense};
+use craft_behavior::{HitLevel, HitPriority, NavMove, PartKey, PlainText, Preview, Selection, Sense};
 use craft_i18n::matcher::Matcher;
-use egui::{Rect, Vec2};
+use egui::{Rect, Response, Vec2};
 
 /// The text part.
 const TEXT: PartKey = PartKey::new("text");
@@ -48,6 +48,30 @@ struct Typing {
 struct Keyed {
     shown: String,
     before: Option<String>,
+}
+
+/// What a [`ComboBox`] reports.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ComboBoxOutput {
+    /// The field's edit.
+    pub edit: EditResponse<String>,
+    /// What this pass did to the preview of the option under the pointer or the keyboard row of the open list: it ends
+    /// when the pointer leaves the rows, the list closes or a row is picked. The field's text and value stay.
+    pub preview: Preview<String>,
+}
+
+impl Outcome for ComboBoxOutput {
+    type Value = String;
+
+    fn response(&self) -> &Response {
+        &self.edit.response
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.edit.story_facts()
+    }
 }
 
 /// A text field with a list of options. The typed text filters the list by the options' labels: the labels that
@@ -105,7 +129,7 @@ impl Component for ComboBox<'_> {
     const INPUT: Input = Input::Text;
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Text).with_moves();
     type Style = crate::text::FieldStyle;
-    type Output = EditResponse<String>;
+    type Output = ComboBoxOutput;
 
     fn style(cx: &crate::style::StyleCx<'_>, _: ComboBoxStyleKey) -> crate::text::FieldStyle {
         crate::text::FieldStyle::at(cx)
@@ -248,7 +272,7 @@ impl Component for ComboBox<'_> {
         ui.face(CHEVRON, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<String> {
-        cx.edit_response()
+    fn finish(self, cx: Cx<'_, Self>) -> ComboBoxOutput {
+        ComboBoxOutput { edit: cx.edit_response(), preview: Preview::default() } // P3(ribbon-w2): rb.R24
     }
 }

@@ -3,7 +3,7 @@
 use super::display_sense;
 use crate::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use crate::list::{ThumbAspect, ThumbSize};
-use crate::primitives::{ContentPainterCx, Revision, TextureStore, TextureStoreOptions, fit_rect};
+use crate::primitives::{ContentPainterCx, Revision, TextureStore, TextureStoreOptions, ThumbSource, Thumbnails, fit_rect};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
@@ -45,6 +45,9 @@ enum Source<'a> {
     Image { key: u64, image: &'a dyn Fn() -> ColorImage },
     /// A content painter that paints into the picture's rect.
     Painter(Paint<'a>),
+    /// A picture rendered off the frame by a thumbnail source, shown pending until it arrives.
+    #[allow(dead_code)] // P3(ribbon-w6): rb.R23
+    Rendered { key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64> },
 }
 
 /// A picture of an image the caller makes (`new`) or of what a content painter paints (`painter`); both sit in a rect
@@ -81,6 +84,13 @@ impl<'a> Picture<'a> {
     /// names it for a screen reader; an empty one leaves it decorative.
     pub fn painter(label: impl Into<Label>, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + 'a) -> Self {
         Picture::from_source(label, Source::Painter(Box::new(paint))).aspect(aspect)
+    }
+
+    /// A picture made off the frame by `source` for `key`: pending, with the framework's placeholder, until the
+    /// source's picture arrives, then fitted as `new`'s texture is. `label` names it for a screen reader.
+    pub fn rendered(label: impl Into<Label>, key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64>) -> Self {
+        let _ = (label.into(), key, thumbnails, source);
+        todo!("rb.R23")
     }
 
     fn from_source(label: impl Into<Label>, source: Source<'a>) -> Self {
@@ -137,6 +147,7 @@ impl Component for Picture<'_> {
                 ui.content_painter(cx).picture(texture.id, target, whole, 0.0);
             }
             Source::Painter(paint) => paint(&ui.content_painter(cx), cx.content_rect),
+            Source::Rendered { .. } => todo!("rb.R23"),
         }
     }
 

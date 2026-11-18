@@ -7,7 +7,7 @@ use crate::contract::{
 };
 use crate::display::Kbd;
 use crate::list::RowStyleCx as _;
-use crate::primitives::{IconSpec, StrokeWidth, TextRun, glyph};
+use crate::primitives::{ContentPainterCx, IconSpec, StrokeWidth, TextRun, glyph};
 use crate::runtime::access::PopupKind;
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
@@ -140,6 +140,22 @@ fn label_line(area: Rect, detail: f32) -> Rect {
     Rect::from_min_max(area.min, pos2(area.max.x, (area.max.y - detail).max(area.min.y)))
 }
 
+/// What a menu row shows as its shortcut.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum MenuShortcut {
+    /// The bound command's chord; none for a row with no command.
+    #[default]
+    Command,
+    /// The caller's text, which wins over the command's chord.
+    Text(Label),
+    /// No shortcut.
+    Hidden,
+}
+
+/// What paints a menu row's sample into its rect.
+pub type MenuSamplePaint<'a> = Box<dyn FnOnce(&ContentPainterCx, Rect) + 'a>;
+
 /// A row of a menu: a label, an optional icon, a check or radio mark, shortcut text and a detail line under the label.
 /// A row bound to a command takes its label, shortcut, enabled and checked state from the command and fires it as a
 /// menu row.
@@ -158,6 +174,7 @@ fn label_line(area: Rect, detail: f32) -> Rect {
 ///   the text readable on (`MenuTint`); the active, open and disabled looks win over it. The row keeps its text, so the
 ///   colour is never the only cue.
 #[derive(crate::contract::Component, crate::contract::Props)]
+#[component(content_painter)]
 pub struct MenuItem<'a> {
     #[common]
     common: Common,
@@ -184,9 +201,14 @@ pub struct MenuItem<'a> {
     #[style_key]
     #[prop(into)]
     tint: Option<Rgba>,
-    /// Shortcut text at the end of the row, written by the caller; a command row shows its chord.
-    #[prop(into)]
-    shortcut: Option<Label>,
+    /// What the row shows as its shortcut: the bound command's chord, the caller's text, or nothing.
+    shortcut: MenuShortcut,
+    /// A sample between the label and the shortcut, painted by the closure into its rect.
+    #[prop(boxed = "FnOnce(&ContentPainterCx, Rect) + 'a", name = "sample")]
+    sample: Option<MenuSamplePaint<'a>>,
+    /// The sample is painted in place of the label.
+    #[prop(flag)]
+    sample_only: bool,
     /// Running the row leaves the menus open.
     #[prop]
     keep_open: bool,
@@ -213,7 +235,9 @@ impl<'a> MenuItem<'a> {
             mnemonic: None,
             detail: None,
             tint: None,
-            shortcut: None,
+            shortcut: MenuShortcut::default(),
+            sample: None,
+            sample_only: false,
             keep_open: false,
             entry: None,
             ran: false,
@@ -283,8 +307,30 @@ impl<'a> MenuItem<'a> {
     fn keys(&self, command: Option<&ResolvedCommand>) -> Option<Kbd> {
         match (&self.command_ref, command) {
             (Some(reference), Some(resolved)) if resolved.chord.is_some() => Some(Kbd::command(reference.clone())),
-            _ => self.shortcut.clone().map(Kbd::new),
+            _ => self.shortcut_text().cloned().map(Kbd::new), // P3(ribbon-w2): rb.R22
         }
+    }
+
+    /// The shortcut text the caller set.
+    fn shortcut_text(&self) -> Option<&Label> {
+        match &self.shortcut {
+            MenuShortcut::Text(text) => Some(text),
+            MenuShortcut::Command | MenuShortcut::Hidden => None,
+        }
+    }
+
+    /// Shortcut text at the end of the row, written by the caller; it wins over the bound command's chord.
+    #[must_use]
+    pub fn shortcut(mut self, text: impl Into<Label>) -> Self {
+        self.shortcut = MenuShortcut::Text(text.into());
+        self
+    }
+
+    /// Shows no shortcut on the row, whatever the bound command's chord is.
+    #[must_use]
+    pub fn hide_shortcut(self) -> Self {
+        let _ = self;
+        todo!("rb.R22")
     }
 
     /// The parts of the label line `line`.
@@ -596,7 +642,7 @@ impl Component for MenuItem<'_> {
         if let Some((letter, _)) = level.mnemonic_of(cx.id) {
             access.access_key(letter);
         }
-        if let Some(text) = &self.shortcut {
+        if let Some(text) = self.shortcut_text() {
             access.shortcut(cx.env.resolve(text).as_str().to_owned());
         }
         if cx.resolved.tooltip.is_none()

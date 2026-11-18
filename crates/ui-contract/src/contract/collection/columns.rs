@@ -95,9 +95,27 @@ pub struct ColumnSpec {
     pub max_share: Option<f32>,
     /// The header menu has a check for the column, so the user can hide it. A column that can't be hidden always shows.
     pub hideable: bool,
+    /// A remove control at the header's end, which reports `ColumnEvent::Removed`.
+    pub remove: Option<ColumnRemove>,
+}
+
+/// The remove control of a column's header.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnRemove {
+    /// The control's accessible name.
+    pub name: Label,
+    /// Whether the control can be pressed.
+    pub enabled: bool,
 }
 
 impl ColumnSpec {
+    /// The column gets a remove control named `name` at its header's end, disabled unless `enabled`.
+    #[must_use]
+    pub fn removable(self, name: impl Into<Label>, enabled: bool) -> Self {
+        let _ = (name.into(), enabled);
+        todo!("dg.F22")
+    }
+
     /// A content column with a header and a width; the other settings off.
     pub fn new(key: ColumnKey, header: impl Into<Label>, width: ColumnWidth) -> Self {
         ColumnSpec {
@@ -116,6 +134,7 @@ impl ColumnSpec {
             tip: None,
             max_share: None,
             hideable: false,
+            remove: None,
         }
     }
 

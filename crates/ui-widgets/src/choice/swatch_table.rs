@@ -69,6 +69,17 @@ impl Outcome for SwatchTableOutput {
     }
 }
 
+/// How a [`SwatchTable`] lays out its cells.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SwatchArrangement {
+    /// Square cells in rows and columns.
+    #[default]
+    Grid,
+    /// Touching hexagon cells; the arrows move between neighbours.
+    Honeycomb,
+}
+
 /// A table of touching colour cells, one per entry, wrapping to the width or to a fixed count per row. Entries are
 /// told apart by index, so duplicates select one cell. With [`span`](Self::span) and a count per row, the cells share
 /// the table's width edge to edge; [`marked`](Self::marked) cells draw the swatch mark.
@@ -106,6 +117,9 @@ pub struct SwatchTable<'a> {
     /// Whether the cells are wells at the control height, as a palette's swatches are, instead of small touching cells.
     #[prop]
     wells: bool,
+    /// How the cells lie: a square grid, or touching hexagons.
+    #[prop]
+    arrangement: SwatchArrangement,
 }
 
 impl<'a> SwatchTable<'a> {
@@ -128,6 +142,7 @@ impl<'a> SwatchTable<'a> {
             marked: None,
             tips: false,
             wells: false,
+            arrangement: SwatchArrangement::default(),
         }
         .label(label)
     }

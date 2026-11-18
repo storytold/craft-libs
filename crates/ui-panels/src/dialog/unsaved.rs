@@ -65,12 +65,31 @@ pub struct UnsavedChangesDialog {
     open: bool,
     /// What a programmatic OK answers; the accepting answer's when `None`.
     chosen: Option<CloseAnswer>,
+    /// Why the last save failed, shown under the message.
+    #[allow(dead_code)] // P3(shell-w3): sh.K10
+    reason: Option<String>,
 }
 
 impl UnsavedChangesDialog {
     /// The question for the document `document_name`, closing under `scope`; the guard asks about one document.
     pub fn new(scope: CloseScope, document_name: impl Into<String>) -> Self {
-        Self { id: dialog_id("unsaved-changes"), scope, name: document_name.into(), remaining: 1, apply_to_all: false, open: true, chosen: None }
+        Self {
+            id: dialog_id("unsaved-changes"),
+            scope,
+            name: document_name.into(),
+            remaining: 1,
+            apply_to_all: false,
+            open: true,
+            chosen: None,
+            reason: None,
+        }
+    }
+
+    /// Shows why the last save failed, in the bad tone under the message.
+    #[must_use]
+    pub fn reason(self, reason: impl Into<String>) -> Self {
+        let _ = reason.into();
+        todo!("sh.K10")
     }
 
     /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An

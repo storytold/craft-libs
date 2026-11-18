@@ -15,6 +15,9 @@ pub enum TabKind {
     /// Text tabs: only the labels, the selected one in the text colour and the others dimmed, no tab surface,
     /// divider or close button. Whole titles, every tab in the overflow menu (a row of categories in a dialog).
     Text,
+    /// Ribbon tabs: label-only tabs, the shown tab in semibold, one sliding accent underline. Whole titles, overflow
+    /// at the end of the strip.
+    Ribbon,
 }
 
 /// How tab widths are fitted to the strip.
@@ -66,7 +69,7 @@ impl TabKind {
     /// How tab widths are fitted: whole titles for document and text tabs, shrinking for panel tabs.
     pub fn fit_mode(self) -> FitMode {
         match self {
-            Self::Document | Self::Text => FitMode::Whole,
+            Self::Document | Self::Text | Self::Ribbon => FitMode::Whole,
             Self::Panel => FitMode::Shrink { keep_selected: self.keeps_active_width() },
         }
     }
@@ -86,7 +89,7 @@ impl TabKind {
     /// tabs.
     pub fn overflow_place(self) -> OverflowPlace {
         match self {
-            Self::Document | Self::Text => OverflowPlace::StripEnd,
+            Self::Document | Self::Text | Self::Ribbon => OverflowPlace::StripEnd,
             Self::Panel => OverflowPlace::AfterTabs,
         }
     }
@@ -94,7 +97,7 @@ impl TabKind {
     /// Which tabs the overflow menu lists: every tab for document and text tabs, the hidden ones for panel tabs.
     pub fn overflow_menu(self) -> OverflowMenu {
         match self {
-            Self::Document | Self::Text => OverflowMenu::AllTabs,
+            Self::Document | Self::Text | Self::Ribbon => OverflowMenu::AllTabs,
             Self::Panel => OverflowMenu::HiddenOnly,
         }
     }
@@ -107,6 +110,11 @@ impl TabKind {
     /// Whether tabs draw only their label, with no surface, indicator or strip fill.
     pub fn text_only(self) -> bool {
         self == Self::Text
+    }
+
+    /// Whether the shown tab is marked by one accent underline that slides to the newly shown tab (ribbon tabs).
+    pub fn slides_underline(self) -> bool {
+        todo!("rb.R1")
     }
 
     /// Whether a middle click closes a closable tab.
