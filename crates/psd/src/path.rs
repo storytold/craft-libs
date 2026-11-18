@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn record_knot_decodes_signed_y_first_coordinates_without_grouping() {
         let mut data = [0; 24];
-        for (chunk, value) in data.chunks_exact_mut(4).zip([-(1i32 << 23), 1 << 22, 1 << 24, -(1 << 24), i32::MIN, i32::MAX]) {
+        for (chunk, value) in data.as_chunks_mut::<4>().0.iter_mut().zip([-(1i32 << 23), 1 << 22, 1 << 24, -(1 << 24), i32::MIN, i32::MAX]) {
             chunk.copy_from_slice(&value.to_be_bytes());
         }
         for selector in [1, 2, 4, 5] {
