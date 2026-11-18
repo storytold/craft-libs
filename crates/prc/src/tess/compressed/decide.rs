@@ -23,6 +23,7 @@ impl Walk<'_> {
         }
         match o {
             Orientation::Reversed(..) if thin => {
+                self.sliver = Some(ti);
                 if let Some(r) = self.normals.as_mut() {
                     r.blind(ti);
                 }
@@ -109,6 +110,17 @@ mod tests {
         // 0.2 tolerances tall: a sliver, left at the default.
         w.signalled = false;
         assert!(!w.decide(borrowed(), [0, 3, 1], false, false).unwrap());
+        assert!(!w.signalled);
+        assert_eq!(w.sliver, Some(1));
+    }
+
+    /// A collinear triangle whose record its normal cannot orient is a sliver the retried walk
+    /// may invert, as a blind one is.
+    #[test]
+    fn a_thin_reversed_record_is_a_sliver() {
+        let mut w = Walk::new(2, usize::MAX, None);
+        w.tris.push([0, 1, 2]);
+        assert!(!w.decide(Orientation::Reversed(true, [0.0, 0.0, 1.0]), [0, 2, 3], false, true).unwrap());
         assert!(!w.signalled);
         assert_eq!(w.sliver, Some(1));
     }

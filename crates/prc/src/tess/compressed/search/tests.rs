@@ -228,3 +228,21 @@ fn a_finished_planar_face_must_lie_in_one_plane() {
     assert!(judge([120.0, 80.0, 0.0], true));
     assert!(judge([120.0, 80.0, 60.0], false));
 }
+
+/// A first reading that refused two fits stays refused: the turned reading is not searched,
+/// and its unique fit is not returned. Only a true no-fit hands over to the turned reading.
+#[test]
+fn a_refused_reading_is_not_answered_by_the_turned_one() {
+    let mesh = || Box::new(rebuilt(vec![[0.0; 3]; 3], vec![[0, 1, 2]], (Vec::new(), Vec::new())));
+    let searched = Cell::new(false);
+    let turned = || {
+        searched.set(true);
+        Search::Unique(mesh())
+    };
+    assert!(then_turned((Search::Refused, true), turned).is_none());
+    assert!(!searched.get());
+    assert!(then_turned((Search::NoFit, false), turned).is_none());
+    assert!(!searched.get());
+    assert!(then_turned((Search::NoFit, true), turned).is_some());
+    assert!(searched.get());
+}

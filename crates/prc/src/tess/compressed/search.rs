@@ -6,7 +6,7 @@ use super::normals::{NormalArrays, NormalReader};
 use super::walk::{Mark, Walk};
 use super::{Arrays, MAX_BEND, Rebuilt, V, add, cross, dot, rebuilt, scale, sub, unit};
 
-/// The searches [`unique_fit_reading`] runs in turn: whether turn candidates are offered, and
+/// The searches [`searched_reading`] runs in turn: whether turn candidates are offered, and
 /// how many inverted choices are combined.
 pub(super) const STAGES: [(bool, usize); 4] = [(false, 2), (true, 2), (true, 4), (true, 6)];
 /// How many unsignalled folds and turns before a failure are tried.
@@ -82,41 +82,53 @@ enum Outcome {
     Dead,
 }
 
-/// [`unique_fit_reading`] on `a`, then on `turned`, the same arrays read with
-/// [`Arrays::ortho_turned`] flipped. The second search is skipped when no walk of the first
-/// met an apex the flip moves: it would repeat the first step for step.
+/// [`searched_reading`] on `a`, then on `turned`, the same arrays read with
+/// [`Arrays::ortho_turned`] flipped. The second search runs only when the first found no fit
+/// at all and one of its walks met an apex the flip moves: otherwise it would repeat the
+/// first step for step, or a refused first reading would be answered by a guess.
 pub(super) fn unique_fit_either(a: &Arrays<'_>, turned: &Arrays<'_>) -> Option<Rebuilt> {
-    match unique_fit_reading(a) {
-        (Some(m), _) => Some(m),
-        (None, true) => unique_fit_reading(turned).0,
-        (None, false) => None,
+    then_turned(searched_reading(a), || searched_reading(turned).0)
+}
+
+/// The mesh the first reading's search `first` and, after a true no-fit, `turned` settle on.
+fn then_turned(first: (Search, bool), turned: impl FnOnce() -> Search) -> Option<Rebuilt> {
+    match first {
+        (Search::Unique(m), _) => Some(*m),
+        (Search::NoFit, true) => turned().unique(),
+        (Search::NoFit, false) | (Search::Refused, _) => None,
     }
 }
 
-/// Searches combinations of inverted choices for one that rebuilds the mesh, and says whether
-/// any of its walks read [`Arrays::ortho_turned`]. A fold candidate is a triangle no stored
-/// decision orients, or a sliver at most a tolerance tall whose decoded decision is noise; a
-/// turn candidate is an apex whose frame is degenerate, whose turn rests on a rounding
-/// residue. A fit consumes every array and stored normal exactly and keeps every planar face
-/// flat. It is returned only if it is the single such geometry found within [`STEP_BUDGET`]
-/// and the stream's search steps: two, or a search cut short after a fit, would make it a
-/// guess. Each of [`STAGES`] runs only when the one before found no fit at all.
+/// [`searched_reading`]'s fit, if unique, and whether any of its walks read
+/// [`Arrays::ortho_turned`].
+#[cfg(test)]
 pub(super) fn unique_fit_reading(a: &Arrays<'_>) -> (Option<Rebuilt>, bool) {
+    let (found, reads) = searched_reading(a);
+    (found.unique(), reads)
+}
+
+/// Searches combinations of inverted choices for one that rebuilds the mesh, and says whether
+/// any of its walks read [`Arrays::ortho_turned`]; a refusal is kept apart from no fit. A
+/// fold candidate is a triangle no stored decision orients, or a sliver at most a tolerance
+/// tall whose decoded decision is noise; a turn candidate is an apex whose frame is
+/// degenerate, whose turn rests on a rounding residue. A fit consumes every array and stored
+/// normal exactly and keeps every planar face flat. It is unique only if it is the single
+/// such geometry found within [`STEP_BUDGET`] and the stream's search steps: two, or a search
+/// cut short after a fit, would make it a guess, and are refused. Each of [`STAGES`] runs only when the one before found no fit at all.
+fn searched_reading(a: &Arrays<'_>) -> (Search, bool) {
     let Some(n) = a.normals.as_ref() else {
-        return (None, false);
+        return (Search::NoFit, false);
     };
     let mut reads_turned = false;
     for (turns, depth) in STAGES {
         let (found, reads) = search_reading(a, n, Plan { turns, depth, budget: STEP_BUDGET });
         reads_turned |= reads;
         match found {
-            Search::Unique(m) => return (Some(*m), reads_turned),
-            Search::Refused => return (None, reads_turned),
-            Search::NoFit if a.steps.get() == 0 => return (None, reads_turned),
-            Search::NoFit => {}
+            Search::NoFit if a.steps.get() > 0 => {}
+            found => return (found, reads_turned),
         }
     }
-    (None, reads_turned)
+    (Search::NoFit, reads_turned)
 }
 
 /// Whether a search of at most `depth` choices, turn candidates offered or not, rebuilds `a`.
@@ -141,6 +153,15 @@ enum Search {
     /// Two geometries fit, or the steps ran out after a fit.
     Refused,
     NoFit,
+}
+
+impl Search {
+    fn unique(self) -> Option<Rebuilt> {
+        match self {
+            Search::Unique(m) => Some(*m),
+            Search::Refused | Search::NoFit => None,
+        }
+    }
 }
 
 /// One depth-first search as `plan` says, and whether any of its walks read
