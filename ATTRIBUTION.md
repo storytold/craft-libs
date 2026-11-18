@@ -158,6 +158,10 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 
 `crates/har` preserves Craft Anything `crates/formats/src/har.rs` from `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Brandon Thomas introduced the typed reader in `f64ae3bf3c8863a982af1304e06de20653803968`; BFlat added UTF-8 BOM compatibility in `cb0bb9d8fa4536ba44ef2c86f5ed759b879cc2d3`. Both source snapshots retain primary author attribution. Shared wiring, explicit byte admission and its tests are subsequent Dylan M. Taylor changes. Redaction and analysis remain app-owned.
 
+## Dalvik DEX inspection
+
+`crates/dex` extracts Craft Anything `crates/formats/src/dex.rs` and `dex_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Five source-history ports preserve Brandon Thomas, BFlat and Afloat as primary authors. Five regression imports retain BFlat/Afloat authors and exact source revisions. The checked byte-reader/MUTF-8 subset and synthetic DEX fixture come from that app's `bytes.rs` and `testkit/src/android.rs`; deterministic noise/mutations come from its testkit. No application file I/O, APK logic or execution is imported. Shared neutral errors and workspace wiring are subsequent changes; existing per-file strings, member/handler and bytecode payload budgets are retained.
+
 ## EVM bytecode inspection
 
 `crates/evm` extracts Craft Anything `crates/formats/src/evm.rs` at `a31e995858f4312e0f1d59a007112da191ef2d26` (MIT OR Apache-2.0). Eight separate source-history ports preserve Brandon Thomas, Afloat, RRFZ and NetterSilver as primary authors with immutable source references. Synthetic EVM fixtures and deterministic mutation helpers come from the same app source; regression files retain their source provenance. Neutral errors and workspace integration are subsequent changes. No code execution or transaction behavior is imported.
