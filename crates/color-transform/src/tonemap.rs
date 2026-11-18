@@ -34,6 +34,10 @@ pub struct Eetf {
     ks: f64,
     /// The spline's slope at the knee: 1 within the Annex's range.
     slope: f64,
+    /// The black lift's exponent: 4 within the Annex's range.
+    lift: f64,
+    /// The E2 at which the black lift reaches 0: 1 within the Annex's range.
+    reach: f64,
 }
 
 impl Eetf {
@@ -44,13 +48,21 @@ impl Eetf {
     /// (KS = 1.5 maxLum − 0.5) is negative. The knee is then 0 and the spline starts with a
     /// slope of 3 maxLum, the steepest that keeps it rising.
     ///
+    /// The Annex's black lift, minLum × (1 − E2)⁴, makes the output fall near black when minLum
+    /// is above 0.25, and lifts the peak well above the target peak. The lift here is
+    /// minLum × (1 − E2 / r)ᵏ with r = max(T, min(1, 2 − 4 minLum)) and k = min(4, r / minLum),
+    /// where T, the top of the output, is the smaller of maxLum and 1. Up to minLum 0.25 this is
+    /// the Annex's lift. Above it, k is the largest exponent that keeps the output rising, r moves
+    /// continuously from 1 down to T, and from minLum 0.5 the lift reaches 0 at the top of the
+    /// output. A target black above the source peak reads as the source peak.
+    ///
     /// A target peak at or below the source black would put every output at the source black
     /// or above it; the source black then reads as 0. A target black above the target peak
     /// reads as the target peak. A target peak that is NaN or not above 0 names no display, and
     /// the EETF then passes values through.
     pub fn new(src_black: f64, src_peak: f64, dst_black: f64, dst_peak: f64) -> Eetf {
         let pb = pq(sane(src_black));
-        let pass = Eetf { pb, span: 0.0, min_lum: 0.0, max_lum: 1.0, ks: 1.0, slope: 1.0 };
+        let pass = Eetf { pb, span: 0.0, min_lum: 0.0, max_lum: 1.0, ks: 1.0, slope: 1.0, lift: 4.0, reach: 1.0 };
         if dst_peak.is_nan() || dst_peak <= 0.0 {
             return pass;
         }
@@ -66,7 +78,15 @@ impl Eetf {
         let max_lum = ((pq(dst_peak) - pb) / span).max(0.0);
         let ks = 1.5 * max_lum - 0.5;
         let (ks, slope) = if ks >= 0.0 { (ks, 1.0) } else { (0.0, 3.0 * max_lum) };
-        Eetf { pb, span, min_lum, max_lum, ks, slope }
+        // E2 ends at `top`. The output's slope at E2 = 0 is 1 − lift × minLum / reach, so the
+        // exponent is at most reach / minLum. Up to minLum 0.25 this gives the Annex's (1, 4); both
+        // change continuously above it, and reach is `top` from minLum 0.5. A target black above
+        // the source peak (minLum above `top`) reads as the source peak.
+        let top = max_lum.min(1.0);
+        let min_lum = min_lum.min(top);
+        let reach = top.max((2.0 - 4.0 * min_lum).min(1.0));
+        let lift = if min_lum > 0.0 { (reach / min_lum).min(4.0) } else { 4.0 };
+        Eetf { pb, span, min_lum, max_lum, ks, slope, lift, reach }
     }
 
     /// Whether the EETF passes every value through unchanged.
@@ -90,7 +110,11 @@ impl Eetf {
             let (t2, t3) = (t * t, t * t * t);
             (2.0 * t3 - 3.0 * t2 + 1.0) * self.ks + (t3 - 2.0 * t2 + t) * (1.0 - self.ks) * self.slope + (-2.0 * t3 + 3.0 * t2) * self.max_lum
         };
-        let e3 = e2 + self.min_lum * (1.0 - e2).powi(4);
+        let e3 = if self.reach == 1.0 && self.lift == 4.0 {
+            e2 + self.min_lum * (1.0 - e2).powi(4)
+        } else {
+            e2 + self.min_lum * (1.0 - e2 / self.reach).max(0.0).powf(self.lift)
+        };
         // Step 5.
         e3 * self.span + self.pb
     }
@@ -283,6 +307,45 @@ mod tests {
         // The taper (1 − E2)⁴ is small but not 0 at the target peak, so the peak rises a little.
         let peak = curve.apply_nits(1000.0);
         assert!(peak > 100.0 && peak < 101.0, "{peak}");
+    }
+
+    #[test]
+    fn a_high_target_black_keeps_the_output_rising_and_lands_the_peak() {
+        let cases = [(100.0, 100.0), (50.0, 100.0), (10.0, 100.0), (1.0, 100.0), (0.1, 1000.0), (40.0, 4000.0), (2000.0, 4000.0)];
+        for (black, peak) in cases {
+            let curve = Eetf::new(0.0, 1000.0, black, peak);
+            // A target black above the 1000-nit source peak reads as the source peak.
+            let want = f64::min(black, 1000.0);
+            assert!((curve.apply_nits(0.0) - want).abs() < 1e-2 * want.max(1.0), "{black} {peak}: {}", curve.apply_nits(0.0));
+            // From minLum 0.5 the lift reaches 0 at the top of the output.
+            let top = curve.apply_nits(1000.0);
+            if curve.min_lum >= 0.5 {
+                assert!((top - f64::min(peak, 1000.0)).abs() < 1e-2 * peak, "{black} {peak}: {top}");
+            }
+            let mut last = curve.apply_pq(0.0);
+            for i in 1..=1000 {
+                let out = curve.apply_pq(f64::from(i) / 1000.0);
+                assert!(out >= last - 1e-12, "{black} {peak} at {i}: {out} < {last}");
+                last = out;
+            }
+        }
+    }
+
+    #[test]
+    fn the_output_changes_continuously_with_the_target_black() {
+        for peak in [100.0, 300.0, 4000.0] {
+            let at = |black: f64, n: f64| Eetf::new(0.0, 1000.0, black, peak).apply_pq(pq(n));
+            // Target blacks 1/20 000 of the target peak's PQ value apart.
+            let black = |i: u32| nits(f64::from(i) / 20_000.0 * pq(peak));
+            for n in [0.0, 1.0, 100.0, 1000.0] {
+                let mut last = at(0.0, n);
+                for i in 1..=20_000 {
+                    let out = at(black(i), n);
+                    assert!((out - last).abs() < 1e-3, "peak {peak}, input {n}, black {}: {last} to {out}", black(i));
+                    last = out;
+                }
+            }
+        }
     }
 
     #[test]
