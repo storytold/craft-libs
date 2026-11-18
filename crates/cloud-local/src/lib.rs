@@ -470,6 +470,8 @@ fn write_replacing(dir: &Dir, rel: &Path, bytes: &[u8], check: impl FnOnce() -> 
         let _ = dir.remove_file(&temp_rel);
         return Err(fault);
     }
+    #[cfg(test)]
+    tests::before_lock();
     let published = {
         let _serialized = WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         check().and_then(|()| {
@@ -628,6 +630,17 @@ mod tests {
         }
     }
 
+    /// Run once by the next [`write_replacing`] to finish its temporary file,
+    /// before it takes [`WRITE_LOCK`], then cleared.
+    static BEFORE_LOCK: Mutex<Option<Hook>> = Mutex::new(None);
+
+    pub(super) fn before_lock() {
+        let hook = BEFORE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     fn entry_for(id: &str) -> Entry {
         Entry {
             room: format!("local:{id}"),
@@ -666,10 +679,16 @@ mod tests {
         // The first save has passed its check and not yet renamed. A second
         // save must not be able to reach its own check in between.
         assert!(WRITE_LOCK.try_lock().is_err(), "the check and the rename must run under one lock");
+        // The second save passes its early check and writes its temporary
+        // file before the first one renames, so only the recheck under the
+        // lock can refuse it.
+        let (ready_tx, ready_rx) = mpsc::channel::<()>();
+        *BEFORE_LOCK.lock().unwrap() = Some(Box::new(move || ready_tx.send(()).unwrap()));
         let second = {
             let (root, entry) = (root.path().to_owned(), read_entry.clone());
             std::thread::spawn(move || write(&root, &entry, b"second save"))
         };
+        ready_rx.recv().unwrap();
         go_tx.send(()).unwrap();
 
         assert!(first.join().unwrap().is_ok());
