@@ -40,18 +40,6 @@ fn picture_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Picture::rendered("Rendered", 1, &thumbnails, &source).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
 }
 
-/// The gradient at its own size in device pixels, beside it at the icon side: the first keeps one texel to a pixel
-/// at every display scale.
-#[story(Picture<'static>, covers = [], drive = Drive::Never)]
-fn picture_device_pixels(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    ui.horizontal(|ui| {
-        Picture::new("Gradient", 6, &gradient).extent(PictureSize::Icon).show(ui);
-        Picture::new("Gradient", 7, &gradient).extent(PictureSize::DevicePixels).show(ui)
-    })
-    .inner
-    .into()
-}
-
 #[story(Picture<'static>, covers = [], drive = Drive::Never)]
 fn picture_painter(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Picture::painter("Swatch", ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
