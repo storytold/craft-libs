@@ -221,6 +221,7 @@ fn escape_and_a_press_outside_close_the_in_place_face_and_the_fallback_row_carri
 
     // With nothing matching, the fallback row stands alone and Enter takes it.
     open.set(true);
+    fixture.settle();
     fixture.type_text("zzz").settle();
     let listed = rows(&fixture);
     assert_eq!(listed.len(), 1, "only the fallback row: {listed:?}");
