@@ -226,15 +226,7 @@ impl<'a> StyleCx<'a> {
     pub fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec, listed: &[impl Hash]) -> Vec<(Presence, P)> {
         let Some((id, policy)) = self.owner else { return Vec::new() };
         let listed: Vec<Id> = listed.iter().map(crate::runtime::motion::key_id).collect();
-        let out = crate::runtime::motion::peek_exiting(self.ctx, id, policy, name, spec, &listed);
-        eprintln!(
-            "DIAG a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades: style exiting owner={id:?} pass={} measuring={} listed={} out={:?}",
-            self.ctx.current_pass_index(),
-            crate::runtime::measure::active(self.ctx),
-            listed.len(),
-            out.iter().map(|(presence, _)| presence.t).collect::<Vec<f32>>()
-        );
-        out
+        crate::runtime::motion::peek_exiting(self.ctx, id, policy, name, spec, &listed)
     }
 
     /// The same context with another variant.

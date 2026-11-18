@@ -548,7 +548,8 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
     let (lists, asks, seen, now) = (listed.clone(), discard.clone(), picked.clone(), shown.clone());
     let mut fixture = Fixture::new(move |ui| {
         let keys: Vec<usize> = (0..RIBBON.len()).filter(|&key| key != TABLE || lists.get()).collect();
-        let source = keyed(&keys, |key: &usize| *key);
+        // The strip names its overflow entries and its fading tabs by the source's text.
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(RIBBON[*key]));
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(now.get()).roles(ribbon_role);
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
         for event in &out.response.events {
