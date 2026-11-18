@@ -1396,7 +1396,7 @@ fn a_rename_editor_selects_the_name_once_keeps_the_caret_and_escape_cancels() {
     let held = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
         let keys = [0_usize, 1];
-        let source = keyed(&keys, |key: &usize| *key);
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(SHEETS[*key]));
         let out = List::new("Sheets").id(list_id()).rename(true).show_items(ui, &source, &mut |key, _| ListRow::new(SHEETS[*key]));
         held.borrow_mut().extend(out.events);
     });
