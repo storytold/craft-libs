@@ -22,6 +22,7 @@ mod notices;
 mod overlay;
 
 mod pickers;
+mod picture;
 mod popover;
 mod runtime;
 
