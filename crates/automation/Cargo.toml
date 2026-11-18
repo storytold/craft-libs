@@ -31,7 +31,7 @@ agents = ["dep:craft-ai-agents", "dep:craft-flags", "dep:craft-atomic", "dep:cra
 
 [dependencies]
 # The screenshot reply's PNG and its inline base64 (the control channel builds on every target with `ui`).
-base64 = "0.22"
+base64 = "0.23"
 craft-behavior = { workspace = true, optional = true }
 craft-host = { workspace = true, optional = true }
 craft-keymap = { workspace = true, optional = true }
