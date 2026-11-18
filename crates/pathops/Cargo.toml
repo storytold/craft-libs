@@ -1,0 +1,22 @@
+[package]
+name = "craft-pathops"
+description = "Path operations on craft-geom's PathData: curve-preserving booleans over linesweeper, Shape Builder regions, Live Paint planar maps, offset, outline stroke, simplify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-geom = { workspace = true }
+kurbo = { workspace = true }
+thiserror = { workspace = true }
+# Resolved to the vendored copy by the workspace's `[patch.crates-io]`.
+linesweeper = "0.5"
+
+[dev-dependencies]
+craft-testkit = { workspace = true, features = ["geom"] }
+proptest = { workspace = true }
