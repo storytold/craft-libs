@@ -1,6 +1,6 @@
 //! The Shape tools and the Create Shape dialog. The view maps one document unit to one screen point.
 
-use craft_behavior::kurbo::{Point, Rect, Vec2};
+use craft_behavior::kurbo::{ParamCurve as _, Point, Rect, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::geometry::shape::ShapeGeometry;
 use craft_draw::ui::shape::VectorMode;
