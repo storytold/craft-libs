@@ -40,8 +40,11 @@ pub struct Policy {
     /// The app's own refused commands (patterns as in [`pattern_matches`]): its document list,
     /// version history, network sessions, nested batches…
     pub denied: Vec<String>,
-    /// Exact command ids allowed although [`Policy::denied`] matches them (FigCraft's `doc.list` and
-    /// `version.list`, which only list). Exceptions never override [`ALWAYS_DENIED`].
+    /// Commands allowed although [`Policy::denied`] matches them: exact ids (FigCraft's `doc.list`
+    /// and `version.list`, which only list) or patterns as in [`pattern_matches`] (`select.*`, so an
+    /// app that refuses everything with `*` can allow whole families). Exceptions never override
+    /// [`ALWAYS_DENIED`], patterns included: a lone `*` exception reopens the app's own list, not the
+    /// shared one.
     pub exceptions: Vec<String>,
 }
 
@@ -51,10 +54,22 @@ impl Policy {
         Policy { denied: denied.iter().map(|s| s.to_string()).collect(), exceptions: exceptions.iter().map(|s| s.to_string()).collect() }
     }
 
-    /// Whether no plug-in may call `command` in this app, whatever its manifest says.
+    /// Whether no plug-in may call `command` in this app, whatever its manifest says. In order:
+    ///
+    /// 1. [`ALWAYS_DENIED`] refuses, and nothing reopens it;
+    /// 2. otherwise an exception that matches (an exact id or a pattern) allows;
+    /// 3. otherwise [`Policy::denied`] refuses what it matches.
+    ///
+    /// The manifest's own allowlist is checked after this ([`check_call`]).
     pub fn refuses(&self, command: &str) -> bool {
         ALWAYS_DENIED.iter().any(|p| pattern_matches(p, command))
-            || (self.denied.iter().any(|p| pattern_matches(p, command)) && !self.exceptions.iter().any(|e| e == command))
+            || (self.denied.iter().any(|p| pattern_matches(p, command)) && !self.excepts(command))
+    }
+
+    /// Whether one of [`Policy::exceptions`] matches `command` (an exact id or a pattern). It says
+    /// nothing about [`ALWAYS_DENIED`], which [`Policy::refuses`] checks first.
+    pub fn excepts(&self, command: &str) -> bool {
+        self.exceptions.iter().any(|e| pattern_matches(e, command))
     }
 }
 

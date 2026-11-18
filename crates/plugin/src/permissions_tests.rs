@@ -91,3 +91,41 @@ fn a_permission_change_needs_new_consent() {
     assert!(changed(&a, &manifest(json!({"access": "write", "commands": ["select.*"]}))));
     assert!(changed(&a, &manifest(json!({"commands": ["select.*", "node.*"]}))));
 }
+
+#[test]
+fn exceptions_may_be_patterns() {
+    let m = manifest(json!({"access": "write"}));
+    // An allowlist app: refuse everything, then allow families and single ids.
+    let allow = Policy::new(&["*"], &["select.*", "shape.rectangle"]);
+    assert_eq!(check_call(&m, &allow, "select.all"), Ok(()));
+    assert_eq!(check_call(&m, &allow, "select.none"), Ok(()));
+    assert_eq!(check_call(&m, &allow, "shape.rectangle"), Ok(()));
+    assert!(check_call(&m, &allow, "shape.ellipse").is_err());
+    assert!(check_call(&m, &allow, "selection.clear").is_err(), "`select.*` doesn't admit `selection.*`");
+    assert!(allow.excepts("select.all"));
+    assert!(!allow.excepts("doc.open"));
+    // Exact exceptions behave as before.
+    let p = figcraft();
+    assert!(p.excepts("doc.list"));
+    assert!(!p.excepts("doc.listAll"));
+    assert!(check_call(&m, &p, "doc.listAll").is_err());
+}
+
+#[test]
+fn pattern_exceptions_never_reopen_the_shared_list() {
+    let m = manifest(json!({"access": "write", "commands": ["*"]}));
+    for exceptions in [&["*"][..], &["file.*", "plugin*", "edit.*", "app.*", "pref.*", "window.*"][..]] {
+        for denied in [&[][..], &["*"][..]] {
+            let p = Policy::new(denied, exceptions);
+            for cmd in
+                ["plugin.install", "plugins.list", "edit.undo", "edit.redo", "file.open", "file.newSequence", "app.quit", "pref.set", "window.new"]
+            {
+                assert!(p.refuses(cmd), "{exceptions:?} {denied:?} {cmd}");
+                assert!(check_call(&m, &p, cmd).unwrap_err().contains("isn't available to plugins"), "{cmd}");
+            }
+        }
+    }
+    // A lone `*` exception reopens the app's own list only.
+    let p = Policy::new(&["*"], &["*"]);
+    assert_eq!(check_call(&m, &p, "edit.copy"), Ok(()));
+}

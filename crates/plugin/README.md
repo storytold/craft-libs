@@ -42,7 +42,7 @@ store writes as `source.json`.
 |---|---|
 | (root) | The sandbox: `Instance`, `run`, `check_module`, `Host`, `Limits`, `RunOutput`, `UiChange`, `PluginError`; the ABI names `IMPORT_MODULE` (`craft`), `LEGACY_IMPORT_MODULE` (`figcraft`), `ENTRY` (`craft_run`), `LEGACY_ENTRY` (`figcraft_run`). `AppInfo` (`api_for`), `KindApi` and `Target`. |
 | `manifest` | `Manifest` (`parse`, `from_value`, `command`, `target`), `AppTarget`, `Permissions`, `Access`, `PluginCommand`, `Param`, `ParamKind`, `Panel`; `MANIFEST_FILE`, `LEGACY_MANIFEST_FILE`, `KIND_COMMAND`, `API_VERSION` (6). |
-| `permissions` | `check_call`, `check_read_only`, `Policy`, `ALWAYS_DENIED`, `pattern_matches`, `changed`. |
+| `permissions` | `check_call`, `check_read_only`, `Policy` (`refuses`, `excepts`), `ALWAYS_DENIED`, `pattern_matches`, `changed`. |
 | `bundle` | `Bundle` (`encode`, `decode`, `check`, `check_with`), `open`, `open_with`, `sha256_hex`, `parse_version`, `compare_versions`, `newer`; `BUNDLE_EXTENSION`, `MAX_BUNDLE_BYTES`. |
 | `catalog` | `parse_catalog`, `Catalog`, `Package` (`latest_for`, `release`, `check_manifest`), `Release` (`target`), `check_url`, `check_redirect`, `file_url_path`, `HOSTS`. |
 | `github` | `parse_repo_spec`, `RepoRef` (`releases_api_url`), `parse_release`, `Release` (`bundle_asset`, `sums_asset`), `parse_sha256sums`, `plan_download`, `RepoDownload`, `verify_sha256`. |
@@ -122,16 +122,37 @@ Inside `Host::call`, before running anything:
 ```rust,ignore
 use craft_plugin::{Policy, check_call, check_read_only};
 
-// Once: the app's own refused commands, and exact exceptions to them.
+// Once: the app's own refused commands, and exceptions to them.
 let policy = Policy::new(&["doc.*", "version.*", "collab.*", "command.batch"], &["doc.list", "version.list"]);
 
+// An allowlist app refuses everything and lists what it allows, families included.
+let allowlist = Policy::new(&["*"], &["select.*", "shape.*", "doc.list"]);
 check_call(manifest, &policy, command)?; // ALWAYS_DENIED, the app's list, the manifest's allowlist
 check_read_only(manifest, command, registry_says_it_edits(command))?;
 ```
 
 `ALWAYS_DENIED` (`plugin.*`, `plugins.*`, `edit.undo`, `edit.redo`, `file.*`, `app.*`, `pref.*`,
-`window.*`) applies in every app; exceptions never reopen it. Patterns are exact ids or prefixes
-ending in `*`.
+`window.*`) applies in every app. Patterns, in the denied list, the exceptions and a manifest's
+`commands`, are exact ids or prefixes ending in `*` (`pattern_matches`). `Policy::refuses` decides
+in this order:
+
+1. `ALWAYS_DENIED` refuses, and nothing reopens it: no exception, not a pattern, not a lone `*`.
+2. Otherwise an exception that matches (exact or pattern) allows.
+3. Otherwise the app's denied list refuses what it matches.
+
+Then `check_call` applies the manifest's own `commands`. Exceptions were exact ids before they took
+patterns; an exact id matches as it did.
+
+**A command `ALWAYS_DENIED` refuses that a plug-in should reach.** Some apps name in-document
+commands after a menu (FilmCraft's `file.newSequence`, `file.newBin`, `file.newColorMatte` create
+items in the open project and touch no disk), and `file.*` refuses them. How to treat them is
+RFC-0046's open question 6, so the shared list doesn't change per app, and an app can't reopen it.
+Until it is settled: leave the command refused, list it in your `docs/plugins.md` as unavailable to
+plug-ins and why, and report it on the tracking issue
+([storytold/craft-libs#2139](https://github.com/storytold/craft-libs/issues/2139)) with the command
+ids, what they do (no disk, no other documents) and whether an alias under another prefix would do.
+Avoid working around it with an alias outside `ALWAYS_DENIED` that runs the same command: that
+would decide the open question for one app.
 
 **Read access is enforced after the call too.** Registries differ in what they record, so the
 crate can't know whether a command edited. Run each call as its own nested undo group, compare the
