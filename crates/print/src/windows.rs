@@ -132,8 +132,8 @@ fn fetch_capabilities_xml(device: &PrinterDevice, base: Option<&PrintTicket>) ->
         .map_err(spool_error)
 }
 
-/// [`crate::is_label_printer`]: the driver's PageOutputColor options and the paper of the user's
-/// settings ([`ticket::label_shaped`]).
+/// [`crate::is_label_printer`]: the driver's PageOutputColor options, its fixed papers, and the
+/// paper of the user's settings ([`ticket::label_shaped`]).
 pub(crate) fn is_label_printer(printer: &str) -> bool {
     let Ok(devices) = PrinterDevice::all() else { return false };
     let Some(device) = devices.iter().find(|d| d.name() == printer) else { return false };
@@ -143,7 +143,13 @@ pub(crate) fn is_label_printer(printer: &str) -> bool {
     let colours: Vec<String> = capabilities.options_for_feature(colour).filter_map(|o| o.name.as_ref().map(|n| n.local_name.clone())).collect();
     let colours: Vec<&str> = colours.iter().map(String::as_str).collect();
     let paper = base.as_ref().and_then(|t| std::str::from_utf8(t.get_xml()).ok()).and_then(ticket::media_size);
-    ticket::label_shaped(&colours, paper)
+    // A paper sized by parameters lists its parameters' defaults, not a paper the printer holds.
+    let offered: Vec<(u32, u32)> = capabilities
+        .page_media_sizes()
+        .filter(|m| m.parameters().is_empty())
+        .map(|m| (m.size().width_in_micron(), m.size().height_in_micron()))
+        .collect();
+    ticket::label_shaped(&colours, paper, &offered)
 }
 
 /// The keyword of the driver's current default paper among `capabilities`' papers: the user's

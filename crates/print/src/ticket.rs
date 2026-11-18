@@ -883,13 +883,23 @@ pub(crate) fn devmode_paper(dev_mode: &[u8]) -> Option<((u32, u32), bool)> {
 /// The longest short side of a label printer's paper, in micrometres (4.5 in).
 pub(crate) const LABEL_MAX_SHORT_SIDE: u32 = 114_300;
 
-/// Whether a driver offering `colours` (PageOutputColor option keywords) on `paper` (micrometres)
-/// is a thermal label printer: monochrome only, label-sized paper. A monochrome office printer
-/// or a fax has Letter or A4; a label printer that also offers colour is left to its driver.
-pub(crate) fn label_shaped(colours: &[&str], paper: Option<(u32, u32)>) -> bool {
+/// Whether a paper of `width` × `height` micrometres is label-sized: at most 4.5 in on its short side.
+fn label_sized((width, height): (u32, u32)) -> bool {
+    width > 0 && height > 0 && width.min(height) <= LABEL_MAX_SHORT_SIDE
+}
+
+/// Whether a driver offering `colours` (PageOutputColor option keywords) and the fixed papers
+/// `offered` (micrometres), set to `paper`, is a thermal label printer: monochrome only, set to a
+/// label-sized paper, and offering no larger paper. A monochrome office printer or a fax set to
+/// an envelope, an index card or A6 still offers Letter or A4; Zebra's ZDesigner GC420T driver
+/// offers only its one 4 × 6 in "User defined" stock. A label printer that also offers colour is
+/// left to its driver. Papers sized by parameters and papers with a zero side say nothing about
+/// what the printer holds and are not counted.
+pub(crate) fn label_shaped(colours: &[&str], paper: Option<(u32, u32)>, offered: &[(u32, u32)]) -> bool {
     !colours.is_empty()
         && colours.iter().all(|c| *c == "Monochrome")
-        && paper.is_some_and(|(w, h)| w > 0 && h > 0 && w.min(h) <= LABEL_MAX_SHORT_SIDE)
+        && paper.is_some_and(label_sized)
+        && offered.iter().filter(|(w, h)| *w > 0 && *h > 0).all(|&size| label_sized(size))
 }
 
 /// A ticket's PageMediaSize, in micrometres; `None` without one or for a roll.
@@ -1795,10 +1805,19 @@ mod tests {
         let label = Some((38_100, 25_400)); // 1.5 × 1 in
         let four_by_six = Some((101_600, 152_400));
         let letter = Some((215_900, 279_400));
-        assert!(label_shaped(&["Monochrome"], label) && label_shaped(&["Monochrome"], four_by_six));
-        assert!(!label_shaped(&["Monochrome"], letter), "a fax or a monochrome laser");
-        assert!(!label_shaped(&["Monochrome", "Color"], label), "a colour label printer keeps its driver's way");
-        assert!(!label_shaped(&[], label) && !label_shaped(&["Monochrome"], None) && !label_shaped(&["Monochrome"], Some((0, 25_400))));
+        let mono = ["Monochrome"];
+        // ZDesigner GC420T (EPL) 4.6.77.3827: its only paper is "User defined" at 4 × 6 in.
+        assert!(label_shaped(&mono, label, &[(101_600, 152_400)]) && label_shaped(&mono, four_by_six, &[(101_600, 152_400)]));
+        assert!(label_shaped(&mono, label, &[]), "a driver that lists only a custom size");
+        assert!(label_shaped(&mono, label, &[(0, 152_400), (38_100, 25_400)]), "a zero side is not counted");
+        assert!(!label_shaped(&mono, letter, &[(215_900, 279_400)]), "a fax or a monochrome laser");
+        assert!(!label_shaped(&["Monochrome", "Color"], label, &[]), "a colour label printer keeps its driver's way");
+        assert!(!label_shaped(&[], label, &[]) && !label_shaped(&mono, None, &[]) && !label_shaped(&mono, Some((0, 25_400)), &[]));
+        // A monochrome office laser set to small paper still offers office paper.
+        let office = [(215_900, 279_400), (210_000, 297_000), (104_775, 241_300), (105_000, 148_000), (76_200, 127_000)];
+        for small in [(104_775, 241_300), (105_000, 148_000), (76_200, 127_000)] {
+            assert!(!label_shaped(&mono, Some(small), &office), "an office laser on {small:?} paper is not a label printer");
+        }
         assert_eq!(media_size(&validated((38_100, 25_400), "psk:Portrait", None)), Some((38_100, 25_400)));
         assert_eq!(media_size("not xml"), None);
     }

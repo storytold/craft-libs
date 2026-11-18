@@ -95,13 +95,17 @@ ticket, which Windows builds on the printer's Printing Defaults: a label driver'
 "User defined" stock is whatever each dialog says, and when a user's Printing Preferences
 and the printer's Printing Defaults disagree the merged ticket names the defaults' size
 while the job prints on the preferences'. When the driver settles on the paper asked for,
-the ticket asked for, laid over the user's settings, is printed with. Every ticket and capabilities request starts from the signed-in user's own settings
+the ticket asked for, laid over the user's settings, is printed with.
+
+Every ticket and capabilities request starts from the signed-in user's own settings
 (winprint's `PrintTicket::user_default`, their Printing Preferences), not the printer's
 Printing Defaults, which Windows' Print Ticket calls fall back to: on a Zebra ZD500 the
 defaults held another stock, another darkness and tear-off where the user had set cutting,
-and the driver's private settings ride in the ticket (`PageDevmodeSnapshot`). A sheet is turned (landscape) only when its shape differs from the
-paper's as the driver feeds it: a wide sheet on upright office paper is, a wide sheet on a
-label stock that is itself wider than tall is not.
+and the driver's private settings ride in the ticket (`PageDevmodeSnapshot`).
+
+A sheet is turned (landscape) only when its shape differs from the paper's as the driver
+feeds it: a wide sheet on upright office paper is, a wide sheet on a label stock that is
+itself wider than tall is not.
 
 Windows jobs briefly use a file in a private temporary folder (random name, this user's only),
 named after the job's title because the spooler shows it as the document name; the folder is
