@@ -5,7 +5,7 @@
 
 use std::io::{Read, Write};
 
-const THEME: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="T"><a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+const THEME: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="T"><a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/><a:ea typeface="SimSun"/><a:cs typeface="Arial"/><a:font script="Jpan" typeface="MS Mincho"/><a:font script="Hans" typeface="DengXian"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
 
 fn docx(body: &str, styles: &str) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
@@ -104,4 +104,24 @@ fn a_named_font_overlaid_replaces_the_latin_slots() {
         ..Default::default()
     });
     assert_eq!(themed.font_ascii_theme, Some(craft_wordmodel::props::ThemeFont::MajorHAnsi));
+}
+
+/// The theme's East Asian, complex-script and per-script fonts are written back with it: the
+/// `w:eastAsiaTheme` and `w:cstheme` slots a save keeps resolve through them in Word, and an
+/// empty `a:ea` would leave them naming no font.
+#[test]
+fn the_themes_east_asian_and_script_fonts_survive_a_save() {
+    let out = craft_docx::write(&craft_docx::read(&docx(BODY, STYLES)).unwrap()).unwrap();
+    let theme = part(&out, "word/theme/theme1.xml");
+    let minor = theme.split("<a:minorFont>").nth(1).and_then(|m| m.split("</a:minorFont>").next()).unwrap_or_default();
+    for want in [
+        r#"<a:ea typeface="SimSun"/>"#,
+        r#"<a:cs typeface="Arial"/>"#,
+        r#"<a:font script="Jpan" typeface="MS Mincho"/>"#,
+        r#"<a:font script="Hans" typeface="DengXian"/>"#,
+    ] {
+        assert!(minor.contains(want), "{want} missing from the minor font: {theme}");
+    }
+    let major = theme.split("<a:majorFont>").nth(1).and_then(|m| m.split("</a:majorFont>").next()).unwrap_or_default();
+    assert!(major.contains(r#"<a:ea typeface=""/>"#) && !major.contains("a:font "), "the major font keeps its empty faces: {theme}");
 }

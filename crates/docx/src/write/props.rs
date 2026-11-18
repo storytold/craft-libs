@@ -35,8 +35,11 @@ impl Drop for ThemeFontsGuard {
 /// `font` as WordCraft does.
 fn latin_slot(slot: Option<ThemeFont>, font: Option<&String>) -> Option<&'static str> {
     let (slot, font) = (slot?, font?);
-    let named = THEME_FONTS.with(|t| t.borrow().as_ref().map(|(major, minor)| if slot.is_major() { major.clone() } else { minor.clone() }))?;
-    (!named.is_empty() && named.eq_ignore_ascii_case(font)).then_some(slot.as_str())
+    let names = |(major, minor): &(String, String)| {
+        let named = if slot.is_major() { major } else { minor };
+        !named.is_empty() && named.eq_ignore_ascii_case(font)
+    };
+    THEME_FONTS.with(|t| t.borrow().as_ref().is_some_and(names)).then_some(slot.as_str())
 }
 
 fn toggle(w: &mut W, name: &str, v: Option<bool>) {

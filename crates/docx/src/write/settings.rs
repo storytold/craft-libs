@@ -245,11 +245,25 @@ pub(super) fn theme_xml(doc: &Document) -> Vec<u8> {
     }
     w.close("a:clrScheme");
     w.open("a:fontScheme", &[("name", name)]);
-    for (tag, face) in [("a:majorFont", &s.major_font), ("a:minorFont", &s.minor_font)] {
+    // The file's own East Asian, complex-script and per-script fonts, as read
+    // (`package::THEME_FONTS`): the theme slots a save keeps resolve through them in Word.
+    let kept = doc.passthrough.get(crate::package::THEME_FONTS).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+    let kept: Vec<[&str; 3]> = kept
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.splitn(3, '\t');
+            Some([it.next()?, it.next()?, it.next()?])
+        })
+        .collect();
+    for (key, tag, face) in [("major", "a:majorFont", &s.major_font), ("minor", "a:minorFont", &s.minor_font)] {
+        let of = |which: &str| kept.iter().find(|[k, w, _]| *k == key && *w == which).map_or("", |[_, _, f]| *f);
         w.open(tag, &[]);
         w.empty("a:latin", &[("typeface", face)]);
-        w.empty("a:ea", &[("typeface", "")]);
-        w.empty("a:cs", &[("typeface", "")]);
+        w.empty("a:ea", &[("typeface", of("ea"))]);
+        w.empty("a:cs", &[("typeface", of("cs"))]);
+        for [_, script, f] in kept.iter().filter(|[k, w, _]| *k == key && *w != "ea" && *w != "cs") {
+            w.empty("a:font", &[("script", script), ("typeface", f)]);
+        }
         w.close(tag);
     }
     w.close("a:fontScheme");

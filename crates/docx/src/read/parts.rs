@@ -227,6 +227,22 @@ impl Reader<'_> {
             };
             self.pc.major_scripts = scripts("a:majorFont");
             self.pc.minor_scripts = scripts("a:minorFont");
+            // Kept for the save, which writes the theme from the model (`package::THEME_FONTS`).
+            let mut kept = String::new();
+            for (key, tag) in [("major", "a:majorFont"), ("minor", "a:minorFont")] {
+                let Some(f) = fs.child(tag) else { continue };
+                let faces = ["a:ea", "a:cs"].into_iter().filter_map(|n| Some((&n[2..], f.child(n)?.attr("typeface")?)));
+                let per_script = f.els().filter(|e| e.name == "a:font").filter_map(|e| Some((e.attr("script")?, e.attr("typeface")?)));
+                for (which, face) in faces.chain(per_script).take(256) {
+                    let clean = |v: &str| !v.is_empty() && v.len() < 256 && !v.contains(['\t', '\n', '\r']);
+                    if clean(which) && clean(face) {
+                        kept.push_str(&format!("{key}\t{which}\t{face}\n"));
+                    }
+                }
+            }
+            if !kept.is_empty() {
+                self.doc.passthrough.insert(crate::package::THEME_FONTS.into(), Arc::new(kept.into_bytes()));
+            }
         }
         self.pc.major_font = self.doc.settings.major_font.clone();
         self.pc.minor_font = self.doc.settings.minor_font.clone();
