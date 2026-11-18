@@ -880,6 +880,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let (layout, body) = (&props.layout, &mut *self.body);
             // The room a scrolling body's bars take under or beside its content this run: no part of the line.
             let mut bars_inset = Vec2::ZERO;
+            // The body-end hook runs in the body's own column below its layout and scroll region, outside the shared label
+            // columns, so it lies under the body and above the footer in every footer place: beside an `EndTop` footer
+            // column too.
             let mut run = |parent: &mut Ui, at: Rect, bcx: &mut BodyCx<'_>| -> Option<Vec2> {
                 let mut body_ui = alloc::child(parent, {
                     let builder = UiBuilder::new().max_rect(at).layout(child::column_layout(rtl)).scope_id(body_id);
@@ -938,7 +941,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         let view_env = body_env.derive_local(|scoped| scoped.lazy = Some(view));
                         let region_env = Env::install_for(&region_ui, view_env.clone());
                         layout::run_body_measured(&mut region_ui, &view_env, layout_id, layout, gap, line, |ui| {
-                            shared_labels(ui, id, columns, room.x, self.settle.clone(), &mut labels, |ui| body(ui, bcx))
+                            shared_labels(ui, id, columns, room.x, self.settle.clone(), &mut labels, |ui| {
+                                body(ui, bcx);
+                            })
                         });
                         Env::restore(&ctx, region_env);
                         if lays_out {
@@ -977,11 +982,21 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     // A row that places its block itself asks for its children's width, not the room it spans.
                     None => {
                         let (_, natural) = layout::run_body_measured(&mut body_ui, &body_env, layout_id, layout, gap, line, |ui| {
-                            shared_labels(ui, id, columns, room.x, self.settle.clone(), &mut labels, |ui| body(ui, bcx))
+                            shared_labels(ui, id, columns, room.x, self.settle.clone(), &mut labels, |ui| {
+                                body(ui, bcx);
+                            })
                         });
                         natural.map(|width| Vec2::new(width, body_ui.min_rect().height()))
                     }
                 };
+                // A scrolling body's region allocates nothing in `body_ui`, so the hook starts below the part it shows.
+                if scroll.is_some() {
+                    body_ui.allocate_space(Vec2::new(0.0, took.map_or(0.0, |size| size.y)));
+                }
+                let before = body_ui.min_rect().height();
+                comp.body_end(&mut body_ui, bcx);
+                let ended = body_ui.min_rect().height() - before;
+                let took = took.map(|size| Vec2::new(size.x, size.y + ended));
                 Env::restore(&ctx, installed);
                 let took = took.unwrap_or_else(|| body_ui.min_rect().size());
                 // A content-sized column of rows takes, in a measuring run, the width they take at its group's widest

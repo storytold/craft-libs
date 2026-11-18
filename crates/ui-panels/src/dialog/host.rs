@@ -212,7 +212,6 @@ impl std::fmt::Debug for ChildDialog {
 /// Type-erased [`StackDialog`] the host stores.
 trait AnyStackDialog: Send {
     fn id(&self) -> DialogId;
-    #[allow(dead_code)] // P3(dialogs-w1): dg.F31
     fn modeless(&self) -> bool;
     fn result_type(&self) -> TypeId;
     fn key(&self) -> Option<String>;
@@ -224,6 +223,8 @@ trait AnyStackDialog: Send {
     fn json_fields(&self) -> Option<Value>;
     fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String>;
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>>;
+    /// [`StackDialog::take_child`], unwrapped.
+    fn take_child_erased(&mut self) -> Option<Box<dyn AnyStackDialog>>;
     /// `DialogResult::<D::Result>::Cancel`, boxed, for a dialog closed from outside.
     fn cancelled(&self) -> Box<dyn Any + Send>;
     /// [`StackDialog::cancelled`].
@@ -280,6 +281,10 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>> {
         self.show(ui, stack).map(|result| Box::new(result) as Box<dyn Any + Send>)
+    }
+
+    fn take_child_erased(&mut self) -> Option<Box<dyn AnyStackDialog>> {
+        self.take_child().map(|ChildDialog(child)| child)
     }
 
     fn release(&mut self, ctx: &Context) {
@@ -389,8 +394,9 @@ impl fmt::Debug for DialogHost {
 
 impl DialogHost {
     /// Whether its open stack holds a dialog that is not modeless; current state, so a dialog opened this pass counts.
+    /// A queued startup dialog is not shown yet, so it does not count.
     pub fn shows_modal(&self) -> bool {
-        todo!("dg.F3")
+        self.open.iter().any(|dialog| !dialog.modeless())
     }
 
     /// An empty host with no open or queued dialogs.
@@ -462,9 +468,13 @@ impl DialogHost {
             let Some(at) = self.position_by_id(id) else { continue };
             let stack = &self.stack;
             let dialog = &mut self.open[at];
-            let Some(result) = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack)) else {
-                // The dialog stays open: a child it asks for opens over it and shows from the next pass.
-                if let Some(ChildDialog(child)) = self.open[at].take_child_erased() {
+            let shown = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack));
+            // The child is taken after every show, so a request is never left for a later pass; a dialog that just
+            // finished would close its child with it, so its request is dropped.
+            let child = dialog.take_child_erased();
+            let Some(result) = shown else {
+                if let Some(child) = child {
+                    // The child is not on this run's `ids`, so it shows from the next pass, as any open during the run.
                     self.open_with_parent(child, Some(id));
                 }
                 continue;

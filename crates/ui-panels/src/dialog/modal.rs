@@ -5,9 +5,10 @@ use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks, 
 use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, FooterPlace, FooterRegion, HeaderRegion, Mount, Overlay, Pad,
-    Props as _, Role, SaveKey, ShowContainer as _,
+    Props as _, Role, SaveKey, Show as _, ShowContainer as _,
 };
 use crate::edit::outer::{self, OuterEnd};
+use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::access::Access;
 use crate::runtime::env::Label;
 use crate::runtime::focus::Initial;
@@ -18,6 +19,7 @@ use crate::sections::{DialogRole, FooterButton};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{CancelRule, Metrics, Sense};
 use craft_host::target::WindowState;
+use craft_theme::variant::Tone;
 use egui::{Align2, Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
 
 /// The style of a dialog: the surface and padding come from the container.
@@ -34,6 +36,8 @@ type OnPickFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) + 'a>;
 
 type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 
+type RefusalFn<'a> = Box<dyn FnMut() -> Option<Label> + 'a>;
+
 /// A dialog on its own layer. It opens in the middle of the window, moves by its title band, scrolls its body when the
 /// window is smaller and traps the keyboard focus while it is open.
 ///
@@ -41,7 +45,9 @@ type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 ///   session slot that starts open. The close action, Escape and `BodyCx::request_close` write `false`.
 /// - Placement and size: saved across runs under [`remember`](Dialog::remember); a resizable dialog also saves the
 ///   size the user left it at.
-/// - A modal dialog blocks input below it in every window; a press outside does nothing.
+/// - A modal dialog blocks input below it in every window; a press outside nudges it (a short damped shake, or two
+///   accent edge flashes under reduced motion) and changes nothing else.
+/// - A refusal ([`refusal`](Dialog::refusal)) shows as a bad-tone notice under the body, above the footer.
 /// - Escape closes a modal dialog, and a modeless one with a footer; a modeless tool window without one ignores it.
 /// - Focus starts on the body's first text or number field, else on the default button, else nowhere.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -82,6 +88,8 @@ pub struct Dialog<'a> {
     /// The body ran in this pass: the header region marks it.
     body_shown: bool,
     alert: bool,
+    /// The refusal's reason, read by the body-end hook in every run that shows it.
+    refusal: Option<RefusalFn<'a>>,
 }
 
 impl<'a> Dialog<'a> {
@@ -118,6 +126,7 @@ impl<'a> Dialog<'a> {
             picked: None,
             body_shown: false,
             alert: false,
+            refusal: None,
         }
         .label(title)
     }
@@ -185,12 +194,12 @@ impl<'a> Dialog<'a> {
     }
 
     /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
-    /// display of a held answer's refusal. The closure is called once in that hook, after the body ran; `None` shows no
-    /// notice.
+    /// display of a held answer's refusal. The closure is called in that hook in every run that shows it, after the
+    /// body ran, so a notice never trails an edit by a pass; `None` shows no notice.
     #[must_use]
-    pub fn refusal(self, reason: impl FnOnce() -> Option<Label> + 'a) -> Self {
-        let _ = reason;
-        todo!("dg.F1")
+    pub fn refusal(mut self, reason: impl FnMut() -> Option<Label> + 'a) -> Self {
+        self.refusal = Some(Box::new(reason));
+        self
     }
 
     /// Saves the placement and size under `key`, so a reopened dialog sits where the user left it.
@@ -475,6 +484,13 @@ impl Container for Dialog<'_> {
         }
         frame::header(ui, cx, frame::close_action(self.closable));
         self.keep_window_draggable(ui);
+    }
+
+    /// The refusal notice, under the body and above the footer: the reason is read in every run, after the body ran.
+    fn body_end(&mut self, ui: &mut Ui, _cx: &mut BodyCx<'_>) {
+        if let Some(reason) = self.refusal.as_mut().and_then(|reason| reason()) {
+            Notice::new(Tone::Bad, reason).layout(NoticeLayout::Inline).show(ui);
+        }
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

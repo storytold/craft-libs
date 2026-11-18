@@ -414,7 +414,8 @@ impl FooterRegion {
     }
 }
 
-/// Where a footer region sits.
+/// Where a footer region sits. In every place, `Container::body_end` fills the body's column under its content, so
+/// a notice it shows lies under the body and above the footer, or beside a footer in the end region.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FooterPlace {
