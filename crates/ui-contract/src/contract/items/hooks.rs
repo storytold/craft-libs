@@ -174,6 +174,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             ShowAt::Rect(rect) => rect.size(),
             ShowAt::Flow => crate::layout::flow_room(ui),
         };
+        let scx = &scx.measured_by(ui);
         self.room = room;
         self.indent_step = scx.control().icon;
         let env = Env::of(ui);

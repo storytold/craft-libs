@@ -47,9 +47,9 @@ impl<'a> Span<'a> {
     }
 
     /// Underlines the span in the ink of `tone` (spelling `Bad`, grammar `Info`).
-    pub fn flag(self, tone: Tone) -> Self {
-        let _ = tone;
-        todo!("ch.C14a")
+    pub fn flag(mut self, tone: Tone) -> Self {
+        self.flag = Some(tone);
+        self
     }
 
     /// Italic.

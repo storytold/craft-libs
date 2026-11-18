@@ -291,6 +291,32 @@ pub fn ramp(rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: 
     vec![Shape::mesh(mesh)]
 }
 
+/// `mesh` with every vertex that lies outside a rounded corner of `rect` moved onto the arc, towards the corner's
+/// centre, keeping its colour. A square corner moves nothing.
+fn rounded_mesh(mut mesh: Mesh, rect: Rect, radius: CornerRadius) -> Vec<Shape> {
+    let most = rect.width().min(rect.height()) / 2.0;
+    let r = |corner: u8| f32::from(corner).min(most);
+    let corners = [
+        (r(radius.nw), rect.left_top(), egui::vec2(1.0, 1.0)),
+        (r(radius.ne), rect.right_top(), egui::vec2(-1.0, 1.0)),
+        (r(radius.sw), rect.left_bottom(), egui::vec2(1.0, -1.0)),
+        (r(radius.se), rect.right_bottom(), egui::vec2(-1.0, -1.0)),
+    ];
+    for vertex in &mut mesh.vertices {
+        for &(r, corner, toward) in &corners {
+            if r <= 0.0 {
+                continue;
+            }
+            let centre = corner + toward * r;
+            let d = vertex.pos - centre;
+            if d.x * toward.x < 0.0 && d.y * toward.y < 0.0 && d.length() > r {
+                vertex.pos = centre + d * (r / d.length());
+            }
+        }
+    }
+    vec![Shape::mesh(mesh)]
+}
+
 /// The columns of a rounded ramp: the places of `marks` (sorted) and of samples along each corner of `corners` (its
 /// radius, and whether it is at the start of the strip), each with its colour.
 fn rounded_columns(marks: &[(f32, Color32)], corners: &[(f32, bool)], length: f32) -> Vec<(f32, Color32)> {
@@ -838,6 +864,12 @@ impl ContentPainterCx<'_> {
     /// Paints a colour ramp over `rect` with corners of `radius` along `axis`, as data; see [`ramp`].
     pub fn ramp(&self, rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: Axis) {
         self.data_shapes(ramp(rect, radius, stops, axis));
+    }
+
+    /// Paints a colour `mesh` laid over `rect`, as data, with its vertices pulled inside the outline of corners of
+    /// `radius`, so a gradient keeps inside the rounded ring of the well it fills.
+    pub fn mesh_in(&self, rect: Rect, radius: CornerRadius, mesh: Mesh) {
+        self.data_shapes(rounded_mesh(mesh, rect, radius));
     }
 
     /// Paints the well of a plot over `rect` and returns the rect inside its edge, where the plot draws.

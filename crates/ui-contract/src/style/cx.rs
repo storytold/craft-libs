@@ -68,6 +68,8 @@ pub struct StyleCx<'a> {
     line_ratio: f32,
     ctx: &'a Context,
     values: &'a AppValues,
+    /// The `Ui` a collection's layout hook measures faces in; none elsewhere.
+    measuring: Option<&'a egui::Ui>,
 }
 
 /// A variant's look as style parts.
@@ -160,6 +162,7 @@ impl<'a> StyleCx<'a> {
             line_ratio,
             ctx,
             values,
+            measuring: None,
         }
     }
 
@@ -189,10 +192,19 @@ impl<'a> StyleCx<'a> {
     }
 
     /// The size `face` has, measured from the `Ui` the collection hook fills this context from, so a collection's
-    /// `item_layout` measures a button's label and icon in the pass it lays out in.
-    pub fn face<S: crate::contract::Show>(&self, face: S) -> egui::Vec2 {
-        let _ = face;
-        todo!("rb.R25")
+    /// `item_layout` measures a button's label and icon in the pass it lays out in. Zero in a context no collection
+    /// filled, which has nothing to measure in.
+    pub fn face<S: crate::contract::Show>(&self, mut face: S) -> egui::Vec2 {
+        let Some(ui) = self.measuring else { return egui::Vec2::ZERO };
+        crate::contract::measure_under(&mut face, ui, None, craft_behavior::Proposal::Ideal, None)
+    }
+
+    /// The same context measuring faces in `ui`; the collection hook calls it before it asks for a layout.
+    pub(crate) fn measured_by<'b>(&self, ui: &'b egui::Ui) -> StyleCx<'b>
+    where
+        'a: 'b,
+    {
+        StyleCx { measuring: Some(ui), ..*self }
     }
 
     /// The same context with another variant.
@@ -249,15 +261,7 @@ impl<'a> StyleCx<'a> {
 
     /// The colour text and icons of `tone` read in.
     pub fn tone(&self, tone: Tone) -> StyleColor {
-        let c = &self.tokens.color;
-        self.color(match tone {
-            Tone::Accent => c.accent.text,
-            Tone::Info => c.status.info.fg,
-            Tone::Good => c.status.good.fg,
-            Tone::Warn => c.status.warn.fg,
-            Tone::Bad => c.status.bad.fg,
-            _ => c.text.normal,
-        })
+        self.color(tone.ink(self.tokens))
     }
 
     /// The tinted background text and icons of `tone` sit on: the status or accent background, and the sunken surface

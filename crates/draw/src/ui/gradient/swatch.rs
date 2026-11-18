@@ -76,7 +76,6 @@ pub struct GradientSwatch<'a> {
     has_popup: bool,
     /// How the gradient is drawn: the ramp chip, or a square two-dimensional tile.
     #[prop]
-    #[allow(dead_code)] // P3(chrome-w5): ch.C15
     tile: GradientTile,
     clicked: bool,
 }
@@ -119,6 +118,9 @@ impl Component for GradientSwatch<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let height = cx.style.side;
+        if self.tile != GradientTile::Ramp {
+            return Vec2::splat(height);
+        }
         let (wide, high) = GradientRamp::CHIP_ASPECT;
         let chip = height * f32::from(wide) / f32::from(high);
         let width = if cx.resolved.sizing() == Some(Sizing::FillWidth) {
@@ -152,6 +154,10 @@ impl Component for GradientSwatch<'_> {
         let style = cx.style;
         let default = default_sampler(self.rows);
         let sampler: &Sampler = self.sampler.unwrap_or(&default);
+        if self.tile != GradientTile::Ramp {
+            self.tile.paint(&ui.content_painter(cx), cx.rect, style.radius, self.stops, sampler, style.edge);
+            return;
+        }
         let colors = GradientRamp::colors(self.stops, sampler);
         GradientRamp::paint_chip(&ui.content_painter(cx), cx.rect, style.radius, &colors, style.edge);
     }

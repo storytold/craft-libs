@@ -299,6 +299,9 @@ impl TextRun<'_> {
             if span.underline {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, color);
             }
+            if let Some(tone) = span.flag {
+                format.underline = egui::Stroke::new(env.tokens.stroke.thin, to_color(tone.ink(env.tokens)));
+            }
             job.append(text_part, 0.0, format);
         }
         job
