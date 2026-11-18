@@ -4,8 +4,8 @@
 mod stories;
 
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, SetPosition,
-    Styled as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
+    Role, SetPosition, Styled as _,
 };
 use crate::primitives::{PaintShape, Span, TextRun};
 use crate::runtime::env::Label;
@@ -13,6 +13,7 @@ use crate::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, TextLo
 use craft_behavior::{Flow, Metrics, NavShape, PartKey, PartRef, Proposal, Roving, Sense, Value};
 use craft_theme::{Rgba, Stateful, States};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2, pos2, vec2};
+use std::ops::Deref;
 
 /// A word of the run: its text on its fill.
 const WORD: PartKey = PartKey::new("word");
@@ -100,17 +101,30 @@ impl<'a, K: Value + 'static> WordRun<'a, K> {
 /// What a `WordRun` returns.
 #[non_exhaustive]
 pub struct WordRunOutput<K> {
-    /// The run's response.
-    pub response: Response,
+    /// The edit response of the picked key.
+    pub edit: EditResponse<Option<K>>,
     /// The key of the word picked in this pass.
     pub picked: Option<K>,
+}
+
+impl<K> Deref for WordRunOutput<K> {
+    type Target = EditResponse<Option<K>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.edit
+    }
 }
 
 impl<K: Value> Outcome for WordRunOutput<K> {
     type Value = Option<K>;
 
     fn response(&self) -> &Response {
-        &self.response
+        &self.edit.response
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.edit.story_facts()
     }
 }
 
@@ -279,10 +293,6 @@ impl<K: Value + 'static> Component for WordRun<'_, K> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(at) = (0..self.words.len()).find(|&at| cx.part_activated(Self::part(at)).is_some()) else { return };
         let key = self.words[at].key.clone();
-        eprintln!(
-            "DIAG suite::craft_ui_widgets::text::word_run::WordRun<'_, usize>::drives: activated word {at}, value {:?}",
-            cx.value().map(|value| value.is_some())
-        );
         self.picked = Some(key.clone());
         if cx.value().and_then(Option::as_ref) != Some(&key) {
             cx.set(Some(key));
@@ -319,6 +329,6 @@ impl<K: Value + 'static> Component for WordRun<'_, K> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> WordRunOutput<K> {
-        WordRunOutput { response: cx.response.clone(), picked: self.picked }
+        WordRunOutput { picked: self.picked.clone(), edit: cx.edit_response() }
     }
 }

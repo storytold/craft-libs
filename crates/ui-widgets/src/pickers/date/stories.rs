@@ -95,10 +95,17 @@ fn calendar_popover_at_rect(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     }
 }
 
-/// The calendar popover open from the first frame, hanging from its opener.
-#[story(CalendarPopover<'static>, covers = [], drive = Drive::Never)]
+/// Focuses the opener and presses Enter, which opens the popover.
+fn open_popover(fixture: &mut Fixture) {
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.idle(4);
+}
+
+/// The calendar popover, opened by its opener and hanging from it.
+#[story(CalendarPopover<'static>, covers = [Open], drive = Drive::Custom(open_popover))]
 fn calendar_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut open = *data.value("open", true);
+    let mut open = *data.value("open", false);
     let mut picked = *data.value("picked", Some(today()));
     let shown = Stack::new().show(ui, |ui, _| {
         let opener = Button::new("Choose a date").show(ui);
@@ -109,7 +116,7 @@ fn calendar_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             .show(ui, |_, _| {})
             .output
     });
-    *data.value("open", true) = open;
+    *data.value("open", false) = open;
     *data.value("picked", Some(today())) = picked;
     match shown.inner {
         Some(output) => output.into(),

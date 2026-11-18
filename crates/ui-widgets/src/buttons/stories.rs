@@ -78,8 +78,9 @@ enum SearchStoryCommand {
     Open,
 }
 
-/// The command-search opener: the search glyph, the placeholder and the chord of its command at the end.
-#[story(Button<'static>, covers = [], drive = Drive::Activate, group = "Playground", title = "Search")]
+/// The command-search opener: the search glyph, the placeholder and the chord of its command at the end. A command-bound
+/// button reports no click (the command fires instead), so the click-counting drive does not apply.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Playground", title = "Search")]
 fn button_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Button::search(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
 }
