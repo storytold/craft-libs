@@ -1,6 +1,6 @@
 //! Stories of the buttons.
 
-use super::{Button, IconButton, Link, SplitButton, ToggleButton};
+use super::{Button, CommandSearch, IconButton, Link, SplitButton, ToggleButton};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Grid, Row};
@@ -78,30 +78,29 @@ enum SearchStoryCommand {
     Open,
 }
 
-/// The command-search opener: the search glyph, the placeholder and the chord of its command at the end. A command-bound
-/// button reports no click (the command fires instead), so the click-counting drive does not apply.
-#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Playground", title = "Search")]
-fn button_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Button::search(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
+/// The command-search opener: the search glyph, the placeholder and the chord of its command at the end.
+#[story(CommandSearch, covers = [Default])]
+fn command_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
 }
 
 /// In a narrow room the chord keeps its width and the placeholder is cut; the tooltip shows it whole.
-#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Playground", title = "Search, narrow")]
-fn button_search_narrow(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+#[story(CommandSearch, covers = [LongText], drive = Drive::Never, title = "Narrow")]
+fn command_search_narrow(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     ui.set_max_width(ui.available_width() * 0.3);
-    Button::search(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
 }
 
-#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Playground", title = "Search, disabled")]
-fn button_search_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Button::search(SearchStoryCommand::Open, "Search commands and settings").enabled(false).show(ui).into()
+#[story(CommandSearch, covers = [], drive = Drive::Never, title = "Disabled")]
+fn command_search_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").enabled(false).show(ui).into()
 }
 
 /// A right-to-left placeholder: the glyph at the reading start and the chord, which keeps its left-to-right order, at
 /// the reading end.
-#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Right to left", title = "Search")]
-fn button_search_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Button::search(SearchStoryCommand::Open, "חיפוש פקודות והגדרות").show(ui).into()
+#[story(CommandSearch, covers = [], drive = Drive::Never, group = "Right to left", title = "Right to left")]
+fn command_search_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "חיפוש פקודות והגדרות").show(ui).into()
 }
 
 #[story(IconButton<'static>, covers = [Default])]

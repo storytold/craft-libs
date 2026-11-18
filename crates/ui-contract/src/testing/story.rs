@@ -2,7 +2,7 @@
 
 use super::Fixture;
 use crate::contract::{CollectionEvent, Inner, Outcome, TooltipSpec};
-use crate::runtime::commands::CommandInput;
+use crate::runtime::commands::{CommandInput, CommandRef};
 use craft_behavior::{EditEvent, EditEvents, PartKey, PartRef, Value};
 use egui::{Id, Response, Ui, Vec2};
 use std::any::{Any, TypeId};
@@ -507,6 +507,9 @@ pub struct StoryOutput {
     pub edits: Vec<EditKind>,
     /// The pass reported a click, by pointer or by keyboard activation.
     pub clicked: bool,
+    /// The commands the story's pass fired, in order; the fixture that shows the story fills it in. A component bound
+    /// to a command reports its activation as the command it fires, not as a click.
+    pub fired: Vec<CommandRef>,
     /// The collection events' kinds, in drawing order.
     pub collection: Vec<CollectionKind>,
     /// The positions a collection showed.
@@ -524,6 +527,12 @@ impl StoryOutput {
     pub fn readout(mut self, text: impl Into<String>) -> Self {
         self.readout = Some(text.into());
         self
+    }
+
+    /// Whether the pass activated what the story shows: it reported a click, or it fired a command, as a component
+    /// bound to one does in place of the click.
+    pub fn activated(&self) -> bool {
+        self.clicked || !self.fired.is_empty()
     }
 
     pub(crate) fn from_response(response: &Response) -> Self {

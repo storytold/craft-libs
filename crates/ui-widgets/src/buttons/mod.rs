@@ -1,6 +1,7 @@
-//! `Button`, `IconButton`, `ToggleButton`, `SplitButton` and `Link`.
+//! `Button`, `IconButton`, `ToggleButton`, `SplitButton`, `Link` and `CommandSearch`.
 
 pub mod button;
+pub mod command_search;
 pub(crate) mod face;
 pub mod icon_button;
 pub mod link;
@@ -10,7 +11,8 @@ mod stories;
 pub mod toggle_button;
 mod words;
 
-pub use button::{Button, ButtonForm, ButtonOutput, ButtonStyle};
+pub use button::{Button, ButtonOutput, ButtonStyle};
+pub use command_search::{CommandSearch, CommandSearchStyle};
 pub use icon_button::{IconButton, IconButtonStyle, PopupMark};
 pub use link::{Link, LinkStyle};
 pub use split_button::{SplitButton, SplitButtonStyle, SplitOutput};

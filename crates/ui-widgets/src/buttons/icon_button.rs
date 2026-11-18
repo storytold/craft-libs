@@ -29,11 +29,7 @@ pub(crate) struct MarkerStyle {
 impl MarkerStyle {
     /// The marker look from the tokens.
     pub(crate) fn of(cx: &StyleCx<'_>) -> MarkerStyle {
-        MarkerStyle {
-            side: cx.tokens.size.handle.sm,
-            color: cx.color(cx.tokens.color.accent.solid),
-            edge: cx.color(cx.tokens.color.line.mark),
-        }
+        MarkerStyle { side: cx.tokens.size.handle.sm, color: cx.color(cx.tokens.color.accent.solid), edge: cx.color(cx.tokens.color.line.mark) }
     }
 }
 

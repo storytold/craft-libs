@@ -152,6 +152,10 @@ fn the_wheel_over_an_open_popup_list_scrolls_the_list_and_not_the_surface_below(
     open.set(false);
     fixture.settle();
     let on_page = fixture.by_label("Page 4").expect("the page shows its buttons").rect.center();
+    eprintln!(
+        "DIAG popover::popup::the_wheel_over_an_open_popup_list_scrolls_the_list_and_not_the_surface_below: after the close still animating {}",
+        fixture.repaint_requested()
+    );
     fixture.frame(vec![pointer::moved(on_page)]);
     fixture.frame(vec![pointer::wheel(-60.0)]);
     eprintln!(
@@ -170,19 +174,21 @@ fn the_wheel_over_an_open_popup_list_scrolls_the_list_and_not_the_surface_below(
 }
 
 /// A pointer resting on the list keeps no hold on the lead: End scrolls another row under it, and Enter picks the row
-/// End went to.
+/// End went to. The list keys reach the list through its opener's key focus; a click gives a button none, so the
+/// opener is reached by Tab.
 #[trial]
 fn a_resting_pointer_leaves_the_lead_where_the_keys_moved_it() {
     let open = Rc::new(Cell::new(false));
     let activated = Rc::new(RefCell::new(Vec::new()));
     let mut fixture = page(Rc::clone(&open), Rc::clone(&activated));
-    let opener = fixture.by_label("Open").expect("the opener shows");
-    fixture.click(&opener).settle();
-    assert!(open.get(), "a click on the opener opens the list");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    fixture.key(Key::Space, Modifiers::NONE).settle();
+    assert!(open.get(), "Space on the focused opener opens the list");
     eprintln!(
-        "DIAG popover::popup::a_resting_pointer_leaves_the_lead_where_the_keys_moved_it: after the click focused {:?} stop {:?}",
+        "DIAG popover::popup::a_resting_pointer_leaves_the_lead_where_the_keys_moved_it: after Space focused {:?} stop {:?} opener {:?}",
         fixture.focused(),
-        fixture.focused_stop()
+        fixture.focused_stop(),
+        fixture.by_label("Open").map(|shown| shown.node)
     );
     let rest = fixture.by_label(&row(3)).expect("the list shows its fourth row").rect.center();
     fixture.frame(vec![pointer::moved(rest)]).settle();

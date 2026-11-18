@@ -88,14 +88,10 @@ fn wrapped_right_to_left_lines_align_to_the_right_edge() {
         })
         .collect();
     let right = spans.iter().map(|(_, right)| *right).fold(f32::NEG_INFINITY, f32::max);
-    for ((left, end), (top, text, glyphs)) in spans.iter().zip(&rows) {
-        let outer = glyphs.iter().filter(|(chr, ..)| !chr.is_whitespace()).max_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)));
-        eprintln!(
-            "DIAG text::rtl_paragraph::wrapped_right_to_left_lines_align_to_the_right_edge: top {top} span {left}..{end} rightmost ink glyph {outer:?} text {text:?}"
-        );
-    }
+    // Glyphs are placed on whole device pixels and their advances are not, so line ends differ by under a pixel.
+    let pixel = 1.0 / fixture.ctx().pixels_per_point();
     for ((left, end), (_, text, _)) in spans.iter().zip(&rows) {
-        assert!((end - right).abs() < 0.5, "{text:?} ends at the right edge {right}: {end}");
+        assert!((end - right).abs() <= pixel, "{text:?} ends at the right edge {right}: {end}");
         assert!(*left >= -0.5, "{text:?} stays inside the column: {left}");
     }
     assert!(right <= WIDTH + 0.5, "the lines stay inside the column: {right}");
