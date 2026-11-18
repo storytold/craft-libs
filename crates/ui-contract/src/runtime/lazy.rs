@@ -389,6 +389,15 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
     });
 }
 
+/// Drops the kept run of the settling child `id`: its last run is not one it settles on, so it runs again.
+pub(crate) fn forget(ctx: &Context, id: Id) {
+    with(ctx, |store, _, _| {
+        if let Some(entry) = store.entries.get_mut(&id) {
+            entry.settled = None;
+        }
+    });
+}
+
 /// Whether the measure-only child `id` takes the size its last measuring run at `place` found, in place of measuring
 /// again, and that size. It does when that run was in this pass, or in an earlier frame and since then none of the
 /// settled rules a measure reads has broken (`settled`): nothing in it moves or asked to be shown again, no value it
