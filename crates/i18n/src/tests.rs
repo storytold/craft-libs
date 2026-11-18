@@ -128,7 +128,7 @@ fn system_tags_match_languages_in_order() {
 fn lookup_falls_back_to_english_and_context_never_borrows_the_plain_row() {
     let (i, _) = all(E);
     let fr = lang(&i, "fr");
-    assert_eq!(i.t(fr, "Save"), "Enregistrer");
+    assert_eq!(i.t(fr, "Save"), "Sauvegarder", "the app's row wins over the shared one");
     assert_eq!(i.t(fr, "Open"), "Ouvrir");
     assert_eq!(i.tc(fr, "menu", "Open"), "Ouvrir le menu");
     assert_eq!(i.tid(fr, "file.save", "Save file"), "Enregistrer le fichier");
