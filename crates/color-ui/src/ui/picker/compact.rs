@@ -124,10 +124,11 @@ impl<'a> Body<'a> {
         }
     }
 
-    /// The hex field, at `sizing` when given. The Full layout's first show focuses it.
+    /// The hex field, at `sizing` when given. The Full layout's first show focuses it. Enter in it
+    /// commits the typed digits and does not reach the dialog's OK, as in the production Colors dialog.
     pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
         let field =
-            TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba());
+            TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba()).submits();
         let edit = match sizing {
             Some(sizing) => field.sizing(sizing),
             None => field,

@@ -659,14 +659,6 @@ impl StackDialog for ColorPickerDialog {
                 }
             });
         self.current = held.same().copied();
-        if self.layout == ColorPickerDialogLayout::Tabbed {
-            eprintln!(
-                "DIAG the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page: held same={} picked={:?} closed={:?}",
-                self.current.is_some(),
-                shown.output.picked,
-                shown.output.closed
-            );
-        }
 
         let (picked, closed) = (shown.output.picked, shown.output.closed);
         let ok = (picked == Some(0) || closed == Some(CloseReason::Enter)) && self.current.is_some();

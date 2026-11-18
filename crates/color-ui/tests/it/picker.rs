@@ -210,17 +210,7 @@ fn the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page() {
     assert_eq!(dialog_field(&dialogs, "model"), Some(serde_json::json!(RgbModel.id())), "the field names the model shown");
     assert!(fixture.by_label("Red").is_some(), "and the compact rows show that model's channels");
 
-    eprintln!(
-        "DIAG the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page: before typing current={:?} open={}",
-        dialog_color(&dialogs),
-        dialogs.borrow().get::<ColorPickerDialog>().is_some()
-    );
     type_into(&mut fixture, "Hex color", "336699");
-    eprintln!(
-        "DIAG the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page: after typing current={:?} open={}",
-        dialog_color(&dialogs),
-        dialogs.borrow().get::<ColorPickerDialog>().is_some()
-    );
     assert_eq!(dialog_color(&dialogs).as_deref(), Some("#336699"), "a hex typed on Custom is the colour");
 
     let set = dialogs.borrow_mut().set_json_field(&ctx, id, "tab", serde_json::json!("standard"));
