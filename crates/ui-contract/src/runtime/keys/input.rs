@@ -55,10 +55,12 @@ struct Strip<'a> {
 }
 
 impl Strip<'_> {
-    /// Whether the keymap binds the press `input` stands for. A press that does fires a command or is refused as
-    /// one, so the text the platform sends with it is the shortcut's own and belongs to no field.
-    fn binds(&self, input: &KeyInput) -> bool {
-        self.layout.candidates(input).iter().any(|chord| (self.bound)(chord))
+    /// Whether the text the platform sends with the press `input` stands for is a shortcut's own and belongs to no
+    /// field: Alt is held and the keymap binds the press, so it fires a command or is refused as one. A platform sends
+    /// its key's text with an Alt shortcut (Alt+Q on Linux). A plain key's text is typing, which a focused field or
+    /// list takes before any shortcut (`route::holds_press`), and Cmd and Ctrl chords type nothing.
+    fn shortcut_text(&self, input: &KeyInput) -> bool {
+        input.mods.alt && self.layout.candidates(input).iter().any(|chord| (self.bound)(chord))
     }
 
     /// Records `event` in `batch` and returns whether egui keeps it.
@@ -78,14 +80,14 @@ impl Strip<'_> {
                 }
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
-                let bound = self.binds(&input);
+                let shortcut_text = self.shortcut_text(&input);
                 let kept = self.press(batch, key, &input, repeat, at);
                 // The canvas's Space keeps its text from every field, as a claim does.
                 let canvas = batch.presses.get(pushed).is_some_and(|press| press.canvas);
                 batch.last_press = Some(LastPress {
                     input,
                     pressed: (batch.presses.len() > pushed).then_some(pushed),
-                    claimed: batch.claimed.len() > claims || canvas || bound,
+                    claimed: batch.claimed.len() > claims || canvas || shortcut_text,
                 });
                 if kept {
                     if let Some(press) = batch.presses.get_mut(pushed) {
