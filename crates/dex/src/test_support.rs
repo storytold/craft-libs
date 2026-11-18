@@ -1,5 +1,5 @@
 // Synthetic DEX fixture and deterministic mutations retained from Craft Anything.
-pub use craft_testkit::format_corpus::{mutations, noise};
+pub use craft_testkit::sample_damage::{mutations, noise};
 
 pub mod android {
     pub const HELLO: &str = "Hello, Craft!";

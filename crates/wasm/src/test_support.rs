@@ -1,5 +1,5 @@
 // Synthetic fixtures and mutations from Craft Anything testkit, same source revision.
-pub use craft_testkit::format_corpus::{mutations, noise};
+pub use craft_testkit::sample_damage::{mutations, noise};
 
 pub mod formats {
     fn leb(mut v: u32, out: &mut Vec<u8>) {

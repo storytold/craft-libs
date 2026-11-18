@@ -37,9 +37,9 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
-pub mod format_corpus;
 pub mod guards;
 pub mod hostile;
+pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};

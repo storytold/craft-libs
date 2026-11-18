@@ -92,4 +92,4 @@ pub fn cpio_newc(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
     out
 }
 
-pub use craft_testkit::format_corpus::{mutations, noise};
+pub use craft_testkit::sample_damage::{mutations, noise};

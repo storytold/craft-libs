@@ -143,6 +143,10 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
 
+## Java class inspection
+
+`crates/java-class` extracts Craft Anything `java_class.rs` and `java_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0), preserving separate primary-author source-history ports by Brandon Thomas, BFlat, Afloat and RRFZ. The checked byte-reader, modified UTF-8 unit decoder, descriptor display helper and synthetic class fixtures come from the same source snapshot. Seven regression files retain their source authors. Neutral error wiring and shared crate integration are subsequent changes. No JAR archive, application I/O or bytecode execution is imported.
+
 ## WebAssembly inspection
 
 `crates/wasm` extracts Craft Anything `crates/formats/src/wasm.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2`, with its checked byte-reader subset and original synthetic WASM/testkit fixtures (MIT OR Apache-2.0). Eight core-history ports preserve Brandon Thomas, Afloat and RRFZ as primary authors; component, repeated-custom-section and referenced-string regression imports retain source authors and commit references. Fixtures come from `crates/testkit/src/formats.rs` and deterministic mutation helpers from `crates/testkit/src/lib.rs`; no third-party binaries. Shared error naming and workspace wiring are subsequent changes. Existing inspection limits and report behavior are unchanged; this crate validates/inspects/renders, never executes modules.
@@ -158,6 +162,12 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 
 `crates/dex` extracts Craft Anything `crates/formats/src/dex.rs` and `dex_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Five source-history ports preserve Brandon Thomas, BFlat and Afloat as primary authors. Five regression imports retain BFlat/Afloat authors and exact source revisions. The checked byte-reader/MUTF-8 subset and synthetic DEX fixture come from that app's `bytes.rs` and `testkit/src/android.rs`; deterministic noise/mutations come from its testkit. No application file I/O, APK logic or execution is imported. Shared neutral errors and workspace wiring are subsequent changes; existing per-file strings, member/handler and bytecode payload budgets are retained.
 
-## Format test corpus helpers
+## EVM bytecode inspection
 
-crates/testkit/src/format_corpus.rs consolidates the identical deterministic noise/mutations helpers previously retained in DEX, WASM and TAR test support from Craft Anything (MIT OR Apache-2.0). The implementations and case order are unchanged; original source-history attribution remains with those extraction commits.
+`crates/evm` extracts Craft Anything `crates/formats/src/evm.rs` at `a31e995858f4312e0f1d59a007112da191ef2d26` (MIT OR Apache-2.0). Eight separate source-history ports preserve Brandon Thomas, Afloat, RRFZ and NetterSilver as primary authors with immutable source references. Synthetic EVM fixtures and deterministic mutation helpers come from the same app source; regression files retain their source provenance. Neutral errors and workspace integration are subsequent changes. No code execution or transaction behavior is imported.
+
+## XFDF field reader
+
+`crates/xfdf` extracts PDFCraft field reading from #5937 refresh `cb564fd827f572818e9ddb0ea5989a432b1f39fd` (MIT OR Apache-2.0). App-side annotation and form policy remains local; source history is retained in the original repository.
+
+Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
