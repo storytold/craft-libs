@@ -7,25 +7,30 @@ use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, List
 
 use super::form::{FormDialog, FormDialogWords};
 use super::host_requests::HostRequests;
-use super::param::{Param, ParamKind, open_fields, set_color_field};
+use super::param::{Param, ParamKind, edited_rows, open_fields, set_color_field};
 use super::preview::{PagerStep, PaneOverlay, PanePager, PreviewPane, PreviewState, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
 
-use crate::contract::{Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
+use crate::contract::{
+    Bind, BodyCx, CanvasGesture, CollectionEvent, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowCollection as _,
+    ShowContainer as _,
+};
 
 use crate::dialog::{Alert, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id};
 
 use crate::display::{Shade, Text};
 use crate::form::SliderFieldLayout;
+use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
 use crate::style::DataColor;
+use crate::tabs::{Tab, TabKind, TabStrip};
 
 use crate::primitives::ContentPainterCx;
 use crate::runtime::env::{Env, Label};
 use crate::text::RangeAlert;
-use craft_behavior::CanvasTransform;
+use craft_behavior::{CanvasTransform, DisplayOrder, EditEvent, ItemSource, Mixed, SelectionChange};
 
 use crate::runtime::memory::MemoryStage;
 
@@ -103,16 +108,52 @@ pub struct ParamTab {
 impl ParamTab {
     /// A tab titled `title` with the rows `params`.
     pub fn new(title: impl Into<Label>, params: Vec<Param>) -> Self {
-        let _ = (title, params);
-        todo!("DG-C1")
+        ParamTab { title: title.into(), params, note: None, read_only: false }
     }
 
     /// The tab as a read-only one, with `note` above its rows.
     #[must_use]
     pub fn read_only(self, note: Option<Label>) -> Self {
-        let _ = note;
-        todo!("DG-C1")
+        ParamTab { note, read_only: true, ..self }
     }
+}
+
+/// The tab titles of a tabbed dialog as an item source, keyed by position.
+struct Titles<'t>(&'t [ParamTab]);
+
+impl DisplayOrder<usize> for Titles<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        (*key < self.0.len()).then_some(*key)
+    }
+
+    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
+        self.0.get(at).map(|tab| Cow::Borrowed(tab.title.as_str()))
+    }
+}
+
+impl ItemSource<usize> for Titles<'_> {}
+
+/// The tab a tabbed dialog without a `tab` binding shows while it is open.
+#[derive(Clone, Default)]
+struct OpenTab(usize);
+
+/// The shared rows, then the rows of every tab: their values open, validate and answer together, whichever tab shows.
+/// The rows of a read-only tab are disabled here, so automation cannot set what the user cannot edit.
+fn every_param<'p>(params: Cow<'p, [Param]>, tabs: &[ParamTab]) -> Cow<'p, [Param]> {
+    if tabs.is_empty() {
+        return params;
+    }
+    let mut every = params.into_owned();
+    every.extend(tabs.iter().flat_map(|tab| tab.params.iter().cloned().map(move |param| if tab.read_only { param.disabled() } else { param })));
+    Cow::Owned(every)
 }
 
 /// Where a tabbed dialog's own `params` go.
@@ -216,7 +257,13 @@ impl Outcome for ParamDialogOutput {
 ///   (the Preview check box held down). Drag pans the picture, the zoom buttons scale it. The
 ///   [`layout`](ParamDialog::layout) places the pane and the buttons.
 /// - Footer: [`extra_buttons`](ParamDialog::extra_buttons) keep the dialog open and come back as
-///   `ParamDialogOutput::action`; [`footer_note`](ParamDialog::footer_note) is a muted line at the start edge.
+///   `ParamDialogOutput::action`, the one action channel a custom row's `CustomContext::request_action` reports in
+///   too; [`footer_note`](ParamDialog::footer_note) is a muted line at the start edge.
+/// - Tabs: with [`tabs`](ParamDialog::tabs) a `TabStrip` shows the tab titles and the shown tab's rows; the dialog's
+///   own `params` are the shared rows, above the strip or under the tab's rows ([`SharedRows`]). Every tab's values
+///   open, validate and answer together. The `tab` binding says which tab shows.
+/// - Read-only: [`read_only`](ParamDialog::read_only) shows the values without controls, has one button and no Alt
+///   reset, and answers with no values whichever way it closes.
 /// - A command form is a dialog with no preview and no remember key.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
@@ -492,7 +539,7 @@ impl<'a> ParamDialog<'a> {
             params,
             tabs,
             shared_rows,
-            tab,
+            mut tab,
             read_only,
             title_note,
             bound,
@@ -514,7 +561,7 @@ impl<'a> ParamDialog<'a> {
             preview_on,
             preview,
             preview_pager,
-            preview_overlay,
+            mut preview_overlay,
             preview_tint,
             click_centres,
             canvas,
@@ -531,11 +578,16 @@ impl<'a> ParamDialog<'a> {
             centre,
             preview_colors,
         } = self;
-        // P3(pdf-dialogs-w1): DG-C3, DG-C12, CM-C28 — the writer draws these; the stub only reads them.
-        let _ = (tabs, shared_rows, tab, read_only, title_note, preview_pager, preview_overlay, preview_tint);
-        let preview_label = Env::of(ui).words::<FormDialogWords>().preview.clone();
+        let env = Env::of(ui);
+        let preview_label = env.words::<FormDialogWords>().preview.clone();
+        // A read-only dialog has one button, so there is no second one for Alt to turn into Reset.
+        let alt_resets = alt_resets && !read_only;
         // The footer `FormDialog` builds for this pass, made the same way, so its `pick` reads `FormOutput::picked`.
         let footer = ResetFooter::new(ui, cancel_label.clone(), alt_resets);
+        let tabbed = !tabs.is_empty();
+        let every = every_param(Cow::Borrowed(&*params), &tabs);
+        let read_only_ok =
+            read_only.then(|| FooterButton::new(ok_label.clone().unwrap_or_else(|| env.words::<CommonWords>().ok.clone()), DialogRole::Accept));
 
         let mut form = match bound {
             Some(bind) => FormDialog::new(title.clone(), bind),
@@ -546,7 +598,8 @@ impl<'a> ParamDialog<'a> {
             .alt_resets(alt_resets)
             .outer_gesture(outer_gesture)
             .history(history)
-            .collection_body(collection_body)
+            // The tab strip is a collection in the body, as a browse list is.
+            .collection_body(collection_body || tabbed)
             .closable(closable)
             .accept_stays_open(hold)
             .answers(answers);
@@ -588,33 +641,57 @@ impl<'a> ParamDialog<'a> {
                 Text::new(note.clone()).shade(Shade::Muted).show(ui);
             });
         }
-        if let Some(Shaped(shape)) = shaped {
-            form = form.shaped(shape);
+        // `FormDialog` has one slot for `Dialog` settings: the read-only footer, then the title note, then the caller's
+        // shape, last so it can still change what the dialog set itself.
+        if read_only_ok.is_some() || title_note.is_some() || shaped.is_some() {
+            form = form.shaped(move |mut dialog| {
+                if let Some(ok) = read_only_ok {
+                    dialog = dialog.buttons([ok]);
+                }
+                if let Some(note) = title_note {
+                    dialog = dialog.title_note(note);
+                }
+                if let Some(Shaped(shape)) = shaped {
+                    dialog = shape(dialog);
+                }
+                dialog
+            });
         }
 
         let mut live = Live::default();
         let mut rows = None;
         let mut shown_preview = ShownPreview::default();
         let mut latest = None::<DialogFields>;
+        let body = DialogRows {
+            title: &title,
+            shared: &params,
+            tabs: &tabs,
+            place: shared_rows,
+            patterns: &patterns,
+            preview_colors: &preview_colors,
+            sliders: layout.sliders(),
+            canvas,
+            read_only,
+        };
         let shown = form.show(ui, |ui, cx, values| {
             if cx.first() && !host_opened {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<DialogFields>>(key).clone());
-                Self::open_values(&params, &patterns, saved.as_ref(), values);
+                Self::open_values(&every, &patterns, saved.as_ref(), values);
             }
             for answer in cx.take_answers() {
                 let answered = match &answer {
                     HostAnswer::Color { key, .. } | HostAnswer::Eyedropper { key, .. } | HostAnswer::Path { key, .. } => {
-                        params.iter().find(|param| param.key == *key)
+                        every.iter().find(|param| param.key == *key)
                     }
                     HostAnswer::Listing { .. } => None,
                 };
                 let held = answered.and_then(|param| values.get(&param.key).cloned());
                 match answer {
-                    HostAnswer::Color { key, color } | HostAnswer::Eyedropper { key, color } => set_color_field(&params, values, &key, color),
+                    HostAnswer::Color { key, color } | HostAnswer::Eyedropper { key, color } => set_color_field(&every, values, &key, color),
                     HostAnswer::Path { key, path } => values.set(&key, FieldValue::Text(path.to_string_lossy().into_owned())),
                     HostAnswer::Listing { key, files } => {
                         let files = files.into_iter().map(|file| FieldValue::Text(file.to_string_lossy().into_owned())).collect();
-                        if let Some(param) = params.iter().find(|param| param.key == key) {
+                        if let Some(param) = every.iter().find(|param| param.key == key) {
                             values.set(param.folder_files_key(), FieldValue::List(files));
                         }
                     }
@@ -636,37 +713,45 @@ impl<'a> ParamDialog<'a> {
                 cx.request_close_as(CloseReason::Activated);
             }
             live = cx.memory::<Live>().clone();
-            // P3(pdf-dialogs-w1): DG-C12 — only a `Ready` preview has a picture to centre on.
+            // Only a `Ready` preview has a picture to centre on.
             if let (Some(point), Some(PreviewState::Ready(texture))) = (centre, &preview) {
                 live.view = live.view.centred_on(point, texture.size);
             }
-            let mut show_rows = |ui: &mut Ui, values: &mut DialogFields| {
-                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values))
-                    .patterns(&patterns)
-                    .preview_colors(&preview_colors)
-                    .sliders(layout.sliders());
-                if let Some(canvas) = canvas {
-                    shown = shown.canvas(canvas);
-                }
-                rows = Some(shown.show(ui));
+            // The `tab` binding, when there is one, says which tab shows; the dialog's memory does otherwise.
+            let last = tabs.len().saturating_sub(1);
+            let bound_tab = match tab.as_mut().map(|bind| bind.reborrow().read(&mut **cx)) {
+                Some(Some(Mixed::Same(at))) => Some(at),
+                _ => None,
             };
+            let held_tab = bound_tab.unwrap_or_else(|| cx.memory::<OpenTab>().0).min(last);
+            let mut shown_tab = held_tab;
+            let mut show_rows = |ui: &mut Ui, values: &mut DialogFields| rows = body.show(ui, &mut shown_tab, values);
+            // A measuring run paints nothing, so it leaves the overlay, which runs once, to the real run.
+            let overlay = if crate::runtime::measure::active(ui.ctx()) { None } else { preview_overlay.take() };
+            let mut extras = PaneExtras { pager: preview_pager.clone(), overlay, tint: preview_tint };
             match (&preview, layout) {
-                (Some(texture), ParamLayout::Beside) => {
+                (Some(state), ParamLayout::Beside) => {
                     Row::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        Stack::new()
-                            .show(ui, |ui, _| shown_preview = show_preview(ui, &preview_label, texture, click_centres, ZoomRow::Above, &mut live));
+                        Stack::new().show(ui, |ui, _| {
+                            shown_preview = show_preview(ui, &preview_label, state, &mut extras, click_centres, ZoomRow::Above, &mut live);
+                        });
                     });
                 }
-                (Some(texture), layout) => {
+                (Some(state), layout) => {
                     let zoom = if layout == ParamLayout::Stacked { ZoomRow::Below } else { ZoomRow::Above };
                     Stack::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        shown_preview = show_preview(ui, &preview_label, texture, click_centres, zoom, &mut live);
+                        shown_preview = show_preview(ui, &preview_label, state, &mut extras, click_centres, zoom, &mut live);
                     });
                 }
                 (None, _) => show_rows(ui, values),
             }
+            if let Some(bind) = tab.as_mut().filter(|_| bound_tab != Some(shown_tab)) {
+                let event = EditEvent::set(bound_tab.map_or(Mixed::Mixed, Mixed::Same), shown_tab, title.as_str().into(), None);
+                let _ = bind.reborrow().write(&mut **cx, &event);
+            }
+            cx.memory::<OpenTab>().0 = shown_tab;
             // The host's refusal of the held OK stays until a value changes.
             if let Some((reason, _)) = refusal.as_ref().filter(|(_, refused)| *refused == *values) {
                 Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
@@ -681,13 +766,19 @@ impl<'a> ParamDialog<'a> {
 
         // `picked` is this pass's press: a second pass of the frame has none, so a press is reported once.
         let pick = footer.pick(shown.picked);
-        let action = match pick {
+        let pressed = match pick {
             Some(ResetPick::Extra(at)) => extra_buttons.get(at).map(|(id, _)| id.clone()),
             _ => None,
         };
+        // Footer and row buttons share one channel. The rows' own slot is emptied, so a host that absorbs the rows
+        // files the press once.
+        let action = rows.as_mut().and_then(|rows: &mut ParamRowsOutput| rows.action.take()).or(pressed);
+        let closed = shown.closed.is_some();
         let (result, held) = match (shown.accepted, pick, latest) {
-            (Some(fields), _, _) => (Some(Self::result(key, &params, remember, fields)), None),
-            (None, Some(ResetPick::Accept), Some(fields)) if hold => (None, Some(Self::result(key, &params, remember, fields))),
+            // A read-only dialog answers with no values, whichever way it closes.
+            _ if read_only => (closed.then(|| Self::result(key, &every, None, DialogFields::new())), None),
+            (Some(fields), _, _) => (Some(Self::result(key, &every, remember, fields)), None),
+            (None, Some(ResetPick::Accept), Some(fields)) if hold => (None, Some(Self::result(key, &every, remember, fields))),
             _ => (None, None),
         };
         ParamDialogOutput {
@@ -700,7 +791,7 @@ impl<'a> ParamDialog<'a> {
             comparing: shown.comparing,
             preview_click: shown_preview.clicked,
             action,
-            preview_step: None, // P3(pdf-dialogs-w1): DG-C12
+            preview_step: shown_preview.step,
             held,
             preview_centre: shown_preview.centre,
         }
@@ -837,6 +928,91 @@ impl ResetFooter {
     }
 }
 
+/// The rows a dialog shows: its own rows and, in a tabbed dialog, its tabs, all drawn the same way.
+struct DialogRows<'p> {
+    /// The dialog's title, which names its own rows and its tab strip.
+    title: &'p Label,
+    /// The dialog's own rows: the shared rows of a tabbed dialog.
+    shared: &'p [Param],
+    tabs: &'p [ParamTab],
+    place: SharedRows,
+    patterns: &'p [PresetRow<String>],
+    preview_colors: &'p [(String, Srgba)],
+    sliders: SliderFieldLayout,
+    canvas: Option<egui::Id>,
+    /// The dialog shows values only.
+    read_only: bool,
+}
+
+impl DialogRows<'_> {
+    /// The rows `params` over `values`, their group named `label`; `read_only` for the rows of a read-only tab.
+    fn group(&self, ui: &mut Ui, label: &Label, params: &[Param], read_only: bool, values: &mut DialogFields) -> ParamRowsOutput {
+        let mut rows = ParamRows::new(label.clone(), params, Bind::bound(values))
+            .patterns(self.patterns)
+            .preview_colors(self.preview_colors)
+            .sliders(self.sliders)
+            .read_only(self.read_only || read_only);
+        if let Some(canvas) = self.canvas {
+            rows = rows.canvas(canvas);
+        }
+        rows.show(ui)
+    }
+
+    /// The body's rows. A tabbed dialog shows its shared rows where `place` puts them, the tab strip (with more than one
+    /// tab), whose pick moves `shown`, and the rows of the tab `shown` under its note. One output for all the rows drawn.
+    fn show(&self, ui: &mut Ui, shown: &mut usize, values: &mut DialogFields) -> Option<ParamRowsOutput> {
+        let (title, shared, tabs) = (self.title, self.shared, self.tabs);
+        if tabs.is_empty() {
+            return Some(self.group(ui, title, shared, false, values));
+        }
+        let mut out = None;
+        if self.place == SharedRows::Above && !shared.is_empty() {
+            merge_rows(&mut out, self.group(ui, title, shared, false, values));
+        }
+        if tabs.len() > 1 {
+            let last = tabs.len() - 1;
+            let strip = TabStrip::new(title.clone())
+                .kind(TabKind::Text)
+                .shown(*shown)
+                .show_items(ui, &Titles(tabs), &mut |key, _| Tab::new(tabs.get(*key).map_or_else(Label::default, |tab| tab.title.clone())));
+            for event in strip.response.events {
+                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    && let Some(key) = keys.into_iter().last()
+                {
+                    *shown = key.min(last);
+                }
+            }
+        }
+        if let Some(tab) = tabs.get(*shown) {
+            if let Some(note) = tab.note.as_ref().filter(|_| tab.read_only) {
+                Notice::new(Tone::Info, note.clone()).layout(NoticeLayout::Inline).show(ui);
+            }
+            merge_rows(&mut out, self.group(ui, &tab.title, &tab.params, tab.read_only, values));
+        }
+        if self.place == SharedRows::Below && !shared.is_empty() {
+            merge_rows(&mut out, self.group(ui, title, shared, false, values));
+        }
+        out
+    }
+}
+
+/// Adds `next`, the output of rows shown after those of `out`, to `out`.
+fn merge_rows(out: &mut Option<ParamRowsOutput>, next: ParamRowsOutput) {
+    *out = Some(match out.take() {
+        Some(earlier) => earlier.merged(next),
+        None => next,
+    });
+}
+
+/// What a dialog's preview pane shows beside its picture: the pager row under it, the host's drawing over the picture
+/// and the tint.
+struct PaneExtras<'p> {
+    pager: Option<PanePager>,
+    /// Taken by the run that paints: it runs once.
+    overlay: Option<PaneOverlay<'p>>,
+    tint: Option<DataColor>,
+}
+
 /// What the preview pane reported in a pass.
 #[derive(Clone, Copy, Default)]
 struct ShownPreview {
@@ -844,6 +1020,8 @@ struct ShownPreview {
     clicked: Option<Pos2>,
     /// The picture point at the centre of the view the pane drew.
     centre: Option<Pos2>,
+    /// The step a press on the pager made.
+    step: Option<PagerStep>,
 }
 
 /// Where the zoom row stands: over the preview pane or under it.
@@ -853,18 +1031,35 @@ enum ZoomRow {
     Below,
 }
 
-/// The zoom row and the pane.
-fn show_preview(ui: &mut Ui, label: &Label, state: &PreviewState, click_centres: bool, zoom_row: ZoomRow, live: &mut Live) -> ShownPreview {
-    let above = (zoom_row == ZoomRow::Above).then(|| PreviewZoom::new(&live.view).show(ui));
-    // P3(pdf-dialogs-w1): DG-C12 — the pane takes the state; the zoom row and the centre follow `Ready` in the writer's version.
-    let pane = PreviewPane::state(label.clone(), state.clone(), &live.view).click_centres(click_centres).show(ui);
-    let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
-    let centre = match state {
-        PreviewState::Ready(texture) => Some(pane.shown.centre(texture.size)),
+/// The pane, the zoom row where `zoom_row` puts it and the pager centred under them. Only a `Ready` picture has a zoom
+/// row and a centre: a pending or failed preview has nothing to zoom.
+fn show_preview(
+    ui: &mut Ui,
+    label: &Label,
+    state: &PreviewState,
+    extras: &mut PaneExtras<'_>,
+    click_centres: bool,
+    zoom_row: ZoomRow,
+    live: &mut Live,
+) -> ShownPreview {
+    let picture = match state {
+        PreviewState::Ready(texture) => Some(texture.size),
         PreviewState::Pending(_) | PreviewState::Failed(_) => None,
     };
-    live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown);
-    ShownPreview { clicked: pane.clicked, centre }
+    let above = (picture.is_some() && zoom_row == ZoomRow::Above).then(|| PreviewZoom::new(&live.view).show(ui));
+    let mut pane = PreviewPane::state(label.clone(), state.clone(), &live.view).click_centres(click_centres);
+    if let Some(tint) = extras.tint {
+        pane = pane.tint(tint);
+    }
+    // `ParamDialog::show` leaves no overlay in a measuring run, which paints nothing.
+    if let Some(overlay) = extras.overlay.take() {
+        pane = pane.overlay(overlay.into_paint());
+    }
+    let pane = pane.show(ui);
+    let below = (picture.is_some() && zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
+    let step = extras.pager.as_ref().and_then(|pager| Row::new().align(RowAlign::Center).show(ui, |ui, _| pager.clone().show(ui)).inner.flatten());
+    live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown.clone());
+    ShownPreview { clicked: pane.clicked, centre: picture.map(|size| pane.shown.centre(size)), step }
 }
 
 /// Builds the dialog over the host-owned values of a [`HostedParamDialog`] for one pass.
@@ -906,6 +1101,14 @@ pub struct HostedParamDialog {
     preview_on: bool,
     /// The preview picture the host last gave (`set_preview`).
     picture: Option<PreviewState>,
+    /// The pager row under the preview pane the host last gave (`set_preview_pager`).
+    pager: Option<PanePager>,
+    /// The host's drawing over the preview picture (`set_preview_overlay`).
+    overlay: Option<SharedOverlay>,
+    /// The tint of the preview picture (`set_preview_tint`).
+    tint: Option<DataColor>,
+    /// The tab a tabbed dialog shows: bound to the dialog's `tab` prop, so the host sets it before a pass.
+    tab: usize,
     /// What the dialog showed in its last pass.
     shown: ShownState,
     /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedParamDialog::held_ok)).
@@ -935,8 +1138,8 @@ impl HostedParamDialog {
         build: impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
-        let ParamDialog { params, remember, patterns, previews, .. } = build(&mut fields);
-        let (params, patterns) = (params.into_owned(), patterns.into_owned());
+        let ParamDialog { params, tabs, remember, patterns, previews, .. } = build(&mut fields);
+        let (params, patterns) = (every_param(params, &tabs).into_owned(), patterns.into_owned());
         let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
         let id = dialog_id(key.as_str());
@@ -952,6 +1155,10 @@ impl HostedParamDialog {
             previews,
             preview_on: true,
             picture: None,
+            pager: None,
+            overlay: None,
+            tint: None,
+            tab: 0,
             shown: ShownState::default(),
             hold: false,
             held: HeldAnswer::new(),
@@ -1024,44 +1231,40 @@ impl HostedParamDialog {
 
     /// Sets the pager row under the preview pane from the next pass on; `None` shows none.
     pub fn set_preview_pager(&mut self, pager: Option<PanePager>) {
-        let _ = pager;
-        todo!("DG-C13")
+        self.pager = pager;
     }
 
     /// Sets the host's drawing over the preview picture from the next pass on; `None` draws none.
     pub fn set_preview_overlay(&mut self, overlay: Option<SharedOverlay>) {
-        let _ = overlay;
-        todo!("DG-C13")
+        self.overlay = overlay;
     }
 
     /// Sets the tint that multiplies the `Ready` preview picture's colours from the next pass on; `None` shows it
     /// untinted.
     pub fn set_preview_tint(&mut self, tint: Option<DataColor>) {
-        let _ = tint;
-        todo!("DG-C13")
+        self.tint = tint;
     }
 
     /// The step the preview pager took, once.
     pub fn take_preview_step(&mut self) -> Option<PagerStep> {
-        todo!("DG-C13")
+        self.requests.take_preview_step()
     }
 
     /// Opens the dialog on the tab `tab` of a tabbed dialog ([`ParamDialog::tabs`]).
     #[must_use]
-    pub fn tab(self, tab: usize) -> Self {
-        let _ = tab;
-        todo!("DG-C4")
+    pub fn tab(mut self, tab: usize) -> Self {
+        self.tab = tab;
+        self
     }
 
     /// Shows the tab `tab` from the next pass on.
     pub fn set_tab(&mut self, tab: usize) {
-        let _ = tab;
-        todo!("DG-C4")
+        self.tab = tab;
     }
 
-    /// The tab shown in the last pass.
+    /// The tab shown in the last pass; before the first pass, the tab it opens on.
     pub fn shown_tab(&self) -> usize {
-        todo!("DG-C4")
+        self.tab
     }
 
     /// Whether the dialog previews and its Preview check box is on: the host renders the preview while it is. The box
@@ -1115,7 +1318,8 @@ impl HostedParamDialog {
         self.requests.take_action()
     }
 
-    /// The row keys an edit changed since the last take.
+    /// The row keys an edit changed since the last take: an edit in a row or a set through automation. The host's own
+    /// [`set_field`](HostedParamDialog::set_field), its answers and Reset are no edit of a row.
     pub fn take_edited(&mut self) -> Vec<String> {
         self.requests.take_edited()
     }
@@ -1282,10 +1486,19 @@ impl StackDialog for HostedParamDialog {
         if self.held.is_waiting() {
             dialog = dialog.ok_enabled(false);
         }
-        // P3(pdf-dialogs-w1): DG-C12 — the state is no longer `Copy`.
         if let Some(picture) = self.picture.clone() {
             dialog = dialog.preview(picture);
         }
+        if let Some(pager) = self.pager.clone() {
+            dialog = dialog.preview_pager(pager);
+        }
+        if let Some(overlay) = self.overlay.clone() {
+            dialog = dialog.preview_overlay(move |cx, transform, rect| overlay(cx, transform, rect));
+        }
+        if let Some(tint) = self.tint {
+            dialog = dialog.preview_tint(tint);
+        }
+        dialog = dialog.tab(Bind::bound(&mut self.tab));
         let alert_title = dialog.alert_title.clone().unwrap_or_else(|| dialog.title.clone());
         let shown = dialog.show(ui);
         if let Some(mut rows) = shown.rows {
@@ -1300,6 +1513,9 @@ impl StackDialog for HostedParamDialog {
         // The pass reports a press only in the pass that took the input, so a second pass of the frame files nothing.
         if let Some(action) = shown.action {
             self.requests.request_action(action);
+        }
+        if let Some(step) = shown.preview_step {
+            self.requests.request_preview_step(step);
         }
         self.shown = ShownState { comparing: shown.comparing, centre: shown.preview_centre };
         if self.held.refusal().is_some_and(|(_, refused)| refused.fields != self.fields) {
@@ -1341,12 +1557,17 @@ impl StackDialog for HostedParamDialog {
         if self.held.is_waiting() {
             return None;
         }
-        let ParamDialog { key, params, remember, ok_enabled, .. } = (self.build)(&mut self.fields);
+        let ParamDialog { key, params, tabs, remember, ok_enabled, read_only, .. } = (self.build)(&mut self.fields);
         if !ok_enabled {
             return None;
         }
-        let params = params.into_owned();
-        let mut result = ParamDialog::result(key, &params, remember, self.fields.clone());
+        let params = every_param(params, &tabs).into_owned();
+        // A read-only dialog answers with no values, as its OK does.
+        let mut result = if read_only {
+            ParamDialog::result(key, &params, None, DialogFields::new())
+        } else {
+            ParamDialog::result(key, &params, remember, self.fields.clone())
+        };
         if self.hold {
             self.file_held(result);
             return None;
@@ -1363,7 +1584,11 @@ impl StackDialog for HostedParamDialog {
     /// Keeps `value` when the row `field` names (a parameter or its unit choice) is shown, takes input, and takes
     /// the value ([`set_param_field`]).
     fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
-        let params = (self.build)(&mut self.fields).params.into_owned();
+        let ParamDialog { params, tabs, read_only, .. } = (self.build)(&mut self.fields);
+        if read_only {
+            return Err(FieldRefusal::Inactive.message(field));
+        }
+        let params = every_param(params, &tabs).into_owned();
         let before = self.fields.clone();
         set_param_field(&params, &mut self.fields, field, value)?;
         for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
@@ -1371,6 +1596,7 @@ impl StackDialog for HostedParamDialog {
                 self.requests.request_listing(request);
             }
         }
+        self.requests.request_edited(edited_rows(&params, &before, &self.fields));
         Ok(())
     }
 

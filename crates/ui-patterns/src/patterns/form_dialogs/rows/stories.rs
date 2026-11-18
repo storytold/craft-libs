@@ -74,6 +74,42 @@ fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).show(ui).into()
 }
 
+/// Rows that never take input (`Param::disabled`): shown greyed out whatever the other rows hold.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_enable_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = vec![
+        Param::new("searchable", "Make Searchable", ParamKind::bool(true)),
+        Param::new("engine", "Engine", ParamKind::choice(vec![("builtin".to_owned(), "Built-in".into())], None)).disabled(),
+        Param::new("dpi", "Resolution", ParamKind::int(Some(72), Some(600), 300)).disabled(),
+    ];
+    let fields = data.value("fields", DialogFields::new());
+    ParamRows::new("Recognize Text", &params, Bind::bound(fields)).show(ui).into()
+}
+
+/// Options with descriptions and a disabled option with its reason, on a Choice row and a Radio row.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_option_descriptions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let modes = || {
+        vec![
+            ("fast".to_owned(), "Fast".into()),
+            ("accurate".to_owned(), "Accurate".into()),
+            ("cloud".to_owned(), "Cloud".into()),
+        ]
+    };
+    let described = |param: Param| {
+        param
+            .option_description("fast", "Lower accuracy, finishes in seconds")
+            .option_description("accurate", "Best for scanned books and small print")
+            .disabled_option("cloud", "Needs a network connection")
+    };
+    let params = vec![
+        described(Param::new("engine", "Engine", ParamKind::choice(modes(), Some("fast".to_owned())))),
+        described(Param::new("quality", "Quality", ParamKind::radio(modes(), Some("accurate".to_owned())))),
+    ];
+    let fields = data.value("fields", DialogFields::new());
+    ParamRows::new("Recognize Text", &params, Bind::bound(fields)).show(ui).into()
+}
+
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();

@@ -1,12 +1,12 @@
 //! `ParamDialog` and `HostedParamDialog`: the dialog's own undo history, the Preview box's hold-to-compare, Enter in
 //! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, reopening under the same key, the
-//! request slots, disabled options and the remembered values a row refuses.
+//! request slots and the rows an edit changed, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Outcome as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult, PreviewState,
+    DialogFields, FieldValue, HostedParamDialog, PagerStep, PanePager, Param, ParamDialog, ParamKind, ParamLayout, ParamResult, PreviewState,
 };
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
@@ -60,7 +60,7 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
     let out = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
         let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
-        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).show(ui); // P3(pdf-dialogs-w1): DG-C12
+        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).show(ui);
         out.set((shown.preview_on, shown.comparing));
     });
     fixture.settle();
@@ -82,7 +82,7 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
 fn laid_out(layout: ParamLayout) -> [egui::Rect; 4] {
     let mut fixture = Fixture::new(move |ui| {
         let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
-        ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).layout(layout).show(ui); // P3(pdf-dialogs-w1): DG-C12
+        ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).layout(layout).show(ui);
     });
     fixture.settle();
     let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the radius row has a slider");
@@ -279,11 +279,20 @@ fn a_hosted_dialog_reopened_under_the_same_key_opens() {
     assert!(matches!(*answered.borrow(), Some(DialogResult::Ok(_))), "the reopened dialog answers OK");
 }
 
-/// A dialog with a files row and two footer buttons that keep it open.
+/// A previewing dialog with a files row, a custom row whose button asks for the `reload` action and two footer
+/// buttons that keep it open.
 fn stack_dialog(fields: &mut DialogFields) -> ParamDialog<'_> {
-    ParamDialog::new("stack", "Load Files into Stack", vec![Param::files("sources", "Source Files").folder_mode(true)])
+    let reload = Param::custom("reload", "Reload Sources", |ui, _, cx| {
+        let shown = Button::new("Reload Sources").show(ui);
+        if clicked(&shown) {
+            cx.request_action("reload");
+        }
+        shown.response().clone()
+    });
+    ParamDialog::new("stack", "Load Files into Stack", vec![Param::files("sources", "Source Files").folder_mode(true), reload])
         .values(Bind::bound(fields))
         .extra_buttons(vec![("load".to_owned(), Label::from("Load…")), ("save".to_owned(), Label::from("Save…"))])
+        .previews(true)
 }
 
 /// The `{files, folder, useFolder}` value of a files row that lists `folder`.
@@ -291,24 +300,40 @@ fn folder_value(folder: &str) -> serde_json::Value {
     json!({ "files": [], "folder": folder, "useFolder": true })
 }
 
-// A footer button that keeps the dialog open is reported once by its id, in a frame that runs twice too; a folder
-// listing is asked for once; `cancel_requests` drops both.
+// A footer button and a custom row's button that keep the dialog open are reported once by their id on the one
+// action channel, and a press on the preview pager once as its step, in a frame that runs twice too; a folder listing
+// is asked for once; `cancel_requests` drops them all.
 #[trial]
 fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
     let mut fixture = host_fixture(&host, &twice);
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "stack", DialogFields::new(), stack_dialog));
+    let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
+    let pager = PanePager { shown: 1, count: 3, back: false, next: true, ..PanePager::default() };
+    on_dialog(&host, |dialog| {
+        dialog.set_preview(Some(PreviewState::Ready(picture)));
+        dialog.set_preview_pager(Some(pager));
+    });
     fixture.idle(10);
+    let press_twice = |fixture: &mut Fixture, label: &str| {
+        let target = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} button"));
+        twice.set(true);
+        fixture.click(&target);
+        assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+        twice.set(false);
+        fixture.idle(4);
+    };
 
-    let save = fixture.by_label("Save…").expect("the Save… button");
-    twice.set(true);
-    fixture.click(&save);
-    twice.set(false);
-    fixture.idle(4);
-    // P3(pdf-dialogs-w1): DG-C9
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten().as_deref(), Some("save"), "the press is reported by its id");
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "the press is reported once");
+    press_twice(&mut fixture, "Save…");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten().as_deref(), Some("save"), "the footer press is reported by its id");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "the footer press is reported once");
     assert!(host.borrow().is_open::<HostedParamDialog>(), "the button keeps the dialog open");
+    press_twice(&mut fixture, "Reload Sources");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten().as_deref(), Some("reload"), "the row's press is reported by its id");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "the row's press is reported once");
+    press_twice(&mut fixture, "Next");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_preview_step).flatten(), Some(PagerStep::Next), "the pager press is its step");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_preview_step).flatten(), None, "the step is reported once");
 
     let ctx = fixture.ctx().clone();
     host.borrow_mut().set_json_field(&ctx, dialog_id("stack"), "sources", folder_value("/photos/shoot")).expect("the files row takes a folder");
@@ -319,11 +344,40 @@ fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
 
     let load = fixture.by_label("Load…").expect("the Load… button");
     fixture.click(&load).idle(2);
+    let next = fixture.by_label("Next").expect("the pager's Next button");
+    fixture.click(&next).idle(2);
     host.borrow_mut().set_json_field(&ctx, dialog_id("stack"), "sources", folder_value("/photos/other")).expect("the files row takes a folder");
     fixture.idle(4);
     on_dialog(&host, HostedParamDialog::cancel_requests);
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "a cancel drops the footer press"); // P3(pdf-dialogs-w1): DG-C9
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "a cancel drops the footer press");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_preview_step).flatten(), None, "a cancel drops the pager step");
     assert_eq!(on_dialog(&host, HostedParamDialog::take_listing).flatten(), None, "a cancel drops the listing request");
+}
+
+// An edit of a row reports its key once, in a frame that runs twice too, and a set through automation reports its
+// key; passes with no edit report none.
+#[trial]
+fn a_hosted_dialog_reports_the_rows_an_edit_changed_once() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(10);
+    let edited = || on_dialog(&host, HostedParamDialog::take_edited).unwrap_or_default();
+    assert_eq!(edited(), Vec::<String>::new(), "opening and passes with no edit report none");
+
+    let smooth = fixture.by_label("Smooth").expect("the smooth row has a check box");
+    twice.set(true);
+    fixture.click(&smooth);
+    assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+    twice.set(false);
+    fixture.idle(4);
+    assert_eq!(edited(), ["smooth"], "the edit reports its row");
+    fixture.idle(4);
+    assert_eq!(edited(), Vec::<String>::new(), "the edit is reported once");
+
+    let ctx = fixture.ctx().clone();
+    host.borrow_mut().set_json_field(&ctx, dialog_id("blur"), "radius", json!(40)).expect("the radius row takes a number");
+    assert_eq!(edited(), ["radius"], "a set through automation reports its row");
 }
 
 /// A dialog with a radio row whose second option is disabled.
@@ -513,13 +567,13 @@ fn a_preview_that_centres_on_clicks_passes_a_press_on_the_canvas_under_it() {
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 0, "no pane yet: the modal layer blocks the press");
-    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture)))); // P3(pdf-dialogs-w1): DG-C12
+    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture))));
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 1, "with the pane shown the press reaches the canvas");
 
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), locating(id, false)));
-    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture)))); // P3(pdf-dialogs-w1): DG-C12
+    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture))));
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 1, "a pane that does not centre on clicks leaves the press blocked");

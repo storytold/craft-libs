@@ -79,7 +79,7 @@ pub use guides::{
     GuideLayoutPreset, GuideLayoutResult, GuideLayoutValues, GuideLength, GuideRect, GuideTarget, GuideUnits, HostedGuideLayoutDialog,
     HostedNewGuideDialog, NEW_GUIDE_COLOR_KEY, NewGuideDialog, NewGuideOutput, NewGuideValues,
 };
-pub use properties::{HostedPropertiesDialog, PropertiesDialog, PropertiesOutput, PropertiesTab, PropertyRow};
+pub use properties::{PropertiesDialog, PropertiesOutput, PropertiesTab, PropertyRow};
 
 // canvas-navigator-a
 mod navigator_options;

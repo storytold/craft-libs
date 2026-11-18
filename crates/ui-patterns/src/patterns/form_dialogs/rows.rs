@@ -7,13 +7,14 @@ use crate::patterns::presets::{PresetKind, PresetPicker, PresetRow};
 use crate::runtime::commands::{CommandState, Commands as _};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, ListingRequest, PathRequest};
 
-use super::param::{CustomContext, Param, ParamKind, fill_defaults, path_list, rounded};
+use super::param::{CustomContext, Param, ParamKind, edited_rows, fill_defaults, path_list, rounded};
 use super::path_row::PathRow;
 use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
+    Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
+    SideLabel, TooltipSpec, clicked,
 };
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
@@ -76,6 +77,32 @@ pub struct ParamRowsOutput {
     pub out_of_range: Option<RangeAlert>,
     /// The id a custom row's button asked the host to act on this pass (`CustomContext::request_action`).
     pub action: Option<String>,
+    /// The keys of the rows whose values an edit of this pass changed; defaults the pass fills in are no edit.
+    pub edited: Vec<String>,
+}
+
+impl ParamRowsOutput {
+    /// This output and `later`'s, of rows shown after these in the same pass over the same values: the later rows'
+    /// values and requests win, and the edited rows of both are kept.
+    pub(crate) fn merged(mut self, later: ParamRowsOutput) -> ParamRowsOutput {
+        let ParamRowsOutput { response, changed, values, pick_color, path, eyedropper, listing, out_of_range, action, edited } = later;
+        self.response = self.response.union(response);
+        self.changed |= changed;
+        // The later rows read the values the earlier ones wrote, so theirs are the values after both.
+        self.values = values.or(self.values);
+        self.pick_color = pick_color.or(self.pick_color);
+        self.path = path.or(self.path);
+        self.eyedropper = eyedropper.or(self.eyedropper);
+        self.listing = listing.or(self.listing);
+        self.out_of_range = out_of_range.or(self.out_of_range);
+        self.action = action.or(self.action);
+        for key in edited {
+            if !self.edited.contains(&key) {
+                self.edited.push(key);
+            }
+        }
+        self
+    }
 }
 
 impl Outcome for ParamRowsOutput {
@@ -91,7 +118,7 @@ impl Outcome for ParamRowsOutput {
 ///
 /// - **Values.** They live in the caller's [`DialogFields`] binding; a missing key shows its parameter's default,
 ///   which the pass writes. The host keeps its own history of the values and its own Reset.
-/// - **Rows.** A row is shown while its `visible_when` holds and takes input while its `enabled_when` holds. A
+/// - **Rows.** A row is shown while every `visible_when` condition holds and takes input while its `enable` rule allows. A
 ///   [`Param::section`] opens a section, a bold title under a rule, whose body is the rows up to the next section.
 ///   A range row is a slider and its number field beside the row's label, or stacked under the label
 ///   ([`sliders`](ParamRows::sliders)).
@@ -183,6 +210,7 @@ impl<'a> ParamRows<'a> {
         pass.sliders = sliders;
         let mut changed = false;
         let mut values = None;
+        let mut edited = Vec::new();
         let mut group = |ui: &mut Ui| {
             FieldGroup::new(label.clone()).show(ui, |ui, cx| {
                 let before = match fields.reborrow().read(cx) {
@@ -205,6 +233,7 @@ impl<'a> ParamRows<'a> {
                 }
                 *cx.keep::<Memo>() = pass.memo.clone();
                 changed = pass.work != filled;
+                edited = if changed { edited_rows(params, &filled, &pass.work) } else { Vec::new() };
                 values = (pass.work != before).then(|| pass.work.clone());
                 if let Some(after) = &values {
                     let event = EditEvent::set(Mixed::Same(before), after.clone(), name.clone(), None);
@@ -217,19 +246,12 @@ impl<'a> ParamRows<'a> {
             })
         };
         let shown = if read_only { with_env(ui, |scope| scope.read_only = Some(true), group) } else { group(ui) };
-        let (pick_color, path, eyedropper, listing, out_of_range) =
-            if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range) };
-        ParamRowsOutput {
-            response: shown.output,
-            changed,
-            values,
-            pick_color,
-            path,
-            eyedropper,
-            listing,
-            out_of_range,
-            action: None, /* P3(pdf-dialogs-w1): DG-C8 */
-        }
+        let (pick_color, path, eyedropper, listing, out_of_range, action) = if read_only {
+            Default::default()
+        } else {
+            (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range, pass.action)
+        };
+        ParamRowsOutput { response: shown.output, changed, values, pick_color, path, eyedropper, listing, out_of_range, action, edited }
     }
 }
 
@@ -265,6 +287,8 @@ struct Pass<'p> {
     listing: Option<ListingRequest>,
     /// The range alert of the number row that clamped a typed value; one a pass is the most a user can cause.
     out_of_range: Option<RangeAlert>,
+    /// The id a custom row's button asked the host to act on.
+    action: Option<String>,
     /// An eyedropper row is armed.
     sampling: bool,
     /// The patterns a pattern row offers.
@@ -319,6 +343,7 @@ impl<'p> Pass<'p> {
             eyedropper: None,
             listing: None,
             out_of_range: None,
+            action: None,
             sampling: false,
             patterns,
             canvas,
@@ -338,6 +363,7 @@ impl<'p> Pass<'p> {
         self.eyedropper = None;
         self.listing = None;
         self.out_of_range = None;
+        self.action = None;
         self.sampling = false;
     }
 
@@ -575,8 +601,7 @@ impl<'p> Pass<'p> {
 
     fn choice(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
-        let entries: Vec<Entry<String>> =
-            options.iter().map(|(id, label)| Entry::new(id.clone(), label.clone()).enabled(line.param.option_enabled(id))).collect();
+        let entries: Vec<Entry<String>> = options.iter().map(|(id, label)| option_entry(line.param, id, label)).collect();
         let searchable = line.param.option().searchable();
         line.show(ui, |ui| {
             let mut select = Select::new(line.name.clone(), Bind::given(value.clone()), &entries);
@@ -690,9 +715,21 @@ impl<'p> Pass<'p> {
                 group = group.tooltip(tip.clone());
             }
             let group = group.show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, cx| {
                     for (id, label) in options {
-                        Radio::new(id.clone()).label(label.clone()).enabled(line.param.option_enabled(id) && line.enabled).show(ui);
+                        let mut radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled);
+                        if let Some(reason) = line.param.disabled_reason(id) {
+                            radio = radio.tooltip(TooltipSpec::new(reason.clone()).disabled_text(reason.clone()));
+                        }
+                        match line.param.option_description_text(id) {
+                            Some(text) => {
+                                let side = SideLabel::new().layout(FieldLayout::After).detail(text.clone());
+                                cx.labelled(ui, id.as_str(), label.clone(), side, radio);
+                            }
+                            None => {
+                                radio.label(label.clone()).show(ui);
+                            }
+                        }
                     }
                 });
             });
@@ -912,6 +949,9 @@ impl<'p> Pass<'p> {
             self.memo.armed = Some(request.key.clone());
             self.eyedropper = Some(request);
         }
+        if let Some(action) = context.take_action() {
+            self.action = Some(action);
+        }
         self.sampling |= context.is_sampling();
     }
 }
@@ -922,6 +962,18 @@ fn read_only_text(ui: &mut Ui, line: &Line<'_>, text: &Label) {
     line.show_body(ui, |ui| {
         SelectableText::new(line.name.clone(), shown.as_str()).multiline().field_inset().show(ui);
     });
+}
+
+/// The entry of the option `id` of a choice row: disabled with its reason when it has one, and with its description.
+fn option_entry(param: &Param, id: &str, label: &Label) -> Entry<String> {
+    let mut entry = Entry::new(id.to_owned(), label.clone()).enabled(param.option_enabled(id));
+    if let Some(reason) = param.disabled_reason(id) {
+        entry = entry.disabled_reason(reason.clone());
+    }
+    if let Some(text) = param.option_description_text(id) {
+        entry = entry.description(text.clone());
+    }
+    entry
 }
 
 /// The mode entries of a Blend row's `modes`, in menu order.

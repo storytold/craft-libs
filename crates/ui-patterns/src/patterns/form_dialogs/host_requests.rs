@@ -26,8 +26,9 @@ impl<O> PreviewRequest<O> {
 }
 
 /// The requests of parameter rows that the host answers: the colour picker, the file dialog, the eyedropper and a
-/// folder listing, the click on a dialog's preview picture (an eyedropper there samples it) and a footer or row button
-/// that keeps the dialog open. A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb)
+/// folder listing, the click on a dialog's preview picture (an eyedropper there samples it), a step of its preview
+/// pager, a footer or row button that keeps the dialog open (one action channel: footer and row ids share one
+/// namespace) and the rows an edit changed. A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb)
 /// and offers the `take_*` methods to its host. A request stays until it is taken; a newer one of the same kind
 /// replaces it. It also keeps the colours a child picker previews in the dialog's colour rows
 /// ([`preview_color`](HostRequests::preview_color)).
@@ -39,6 +40,9 @@ pub struct HostRequests {
     listing: Option<ListingRequest>,
     preview_click: Option<Pos2>,
     action: Option<String>,
+    preview_step: Option<PagerStep>,
+    /// The keys of the rows an edit changed since the last take, each once.
+    edited: Vec<String>,
     /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
     previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
@@ -64,6 +68,10 @@ impl HostRequests {
         if let Some(request) = rows.listing.take() {
             self.request_listing(request);
         }
+        if let Some(id) = rows.action.take() {
+            self.request_action(id);
+        }
+        self.request_edited(std::mem::take(&mut rows.edited));
     }
 
     /// Files a colour request; it replaces one not taken yet.
@@ -130,13 +138,15 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, listing, preview_click, action, previews, answers } = other;
+        let HostRequests { color, path, eyedropper, listing, preview_click, action, preview_step, edited, previews, answers } = other;
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());
         self.eyedropper = eyedropper.or(self.eyedropper.take());
         self.listing = listing.or(self.listing.take());
         self.preview_click = preview_click.or(self.preview_click.take());
         self.action = action.or(self.action.take());
+        self.preview_step = preview_step.or(self.preview_step.take());
+        self.request_edited(edited);
         for (key, color) in previews {
             self.preview_color(key, Some(color));
         }
@@ -153,20 +163,28 @@ impl HostRequests {
         self.action.take()
     }
 
+    /// Files the keys of rows an edit changed; a key not taken yet is kept once.
+    pub fn request_edited(&mut self, keys: impl IntoIterator<Item = String>) {
+        for key in keys {
+            if !self.edited.contains(&key) {
+                self.edited.push(key);
+            }
+        }
+    }
+
     /// The row keys an edit changed since the last take.
     pub fn take_edited(&mut self) -> Vec<String> {
-        todo!("DG-C13")
+        std::mem::take(&mut self.edited)
     }
 
     /// Files a step of the preview pager; it replaces one not taken yet.
     pub fn request_preview_step(&mut self, step: PagerStep) {
-        let _ = step;
-        todo!("DG-C13")
+        self.preview_step = Some(step);
     }
 
     /// The step of the preview pager, once.
     pub fn take_preview_step(&mut self) -> Option<PagerStep> {
-        todo!("DG-C13")
+        self.preview_step.take()
     }
 
     /// Files a request for the files of a folder; it replaces one not taken yet.

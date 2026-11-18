@@ -391,12 +391,13 @@ pub struct CustomContext {
     canvas: Option<egui::Id>,
     eyedropper: Option<EyedropperRequest>,
     sampling: bool,
+    action: Option<String>,
 }
 
 impl CustomContext {
     /// The context of a row labelled `title`.
     pub(crate) fn new(title: Label, canvas: Option<egui::Id>) -> Self {
-        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false }
+        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false, action: None }
     }
 
     /// Arms the host's eyedropper for the colour under `request.key`, as a colour row's dropper toggle does.
@@ -424,8 +425,12 @@ impl CustomContext {
     /// Asks the host to act on `id`: a custom row's button. The request is reported once, in the pass of the press
     /// (`ParamRowsOutput::action`).
     pub fn request_action(&mut self, id: impl Into<String>) {
-        let _ = id;
-        todo!("DG-C7")
+        self.action = Some(id.into());
+    }
+
+    /// The action the row asked for, once.
+    pub(crate) fn take_action(&mut self) -> Option<String> {
+        self.action.take()
     }
 
     /// The dropper the row armed, once.
@@ -480,6 +485,10 @@ pub(crate) struct RowOptions {
     units: Option<UnitChoices>,
     /// The ids of the options a choice row shows disabled.
     disabled_options: Vec<String>,
+    /// Why an option of `disabled_options` is disabled, by option id ([`Param::disabled_option`]).
+    disabled_reasons: Vec<(String, Label)>,
+    /// The description of an option of a choice or radio row, by option id ([`Param::option_description`]).
+    option_descriptions: Vec<(String, Label)>,
     /// The row's select has a search field.
     searchable: bool,
     /// The keys a change of the row's value removes ([`Param::resets`]).
@@ -611,22 +620,42 @@ impl Param {
 
     /// Shows `text` as the description of the option `id` of a choice or radio row.
     #[must_use]
-    pub fn option_description(self, id: impl Into<String>, text: impl Into<Label>) -> Self {
-        let _ = (id, text);
-        todo!("PO-P12")
+    pub fn option_description(mut self, id: impl Into<String>, text: impl Into<Label>) -> Self {
+        keyed_text(&mut self.options.get_or_insert_default().option_descriptions, id.into(), text.into());
+        self
     }
 
-    /// Shows the option `id` disabled, with `reason` as its tooltip.
+    /// Shows the option `id` disabled, with `reason` as its tooltip. It joins the options
+    /// [`disabled_options`](Param::disabled_options) lists, so automation refuses it as it refuses those.
     #[must_use]
-    pub fn disabled_option(self, id: impl Into<String>, reason: impl Into<Label>) -> Self {
-        let _ = (id, reason);
-        todo!("PO-P12")
+    pub fn disabled_option(mut self, id: impl Into<String>, reason: impl Into<Label>) -> Self {
+        let options = self.options.get_or_insert_default();
+        let id = id.into();
+        if !options.disabled_options.contains(&id) {
+            options.disabled_options.push(id.clone());
+        }
+        keyed_text(&mut options.disabled_reasons, id, reason.into());
+        self
+    }
+
+    /// The description of the option `id` of a choice or radio row ([`option_description`](Param::option_description)).
+    pub(crate) fn option_description_text(&self, id: &str) -> Option<&Label> {
+        self.options.as_deref()?.option_descriptions.iter().find(|(held, _)| held == id).map(|(_, text)| text)
+    }
+
+    /// Why the option `id` is disabled, while it is ([`disabled_option`](Param::disabled_option)).
+    pub(crate) fn disabled_reason(&self, id: &str) -> Option<&Label> {
+        if self.option_enabled(id) {
+            return None;
+        }
+        self.options.as_deref()?.disabled_reasons.iter().find(|(held, _)| held == id).map(|(_, reason)| reason)
     }
 
     /// The row never takes input: it is shown disabled.
     #[must_use]
-    pub fn disabled(self) -> Self {
-        todo!("CM-C29")
+    pub fn disabled(mut self) -> Self {
+        self.enable = Enable::Off;
+        self
     }
 
     /// Gives a choice row's select a search field.
@@ -974,13 +1003,11 @@ impl Param {
 
     /// Whether the row is shown with `fields`.
     pub fn visible(&self, fields: &DialogFields) -> bool {
-        // P3(pdf-dialogs-w1): PO-P13
         self.visible_when.iter().all(|(key, value)| fields.get(key) == Some(value))
     }
 
     /// Whether the row takes input with `fields`.
     pub fn enabled(&self, fields: &DialogFields) -> bool {
-        // P3(pdf-dialogs-w1): CM-C29
         match &self.enable {
             Enable::Always => true,
             Enable::When(key, values) => fields.get(key).is_some_and(|held| values.contains(held)),
@@ -1078,6 +1105,28 @@ pub fn set_color_field(params: &[Param], fields: &mut DialogFields, key: &str, c
     if colour_row || custom_request {
         fields.set(key, FieldValue::Color(color.to_rgb_array()));
     }
+}
+
+/// The keys of the rows of `params` whose values differ between `before` and `after`: a row's own key, its unit key, a
+/// custom row's companions or a Files row's folder and mode. Every record of the rows an edit changed reads this rule.
+pub(crate) fn edited_rows(params: &[Param], before: &DialogFields, after: &DialogFields) -> Vec<String> {
+    let differs = |key: &str| before.get(key) != after.get(key);
+    params
+        .iter()
+        .filter(|param| {
+            differs(&param.key)
+                || param.unit_key().is_some_and(|key| differs(key))
+                || matches!(&param.kind, ParamKind::Custom(row) if row.companions.iter().any(|key| differs(key)))
+                || (matches!(param.kind, ParamKind::Files { .. }) && (differs(&param.folder_key()) || differs(&param.use_folder_key())))
+        })
+        .map(|param| param.key.clone())
+        .collect()
+}
+
+/// Sets `text` as the one text of `id` in `texts`.
+fn keyed_text(texts: &mut Vec<(String, Label)>, id: String, text: Label) {
+    texts.retain(|(held, _)| *held != id);
+    texts.push((id, text));
 }
 
 /// Fills the keys `params` have defaults for and `fields` lack, and takes the opening snapshot.

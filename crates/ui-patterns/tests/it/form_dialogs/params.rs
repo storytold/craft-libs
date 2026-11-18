@@ -105,6 +105,39 @@ fn rows_follow_their_predicates_and_carry_their_tooltip() {
     assert!(fixture.tree().is_disabled_key(detail.node), "disabled for the third value");
 }
 
+// A row with two `visible_when` conditions is there only while both hold: the second call adds a condition, not
+// replaces the first. A `disabled` row takes no input whatever the fields hold, from a click or from automation.
+#[trial]
+fn a_row_with_two_visible_conditions_needs_both_and_a_disabled_row_takes_no_input() {
+    let params = vec![
+        Param::new("custom", "Custom", ParamKind::bool(false)),
+        Param::new("advanced", "Advanced", ParamKind::bool(false)),
+        Param::new("quality", "Quality", ParamKind::int(Some(0), Some(12), 8)).visible_when("custom", true).visible_when("advanced", true),
+        Param::new("locked", "Locked", ParamKind::bool(false)).disabled(),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params.clone(), &values);
+    let click = |fixture: &mut Fixture, label: &str| {
+        let target = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} row"));
+        fixture.click(&target).settle();
+    };
+    assert!(fixture.by_label("Quality").is_none(), "hidden while neither condition holds");
+    click(&mut fixture, "Custom");
+    assert!(fixture.by_label("Quality").is_none(), "the first condition alone keeps the row hidden");
+    click(&mut fixture, "Advanced");
+    assert!(fixture.by_label("Quality").is_some(), "shown once both hold");
+    click(&mut fixture, "Custom");
+    assert!(fixture.by_label("Quality").is_none(), "the second condition alone keeps the row hidden");
+
+    let locked = fixture.by_label("Locked").expect("a disabled row shows");
+    assert!(fixture.tree().is_disabled_key(locked.node), "a disabled row is a disabled node");
+    fixture.click(&locked).settle();
+    assert_ne!(values.borrow().bool("locked"), Some(true), "a click on a disabled row changes nothing");
+    let mut fields = values.borrow().clone();
+    assert!(set_param_field(&params, &mut fields, "locked", json!(true)).is_err(), "automation is refused a disabled row");
+    assert_ne!(fields.bool("locked"), Some(true), "the refused value is not set");
+}
+
 // A row that resets its dependents removes them when its value changes, from the row or from automation before any
 // pass; the value it already holds keeps them.
 #[trial]
