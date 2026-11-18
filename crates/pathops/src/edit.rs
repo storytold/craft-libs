@@ -1742,6 +1742,9 @@ mod tests {
         path.curve_to((10.0, 0.0), (10.0, 0.0), (10.0, 0.0));
         path.curve_to((10.0, 0.0), (30.0, -30.0), (20.0, 0.0));
         path.curve_to((20.0, 0.0), (20.0, 0.0), (20.0, 0.0));
+        // Loops that come back to their start with one handle at it and the other not (either one) are curves, as the first is.
+        path.curve_to((20.0, 0.0), (20.0, 0.0), (20.0, 12.0));
+        path.curve_to((20.0, 12.0), (35.0, 12.0), (20.0, 12.0));
         let out = remove_redundant_points(&path, 1e-3);
         let (before, after) = (path.bounding_box(), out.bounding_box());
         for (what, a, b) in
@@ -1749,8 +1752,8 @@ mod tests {
         {
             assert!((a - b).abs() < 1e-3, "{what}: {a} against {b}");
         }
-        // The segments that go are those of no length: three curves are left.
-        assert_eq!(out.elements().len(), 4, "{:?}", out.elements());
+        // The segments that go are those of no length: five curves are left.
+        assert_eq!(out.elements().len(), 6, "{:?}", out.elements());
     }
 
     /// A circle of radius `r` in `n` cubics, each the standard arc of its angle, from `(r, 0)` round.
