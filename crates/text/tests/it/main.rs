@@ -3,6 +3,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod editor;
+mod find_bar;
+mod find_matches;
+
 mod notes;
 mod path_text;
 

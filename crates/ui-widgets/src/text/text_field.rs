@@ -72,6 +72,8 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// the id the collection is built with (`Props::id`), so a pattern can name a collection it shows after the field.
     #[prop]
     drives: Option<Id>,
+    /// The whole text is selected in this pass unless the field is composing text (`select_all`).
+    select_all: bool,
 }
 
 impl<'a> TextField<'a, PlainText> {
@@ -106,6 +108,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             leading: Vec::new(),
             arrow: false,
             drives: None,
+            select_all: false,
         }
         .label(label)
     }
@@ -153,9 +156,9 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     /// With `on`, selects the whole text in this pass, so typing replaces it, unless the field is composing text; a
     /// request made during a composition is dropped.
     #[must_use]
-    pub fn select_all(self, on: bool) -> Self {
-        let _ = (self, on);
-        todo!("CV-C17")
+    pub fn select_all(mut self, on: bool) -> Self {
+        self.select_all = on;
+        self
     }
 
     /// Monospace text.
@@ -353,6 +356,10 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             && let Some(empty) = self.empty.clone()
         {
             cx.set(empty);
+        }
+        // Selecting during a composition would make its commit replace the whole text, so the request is dropped.
+        if self.select_all && !cx.text(&text_part::<C::Value>()).is_some_and(|outcome| outcome.composing) {
+            cx.select_all_text();
         }
     }
 

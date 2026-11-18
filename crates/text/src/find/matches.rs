@@ -51,6 +51,7 @@ impl FindMatches {
     }
 
     /// The page the search started from, so a refined query restarts from it.
+    #[must_use]
     pub fn from(&self) -> Option<usize> {
         self.from
     }
