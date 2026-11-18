@@ -5,7 +5,7 @@ use super::level::{LevelMemory, MenuLevel, level_env};
 use super::words::MenuWords;
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, Popup};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
     Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, TooltipSpec, Trigger,
 };
 use crate::display::Divider;
@@ -176,10 +176,11 @@ pub struct Menu<'a> {
 
 impl<'a> Menu<'a> {
     /// A modeless bar layer above the menu, in its press family; it closes with the menu, and Escape closes the top
-    /// layer first.
+    /// layer first. The bar runs in the menu's end region, which the layer leaves empty in flow, so it takes no room.
     #[must_use]
     pub fn companion(mut self, bar: &'a mut dyn FnMut(&mut Ui)) -> Self {
         self.companion = Some(bar);
+        self.props = self.props.end(EndRegion::new());
         self
     }
 
