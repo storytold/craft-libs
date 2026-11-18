@@ -1,5 +1,5 @@
 //! `AboutDialog`: Help > About in one window for every app, with the app's own data. Tabs About, Contributors and
-//! Models.
+//! Models, then the app's own tabs.
 
 mod contributors;
 mod credits;
@@ -109,12 +109,11 @@ pub enum AboutTab {
 }
 
 /// A tab the app adds after Models: a name for the hosted dialog's `tab` field, a title and a body.
+///
+/// The body is `Send` because a [`HostedAbout`] lives on the dialog stack, which needs its dialogs `Send`.
 pub struct AboutAppTab {
-    #[allow(dead_code)] // P3(chrome-w4): ch.C11
     name: &'static str,
-    #[allow(dead_code)] // P3(chrome-w4): ch.C11
     title: Label,
-    #[allow(dead_code)] // P3(chrome-w4): ch.C11
     body: Box<dyn FnMut(&mut Ui) + Send>,
 }
 
@@ -220,6 +219,8 @@ impl Outcome for AboutOutput {
 ///   header press sorts by its column, activating a row (Enter or a double click) reports the profile URL, and the
 ///   row's tooltip is the summary.
 /// - **Models.** A table of the credited models with their commits, share of all commits and lines.
+/// - **App tabs.** The app's own [`AboutAppTab`]s ([`app_tabs`](AboutDialog::app_tabs)) follow Models, each body in a
+///   vertically scrolling stack.
 ///
 /// The name mode, the sort order and the view are kept in the dialog's container while it is open, and so is the tab
 /// unless [`tab`](AboutDialog::tab) binds it. Links are reported
@@ -252,8 +253,9 @@ impl<'a> AboutDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> AboutOutput {
-        let AboutDialog { info, credits, open, tab, app_tabs } = self;
-        let _ = app_tabs; // P3(chrome-w4): ch.C11
+        let AboutDialog { info, credits, open, tab, mut app_tabs } = self;
+        // The strip shows the titles while the body draws a tab, so it reads its own copy of them.
+        let app_titles: Vec<Label> = app_tabs.as_deref().unwrap_or_default().iter().map(|app| app.title.clone()).collect();
         let env = Env::of(ui);
         let words = env.words::<AboutWords>();
         let common = env.words::<CommonWords>();
@@ -280,13 +282,20 @@ impl<'a> AboutDialog<'a> {
             }
             let before = kept.tab;
             *view.borrow_mut() = kept;
-            Stack::new().header(|ui, _| shown.tabs(ui, &title, &view)).show(ui, |ui, _| {
+            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).show(ui, |ui, _| {
                 let tab = view.borrow().tab;
-                match tab {
-                    AboutTab::About => shown.about(ui, &link),
-                    AboutTab::Contributors => shown.contributors(ui, &view, &link),
-                    AboutTab::Models => shown.models(ui),
-                    AboutTab::App(_) => todo!("ch.C11"),
+                let app = match tab {
+                    AboutTab::App(at) => app_tabs.as_deref_mut().and_then(|tabs| tabs.get_mut(usize::from(at))),
+                    _ => None,
+                };
+                match (tab, app) {
+                    (AboutTab::Contributors, _) => shown.contributors(ui, &view, &link),
+                    (AboutTab::Models, _) => shown.models(ui),
+                    (AboutTab::App(_), Some(app)) => {
+                        Stack::new().scroll(Scroll::vertical()).fill().show(ui, |ui, _| (app.body)(ui));
+                    }
+                    // An app tab past the given ones shows About.
+                    _ => shown.about(ui, &link),
                 }
             });
             let picked = view.borrow().tab;
@@ -312,14 +321,15 @@ struct Shown<'s> {
 }
 
 impl Shown<'_> {
-    /// The tab strip; a pick of a tab is kept in `view`.
-    fn tabs(&self, ui: &mut Ui, title: &Label, view: &RefCell<View>) {
+    /// The tab strip: the three built in, then one per app tab titled `app`. A pick of a tab is kept in `view`.
+    fn tabs(&self, ui: &mut Ui, title: &Label, app: &[Label], view: &RefCell<View>) {
         let words = self.words;
-        let tabs = [
+        let mut tabs = vec![
             (AboutTab::About, words.about_tab.clone()),
             (AboutTab::Contributors, words.contributors_tab.clone()),
             (AboutTab::Models, words.models_tab.clone()),
         ];
+        tabs.extend(app.iter().enumerate().filter_map(|(at, title)| u8::try_from(at).ok().map(|at| (AboutTab::App(at), title.clone()))));
         let source = keyed(&tabs[..], |tab: &(AboutTab, Label)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let shown = view.borrow().tab;
         // The strip sits in the stack's header, which is as tall as what it holds: it takes its tabs' height.
@@ -565,7 +575,8 @@ const ABOUT_KEY: &str = "help.about";
 const TAB_NAMES: [(AboutTab, &str); 3] = [(AboutTab::About, "about"), (AboutTab::Contributors, "contributors"), (AboutTab::Models, "models")];
 
 impl HostedAbout {
-    /// The name of `tab` in the dialog's `tab` field: the app tabs' names as well as the three built in.
+    /// The name of `tab` in the dialog's `tab` field: the app tabs' names as well as the three built in. An app tab
+    /// past the given ones shows About, so it is named so.
     fn tab_name(&self, tab: AboutTab) -> &str {
         if let AboutTab::App(at) = tab
             && let Some(app) = self.app_tabs.get(usize::from(at))
@@ -573,6 +584,15 @@ impl HostedAbout {
             return app.name;
         }
         TAB_NAMES.iter().find(|(known, _)| *known == tab).map_or("about", |(_, name)| *name)
+    }
+
+    /// The tab named `name` in the dialog's `tab` field; a name built in wins over an app tab's of the same name.
+    fn tab_named(&self, name: &str) -> Option<AboutTab> {
+        if let Some((tab, _)) = TAB_NAMES.iter().find(|(_, known)| *known == name) {
+            return Some(*tab);
+        }
+        let at = self.app_tabs.iter().position(|app| app.name == name)?;
+        u8::try_from(at).ok().map(AboutTab::App)
     }
 }
 
@@ -591,7 +611,7 @@ impl StackDialog for HostedAbout {
         if field != "tab" {
             return Err(FieldRefusal::Unknown.message(field));
         }
-        let picked = value.as_str().and_then(|name| TAB_NAMES.iter().find(|(_, known)| *known == name)).map(|(tab, _)| *tab);
+        let picked = value.as_str().and_then(|name| self.tab_named(name));
         let Some(picked) = picked else { return Err(FieldRefusal::Rejects(&value).message(field)) };
         self.tab = picked;
         Ok(())

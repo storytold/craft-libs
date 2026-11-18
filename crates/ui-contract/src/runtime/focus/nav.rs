@@ -315,15 +315,20 @@ impl State {
         self.focus_stop(arrival)
     }
 
-    /// F6: the first stop of the next pane, with its label as the announcement.
+    /// F6: the first stop of the next pane, with its label as the announcement. Inside a trapping scope (a modal
+    /// dialog or a popup, also when nothing in it is focused) F6 moves nothing and announces nothing: a pane move
+    /// would carry the focus out of the trap, which only closing the dialog may do.
     pub(super) fn pane(&mut self, forward: bool, all_controls: bool) -> (Vec<Act>, Vec<String>) {
+        let current = self.stop_of_focus();
+        if self.trap_of(current.as_ref()).is_some() {
+            return (Vec::new(), Vec::new());
+        }
         let panes: Vec<Id> = self
             .last_scope_order
             .iter()
             .copied()
             .filter(|id| self.last_scopes.get(id).is_some_and(|scope| scope.policy.kind == ScopeKind::Pane))
             .collect();
-        let current = self.stop_of_focus();
         let here = current.as_ref().and_then(|rec| self.pane_of(rec));
         let at = here.and_then(|pane| panes.iter().position(|id| *id == pane));
         let next = match (at, forward) {

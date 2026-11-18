@@ -1,14 +1,16 @@
-//! About's Contributors tab (the grab bag of name links and the Table view) and the hosted dialog's `tab` field.
+//! About's Contributors tab (the grab bag of name links and the Table view and its order), the hosted dialog's `tab`
+//! field and the app's own tabs.
 
 use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, StackDialog as _};
-use craft_ui::patterns::form_dialogs::{AboutDialog, AboutInfo, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use craft_ui::patterns::form_dialogs::{AboutAppTab, AboutDialog, AboutInfo, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
 use craft_ui::testing::{Fixture, trial};
 use egui::Vec2;
 use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 
 static INFO: LazyLock<AboutInfo> = LazyLock::new(|| AboutInfo::new("PhotoCraft", "An image editor.", "1.0"));
 static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
@@ -63,4 +65,107 @@ fn about_tab_is_a_field() {
     fixture.click(&contributors).idle(4);
     let fields = host.borrow().get::<HostedAbout>().and_then(|about| about.json_fields());
     assert_eq!(fields, Some(json!({ "tab": "contributors" })), "the field lists the tab a click picked");
+}
+
+/// Guards the app tabs of the About dialog: an app tab is listed after Models, `tab` takes its name and shows its
+/// body, a click on it reports its name in the field, and a name that is neither built in nor an app tab's is refused.
+#[trial]
+fn an_app_tab_shows_after_models_and_is_a_tab_field_value() {
+    let drawn = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&drawn);
+    let languages = AboutAppTab::new("languageData", "Languages", move |_| {
+        counted.fetch_add(1, Ordering::Relaxed);
+    });
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let info = AboutInfo::new("PhotoCraft", "An image editor.", "1.0");
+    let id = host.borrow_mut().open(HostedAbout::new(info, CREDITS.clone()).app_tab(languages));
+    fixture.idle(10);
+    assert_eq!(drawn.load(Ordering::Relaxed), 0, "the dialog opens on About");
+
+    let tabs: Vec<String> =
+        fixture.by_role(Role::TAB).iter().filter_map(|tab| fixture.tree().name_of(tab.node).map(str::to_owned)).collect();
+    let models = tabs.iter().position(|name| name == "Models").expect("the strip lists Models");
+    assert_eq!(tabs.get(models + 1).map(String::as_str), Some("Languages"), "the app tab follows Models: {tabs:?}");
+
+    let ctx = fixture.ctx().clone();
+    host.borrow_mut().set_json_field(&ctx, id, "tab", json!("languageData")).expect("`tab` takes the app tab's name");
+    fixture.idle(4);
+    assert!(drawn.load(Ordering::Relaxed) > 0, "setting `tab` to the app tab's name shows its body");
+
+    host.borrow_mut().set_json_field(&ctx, id, "tab", json!("about")).expect("`tab` takes a built-in name");
+    fixture.idle(4);
+    let fields = host.borrow().get::<HostedAbout>().and_then(|about| about.json_fields());
+    assert_eq!(fields, Some(json!({ "tab": "about" })));
+    let app = fixture.by_label("Languages").expect("the strip offers the app tab");
+    fixture.click(&app).idle(4);
+    let fields = host.borrow().get::<HostedAbout>().and_then(|about| about.json_fields());
+    assert_eq!(fields, Some(json!({ "tab": "languageData" })), "the field names the app tab a click picked");
+
+    let refused = host.borrow_mut().set_json_field(&ctx, id, "tab", json!("languages"));
+    assert!(refused.is_err(), "a name that is no tab's is refused");
+}
+
+/// The contributors of the order trial: a capitalised login with a display name, an undated (pull request only)
+/// contributor, and one with a real name.
+static PEOPLE: LazyLock<Credits> = LazyLock::new(|| {
+    let dated = |login: &'static str, day: &'static str| Contributor::new(login).counts(0, 1).active(day, day);
+    Credits::new(
+        vec![
+            dated("zed", "2026-01-02T00:00:00Z").lines(5, 50),
+            dated("Bob", "2026-01-01T00:00:00Z").display_name("Ann").lines(10, 0),
+            Contributor::new("alice").counts(1, 0).lines(7, 1),
+            dated("carol", "2026-01-03T00:00:00Z").real_name("Dana").lines(1, 0),
+        ],
+        Vec::new(),
+        3,
+    )
+});
+
+/// The contributors' names among `names` in the order the table shows them, top to bottom.
+fn rows(fixture: &Fixture, names: &[&str]) -> Vec<String> {
+    let mut placed: Vec<(f32, &str)> =
+        names.iter().map(|name| (fixture.by_label(name).expect("the table lists every contributor").rect.top(), *name)).collect();
+    placed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    placed.into_iter().map(|(_, name)| name.to_owned()).collect()
+}
+
+/// A press on the column head `head`. The idle frames outlast the double-click time, so a second press of the same
+/// head is a click of its own.
+fn sort_by(fixture: &mut Fixture, head: &str) {
+    let cell = fixture
+        .by_role(Role::COLUMN_HEADER)
+        .into_iter()
+        .find(|cell| fixture.tree().name_of(cell.node) == Some(head))
+        .expect("the table has the column");
+    fixture.click(&cell).idle(30);
+}
+
+/// Guards the contributors' order: names compare without the `@` and without case, a display name sorts among the
+/// usernames, and a contributor with no commit date follows everyone with one whichever way the dates sort.
+#[trial]
+fn names_sort_without_at_and_case_and_undated_contributors_sort_last_both_ways() {
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&INFO, &PEOPLE).tab(Bind::given(AboutTab::Contributors)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let table = fixture.by_label("Table").expect("the View control offers Table");
+    fixture.click(&table).idle(30);
+    let logins = ["@zed", "@Bob", "@alice", "@carol"];
+
+    assert_eq!(rows(&fixture, &logins), ["@Bob", "@zed", "@carol", "@alice"], "oldest first commit first, the undated last");
+    sort_by(&mut fixture, "First");
+    assert_eq!(rows(&fixture, &logins), ["@carol", "@zed", "@Bob", "@alice"], "newest first commit first, the undated still last");
+
+    sort_by(&mut fixture, "Name");
+    assert_eq!(rows(&fixture, &logins), ["@alice", "@Bob", "@carol", "@zed"], "A to Z without the @ and without case");
+    sort_by(&mut fixture, "Name");
+    assert_eq!(rows(&fixture, &logins), ["@zed", "@carol", "@Bob", "@alice"], "Z to A");
+
+    let display = fixture.by_label("Display name").expect("the Show control offers Display name");
+    fixture.click(&display).idle(30);
+    sort_by(&mut fixture, "Name");
+    assert_eq!(rows(&fixture, &["@zed", "Ann", "@alice", "@carol"]), ["@alice", "Ann", "@carol", "@zed"], "a display name sorts among the usernames");
 }

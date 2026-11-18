@@ -1,7 +1,9 @@
-//! Stories of `AboutDialog`: the About tab and the Contributors tab with a PR-only contributor.
+//! Stories of `AboutDialog`: the About tab, the Contributors tab with a PR-only contributor, and an app tab.
 
-use super::{AboutDialog, AboutInfo, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use super::{AboutAppTab, AboutDialog, AboutInfo, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use crate::contract::Show as _;
 use crate::dialog::stories::hosted;
+use crate::display::Text;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;
@@ -37,6 +39,20 @@ fn about_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::About, &TABS);
     let community = *data.value("community_button", true);
     hosted(ui, data, (tab, community), || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
+}
+
+/// The dialog with one app tab after Models, open on it.
+#[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
+fn about_dialog_app_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let community = *data.value("community_button", true);
+    hosted(ui, data, community, || {
+        let languages = AboutAppTab::new("languageData", "Languages", |ui: &mut Ui| {
+            Text::new("English (built in)").show(ui);
+            Text::new("Français 1.2 · 98% translated").show(ui);
+            Text::new("Deutsch 1.1 · 91% translated").show(ui);
+        });
+        HostedAbout::new(info(community), CREDITS.clone()).app_tab(languages).tab(AboutTab::App(0))
+    })
 }
 
 #[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]

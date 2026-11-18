@@ -4,12 +4,12 @@
 #[cfg(feature = "testing")]
 mod stories;
 
-use super::body::{self, BodyOut};
 #[cfg(doc)]
 use super::model::PreferencesModel;
 use super::model::{Closed, PreferencesDraft, PreferencesOutput};
+use super::page::PreferencesPage;
 use super::words::PreferencesWords;
-use crate::contract::{Bind, Props as _, Remember, SaveKey, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogOutput};
 use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::env::{Env, Label};
@@ -18,7 +18,6 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use craft_behavior::{EditEvent, Mixed};
-use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
 use egui::{Ui, Vec2, vec2};
 use std::cell::RefCell;
@@ -44,7 +43,8 @@ pub struct PreferencesState {
 
 /// The preferences window: a search field over a page list and the shown page, with OK, Cancel and Apply under them.
 ///
-/// The host keeps the model ([`PreferencesModel`]) and calls [`show`](PreferencesWindow::show) on every pass the window
+/// The body is a [`PreferencesPage`] over the window's state. The host keeps the model ([`PreferencesModel`] and
+/// [`PreferencesDraft`]) and calls [`show`](PreferencesWindow::show) on every pass the window
 /// should exist; it stops calling to close the window, and does so when the output says `closed`.
 ///
 /// - **Pages and search.** The host builds the pages each pass; the window lists the pages that match the search (the
@@ -91,17 +91,14 @@ struct Session<'h, 'b, H: ?Sized> {
 }
 
 impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
-    /// Reads the state at the start of the body. A window that has just opened starts with no search and no error.
-    fn begin(&mut self, cx: &mut (impl StageAccess + Remember)) {
+    /// Reads the state at the start of the body. The page clears the search and the error of a window that has just
+    /// opened.
+    fn begin(&mut self, cx: &mut impl StageAccess) {
         self.before = match self.state.reborrow().read(cx) {
             Some(Mixed::Same(held)) => held,
             _ => PreferencesState::default(),
         };
         self.work = self.before.clone();
-        if cx.appeared() {
-            self.work.search.clear();
-            self.work.error = None;
-        }
     }
 
     /// Writes the state the pass changed through the binding.
@@ -141,7 +138,6 @@ impl<'a> PreferencesWindow<'a> {
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
-        let units = env.units();
 
         let nested = host.nested_open();
         let can_ok = host.can_ok() && !nested;
@@ -197,27 +193,12 @@ impl<'a> PreferencesWindow<'a> {
                 let mut guard = session.borrow_mut();
                 let session = &mut *guard;
                 session.begin(cx);
-                let matcher = Matcher::new(&env.folder(), session.work.search.trim());
-                let snap = body::snapshot(&*session.host, &matcher, &session.work.selected);
-                let mut out = BodyOut::default();
-                body::show_body(ui, &mut *session.host, &snap, &mut session.work, &words, &units, &mut out);
-                if let Some(request) = out.rows.pick_color.take() {
+                let shown = PreferencesPage::new(Bind::bound(&mut session.work)).show(ui, &mut *session.host);
+                if let Some(request) = shown.pick_color {
                     pick_color = Some(request);
                 }
-                let edits = out.edits();
-                if !edits.is_empty() || out.reset {
-                    session.work.error = None;
-                }
-                for (key, value) in edits {
-                    session.host.set(&key, value);
-                }
-                if out.reset
-                    && let Some(page) = &snap.shown
-                {
-                    session.host.reset_page(&page.id);
-                }
                 session.host.nested(ui.ctx());
-                session.page = snap.shown.map(|page| page.id);
+                session.page = shown.page;
                 session.commit(cx);
             });
 

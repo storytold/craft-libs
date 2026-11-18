@@ -3,7 +3,10 @@
 //!
 //! - [`PageSpec`], [`GroupSpec`], [`RowSpec`], [`RowKind`], [`PrefValue`]: the row model the host builds each frame
 //!   from its settings and its draft. The library keeps no copy of the values.
-//! - [`PreferencesModel`]: what the app implements: pages, draft, apply, cancel, reset, custom rows and nested dialogs.
+//! - [`PreferencesModel`]: what the app implements: pages, edits, reset, custom rows and nested dialogs.
+//!   [`PreferencesDraft`] adds the draft's apply, cancel and differs for a window with OK, Cancel and Apply.
+//! - [`PreferencesPage`]: the search, page list and shown page, applying each edit to the model at once.
+//! - [`PreferencesWindow`]: the page in a modal window with OK, Cancel and Apply over a [`PreferencesDraft`].
 //! - [`PreferencesWords`]: every caption of the window.
 //! - [`PathSetting`]: a path setting for a custom row or page, typed or picked through the host's file service.
 //! - [`SettingsDocument`]: a [`PreferencesModel`] built from the app's settings struct, one row per setting by type,
@@ -23,8 +26,7 @@ pub use model::{Closed, GroupSpec, PageSpec, PrefValue, PreferencesDraft, Prefer
 pub use search::{Listed, list_pages, matches, row_matches, row_shown, shown_position};
 pub use words::{PreferencesWords, SettingsDocumentWords};
 
-// The window, its body and its rows.
-mod body;
+// The page, the window around it and their rows.
 mod page;
 mod path_setting;
 mod rows;

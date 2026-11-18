@@ -190,20 +190,31 @@ pub struct PaneSpec {
     pub edges: PaneEdges,
 }
 
-/// A set of dock edges.
+/// The edges a pane may dock at: a set over `Start`, `End`, `Top` and `Bottom`. The centre is no edge of a pane area
+/// and is in no set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PaneEdges(u8);
 
 impl PaneEdges {
-    /// Every edge, the centre included.
-    pub const ALL: PaneEdges = PaneEdges(0b1_1111);
-    /// The four sides, without the centre.
-    pub const SIDES: PaneEdges = PaneEdges(0b1111);
+    /// Every edge: start, end, top and bottom.
+    pub const ALL: PaneEdges = PaneEdges(0b1111);
+    /// The start and end edges only: a pane that docks beside the document, never above or below it.
+    pub const SIDES: PaneEdges = PaneEdges(0b0011);
 
-    /// Whether `edge` is in the set.
+    /// The bit of `edge`; the centre has none.
+    fn bit(edge: PaneEdge) -> u8 {
+        match edge {
+            PaneEdge::Start => 0b0001,
+            PaneEdge::End => 0b0010,
+            PaneEdge::Top => 0b0100,
+            PaneEdge::Bottom => 0b1000,
+            _ => 0,
+        }
+    }
+
+    /// Whether `edge` is in the set; never for the centre.
     pub fn contains(self, edge: PaneEdge) -> bool {
-        let _ = (self, edge);
-        todo!("ch.C12")
+        self.0 & Self::bit(edge) != 0
     }
 }
 
@@ -280,9 +291,13 @@ impl<P> Shown<P> {
 }
 
 /// The requests that dock `dragged` at `edge`, directly before the pane `before` in the order (`None`: after every
-/// pane). None when it lands where it is.
+/// pane). None when it lands where it is, or when the pane may not dock at `edge` ([`PaneSpec::edges`]): every docked
+/// move, a command's and a drop's, comes here, and an empty answer makes a drop draw no mark.
 fn dock_requests<P: Clone>(panes: &[Shown<P>], dragged: PanelKey, edge: PaneEdge, before: Option<PanelKey>) -> Vec<PaneRequest<P>> {
     let Some(moved) = panes.iter().find(|s| s.key == dragged) else { return Vec::new() };
+    if !moved.spec.edges.contains(edge) {
+        return Vec::new();
+    }
     let order: Vec<PanelKey> = panes.iter().map(|s| s.key).collect();
     let mut after: Vec<PanelKey> = order.iter().copied().filter(|key| *key != dragged).collect();
     let at = before.and_then(|before| after.iter().position(|key| *key == before)).unwrap_or(after.len());
@@ -602,6 +617,8 @@ struct LastFocus(Option<PanelKey>);
 ///   [`PaneRequest`]s for the app to apply, and reads the states again through [`PaneContent::state`].
 /// - **Menu.** Each pane's menu holds the app's rows, then the [`PaneCommands`] rows. Every row is also a command that
 ///   acts on the pane holding focus.
+/// - **Edges.** A pane docks only at its [`PaneSpec::edges`]: its menu and commands leave out the other edges, and a
+///   drop on one is refused and draws no mark.
 /// - **Centre.** The closure given to `show` fills what the docked panes leave.
 #[must_use = "show the pane area with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
@@ -774,9 +791,9 @@ fn show_floating<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(ui: &mut 
             pass.content.borrow_mut().body(&pane.pane, ui, bcx);
         })
         .output;
-    if let Some(change) = shown.placed
-        && change.phase != GesturePhase::Cancel
-    {
+    // A cancelled move or resize (Escape) reports the rect from before the gesture: the app takes it back, as the
+    // steps of the gesture moved its kept rect. A click on the title with no drag reports nothing.
+    if let Some(change) = shown.placed {
         pass.sink.borrow_mut().push(PaneRequest::FloatRect(pane.pane.clone(), change.rect));
     }
     if shown.minimized_toggled {
@@ -804,10 +821,22 @@ fn queue_action<P: Clone>(action: Option<HeaderAction>, pass: &Pass<'_, P>, pane
     pass.sink.borrow_mut().extend(command_requests(pass.panes, pass.policy, pane.key, command));
 }
 
+/// Whether the pane offers the move `command`: a movable pane offers Float and a Move to an edge it may dock at.
+fn offers_move(spec: &PaneSpec, command: PaneCommands) -> bool {
+    let edge = match command {
+        PaneCommands::MoveToStart => PaneEdge::Start,
+        PaneCommands::MoveToEnd => PaneEdge::End,
+        PaneCommands::MoveToTop => PaneEdge::Top,
+        PaneCommands::MoveToBottom => PaneEdge::Bottom,
+        _ => return spec.movable,
+    };
+    spec.movable && spec.edges.contains(edge)
+}
+
 /// Publishes the state of the pane commands and queues the ones that reached the pane this pass.
 fn take_commands<P: Clone>(cx: &mut BodyCx<'_>, pass: &Pass<'_, P>, pane: &Shown<P>) {
     for command in MOVES {
-        cx.publish(command, CommandState::new().enabled(pane.spec.movable));
+        cx.publish(command, CommandState::new().enabled(offers_move(&pane.spec, command)));
     }
     cx.publish(PaneCommands::Close, CommandState::new().enabled(pane.spec.closable));
     while let Some((command, _)) = cx.take_command::<PaneCommands>() {
@@ -819,10 +848,7 @@ fn take_commands<P: Clone>(cx: &mut BodyCx<'_>, pass: &Pass<'_, P>, pane: &Shown
 fn pane_menu<P: Clone>(ui: &mut Ui, cx: &mut BodyCx<'_>, pane: &Shown<P>, content: &RefCell<&mut dyn PaneContent<P>>) {
     content.borrow_mut().menu(&pane.pane, ui, cx);
     Divider::horizontal().show(ui);
-    let mut commands = Vec::new();
-    if pane.spec.movable {
-        commands.extend(MOVES);
-    }
+    let mut commands: Vec<PaneCommands> = MOVES.into_iter().filter(|command| offers_move(&pane.spec, *command)).collect();
     if pane.spec.closable {
         commands.push(PaneCommands::Close);
     }
