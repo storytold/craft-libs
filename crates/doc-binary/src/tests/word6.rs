@@ -104,6 +104,8 @@ struct Doc6<'a> {
     hdd: &'a [u32],
     /// The Dop's first bytes (pair 31).
     dop: &'a [u8],
+    /// The Dop's size in the FIB, when it isn't `dop`'s (a short Dop the bytes after it follow).
+    dop_lcb: Option<u32>,
     /// Footnotes and endnotes: (reference CPs, story CPs within their subdocument).
     footnotes: (&'a [u32], &'a [u32]),
     endnotes: (&'a [u32], &'a [u32]),
@@ -173,11 +175,13 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
     let mut w = vec![0u8; TEXT_AT as usize];
     w.extend_from_slice(d.text);
     let others: u32 = d.stories.iter().sum();
+    // fExtChar (0x1000): the text is 16-bit, two bytes a character.
+    let unit = if d.flags & 0x1000 != 0 { 2 } else { 1 };
     let ccp = match (d.ccp, d.pieces) {
         (Some(ccp), _) => ccp,
         (None, pieces) => match pieces {
             Some(p) => p.iter().map(|(len, _)| len).sum::<u32>() - others,
-            None => d.text.len() as u32 - others,
+            None => d.text.len() as u32 / unit - others,
         },
     };
     let mut pairs: Vec<(usize, u32, u32)> = Vec::new();
@@ -227,7 +231,7 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
         w.extend_from_slice(d.owners);
     }
     if !d.dop.is_empty() {
-        pairs.push((31, w.len() as u32, d.dop.len() as u32));
+        pairs.push((31, w.len() as u32, d.dop_lcb.unwrap_or(d.dop.len() as u32)));
         w.extend_from_slice(d.dop);
     }
     for (pair, runs, papx) in [(12, d.runs, false), (13, d.paras, true)] {
@@ -917,6 +921,37 @@ fn separator_stories_come_first() {
     // ... and it is the document's footnote separator.
     let sep = doc.footnote_separators.separator.as_ref().and_then(|b| b.first()).and_then(|b| b.as_para()).map(|p| p.text.clone());
     assert_eq!(sep.as_deref(), Some("SEP"));
+}
+
+#[test]
+fn the_separator_flags_are_read_from_the_dop_only() {
+    // A one-byte Dop, followed in the stream by a byte with bit 0 set: the Dop names no
+    // separators, so the table's first story is the section's header.
+    let text = b"Body\rHDR\r\r\r";
+    let hdd: &[u32] = &[0, 5, 6];
+    let d =
+        Doc6 { text, stories: [0, 6, 0, 0, 0], sections: &[(11, &[0x99, 0x02])], hdd, dop: &[0x02, 0x01], dop_lcb: Some(1), ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert_eq!(part_text(&doc, doc.last_section.headers.default), Some("HDR".into()));
+}
+
+#[test]
+fn section_sprms_after_the_column_sprms_are_read() {
+    // As Word 95 writes unequal columns: 8A 00 (not evenly spaced), then 88 and 89 (column 0's
+    // width and spacing, 3 bytes each), then a sprm read: the title page (8F 01).
+    let sepx: &[u8] = &[0x8A, 0x00, 0x88, 0x00, 0xB8, 0x0B, 0x89, 0x00, 0x90, 0x01, 0x8F, 0x01];
+    let d = Doc6 { text: b"Body\r", sections: &[(5, sepx)], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert!(doc.last_section.title_page);
+}
+
+#[test]
+fn utf16_text_without_a_count_is_counted_in_characters() {
+    // The fixture's own count: 16-bit text and a 2-character header story leave 3 characters
+    // of main text.
+    let text = utf16("Hi\rH\r");
+    let d = Doc6 { flags: 0x1000, text: &text, stories: [0, 2, 0, 0, 0], ..Default::default() };
+    assert_eq!(texts(&d), ["Hi"]);
 }
 
 #[test]
