@@ -1,5 +1,6 @@
 //! 3×3 matrices, chromaticities, RGB spaces and Bradford chromatic adaptation.
 
+use craft_cms::math;
 use craft_color::Primaries;
 use serde::{Deserialize, Serialize};
 
@@ -14,56 +15,26 @@ impl Mat3 {
         Mat3([[a, 0.0, 0.0], [0.0, b, 0.0], [0.0, 0.0, c]])
     }
 
-    /// `self × o`: applying the product applies `o` first.
+    /// `self × o`: applying the product applies `o` first ([`math::mul`]).
     pub fn mul(&self, o: &Mat3) -> Mat3 {
-        let mut r = [[0.0; 3]; 3];
-        for (i, row) in r.iter_mut().enumerate() {
-            for (j, v) in row.iter_mut().enumerate() {
-                *v = self.0[i][0] * o.0[0][j] + self.0[i][1] * o.0[1][j] + self.0[i][2] * o.0[2][j];
-            }
-        }
-        Mat3(r)
+        Mat3(math::mul(&self.0, &o.0))
     }
 
+    /// [`math::apply`].
     pub fn apply(&self, v: [f64; 3]) -> [f64; 3] {
-        let m = &self.0;
-        [
-            m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-            m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-            m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
-        ]
+        math::apply(&self.0, v)
     }
 
+    /// [`math::det`].
     pub fn determinant(&self) -> f64 {
-        let m = &self.0;
-        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        math::det(&self.0)
     }
 
     /// The inverse, or `None` when the matrix holds a non-finite value, is singular to within
-    /// rounding (the determinant is below 1e-12 times the cube of the largest entry), or has an
-    /// inverse with an entry beyond the range of `f64`.
+    /// rounding (the determinant is at most 1e-12 times the cube of the largest entry), or has an
+    /// inverse with an entry beyond the range of `f64` ([`math::inverse`]).
     pub fn inverse(&self) -> Option<Mat3> {
-        let scale = self.0.iter().flatten().fold(0.0f64, |a, v| a.max(v.abs()));
-        if !(scale.is_finite() && scale > 0.0) || self.0.iter().flatten().any(|v| v.is_nan()) {
-            return None;
-        }
-        // The determinant of the matrix divided by its largest entry stays within f64 where
-        // the matrix's own determinant would overflow or underflow.
-        let m = &self.0.map(|r| r.map(|v| v / scale));
-        let d = Mat3(*m).determinant();
-        if !d.is_finite() || d.abs() <= 1e-12 {
-            return None;
-        }
-        // Each cofactor is divided by the determinant and then by the scale: the reciprocals
-        // can overflow where the quotients do not.
-        let inv = Mat3([
-            [(m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d, (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d, (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d],
-            [(m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d, (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d, (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d],
-            [(m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d, (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d, (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d],
-        ]);
-        let inv = Mat3(inv.0.map(|r| r.map(|v| v / scale)));
-        inv.0.iter().flatten().all(|v| v.is_finite()).then_some(inv)
+        math::inverse(&self.0).map(Mat3)
     }
 
     pub fn transpose(&self) -> Mat3 {
@@ -108,7 +79,7 @@ impl Xy {
         if !(self.x.is_finite() && self.y.is_finite() && self.y > 0.0) {
             return None;
         }
-        let xyz = [self.x / self.y, 1.0, (1.0 - self.x - self.y) / self.y];
+        let xyz = math::xy_to_xyz([self.x, self.y]);
         xyz.iter().all(|v| v.is_finite()).then_some(xyz)
     }
 
@@ -193,7 +164,7 @@ impl RgbSpace {
 }
 
 /// The Bradford cone response matrix (XYZ to sharpened cone responses).
-pub const BRADFORD: Mat3 = Mat3([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]]);
+pub const BRADFORD: Mat3 = Mat3(math::BRADFORD);
 
 /// The Bradford chromatic adaptation matrix (XYZ to XYZ) from white `src` to white `dst`. A
 /// white that [`Xy::to_xyz`] rejects gives the identity.
@@ -210,13 +181,7 @@ pub fn bradford(src: Xy, dst: Xy) -> Mat3 {
 /// [`bradford`] for whites given as XYZ. A white with a cone response that is not above 0 or
 /// not finite, or a pair whose response ratios overflow, gives the identity.
 pub fn bradford_xyz(src: [f64; 3], dst: [f64; 3]) -> Mat3 {
-    let s = BRADFORD.apply(src);
-    let d = BRADFORD.apply(dst);
-    let ok = |v: [f64; 3]| v.iter().all(|c| c.is_finite() && *c > 0.0);
-    // BRADFORD is a constant invertible matrix (its determinant is about 2.1).
-    let (true, true, Some(inv)) = (ok(s), ok(d), BRADFORD.inverse()) else { return Mat3::IDENTITY };
-    let m = inv.mul(&Mat3::diag(d[0] / s[0], d[1] / s[1], d[2] / s[2])).mul(&BRADFORD);
-    if m.0.iter().flatten().all(|v| v.is_finite()) { m } else { Mat3::IDENTITY }
+    math::bradford_checked(src, dst).map_or(Mat3::IDENTITY, Mat3)
 }
 
 #[cfg(test)]

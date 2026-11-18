@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 # PQ (SMPTE ST 2084), the HDR reference white and the color primaries tags.
 craft-color = { workspace = true }
+# The 3×3 matrix arithmetic and Bradford adaptation (`craft_cms::math`).
+craft-cms = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

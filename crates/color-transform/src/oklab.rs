@@ -63,6 +63,15 @@ pub fn from_xyz(xyz: [f64; 3]) -> [f64; 3] {
     LMS_TO_LAB.apply(XYZ_TO_LMS.apply(xyz).map(f64::cbrt))
 }
 
+/// The `f64` matrices [`OkLab::for_space`] starts from: linear RGB in `space` to cone responses
+/// (the white adapted to D65 by Bradford), and back. `None` when the first has no inverse. Code
+/// that builds its matrices once per render in `f64` uses these with [`LMS_TO_LAB`] and
+/// [`LAB_TO_LMS`].
+pub fn lms_matrices(space: &RgbSpace) -> Option<(Mat3, Mat3)> {
+    let to_lms = XYZ_TO_LMS.mul(&bradford(space.white, D65)).mul(&space.to_xyz());
+    to_lms.inverse().map(|from_lms| (to_lms, from_lms))
+}
+
 /// OkLab to OkLCh `[L, C, h]`, with the hue in radians from −π to π.
 #[inline]
 pub fn lab_to_lch(lab: [f32; 3]) -> [f32; 3] {
@@ -86,8 +95,7 @@ pub struct OkLab {
 impl OkLab {
     /// The conversion for linear RGB in `space`.
     pub fn for_space(space: &RgbSpace) -> OkLab {
-        let to_lms = XYZ_TO_LMS.mul(&bradford(space.white, D65)).mul(&space.to_xyz());
-        let pair = to_lms.inverse().map(|from_lms| (to_lms.to_f32(), from_lms.to_f32()));
+        let pair = lms_matrices(space).map(|(to_lms, from_lms)| (to_lms.to_f32(), from_lms.to_f32()));
         let finite = |m: &[[f32; 3]; 3]| m.iter().flatten().all(|v| v.is_finite());
         match pair {
             Some((to_lms, from_lms)) if finite(&to_lms) && finite(&from_lms) => OkLab { to_lms, from_lms },
@@ -195,6 +203,32 @@ mod tests {
         let bad = crate::RgbSpace { r: Xy::new(0.3, 0.0), ..SRGB };
         let ok = OkLab::for_space(&bad);
         assert!(ok.from_rgb([0.5, 0.5, 0.5]).iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn the_f64_matrices_match_the_published_xyz_conversion() {
+        let (to, from) = lms_matrices(&SRGB).unwrap();
+        let p = to.mul(&from);
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((p.0[i][j] - if i == j { 1.0 } else { 0.0 }).abs() < 1e-12, "{p:?}");
+            }
+        }
+        // The published linear sRGB matrix and the one built from XYZ differ by at most 3.1e-4.
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((to.0[i][j] - SRGB_TO_LMS.0[i][j]).abs() < 5e-4, "{to:?}");
+            }
+        }
+        for c in [[0.1, 0.5, 0.9], [1.0, 1.0, 1.0]] {
+            let lab = LMS_TO_LAB.apply(to.apply(c).map(f64::cbrt));
+            let f = OkLab::for_space(&SRGB).from_rgb(c.map(|v| v as f32));
+            for i in 0..3 {
+                assert!((lab[i] - f64::from(f[i])).abs() < 1e-5, "{c:?} {lab:?} {f:?}");
+            }
+        }
+        let bad = crate::RgbSpace { r: Xy::new(0.3, 0.0), ..SRGB };
+        assert!(lms_matrices(&bad).is_some_and(|(t, _)| t.0.iter().flatten().all(|v| v.is_finite())));
     }
 
     /// A white this close to y = 0 gives `f64` matrices with entries beyond `f32`.
