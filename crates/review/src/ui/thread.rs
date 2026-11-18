@@ -38,6 +38,6 @@ craft_ui::words! {
         pin: template "thread.pin" = "Comment by {author}";
         pin_text: template "thread.pinText" = "Comment by {author}: {words}";
         cluster: template "thread.cluster" = "{n} comments";
-        note_title: "thread.noteTitle" = "Note";
+        note_title: template "thread.noteTitle" = "{kind} – {author}";
     }
 }
