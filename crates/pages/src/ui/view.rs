@@ -664,15 +664,6 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let wheel_turned = wheel
         .filter(|_| !state.continuous)
         .and_then(|wheel| wheel_turn(&wheel, edge_ahead(&geo, state.offset.1, vh, wheel.scroll.y < 0.0), f64::from(navigation.wheel_line)));
-    if let Some(wheel) = wheel.filter(|_| !state.continuous) {
-        let ahead = edge_ahead(&geo, state.offset.1, vh, wheel.scroll.y < 0.0);
-        let line = format!(
-            "scroll {:?} gathered {:?} unit {:?} moved {} edge {ahead:?} offset {:?} notch {} turned {wheel_turned:?}",
-            wheel.scroll, wheel.gathered, wheel.unit, wheel.moved, state.offset, navigation.wheel_line
-        );
-        eprintln!("DIAG half_notches_past_the_bottom_turn_once_they_add_up_within_one_gesture_and_never_across_two: {line}");
-        eprintln!("DIAG every_notch_turns_one_page_and_a_swipe_with_its_momentum_turns_once: {line}");
-    }
     let step = state.turn.take();
     let mut go_to = keys.go_to;
     if let Some(forward) = keys.turn.or(step).or(wheel_turned) {
@@ -693,7 +684,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         }
     }
 
-    // The pasteboard, the pictures and the scroll bars are drawn through the view the canvas shows; a zoom still
+    // The pasteboard and the pictures are drawn through the view the canvas shows; a zoom still
     // under way draws the layout the view was made for, scaled. A pointer zoom runs while the canvas zooms this pass
     // or its eased zoom is still arriving on screen.
     let ratio = shown.zoom / drawn_frame.zoom;
@@ -756,12 +747,14 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     // paint where they always did, over the pictures: their shapes are lifted out of the paint list here and put back
     // in a slot reserved after the pictures.
     let slot = PaintSlot::reserve(&ui.painter_at(cx.rect));
+    // The bars edit the view the state keeps, the canvas's settled one: the view on screen is pixel aligned, and a
+    // drag handed it back would differ from the drag's own value and cancel it.
     let document = drawn_frame.document(&drawn);
     let bars =
-        CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(shown), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
+        CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(target), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
     let bar_drag = bars.view.value().is_some();
     eprintln!(
-        "DIAG a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass: bar_drag {bar_drag} travel {travel} pointer_zoom {pointer_zoom} given {shown:?} events {:?}",
+        "DIAG a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass: bar_drag {bar_drag} travel {travel} given {target:?} shown {shown:?} events {:?}",
         bars.view.events
     );
     if let Some(moved) = bars.view.value() {
