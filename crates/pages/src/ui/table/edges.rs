@@ -297,7 +297,7 @@ fn line_at(lines: &[(Pos2, Pos2); 6], keys: &[EdgeKey], p: Pos2, reach: f32) -> 
 impl Component for EdgePicker<'_> {
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Both);
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Enter);
     type Style = EdgePickerStyle;
     type Output = EditResponse<BorderEdges>;
 

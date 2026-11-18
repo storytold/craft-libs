@@ -347,7 +347,10 @@ impl KeyUse {
     /// The default key use of a component that takes `input`. The only place egui key filters start from.
     pub const fn of(input: Input) -> KeyUse {
         let (keep, activate, owner) = match input {
-            Input::Pointer => (KeepKeys::None, ActivateKeys::Both, OwnerClass::Widget),
+            // Enter activates a pointer control; Space does not. Space is the canvas's Hand key, and a control
+            // that took it opened its own menu instead of panning (photocraft: Space over a canvas opened the
+            // File menu, whose first item the next press ran).
+            Input::Pointer => (KeepKeys::None, ActivateKeys::Enter, OwnerClass::Widget),
             Input::Text => (KeepKeys::InlineArrows, ActivateKeys::Neither, OwnerClass::Text),
             Input::Editor => (KeepKeys::BlockArrows, ActivateKeys::Neither, OwnerClass::Text),
             _ => (KeepKeys::None, ActivateKeys::Neither, OwnerClass::Widget),

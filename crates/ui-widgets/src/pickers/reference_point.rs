@@ -139,7 +139,7 @@ impl<'a> ReferencePoint<'a> {
 impl Component for ReferencePoint<'_> {
     const ROLE: Role = Role::RADIO_GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Both);
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Enter);
     type Style = ReferencePointStyle;
     type Output = EditResponse<Anchor9>;
 

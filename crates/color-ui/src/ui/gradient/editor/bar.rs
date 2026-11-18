@@ -681,7 +681,7 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
 impl<P: Clone + Send + Sync + 'static> Component for GradientBar<'_, P> {
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::CANVAS.with_activate(ActivateKeys::Both).with_deletes().with_chrome_key(false).with_claims(&CLAIMS);
+    const KEYS: KeyUse = KeyUse::CANVAS.with_activate(ActivateKeys::Enter).with_deletes().with_chrome_key(false).with_claims(&CLAIMS);
     type Style = GradientBarStyle;
     type Output = GradientBarOutput<P>;
 
