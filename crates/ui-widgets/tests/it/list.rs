@@ -998,7 +998,7 @@ fn a_row_labelled_from_spans_highlights_only_its_match_and_is_named_by_the_joine
         .sections
         .iter()
         .filter(|section| section.format.background != egui::Color32::TRANSPARENT)
-        .filter_map(|section| galley.job.text.get(section.byte_range.clone()))
+        .filter_map(|section| galley.job.text.get(section.byte_range.start.0..section.byte_range.end.0))
         .collect();
     assert_eq!(marked, ["harbour"], "only the match is drawn on the highlight");
 }
