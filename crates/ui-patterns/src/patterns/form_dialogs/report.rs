@@ -168,7 +168,7 @@ pub struct HostedReport {
     lines: Vec<String>,
     open: bool,
     copied: Option<String>,
-    #[allow(dead_code)] // P3(dialogs-w5): dg.F15
+    /// The notes shown as notices; plain `lines` take their place when there are any.
     notes: Vec<ReportNote>,
 }
 
@@ -211,7 +211,7 @@ impl crate::dialog::StackDialog for HostedReport {
         let shown = ReportDialog {
             title: self.title.clone(),
             summary: self.summary.clone(),
-            notes: Vec::new(),
+            notes: self.notes.clone(),
             lines,
             open: Some(Bind::bound(&mut self.open)),
         }
@@ -227,7 +227,8 @@ impl crate::dialog::StackDialog for HostedReport {
     }
 
     fn json_fields(&self) -> Option<Value> {
-        Some(json!({ "lines": self.lines }))
+        let notes: Vec<Value> = self.notes.iter().map(|note| json!({ "tone": note.tone.name(), "text": note.text.as_str() })).collect();
+        Some(json!({ "lines": self.lines, "notes": notes }))
     }
 }
 

@@ -403,9 +403,20 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             reset_with,
             on_reset,
             opening,
-            held,
+            held: mut hold,
         } = self;
-        let _ = held; // P3(dialogs-w5): dg.F11
+        // A measuring run files and closes nothing: the real run that follows does.
+        let measuring_run = crate::runtime::measure::active(ui.ctx());
+        // The app accepted the held OK: this pass finishes it. A second pass of the frame finds the answer already taken.
+        let finish = !measuring_run && hold.as_deref().is_some_and(|held| held.is_accepted());
+        // The refusal and the values it refused are read before the body, which may edit the values; the notice is decided
+        // after the body, in the same pass, against the values the body left.
+        let refusal = hold.as_deref().and_then(|held| held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone())));
+        let reason_cell = Rc::new(Cell::new(None::<Label>));
+        let waiting = hold.as_deref().is_some_and(|held| held.is_waiting());
+        let ok_enabled = ok_enabled && !waiting;
+        // A held OK files its values and leaves the dialog open until the app answers.
+        let accept_stays_open_button = accept_stays_open || hold.is_some();
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let name: Arc<str> = title.as_str().into();
@@ -413,7 +424,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
 
         let reset = ResetFooter::new(ui, cancel_label, alt_resets).extra(extra_buttons);
         let mut accept =
-            FooterButton::new(ok_label.unwrap_or_else(|| common.ok.clone()), DialogRole::Accept).enabled(ok_enabled).stays_open(accept_stays_open);
+            FooterButton::new(ok_label.unwrap_or_else(|| common.ok.clone()), DialogRole::Accept).enabled(ok_enabled).stays_open(accept_stays_open_button);
         if let (false, Some(reason)) = (ok_enabled, &ok_reason) {
             accept = accept.disabled_reason(reason.clone());
         }
@@ -482,13 +493,17 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         if let Some(shape) = shaped {
             dialog = shape(dialog);
         }
+        if hold.is_some() {
+            let reason = Rc::clone(&reason_cell);
+            dialog = dialog.refusal(move || reason.take());
+        }
 
         let work = RefCell::new(None::<V>);
         let requests = RefCell::new(HostRequests::new());
         let accepts = Cell::new(ok_enabled);
         let shown = dialog.show(ui, |ui, cx| {
             // A measuring run sees no answers and no opening pass: the real run that follows still has both.
-            let measuring = crate::runtime::measure::active(ui.ctx());
+            let measuring = measuring_run;
             let first = cx.appeared() && !measuring;
             let mut held = bind.borrow_mut();
             let before = match held.reborrow().read(cx) {
@@ -538,14 +553,39 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 let _ = held.reborrow().write(cx, &EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
                 *changed.borrow_mut() = Some(values.clone());
             }
+            if let Some((reason, refused)) = &refusal {
+                if *refused == values {
+                    reason_cell.set(Some(reason.clone()));
+                }
+            }
+            if finish && !accept_stays_open {
+                cx.request_close_as(CloseReason::Activated);
+            }
             *work.borrow_mut() = Some(values);
         });
 
         let DialogOutput { response, closed, picked } = shown.output;
-        let accepted = match closed {
-            Some(CloseReason::Enter | CloseReason::Activated) if accepts.get() => work.into_inner(),
+        let mut accepted = match closed {
+            Some(CloseReason::Enter | CloseReason::Activated) if accepts.get() && hold.is_none() => work.borrow().clone(),
             _ => None,
         };
+        if let Some(held) = hold.as_deref_mut() {
+            let values = work.into_inner();
+            if let (Some((_, refused)), Some(values)) = (held.refusal(), values.as_ref()) {
+                if refused != values {
+                    held.clear_refusal();
+                }
+            }
+            // The pass reports a press only in the pass that took the input, so a second pass of the frame files nothing.
+            if let (false, true, Some(0), Some(values)) = (measuring_run, accepts.get(), picked, values.as_ref()) {
+                if !held.is_waiting() {
+                    held.file(values.clone());
+                }
+            }
+            if finish && (accept_stays_open || closed == Some(CloseReason::Activated)) {
+                accepted = held.finish();
+            }
+        }
         FormOutput {
             response,
             closed,

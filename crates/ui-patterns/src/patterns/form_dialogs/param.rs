@@ -470,6 +470,10 @@ pub(crate) struct RowOptions {
     not_remembered: bool,
     /// The lines a multi-line text row shows.
     lines: Option<usize>,
+    /// The most characters a text row takes ([`Param::max_chars`]).
+    max_chars: Option<usize>,
+    /// Whether a text row shows its text in the monospace face ([`Param::mono`]).
+    mono: bool,
     units: Option<UnitChoices>,
     /// The ids of the options a choice row shows disabled.
     disabled_options: Vec<String>,
@@ -765,15 +769,15 @@ impl Param {
     /// The most characters a [`ParamKind::Text`] row takes: the field limits its input and `accepts` refuses longer text.
     #[must_use]
     pub fn max_chars(mut self, chars: usize) -> Self {
-        let _ = (&mut self, chars);
-        todo!("dg.F17")
+        self.options.get_or_insert_default().max_chars = Some(chars);
+        self
     }
 
     /// Shows a [`ParamKind::Text`] row's text in the monospace face.
     #[must_use]
     pub fn mono(mut self) -> Self {
-        let _ = &mut self;
-        todo!("dg.F17")
+        self.options.get_or_insert_default().mono = true;
+        self
     }
 
     /// Hover text for the whole row, label and control, of any kind.
@@ -938,9 +942,13 @@ impl Param {
         format!("{}.folderFiles", self.key)
     }
 
-    /// Whether `value` names no disabled option of a Radio, Choice or Blend row.
+    /// Whether `value` names no disabled option of a Radio, Choice or Blend row and is no longer than a text row's
+    /// [`max_chars`](Param::max_chars), counted in characters.
     fn option_allowed(&self, value: &FieldValue) -> bool {
         match (&self.kind, value) {
+            (ParamKind::Text { .. }, FieldValue::Text(text)) => {
+                self.options.as_deref().and_then(|options| options.max_chars).is_none_or(|max| text.chars().count() <= max)
+            }
             (ParamKind::Radio { .. } | ParamKind::Choice { .. } | ParamKind::Blend { .. }, FieldValue::Text(id)) => self.option_enabled(id),
             _ => true,
         }
@@ -986,6 +994,16 @@ impl RowOptions {
     /// The lines of a multi-line text row; `None` for a single line.
     pub(crate) fn lines(&self) -> Option<usize> {
         self.lines
+    }
+
+    /// The most characters a text row takes; `None` for the field's own limit.
+    pub(crate) fn max_chars(&self) -> Option<usize> {
+        self.max_chars
+    }
+
+    /// Whether a text row shows its text in the monospace face.
+    pub(crate) fn mono(&self) -> bool {
+        self.mono
     }
 
     /// Whether a choice row's select has a search field.

@@ -250,11 +250,17 @@ fn accepts(action: &ListManagerAction, entry: &ListManagerEntry) -> bool {
     }
 }
 
-/// The action's button state for the name box's text.
-fn is_enabled(action: &ListManagerAction, entries: &[ListManagerEntry], folder: &Folder, name: &str) -> bool {
+/// The action's button state for the name box's text. `OnValidName` follows `name_check` on the trimmed name, and is
+/// "not empty" without one, so it holds for a name an entry already has (unlike `OnNewName`).
+fn is_enabled(action: &ListManagerAction, entries: &[ListManagerEntry], folder: &Folder, name: &str, name_check: Option<fn(&str) -> bool>) -> bool {
     match action.enabled {
         ActionEnabled::OnEntry { .. } => entries.iter().any(|entry| is_named(entry, folder, name) && accepts(action, entry)),
         ActionEnabled::OnNewName => !name.trim().is_empty() && !entries.iter().any(|entry| is_named(entry, folder, name)),
+        ActionEnabled::OnValidName => match name_check {
+            Some(check) => check(name.trim()),
+            None => !name.trim().is_empty(),
+        },
+        ActionEnabled::Never => false,
         _ => true,
     }
 }
@@ -333,7 +339,7 @@ impl<'a> ListManager<'a> {
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ListManagerOutput {
         let ListManager { title, name_label, entries, actions, empty, note, searchable, name, open, name_check, cancel_label, under } = self;
-        let _ = (name_check, cancel_label, under); // P3(dialogs-w5): dg.F13
+        let under = RefCell::new(under);
         let env = Env::of(ui);
         let words = env.words::<ListManagerWords>();
         let common = env.words::<CommonWords>();
@@ -356,13 +362,13 @@ impl<'a> ListManager<'a> {
                 button
             })
             .collect();
-        buttons.push(FooterButton::new(common.cancel.clone(), DialogRole::Cancel));
+        buttons.push(FooterButton::new(cancel_label.unwrap_or_else(|| common.cancel.clone()), DialogRole::Cancel));
         let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(false).side_buttons(true).buttons(buttons).settle_buttons(
             move |cx, buttons| {
                 let folder = cx.env.folder();
                 let typed = cx.memory::<Session>().name.clone();
                 for (button, action) in buttons.iter_mut().zip(actions) {
-                    button.set_enabled(is_enabled(action, entries, &folder, &typed));
+                    button.set_enabled(is_enabled(action, entries, &folder, &typed, name_check));
                 }
             },
         );
@@ -390,6 +396,9 @@ impl<'a> ListManager<'a> {
                 })
                 .footer(|ui, _| {
                     let session = session.borrow();
+                    if let Some(under) = under.borrow_mut().as_mut() {
+                        under(ui);
+                    }
                     if let Some(entry) = entries.iter().find(|entry| is_named(entry, &folder, &session.name)) {
                         Text::new(words.description.clone()).show(ui);
                         Text::new(entry.description.clone()).shade(Shade::Muted).show(ui);
@@ -435,7 +444,7 @@ impl<'a> ListManager<'a> {
                         match event {
                             CollectionEvent::Activate(at) => {
                                 session.name.clone_from(&entries[at].name);
-                                let first = actions.first().filter(|action| is_enabled(action, entries, &folder, &session.name));
+                                let first = actions.first().filter(|action| is_enabled(action, entries, &folder, &session.name, name_check));
                                 activated.set(first.map(|_| 0));
                             }
                             CollectionEvent::Delete(rows) => {
@@ -443,7 +452,7 @@ impl<'a> ListManager<'a> {
                                     session.name.clone_from(&entries[*at].name);
                                 }
                                 let delete = actions.iter().position(|action| action.id == DELETE);
-                                activated.set(delete.filter(|at| is_enabled(&actions[*at], entries, &folder, &session.name)));
+                                activated.set(delete.filter(|at| is_enabled(&actions[*at], entries, &folder, &session.name, name_check)));
                             }
                             _ => {}
                         }

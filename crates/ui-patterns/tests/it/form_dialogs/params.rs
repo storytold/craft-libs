@@ -297,3 +297,26 @@ fn an_optional_number_is_held_to_its_bounds_and_remembered_while_off() {
     toggle(&mut fixture);
     assert_eq!(values.borrow().number("quality"), Some(7.0), "the box on again brings back the value typed before");
 }
+
+// A text row with `max_chars` stops typing at its limit, and the host's `set` refuses longer text; the limit counts
+// characters, not bytes.
+#[trial]
+fn a_text_row_with_a_limit_refuses_longer_text() {
+    let params = vec![Param::new("code", "Code", ParamKind::text("")).max_chars(4).mono()];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params.clone(), &values);
+    let field = fixture.by_label("Code").expect("the code row has a field");
+    fixture.click(&field).settle();
+    fixture.type_text("abcdefgh").settle();
+    assert_eq!(values.borrow().text("code"), Some("abcd"), "the field stops at the limit");
+
+    assert!(params[0].accepts("code", &FieldValue::Text("abcd".into())), "text at the limit fits");
+    assert!(params[0].accepts("code", &FieldValue::Text("éééé".into())), "four characters of two bytes each fit");
+    assert!(!params[0].accepts("code", &FieldValue::Text("abcde".into())), "text past the limit is refused");
+
+    let mut fields = DialogFields::new();
+    set_param_field(&params, &mut fields, "code", json!("wxyz")).expect("text at the limit is set");
+    let refused = set_param_field(&params, &mut fields, "code", json!("wxyz1"));
+    assert!(refused.is_err(), "longer text is refused: {refused:?}");
+    assert_eq!(fields.text("code"), Some("wxyz"), "the refused text is not set");
+}

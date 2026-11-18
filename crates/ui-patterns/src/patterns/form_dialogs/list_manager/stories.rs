@@ -1,7 +1,10 @@
 //! Stories of `ListManager`.
 
-use super::{ListManager, ListManagerAction, ListManagerEntry, ListManagerWords};
-use crate::contract::Bind;
+use super::{ActionEnabled, ListManager, ListManagerAction, ListManagerEntry, ListManagerWords};
+use crate::buttons::Button;
+use crate::choice::{Checkbox, Radio, RadioGroup};
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::layout_components::Stack;
 use crate::runtime::env::Env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -26,6 +29,65 @@ fn list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .opened(Bind::bound(data.value("open", true)))
         .show(ui)
         .into()
+}
+
+/// A bookmark name is valid while it is not empty and fits the name box.
+fn bookmark_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().count() <= 32
+}
+
+/// A bookmark manager: Add follows the name check, Go To and Delete keep the dialog open, Close ends it. A Sort by
+/// choice and a Hidden box stand under the list. The dialog opens from its button.
+#[story(ListManager<'static>, covers = [], drive = Drive::Never)]
+fn list_manager_bookmark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<ListManagerWords>();
+    let mut by_name = *data.value("sort by name", true);
+    let mut hidden = *data.value("hidden", false);
+    let mut gone = data.value("deleted", Vec::<String>::new()).clone();
+    let open = data.value("open", false);
+    if clicked(&Button::new("Bookmarks…").show(ui)) {
+        *open = true;
+    }
+    let actions = vec![
+        ListManagerAction::new("add", "Add", ActionEnabled::OnValidName).keeps_open(),
+        ListManagerAction::new("goTo", "Go To", ActionEnabled::OnEntry { kind: None }).keeps_open(),
+        ListManagerAction::delete(&words),
+    ];
+    let marks: Vec<ListManagerEntry> = ["Cover", "Chapter 1", "Index"]
+        .iter()
+        .map(|name| ListManagerEntry::new(*name, *name))
+        .filter(|entry| !gone.contains(&entry.id))
+        .collect();
+    let shown = ListManager::new("Bookmarks", "Bookmark name:", marks, actions)
+        .empty("There are no bookmarks.".into())
+        .name_check(bookmark_name)
+        .cancel_label("Close")
+        .under_list(|ui| {
+            let sorted = RadioGroup::new("Sort by", Bind::given(by_name)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    Radio::new(true).label("Name").show(ui);
+                    Radio::new(false).label("Location").show(ui);
+                });
+            });
+            if let Some(on) = sorted.output.value().copied() {
+                by_name = on;
+            }
+            if let Some(on) = Checkbox::new(Bind::given(hidden)).label("Hidden").show(ui).value().copied() {
+                hidden = on;
+            }
+        })
+        .opened(Bind::bound(open))
+        .show(ui);
+    if let Some(choice) = &shown.choice
+        && choice.action == "delete"
+        && let Some(id) = &choice.entry
+    {
+        gone.push(id.clone());
+    }
+    *data.value("deleted", Vec::<String>::new()) = gone;
+    *data.value("sort by name", true) = by_name;
+    *data.value("hidden", false) = hidden;
+    shown.into()
 }
 
 #[story(ListManager<'static>, covers = [], drive = Drive::Never)]

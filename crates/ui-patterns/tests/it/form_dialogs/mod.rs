@@ -6,6 +6,7 @@ mod dialog;
 mod export;
 mod files;
 mod hosted;
+mod list_manager;
 mod new_document;
 mod params;
 mod password;

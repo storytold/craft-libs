@@ -4,7 +4,7 @@
 mod stories;
 
 use crate::buttons::Button;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing, clicked};
+use crate::contract::{Bind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing, TooltipSpec, clicked};
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, Label};
 use crate::text::TextField;
@@ -83,7 +83,6 @@ impl<'a> PathRow<'a> {
     /// Shows the row.
     pub fn show(self, ui: &mut Ui) -> PathRowOutput {
         let PathRow { name, mut value, button, placeholder, pick, browse_reason } = self;
-        let _ = browse_reason; // P3(dialogs-w5): dg.F16
         let button = button.unwrap_or_else(|| Env::of(ui).words::<PathRowWords>().browse.clone());
         let mut edit = EditEvents::new();
         let mut browse = false;
@@ -102,7 +101,12 @@ impl<'a> PathRow<'a> {
                 field = field.placeholder(placeholder);
             }
             edit = field.show(ui).events;
-            browse = clicked(&Button::new(button.clone()).id_salt("browse").show(ui));
+            let mut browse_button = Button::new(button.clone()).id_salt("browse");
+            // A disabled button with a reason stays focusable, so the reason is reachable without a pointer.
+            if let Some(reason) = &browse_reason {
+                browse_button = browse_button.tooltip(TooltipSpec::new(button.clone()).disabled_text(reason.clone())).enabled(false);
+            }
+            browse = clicked(&browse_button.show(ui));
             if browse
                 && let Some(request) = &pick
                 && let Some(host) = cx.env.host().cloned()

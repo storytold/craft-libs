@@ -845,8 +845,15 @@ impl<'p> Pass<'p> {
                 }
                 None => {
                     let mut field = TextField::new(line.name.clone(), Bind::given(value.clone())).id_salt("text");
-                    if let Some(lines) = line.param.option().lines() {
+                    let options = line.param.option();
+                    if let Some(lines) = options.lines() {
                         field = field.lines(lines);
+                    }
+                    if let Some(max) = options.max_chars() {
+                        field = field.limit(Some(max));
+                    }
+                    if options.mono() {
+                        field = field.mono();
                     }
                     if let Some(hint) = line.param.hint_text() {
                         field = field.placeholder(hint.clone());

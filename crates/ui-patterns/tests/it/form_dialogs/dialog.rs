@@ -3,9 +3,10 @@
 //! request slots, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Outcome as _, Role, SaveKey, Show as _, clicked};
-use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
+use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
+use craft_ui::choice::Checkbox;
+use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
@@ -247,6 +248,38 @@ fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     fixture.idle(4);
     let answered = host.borrow_mut().take_keyed::<HostedParamDialog>().map(|(result, _)| result).and_then(DialogResult::ok);
     assert_eq!(answered.map(|result| result.fields), Some(filed.fields), "the accepted OK closes the dialog with the held values");
+
+    // A form that stays open after an accepted answer (Symbol Insert): the accepted OK hands the values out once, the
+    // held state returns to idle and the dialog is still open with OK enabled.
+    let held = Rc::new(RefCell::new(HeldAnswer::<bool>::new()));
+    let (state, accepted, closed) = (Rc::clone(&held), Rc::new(Cell::new(0)), Rc::new(Cell::new(false)));
+    let (count, ended) = (Rc::clone(&accepted), Rc::clone(&closed));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = state.borrow_mut();
+        let shown = FormDialog::own("Insert").held(&mut held).accept_stays_open(true).show(ui, |ui, _, value: &mut bool| {
+            Checkbox::new(Bind::bound(value)).label("Wide").show(ui);
+            true
+        });
+        if shown.accepted.is_some() {
+            count.set(count.get() + 1);
+        }
+        if shown.closed.is_some() {
+            ended.set(true);
+        }
+    });
+    fixture.idle(10);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.idle(4);
+    assert!(held.borrow().is_waiting(), "Enter files the values and waits");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK waits disabled while the answer is out");
+    assert!(held.borrow_mut().answer(Ok(())), "an answer was filed");
+    fixture.idle(4);
+    assert_eq!(accepted.get(), 1, "the accepted answer comes out once");
+    assert!(!closed.get(), "an accepted answer leaves the dialog open");
+    assert_eq!(held.borrow().state(), None, "the held state is idle again");
+    let ok = fixture.by_label("OK").expect("the dialog is still open");
+    assert!(!fixture.tree().is_disabled_key(ok.node), "OK is enabled again");
 }
 
 // A dialog the app opens again under the same key, in the pass it takes the first one's Cancel, shows and answers.
