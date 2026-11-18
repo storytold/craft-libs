@@ -178,7 +178,7 @@ fn pixel_aspect_lists_the_custom_entries_and_shows_an_unknown_id_as_square() {
 /// The tab titles left to right, as painted.
 fn tab_order(fixture: &Fixture) -> Vec<String> {
     let names = ["Recent", "Saved", "Photo", "Print", "Art & Illustration", "Web", "Mobile", "Film & Video"];
-    let mut tabs: Vec<_> = fixture.texts().into_iter().filter(|painted| names.contains(&painted.text.as_str())).collect();
+    let mut tabs: Vec<_> = fixture.texts().iter().filter(|painted| names.contains(&painted.text.as_str())).collect();
     tabs.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
     tabs.dedup_by(|a, b| a.text == b.text);
     tabs.into_iter().map(|painted| painted.text.clone()).collect()
