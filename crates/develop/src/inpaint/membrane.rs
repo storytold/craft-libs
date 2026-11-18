@@ -6,6 +6,10 @@
 //! cascadically (solve on a half-resolution grid, prolong bilinearly, a few SOR sweeps per level).
 //! Ported from PhotoCraft's `algo::poisson` (MIT OR Apache-2.0).
 
+fn allocation_fits<T>(len: usize) -> bool {
+    len.checked_mul(std::mem::size_of::<T>()).is_some_and(|bytes| bytes <= isize::MAX as usize)
+}
+
 /// Convergence threshold (max per-sweep update) for the SOR sweeps.
 const TOL: f32 = 2e-5;
 /// SOR sweeps (cap) and relaxation factor on every level above the coarsest: tuned so a 96×72 disc
@@ -17,10 +21,41 @@ const FINE_OMEGA: f32 = 1.7;
 /// (out-of-grid neighbours are ignored, i.e. a Neumann boundary). `v` holds the known values on
 /// entry and the solution on exit. Cascadic multigrid + SOR.
 pub(crate) fn solve_membrane(w: usize, h: usize, unknown: &[bool], v: &mut [f32]) {
-    if unknown.len() != w * h || v.len() != w * h {
+    if Some(unknown.len()) != w.checked_mul(h) || v.len() != unknown.len() {
         return;
     }
-    solve_rec(w, h, unknown, v, 0, &|| false);
+    if !allocation_fits::<(usize, u8)>(unknown.iter().filter(|&&hole| hole).count()) {
+        return;
+    }
+    // Keep the ordinary path bit-for-bit unchanged. Extremely large finite boundaries can
+    // overflow even their mean or a four-neighbour sum; harmonic interpolation is linear,
+    // so solve those channels at unit scale instead. The final clamp enforces the harmonic
+    // maximum principle if the finite-iteration relaxation overshoots a boundary extremum.
+    let mut low = f32::INFINITY;
+    let mut high = f32::NEG_INFINITY;
+    for (&value, &hole) in v.iter().zip(unknown) {
+        if !hole {
+            if !value.is_finite() {
+                solve_rec(w, h, unknown, v, 0, &|| false);
+                return;
+            }
+            low = low.min(value);
+            high = high.max(value);
+        }
+    }
+    let scale = low.abs().max(high.abs());
+    let needs_scale = scale.is_finite() && f64::from(scale) > f64::from(f32::MAX) / v.len().max(16) as f64;
+    if needs_scale {
+        let mut normalized: Vec<f32> = v.iter().map(|&value| value / scale).collect();
+        solve_rec(w, h, unknown, &mut normalized, 0, &|| false);
+        for ((value, solved), &hole) in v.iter_mut().zip(normalized).zip(unknown) {
+            if hole {
+                *value = (f64::from(solved) * f64::from(scale)).clamp(f64::from(low), f64::from(high)) as f32;
+            }
+        }
+    } else {
+        solve_rec(w, h, unknown, v, 0, &|| false);
+    }
 }
 
 fn solve_rec(w: usize, h: usize, unknown: &[bool], v: &mut [f32], depth: usize, stop: &(dyn Fn() -> bool + Sync)) {
@@ -31,7 +66,9 @@ fn solve_rec(w: usize, h: usize, unknown: &[bool], v: &mut [f32], depth: usize, 
     if n_unknown == 0 {
         return;
     }
-    let known: Vec<f32> = v.iter().zip(unknown).filter(|(_, u)| !**u).map(|(x, _)| *x).collect();
+    // Like the cell list below, this filtered collection must not grow geometrically.
+    let mut known = Vec::with_capacity(v.len() - n_unknown);
+    known.extend(v.iter().zip(unknown).filter(|(_, u)| !**u).map(|(x, _)| *x));
     if known.is_empty() {
         return; // nothing to interpolate from
     }
@@ -91,21 +128,20 @@ fn solve_rec(w: usize, h: usize, unknown: &[bool], v: &mut [f32], depth: usize, 
 /// SOR sweeps over the unknown pixels until the largest update drops below [`TOL`].
 fn sor(w: usize, h: usize, unknown: &[bool], v: &mut [f32], max_iter: usize, omega: f32, stop: &(dyn Fn() -> bool + Sync)) {
     // Precompute the unknown pixels and which neighbours exist.
-    let cells: Vec<(u32, u8)> = (0..w * h)
-        .filter(|&i| unknown[i])
-        .map(|i| {
-            let (x, y) = (i % w, i / w);
-            let m = u8::from(x > 0) | (u8::from(x + 1 < w) << 1) | (u8::from(y > 0) << 2) | (u8::from(y + 1 < h) << 3);
-            (i as u32, m)
-        })
-        .collect();
+    // The caller validated this exact count; reserve it before extend so geometric growth
+    // cannot round the allocation above the target's capacity limit.
+    let mut cells = Vec::with_capacity(unknown.iter().filter(|&&hole| hole).count());
+    cells.extend((0..w * h).filter(|&i| unknown[i]).map(|i| {
+        let (x, y) = (i % w, i / w);
+        let m = u8::from(x > 0) | (u8::from(x + 1 < w) << 1) | (u8::from(y > 0) << 2) | (u8::from(y + 1 < h) << 3);
+        (i, m)
+    }));
     for _ in 0..max_iter {
         if stop() {
             return;
         }
         let mut max_d = 0.0f32;
         for &(i, m) in &cells {
-            let i = i as usize;
             let (s, n) = if m == 0b1111 {
                 (v[i - 1] + v[i + 1] + v[i - w] + v[i + w], 4.0)
             } else {
@@ -173,6 +209,10 @@ pub fn membrane_fill(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool]) 
     if hole.is_empty() {
         return img.to_vec();
     }
+    // A valid input slice does not prove the wider index/plane vectors fit the target.
+    if !allocation_fits::<Vec<f32>>(ch) || !allocation_fits::<(usize, u8)>(hole.iter().filter(|&&hole| hole).count()) {
+        return img.to_vec();
+    }
     per_channel(w, h, ch, |c| {
         let mut v: Vec<f32> = (0..w * h).map(|i| if hole[i] { 0.0 } else { img[i * ch + c] }).collect();
         solve_membrane(w, h, hole, &mut v);
@@ -185,6 +225,14 @@ mod tests {
 
     fn disc(w: usize, h: usize, cx: f32, cy: f32, r: f32) -> Vec<bool> {
         (0..w * h).map(|i| ((i % w) as f32 - cx).hypot((i / w) as f32 - cy) < r).collect()
+    }
+
+    #[test]
+    fn auxiliary_vector_limits_are_checked_without_allocating() {
+        let max_cells = isize::MAX as usize / std::mem::size_of::<(usize, u8)>();
+        assert!(allocation_fits::<(usize, u8)>(max_cells));
+        assert!(!allocation_fits::<(usize, u8)>(max_cells + 1));
+        assert!(!allocation_fits::<Vec<f32>>(usize::MAX));
     }
 
     #[test]

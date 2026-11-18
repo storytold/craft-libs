@@ -117,6 +117,21 @@ fn downsample(l: &Level, ch: usize) -> Level {
     Level { w, h, img, hole }
 }
 
+// Search offsets add/subtract a full image dimension in i32. Summed-area queries
+// add two u32 entries before subtracting. Both the padded table and the larger
+// per-pixel nearest-neighbour/valid-coordinate arrays must fit a Vec.
+fn supported_grid(w: usize, h: usize) -> bool {
+    let max_dimension = (i32::MAX / 2) as usize;
+    w <= max_dimension
+        && h <= max_dimension
+        && w.checked_mul(h).is_some_and(|n| n <= (u32::MAX / 2) as usize)
+        && w.checked_mul(h).and_then(|n| n.checked_mul(std::mem::size_of::<(i32, i32)>())).is_some_and(|bytes| bytes <= isize::MAX as usize)
+        && w.checked_add(1)
+            .and_then(|pw| h.checked_add(1).and_then(|ph| pw.checked_mul(ph)))
+            .and_then(|n| n.checked_mul(std::mem::size_of::<u32>()))
+            .is_some_and(|bytes| bytes <= isize::MAX as usize)
+}
+
 /// Summed-area table of a boolean grid (`(w+1) × (h+1)`).
 fn integral(w: usize, h: usize, m: &[bool]) -> Vec<u32> {
     let mut s = vec![0u32; (w + 1) * (h + 1)];
@@ -182,7 +197,8 @@ impl Solver<'_> {
     /// SSD between the (clipped) target patch at `t` and the source patch at `s`, per sample.
     fn dist(&self, t: (i32, i32), s: (i32, i32), cutoff: f32) -> f32 {
         let (w, h, ch, r) = (self.w as i32, self.h as i32, self.ch, self.r);
-        let full = ((2 * r + 1) * (2 * r + 1)) as f32 * ch as f32;
+        let diameter = f64::from(2 * r + 1);
+        let full = (diameter * diameter) as f32 * ch as f32;
         let mut sum = 0.0f32;
         let mut n = 0usize;
         for dy in -r..=r {
@@ -396,11 +412,16 @@ pub fn complete_with(
     if hole.is_empty() {
         return Ok(Some(img.to_vec()));
     }
+    if !supported_grid(w, h) {
+        check()?;
+        return Ok(None);
+    }
     let Some((bx0, by0, bx1, by1)) = hole_bbox(w, h, hole) else { return Ok(Some(img.to_vec())) };
     let r = p.patch_radius.max(1);
     // A patch wider than the image has no place to be copied from, which is the `None` the search below
     // would reach anyway. Said here, before `2 * r + 1` and `r as i32` can overflow on an absurd radius.
     if r > (w.min(h) - 1) / 2 {
+        check()?;
         return Ok(None);
     }
     let psz = 2 * r + 1;
@@ -442,7 +463,7 @@ pub fn complete_with(
         let ri = r as i32;
         let hs = integral(lw, lh, &lhole);
         let mut valid = vec![false; lw * lh];
-        let mut valid_list = Vec::new();
+        let mut valid_count = 0;
         let mut targets = vec![false; lw * lh];
         for y in 0..lh as i32 {
             if y % 32 == 0 {
@@ -454,18 +475,29 @@ pub fn complete_with(
                 let i = y as usize * lw + x as usize;
                 if inside && cnt == 0 {
                     valid[i] = true;
-                    valid_list.push((x, y));
+                    valid_count += 1;
                 }
                 targets[i] = cnt > 0;
             }
         }
-        if valid_list.is_empty() {
+        if valid_count == 0 {
             if li == 0 {
                 return Ok(None);
             }
             prev = Some((lw, lh, limg));
             nnf.clear();
             continue;
+        }
+        // Count first and reserve exactly, avoiding both geometric capacity overflow and
+        // allocating coordinates for pixels that cannot be source centres.
+        let mut valid_list = Vec::with_capacity(valid_count);
+        for (i, &is_valid) in valid.iter().enumerate() {
+            if i % (lw * 32) == 0 {
+                check()?;
+            }
+            if is_valid {
+                valid_list.push(((i % lw) as i32, (i / lw) as i32));
+            }
         }
         let mut solver = Solver { w: lw, h: lh, ch, r: ri, img: &mut limg, hole: &lhole, valid, valid_list, targets, ctl: cancelled };
         // NNF init: upsampled from the coarser level where possible, random otherwise.
@@ -522,7 +554,7 @@ pub fn complete_with(
             } else if li + 1 == nlev || it == 0 {
                 full_search
             } else {
-                (4 * psz as i32).min(full_search)
+                (4 * psz).min(full_search as usize) as i32
             };
             for pass in 0..pm_iters {
                 check()?;
@@ -570,6 +602,16 @@ mod tests {
             }
         }
         (e / n as f32).sqrt()
+    }
+
+    #[test]
+    fn grid_limits_reject_narrowing_and_integral_overflow_without_allocating() {
+        assert!(supported_grid(32, 32));
+        assert!(supported_grid(16_384, 8_192));
+        assert_eq!(supported_grid(20_000, 20_000), usize::BITS > 32);
+        assert!(!supported_grid(i32::MAX as usize, 1));
+        assert!(!supported_grid(65_536, 65_536));
+        assert!(!supported_grid(usize::MAX, usize::MAX));
     }
 
     #[test]

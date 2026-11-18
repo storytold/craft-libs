@@ -38,6 +38,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn finite_extreme_membrane_boundaries_stay_finite() {
+        let img = [f32::MAX, 0.0, f32::MAX];
+        let out = membrane_fill(3, 1, 1, &img, &[false, true, false]);
+        assert_eq!(out, vec![f32::MAX; 3]);
+        assert_eq!(membrane_fill(3, 1, 1, &[-f32::MAX, 0.0, f32::MAX], &[false, true, false]), vec![-f32::MAX, 0.0, f32::MAX]);
+        // Also exercise the multigrid restriction and prolongation at extreme scale.
+        let hole: Vec<bool> = (0..256).map(|i| i % 16 > 0 && i % 16 < 15 && i / 16 > 0 && i / 16 < 15).collect();
+        assert_eq!(membrane_fill(16, 16, 1, &[f32::MAX; 256], &hole), vec![f32::MAX; 256]);
+        let img: Vec<f32> = (0..256).map(|i| if i % 16 < 8 { -f32::MAX } else { f32::MAX }).collect();
+        let out = membrane_fill(16, 16, 1, &img, &hole);
+        for ((&actual, &original), &unknown) in out.iter().zip(&img).zip(&hole) {
+            assert!(actual.is_finite() && actual >= -f32::MAX && actual <= f32::MAX);
+            if !unknown {
+                assert_eq!(actual.to_bits(), original.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn cancellation_precedes_an_oversized_patch_result() {
+        let mut hole = vec![false; 32 * 32];
+        hole[16 * 32 + 16] = true;
+        let p = CompleteParams { patch_radius: 16, ..CompleteParams::default() };
+        assert_eq!(complete_with(32, 32, 1, &[0.5; 32 * 32], &hole, &p, &|| true), Err(Cancelled));
+    }
+
+    #[test]
     fn hostile_sizes_do_not_panic() {
         assert_eq!(complete(4, 4, 3, &[0.0; 5], &[true; 16], &CompleteParams::default()), None);
         assert_eq!(complete(4, 4, 0, &[], &[true; 16], &CompleteParams::default()), None);
