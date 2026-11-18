@@ -590,9 +590,9 @@ impl<'a> CharacterControls<'a> {
 
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &words, values, families, picker.as_mut());
+            let family = family_field(ui, &words, values, families, None, picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &words, values, families);
+            let family = family_field(ui, &words, values, families, None);
             preview_family = family.preview;
             rested_family = family.rested;
             edits.extend(family.edits);
@@ -614,6 +614,7 @@ impl<'a> CharacterControls<'a> {
                     value: values.size,
                     range: SIZE_RANGE,
                     presets: &size_presets,
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, size);
                 edits.extend(number_change(event, CharacterChange::Size));
@@ -637,6 +638,7 @@ impl<'a> CharacterControls<'a> {
                     range: TRACKING_RANGE,
                     percent: false,
                     presets: &tracking_presets,
+                    disabled: None,
                 };
                 let (event, _) = lengths.plain(ui, tracking);
                 edits.extend(number_change(event, CharacterChange::Tracking));
@@ -649,6 +651,7 @@ impl<'a> CharacterControls<'a> {
                     range: SCALE_RANGE,
                     percent: true,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.plain(ui, vertical);
                 edits.extend(number_change(event, CharacterChange::VerticalScale));
@@ -659,6 +662,7 @@ impl<'a> CharacterControls<'a> {
                     range: SCALE_RANGE,
                     percent: true,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.plain(ui, horizontal);
                 edits.extend(number_change(event, CharacterChange::HorizontalScale));
@@ -670,6 +674,7 @@ impl<'a> CharacterControls<'a> {
                     value: values.baseline_shift,
                     range: SHIFT_RANGE,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, shift);
                 edits.extend(number_change(event, CharacterChange::BaselineShift));
