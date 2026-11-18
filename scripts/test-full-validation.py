@@ -179,6 +179,7 @@ class PackageFormatting(unittest.TestCase):
             ["cargo", "fmt", "--check", "--package", "craft-a"],
             ["cargo", "fmt", "--check", "--package", "craft-b"],
         ])
+        self.assertEqual(execute.call_args_list[0].kwargs["encoding"], "utf-8")
         for call in execute.call_args_list:
             self.assertEqual(call.kwargs["cwd"], ROOT)
             self.assertTrue(call.kwargs["check"])

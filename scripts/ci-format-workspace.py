@@ -31,7 +31,7 @@ def workspace_names(metadata):
 def check_workspace():
     result = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--offline", "--locked", "--format-version", "1"],
-        cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True,
+        cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True, encoding="utf-8",
     )
     names = workspace_names(json.loads(result.stdout))
     # From this virtual workspace root, cargo fmt normally checks all workspace packages.
