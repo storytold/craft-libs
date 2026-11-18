@@ -182,7 +182,11 @@ impl<D: Clone + PartialEq> CloseGuard<D> {
     /// the apply-to-all answer clears, and the guard asks about that document again.
     pub fn retry_after_failure(&mut self) -> GuardStep<D> {
         let Some(doc) = self.saving.take() else { return self.cancel() };
-        self.pending.push_front(doc.clone());
+        // A save keeps its document at the front until `saved`; only a document forgotten while
+        // the save ran needs putting back.
+        if self.pending.front() != Some(&doc) {
+            self.pending.push_front(doc.clone());
+        }
         self.apply_to_all = None;
         GuardStep::Ask(doc)
     }
