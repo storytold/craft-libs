@@ -179,6 +179,9 @@ fn injected_caps_lock_holds_until_cleared() {
     assert_eq!(rig.host().injected_caps_lock(), None);
 }
 
+/// Per pass: whether the waiter had its reply by the pass's end, and the pointer position the pass saw.
+type PassLog = Rc<RefCell<Vec<(bool, Option<Pos2>)>>>;
+
 /// A fixture whose UI polls `channel` at the end of each pass, as an application does after its UI, with `discard`
 /// asking egui to run the pass again on the passes it is true for; `answered` records, per pass, whether the waiter
 /// had its reply by the pass's end and the pointer position the pass saw.
@@ -186,7 +189,7 @@ fn polling_fixture(
     channel: Rc<RefCell<craft_automation::control::ControlChannel>>,
     reply: Rc<std::sync::mpsc::Receiver<craft_automation::control::ControlResponse>>,
     discard: impl Fn(usize) -> bool + 'static,
-) -> (Fixture, Rc<RefCell<Vec<(bool, Option<Pos2>)>>>) {
+) -> (Fixture, PassLog) {
     let answered = Rc::new(RefCell::new(Vec::new()));
     let seen = answered.clone();
     let fx = Fixture::new(move |ui| {
