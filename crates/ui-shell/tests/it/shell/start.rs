@@ -111,6 +111,9 @@ fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     }
 }
 
+/// The template's detail line; a tile with a detail is named "name, detail".
+const TEMPLATE_DETAIL: &str = "210 × 297 mm";
+
 /// How often the host section before Recent repeats its line. The line is one unwrapped run, so the section's least
 /// width is wider than the room where the plain page has its rail beside.
 const HOST_TEXT_REPEATS: usize = 14;
@@ -119,7 +122,7 @@ const HOST_TEXT_REPEATS: usize = 14;
 /// Recent (labelled "Before", with a long line) and one after the built-in sections ("After").
 fn host_screen(sections: bool, offers_new: bool) -> Fixture {
     let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
-    let templates = vec![Template::new("a4", "A4", "210 × 297 mm")];
+    let templates = vec![Template::new("a4", "A4", TEMPLATE_DETAIL)];
     let links = vec![StartLink::url("Docs", None, "https://example.test/docs")];
     let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
     let mut fixture = Fixture::new(move |ui| {
@@ -168,7 +171,7 @@ fn host_sections_sit_at_their_place_and_count_in_the_rail_decision() {
     let before = target(&hosted, "Before");
     assert!(before.rect.max.y <= target(&hosted, "Poster.psd").rect.min.y, "BeforeRecent sits above Recent");
     let after = target(&hosted, "After");
-    assert!(after.rect.min.y >= target(&hosted, "A4").rect.max.y, "AfterSections sits below Templates");
+    assert!(after.rect.min.y >= target(&hosted, &format!("A4, {TEMPLATE_DETAIL}")).rect.max.y, "AfterSections sits below Templates");
 
     let mut no_new = host_screen(false, false);
     assert!(no_new.by_label("New…").is_none(), "without New the page row has no New");
