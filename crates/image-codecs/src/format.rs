@@ -101,7 +101,12 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
          `avif-decode` feature, native targets only (on wasm32 a decoder panic would abort). A build \
          with only one of them reads or writes AVIF, not both.",
     ),
-    (Format::Jxl, "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder; JPEG XL reading is tracked separately and is not yet available."),
+    (
+        Format::Jxl,
+        "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder in every build; JPEG XL decode \
+         (craft-jxl on jxl-oxide, pure Rust) is behind the non-default `jxl` feature, which official \
+         builds enable. Without the feature JPEG XL is written but not read.",
+    ),
     (
         Format::Heif,
         "HEIC decode uses heic-rs (pure Rust, in the optional craft-heif crate behind the \
@@ -330,7 +335,7 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
-        Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        Format::Jxl => FormatCaps { read: cfg!(feature = "jxl"), depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
