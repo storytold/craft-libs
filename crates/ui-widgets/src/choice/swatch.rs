@@ -7,7 +7,7 @@ use crate::contract::{
     Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
     Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
+use crate::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth, WellFill};
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
 use craft_behavior::{Metrics, Mixed, Sense, Value};
@@ -129,7 +129,7 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 pub struct Swatch<T: Value + 'static = ()> {
     #[common]
     common: Common,
-    color: Mixed<Srgba>,
+    color: Mixed<Option<Srgba>>,
     /// The value this swatch stands for in its `RadioGroup`.
     member: Option<T>,
     /// A cell of a table of touching swatches: `size.icon.md` square with square corners.
@@ -155,7 +155,7 @@ impl Swatch<()> {
     pub fn new(label: impl Into<crate::runtime::env::Label>, color: impl Into<Mixed<Srgba>>) -> Self {
         Swatch {
             common: Common::new(),
-            color: color.into(),
+            color: some_color(color.into()),
             member: None,
             cell: false,
             well: false,
@@ -165,6 +165,20 @@ impl Swatch<()> {
             activation: None,
         }
         .label(label)
+    }
+
+    /// A swatch that can be "no colour": `None` paints the empty well and reads as "None".
+    pub fn optional(label: impl Into<crate::runtime::env::Label>, color: impl Into<Mixed<Option<Srgba>>>) -> Swatch<()> {
+        let _ = (label, color);
+        todo!("CM-C25b")
+    }
+}
+
+/// A colour as one that may also be "no colour".
+fn some_color(color: Mixed<Srgba>) -> Mixed<Option<Srgba>> {
+    match color {
+        Mixed::Same(color) => Mixed::Same(Some(color)),
+        Mixed::Mixed => Mixed::Mixed,
     }
 }
 
@@ -250,10 +264,13 @@ impl<T: Value + 'static> Component for Swatch<T> {
         } else if self.cell {
             access.role(Role::LIST_BOX_OPTION);
         }
-        match self.color.same() {
-            Some(color) => {
+        match self.color.same().copied() {
+            Some(Some(color)) => {
                 access.value(color.to_hex());
-                access.color(*color);
+                access.color(color);
+            }
+            Some(None) => {
+                access.value(cx.words::<ChoiceWords>().swatch_none.as_str());
             }
             None => {
                 access.value(cx.words::<ChoiceWords>().swatch_mixed.as_str());
@@ -266,17 +283,25 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
-        let pick_color =
-            self.picker.filter(|_| self.activation.is_some()).map(|key| ColorRequest::new(key, self.color.same().copied()).title(cx.label()));
+        let pick_color = self
+            .picker
+            .filter(|_| self.activation.is_some())
+            .map(|key| ColorRequest::new(key, self.color.same().copied().flatten()).title(cx.label()));
         SwatchOutput { response: cx.response.clone(), clicked: self.activation.is_some(), activation: self.activation, pick_color }
     }
 }
 
 /// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
 /// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool) {
+fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Option<Srgba>>, marked: bool) {
     let shape = PaintShape::Rect(well, style.radius);
-    draw.swatch_well(well, style.radius, color.same().copied());
+    // P3(pdf-comments-w5): CM-C25a
+    let fill = match color {
+        Mixed::Same(Some(color)) => WellFill::Color(color),
+        Mixed::Same(None) => WellFill::None,
+        Mixed::Mixed => WellFill::Mixed,
+    };
+    draw.swatch_well(well, style.radius, fill);
     draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge));
     if marked {
         let inside = PaintShape::Rect(well.shrink(draw.width(StrokeWidth::Thin)), style.radius);
@@ -290,14 +315,20 @@ fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet
 /// ring when `selected`.
 #[derive(Clone, Copy, Debug)]
 pub struct SwatchFace {
-    color: Mixed<Srgba>,
+    color: Mixed<Option<Srgba>>,
     selected: bool,
 }
 
 impl SwatchFace {
     /// The face of `color`, not selected.
     pub fn new(color: impl Into<Mixed<Srgba>>) -> Self {
-        SwatchFace { color: color.into(), selected: false }
+        SwatchFace { color: some_color(color.into()), selected: false }
+    }
+
+    /// The face of a colour that can be "no colour": `None` paints the empty well.
+    pub fn optional(color: impl Into<Mixed<Option<Srgba>>>) -> SwatchFace {
+        let _ = color;
+        todo!("CM-C25b")
     }
 
     /// Whether the selected ring shows.
@@ -309,7 +340,8 @@ impl SwatchFace {
 
     /// Paints the face filling `rect`.
     pub fn paint(&self, cx: &ContentPainterCx<'_>, rect: Rect) {
-        let key = Swatch::new("", self.color).style_key();
+        // P3(pdf-comments-w5): CM-C25b: the key does not read the colour.
+        let key = Swatch::new("", Mixed::<Srgba>::Mixed).style_key();
         let scope = cx.style_cx();
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };

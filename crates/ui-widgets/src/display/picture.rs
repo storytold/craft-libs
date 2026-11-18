@@ -45,6 +45,8 @@ enum Source<'a> {
     Image { key: u64, image: &'a dyn Fn() -> ColorImage },
     /// A content painter that paints into the picture's rect.
     Painter(Paint<'a>),
+    /// An SVG asset, rasterised at the picture's drawn size.
+    Svg(#[allow(dead_code)] &'static [u8]), // P3(pdf-chrome-w2): CH-C26
 }
 
 /// A picture of an image the caller makes (`new`) or of what a content painter paints (`painter`); both sit in a rect
@@ -81,6 +83,12 @@ impl<'a> Picture<'a> {
     /// names it for a screen reader; an empty one leaves it decorative.
     pub fn painter(label: impl Into<Label>, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + 'a) -> Self {
         Picture::from_source(label, Source::Painter(Box::new(paint))).aspect(aspect)
+    }
+
+    /// A picture of the SVG asset `svg`, rasterised through `craft-svg` at the picture's drawn size; a malformed or
+    /// oversized SVG draws nothing. `label` names it for a screen reader; an empty one leaves it decorative.
+    pub fn svg(label: impl Into<Label>, svg: &'static [u8]) -> Self {
+        Picture::from_source(label, Source::Svg(svg))
     }
 
     fn from_source(label: impl Into<Label>, source: Source<'a>) -> Self {
@@ -137,6 +145,7 @@ impl Component for Picture<'_> {
                 ui.content_painter(cx).picture(texture.id, target, whole, 0.0);
             }
             Source::Painter(paint) => paint(&ui.content_painter(cx), cx.content_rect),
+            Source::Svg(_) => todo!("CH-C26"),
         }
     }
 

@@ -34,12 +34,30 @@ pub struct PostedNotice {
     /// Stays until dismissed, whatever the center's timeout (an error the user must read).
     #[prop(flag)]
     sticky: bool,
+    /// How far the job has got, between 0 and 1: the card shows a progress bar and the percentage.
+    #[prop]
+    progress: Option<f32>,
+    /// The notice's own action; activating it ends the notice as `NoticeEnd::Action`.
+    #[prop(into)]
+    action: Option<Label>,
+    /// The message under the title: a title and a message on one card.
+    #[prop(into)]
+    message: Option<String>,
 }
 
 impl PostedNotice {
     /// A notice titled `title` in the neutral tone.
     pub fn new(title: impl Into<String>) -> Self {
-        PostedNotice { title: title.into(), lines: Vec::new(), tone: Tone::Neutral, dismiss_key: None, sticky: false }
+        PostedNotice {
+            title: title.into(),
+            lines: Vec::new(),
+            tone: Tone::Neutral,
+            dismiss_key: None,
+            sticky: false,
+            progress: None,
+            action: None,
+            message: None,
+        }
     }
 }
 
@@ -53,6 +71,8 @@ pub enum NoticeEnd {
     Expired(ToastId),
     /// The window's card limit removed the notice to make room for a newer one.
     Dropped(ToastId),
+    /// The notice's own action ([`PostedNotice::action`]) was activated.
+    Action(ToastId),
     /// "Don't Show Again": the app stores `key` as silenced.
     #[non_exhaustive]
     Silenced {
@@ -146,6 +166,13 @@ impl NoticeCenter {
     /// Keeps notice `id` until it is closed, whatever the timeout (an error the user must read).
     pub fn keep(&self, ctx: &Context, id: ToastId) {
         toast::keep(ctx, id);
+    }
+
+    /// Sets how far the job of notice `id` has got, `fraction` between 0 and 1, and its message; the center keeps
+    /// tracking the id.
+    pub fn set_progress(&self, ctx: &Context, id: ToastId, fraction: f32, message: Option<Label>) {
+        let _ = (ctx, id, fraction, message);
+        todo!("CH-C16")
     }
 
     /// Removes a notice the app no longer needs (the job it reported on was cancelled).

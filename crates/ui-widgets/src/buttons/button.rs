@@ -19,6 +19,17 @@ use std::ops::Deref;
 /// The part a loading button shows its spinner in.
 const SPINNER: PartKey = PartKey::new("spinner");
 
+/// The form of a button's face.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ButtonForm {
+    /// The ordinary push button.
+    #[default]
+    Push,
+    /// The command-search opener: a text field's face with the search glyph, the placeholder and the command's chord.
+    Search,
+}
+
 /// The style of a push button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
@@ -152,6 +163,10 @@ pub struct Button<'a> {
     /// that names an item at the reading start).
     #[prop]
     align: HAlign,
+    /// The face: a push button, or the command-search opener.
+    #[style_key]
+    #[prop]
+    form: ButtonForm,
 }
 
 impl<'a> Button<'a> {
@@ -166,8 +181,15 @@ impl<'a> Button<'a> {
             tint: None,
             least_width: None,
             align: HAlign::Center,
+            form: ButtonForm::Push,
         }
         .label(label)
+    }
+
+    /// The command-search opener: a search field's face showing `placeholder` and the chord of `command`.
+    pub fn search(command: impl Into<CommandRef>, placeholder: impl Into<Label>) -> Self {
+        let _ = (command, placeholder);
+        todo!("CH-C8")
     }
 
     /// A button bound to `command`: its label, enabled state and activation follow the command.

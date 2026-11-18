@@ -67,6 +67,7 @@ use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Focus as _, Outcome, Pad, PaintUi,
     PartsCx, Props as _, Role, Sizing, WordSetCx as _,
 };
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::runtime::memory::sub;
@@ -110,12 +111,21 @@ pub struct PanelTitle {
     pub title: Label,
     /// Whether the panel's tab shows a close button, where the group's tabs close.
     pub closable: bool,
+    /// The panel's toggle command: the tab resolves it for its marker and its hint.
+    pub command: Option<CommandRef>,
 }
 
 impl PanelTitle {
     /// A panel `key` titled `title`, not closable from its tab.
     pub fn new(key: PanelKey, title: impl Into<Label>) -> Self {
-        PanelTitle { key, title: title.into(), closable: false }
+        PanelTitle { key, title: title.into(), closable: false, command: None }
+    }
+
+    /// The panel's toggle command.
+    #[must_use]
+    pub fn command(self, command: Option<CommandRef>) -> Self {
+        let _ = command;
+        todo!("CH-C19")
     }
 
     /// Whether the panel's tab shows a close button.

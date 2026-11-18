@@ -2,6 +2,7 @@
 
 use crate::contract::SizeLimits;
 use crate::primitives::IconSpec;
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_host::target::WindowKind;
 use egui::Vec2;
@@ -130,6 +131,9 @@ pub struct PanelSpec {
     /// The grid the panel lays its content in, which makes a column with steps whole content columns wide and as
     /// tall as its content. `None` for a panel that fills the width it gets.
     pub grid: Option<DockGrid>,
+    /// The panel's toggle command: an iconic cell's face is `IconButton::command` of it, so the marker and the hint
+    /// follow the command.
+    pub command: Option<CommandRef>,
 }
 
 impl PanelSpec {
@@ -145,7 +149,15 @@ impl PanelSpec {
             window_kind: WindowKind::Tool,
             canvas: false,
             grid: None,
+            command: None,
         }
+    }
+
+    /// The panel's toggle command.
+    #[must_use]
+    pub fn command(self, command: impl Into<CommandRef>) -> Self {
+        let _ = command;
+        todo!("CH-C19")
     }
 
     /// The panel's icon.

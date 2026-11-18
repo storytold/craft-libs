@@ -159,8 +159,9 @@ impl ListRow<'_> {
         let style = cx.style;
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
+        // P3(pdf-chrome-w3): CH-C11: spans paint as their joined text until the writer lays them out as spans.
         let wrapped = self.lines.as_ref().map(|text| {
-            let run = TextRun::new(text.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(self.lines_wrap());
+            let run = TextRun::new(text.text()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(self.lines_wrap());
             draw.layout(&run, self.text_block(label, sizes, 0.0).0.width())
         });
         let lines = wrapped.as_ref().map_or(0.0, |layout| sizes.gap + layout.size().y);

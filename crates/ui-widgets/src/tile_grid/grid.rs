@@ -11,7 +11,7 @@ mod stories;
 use super::headers::Outline;
 use super::layout::{Around, ArrangeSpacing, GridLayout, Recipe, Slot, TailRow, TileGroup, Tiling, arrange, aspects_of, slot_at};
 use super::tile::AroundPicture;
-use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
+use super::{CaptionPlace, Tile, TileActionPlace, TilePartEvent, TileZoom, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
     ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, Meta as _, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
@@ -55,6 +55,22 @@ pub enum RatingKeys {
     CommandDigits,
 }
 
+/// The size of a grid's tiles.
+#[non_exhaustive]
+pub enum GridZoom<'a> {
+    /// A picture side factor the host holds.
+    Fixed(f64),
+    /// A factor the grid steps itself: Cmd/Ctrl `=`, `-` and `0` and Ctrl/Cmd with the wheel or a pinch, through
+    /// `TileZoom::step`, keeping the tile under the pointer in place.
+    Bound(Bind<'a, f64>, TileZoom),
+}
+
+impl Default for GridZoom<'_> {
+    fn default() -> Self {
+        GridZoom::Fixed(1.0)
+    }
+}
+
 /// What the grid reports besides the collection's events.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -87,6 +103,12 @@ pub enum GridEvent<K> {
     /// Cmd/Ctrl with `=` or `+`, `-` or `0` on a grid that `zooms`: a step of the tile size. Cmd/Ctrl+0 is a rating key
     /// under `RatingKeys::CommandDigits`, so it clears the rating there instead of resetting the size.
     Zoom(ZoomStep),
+    /// The insert gap before display position `at` was activated ([`TileGrid::insert_gaps`]).
+    #[non_exhaustive]
+    Insert {
+        /// The display position the insertion goes before.
+        at: usize,
+    },
     /// A group header asks for its context menu: a secondary click, the context-menu key or Shift+F10.
     #[non_exhaustive]
     GroupMenu {
@@ -217,8 +239,11 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     #[prop(quantity = "aspect ratio")]
     aspect: f32,
     /// The picture side as a multiple of the thumbnail side the grid sizes from; 1 is that side.
-    #[prop(quantity = "zoom factor")]
-    zoom: f32,
+    zoom: GridZoom<'a>,
+    /// Where every tile's hover actions sit.
+    #[allow(dead_code)] // P3(pdf-workflows-w2): CV-C25
+    #[prop]
+    action_place: TileActionPlace,
     /// The thumbnail size the zoom is a factor of; `None` is the card thumbnail.
     #[prop]
     thumb_size: Option<ThumbSize>,
@@ -304,7 +329,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             justified: false,
             fill_row: false,
             aspect: 1.0,
-            zoom: 1.0,
+            zoom: GridZoom::Fixed(1.0),
+            action_place: TileActionPlace::Corner,
             thumb_size: None,
             content_cells: false,
             card_columns: 0,
@@ -328,6 +354,21 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             events: Vec::new(),
         }
         .label(label)
+    }
+
+    /// The size of the tiles: a factor the host holds, or one the grid steps itself through a binding.
+    #[must_use]
+    pub fn zoom(self, zoom: GridZoom<'a>) -> Self {
+        let _ = zoom;
+        todo!("WF-W12")
+    }
+
+    /// Insert gaps between tiles, keyed by display position; `label` names the gap before a position. None show
+    /// while a drag is held. A press on one reports [`GridEvent::Insert`].
+    #[must_use]
+    pub fn insert_gaps(self, label: &'a dyn Fn(usize) -> Label) -> Self {
+        let _ = label;
+        todo!("CV-C26")
     }
 
     /// Which keys rate the selected tiles. Digit keys reach the grid as digits only while this is on.
@@ -447,7 +488,14 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     fn picture_side(&self, style: &GridSizes, item: Option<Vec2>, around: Around) -> f32 {
         match item.filter(|_| self.content_cells) {
             Some(item) => (item.x - around.size().x).max(1.0),
-            None => style.picture_side(self.zoom, self.thumb_size),
+            None => {
+                // P3(pdf-workflows-w2): CV-C27: a bound zoom reads its binding's value.
+                let zoom = match &self.zoom {
+                    GridZoom::Fixed(factor) => *factor as f32,
+                    _ => 1.0,
+                };
+                style.picture_side(zoom, self.thumb_size)
+            }
         }
     }
 

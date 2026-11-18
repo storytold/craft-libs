@@ -1,6 +1,6 @@
 //! Stories of `TileGrid`.
 
-use super::{GridEvent, RatingKeys, TileGrid, TileGridOutput, TileGroup};
+use super::{GridEvent, GridZoom, RatingKeys, TileGrid, TileGridOutput, TileGroup};
 use crate::contract::{ShowCollection as _, SpaceAction};
 use crate::list::ThumbAspect;
 use crate::testing::pictures::StoryPictures;
@@ -103,7 +103,7 @@ impl ItemSource<usize> for Photos {
 fn grid(ui: &mut Ui, data: &mut StoryData, grid: TileGrid<'_, usize>, count: usize, zoom: f64) -> TileGridOutput<usize> {
     let pictures = StoryPictures::of(ui.ctx());
     let zoom = data.value("zoom", zoom);
-    let grid = grid.rating_keys(RatingKeys::CommandDigits).space(SpaceAction::Preview).zooms().zoom(*zoom as f32);
+    let grid = grid.rating_keys(RatingKeys::CommandDigits).space(SpaceAction::Preview).zooms().zoom(GridZoom::Fixed(*zoom)); // P3(pdf-workflows-w2): WF-W12
     let mut ratings = Ratings::of(data, count);
     let out = grid.show_items(ui, &Photos(count), &mut |key, _| photo(&pictures, *key, ratings.0[*key]));
     ratings.apply(&out.events);

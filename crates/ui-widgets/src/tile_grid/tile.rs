@@ -48,6 +48,30 @@ pub enum TilePartEvent {
     Scrub(f32),
     /// An activation of the corner action ([`Tile::corner_action`]).
     CornerAction,
+    /// An activation of the `i`-th hover action ([`Tile::action`]), counted from 0 in the order added.
+    Action(usize),
+}
+
+/// Where a tile's hover actions sit.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TileActionPlace {
+    /// In the picture's end-top corner.
+    #[default]
+    Corner,
+    /// In a band along the picture's edge.
+    Band,
+}
+
+/// How a stacked tile shows its stack.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StackLook {
+    /// The ×N badge in the end-top corner.
+    #[default]
+    Badge,
+    /// Two offset sheets inside the cell.
+    Sheets,
 }
 
 /// What a tile returns.
@@ -357,6 +381,14 @@ pub struct Tile<'a> {
     /// The check box, in check mode; `None` outside it.
     #[prop]
     check: Option<ToggleState>,
+    /// Where the hover actions sit: the grid's, applied to its tiles.
+    #[allow(dead_code)] // P3(pdf-workflows-w2): CV-C25
+    #[prop]
+    action_place: TileActionPlace,
+    /// The icon face reads in this colour from data in place of the face colour.
+    #[allow(dead_code)] // P3(pdf-workflows-w2): CH-C10b
+    #[prop]
+    hue: Option<DataColor>,
     aspect: ThumbAspect,
     first: Option<ThumbPaint<'a>>,
     icon: Option<IconSpec<'static>>,
@@ -395,6 +427,8 @@ impl<'a> Tile<'a> {
             icon: None,
             renaming: false,
             check: None,
+            action_place: TileActionPlace::Corner,
+            hue: None,
             aspect: ThumbAspect::SQUARE,
             first: None,
             badges: Vec::new(),
@@ -425,6 +459,21 @@ impl<'a> Tile<'a> {
         self.icon = Some(icon.into());
         self.first = None;
         self
+    }
+
+    /// A hover action: an `IconButton::command` face shown while the pointer is over the tile or it has visible focus;
+    /// repeatable. Its activation is [`TilePartEvent::Action`] with its index.
+    #[must_use]
+    pub fn action(self, icon: IconId, command: impl Into<CommandRef>) -> Self {
+        let _ = (icon, command);
+        todo!("CV-C25")
+    }
+
+    /// How the stack of a stacked tile shows.
+    #[must_use]
+    pub fn stack_look(self, look: StackLook) -> Self {
+        let _ = look;
+        todo!("WF-W11")
     }
 
     /// A corner badge.

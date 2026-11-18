@@ -4,8 +4,8 @@ use super::button::ButtonOutput;
 use super::face::{self, tinted};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PopupKind, Props, Role, Styled as _};
 use crate::controls::disclosure::DisclosureGlyph;
-use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
-use crate::runtime::commands::CommandRef;
+use crate::primitives::{Draw, IconSpec, PaintShape, StrokeWidth};
+use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::style::{ComponentStyle, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook};
 use craft_behavior::{Metrics, Sense};
 use craft_i18n::Direction;
@@ -14,6 +14,34 @@ use craft_theme::{
     variant::{Emphasis, Tone},
 };
 use egui::{Pos2, Vec2};
+
+/// The marker dot's look: the one reading of the tokens that `IconButton` and `Tab` paint it from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
+pub(crate) struct MarkerStyle {
+    /// The dot's diameter.
+    pub(crate) side: f32,
+    /// The dot's fill.
+    pub(crate) color: StyleColor,
+    /// The dot's edge.
+    pub(crate) edge: StyleColor,
+}
+
+impl MarkerStyle {
+    /// The marker look from the tokens.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
+    pub(crate) fn of(cx: &StyleCx<'_>) -> MarkerStyle {
+        let _ = cx;
+        todo!("CH-C7")
+    }
+}
+
+/// Paints the marker dot centred on `center`.
+#[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
+pub(crate) fn paint_marker(draw: &Draw<'_>, center: Pos2, style: &MarkerStyle) {
+    let _ = (draw, center, style);
+    todo!("CH-C7")
+}
 
 /// The style of an icon button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -95,6 +123,13 @@ impl<'a> IconButton<'a> {
     /// An icon button bound to `command`: its label, enabled state and activation follow the command.
     pub fn command(icon: impl Into<IconSpec<'a>>, command: impl Into<CommandRef>) -> Self {
         <IconButton as Props>::command(IconButton::new(icon), command)
+    }
+
+    /// Whether `command`'s marker shows: it is marked and its content is not shown.
+    #[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
+    pub fn shows_marker(command: &ResolvedCommand) -> bool {
+        let _ = command;
+        todo!("CH-C7")
     }
 }
 

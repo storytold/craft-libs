@@ -35,12 +35,14 @@ pub struct DocumentTab<D> {
     pub detail: Option<Label>,
     /// The accessible name of the close button, for a tab whose close cancels the opening.
     pub close_label: Option<Label>,
+    /// Hover text; `DocumentTabs::show` passes it as the tab's tooltip. A tab whose label is cut shows the full label, then this text on the next line.
+    pub tooltip: Option<Label>,
 }
 
 impl<D> DocumentTab<D> {
     /// A closable, unmodified tab for document `id` named `label`.
     pub fn new(id: D, label: impl Into<Label>) -> Self {
-        DocumentTab { id, label: label.into(), modified: false, closable: true, progress: None, detail: None, close_label: None }
+        DocumentTab { id, label: label.into(), modified: false, closable: true, progress: None, detail: None, close_label: None, tooltip: None }
     }
 
     /// Unsaved changes.
@@ -76,6 +78,13 @@ impl<D> DocumentTab<D> {
     pub fn close_label(mut self, label: impl Into<Label>) -> Self {
         self.close_label = Some(label.into());
         self
+    }
+
+    /// Hover text for the tab.
+    #[must_use]
+    pub fn tooltip(self, text: impl Into<Label>) -> Self {
+        let _ = text;
+        todo!("CH-C6")
     }
 }
 

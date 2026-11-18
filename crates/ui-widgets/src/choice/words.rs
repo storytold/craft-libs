@@ -5,6 +5,7 @@ craft_ui::words! {
     pub struct ChoiceWords {
         unrated: "choice.ratingUnrated" = "Unrated";
         swatch_mixed: "choice.swatchMixed" = "Mixed";
+        swatch_none: "choice.swatchNone" = "None";
         stars: count "choice.ratingStars" = "{n} star" | "{n} stars";
     }
 }

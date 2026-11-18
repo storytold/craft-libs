@@ -7,11 +7,13 @@
 
 mod calendar;
 mod codec;
+mod popover;
 #[cfg(feature = "testing")]
 mod stories;
 
 pub use calendar::{Calendar, CalendarOutput, CalendarStyle, CalendarView, local_month_grid, month_grid};
 pub use codec::DateCodec;
+pub use popover::{CalendarPopover, CalendarPopoverStyle};
 
 use super::words::PickerWords;
 use crate::buttons::{IconButton, Link};

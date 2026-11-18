@@ -47,6 +47,14 @@ impl<'a> PopupList<'a> {
         PopupList { common: Common::new(), props, open, closed: None }.label(label)
     }
 
+    /// Changes the popup's overlay as `Popover::overlay` does; callers hang the list from a part with
+    /// `Overlay::opener_anchor(Anchor::Rect(..))`.
+    #[must_use]
+    pub fn overlay(self, change: impl FnOnce(Overlay) -> Overlay) -> Self {
+        let _ = change;
+        todo!("FM-PF12")
+    }
+
     /// The field the popup hangs from. The popup closes when the opener is no longer shown.
     #[must_use]
     pub fn opened_by(mut self, opener: &Response) -> Self {

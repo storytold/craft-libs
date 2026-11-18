@@ -9,7 +9,7 @@ use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
     Styled as _, WordSetCx as _,
 };
-use crate::primitives::{Completer, IconSpec, TextOptions, TextRun};
+use crate::primitives::{Completer, IconSpec, SubmitKey, TextOptions, TextRun};
 use crate::runtime::env::{Label, Message};
 use craft_behavior::{Codec, IconId, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
@@ -202,6 +202,13 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     pub fn submits(mut self) -> Self {
         self.options.submits = true;
         self
+    }
+
+    /// The key that submits a multi-line field (`TextOptions::submit_key`).
+    #[must_use]
+    pub fn submit_key(self, key: SubmitKey) -> Self {
+        let _ = key;
+        todo!("CM-C24b")
     }
 
     /// Completion candidates for the text before the caret. The text adapter owns the list and the keys it takes.

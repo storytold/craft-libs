@@ -75,6 +75,9 @@ pub struct Dialog<'a> {
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
+    /// A muted note after the title.
+    #[prop(into)]
+    title_note: Option<Label>,
     /// The footer stands in a column at the end edge, beside the whole body.
     side: bool,
     closed: Option<CloseReason>,
@@ -113,6 +116,7 @@ impl<'a> Dialog<'a> {
             buttons: Vec::new(),
             enter: false,
             closable: true,
+            title_note: None,
             side: false,
             closed: None,
             picked: None,
@@ -464,7 +468,7 @@ impl Container for Dialog<'_> {
         if self.holds_outer_gesture() {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable));
+        frame::header(ui, cx, frame::close_action(self.closable), self.title_note.as_ref());
         self.keep_window_draggable(ui);
     }
 

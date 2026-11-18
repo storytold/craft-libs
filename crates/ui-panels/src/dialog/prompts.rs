@@ -275,6 +275,14 @@ impl StandardPrompt {
         Self::new(PromptKind::Custom).message(message)
     }
 
+    /// The answer Enter gives and the button drawn as default: Proceed unless set. A choice with no button leaves
+    /// Proceed.
+    #[must_use]
+    pub fn default_choice(self, choice: PromptChoice) -> Self {
+        let _ = choice;
+        todo!("DG-C16")
+    }
+
     /// Adds a paragraph after the message, a label of its own.
     #[must_use]
     pub fn paragraph(mut self, paragraph: impl Into<Label>) -> Self {

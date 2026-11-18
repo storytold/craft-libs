@@ -137,13 +137,28 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     opens: Side,
     dropped: Option<ToolDropped>,
     opener: Option<Response>,
+    /// Whether the drawer searches: a searchable drawer shows a search field under its title and filters its tool rows.
+    #[prop]
+    kind: DrawerKind,
+}
+
+/// What a `ToolbarDrawer` offers besides its list.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DrawerKind {
+    /// The list alone.
+    #[default]
+    Plain,
+    /// A `TextField::search` under the title filters the tool rows; the query lives in the popover's kept state and
+    /// clears on close.
+    Searchable,
 }
 
 impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
     /// A drawer beside `rail` (the rail's rect), listing `groups`, over a toolbar of `toolbar` slots. `dropped` is the
     /// drag the rail took in this pass (`ToolRailOutput::dropped`); the drawer turns it into an edit.
     pub fn new(rail: Rect, groups: &'a [DrawerGroup<T>], toolbar: &'a [ToolSlot<T>], dropped: Option<ToolDropped>) -> Self {
-        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped, opener: None }
+        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped, opener: None, kind: DrawerKind::Plain }
     }
 
     /// The control that opened the drawer, the rail's Edit Toolbar button (`ToolRailOutput::edit_toolbar`): the focus
@@ -216,7 +231,8 @@ fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener } = self;
+        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener, kind } = self;
+        let _ = kind; // P3(pdf-chrome-w6): CH-C20
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
         let os = os_of(ui.ctx());

@@ -130,8 +130,9 @@ impl Component for ListRow<'_> {
         let probe = self.place_in(&[], sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(room, height)), rtl);
         let probe_min = probe.min_width + toggles;
         let band = cx.room.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
+        // P3(pdf-chrome-w3): CH-C11: spans measure as their joined text until the writer measures them as spans.
         let wrapped = self.lines.as_ref().map_or(0.0, |text| {
-            let run = TextRun::new(text.as_str()).role(cx.style.detail.role).wrap(self.lines_wrap());
+            let run = TextRun::new(text.text()).role(cx.style.detail.role).wrap(self.lines_wrap());
             sizes.gap + cx.layout_at(&run, band).size().y
         });
         let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
@@ -231,14 +232,15 @@ impl Component for ListRow<'_> {
         // row does not hide.
         if let Some(text) = self.lines.as_ref().filter(|_| self.line_limit.is_some()) {
             let sizes = &cx.style.sizes;
-            let run = TextRun::new(text.as_str()).role(cx.style.detail.role).wrap(self.lines_wrap());
+            // P3(pdf-chrome-w3): CH-C11
+            let run = TextRun::new(text.text()).role(cx.style.detail.role).wrap(self.lines_wrap());
             let layout = cx.layout_at(&run, self.text_block(placed.label, sizes, 0.0).0.width());
             if layout.elided {
                 let (band, top) = self.text_block(placed.label, sizes, sizes.gap + layout.size().y);
                 let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
                 let lines_top = top + sizes.label_line + detail + sizes.gap;
                 let rect = Rect::from_x_y_ranges(band.x_range(), lines_top..=lines_top + layout.size().y);
-                cx.part(LINES, rect).tooltip(text.clone());
+                cx.part(LINES, rect).tooltip(Label::from(text.text().into_owned())); // P3(pdf-chrome-w3): CH-C11
             }
         }
         let mut focusable = false;
@@ -409,7 +411,7 @@ impl Component for ListRow<'_> {
             .then(|| words.clipped.as_str().to_owned())
             .into_iter()
             .chain(self.common.description.clone())
-            .chain(self.lines.as_ref().filter(|_| self.line_limit.is_some()).map(|text| text.as_str().to_owned()))
+            .chain(self.lines.as_ref().filter(|_| self.line_limit.is_some()).map(|text| text.text().into_owned())) // P3(pdf-chrome-w3): CH-C11
             .chain(percent)
             .chain(icons)
             .collect();

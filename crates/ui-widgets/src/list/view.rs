@@ -9,6 +9,8 @@ use crate::contract::{
     Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnLayout, Common, Component, ContainerProps, Cx,
     DropKind, EdgePress, EditResponse, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
 };
+use crate::fonts::FontRef;
+use crate::primitives::HAlign;
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Metrics, Selection, SizeHint, SpanLayout};
@@ -16,6 +18,26 @@ use craft_i18n::matcher::Matcher;
 use egui::{Rect, Ui};
 use std::borrow::Cow;
 use std::hash::{DefaultHasher, Hash, Hasher};
+
+/// How the rows of a list show their labels as document text: the document's font, size and alignment.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentRows {
+    /// The font of the labels.
+    pub font: FontRef,
+    /// The size of the labels.
+    pub size: f32,
+    /// The alignment of the labels.
+    pub align: HAlign,
+}
+
+impl DocumentRows {
+    /// Rows whose labels are document text in `font` at `size`, aligned `align`.
+    pub fn new(font: FontRef, size: f32, align: HAlign) -> Self {
+        let _ = (font, size, align);
+        todo!("FM-PF11a")
+    }
+}
 
 /// The style of the list: it has no look of its own beyond its container's surface.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -110,6 +132,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
         .label(label)
     }
 
+    /// The rows' labels are document text at the document's font, size and alignment; UI text keeps its tokens.
+    #[must_use]
+    pub fn document_rows(self, rows: DocumentRows) -> Self {
+        let _ = rows;
+        todo!("FM-PF11a")
+    }
+
     /// The options list of a value picker's popup (completions, number presets, `PopupList`): one selection, a click
     /// activates, the lead starts on the first row and follows the pointer, typed letters move it, and a press leaves
     /// the key focus on the opener, whose list keys the host forwards while the popup is open. Its rows are
@@ -130,12 +159,12 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
     /// accents ignored); an empty query keeps every row. The rows stamp folds in the query, so the lead starts over
     /// on the first shown row and the layout rebuilds when the query changes. Sets the rows stamp.
     #[must_use]
-    pub fn filter(mut self, query: &str, label: impl Fn(&K) -> Label + 'a) -> Self {
+    pub fn filter(mut self, query: &str, texts: impl Fn(&K) -> Vec<Label> + 'a) -> Self {
         let query = query.trim();
         let mut hasher = DefaultHasher::new();
         query.hash(&mut hasher);
         self.items = self.items.rows_stamp(hasher.finish());
-        self.filter = Some(Filter { query: query.to_owned(), label: Box::new(label) });
+        self.filter = Some(Filter { query: query.to_owned(), label: Box::new(texts) });
         self
     }
 
@@ -206,8 +235,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
         }
         let mut kept: Vec<(craft_i18n::matcher::Rank, usize)> = (0..source.len())
             .filter_map(|at| {
-                let label = (filter.label)(&source.key(at)).resolved(&env.words);
-                matcher.score(label.as_str()).map(|found| (found.rank, at))
+                // P3(pdf-forms-w3): CH-C24: a row matches by the best rank of any of its texts.
+                let texts = (filter.label)(&source.key(at));
+                texts.iter().filter_map(|text| matcher.score(text.resolved(&env.words).as_str())).map(|found| found.rank).min().map(|rank| (rank, at))
             })
             .collect();
         if self.ranked {
@@ -270,7 +300,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
 /// What `List::filter` keeps: the query and how a row's key reads as text.
 struct Filter<'a, K> {
     query: String,
-    label: Box<dyn Fn(&K) -> Label + 'a>,
+    label: Box<dyn Fn(&K) -> Vec<Label> + 'a>,
 }
 
 /// The rows of `source` at the positions `at`, in that order.

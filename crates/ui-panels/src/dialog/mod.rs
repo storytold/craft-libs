@@ -32,7 +32,7 @@ pub use host::{DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, 
 pub use modal::{Dialog, DialogStyle};
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};
-pub use recovery::{RecoveredDocument, RecoveryAnswer, RecoveryDialog, RecoveryOutput};
+pub use recovery::{RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, RecoveryOutput};
 pub use serde_fields::{serde_fields, set_serde_field};
 pub use stack::{DialogId, DialogStack, dialog_id};
 pub use unsaved::{UnsavedAnswer, UnsavedChangesDialog, UnsavedChangesOutput};

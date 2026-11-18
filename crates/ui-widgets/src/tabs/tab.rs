@@ -153,6 +153,9 @@ pub struct Tab<'a> {
     /// The close button's name and tooltip in place of "Close {tab}" (a tab still opening names it "Cancel opening").
     #[prop(into)]
     close_label: Option<Label>,
+    /// The marker dot after the last text: the tab's content has something to show.
+    #[prop]
+    marked: bool,
     /// The tab's place in its set when it is shown alone; inside a strip the item step gives it.
     #[prop]
     position: Option<SetPosition>,
@@ -173,6 +176,7 @@ impl<'a> Tab<'a> {
             closable: None,
             progress: None,
             close_label: None,
+            marked: false,
             position: None,
             placed: None,
             event: None,

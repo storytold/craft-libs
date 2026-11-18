@@ -9,6 +9,7 @@ mod linked;
 mod number;
 mod selectable_text;
 mod text_field;
+mod word_run;
 mod words;
 mod zoom_field;
 
@@ -20,6 +21,7 @@ pub use linked::{LinkMode, LinkedFields, LinkedFieldsStyle, LinkedLayout, Linked
 pub use number::{NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert};
 pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
+pub use word_run::{RunWord, WordRun, WordRunOutput, WordState};
 pub use words::TextWords;
 pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput};
 

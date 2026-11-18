@@ -25,12 +25,20 @@ pub struct RecoveredDocument {
     pub age: Duration,
     /// Why Recover is disabled now ("Stop recording first"), the tooltip of the disabled button; `None` enables it.
     pub blocked: Option<String>,
+    /// The copy is password-protected: the dialog says so, and Recover stays available (a flag apart from `blocked`).
+    pub protected: bool,
 }
 
 impl RecoveredDocument {
     /// A document autosaved `age` ago, with Recover available.
     pub fn new(key: impl Into<String>, name: impl Into<String>, age: Duration) -> Self {
-        RecoveredDocument { key: key.into(), name: name.into(), age, blocked: None }
+        RecoveredDocument { key: key.into(), name: name.into(), age, blocked: None, protected: false }
+    }
+
+    /// Marks the copy password-protected.
+    #[must_use]
+    pub fn protected(self) -> Self {
+        todo!("SH-C34")
     }
 
     /// Disables Recover for `reason`.
@@ -43,13 +51,24 @@ impl RecoveredDocument {
 
 /// What the user chose for one document. Closing the dialog (Escape, the close action) is `DialogResult::Cancel`:
 /// the copy stays and is offered again at the next launch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RecoveryAnswer {
     /// Open the autosaved copy as an unsaved document.
     Recover,
     /// Delete the autosaved copy.
     Discard,
+}
+
+/// The answer the recovery dialog gives: what to do with the document, and whether to do it for the documents
+/// still waiting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct RecoveryChoice {
+    /// What to do with the document.
+    pub answer: RecoveryAnswer,
+    /// Apply the answer to every remaining document (the Apply to All box was ticked).
+    pub apply_to_all: bool,
 }
 
 /// What the recovery dialog reports: its response, how it closed and the answer given.
@@ -62,7 +81,7 @@ pub struct RecoveryOutput {
     pub closed: Option<CloseReason>,
     /// Discard or Recover, the pass a button or Enter answers; `None` when the dialog stays open or was dismissed
     /// (Escape, the close action): the copy stays and is offered again at the next launch.
-    pub answer: Option<RecoveryAnswer>,
+    pub answer: Option<RecoveryChoice>,
 }
 
 impl Outcome for RecoveryOutput {
@@ -82,12 +101,25 @@ pub struct RecoveryDialog {
     id: DialogId,
     document: RecoveredDocument,
     open: bool,
+    /// The documents still waiting, this one included: the Apply to All box shows while it is above 1.
+    #[allow(dead_code)] // P3(pdf-shell-w5): SH-C34
+    remaining: usize,
+    /// The state of the Apply to All box.
+    #[allow(dead_code)] // P3(pdf-shell-w5): SH-C34
+    apply_to_all: bool,
 }
 
 impl RecoveryDialog {
     /// A dialog offering to recover `document`.
     pub fn new(document: RecoveredDocument) -> Self {
-        Self { id: dialog_id("recovery"), document, open: true }
+        Self { id: dialog_id("recovery"), document, open: true, remaining: 1, apply_to_all: false }
+    }
+
+    /// The documents still waiting, this one included; the Apply to All box shows while it is above 1.
+    #[must_use]
+    pub fn remaining(self, n: usize) -> Self {
+        let _ = n;
+        todo!("SH-C34")
     }
 
     /// The document asked about; the app reads its key with the answer.
@@ -118,6 +150,8 @@ impl RecoveryDialog {
             (Some(CloseReason::Activated | CloseReason::Enter), Some(_)) => Some(RecoveryAnswer::Recover),
             _ => None,
         };
+        // P3(pdf-shell-w5): SH-C34: the Apply to All box is not shown yet.
+        let answer = answer.map(|answer| RecoveryChoice { answer, apply_to_all: false });
         RecoveryOutput { response: shown.response, closed: shown.closed, answer }
     }
 
@@ -129,20 +163,21 @@ impl RecoveryDialog {
 }
 
 impl StackDialog for RecoveryDialog {
-    type Result = RecoveryAnswer;
+    type Result = RecoveryChoice;
 
     fn id(&self) -> DialogId {
         self.id
     }
 
-    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<RecoveryAnswer>> {
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<RecoveryChoice>> {
         let shown = self.present(ui, true);
         shown.closed?;
         Some(shown.answer.map_or(DialogResult::Cancel, DialogResult::Ok))
     }
 
     /// Recover, the accepting answer; `None` while recovery is blocked.
-    fn confirm(&mut self, _: &Context) -> Option<RecoveryAnswer> {
-        self.document.blocked.is_none().then_some(RecoveryAnswer::Recover)
+    fn confirm(&mut self, _: &Context) -> Option<RecoveryChoice> {
+        // P3(pdf-shell-w5): SH-C34
+        self.document.blocked.is_none().then_some(RecoveryChoice { answer: RecoveryAnswer::Recover, apply_to_all: self.apply_to_all })
     }
 }

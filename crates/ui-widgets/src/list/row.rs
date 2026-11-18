@@ -8,14 +8,18 @@
 //! collection that shows the row; the row draws the look the item step gives it and reports what its own parts do.
 
 use super::toggle::ToggleCell;
+use super::view::DocumentRows;
 use super::words::ListWords;
 use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show};
-use crate::primitives::{ContentPainterCx, HAlign, IconSpec};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span};
 use crate::runtime::env::Label;
+use crate::style::DataColor;
 use craft_behavior::{ColumnKey, Cursor};
+use craft_i18n::Word;
 use craft_theme::variant::Tone;
 use craft_theme::{LabelColor, TypeRole};
 use egui::Rect;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 mod output;
@@ -86,6 +90,110 @@ pub enum RowInk {
     Muted,
     /// `text.faint`: a hidden layer.
     Dimmed,
+}
+
+/// The part of a row that a colour from data inks.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum HueTarget {
+    /// The row's icon.
+    #[default]
+    Icon,
+    /// The row's label.
+    Label,
+}
+
+/// The wrapped text under a row's label: one run, or styled spans such as a search match.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub enum RowLines {
+    /// Plain text.
+    Plain(Label),
+    /// Spans, which paint as `TextRun::spans` does.
+    Spans(Vec<Span<'static>>),
+}
+
+impl RowLines {
+    // P3(pdf-chrome-w3): CH-C11: the text where the body still reads a plain label.
+    /// The text as one string: the label, or the spans joined.
+    pub(super) fn text(&self) -> Cow<'_, str> {
+        match self {
+            RowLines::Plain(label) => Cow::Borrowed(label.as_str()),
+            RowLines::Spans(spans) => Cow::Owned(spans.iter().map(|span| span.text.as_ref()).collect()),
+        }
+    }
+}
+
+impl From<Label> for RowLines {
+    fn from(label: Label) -> Self {
+        RowLines::Plain(label)
+    }
+}
+
+impl From<&'static str> for RowLines {
+    fn from(text: &'static str) -> Self {
+        RowLines::Plain(text.into())
+    }
+}
+
+impl From<String> for RowLines {
+    fn from(text: String) -> Self {
+        RowLines::Plain(text.into())
+    }
+}
+
+impl From<Arc<str>> for RowLines {
+    fn from(text: Arc<str>) -> Self {
+        RowLines::Plain(text.into())
+    }
+}
+
+impl From<Word> for RowLines {
+    fn from(word: Word) -> Self {
+        RowLines::Plain(word.into())
+    }
+}
+
+impl From<Vec<Span<'static>>> for RowLines {
+    fn from(spans: Vec<Span<'static>>) -> Self {
+        RowLines::Spans(spans)
+    }
+}
+
+/// A status in a table cell: a tone icon, toned text, a tip and an action link.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellStatus {
+    /// The tone of the icon and the text.
+    pub tone: Tone,
+    /// The status text.
+    pub text: Label,
+    /// A multi-line tip.
+    pub tip: Option<Label>,
+    /// The focusable action link's text.
+    pub action: Option<Label>,
+}
+
+impl CellStatus {
+    /// A status of `tone` reading `text`.
+    pub fn new(tone: Tone, text: impl Into<Label>) -> Self {
+        let _ = (tone, text);
+        todo!("WF-W8")
+    }
+
+    /// The multi-line tip shown over the cell.
+    #[must_use]
+    pub fn tip(self, tip: impl Into<Label>) -> Self {
+        let _ = tip;
+        todo!("WF-W8")
+    }
+
+    /// The focusable action link; activating it reports `RowEvent::CellAction`.
+    #[must_use]
+    pub fn action(self, action: impl Into<Label>) -> Self {
+        let _ = action;
+        todo!("WF-W8")
+    }
 }
 
 /// A text shown in one column of a row: the body role in the row's ink, on one elided line or wrapped.
@@ -195,11 +303,17 @@ pub struct ListRow<'a> {
     /// Secondary text under the detail line, wrapped to the label band's width. The row's height follows the
     /// wrapped lines.
     #[prop(into)]
-    pub(super) lines: Option<Label>,
+    pub(super) lines: Option<RowLines>,
     /// The most lines of `lines` the row shows: longer text is cut with an ellipsis at the end of the last one, and
     /// the row is no taller than with exactly that many lines. A screen reader reads all of the text.
     #[prop(quantity = "count")]
     pub(super) line_limit: Option<u8>,
+    /// The colour from data that inks a part of the row.
+    #[allow(dead_code)] // P3(pdf-chrome-w3): CH-C10a
+    pub(super) hue: Option<(DataColor, HueTarget)>,
+    /// The row's label is document text at the list's font, size and alignment.
+    #[allow(dead_code)] // P3(pdf-chrome-w3): FM-PF11b
+    pub(super) document: Option<DocumentRows>,
     /// A progress bar under the label, `fraction` full (clamped to 0..=1), in a line of its own below the detail. The
     /// row is one caption line taller than its detail makes it, so a list with fixed row heights adds one
     /// (`ListRow::row_height` counts the detail only). A screen reader reads the percentage in the row's description.
@@ -313,6 +427,8 @@ impl<'a> ListRow<'a> {
             detail: None,
             lines: None,
             line_limit: None,
+            hue: None,
+            document: None,
             progress: None,
             accessible_name: None,
             spacer: false,
@@ -399,6 +515,28 @@ impl<'a> ListRow<'a> {
         self.striped = row.striped;
         self.highlight |= row.emphasized;
         self
+    }
+
+    /// A colour from data inks `target` of the row in place of its tone or ink, read against the row's surface; a
+    /// selected row keeps the selection ink and a dimmed or disabled row its ink.
+    #[must_use]
+    pub fn hue(self, color: DataColor, target: HueTarget) -> Self {
+        let _ = (color, target);
+        todo!("CH-C10a")
+    }
+
+    /// A status cell in `column`: a tone icon, toned text, a multi-line tip and a focusable action link.
+    #[must_use]
+    pub fn cell_status(self, column: ColumnKey, status: CellStatus) -> Self {
+        let _ = (column, status);
+        todo!("WF-W8")
+    }
+
+    /// A tooltip over the text cell of `column`.
+    #[must_use]
+    pub fn cell_tip(self, column: ColumnKey, tip: impl Into<Label>) -> Self {
+        let _ = (column, tip);
+        todo!("WF-W9")
     }
 
     /// The column `column` reads in the muted look: its text cell, or the label when it is the label column.
