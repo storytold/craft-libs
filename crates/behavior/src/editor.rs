@@ -87,6 +87,8 @@ pub enum EditorInput {
     Newline,
     /// Tab.
     Tab,
+    /// Shift+Tab, which reaches only a document canvas's editor part that keeps Tab.
+    BackTab,
     /// Escape.
     Cancel,
 }

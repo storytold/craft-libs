@@ -32,12 +32,14 @@ struct Probe<'a> {
     report: bool,
     purpose: EditorPurpose,
     doc: Option<&'a Doc>,
+    /// The probe is a document canvas's editor: it marks its window as showing a document and keeps Tab.
+    canvas: bool,
 }
 
 impl<'a> Probe<'a> {
     /// A code editor that logs into `log` and keeps no text.
     fn new(log: &'a RefCell<Vec<EditorInput>>, report: bool) -> Self {
-        Probe { common: Common::new(), log, report, purpose: EditorPurpose::Code, doc: None }
+        Probe { common: Common::new(), log, report, purpose: EditorPurpose::Code, doc: None, canvas: false }
     }
 }
 
@@ -54,7 +56,13 @@ impl Component for Probe<'_> {
 
     fn keys(&self) -> KeyUse {
         // A prose field leaves Tab to the focus order, so Tab can take the keyboard away from it.
-        if self.purpose == EditorPurpose::Code { KeyUse::CODE } else { KeyUse::of(craft_ui::contract::Input::Editor) }
+        if self.canvas {
+            KeyUse::CODE.with_chrome_key(true)
+        } else if self.purpose == EditorPurpose::Code {
+            KeyUse::CODE
+        } else {
+            KeyUse::of(craft_ui::contract::Input::Editor)
+        }
     }
 
     fn sense(&self) -> Sense {
@@ -182,11 +190,12 @@ struct View<'r> {
     purpose: EditorPurpose,
     doc: Option<&'r Doc>,
     next: Option<&'r RefCell<Seen>>,
+    canvas: bool,
 }
 
 impl View<'_> {
     fn show(self, ui: &mut egui::Ui) {
-        let probe = Probe { purpose: self.purpose, doc: self.doc, ..Probe::new(self.log, true) };
+        let probe = Probe { purpose: self.purpose, doc: self.doc, canvas: self.canvas, ..Probe::new(self.log, true) };
         let response = probe.label("Source").read_only(self.read_only).id_salt("code").show_at(ui, AT);
         self.id.set(response.id);
         if let Some(seen) = self.next {
@@ -204,6 +213,8 @@ struct Rig {
     doc: Option<Doc>,
     /// The control after the probe that Tab takes the keyboard to, when the rig shows one.
     next: Option<RefCell<Seen>>,
+    /// The probe is a document canvas's editor.
+    canvas: bool,
 }
 
 impl Rig {
@@ -221,6 +232,7 @@ impl Rig {
             purpose,
             doc,
             next: next.then(|| RefCell::new(Seen::default())),
+            canvas: false,
         };
         for _ in 0..3 {
             rig.frame(Vec::new());
@@ -237,8 +249,17 @@ impl Rig {
             purpose: self.purpose,
             doc: self.doc.as_ref(),
             next: self.next.as_ref(),
+            canvas: self.canvas,
         };
         self.frames.frame(events, |ui| view.show(ui))
+    }
+
+    /// A rig whose probe is a document canvas's editor, with a control after it.
+    fn canvas_editor() -> Rig {
+        let mut rig = Rig::with(EditorPurpose::Text, None, true);
+        rig.canvas = true;
+        rig.frame(Vec::new());
+        rig
     }
 
     fn focus(&mut self) {
@@ -249,6 +270,7 @@ impl Rig {
             purpose: self.purpose,
             doc: self.doc.as_ref(),
             next: self.next.as_ref(),
+            canvas: self.canvas,
         };
         click(&mut self.frames, AT.center(), &mut |ui| view.show(ui));
         self.log.borrow_mut().clear();
@@ -542,5 +564,35 @@ fn a_focused_text_field_does_not_interrupt_the_input_method_every_frame() {
         rig.frame(Vec::new());
         assert!(!rig.resets_ime(&mut on), "frame {frame} after the round trip resets the input method");
     }
+}
+
+/// canvas-w10 F17: Shift+Tab reaches a document canvas's editor as `BackTab` (a word processor's outdent, the
+/// previous slot of an equation), where an editor that is no canvas's does not read it. A text field keeps Shift+Tab
+/// as a focus move: the keyboard leaves it, so typing after it no longer lands there.
+#[trial]
+fn shift_tab_is_a_canvas_editors_back_tab_and_moves_focus_out_of_a_text_field() {
+    let mut canvas = Rig::canvas_editor();
+    canvas.focus();
+    canvas.frame(vec![key_press(Key::Tab, Modifiers::SHIFT)]);
+    canvas.frame(vec![Event::Text("x".into())]);
+    let inputs = canvas.take();
+    assert!(
+        matches!(inputs.as_slice(), [EditorInput::BackTab, EditorInput::Text(text)] if &**text == "x"),
+        "the canvas editor reads Shift+Tab and keeps the keyboard: {inputs:?}"
+    );
+
+    let mut code = Rig::new();
+    code.focus();
+    code.frame(vec![key_press(Key::Tab, Modifiers::SHIFT)]);
+    let inputs = code.take();
+    assert!(!inputs.contains(&EditorInput::BackTab), "only a canvas's editor reads Shift+Tab: {inputs:?}");
+
+    let mut field = Rig::with(EditorPurpose::Text, None, true);
+    field.focus();
+    field.frame(vec![key_press(Key::Tab, Modifiers::SHIFT)]);
+    field.frame(Vec::new());
+    field.frame(vec![Event::Text("x".into())]);
+    let inputs = field.take();
+    assert!(inputs.is_empty(), "Shift+Tab takes the keyboard out of the text field: {inputs:?}");
 }
 

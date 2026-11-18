@@ -143,6 +143,34 @@ fn a_map_entry_the_app_removes_is_removed_from_the_file() {
     assert!(last.get().shortcuts.is_empty(), "{}", read_config(tmp.path()));
 }
 
+// #3773: words read from another file (a custom dictionary) count as loaded, not as this instance's edit, so a
+// later save of another change does not write back an entry a second instance removed meanwhile.
+#[test]
+fn a_loaded_change_is_not_saved_over_another_instances_edit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut first, _) = open_in(tmp.path());
+    first.flush().unwrap();
+    let (mut second, _) = open_in(tmp.path());
+
+    let entry = "loaded".to_owned();
+    assert!(first.update_loaded(|p| p.general.recent.push(entry.clone())));
+    assert!(!first.is_dirty(), "a loaded change schedules no save");
+    // The second instance loads the same entry, and its user removes it; the other change makes its file differ from
+    // the one the first instance last read, so the first merges on its next save.
+    second.update_loaded(|p| p.general.recent.push(entry.clone()));
+    second.update(|p| {
+        p.general.recent.retain(|e| *e != entry);
+        p.general.autosave_minutes = 10;
+    });
+    second.flush().unwrap();
+
+    first.update(|p| p.general.language = "fr".into());
+    first.flush().unwrap();
+    let (reloaded, _) = open_in(tmp.path());
+    assert!(!reloaded.get().general.recent.contains(&entry), "{}", read_config(tmp.path()));
+    assert_eq!((reloaded.get().general.language.as_str(), reloaded.get().general.autosave_minutes), ("fr", 10), "both saves merged");
+}
+
 /// Options for a `Prefs` store in `dir`, importing `legacy.txt` (its text is the language) when there is no
 /// `config.toml`.
 fn read_options(dir: &Path) -> OpenOptions<Prefs> {

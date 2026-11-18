@@ -74,6 +74,10 @@ let scale = store.get().appearance.ui_scale;
 // On change: only marks the store dirty if the value actually changed.
 store.update(|p| p.appearance.theme = "dark".into());
 
+// Values read from another file at startup (a custom dictionary's words) count as loaded: no save is
+// scheduled, and a later save does not write them over another instance's edit.
+store.update_loaded(|p| p.spelling.words = words);
+
 // Every frame: saves 500 ms after the last change, retries failures with backoff.
 // `web_time::Instant` is `std::time::Instant` on native targets and also works in a browser.
 let tick = store.tick(web_time::Instant::now());

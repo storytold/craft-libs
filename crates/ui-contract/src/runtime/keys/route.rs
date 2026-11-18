@@ -542,9 +542,20 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
         None if press.key == Key::Enter && !press.mods.cmd && !press.mods.ctrl => PressRoute::Intent(Intent::Submit),
         None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
         None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => PressRoute::Intent(Intent::Tab),
+        // A document canvas's editor reads Shift+Tab itself (a word processor's outdent, the previous slot of an
+        // equation). No other stop that keeps Tab gets it as an intent.
+        None if press.key == Key::Tab && press.mods == Mods::SHIFT && stop.keys.keep == focus::KeepKeys::Tab && is_canvas_editor(stop) => {
+            PressRoute::Intent(Intent::BackTab)
+        }
         None if stop.role.nudge => nudge_of(press.key, press.mods).map_or(PressRoute::Free, PressRoute::Nudge),
         None => PressRoute::Free,
     }
+}
+
+/// Whether `stop` is a document canvas's editor part: the canvas's own stop (`KeyUse::chrome_key`, the record the key
+/// stage reads as the window's canvas) holding its editor's text keys.
+fn is_canvas_editor(stop: &focus::Stop) -> bool {
+    stop.keys.chrome_key && stop.keys.owner == OwnerClass::Text
 }
 
 fn is_vertical(mv: NavMove) -> bool {

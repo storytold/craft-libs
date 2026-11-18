@@ -286,6 +286,25 @@ impl<T: Settings> SettingsStore<T> {
         true
     }
 
+    /// Changes the settings as loaded rather than as edited: for values that come from another file
+    /// this process reads (a custom dictionary's words), not from the user. The change applies to the
+    /// value and to the merge base alike, so it schedules no save, leaves [`SettingsStore::is_dirty`]
+    /// as it was, and a later save does not count it as this store's change: another instance's edit
+    /// of the same keys is kept. Returns true only if the value changed.
+    pub fn update_loaded(&mut self, f: impl FnOnce(&mut T)) -> bool {
+        let mut next = self.value.clone();
+        f(&mut next);
+        if next == self.value {
+            return false;
+        }
+        // Only the keys this change touched move in the base; a pending edit of other keys stays ours.
+        if let (Some(before), Some(after)) = (value_document(&self.value), value_document(&next)) {
+            merge_changes::<T>(&before, &after, &mut self.base);
+        }
+        self.value = next;
+        true
+    }
+
     /// Like [`SettingsStore::update`] with an explicit clock, for tests.
     pub fn update_at(&mut self, now: Instant, f: impl FnOnce(&mut T)) -> bool {
         let mut next = self.value.clone();
@@ -525,6 +544,13 @@ fn default_document<T: Settings>() -> DocumentMut {
     // Defaults that don't serialize leave the base empty, which makes every key ours.
     let _ = merge_into(&mut doc, &T::default());
     doc
+}
+
+/// `value` serialised as a fresh document; `None` when it does not serialise.
+fn value_document<T: Settings>(value: &T) -> Option<DocumentMut> {
+    let mut doc = document::new_document(T::SCHEMA_VERSION);
+    merge_into(&mut doc, value).ok()?;
+    Some(doc)
 }
 
 /// Exponential backoff: 1 s, 2 s, 4 s, … capped at [`MAX_RETRY_DELAY`].
