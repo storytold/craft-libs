@@ -5,7 +5,7 @@
 mod editor;
 mod find_bar;
 mod find_matches;
-
+mod format_text;
 mod notes;
 mod path_text;
 
