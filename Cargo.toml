@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
 craft-java-class = { path = "crates/java-class" }
 craft-sourcemap = { path = "crates/sourcemap" }
@@ -60,6 +61,9 @@ craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
+# The ArtCraft Launcher's app list for AI agents (storytold/craft-ai-integrations, crates/app/ai-agents).
+craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d94a3593adcff504eaaad9e5aee4c84fd2f07a72" }
+craft-dex = { path = "crates/dex" }
 craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
@@ -68,6 +72,7 @@ craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
 craft-cloud-local = { path = "crates/cloud-local" }
 craft-color = { path = "crates/color" }
+craft-color-transform = { path = "crates/color-transform" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
@@ -96,6 +101,7 @@ craft-dpx = { path = "crates/dpx" }
 craft-dwg = { path = "crates/dwg" }
 craft-fcproj-format = { path = "crates/fcproj-format" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
+craft-esign = { path = "crates/esign" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
@@ -122,7 +128,7 @@ craft-jpeg = { path = "crates/jpeg" }
 craft-control-protocol = { path = "crates/control-protocol" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
 craft-mcp = { path = "crates/mcp" }
-craft-jxl = { path = "crates/jxl" }
+craft-jxl = { path = "crates/jxl", default-features = false }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
@@ -168,6 +174,9 @@ craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
+craft-geom = { path = "crates/geom" }
+craft-develop = { path = "crates/develop" }
+craft-develop-model = { path = "crates/develop-model" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }

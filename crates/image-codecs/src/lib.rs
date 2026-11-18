@@ -57,7 +57,7 @@ pub use crate::codecs::tiff_ifd::{ExtraSampleKind, InkSet, TiffInfo, TiffPage, T
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
-pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension};
+pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Detection, Format, FormatCaps, PrefixDetector, caps, detect, detect_prefix, from_extension};
 pub use crate::image::{
     ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, ExtraSample, Image,
     MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples,
@@ -140,7 +140,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
-        Format::Jxl => Err(CodecError::unsupported(format, "JPEG XL reading is not yet available; export is supported")),
+        Format::Jxl => jxl::decode(bytes, l),
         #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
         Format::Avif => codecs::avif_decode::decode(bytes, l, opts.keep_orientation),
         #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]

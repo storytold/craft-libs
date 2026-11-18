@@ -143,6 +143,10 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
 
+## XFA XML DOM
+
+`crates/xfa/src/xml.rs` is extracted from PDFCraft at `271e479c53723b1b294c866d5cb2f27604601b29`, originally by Dylan M. Taylor (`eead4541`, `7d44e654`), MIT OR Apache-2.0. The initial extraction changes visibility and module boundaries; subsequent namespace-retention budget hardening intentionally tightens resource admission. PDF/layout/form policy remains in the app.
+
 ## Java class inspection
 
 `crates/java-class` extracts Craft Anything `java_class.rs` and `java_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0), preserving separate primary-author source-history ports by Brandon Thomas, BFlat, Afloat and RRFZ. The checked byte-reader, modified UTF-8 unit decoder, descriptor display helper and synthetic class fixtures come from the same source snapshot. Seven regression files retain their source authors. Neutral error wiring and shared crate integration are subsequent changes. No JAR archive, application I/O or bytecode execution is imported.
@@ -161,6 +165,10 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## GPU device selection
 
 `crates/gpu-device`'s adapter rule and driver corrections come from FilmCraft `crates/gpu/src/adapter.rs` at `93a88a839aae370740b09434fdec410abb8c24ca`, and its device health from PhotoCraft `crates/gpu/src/health.rs` at `01a5b5a389acc93f081e5ce6a8d0580d6438774a`, both MIT OR Apache-2.0; `crates/gpu-device/NOTICE` names both.
+
+## Dalvik DEX inspection
+
+`crates/dex` extracts Craft Anything `crates/formats/src/dex.rs` and `dex_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Five source-history ports preserve Brandon Thomas, BFlat and Afloat as primary authors. Five regression imports retain BFlat/Afloat authors and exact source revisions. The checked byte-reader/MUTF-8 subset and synthetic DEX fixture come from that app's `bytes.rs` and `testkit/src/android.rs`; deterministic noise/mutations come from its testkit. No application file I/O, APK logic or execution is imported. Shared neutral errors and workspace wiring are subsequent changes; existing per-file strings, member/handler and bytecode payload budgets are retained.
 
 ## EVM bytecode inspection
 
