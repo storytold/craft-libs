@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 craft-audio-dsp = { path = "crates/audio-dsp" }
+craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
 craft-java-class = { path = "crates/java-class" }
 craft-sourcemap = { path = "crates/sourcemap" }
@@ -60,6 +61,9 @@ craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
+# The ArtCraft Launcher's app list for AI agents (storytold/craft-ai-integrations, crates/ai-agents).
+craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "35e0352666a117407d62230a6c6c2366f3e21a3b" }
+craft-dex = { path = "crates/dex" }
 craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
@@ -96,6 +100,7 @@ craft-dpx = { path = "crates/dpx" }
 craft-dwg = { path = "crates/dwg" }
 craft-fcproj-format = { path = "crates/fcproj-format" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
+craft-esign = { path = "crates/esign" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
@@ -174,6 +179,7 @@ craft-settings = { path = "crates/settings" }
 craft-scraft-format = { path = "crates/scraft-format" }
 craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
+craft-suite-account = { path = "crates/suite-account" }
 craft-svg = { path = "crates/svg" }
 craft-stencilcraft-format = { path = "crates/stencilcraft-format" }
 craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
