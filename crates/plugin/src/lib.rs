@@ -1,6 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! One WebAssembly plug-in runtime for the Craft apps (RFC-0041).
+//! One WebAssembly plug-in runtime for the Craft apps (RFC-0046).
 //!
 //! - [`sandbox`](crate::Instance): modules run in a metered interpreter (wasmi, no JIT) with a
 //!   memory cap, no WASI and a handful of host functions, imported from `craft` (FigCraft's older

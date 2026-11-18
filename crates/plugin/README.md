@@ -1,7 +1,7 @@
 # Craft Plugin
 
 `craft-plugin` is the one WebAssembly plug-in runtime of the Craft apps
-([RFC-0041](https://github.com/storytold/craft-contrib/blob/main/rfcs/0041-shared-plugin-runtime.md)):
+([RFC-0046](https://github.com/storytold/craft-contrib/blob/main/rfcs/0046-shared-plugin-runtime.md)):
 the sandbox and its limits, the manifest (`craft-plugin.json`), permissions checked against an
 app's command registry, the `.craftplugin` bundle, the per-user plug-in store, catalogs and
 installing from GitHub releases. It was extracted from FigCraft's `figcraft-plugin` with its tests;
