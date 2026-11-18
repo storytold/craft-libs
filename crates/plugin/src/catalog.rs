@@ -51,6 +51,11 @@ use crate::target::{AppInfo, Target, check_target};
 pub const CATALOG_SCHEMA: u32 = 1;
 /// Hosts catalogs and plug-ins may be downloaded from (release assets redirect to the last two).
 pub const HOSTS: &[&str] = &["github.com", "raw.githubusercontent.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
+/// Hosts of GitHub's releases API ([`crate::github::RepoRef::releases_api_url`]), which
+/// [`crate::fetch::resolve_repo`] reads release JSON from, and where that request's redirects (a
+/// renamed repository) must stay ([`check_api_redirect`]). Never a place bundles or catalogs are
+/// downloaded from: [`check_url`] and [`check_redirect`] don't accept it.
+pub const API_HOSTS: &[&str] = &["api.github.com"];
 /// Largest catalog read.
 pub const MAX_CATALOG_BYTES: usize = 4 << 20;
 /// Most packages read from one catalog, and releases from one package.
@@ -332,6 +337,45 @@ pub fn check_redirect(final_url: &str) -> Result<(), String> {
         Ok(Location::Https(_)) => Ok(()),
         _ => Err(format!("the download was redirected to `{}`, which isn't on GitHub", final_url.chars().take(120).collect::<String>())),
     }
+}
+
+/// The lower-case host of an `https://` URL fit to check (no user info, port or `\`), or `None`.
+fn https_host(url: &str) -> Option<String> {
+    if url.len() > MAX_URL || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    let rest = strip_prefix_ignore_case(url, "https://")?;
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default().to_ascii_lowercase();
+    (!host.is_empty() && !host.contains(['@', ':', '\\'])).then_some(host)
+}
+
+/// Whether `url` is a request to GitHub's API: `https://` on [`API_HOSTS`].
+pub fn is_api_url(url: &str) -> bool {
+    https_host(url).is_some_and(|host| API_HOSTS.contains(&host.as_str()))
+}
+
+/// The hosts a request that started at `url` may be redirected to: [`API_HOSTS`] for an API
+/// request ([`is_api_url`]), [`HOSTS`] for everything else (catalogs and bundles).
+pub fn hosts_for(url: &str) -> &'static [&'static str] {
+    if is_api_url(url) { API_HOSTS } else { HOSTS }
+}
+
+/// Check where an API request ended after following redirects: still `https://` on
+/// [`API_HOSTS`]. A redirect from the API to GitHub's download hosts is refused too: the API
+/// answers with release JSON, never a file.
+pub fn check_api_redirect(final_url: &str) -> Result<(), String> {
+    if is_api_url(final_url) {
+        return Ok(());
+    }
+    Err(format!("GitHub's API was redirected to `{}`, which isn't {}", final_url.chars().take(120).collect::<String>(), API_HOSTS.join(", ")))
+}
+
+/// Check one redirect hop `hop` of a request that started at `start`, by the list that applies
+/// to `start` ([`hosts_for`]): [`check_api_redirect`] for an API request, [`check_redirect`]
+/// otherwise. A client that checks hops itself calls this for each one (`start` included, as its
+/// own first hop); [`crate::fetch::follow_redirects`] does.
+pub fn check_redirect_for(start: &str, hop: &str) -> Result<(), String> {
+    if is_api_url(start) { check_api_redirect(hop) } else { check_redirect(hop) }
 }
 
 /// `file:///C:/x` or `file:///home/x` as a path (percent-decoded; no remote hosts). A path that

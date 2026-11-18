@@ -16,17 +16,20 @@
 use std::path::Path;
 
 use crate::bundle::MAX_BUNDLE_BYTES;
-use crate::catalog::{Catalog, Location, MAX_CATALOG_BYTES, Package, Release, check_redirect, check_url, parse_catalog, release_url_problem};
+use crate::catalog::{Catalog, Location, MAX_CATALOG_BYTES, Package, Release, check_redirect_for, check_url, parse_catalog, release_url_problem};
 use crate::github::{MAX_API_BYTES, MAX_SUMS_BYTES, RepoDownload, RepoRef, parse_release, plan_download, verify_sha256};
 
 /// An HTTPS client.
 pub trait Fetch {
     /// GET `url`, following redirects, and return the body: `Ok(None)` when the server answers 404
     /// Not Found. A body of more than `max` bytes is an error, refused as it arrives (not read
-    /// whole first). `url` is `https://` on GitHub's hosts or `https://api.github.com/`. Each
-    /// redirect should stay where [`crate::catalog::check_redirect`] allows: a client that can
-    /// look at a redirect before following it walks them with [`follow_redirects`] (as the `http`
-    /// feature's client does); the SHA-256 check guards a bundle's bytes either way.
+    /// whole first). `url` is `https://` on GitHub's hosts ([`crate::catalog::HOSTS`]) or on its
+    /// API ([`crate::catalog::API_HOSTS`]; [`crate::catalog::is_api_url`] tells them apart). Each
+    /// redirect should stay where [`crate::catalog::check_redirect_for`] allows for `url`: an API
+    /// request on the API's hosts, anything else on GitHub's download hosts. A client that can look
+    /// at a redirect before following it walks them with [`follow_redirects`], which picks the
+    /// list itself (the `http` feature's client does for downloads); the SHA-256 check guards a
+    /// bundle's bytes either way.
     fn get(&mut self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String>;
 
     /// Read a local file a `file://` catalog URL names (the catalog, or a release it lists), of at
@@ -59,16 +62,19 @@ pub const MAX_REDIRECTS: usize = 10;
 
 /// Walk `url`'s redirects with `probe` (where a URL redirects to, without following it: `None`
 /// when it doesn't, or when that can't be told) and return where they end. Every hop, `url`
-/// included, must pass [`check_redirect`] (`https://` on [`crate::catalog::HOSTS`]); a relative
-/// `Location` (`/path`, `//host/path`) is resolved against the hop before it. More than
-/// [`MAX_REDIRECTS`] hops is an error. The caller then GETs the end it returns.
+/// included, must pass [`check_redirect_for`] with `url` as the start: `https://` on
+/// [`crate::catalog::API_HOSTS`] when `url` is an API request ([`crate::catalog::is_api_url`]),
+/// on [`crate::catalog::HOSTS`] otherwise, so a download is never redirected to the API nor an API
+/// request to a download host. A relative `Location` (`/path`, `//host/path`) is resolved against
+/// the hop before it. More than [`MAX_REDIRECTS`] hops is an error. The caller then GETs the end it
+/// returns.
 pub fn follow_redirects(url: &str, probe: &mut dyn FnMut(&str) -> Option<String>) -> Result<String, String> {
-    check_redirect(url)?;
+    check_redirect_for(url, url)?;
     let mut here = url.to_string();
     for _ in 0..MAX_REDIRECTS {
         let Some(next) = probe(&here) else { return Ok(here) };
         let next = resolve_location(&here, next.trim())?;
-        check_redirect(&next)?;
+        check_redirect_for(url, &next)?;
         here = next;
     }
     Err(format!("the download was redirected more than {MAX_REDIRECTS} times"))
@@ -170,7 +176,7 @@ pub fn download_repo(fetch: &mut dyn Fetch, plan: &RepoDownload) -> Result<Vec<u
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 impl Fetch for craft_update::Http {
     fn get(&mut self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
-        if url.starts_with("https://api.github.com/") {
+        if crate::catalog::is_api_url(url) {
             return match self.get_api(url, None)? {
                 craft_update::http::Fetched::Body { text, .. } if text.len() > max => Err(format!("GitHub's answer is larger than {max} bytes")),
                 craft_update::http::Fetched::Body { text, .. } => Ok(Some(text.into_bytes())),

@@ -4,7 +4,10 @@
 use serde_json::{Value, json};
 
 use crate::AppInfo;
-use crate::catalog::{Location, check_redirect, check_url, file_url_path, parse_catalog};
+use crate::catalog::{
+    API_HOSTS, HOSTS, Location, check_api_redirect, check_redirect, check_redirect_for, check_url, file_url_path, hosts_for, is_api_url,
+    parse_catalog,
+};
 
 const CATALOG: &str = "https://raw.githubusercontent.com/storytold/craft-plugins/main/index.json";
 
@@ -184,4 +187,32 @@ fn file_urls_stay_local() {
     ] {
         assert!(file_url_path(bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn the_api_has_its_own_hosts() {
+    assert!(is_api_url("https://api.github.com/repos/a/b/releases/latest"));
+    assert!(is_api_url("HTTPS://API.GitHub.com/repos/a/b/releases/latest"));
+    for not in [
+        "http://api.github.com/repos/a/b",
+        "https://api.github.com.evil.example/x",
+        "https://user@api.github.com/x",
+        "https://api.github.com:8443/x",
+        "https://github.com/a/b",
+        "https://api.github.com/a b",
+        "",
+    ] {
+        assert!(!is_api_url(not), "{not}");
+    }
+    assert_eq!(hosts_for("https://api.github.com/repos/a/b/releases"), API_HOSTS);
+    assert_eq!(hosts_for("https://github.com/a/b/releases/download/v1/x.craftplugin"), HOSTS);
+    assert_eq!(hosts_for("file:///tmp/index.json"), HOSTS);
+    assert!(check_api_redirect("https://api.github.com/repositories/1/releases/latest").is_ok());
+    assert!(check_api_redirect("https://objects.githubusercontent.com/x").is_err());
+    assert!(check_redirect_for("https://api.github.com/repos/a/b/releases", "https://api.github.com/repositories/1/releases").is_ok());
+    assert!(check_redirect_for("https://github.com/a/b", "https://objects.githubusercontent.com/x").is_ok());
+    // Downloads and catalogs accept no more than before.
+    assert!(check_redirect_for("https://github.com/a/b", "https://api.github.com/repos/a/b").is_err());
+    assert!(check_redirect("https://api.github.com/repos/a/b").is_err());
+    assert!(check_url("https://api.github.com/repos/a/b", None).is_err());
 }

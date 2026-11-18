@@ -201,3 +201,33 @@ fn redirects_are_checked_hop_by_hop() {
     assert!(follow_redirects(CATALOG, &mut |_| None).is_ok());
     assert_eq!(asked.iter().filter(|u| u.ends_with("/loop")).count(), MAX_REDIRECTS);
 }
+
+#[test]
+fn api_requests_follow_redirects_on_the_api_only() {
+    use crate::fetch::follow_redirects;
+    const API: &str = "https://api.github.com/repos/old/name/releases/latest";
+    const MOVED: &str = "https://api.github.com/repositories/42/releases/latest";
+    let hops: HashMap<&str, &str> = HashMap::from([
+        (API, MOVED),
+        ("https://api.github.com/repos/a/b/releases/tags/rel", "/repositories/7/releases/tags/rel"),
+        ("https://api.github.com/repos/a/b/releases/tags/off", "https://github.com/a/b/releases/download/v1/x.craftplugin"),
+        ("https://api.github.com/repos/a/b/releases/tags/evil", "https://evil.example/x"),
+        ("https://github.com/a/b/releases/download/v1/to-api", "https://api.github.com/repos/a/b/releases/latest"),
+    ]);
+    let mut probe = |u: &str| hops.get(u).map(|s| s.to_string());
+    // A renamed repository: the API's own redirect is followed and the end returned.
+    assert_eq!(follow_redirects(API, &mut probe).unwrap(), MOVED);
+    assert_eq!(
+        follow_redirects("https://api.github.com/repos/a/b/releases/tags/rel", &mut probe).unwrap(),
+        "https://api.github.com/repositories/7/releases/tags/rel"
+    );
+    assert!(follow_redirects(MOVED, &mut |_| None).is_ok());
+    // An API request never ends on a download host or elsewhere, and a download never on the API.
+    for bad in ["off", "evil"] {
+        let e = follow_redirects(&format!("https://api.github.com/repos/a/b/releases/tags/{bad}"), &mut probe).unwrap_err();
+        assert!(e.contains("api.github.com"), "{bad}: {e}");
+    }
+    assert!(follow_redirects("https://github.com/a/b/releases/download/v1/to-api", &mut probe).is_err());
+    // The plan a repository install downloads stays on the download hosts.
+    assert!(crate::catalog::check_url("https://api.github.com/repos/a/b/releases/latest", None).is_err());
+}

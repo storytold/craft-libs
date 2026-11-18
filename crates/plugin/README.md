@@ -44,7 +44,7 @@ store writes as `source.json`.
 | `manifest` | `Manifest` (`parse`, `from_value`, `command`, `target`), `AppTarget`, `Permissions`, `Access`, `PluginCommand`, `Param`, `ParamKind`, `Panel`; `MANIFEST_FILE`, `LEGACY_MANIFEST_FILE`, `KIND_COMMAND`, `API_VERSION` (6). |
 | `permissions` | `check_call`, `check_read_only`, `Policy` (`refuses`, `excepts`), `ALWAYS_DENIED`, `pattern_matches`, `changed`. |
 | `bundle` | `Bundle` (`encode`, `decode`, `check`, `check_with`), `open`, `open_with`, `sha256_hex`, `parse_version`, `compare_versions`, `newer`; `BUNDLE_EXTENSION`, `MAX_BUNDLE_BYTES`. |
-| `catalog` | `parse_catalog`, `Catalog`, `Package` (`latest_for`, `release`, `check_manifest`), `Release` (`target`), `check_url`, `check_redirect`, `file_url_path`, `HOSTS`. |
+| `catalog` | `parse_catalog`, `Catalog`, `Package` (`latest_for`, `release`, `check_manifest`), `Release` (`target`), `check_url`, `check_redirect`, `check_api_redirect`, `check_redirect_for`, `is_api_url`, `hosts_for`, `file_url_path`, `HOSTS`, `API_HOSTS`. |
 | `github` | `parse_repo_spec`, `RepoRef` (`releases_api_url`), `parse_release`, `Release` (`bundle_asset`, `sums_asset`), `parse_sha256sums`, `plan_download`, `RepoDownload`, `verify_sha256`. |
 | `fetch` | `Fetch` (`get`, `read_local`), `fetch_catalog`, `download_release`, `resolve_repo`, `download_repo`, `read_location`, `read_local_file`, `follow_redirects`, `MAX_REDIRECTS`. |
 | `source` | `Source` (`File`, `Catalog`, `Github`, `Other`; `check`), `SourceRecord`: on every target. |
@@ -234,14 +234,27 @@ impl craft_plugin::Fetch for AppFetch {
 
 ### Redirects
 
-Every redirect should stay `https://` on `catalog::HOSTS` (`catalog::check_redirect`). A client
-that can see a redirect before following it walks them with `fetch::follow_redirects` and GETs
-where they end; the `http` feature's client does, with a HEAD request per hop
-(`Http::redirect_target`). What it doesn't check: the GitHub API's own redirects (a renamed
-repository; its answer is only read as release JSON, whose URLs are checked, and the token is
-never sent on a redirect), and a server on GitHub's hosts that answers the final GET with another
-redirect than it gave the HEAD (followed on HTTPS only). Bundles are pinned by SHA-256 and size
-whatever served them.
+`Fetch::get` receives two kinds of URL, and each has its own hosts:
+
+| Request | `catalog::is_api_url` | Its redirects stay on | Check |
+|---|---|---|---|
+| Catalogs, bundles, `SHA256SUMS` | `false` | `catalog::HOSTS` (GitHub's download hosts) | `catalog::check_redirect` |
+| The releases API (`resolve_repo`'s first request) | `true` | `catalog::API_HOSTS` (`api.github.com`) | `catalog::check_api_redirect` |
+
+`catalog::hosts_for(url)` returns the list that applies to a request, and
+`catalog::check_redirect_for(start, hop)` checks one hop of a request that started at `start`
+against it, so a client that checks hops itself needs no special case for the API. A client that
+can see a redirect before following it walks them with `fetch::follow_redirects`, which does this
+for both kinds, and GETs where they end. A download is never redirected to the API, nor an API
+request to a download host. `check_url` and `check_redirect` don't accept `api.github.com`: catalogs
+and bundles are still only downloaded from `HOSTS`.
+
+The `http` feature's client walks download redirects with a HEAD request per hop
+(`Http::redirect_target`) and reads the API through craft-update's `get_api`, which follows the
+API's own redirects (a renamed repository) without this check; its answer is only read as release
+JSON, whose URLs are checked, and the token is never sent on a redirect. Also not checked: a server
+on GitHub's hosts that answers the final GET with another redirect than it gave the HEAD (followed
+on HTTPS only). Bundles are pinned by SHA-256 and size whatever served them.
 
 ### Threads
 
