@@ -9,7 +9,7 @@ use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, Set
 use crate::runtime::commands::{self, ResolvedCommand};
 use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
-use crate::runtime::{inspect, keys};
+use crate::runtime::{inspect, keys, pass_state};
 use crate::style::Flags;
 use craft_behavior::Sense;
 use egui::Id;

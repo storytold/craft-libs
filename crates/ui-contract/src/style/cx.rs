@@ -73,6 +73,8 @@ pub struct StyleCx<'a> {
     /// The component whose motion memory `exiting` reads, and the motion policy it runs under; set by the collection
     /// hook for the layout it asks of the component.
     owner: Option<(Id, MotionPolicy)>,
+    /// The `Ui` a collection's layout hook measures faces in; none elsewhere.
+    measuring: Option<&'a egui::Ui>,
 }
 
 /// A variant's look as style parts.
@@ -166,6 +168,7 @@ impl<'a> StyleCx<'a> {
             ctx,
             values,
             owner: None,
+            measuring: None,
         }
     }
 
