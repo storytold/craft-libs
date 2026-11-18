@@ -118,8 +118,12 @@ const CARD_COLUMNS: usize = 3;
 /// Shows the tabs and what the open tab lists, and reports the tab and the card the user picked.
 pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
     let (setup, words) = (read.setup, read.words);
-    let tabs: Vec<TabId> =
-        std::iter::once(TabId::Recent).chain((0..setup.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
+    let categories = (0..setup.categories.len()).map(TabId::Category);
+    let tabs: Vec<TabId> = if setup.saved_after_recent {
+        [TabId::Recent, TabId::Saved].into_iter().chain(categories).collect()
+    } else {
+        std::iter::once(TabId::Recent).chain(categories).chain(std::iter::once(TabId::Saved)).collect()
+    };
     let source = keyed(&tabs, |tab| *tab);
     let strip = TabStrip::new(words.tabs.clone())
         .kind(TabKind::Text)

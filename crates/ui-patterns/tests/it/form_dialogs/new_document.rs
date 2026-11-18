@@ -174,3 +174,58 @@ fn pixel_aspect_lists_the_custom_entries_and_shows_an_unknown_id_as_square() {
     fixture.click(&row).idle(10);
     assert!(shows(&fixture, "DVCPRO HD 1080 (1.5)") && shows(&fixture, "Mine"), "the built-in ratios, then the app's");
 }
+
+/// The tab titles left to right, as painted.
+fn tab_order(fixture: &Fixture) -> Vec<String> {
+    let names = ["Recent", "Saved", "Photo", "Print", "Art & Illustration", "Web", "Mobile", "Film & Video"];
+    let mut tabs: Vec<_> = fixture.texts().into_iter().filter(|painted| names.contains(&painted.text.as_str())).collect();
+    tabs.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
+    tabs.dedup_by(|a, b| a.text == b.text);
+    tabs.into_iter().map(|painted| painted.text.clone()).collect()
+}
+
+#[trial]
+fn saved_after_recent_lists_saved_second() {
+    // The strip shows the first tabs; the rest wait behind its overflow button.
+    for (after_recent, expected) in [(false, ["Recent", "Photo", "Print"]), (true, ["Recent", "Saved", "Photo"])] {
+        let mut options = DocumentOptions::default();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = NewDocumentDialog::new(Bind::bound(&mut options)).saved_after_recent(after_recent).show(ui);
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        assert_eq!(tab_order(&fixture)[..3], expected, "saved_after_recent({after_recent})");
+    }
+}
+
+#[trial]
+fn grey_create_on_empty_saved_greys_create_only_there() {
+    for grey in [false, true] {
+        let mut options = DocumentOptions::default();
+        let created = Rc::new(RefCell::new(0));
+        let count = created.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            // Saved after Recent, so its tab is in the strip to click.
+            let shown = NewDocumentDialog::new(Bind::bound(&mut options)).saved_after_recent(true).grey_create_on_empty_saved(grey).show(ui);
+            *count.borrow_mut() += usize::from(shown.result.is_some());
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        let create_disabled = |fixture: &Fixture| fixture.tree().is_disabled_key(fixture.by_label("Create").expect("Create").node);
+        assert!(!create_disabled(&fixture), "Recent keeps Create on");
+        let saved = fixture.by_label("Saved").expect("the Saved tab");
+        fixture.click(&saved).idle(10);
+        assert!(shows(&fixture, "No saved presets yet."), "the Saved tab is empty");
+        assert_eq!(create_disabled(&fixture), grey, "Create on an empty Saved tab, grey_create_on_empty_saved({grey})");
+        if grey {
+            let create = fixture.by_label("Create").expect("Create");
+            fixture.click(&create).idle(10);
+            assert_eq!(*created.borrow(), 0, "a greyed Create creates nothing");
+            // A saved preset gives the tab something to create from.
+            save_preset(&mut fixture, "Poster");
+            assert!(!create_disabled(&fixture), "a saved preset turns Create back on");
+        } else {
+            let create = fixture.by_label("Create").expect("Create");
+            fixture.click(&create).idle(10);
+            assert_eq!(*created.borrow(), 1, "without the option Create creates from the details");
+        }
+    }
+}

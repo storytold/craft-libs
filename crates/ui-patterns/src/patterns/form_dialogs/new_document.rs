@@ -140,6 +140,8 @@ struct Setup {
     profiles: Vec<ColorProfiles>,
     app_name: Option<Label>,
     custom_pixel_aspects: Vec<(String, String)>,
+    saved_after_recent: bool,
+    grey_create_on_empty_saved: bool,
 }
 
 /// What the columns read besides the session: the setup, the remembered lists, the words and the units.
@@ -472,6 +474,9 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
             session.name_tried = true;
         }
     }
+    // Nothing is picked on an empty Saved tab: with the option, there is nothing to create from.
+    let empty_saved = session.tab == TabId::Saved && !library.items().iter().any(|item| item.value.fits());
+    let can_create = !(setup.grey_create_on_empty_saved && empty_saved);
     if changed {
         match bound.saved {
             Some(cell) => *cell.borrow_mut() = library,
@@ -485,14 +490,16 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
         }
     }
     *form.memory::<Session>() = session;
-    true
+    can_create
 }
 
 /// File > New: category tabs over a grid of preset cards, a details column and Create and Close.
 ///
-/// - Tabs: Recent, the categories and Saved. Recent lists the clipboard's image size first when the app gives one,
+/// - Tabs: Recent, the categories and Saved ([`saved_after_recent`](NewDocumentDialog::saved_after_recent) lists Saved
+///   second). Recent lists the clipboard's image size first when the app gives one,
 ///   then the recent documents kept under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet among them. Saved lists the user's presets in a list
-///   whose Delete key removes the picked ones, with "No saved presets yet." when there are none.
+///   whose Delete key removes the picked ones, with "No saved presets yet." when there are none (Create is greyed
+///   there with [`grey_create_on_empty_saved`](NewDocumentDialog::grey_create_on_empty_saved)).
 /// - Cards: a click or an arrow fills the details; Enter on a card or a double click creates. A built-in card turns with
 ///   the orientation control. Saved and recent cards restore every setting but the name. A Web or Mobile card turns
 ///   Artboards on; a card of another category turns it off again only when such a card turned it on.
@@ -562,6 +569,12 @@ pub struct NewDocumentDialog<'a> {
     /// The application's name, for the "Default {app} Size" card.
     #[prop(into)]
     app_name: Option<Label>,
+    /// Lists Saved second, right after Recent, instead of after the categories.
+    #[prop]
+    saved_after_recent: bool,
+    /// Greys Create (and Enter) on a Saved tab with no presets, where no card is picked.
+    #[prop]
+    grey_create_on_empty_saved: bool,
     /// Keeps the dialog's place and size across runs under `key`.
     #[prop]
     remember: Option<SaveKey>,
@@ -595,6 +608,8 @@ impl<'a> NewDocumentDialog<'a> {
             recent: None,
             tab: None,
             app_name: None,
+            saved_after_recent: false,
+            grey_create_on_empty_saved: false,
             remember: None,
             answers: Vec::new(),
             opening: None,
@@ -619,6 +634,8 @@ impl<'a> NewDocumentDialog<'a> {
             recent: mut recent_bound,
             mut tab,
             app_name,
+            saved_after_recent,
+            grey_create_on_empty_saved,
             remember,
             answers,
             opening,
@@ -647,6 +664,8 @@ impl<'a> NewDocumentDialog<'a> {
             profiles,
             app_name,
             custom_pixel_aspects,
+            saved_after_recent,
+            grey_create_on_empty_saved,
         };
         let untitled = words.untitled.as_str().to_owned();
         let shared = Shared {
