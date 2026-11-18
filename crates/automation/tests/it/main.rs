@@ -7,5 +7,6 @@ mod actions;
 mod agents;
 mod control;
 mod dialogs;
+mod dock;
 mod screenshot;
 mod synthetic;
