@@ -708,11 +708,8 @@ impl<'a, S> AppShell<'a, S> {
             edges.extend(scope.revealed_rects());
             kept.reveal.record(edges);
             // The screen bar and the drop-down slot show by the mode, never by a reveal.
-            let revealed = only
-                && slots
-                    .iter()
-                    .zip(&visible)
-                    .any(|(placed, shown)| *shown && !placed.slot.is_screen_bar() && !placed.slot.drops_down());
+            let revealed =
+                only && slots.iter().zip(&visible).any(|(placed, shown)| *shown && !placed.slot.is_screen_bar() && !placed.slot.drops_down());
             *cx.keep::<ShellState>() = kept;
             Parts { regions, revealed, panels_hidden, mode, dropped: dropped_shown }
         };

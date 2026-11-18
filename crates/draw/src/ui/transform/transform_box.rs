@@ -246,10 +246,7 @@ impl LineLook {
     /// (on a level or upright line, the side). A line of no length, or one with free ends, has none.
     fn end_parts(&self) -> impl Iterator<Item = (BoxPart, Point)> {
         let boxed = self.ends == LineEnds::Box;
-        [(self.from, self.to), (self.to, self.from)]
-            .into_iter()
-            .filter(move |_| boxed)
-            .filter_map(|(end, other)| Some((end_part(end, other)?, end)))
+        [(self.from, self.to), (self.to, self.from)].into_iter().filter(move |_| boxed).filter_map(|(end, other)| Some((end_part(end, other)?, end)))
     }
 
     /// Each free end with its point, in [`LineEnds::Free`]; none when the ends are box handles.

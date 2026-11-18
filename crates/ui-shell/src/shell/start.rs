@@ -329,13 +329,7 @@ impl<'p> Page<'p> {
 /// The thumbnail of `key` in `rect`, asked for at the size it paints. The store paints the placeholder while the
 /// picture is not ready and the failure mark when it failed; a key the source has no picture for (`Blank`) gets the
 /// file icon on the sunken tile.
-pub(super) fn paint_thumb(
-    cx: &ContentPainterCx,
-    rect: Rect,
-    thumbnails: &Thumbnails<ThumbKey>,
-    source: &dyn ThumbSource<ThumbKey>,
-    key: &ThumbKey,
-) {
+pub(super) fn paint_thumb(cx: &ContentPainterCx, rect: Rect, thumbnails: &Thumbnails<ThumbKey>, source: &dyn ThumbSource<ThumbKey>, key: &ThumbKey) {
     let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
     let state = thumbnails.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
     if thumbnails.paint(cx, rect, &state, &ThumbPaint::default()) {

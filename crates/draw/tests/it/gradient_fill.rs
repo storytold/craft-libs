@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use craft_behavior::EditEvent;
 use craft_color_ui::ui::gradient::{ColorStop, GradientStops};
-use craft_draw::ui::gradient::{FocusOutline, GradientFill, GradientFillEditor, GradientGroup, GradientItem, GradientRef, GradientStyle, GradientTile};
+use craft_draw::ui::gradient::{
+    FocusOutline, GradientFill, GradientFillEditor, GradientGroup, GradientItem, GradientRef, GradientStyle, GradientTile,
+};
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::presets::PresetState;

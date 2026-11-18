@@ -1,9 +1,7 @@
 //! `PreferencesPage` over a model with no draft: each edit reaches the model in the pass it lands in.
 
 use craft_ui::contract::{Bind, Role};
-use craft_ui::patterns::preferences::{
-    PageSpec, PrefValue, PreferencesModel, PreferencesPage, PreferencesState, PreferencesWords, RowKind, RowSpec,
-};
+use craft_ui::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, PreferencesPage, PreferencesState, PreferencesWords, RowKind, RowSpec};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::testing::pointer::{moved, press, release};

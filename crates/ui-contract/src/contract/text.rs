@@ -430,8 +430,8 @@ pub(crate) fn run<C: Component>(
     // The bound caret is compared with the widget's before anything else this pass moves it (AccessKit, Select All,
     // the typing): last pass reported the widget's caret, so only an app write differs here. A composition keeps its
     // caret.
-    let caret_placed = state.preedit.is_none()
-        && adapter::place_caret(&ctx, widget, state.draft.as_deref().unwrap_or(&decl.shown), decl.options.caret);
+    let caret_placed =
+        state.preedit.is_none() && adapter::place_caret(&ctx, widget, state.draft.as_deref().unwrap_or(&decl.shown), decl.options.caret);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
     if std::mem::take(&mut state.select_all) {
         let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();

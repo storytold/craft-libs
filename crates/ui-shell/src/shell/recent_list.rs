@@ -8,7 +8,8 @@ use super::start::{
 use super::words::ShellWords;
 use crate::buttons::Button;
 use crate::contract::{
-    ActivateOn, BodyCx, CollectionEvent, Gap, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
+    ActivateOn, BodyCx, CollectionEvent, Gap, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+    clicked,
 };
 use crate::list::{List, ListRow, RowEvent, ThumbAspect, ThumbSize, TrailingFace};
 use crate::menu::{Menu, MenuItem};

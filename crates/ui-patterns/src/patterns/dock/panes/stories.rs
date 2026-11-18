@@ -57,8 +57,7 @@ impl PaneContent<u32> for Panes {
 /// The two panes around a document, each docking only at `edges`.
 fn area(ui: &mut Ui, edges: PaneEdges) -> StoryOutput {
     let size = &Env::of(ui).tokens.size;
-    let mut content =
-        Panes { float: Vec2::new(size.float.width, size.float.height), side: size.length.field.md, layers: layer_names(), edges };
+    let mut content = Panes { float: Vec2::new(size.float.width, size.float.height), side: size.length.field.md, layers: layer_names(), edges };
     let open = [0_u32, 1];
     PaneArea::new("Panes", &open, &mut content)
         .show(ui, |ui, _| {

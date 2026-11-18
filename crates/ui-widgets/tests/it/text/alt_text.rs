@@ -11,7 +11,6 @@ use std::rc::Rc;
 
 const PROMPT: &str = "Describe this object";
 
-
 fn rig(start: AltText) -> (Fixture, Rc<RefCell<AltText>>) {
     let value = Rc::new(RefCell::new(start));
     let shown = value.clone();

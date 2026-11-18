@@ -20,11 +20,11 @@ pub use board::declare_child;
 #[doc(hidden)]
 pub use board::focus_within;
 pub use board::keymap;
-#[doc(hidden)]
-pub use board::note_page_root;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use board::keymap_builds;
+#[doc(hidden)]
+pub use board::note_page_root;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{

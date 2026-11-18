@@ -85,8 +85,7 @@ fn an_app_tab_shows_after_models_and_is_a_tab_field_value() {
     fixture.idle(10);
     assert_eq!(drawn.load(Ordering::Relaxed), 0, "the dialog opens on About");
 
-    let tabs: Vec<String> =
-        fixture.by_role(Role::TAB).iter().filter_map(|tab| access::name(fixture.tree(), tab.node).map(str::to_owned)).collect();
+    let tabs: Vec<String> = fixture.by_role(Role::TAB).iter().filter_map(|tab| access::name(fixture.tree(), tab.node).map(str::to_owned)).collect();
     let models = tabs.iter().position(|name| name == "Models").expect("the strip lists Models");
     assert_eq!(tabs.get(models + 1).map(String::as_str), Some("Languages"), "the app tab follows Models: {tabs:?}");
 

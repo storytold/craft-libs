@@ -129,7 +129,10 @@ fn a_recent_row_names_its_full_path_and_reveals_remove_on_hover_or_focus() {
     fixture.idle(2);
     let revealed = fixture.by_role(Role::BUTTON);
     assert!(revealed.len() > buttons_focused - 1, "hovering a row keeps its remove part shown");
-    let remove = revealed.into_iter().find(|button| row.rect.contains(button.center()) && button.center().x > row.center().x).expect("hovering the row reveals its remove part");
+    let remove = revealed
+        .into_iter()
+        .find(|button| row.rect.contains(button.center()) && button.center().x > row.center().x)
+        .expect("hovering the row reveals its remove part");
     fixture.click(&remove).idle(2);
     assert!(log.borrow().contains(&StartAction::RemoveRecent(poster)), "the remove part removes that row's file: {:?}", log.borrow());
 

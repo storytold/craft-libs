@@ -150,8 +150,7 @@ fn titled(title: &'static str) -> (Fixture, Rc<Cell<TitleSeen>>) {
     let out = Rc::clone(&seen);
     let mut fixture = Fixture::new(move |ui| {
         // The title shows whatever frame the trial's host decides.
-        let shown =
-            TitleBar::new().title_when_native().show_titled(ui, Title::new(title).action("Rename the document"), |_, _| {}, |_, _| {});
+        let shown = TitleBar::new().title_when_native().show_titled(ui, Title::new(title).action("Rename the document"), |_, _| {}, |_, _| {});
         let mut now = out.get();
         now.bar = shown.response.rect;
         now.activations += usize::from(shown.title_activated);

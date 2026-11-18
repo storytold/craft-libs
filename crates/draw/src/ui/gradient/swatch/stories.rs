@@ -65,10 +65,8 @@ fn gradient_swatch(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn gradient_swatch_tiles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let stops = GradientStops::new(vec![stop(0.0, [0.96, 0.65, 0.14]), stop(1.0, [0.24, 0.39, 0.87])]);
     let focus = egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.5, 0.5));
-    let mut tiles: Vec<(String, GradientTile)> = GradientStyle::ALL
-        .into_iter()
-        .map(|style| (format!("{style:?}"), GradientTile::Style { style, angle: -45.0 }))
-        .collect();
+    let mut tiles: Vec<(String, GradientTile)> =
+        GradientStyle::ALL.into_iter().map(|style| (format!("{style:?}"), GradientTile::Style { style, angle: -45.0 })).collect();
     tiles.push(("Focus, circle".to_owned(), GradientTile::Focus { outline: FocusOutline::Circle, focus }));
     tiles.push(("Focus, rectangle".to_owned(), GradientTile::Focus { outline: FocusOutline::Rect, focus }));
     Stack::new().show(ui, |ui, _| {

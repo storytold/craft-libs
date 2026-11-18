@@ -9,8 +9,8 @@ use super::search::{self, Listed};
 use super::window::PreferencesState;
 use super::words::PreferencesWords;
 use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, NoValue, Outcome, Pattern, Props, Scroll, SelectMode, Show as _, ShowCollection as _,
-    ShowContainer as _, Sizing,
+    ActivateOn, Bind, CollectionEvent, NoValue, Outcome, Pattern, Props, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Sizing,
 };
 use crate::display::{Divider, Shade, Text};
 use crate::form::FieldGroup;

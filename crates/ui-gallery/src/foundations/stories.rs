@@ -14,7 +14,6 @@ fn semantic(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     StoryOutput::default()
 }
 
-
 // Each surface kind in the story's own theme, with the ink that reads on it.
 #[story(Surfaces<'static>, covers = [], drive = Drive::Never, title = "Surface kinds")]
 fn surface_kinds(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {

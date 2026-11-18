@@ -32,11 +32,7 @@ fn on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, B
 }
 
 /// [`on_canvas`] with the box's whole output.
-fn shown_on_canvas(
-    ui: &mut Ui,
-    data: &mut StoryData,
-    make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>,
-) -> Option<TransformBoxOutput> {
+fn shown_on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> Option<TransformBoxOutput> {
     let state = data.value("box", BoxState::from_rect(PICTURE));
     let room = craft_ui::testing::stage(ui);
     let view = craft_ui::testing::canvas_story::story_view(room, ui.pixels_per_point(), PICTURE.center(), 100.0);

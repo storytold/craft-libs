@@ -215,11 +215,7 @@ fn caption_widths(windows: &Windows, runs: &mut PageRuns, names: &[&str]) -> Vec
     names
         .iter()
         .map(|name| {
-            buttons
-                .iter()
-                .find(|key| tree.name_of(**key) == Some(*name))
-                .and_then(|key| tree.bounds_of(*key))
-                .map_or(0.0, |rect| rect.width())
+            buttons.iter().find(|key| tree.name_of(**key) == Some(*name)).and_then(|key| tree.bounds_of(*key)).map_or(0.0, |rect| rect.width())
         })
         .collect()
 }
@@ -265,8 +261,7 @@ fn a_page_hides_the_slots_and_its_band_keeps_the_window_ends_and_moves_the_windo
     let bands = regions.moves.iter().filter(|area| band.rect.contains_rect(**area)).count();
     let to = free + egui::vec2(40.0, 0.0);
     let mut sent = Vec::new();
-    for events in [vec![craft_ui::testing::pointer::moved(free)], vec![press(free)], vec![craft_ui::testing::pointer::moved(to)], vec![release(to)]]
-    {
+    for events in [vec![craft_ui::testing::pointer::moved(free)], vec![press(free)], vec![craft_ui::testing::pointer::moved(to)], vec![release(to)]] {
         sent.extend(page_frame(&windows, &mut runs, false, events));
     }
     assert!(sent.contains(&egui::ViewportCommand::StartDrag), "a drag of the free band moves the window: {sent:?}");

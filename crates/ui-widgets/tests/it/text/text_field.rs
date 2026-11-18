@@ -21,7 +21,12 @@ const ROOM: Vec2 = Vec2::new(320.0, 240.0);
 /// Where a field's text is painted, found by a piece of it no label holds: the whole text, scrolled past the field's
 /// edges when it is taller.
 fn run_with(fixture: &Fixture, piece: &str) -> Rect {
-    fixture.texts().iter().find(|run| run.text.contains(piece)).map(|run| run.rect).unwrap_or_else(|| panic!("the field paints its text holding {piece:?}"))
+    fixture
+        .texts()
+        .iter()
+        .find(|run| run.text.contains(piece))
+        .map(|run| run.rect)
+        .unwrap_or_else(|| panic!("the field paints its text holding {piece:?}"))
 }
 
 /// Clearing a search field that has an open typing run empties it for good: the clear part goes, and leaving the
@@ -186,7 +191,10 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     caret.set(TEXT.len());
     fixture.idle(3);
     let (field, end) = (rect.get(), run_with(&fixture, "\nf"));
-    assert!(end.top() < field.top() && end.bottom() <= field.bottom() + SNAP, "an app caret at the end scrolls the last line into view: {end:?} in {field:?}");
+    assert!(
+        end.top() < field.top() && end.bottom() <= field.bottom() + SNAP,
+        "an app caret at the end scrolls the last line into view: {end:?} in {field:?}"
+    );
     assert_eq!(caret.get(), TEXT.len(), "the caret the app wrote stays");
 
     // Everything selected; the app's caret, inside "é", collapses the selection at the boundary before it.

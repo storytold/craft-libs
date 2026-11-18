@@ -98,7 +98,6 @@ pub struct EditorHandle {
     read_only: bool,
 }
 
-
 impl EditorHandle {
     /// The handle of the editor part step 8b set up.
     fn of(info: &EditorInfo) -> EditorHandle {
