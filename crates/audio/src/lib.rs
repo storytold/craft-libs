@@ -2,7 +2,7 @@
 #![warn(missing_docs)]
 // The docs link items of every feature; built with fewer features, those links have no target.
 // CI and docs.rs build the docs with all features, where every link must resolve.
-#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks")), allow(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks", feature = "smacker-decode")), allow(rustdoc::broken_intra_doc_links))]
 //! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
 //! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
 //! `wasm32-unknown-unknown`.
@@ -33,8 +33,9 @@
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
 //!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files), [`adpcm`]
 //!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM),
-//!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`vmd`] (`vmd-decode`:
-//!   Sierra VMD sound).
+//!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`smacker`]
+//!   (`smacker-decode`: the audio chunks of a Smacker file), [`vmd`] (`vmd-decode`: Sierra VMD
+//!   sound).
 //!
 //! The shared types below build with no features.
 
@@ -70,6 +71,8 @@ pub mod qoa;
 mod read;
 #[cfg(feature = "sbc")]
 pub mod sbc;
+#[cfg(feature = "smacker-decode")]
+pub mod smacker;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
 #[cfg(feature = "vmd-decode")]

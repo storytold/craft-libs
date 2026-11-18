@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Sierra VMD."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Smacker, Sierra VMD."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -62,6 +62,9 @@ av1-decode = []
 av1-encode = ["craft-media/isobmff"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
+# Smacker video (the 8-bit paletted game video format): decoder; `smacker` turns it on too.
+smacker = ["smacker-decode"]
+smacker-decode = ["craft-media/smacker"]
 # Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
 vmd = ["vmd-decode"]
 vmd-decode = []
@@ -98,6 +101,10 @@ required-features = ["mjpeg"]
 [[test]]
 name = "dnx"
 required-features = ["dnx"]
+
+[[test]]
+name = "smacker"
+required-features = ["smacker-decode"]
 
 [[test]]
 name = "apv"
