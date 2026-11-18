@@ -176,6 +176,7 @@ fn built_help_entries_are_collected_only_while_the_help_menu_shows() {
         };
         MenuBar::new("Main menu", titles).help(MenuHelp::built(1, &build)).show(ui);
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     fixture.settle();
     assert_eq!(builds.get(), 0, "closed menus build nothing");
@@ -219,6 +220,7 @@ fn a_row_whose_label_changed_since_the_menu_last_opened_takes_its_new_letter() {
         })];
         MenuBar::new("Main menu", titles).show(ui);
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let file = fixture.by_label("File").expect("the File title");
     fixture.click(&file);
