@@ -107,9 +107,10 @@ fn picked(pick: &Rc<RefCell<Pick>>) -> Pick {
     pick.borrow().clone()
 }
 
+/// A pick over a frame lowered to leave room above it for the bar, so the bar hangs above until `at_top` moves it.
 fn new_pick(dismiss: TaskBarDismiss, at_top: bool) -> Rc<RefCell<Pick>> {
     Rc::new(RefCell::new(Pick {
-        anchor: frame(DocVec::ZERO),
+        anchor: frame(DocVec::new(0.0, 80.0)),
         at_top,
         dismiss,
         bounds: Rect::NOTHING,
