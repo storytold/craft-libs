@@ -2389,6 +2389,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ipp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-java-class"
 version = "0.1.0"
 dependencies = [
