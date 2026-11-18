@@ -45,8 +45,11 @@ impl Flavor {
 
     /// `image` as an [`RGBA8`] flavor.
     pub fn rgba8(image: &ClipboardImage) -> Flavor {
-        let _ = image;
-        todo!("pf.C-P3")
+        let mut data = Vec::with_capacity(8 + image.rgba.len());
+        data.extend_from_slice(&image.width.to_le_bytes());
+        data.extend_from_slice(&image.height.to_le_bytes());
+        data.extend_from_slice(&image.rgba);
+        Flavor::new(RGBA8, data)
     }
 
     /// `text/plain` with `text`.

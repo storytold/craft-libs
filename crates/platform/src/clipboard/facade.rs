@@ -4,7 +4,6 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use super::backend::{ClipboardBackend, Written};
-use super::convert::rgba8_flavor;
 use super::types::{ClipboardError, ClipboardImage, ClipboardLimits, Flavor, SVG, TEXT};
 
 /// The app's clipboard: one per window, on the UI thread.
@@ -65,7 +64,7 @@ impl Clipboard {
         if !image.is_whole() {
             return Err(ClipboardError::BadImage);
         }
-        let written = self.write(&[rgba8_flavor(image)])?;
+        let written = self.write(&[Flavor::rgba8(image)])?;
         if written == Written::Written {
             self.ours = Some(Ours::Image(image_signature(image.width, image.height, &image.rgba)));
         }
@@ -129,12 +128,12 @@ impl Clipboard {
 
     /// The MIME names of the formats on offer.
     pub fn formats(&mut self) -> Vec<String> {
-        todo!("pf.C-P8")
+        self.backend.formats()
     }
 
     /// Whether a late paste arrived since the last call.
     pub fn take_arrived_paste(&mut self) -> bool {
-        todo!("pf.C-P8")
+        self.backend.take_arrived()
     }
 
     /// Does the clipboard still hold what this app wrote last (nothing copied since, here or in
@@ -143,6 +142,13 @@ impl Clipboard {
     /// already read, [`is_ours`](Self::is_ours) answers without another read.
     // vectorcraft: crates/ui-egui/src/sysclip.rs:25 SystemClipboard::holds_ours
     pub fn holds_ours(&mut self) -> bool {
+        if self.ours.is_none() {
+            return false;
+        }
+        // The platform's owner marker answers without a read; content is compared only when it cannot tell.
+        if let Some(owned) = self.backend.owns() {
+            return owned;
+        }
         match &self.ours {
             None => false,
             Some(Ours::Image(signature)) => {
