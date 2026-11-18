@@ -1114,6 +1114,9 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
         // Word. Only Repeat as header row makes it one then.
         let header = r.props.header || (ri == 0 && style.is_some() && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
+        for _ in 0..r.first_grid() {
+            cells.push(Cell::default());
+        }
         for (ci, c) in r.cells.iter().enumerate() {
             let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };
             let mut rowspan = 1;
@@ -1159,6 +1162,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                     Some(Box::new(crate::CellPic { img, repeat: p.repeat, align: p.align }))
                 }),
                 width: None,
+                vmerge_restart: c.props.vmerge == VMerge::Restart,
+                synthetic_covered: false,
             });
         }
         rows.push(cells);

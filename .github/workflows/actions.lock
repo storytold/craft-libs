@@ -46,6 +46,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
         - 'step-security/harden-runner@v2.22.4'
+    '.github/workflows/full-validation.yml': []
     '.github/workflows/house-rules.yml': []
     '.github/workflows/jpeg.yml':
         - 'actions/checkout@v7.0.1'
@@ -144,18 +145,8 @@ dependencies:
         commit: 'sha1-1d88384fd173af6ecb012dfd0264a306b711241a'
         owner_id: 88700172
         repo_id: 422287306
-    'step-security/rust-cache@v2.9.2':
-        ref: 'v2.9.2'
-        commit: 'sha1-8871c8ba063416da7c32246932ea6ae08700453e'
-        owner_id: 88700172
-        repo_id: 822636713
     'step-security/taiki-e-install-action@v2.87.32':
         ref: 'v2.87.32'
         commit: 'sha1-76747d22a7567cc4438546a84f11bdf18e670ab8'
         owner_id: 88700172
         repo_id: 1382753260
-    'swatinem/rust-cache@v2.9.3':
-        ref: 'v2.9.3'
-        commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
-        owner_id: 580492
-        repo_id: 298565987
