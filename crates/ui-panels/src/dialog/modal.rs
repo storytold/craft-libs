@@ -44,6 +44,8 @@ type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 /// - A modal dialog blocks input below it in every window; a press outside does nothing.
 /// - Escape closes a modal dialog, and a modeless one with a footer; a modeless tool window without one ignores it.
 /// - Focus starts on the body's first text or number field, else on the default button, else nowhere.
+/// - A [`title_note`](Dialog::title_note) runs on after the title in muted text ("· 3 comments selected"), and is
+///   dropped before the title elides.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct Dialog<'a> {

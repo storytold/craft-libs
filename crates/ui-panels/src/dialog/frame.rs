@@ -136,11 +136,15 @@ pub struct FooterHost<'s, 'a> {
     pub settle: &'s mut Option<ButtonState<'a>>,
 }
 
-/// Fills the header region: the title and, for a closable shell, the close action.
+/// Fills the header region: the title, the muted `note` after it when there is one and, for a closable shell, the
+/// close action.
 #[doc(hidden)]
 pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction], note: Option<&Label>) {
-    let _ = note;
-    let shown = TitleRow::new(cx.label()).strength(HeaderStrength::Heading).level(TITLE_LEVEL).actions(actions.iter().copied()).show(ui);
+    let mut row = TitleRow::new(cx.label()).strength(HeaderStrength::Heading).level(TITLE_LEVEL);
+    if let Some(note) = note {
+        row = row.note(note.clone());
+    }
+    let shown = row.actions(actions.iter().copied()).show(ui);
     if shown.action == Some(HeaderAction::Close) {
         cx.request_close();
     }
@@ -319,7 +323,7 @@ impl Component for DialogFrame<'_> {
 
 impl Container for DialogFrame<'_> {
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        header(ui, cx, close_action(self.closable), None); // P3(pdf-comments-w6): CM-C27
+        header(ui, cx, close_action(self.closable), None);
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
