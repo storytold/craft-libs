@@ -107,6 +107,7 @@ pass_state! {
         inspect: crate::runtime::inspect::Log,
         recorder: crate::runtime::replay::Recorder,
         pen: crate::runtime::pen::InstalledPen,
+        clipboard: crate::runtime::egui::clipboard::Installed,
         #[cfg(feature = "testing")]
         noted: crate::runtime::egui::widgets::noted::Noted,
         #[cfg(feature = "testing")]

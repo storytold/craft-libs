@@ -3144,9 +3144,20 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `pub const fn toggle(self) -> ChromeToggle`. The toggle the command writes to the output.
 - `craft_ui::runtime::commands::ClipContent`: `pub struct ClipContent { pub text: Option<Arc<str>> }`. What a paste delivers.
 - `craft_ui::runtime::commands::ClipError`: `pub struct ClipError(pub String)`. Why a paste has no content.
-- `craft_ui::runtime::commands::ClipItem`: `pub enum ClipItem { Text(Arc<str>), Html(Arc<str>), Image(Arc<ColorImage>), Custom { mime: Arc<str>, bytes: Arc<[u8]> } }`. One clipboard item.
-- `craft_ui::runtime::commands::ClipboardHandle`: `pub struct ClipboardHandle`. The component's paste slot over the system clipboard. egui carries text and images, so `Html` and `Custom`
-  - `pub fn put(&self, items: &[ClipItem])`. Writes every flavour of `items` that the clipboard carries.
+- `craft_ui::runtime::commands::ClipItem`: `pub enum ClipItem { Text(Arc<str>), Html(Arc<str>), Image(Arc<ColorImage>), Rtf(Arc<str>), MathMl(Arc<str>), Custom { mime: Arc<str>, bytes: Arc<[u8]> } }`. One clipboard item.
+  - `pub fn custom(mime: impl Into<Arc<str>>, bytes: impl Into<Arc<[u8]>>) -> ClipItem`. An item of an app-defined type: `bytes` under the MIME type `mime`.
+- `craft_ui::runtime::commands::ClipboardHandle`: `pub struct ClipboardHandle`. The component's paste slot over the installed clipboard (the host's, else egui's). Every call goes to the
+  - `pub fn of(ctx: &Context) -> ClipboardHandle`. The clipboard handle of `ctx`, over the installed clipboard, for code outside a component; its paste slot
+  - `pub fn offer(&self, items: &[ClipItem]) -> Result<Written, ClipboardError>`. Offers `items` in the caller's order, as one offer, and says which flavour the clipboard kept. A measuring run
+  - `pub fn read(&self, mimes: &[&str]) -> Result<Option<Flavor>, ClipboardError>`. The first of `mimes` the installed clipboard holds.
+  - `pub fn read_text(&self) -> Result<Option<String>, ClipboardError>`. The clipboard's text.
+  - `pub fn read_image(&self) -> Result<Option<ClipboardImage>, ClipboardError>`. The clipboard's image as straight-alpha RGBA8 pixels; `ColorImage::from_rgba_unmultiplied` turns them back.
+  - `pub fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError>`. The files the clipboard holds.
+  - `pub fn has(&self, mimes: &[&str]) -> bool`. Whether the clipboard holds one of `mimes`.
+  - `pub fn holds_ours(&self) -> bool`. Whether the clipboard still holds what this app last offered.
+  - `pub fn formats(&self) -> Vec<String>`. The MIME names of the formats on the clipboard.
+  - `pub fn arrived(&self) -> bool`. Whether a late paste offer arrived this frame; true in every pass of that frame.
+  - `pub fn put(&self, items: &[ClipItem])`. Offers `items` as one offer ([`offer`](Self::offer)), for a caller that does not ask what was kept.
   - `pub fn paste(&self) -> &Pending<ClipContent, ClipError>`. The pasted content: ready in the pass that delivers the paste to the focused component that lists Paste.
 - `craft_ui::runtime::commands::CommandDef`: re-export of `craft_keymap::CommandDef` (outside these crates).
 - `craft_ui::runtime::commands::CommandDefError`: `pub enum CommandDefError { Binding { command: &'static str, error: BindingError }, Scope { command: &'static str }, Duplicate { command: String } }`. Why a command definition is unusable.
@@ -3570,13 +3581,14 @@ Decision records and findings: what each pipeline step did, kept in frames a tes
 `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
 - `craft_ui::runtime::install::InstallError`: `pub enum InstallError { AlreadyInstalled, DuplicateStyle(DuplicateStyle), Commands(commands::CommandDefError) }`. Why `install` refused a spec.
-- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader }`. What `install` takes.
+- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader, pub clipboard: Option<craft_platform::clipboard::Clipboard> }`. What `install` takes.
   - `pub fn new(shell_info: ShellInfo, window_system: Arc<dyn WindowSystem>) -> Self`. A spec for `shell_info` and `window_system`, with no ghost-layer painter.
   - `pub fn placement(mut self, store: Arc<Mutex<Store>>) -> Self`. Sets the store viewport mounts save their window placement in.
   - `pub fn looks(mut self, looks: impl Into<StyleReplacements>) -> Self`. Sets the app's style replacements.
   - `pub fn system(mut self, reader: SystemReader) -> Self`. Sets the reader of the OS's appearance; the host starts it (`SystemReader::start`) with a wake that repaints.
   - `pub fn frame(mut self, decision: Decision) -> Self`. Sets the root window's decided frame (`craft_window::policy::decide_for`).
   - `pub fn frame_layers(mut self, painter: Option<fn(&Context)>) -> Self`. Sets the end hook's ghost-layer painter.
+  - `pub fn clipboard(mut self, clipboard: craft_platform::clipboard::Clipboard) -> Self`. Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
 - `craft_ui::runtime::install::install`: `pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError>`. Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, and
 
 ## `craft_ui::runtime::keys`
