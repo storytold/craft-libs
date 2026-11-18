@@ -14,7 +14,6 @@ use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense,
 use craft_behavior::{HitLevel, HitPriority, NavMove, Preview};
 use craft_font_catalog::Catalog;
 use craft_host::Section;
-use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
@@ -27,6 +26,7 @@ use craft_ui::text::{Adornment, place, reserve};
 use egui::{Rect, Response, Vec2};
 use serde::{Deserialize, Serialize};
 
+use crate::missing::{DocumentFont, FontStatus, MissingFontsWords, document_fonts};
 use rank::{Info, infos, shown_name};
 
 craft_ui::words! {
@@ -312,6 +312,17 @@ pub enum FontPickerKind {
     Plain,
 }
 
+/// What the note of a shown font that is not installed advises.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MissingAdvice {
+    /// The note alone.
+    #[default]
+    None,
+    /// The note, then the advice to add the font file with the host's Add Font row.
+    AddFont,
+}
+
 /// What a [`FontPicker`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -351,6 +362,9 @@ const TEXT: PartKey = PartKey::new("text");
 /// The chevron that opens and closes the list.
 const CHEVRON: PartKey = PartKey::new("chevron");
 const CHEVRON_ICON: &str = "chevron_down";
+/// The mark before the chevron of a shown font that is not installed; its tooltip is the note.
+const WARNING: PartKey = PartKey::new("missing");
+const WARNING_ICON: &str = "warning";
 /// The popup the chevron and Alt+Down toggle.
 const POPUP: &str = "list";
 /// The star at the end of a row.
@@ -367,6 +381,8 @@ fn text_key() -> TextKey<String> {
 struct FamilyCodec {
     infos: Arc<rank::Infos>,
     language: String,
+    /// A typed name that is no installed family is a value too (Word's font box applies it as typed).
+    free: bool,
 }
 
 impl FamilyCodec {
@@ -382,13 +398,18 @@ impl Codec for FamilyCodec {
         self.infos.families.get(family).map_or_else(|| family.clone(), |info| self.shown(family, info))
     }
 
-    /// A family whose name, shown or in the catalog, is the text apart from case.
+    /// A family whose name, shown or in the catalog, is the text apart from case; for a `free` codec, else the
+    /// trimmed text when it is not empty.
     fn parse(&self, text: &str, _: &String) -> Result<String, NotAValue> {
         let wanted = text.trim().to_lowercase();
         let named = |(family, info): (&String, &Info)| {
             (family.to_lowercase() == wanted || self.shown(family, info).to_lowercase() == wanted).then(|| family.clone())
         };
-        self.infos.families.iter().find_map(named).ok_or(NotAValue)
+        match self.infos.families.iter().find_map(named) {
+            Some(family) => Ok(family),
+            None if self.free && !wanted.is_empty() => Ok(text.trim().to_owned()),
+            None => Err(NotAValue),
+        }
     }
 
     fn sample(&self, current: &String) -> std::borrow::Cow<'_, str> {
@@ -480,16 +501,17 @@ pub struct FontPicker<'a> {
     served: &'a [String],
     /// How the list is laid out: the library picker, or Word's plain font box.
     #[prop]
-    #[allow(dead_code)] // P3(ribbon-w7): rb.R21
     kind: FontPickerKind,
-    /// Action rows above the families (the `Plain` box), reported through `FontPickerOutput::action`.
+    /// Action rows after the families (the `Plain` box), reported through `FontPickerOutput::action`.
     #[prop]
-    #[allow(dead_code)] // P3(ribbon-w7): rb.R21
     actions: &'a [Label],
     /// The face the shown font is displayed in when it is not installed, for the note beside it.
     #[prop]
-    #[allow(dead_code)] // P3(ribbon-w7): rb.R21
     shown_as: Option<&'a str>,
+    /// What the note advises beyond naming the face; `AddFont` when an action row adds a font.
+    #[prop]
+    advice: MissingAdvice,
+    action: Option<usize>,
 }
 
 impl<'a> FontPicker<'a> {
@@ -510,16 +532,41 @@ impl<'a> FontPicker<'a> {
             kind: FontPickerKind::default(),
             actions: &[],
             shown_as: None,
+            advice: MissingAdvice::default(),
+            action: None,
         }
         .label(label)
     }
 
-    fn trailing(name: Label) -> [Adornment; 1] {
-        [Adornment::button(CHEVRON, IconSpec::svg(IconId::new(CHEVRON_ICON)), name)]
+    /// The adornments at the end of the field: the missing mark when `missing`, then the chevron. The mark is a glyph
+    /// whose part carries the note.
+    fn trailing(name: Label, missing: bool) -> Vec<Adornment> {
+        let mut all = Vec::with_capacity(2);
+        if missing {
+            all.push(Adornment::glyph(IconSpec::svg(IconId::new(WARNING_ICON))));
+        }
+        all.push(Adornment::button(CHEVRON, IconSpec::svg(IconId::new(CHEVRON_ICON)), name));
+        all
+    }
+
+    /// The note for `family` when it is shown in another face because the catalog lacks it, by the rule the Missing
+    /// Fonts dialog uses: the missing-font sentence, then the advice the host chose.
+    fn missing_note(&self, family: &str, words: &MissingFontsWords) -> Option<Label> {
+        let face = self.shown_as?;
+        let status = document_fonts(self.catalog, &[DocumentFont::new(family, "", None)]).into_iter().next()?.status;
+        if status != FontStatus::Missing {
+            return None;
+        }
+        let mut note = words.shown_as.fill(&[("family", family), ("face", face)]);
+        if self.advice == MissingAdvice::AddFont {
+            note.push(' ');
+            note.push_str(words.add_font.as_str());
+        }
+        Some(Label::from(note))
     }
 
     fn codec(&self, env: &EnvView<'_>) -> FamilyCodec {
-        FamilyCodec { infos: infos(self.catalog), language: ui_language(env) }
+        FamilyCodec { infos: infos(self.catalog), language: ui_language(env), free: self.kind == FontPickerKind::Plain }
     }
 
     /// The families in list order without filters or recents, which the arrows and the wheel step through.
@@ -554,14 +601,20 @@ impl Component for FontPicker<'_> {
         let current = cx.value().map_or("", String::as_str);
         let widest = [NAME_SAMPLE, current].into_iter().map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
         let name = cx.words::<FontPickerWords>().list.clone();
-        Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name)), widest.y)
+        let note = self.missing_note(current, &cx.words::<MissingFontsWords>());
+        Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name, note.is_some())), widest.y)
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let name = cx.words::<FontPickerWords>().list.clone();
-        let trailing = Self::trailing(name);
+        let family = cx.value().cloned().unwrap_or_default();
+        let note = self.missing_note(&family, &cx.words::<MissingFontsWords>());
+        let trailing = Self::trailing(name, note.is_some());
         let placed = place(cx.content_rect, cx.style, &[], &trailing, cx.flow.is_rtl());
-        if let Some(at) = placed.trailing.first() {
+        if let (Some(note), Some(at)) = (note, placed.trailing.first()) {
+            cx.part(WARNING, *at).tooltip(note);
+        }
+        if let Some(at) = placed.trailing.last() {
             cx.part(CHEVRON, *at)
                 .sense(Sense::CLICK | Sense::KEEP_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
@@ -569,7 +622,6 @@ impl Component for FontPicker<'_> {
                 .toggles(POPUP);
         }
         let codec = self.codec(&cx.env);
-        let family = cx.value().cloned().unwrap_or_default();
         let mut options = TextOptions::new();
         options.select_on_focus = true;
         cx.text(text_key(), placed.text, &codec, &family, &options);
@@ -635,6 +687,13 @@ impl Component for FontPicker<'_> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let name = cx.words::<FontPickerWords>().list.clone();
+        let family = cx.value().cloned().unwrap_or_default();
+        let missing = self.missing_note(&family, &cx.words::<MissingFontsWords>()).is_some();
+        let trailing = Self::trailing(name.clone(), missing);
+        let placed = place(cx.content_rect, cx.style, &[], &trailing, cx.env.direction().is_rtl());
+        if let (true, Some(at)) = (missing, placed.trailing.first()) {
+            ui.draw().icon(*at, &IconSpec::svg(IconId::new(WARNING_ICON)));
+        }
         ui.face(CHEVRON, IconButton::new(IconId::new(CHEVRON_ICON)).label(name));
     }
 
@@ -652,6 +711,6 @@ impl Component for FontPicker<'_> {
             settings.note_recent(family);
             write(&mut bind, &mut cx, settings, "Recent font");
         }
-        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested, action: None }
+        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested, action: self.action }
     }
 }

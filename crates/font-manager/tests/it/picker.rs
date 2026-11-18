@@ -7,9 +7,13 @@ use std::sync::Arc;
 
 use craft_behavior::Preview;
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
-use craft_font_manager::picker::{FontFilters, FontPicker, FontPickerSettings, SIMILAR_COUNT, family_rows};
+use craft_font_manager::missing::MissingFontsWords;
+use craft_font_manager::picker::{
+    FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+};
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Room, trial};
 use egui::{Event, Key, Modifiers};
@@ -33,6 +37,7 @@ struct Seen {
     rested: Vec<String>,
     /// The family the open list proposes as a live preview, as the last pass reported it.
     preview: Option<String>,
+    actions: Vec<usize>,
 }
 
 fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>>) {
@@ -186,3 +191,87 @@ fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() 
         assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some(family), "the typed name is picked");
     }
 }
+
+/// A `Plain` picker over `family` with `recent` families, `actions` rows and the face `shown_as`.
+fn plain_rig(
+    catalog: Arc<Catalog>,
+    family: &str,
+    recent: &[&str],
+    actions: Vec<Label>,
+    shown_as: Option<&'static str>,
+) -> (Fixture, Rc<RefCell<Seen>>) {
+    let seen = Rc::new(RefCell::new(Seen { family: family.to_owned(), ..Seen::default() }));
+    let shown = Rc::clone(&seen);
+    let mut settings = FontPickerSettings::default();
+    settings.recent = recent.iter().map(|family| (*family).to_owned()).collect();
+    let mut fx = Fixture::new(move |ui| {
+        let mut seen = shown.borrow_mut();
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .kind(FontPickerKind::Plain)
+            .actions(&actions)
+            .advice(if actions.is_empty() { MissingAdvice::None } else { MissingAdvice::AddFont });
+        if let Some(face) = shown_as {
+            picker = picker.shown_as(face);
+        }
+        let out = picker.show(ui);
+        if let Some(family) = out.picked {
+            seen.picks.push((family, out.picked_style));
+        }
+        seen.actions.extend(out.action);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    (fx, seen)
+}
+
+#[trial]
+fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after_a_cleared_query() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let words = FontPickerWords::default();
+    let (recently, all) = (words.recently_used.as_str(), words.all_fonts.as_str());
+    open(&mut fx);
+    assert!(present(&fx, recently), "the recents have their heading");
+    assert!(present(&fx, all), "the families have theirs");
+    fx.key(Key::Escape, Modifiers::NONE);
+    fx.settle();
+
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    fx.type_text("x");
+    fx.settle();
+    assert!(!present(&fx, recently), "a query lists its matches only");
+    fx.key(Key::Backspace, Modifiers::NONE);
+    fx.settle();
+    assert!(present(&fx, recently), "a cleared query lists the recents again");
+
+    fx.type_text("Zapfino");
+    fx.settle();
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(seen.borrow().family, "Zapfino", "a name that is no family is applied as typed");
+    assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some("Zapfino"));
+}
+
+#[trial]
+fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_naming_the_face() {
+    let words = MissingFontsWords::default();
+    let note = format!("{} {}", words.shown_as.fill(&[("family", "Gotham"), ("face", "Inter")]), words.add_font.as_str());
+    let note = note.as_str();
+    let (mut fx, seen) = plain_rig(catalog_of(&[INTER_REGULAR]), "Gotham", &[], vec![Label::from("Add Font…")], Some("Inter"));
+    assert!(present(&fx, note), "the field carries the note while the family is not installed");
+    open(&mut fx);
+    let action = fx.by_label("Add Font…").expect("the action row");
+    fx.click(&action);
+    fx.settle();
+    assert_eq!(seen.borrow().actions, [0], "the action is reported by its index");
+    assert_eq!(seen.borrow().family, "Gotham", "an action leaves the family");
+    assert!(seen.borrow().picks.is_empty(), "and picks nothing");
+
+    let (fx, _) = plain_rig(catalog_of(&[INTER_REGULAR]), "Inter", &[], vec![Label::from("Add Font…")], Some("Inter"));
+    assert!(!present(&fx, note), "an installed family has no note");
+}
+
+
