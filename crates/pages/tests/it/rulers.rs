@@ -1,19 +1,19 @@
 //! The page rulers: ruler numbers keep clear of table column markers, the margin handles stop short of the opposite
 //! edge and swap sides on a mirrored even page, and a table row grip drags as one gesture.
 
-use craft_behavior::GesturePhase;
+use craft_behavior::{EditEvent, GesturePhase};
 use craft_pages::setup::Margins;
 use craft_pages::ui::fixtures::demo_placed;
 use craft_pages::ui::margins::{MIN_TEXT, MarginHandlesWords};
 use craft_pages::ui::page_rulers::PageRulersWords;
 use craft_pages::ui::{PageEdges, PageRulers, RowDrag, VerticalRuler};
 use craft_text::ui::DocUnit;
-use craft_text::ui::ruler::{RulerValues, TextRulerWords};
+use craft_text::ui::ruler::{RulerValues, TabAlign, TabLeader, TabStop, TextRulerWords};
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rangef, Rect, pos2, vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Where the page's top-left corner sits in the fixture, points.
@@ -143,4 +143,57 @@ fn a_row_grip_drag_reports_one_gesture_with_alt_free_and_the_arrow_nudges() {
     let nudge = *seen.borrow().last().expect("the arrow nudges the focused grip");
     assert_eq!(nudge.phase, GesturePhase::Commit, "a nudge is a lone Commit");
     assert!(nudge.position > 100.0, "Down moves the border down: {}", nudge.position);
+}
+
+/// Where the trial's left tab stop sits, points from the column's start edge.
+const STOP_AT: f32 = 144.0;
+
+/// Guards `PageRulers::id_salt`: the caret paragraph's key salts the text ruler, so a new paragraph is a new ruler and
+/// a stop drag open on the old one commits nothing when its button comes up. The first drag, with the salt kept, is the
+/// control: it commits once.
+#[trial]
+fn a_new_salt_during_a_tab_drag_commits_nothing() {
+    let salt = Rc::new(Cell::new(1u32));
+    let commits = Rc::new(Cell::new(0usize));
+    let mut start = RulerValues::default();
+    start.stops.push(TabStop::new(STOP_AT, TabAlign::Left, TabLeader::None));
+    let values = Rc::new(RefCell::new(start));
+    let (shown_salt, seen, shown_values) = (Rc::clone(&salt), Rc::clone(&commits), Rc::clone(&values));
+    let mut fixture = Fixture::new(move |ui| {
+        let full = craft_ui::testing::stage(ui);
+        let page = demo_placed(1, pos2(full.min.x + PAGE_AT.0, full.min.y + PAGE_AT.1)).remove(0);
+        let mut edges = PageEdges::new(Margins::uniform(72.0));
+        let out = PageRulers::new("Rulers", &page, Bind::bound(&mut edges), Bind::bound(&mut *shown_values.borrow_mut()))
+            .id_salt(shown_salt.get())
+            .show_at(ui, full);
+        let committed = out.ruler.edit.events.iter().filter(|event| matches!(event, EditEvent::Commit { .. })).count();
+        seen.set(seen.get() + committed);
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let left_tab = TextRulerWords::default().left_tab;
+    let stop = |fixture: &Fixture| {
+        fixture
+            .by_role(Role::SLIDER)
+            .into_iter()
+            .find(|target| craft_ui::testing::access::name(fixture.tree(), target.node).is_some_and(|name| name.starts_with(left_tab.as_str())))
+            .expect("the ruler shows the stop")
+            .rect
+            .center()
+    };
+    let by = vec2(40.0, 0.0);
+
+    let at = stop(&fixture);
+    fixture.drag_hold_at(at, by);
+    fixture.release_at(at + by);
+    fixture.settle();
+    assert_eq!(commits.get(), 1, "a stop drag on one paragraph's ruler commits once");
+
+    let at = stop(&fixture);
+    fixture.drag_hold_at(at, by);
+    salt.set(2);
+    fixture.idle(1);
+    fixture.release_at(at + by);
+    fixture.settle();
+    assert_eq!(commits.get(), 1, "the drag open when the paragraph changed commits nothing");
 }

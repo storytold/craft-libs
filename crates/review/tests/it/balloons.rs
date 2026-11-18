@@ -39,6 +39,11 @@ struct Shown {
 
 impl Shown {
     fn new(threads: Vec<(CommentThread, f32)>, state: CommentsPanelState, place: BalloonPlace, room: Vec2, direction: Direction) -> Shown {
+        Shown::with(threads, state, place, room, direction, false)
+    }
+
+    /// [`Shown::new`] with the balloons `read_only` or not.
+    fn with(threads: Vec<(CommentThread, f32)>, state: CommentsPanelState, place: BalloonPlace, room: Vec2, direction: Direction, read_only: bool) -> Shown {
         let state = Rc::new(RefCell::new(state));
         let edits = Rc::new(RefCell::new(Vec::new()));
         let cards = Rc::new(RefCell::new(Vec::new()));
@@ -48,7 +53,7 @@ impl Shown {
             let items: Vec<BalloonItem<'_>> =
                 threads.iter().map(|(thread, y)| BalloonItem::Thread { thread, page: 0, anchor: Pos2::new(30.0, *y) }).collect();
             let mut state = shown_state.borrow_mut();
-            let out = CommentBalloons::new("Comments", &pages, &items, &mut state).place(place).now(Some(3_600)).show(ui);
+            let out = CommentBalloons::new("Comments", &pages, &items, &mut state).place(place).now(Some(3_600)).read_only(read_only).show(ui);
             shown_edits.borrow_mut().extend(out.edits);
             *shown_cards.borrow_mut() = out.cards;
         });
@@ -120,6 +125,26 @@ fn selecting_a_card_and_posting_a_reply_report_the_matching_edits() {
         shown.edits.borrow()
     );
     assert!(shown.state.borrow().reply.is_empty(), "a posted reply clears the binding");
+}
+
+/// Guards `CommentBalloons::read_only`: while comments cannot change, a selected card takes no typing, as the panel's
+/// rows do: it shows no reply field, and text typed after a click on it reaches no reply.
+#[trial]
+fn a_read_only_card_takes_no_typing() {
+    let threads = vec![(thread(1, "First"), 100.0)];
+    let selected = CommentsPanelState { selected: Some(ThreadId(1)), ..CommentsPanelState::default() };
+    let mut shown = Shown::with(threads, selected, BalloonPlace::Column, room(), Direction::Ltr, true);
+    let words = CommentsWords::default();
+    assert!(shown.fixture.by_label(words.reply.as_str()).is_none(), "a read-only card shows no reply field");
+    let card = shown.card(1);
+    shown.fixture.click_at(card.center()).settle();
+    shown.fixture.type_text("Thanks").settle();
+    assert!(shown.state.borrow().reply.is_empty(), "typing reaches no reply: {:?}", shown.state.borrow().reply);
+    assert!(
+        !shown.edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Reply { .. })),
+        "no reply is reported: {:?}",
+        shown.edits.borrow()
+    );
 }
 
 /// The selected card's buttons: Reply puts the focus in the reply field, Resolve and Reopen report `Resolve`, Delete reports

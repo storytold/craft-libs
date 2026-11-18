@@ -126,6 +126,9 @@ impl EditorHandle {
 
     /// The one editor report path: notes the caret, the composition, the undo state and the surrounding text with the
     /// IME engine, and returns the text facts when AccessKit reads the part.
+    ///
+    /// A report with no lines has no text facts: an editor whose view describes its text (a page editor, through the
+    /// page view's describer) reports its caret to the input method only, and no caret is announced in an empty text.
     fn note(&self, ctx: &egui::Context, state: EditorState<'_>) -> Option<TextFacts> {
         let masked = self.purpose == EditorPurpose::Password;
         if self.focused {
@@ -133,7 +136,7 @@ impl EditorHandle {
         }
         let surrounding = state.surrounding.as_ref().map(|(epoch, report)| (*epoch, report));
         ime::note_editor(ctx, self.widget, state.composing, (state.can_undo, state.can_redo), surrounding);
-        if !text_access::exposed(ctx, self.widget) {
+        if state.lines.is_empty() || !text_access::exposed(ctx, self.widget) {
             return None;
         }
         let lines = state

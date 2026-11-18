@@ -295,6 +295,10 @@ impl TextRuler<'_> {
     /// step unless Alt is held. An edge stays on its side of the other edge of the gap and within the strip, and a
     /// press released without a drag reports nothing.
     fn run_gaps(&mut self, cx: &mut Cx<'_, Self>, g: &super::Geometry, step: f32, held: &mut Held) {
+        // Fixed gaps declared no edge parts.
+        if !self.gaps_draggable {
+            return;
+        }
         let (lo, hi) = g.span();
         for (index, gap) in self.gaps.iter().copied().enumerate() {
             for edge in [GapEdge::End, GapEdge::Start] {

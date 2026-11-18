@@ -100,12 +100,20 @@ pub struct CommentBalloons<'a> {
     place: BalloonPlace,
     width: Option<f32>,
     now: Option<i64>,
+    read_only: bool,
 }
 
 impl<'a> CommentBalloons<'a> {
     /// Balloons named `label` for `items` on `pages`, with the card state in `state`.
     pub fn new(label: impl Into<Label>, pages: &'a [PlacedPage], items: &'a [BalloonItem<'a>], state: &'a mut CommentsPanelState) -> Self {
-        CommentBalloons { label: label.into(), pages, items, state, place: BalloonPlace::Column, width: None, now: None }
+        CommentBalloons { label: label.into(), pages, items, state, place: BalloonPlace::Column, width: None, now: None, read_only: false }
+    }
+
+    /// Whether the comments are read only (off by default): every card shows as a locked thread's does, its text
+    /// taking no typing, as the comments panel's rows do while comments cannot change.
+    pub fn read_only(mut self, on: bool) -> Self {
+        self.read_only = on;
+        self
     }
 
     /// Where the balloons sit.
@@ -131,7 +139,7 @@ impl<'a> CommentBalloons<'a> {
     /// Every card is measured and placed first, so the leaders can be shown beneath the cards; the cards' events
     /// are applied once all are shown.
     pub fn show(self, ui: &mut Ui) -> CommentBalloonsOutput {
-        let CommentBalloons { label, pages, items, state, place, width, now } = self;
+        let CommentBalloons { label, pages, items, state, place, width, now, read_only } = self;
         let room = ui.available_rect_before_wrap();
         let env = Env::of(ui);
         let words = env.words::<CommentsWords>();
@@ -176,7 +184,7 @@ impl<'a> CommentBalloons<'a> {
                     Some((placed, bottom)) if placed == page.page => bottom + gap,
                     _ => f32::NEG_INFINITY,
                 };
-                let (mut row, thread) = card(item, &words, &*state, now);
+                let (mut row, thread) = card(item, &words, &*state, now, read_only);
                 let height = measure_item(ui, &mut row, SetPosition::new(at).of(count), Proposal::Width(width)).y;
                 let rect = Rect::from_min_size(Pos2::new(x_of(page), anchor.y.max(floor)), vec2(width, height));
                 stacked = Some((page.page, rect.bottom()));
@@ -218,8 +226,8 @@ impl<'a> CommentBalloons<'a> {
     }
 }
 
-/// The card of `item` and, for a comment, its thread. A comment's card is the panel's row with the balloon buttons;
-/// a revision's is the row's note form.
+/// The card of `item` and, for a comment, its thread. A comment's card is the panel's row with the balloon buttons,
+/// editable unless the balloons are `read_only` or its thread is locked; a revision's is the row's note form.
 ///
 /// The thread keeps its own lifetime, apart from the borrow of `state` the row holds, so the caller can change `state`
 /// once the row is shown.
@@ -228,6 +236,7 @@ fn card<'r, 't: 'r>(
     words: &CommentsWords,
     state: &'r CommentsPanelState,
     now: i64,
+    read_only: bool,
 ) -> (CommentRow<'r>, Option<&'t CommentThread>) {
     match item {
         BalloonItem::Thread { thread, .. } => {
@@ -240,7 +249,7 @@ fn card<'r, 't: 'r>(
             let row = CommentRow::card(thread, name)
                 .actions(CardActions::Buttons)
                 .body_rows(BODY_ROWS)
-                .state(selected, !thread.locked, now)
+                .state(selected, !read_only && !thread.locked, now)
                 .drafts(editing, if selected { state.reply.as_str() } else { "" });
             (row, Some(thread))
         }

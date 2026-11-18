@@ -62,7 +62,9 @@
 //! host ends such keys where it drops injected input (a withdrawal, a focus loss, a cancel, the end of the session).
 //!
 //! Readouts: a tool's [`ToolContext::readout`] rows paint only while the root env's `ShowReadouts` holds; its
-//! [`ToolContext::hud`] rows always paint. A secondary press the tool did not take is reported in
+//! [`ToolContext::hud`] rows always paint. A tool's [`ToolContext::tip`] from `hover` shows at the pointer through the
+//! framework tooltip, with its look and delay, while no gesture runs; the pointer leaving or a press drops it, and
+//! [`ToolHostResponse::tip`] repeats it as data. A secondary press the tool did not take is reported in
 //! [`ToolHostResponse::context`], and so are a secondary click with the momentary Hand (whose drag pans) and the Menu
 //! key.
 //!
@@ -91,7 +93,7 @@ use super::zoom_motion::{self, Steer};
 use super::{CanvasSpace, Snap, ToolPass, context_click};
 use crate::canvas_controls::paint_lines;
 use crate::canvas_controls::{SmartGuides, SmartLine};
-use crate::contract::{Component, Meta as _};
+use crate::contract::{Component, Meta as _, Tooltip, tooltip};
 use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord};
 use crate::runtime::access::{self, Name, Role, SubDecl, SubNode};
 use crate::runtime::commands;
@@ -262,6 +264,9 @@ pub struct ToolHostResponse {
     pub context: Option<ContextRequest>,
     /// The document distance the view centre moved this pass from a `pan_view`, after the Overscroll clamp.
     pub pan: Option<ViewPan>,
+    /// The text of the tip the tool asked for at the pointer ([`ToolContext::tip`]) while it stands: the host shows it
+    /// after the tooltip delay; this is the data for automation.
+    pub tip: Option<Label>,
 }
 
 /// Where and how the app opens its canvas menu, from [`ToolHostResponse::context`].
@@ -357,6 +362,9 @@ struct HostState {
     time: Option<f64>,
     /// The open secondary press the tool refused or the momentary Hand took: its release asks for the canvas menu.
     secondary: Option<SecondaryPress>,
+    /// The tip the tool's last hover asked for: the tool answers again only when the pointer moves, so it stands
+    /// while the pointer rests, until a press, a gesture or the pointer leaving drops it.
+    tip: Option<Tooltip>,
 }
 
 fn state_id(canvas: Id) -> Id {
@@ -556,6 +564,7 @@ impl<'m> ToolHost<'m> {
             cancelled: false,
             ending: None,
             hover_scrolls: false,
+            hovered: false,
         };
         run.call(None, |tool, cx| tool.each_pass(cx));
         run.hover_scrolls = run.pick_as(None).autoscrolls_on_hover();
@@ -570,7 +579,7 @@ impl<'m> ToolHost<'m> {
             run.keys(&ctx, pass.id, env.direction.is_rtl());
             run.menu_key();
         }
-        let Run { mut response, requests, momentary: momentary_tool, .. } = run;
+        let Run { mut response, requests, momentary: momentary_tool, hovered, .. } = run;
         let before = space.map(|space| space.target());
         if let Some(past) = response.past_edge {
             let step = frame_step(input.time - state.time.unwrap_or(input.time));
@@ -624,6 +633,17 @@ impl<'m> ToolHost<'m> {
             }
         };
         paint_tool(ui, &env, effective, context());
+        // The tip stands while the pointer rests on the background with no gesture running; each hover answers anew.
+        let resting = matches!(phase, PressPhase::Hover) && state.gesture.is_none() && !disabled;
+        if hovered {
+            state.tip = requests.tip;
+        }
+        if !resting {
+            state.tip = None;
+        }
+        let tip_at = current.filter(|_| resting).map(|pointer| pointer.pos);
+        tooltip::at_pointer(ui, pass.id, state.tip.as_ref(), tip_at, phase.is_press() || state.gesture.is_some());
+        response.tip = state.tip.as_ref().map(|tip| tip.spec().text.clone());
         if pass.snap.as_ref().is_some_and(|snap| snap.options().smart_guides) {
             paint_smart_lines(ui, &env, rect, space, &requests.snapped, smart_guide_color);
         }
@@ -922,6 +942,8 @@ struct Run<'a, 't> {
     ending: Option<GestureId>,
     /// The tool autoscrolls on hover, in its state after `each_pass`.
     hover_scrolls: bool,
+    /// The tool had a hover over the canvas this pass: its tip request, or none, replaces the standing tip.
+    hovered: bool,
     /// The Command stand-in.
     command: Option<&'a mut (dyn CanvasTool + 't)>,
     /// The Alt stand-in.
@@ -958,6 +980,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
         self.requests.readout = asked.readout.or(self.requests.readout.take());
         self.requests.repaint |= asked.repaint;
         self.requests.hud = asked.hud.or(self.requests.hud.take());
+        self.requests.tip = asked.tip.or(self.requests.tip.take());
         self.requests.snapped.extend(asked.snapped);
         self.requests.pan = asked.pan.or(self.requests.pan);
         if let Some(at) = asked.autoscroll_at {
@@ -1206,6 +1229,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
 
     fn hover(&mut self, pointer: ToolPointer) {
         self.call(Some(pointer), |tool, cx| tool.hover(&pointer, cx));
+        self.hovered = true;
         if let Some(past) = self.hover_edge(pointer.pos) {
             self.response.past_edge = Some(past);
         }

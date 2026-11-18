@@ -1,15 +1,20 @@
 //! The page view and the page preview: the scroll anchor under a zoom change, wheel input at the end of the document,
 //! the view's page and arrow keys and its zoom commands, and the preview's keys.
 
+use craft_behavior::geometry::{CropBox, SnapKind, SnapOptions, SnapTarget};
 use craft_behavior::kurbo;
-use craft_pages::layout::{Fit, LayoutOptions};
+use craft_behavior::{Axis, CancelReason, CanvasView};
+use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
-use craft_pages::ui::{PagePreview, PageSource, PageView, PageViewState, PageViewWords, ReadingNav, ReadingState, ReadingView};
-use craft_ui::contract::{Role, Show as _};
+use craft_pages::ui::{
+    PagePreview, PageRegion, PageSnap, PageSource, PageView, PageViewState, PageViewWords, PlacedPage, ReadingNav, ReadingState, ReadingView,
+};
+use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer};
+use craft_ui::contract::{Bind, Role, Show as _};
 
-use craft_ui::primitives::EditorPurpose;
+use craft_ui::primitives::{Draw, EditorPurpose};
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Key, Modifiers, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -510,4 +515,135 @@ fn a_view_with_an_editor_purpose_takes_no_plain_keys_for_moving() {
     assert!(after.current != before.current || after.offset != before.offset, "the plain view moves on its keys");
     let (before, after) = keyed(true);
     assert_eq!((after.current, after.offset), (before.current, before.offset), "the editor view leaves moving to the app");
+}
+
+/// Where a snap line lies on page 2, in that page's own points.
+const LINE_X: f64 = 120.0;
+
+/// A tool that snaps the document point under each drag sample and keeps the last one, and counts its presses.
+#[derive(Default)]
+struct Snapper {
+    snapped: Option<kurbo::Point>,
+    presses: usize,
+}
+
+impl CanvasTool for Snapper {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.presses += 1;
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if let Some(space) = cx.space() {
+            self.snapped = Some(cx.snap(space.view.to_doc(pointer.pos)));
+        }
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Snap command")
+    }
+}
+
+/// A drag a few points beside the snap line at `LINE_X` on page 2, in a view of `state` with the line handed over in
+/// page points: where the drag snapped to on screen, and where the line shows on page 2.
+fn drag_beside_the_line_on_page_two(state: PageViewState) -> (f32, f32) {
+    let tool = Rc::new(RefCell::new(Snapper::default()));
+    let two: Rc<Cell<Option<(PlacedPage, CanvasView)>>> = Rc::default();
+    let (shown_tool, seen) = (Rc::clone(&tool), Rc::clone(&two));
+    let pages = DemoPages::new(4);
+    let mut state = state;
+    let mut fixture = Fixture::new(move |ui| {
+        let snap = PageSnap::new(SnapOptions::default()).page(1, vec![SnapTarget::new(Axis::Y, LINE_X, SnapKind::Guide)]);
+        PageView::new("Pages", &pages, &mut state, PAPER).options(LayoutOptions::ACROBAT).snap(Some(snap)).show(ui, |ui, body| {
+            if let Some(page) = body.pages.iter().find(|placed| placed.page == 1) {
+                seen.set(Some((*page, body.view)));
+            }
+            if let Some(pass) = body.pass {
+                let _ = ToolHost::new().run(ui, pass, &mut *shown_tool.borrow_mut());
+            }
+        });
+    });
+    fixture.room(vec2(900.0, 700.0));
+    fixture.settle();
+    let (page, _) = two.get().expect("page 2 shows");
+    let line = page.to_screen(kurbo::Point::new(LINE_X, 200.0));
+    let from = line + vec2(30.0, 0.0);
+    fixture.frame(vec![pointer::moved(from)]);
+    fixture.frame(vec![pointer::press(from)]);
+    for step in 1..=3 {
+        fixture.frame(vec![pointer::moved(from - vec2(9.0 * step as f32, 0.0))]);
+    }
+    let (_, view) = two.get().expect("page 2 shows");
+    let snapped = tool.borrow().snapped.expect("the tool dragged");
+    (view.to_screen(snapped).x, line.x)
+}
+
+/// Guards the view's placement of page geometry: a target in page points snaps where its page shows, not at the
+/// same numbers in document units, in a continuous view and in a two-up spread.
+#[trial]
+fn a_snap_target_on_page_two_snaps_a_drag_where_page_two_shows() {
+    let continuous = state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 0.4;
+        s.continuous = true;
+    });
+    let spread = state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 0.4;
+        s.continuous = false;
+        s.display = PageDisplay::TwoUp;
+    });
+    for (name, state) in [("continuous", continuous), ("two-up", spread)] {
+        let (snapped, line) = drag_beside_the_line_on_page_two(state);
+        assert!((snapped - line).abs() < 0.5, "{name}: the drag snaps onto page 2's line: {snapped} against {line}");
+    }
+}
+
+/// Guards the view's placement of tool regions: a region in page points on page 1 takes a press over a canvas
+/// control there.
+#[trial]
+fn a_tool_region_on_page_one_takes_a_press_over_a_canvas_control_there() {
+    let tool = Rc::new(RefCell::new(Snapper::default()));
+    let crop: Rc<RefCell<Option<CropBox>>> = Rc::default();
+    let (shown_tool, shown_crop) = (Rc::clone(&tool), Rc::clone(&crop));
+    let pages = DemoPages::new(2);
+    let mut state = state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 0.4;
+    });
+    // The region covers the crop frame's top left corner, at page 1's (100, 80) points.
+    let corner = vec![kurbo::Point::new(80.0, 60.0), kurbo::Point::new(120.0, 60.0), kurbo::Point::new(120.0, 100.0), kurbo::Point::new(80.0, 100.0)];
+    let mut fixture = Fixture::new(move |ui| {
+        let regions = vec![PageRegion::polygon(0, corner.clone())];
+        PageView::new("Pages", &pages, &mut state, PAPER).options(LayoutOptions::ACROBAT).tool_regions(regions).show(ui, |ui, body| {
+            let Some(first) = body.pages.iter().find(|placed| placed.page == 0) else { return };
+            let mut crop = shown_crop.borrow_mut();
+            let frame = crop.get_or_insert_with(|| {
+                let (a, b) = (first.to_doc(&body.view, kurbo::Point::new(100.0, 80.0)), first.to_doc(&body.view, kurbo::Point::new(300.0, 220.0)));
+                CropBox::upright(kurbo::Rect::from_points(a, b))
+            });
+            let _ = CropOverlay::new("Crop", Bind::bound(frame)).show_at(ui, body.rect);
+            if let Some(pass) = body.pass {
+                let _ = ToolHost::new().run(ui, pass, &mut *shown_tool.borrow_mut());
+            }
+        });
+    });
+    fixture.room(vec2(900.0, 700.0));
+    fixture.settle();
+    let start = crop.borrow().as_ref().map(|frame| frame.rect).expect("the crop shows on page 1");
+    let at = fixture.by_label("Crop corner, top left").expect("the crop shows its corners").rect.center();
+    let by = vec2(20.0, 15.0);
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::press(at)]);
+    fixture.frame(vec![pointer::moved(at + by * 0.5)]);
+    fixture.frame(vec![pointer::moved(at + by)]);
+    fixture.frame(vec![pointer::release(at + by)]);
+    assert_eq!(tool.borrow().presses, 1, "a press in the region is the tool's");
+    assert_eq!(crop.borrow().as_ref().map(|frame| frame.rect), Some(start), "the corner under the region does not move");
 }
