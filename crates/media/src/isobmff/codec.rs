@@ -1023,7 +1023,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
         v.compressor_name = String::from_utf8_lossy(&name[1..1 + n]).into_owned();
         v.depth = c.u16()?;
         let ctab = c.i16()?;
-        let color_table_bytes = if f == b"cvid" && ctab == 0 { parse_qt_color_table(&mut c) } else { None };
+        let color_table_bytes = if matches!(f, b"cvid" | b"CVID") && ctab == 0 { parse_qt_color_table(&mut c) } else { None };
         let mut codec = None;
         let mut bitrate = None;
         let mut log_seen = false;
@@ -1790,6 +1790,38 @@ mod tests {
             ct.extend_from_slice(&(i * 1000).to_be_bytes()); // r
             ct.extend_from_slice(&(i * 2000).to_be_bytes()); // g
             ct.extend_from_slice(&(i * 3000).to_be_bytes()); // b
+        }
+        let entry = SampleEntry {
+            format: f,
+            data_reference_index: 1,
+            codec: CodecConfig::Cinepak { fourcc: f, color_table_id: 0, color_table: Some(ct.clone()) },
+            video: Some(VideoParams { width: 320, height: 240, depth: 8, compressor_name: "Cinepak".into(), ..Default::default() }),
+            audio: None,
+            bitrate: None,
+        };
+        let parsed = roundtrip(&entry, true, b"vide");
+        assert_eq!(parsed.format, f);
+        match parsed.codec {
+            CodecConfig::Cinepak { color_table_id, color_table, .. } => {
+                assert_eq!(color_table_id, 0);
+                assert_eq!(color_table, Some(ct));
+            }
+            other => panic!("expected Cinepak codec, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cinepak_uppercase_fourcc_palette_roundtrip() {
+        let f = FourCc(*b"CVID");
+        let mut ct = Vec::new();
+        ct.extend_from_slice(&0u32.to_be_bytes()); // ctSeed
+        ct.extend_from_slice(&0u16.to_be_bytes()); // ctFlags
+        ct.extend_from_slice(&1u16.to_be_bytes()); // ctSize = 1 (2 entries)
+        for i in 0..2u16 {
+            ct.extend_from_slice(&i.to_be_bytes());
+            ct.extend_from_slice(&(i * 500).to_be_bytes());
+            ct.extend_from_slice(&(i * 1000).to_be_bytes());
+            ct.extend_from_slice(&(i * 1500).to_be_bytes());
         }
         let entry = SampleEntry {
             format: f,

@@ -231,6 +231,87 @@ fn test_synthetic_interframe_skip_and_update() {
 }
 
 #[test]
+fn test_interframe_grayscale_vector_neutralizes_chroma_planes() {
+    let mut decoder = Decoder::new();
+
+    // Frame 0: 8x4 color keyframe (2 macroblocks horizontally).
+    let mut f0_data = Vec::new();
+    let f0_total = 10 + 12 + 10 + 6;
+    f0_data.push(0x00);
+    f0_data.extend_from_slice(&(f0_total as u32).to_be_bytes()[1..4]);
+    f0_data.extend_from_slice(&8u16.to_be_bytes()); // Width 8
+    f0_data.extend_from_slice(&4u16.to_be_bytes()); // Height 4
+    f0_data.extend_from_slice(&1u16.to_be_bytes()); // 1 strip
+
+    f0_data.extend_from_slice(&0x1000u16.to_be_bytes());
+    f0_data.extend_from_slice(&28u16.to_be_bytes());
+    f0_data.extend_from_slice(&0u16.to_be_bytes());
+    f0_data.extend_from_slice(&0u16.to_be_bytes());
+    f0_data.extend_from_slice(&4u16.to_be_bytes());
+    f0_data.extend_from_slice(&8u16.to_be_bytes());
+
+    // 0x22: 1 color vector: Y=[100, 100, 100, 100], U=50, V=-40
+    f0_data.push(0x22);
+    f0_data.extend_from_slice(&10u32.to_be_bytes()[1..4]);
+    f0_data.extend_from_slice(&[100, 100, 100, 100, 50, (-40i8) as u8]);
+
+    // 0x32: 2 blocks
+    f0_data.push(0x32);
+    f0_data.extend_from_slice(&6u32.to_be_bytes()[1..4]);
+    f0_data.extend_from_slice(&[0, 0]);
+
+    let f0 = decoder.decode(&f0_data).expect("decode f0");
+    assert!(f0.is_color);
+    let u_plane = f0.u.as_ref().expect("u plane");
+    let v_plane = f0.v.as_ref().expect("v plane");
+    assert_eq!(u_plane[0], (50i16 + 128) as u8);
+    assert_eq!(u_plane[2], (50i16 + 128) as u8);
+    assert_eq!(v_plane[0], (-40i16 + 128) as u8);
+    assert_eq!(v_plane[2], (-40i16 + 128) as u8);
+
+    // Frame 1: interframe updating block 1 with grayscale codebook 0x26.
+    let mut f1_data = Vec::new();
+    let f1_total = 10 + 12 + 8 + 9;
+    f1_data.push(0x01); // Interframe
+    f1_data.extend_from_slice(&(f1_total as u32).to_be_bytes()[1..4]);
+    f1_data.extend_from_slice(&8u16.to_be_bytes());
+    f1_data.extend_from_slice(&4u16.to_be_bytes());
+    f1_data.extend_from_slice(&1u16.to_be_bytes());
+
+    f1_data.extend_from_slice(&0x1100u16.to_be_bytes()); // Inter strip
+    f1_data.extend_from_slice(&29u16.to_be_bytes());
+    f1_data.extend_from_slice(&0u16.to_be_bytes());
+    f1_data.extend_from_slice(&0u16.to_be_bytes());
+    f1_data.extend_from_slice(&4u16.to_be_bytes());
+    f1_data.extend_from_slice(&8u16.to_be_bytes());
+
+    // 0x26: 1 grayscale vector: Y=[200, 200, 200, 200]
+    f1_data.push(0x26);
+    f1_data.extend_from_slice(&8u32.to_be_bytes()[1..4]);
+    f1_data.extend_from_slice(&[200, 200, 200, 200]);
+
+    // 0x31: inter vectors: block 0 skipped, block 1 updated with vector 0
+    f1_data.push(0x31);
+    f1_data.extend_from_slice(&9u32.to_be_bytes()[1..4]);
+    f1_data.extend_from_slice(&0x4000_0000u32.to_be_bytes());
+    f1_data.push(0);
+
+    let f1 = decoder.decode(&f1_data).expect("decode f1");
+    let u1 = f1.u.as_ref().expect("u plane");
+    let v1 = f1.v.as_ref().expect("v plane");
+
+    // Block 0 was skipped: keeps original color chroma
+    assert_eq!(u1[0], 178);
+    assert_eq!(v1[0], 88);
+
+    // Block 1 was replaced by grayscale vector: chroma must be neutralized to 128
+    assert_eq!(u1[2], 128);
+    assert_eq!(v1[2], 128);
+    assert_eq!(u1[3], 128);
+    assert_eq!(v1[3], 128);
+}
+
+#[test]
 fn test_grayscale_and_custom_palette() {
     // 4x4 frame using 8-bit grayscale codebook 0x26 (V1)
     let mut data = Vec::new();

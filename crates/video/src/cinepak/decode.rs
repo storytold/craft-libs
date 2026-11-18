@@ -99,6 +99,8 @@ impl<'a> FrameBuffer<'a> {
 
         if is_color {
             self.put_chroma(qx / 2, qy / 2, u, v);
+        } else if self.u.is_some() || self.v.is_some() {
+            self.put_chroma(qx / 2, qy / 2, 0, 0);
         }
     }
 
