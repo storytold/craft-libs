@@ -9,7 +9,7 @@ use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
     Styled as _, WordSetCx as _,
 };
-use crate::primitives::{Completer, IconSpec, TabKey, TextOptions, TextRun};
+use crate::primitives::{Completer, IconSpec, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
@@ -318,11 +318,22 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         let text = if sample.is_empty() { self.options.placeholder.as_ref().map_or("", Label::as_str) } else { sample.as_ref() };
         let mut size = cx.field_text(&TextRun::new(text).role(self.options.role));
         // A multi-line field takes the height of its lines, and grows past them with longer text, as the editor does, up
-        // to `max_lines`; past that its text scrolls inside it (the text part is its scroll owner).
+        // to `max_lines`; past that its text scrolls inside it (the text part is its scroll owner). The rows are the
+        // field's own text wrapped as the editor wraps it, not the codec's width sample, which a plain field leaves
+        // empty.
         if let Some(lines) = self.options.lines.filter(|_| self.options.multiline()) {
             let line = cx.layout(&TextRun::new("M").role(self.options.role)).size().y;
             let height = |lines: usize| cx.style.metrics().min_size.y + line * lines.saturating_sub(1) as f32;
-            size.y = size.y.max(height(lines));
+            let shown = cx.value().map(|value| self.codec.format(value)).unwrap_or_default();
+            let tall = cx.layout(&TextRun::new(shown).role(self.options.role).wrap(Wrap::Wrap)).size().y;
+            let rows = if line > 0.0 { (tall / line).round() as usize } else { 1 };
+            size.y = size.y.max(height(lines.max(rows)));
+            if self.max_lines.is_some() {
+                eprintln!(
+                    "DIAG a_capped_field_grows_to_its_lines_then_scrolls_with_the_caret_in_view: measure line={line} tall={tall} rows={rows} room={:?} size_y={}",
+                    cx.room, size.y
+                );
+            }
             if let Some(most) = self.max_lines {
                 size.y = size.y.min(height(most.max(lines)));
             }

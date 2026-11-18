@@ -169,8 +169,10 @@ impl NumberName for LengthName {
     }
 }
 
-/// A named-or-length field: "Auto" is a name, and the lengths are stored in points and shown in inches.
-#[story(NumberField<'static, NamedOr<LengthName>>, covers = [], drive = Drive::Never)]
+/// A named-or-length field: "Auto" is a name, and the lengths are stored in points and shown in inches. It is a story
+/// of the registered `NumberField` card: the named instantiation shares its parts, style and value cases, and a
+/// registration of its own would need a full set of state stories for one builder.
+#[story(NumberField<'static>, covers = [], drive = Drive::Never)]
 fn number_field_named_length(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let presets = [Entry::new(NumberPick::Choice(0), "Auto")];
     let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Inches, 72.0);
