@@ -392,12 +392,14 @@ impl MultibandCompressor {
         s
     }
 
-    /// Crossover frequencies (Hz) at the current settings, kept strictly increasing.
+    /// Crossover frequencies (Hz) at the current settings, kept strictly increasing, each at least
+    /// 1.25 times the one below it, and at most 0.45 times the sample rate.
     pub fn crossovers(&self) -> [f32; 3] {
-        let a = self.pv.v("xo1");
-        let b = self.pv.v("xo2").max(a * 1.25);
-        let c = self.pv.v("xo3").max(b * 1.25).min(self.sr * 0.45);
-        [a, b.min(c / 1.25), c]
+        let top = self.sr * 0.45;
+        let a = self.pv.v("xo1").min(top / (1.25 * 1.25));
+        let b = self.pv.v("xo2").max(a * 1.25).min(top / 1.25);
+        let c = self.pv.v("xo3").max(b * 1.25).min(top);
+        [a, b, c]
     }
 
     fn update_xo(&mut self) {
@@ -710,5 +712,19 @@ mod tests {
         let f = 2f64.powf(e.crossovers()[0].log2() as f64);
         assert_eq!(e.xc.lp[0], Coeffs::design(FilterType::LowPass, sr as f64, f, Q_BW, 0.0));
         assert_eq!(e.xc.hp[0], Coeffs::design(FilterType::HighPass, sr as f64, f, Q_BW, 0.0));
+    }
+
+    #[test]
+    fn crossovers_stay_increasing_at_the_lowest_sample_rate() {
+        for sr in [crate::MIN_SAMPLE_RATE, 2_000.0, 48_000.0] {
+            let mut e = MultibandCompressor::new(sr, 2);
+            for (xo1, xo2, xo3) in [(1000.0, 100.0, 1000.0), (1000.0, 8000.0, 20000.0), (20.0, 100.0, 1000.0), (120.0, 2000.0, 10000.0)] {
+                assert!(e.set_param("xo1", xo1));
+                assert!(e.set_param("xo2", xo2));
+                assert!(e.set_param("xo3", xo3));
+                let [a, b, c] = e.crossovers();
+                assert!(a < b && b < c && c <= sr * 0.45, "{sr} Hz, ({xo1}, {xo2}, {xo3}): {a}, {b}, {c}");
+            }
+        }
     }
 }
