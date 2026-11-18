@@ -891,6 +891,13 @@ impl Session {
         if self.next_id == u64::MAX {
             return Err(SessionError::Invalid("the session id space is exhausted".into()));
         }
+        for track in &self.tracks {
+            if let Some(destination) = &track.midi_destination
+                && !(1..=16).contains(&destination.channel)
+            {
+                return Err(SessionError::Invalid(format!("track {} has an invalid MIDI destination channel", track.id.0)));
+            }
+        }
         distinct("track", self.tracks.iter().map(|t| t.id.0))?;
         distinct("clip", self.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(|p| p.clips.iter().map(|c| c.id.0))))?;
         distinct("source", self.sources.iter().map(|s| s.id.0))?;
@@ -929,6 +936,22 @@ fn distinct(kind: &str, ids: impl Iterator<Item = u64>) -> Result<(), SessionErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_midi_destination_channel_on_load() {
+        let mut session = Session::default();
+        let track = session.add_track(TrackKind::Midi, ChannelFormat::Mono, None);
+        let target = session.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        for channel in [0, 1, 16, 17] {
+            session.track_mut(track).unwrap().midi_destination = Some(crate::MidiDestination { track: target, channel });
+            let json = session.to_json().unwrap();
+            if (1..=16).contains(&channel) {
+                assert_eq!(Session::from_json(&json).unwrap(), session);
+            } else {
+                assert!(matches!(Session::from_json(&json), Err(SessionError::Invalid(message)) if message.contains("MIDI destination channel")));
+            }
+        }
+    }
 
     #[test]
     fn add_tracks_names_and_order() {
