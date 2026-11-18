@@ -18,8 +18,10 @@ pub enum Metric {
     #[default]
     De76,
     /// ΔE00 (CIEDE2000, CIE 142-2001): the weighted difference, which one threshold can be set
-    /// against across the whole space. About half the ΔE76 number for the same visual difference,
-    /// so the usual warning threshold is 2.0 rather than 4.0.
+    /// against across the whole space. Its usual warning threshold is 2.0 (see
+    /// [`Metric::default_threshold`]). That is a default of its own, not a conversion: a ΔE76
+    /// threshold can't be halved into a ΔE00 one, since the two disagree by different amounts in
+    /// different parts of the space, and near neutrals ΔE00 can be the larger.
     De2000,
 }
 
@@ -42,8 +44,9 @@ const PAR_CHUNK_PIXELS: usize = 16 * 1024;
 ///
 /// A colour is out of gamut when sending it to the proof device (relative colorimetric,
 /// clipping) and back to Lab moves it by more than the threshold. The difference is tabulated
-/// over the source device space (33³ grid for 3 channels, 17⁴ for 4, exact otherwise), in the
-/// [`Metric`] the check was built with.
+/// over the source device space (256 points for 1 channel, a 33³ grid for 3 channels, 17⁴ for
+/// 4), and [`GamutCheck::delta_e`] interpolates between the grid's nodes; for other channel
+/// counts it is computed exactly. Either way it is in the [`Metric`] the check was built with.
 #[derive(Debug)]
 pub struct GamutCheck {
     inputs: usize,
@@ -72,6 +75,16 @@ fn difference(metric: Metric, a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+/// [`difference`] for the exact path: ΔE76 as chained `hypot`s, as this computed it before there
+/// was a choice of metric, so the number is the same bit for bit (review). The grid has always
+/// sampled the square-root sum, which `difference` keeps.
+fn exact_difference(metric: Metric, a: &[f32], b: &[f32]) -> f32 {
+    match metric {
+        Metric::De76 => ((a[0] - b[0]) * 100.0).hypot((a[1] - b[1]) * 255.0).hypot((a[2] - b[2]) * 255.0),
+        Metric::De2000 => difference(metric, a, b),
+    }
+}
+
 impl GamutCheck {
     /// A check measuring in ΔE76, as this has always done.
     pub fn new(src: &Profile, proof: &Profile, threshold: f32) -> Result<GamutCheck, CmsError> {
@@ -79,7 +92,16 @@ impl GamutCheck {
     }
 
     /// A check measuring in `metric`. [`Metric::default_threshold`] gives the threshold that
-    /// metric is usually read against.
+    /// metric is usually read against; the caller passes the threshold, none is chosen here.
+    ///
+    /// ```
+    /// use craft_cms::{Builtin, GamutCheck, Metric};
+    /// let check = GamutCheck::with_metric(Builtin::Srgb.profile(), Builtin::CoatedCmyk.profile(), Metric::De2000, Metric::De2000.default_threshold()).unwrap();
+    /// assert!(check.out_of_gamut(&[0.0, 0.0, 1.0]).unwrap(), "sRGB blue is outside coated CMYK");
+    /// ```
+    ///
+    /// # Errors
+    /// [`CmsError`] when either profile can't be linked to Lab.
     pub fn with_metric(src: &Profile, proof: &Profile, metric: Metric, threshold: f32) -> Result<GamutCheck, CmsError> {
         let lab = crate::Builtin::LabD50.profile();
         let direct = Pipeline::new(src.channels(), link_stages(src, lab, Intent::RelativeColorimetric, false)?)?;
@@ -129,7 +151,7 @@ impl GamutCheck {
                 let (mut a, mut b) = ([0.0f32; 16], [0.0f32; 16]);
                 self.exact.0.run(px, &mut a);
                 self.exact.1.run(px, &mut b);
-                o[0] = difference(self.metric, &a, &b);
+                o[0] = exact_difference(self.metric, &a, &b);
             }
         }
         Ok(o[0])
@@ -204,6 +226,25 @@ mod tests {
                 assert_eq!(got, want, "{proof:?} threshold {threshold} n {n}");
                 assert_eq!(count, want.iter().filter(|&&m| m == 255).count());
             }
+        }
+    }
+
+    /// The exact path's ΔE76 is the chained `hypot` it always was, bit for bit, and its ΔE00 is
+    /// the same as the grid's formula.
+    #[test]
+    fn the_exact_de76_is_the_chained_hypot() {
+        let mut s = 0x2545_F491u32;
+        let mut rnd = move || {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            (s >> 8) as f32 / (1u32 << 24) as f32
+        };
+        for _ in 0..10_000 {
+            let (a, b) = ([rnd(), rnd(), rnd()], [rnd(), rnd(), rnd()]);
+            let hypot = ((a[0] - b[0]) * 100.0).hypot((a[1] - b[1]) * 255.0).hypot((a[2] - b[2]) * 255.0);
+            assert_eq!(exact_difference(Metric::De76, &a, &b).to_bits(), hypot.to_bits(), "{a:?} {b:?}");
+            assert_eq!(exact_difference(Metric::De2000, &a, &b).to_bits(), difference(Metric::De2000, &a, &b).to_bits());
         }
     }
 

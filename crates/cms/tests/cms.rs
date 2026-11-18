@@ -1170,7 +1170,8 @@ fn gamut_masks_measure_in_the_checks_metric() {
     let differ = m76.iter().zip(&m00).filter(|(a, b)| a != b).count();
     assert!(differ > 0, "the two masks are the same");
     for (i, p) in px.iter().enumerate() {
-        assert_eq!(m00[i] == 255, de00.out_of_gamut(&p[..3]).unwrap(), "dE2000 mask at {p:?}");
-        assert_eq!(m76[i] == 255, de76.out_of_gamut(&p[..3]).unwrap(), "dE76 mask at {p:?}");
+        // Alpha is 1, so a hit is exactly 255 and a miss exactly 0.
+        assert_eq!(m00[i], if de00.out_of_gamut(&p[..3]).unwrap() { 255 } else { 0 }, "dE2000 mask at {p:?}");
+        assert_eq!(m76[i], if de76.out_of_gamut(&p[..3]).unwrap() { 255 } else { 0 }, "dE76 mask at {p:?}");
     }
 }
