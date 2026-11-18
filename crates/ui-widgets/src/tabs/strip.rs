@@ -643,6 +643,15 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         drop(texts);
         // The same keys in the same order as the layout reserved their slots from (`reserved`).
         self.ghosts = cx.exiting::<Ghost>(LEAVE, spec::OPEN_FADE).into_iter().map(|(presence, ghost)| Fading { label: ghost.label, alpha: presence.t }).collect();
+        eprintln!(
+            "DIAG a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades: track id={:?} pass={} texts={} placed={:?} report_ghosts={:?} ghosts={:?}",
+            cx.core.id,
+            cx.core.ctx.current_pass_index(),
+            self.texts.borrow().len(),
+            report.placed,
+            report.ghosts,
+            self.ghosts
+        );
     }
 
     /// The menus of the end items that open one, each below its item.
@@ -687,13 +696,24 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             .iter()
             .enumerate()
             .filter_map(|(slot, (_, ghost))| Some(Reserved { slot, before: ghost.before.min(listed.len()), width: ghost.width? }))
-            .collect();
+            .collect::<Vec<Reserved>>();
+        eprintln!(
+            "DIAG a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades: reserved listed={} departing={:?} reserved={reserved:?}",
+            listed.len(),
+            departing.iter().map(|(presence, ghost)| (presence.t, ghost.before, ghost.width)).collect::<Vec<_>>()
+        );
         (reserved, departing.len())
     }
 
     /// The departed contextual tabs at the slots the fit kept for them, each painted as the `Tab` it was, as opaque
     /// as its presence has left it.
     fn paint_ghosts(&self, ui: &mut PaintUi<'_>, report: &Report) {
+        if self.roles.is_some() {
+            eprintln!(
+                "DIAG a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades: paint ghosts={:?} report_ghosts={:?}",
+                self.ghosts, report.ghosts
+            );
+        }
         for (at, fading) in self.ghosts.iter().enumerate() {
             if report.ghosts.get(at).copied().flatten().is_some() {
                 let tab = Tab::new(fading.label.clone()).kind(TabKind::Ribbon).role(TabRole::Contextual);
