@@ -247,6 +247,7 @@ impl<'a> CommandPalette<'a> {
                     focus::request(&ctx, FocusTarget::Id(field_id));
                 }
                 let session = inner.memory::<Session>();
+                eprintln!("DIAG escape_and_a_press_outside_close_the_in_place_face_and_the_fallback_row_carries_the_query: query={:?}", session.query);
                 let field = TextField::search(words.palette_search.clone(), Bind::bound(&mut session.query))
                     .placeholder(face_hint.clone())
                     .id(field_id)
