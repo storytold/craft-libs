@@ -101,7 +101,12 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
          `avif-decode` feature, native targets only (on wasm32 a decoder panic would abort). A build \
          with only one of them reads or writes AVIF, not both.",
     ),
-    (Format::Jxl, "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder; JPEG XL reading is tracked separately and is not yet available."),
+    (
+        Format::Jxl,
+        "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder in every build; JPEG XL decode \
+         (craft-jxl on jxl-oxide, pure Rust) is behind the non-default `jxl` feature, which official \
+         builds enable. Without the feature JPEG XL is written but not read.",
+    ),
     (
         Format::Heif,
         "HEIC decode uses heic-rs (pure Rust, in the optional craft-heif crate behind the \
@@ -330,7 +335,7 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
-        Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        Format::Jxl => FormatCaps { read: cfg!(feature = "jxl"), depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
@@ -349,8 +354,65 @@ pub fn caps(format: Format) -> FormatCaps {
     }
 }
 
+/// What [`detect_prefix`] makes of the first bytes of a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detection {
+    /// The bytes identify this format, as [`detect`] reports it.
+    Format(Format),
+    /// The bytes start with a JPEG SOI and end before the frame header that tells JPEG from
+    /// JPEG-LS. Read the file up to at least this many bytes and call [`detect_prefix`] or
+    /// [`PrefixDetector::detect`] again.
+    NeedBytes(usize),
+    /// The bytes match no format.
+    Unknown,
+}
+
+/// Identify a format from the first bytes of a file, which may be all of it or only its start.
+/// A JPEG and a JPEG-LS file both start with an SOI, and only the frame header after their marker
+/// segments tells them apart. When `bytes` ends before that header, the answer is
+/// [`Detection::NeedBytes`]; every other answer is the one [`detect`] gives.
+///
+/// Each call walks the marker segments from the SOI. To read more of a file after each
+/// [`Detection::NeedBytes`], use a [`PrefixDetector`], which starts each walk where the previous
+/// one stopped.
+pub fn detect_prefix(bytes: &[u8]) -> Detection {
+    PrefixDetector::new().detect(bytes)
+}
+
+/// [`detect_prefix`] for a file read in steps. The detector keeps the offset of the JPEG marker
+/// where its last walk stopped, so it reads each marker segment once, however many steps the file
+/// is read in.
+#[derive(Debug, Clone, Default)]
+pub struct PrefixDetector {
+    jpeg_pos: usize,
+}
+
+impl PrefixDetector {
+    /// A detector that has seen no bytes.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The answer [`detect_prefix`] gives for `bytes`. The `bytes` of each call must start with
+    /// the `bytes` of the previous call on this detector.
+    pub fn detect(&mut self, bytes: &[u8]) -> Detection {
+        use crate::codecs::jpegls::{JpegFrame, jpeg_frame_from};
+        match jpeg_frame_from(bytes, &mut self.jpeg_pos) {
+            Some(JpegFrame::Short(len)) => Detection::NeedBytes(len),
+            Some(JpegFrame::Ls) => Detection::Format(Format::JpegLs),
+            // The walk found no SOF55 frame header, so `detect` answers JPEG for these bytes.
+            Some(JpegFrame::Other) if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) => Detection::Format(Format::Jpeg),
+            Some(JpegFrame::Other) | None => detect(bytes).map_or(Detection::Unknown, Detection::Format),
+        }
+    }
+}
+
 /// Identify a format from its leading bytes (magic numbers). TGA has no
 /// magic and is recognized last, by header plausibility.
+///
+/// JPEG-LS is told from JPEG by the frame header that follows the marker segments, so `bytes`
+/// must reach that header; a buffer that ends before it is reported as [`Format::Jpeg`]. Use
+/// [`detect_prefix`] on a buffer that may hold only the start of a file.
 pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {

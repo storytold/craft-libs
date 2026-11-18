@@ -402,3 +402,155 @@ mod tar_global_pax {
         }
     }
 }
+
+// Ported from Craft Anything gnu_sparse_extensions.rs (RRFZ).
+mod gnu_sparse_extensions {
+    use crate::testkit::tar_entries;
+    use crate::{MemberKind, member_data, tar};
+
+    /// Build an old GNU sparse header followed by the requested number of extension blocks.
+    fn archive(extension_blocks: usize) -> Vec<u8> {
+        let mut archive = tar_entries(&[("sparse.dat", b'S', &[b'x'; 512], ""), ("after.txt", b'0', b"after", "")]);
+        archive[257..265].copy_from_slice(b"ustar  \0");
+        archive[482] = u8::from(extension_blocks != 0);
+        archive[148..156].fill(b' ');
+        let sum: u32 = archive[..512].iter().map(|&byte| u32::from(byte)).sum();
+        archive[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+        let mut extensions = vec![0; 512 * extension_blocks];
+        for block in extensions.as_chunks_mut::<512>().0.iter_mut().take(extension_blocks.saturating_sub(1)) {
+            block[504] = 1;
+        }
+        archive.splice(512..512, extensions);
+        archive
+    }
+
+    /// Actual file data starts after the entire sparse map. Later members remain readable.
+    #[test]
+    fn skips_old_gnu_sparse_extension_blocks() {
+        for blocks in [1, 2] {
+            let bytes = archive(blocks);
+            let listing = tar(&bytes, 8).unwrap();
+            assert!(listing.complete, "{blocks} extensions: {:?}", listing.warnings);
+            assert_eq!(listing.members.len(), 2);
+            assert_eq!(listing.members[0].kind, MemberKind::Other);
+            assert_eq!(listing.members[0].data_offset, (512 * (blocks + 1)) as u64);
+            assert_eq!(listing.members[1].name, "after.txt");
+            assert_eq!(member_data(&bytes, &listing.members[1]), Some(b"after".as_slice()));
+        }
+    }
+
+    /// A missing sparse extension cannot turn padding into a complete archive.
+    #[test]
+    fn refuses_a_truncated_old_gnu_sparse_extension() {
+        let mut bytes = archive(2);
+        bytes.truncate(512 + 512 + 17);
+        let listing = tar(&bytes, 8).unwrap();
+        assert!(!listing.complete);
+        assert!(listing.members.is_empty());
+        assert!(listing.warnings.iter().any(|warning| warning.contains("sparse extension")));
+    }
+
+    /// A sparse member with no extensions still leaves the next header at its usual offset.
+    #[test]
+    fn keeps_the_next_member_when_no_sparse_extensions_follow() {
+        let bytes = archive(0);
+        let listing = tar(&bytes, 8).unwrap();
+        assert!(listing.complete);
+        assert_eq!(listing.members[0].kind, MemberKind::Other);
+        assert_eq!(listing.members[1].name, "after.txt");
+    }
+}
+
+// Ported from Craft Anything cpio_symlink_crc.rs (RRFZ).
+mod cpio_symlink_crc {
+    use crate::cpio;
+    use crate::testkit::cpio_newc;
+
+    /// Convert a single-member newc fixture to CRC and set the member checksum.
+    fn archive(mode: u32, checksum: u32) -> Vec<u8> {
+        let mut bytes = cpio_newc(&[("entry", b"target", mode)]);
+        bytes[..6].copy_from_slice(b"070702");
+        bytes[102..110].copy_from_slice(format!("{checksum:08x}").as_bytes());
+        let trailer = (110 + "entry".len() + 1 + 3) & !3;
+        let trailer = (trailer + "target".len() + 3) & !3;
+        bytes[trailer..trailer + 6].copy_from_slice(b"070702");
+        bytes
+    }
+
+    /// GNU-style CRC symlinks carry a zero placeholder and keep the recorded target.
+    #[test]
+    fn accepts_a_symlink_with_no_stored_checksum() {
+        let listing = cpio(&archive(0o120777, 0), 10).unwrap();
+        assert!(listing.complete);
+        assert_eq!(listing.members[0].link_target.as_deref(), Some("target"));
+        assert!(listing.warnings.is_empty(), "{:?}", listing.warnings);
+    }
+
+    /// A nonzero symlink checksum and even a zero regular-file checksum are checked.
+    #[test]
+    fn still_checks_nonzero_symlink_and_zero_regular_file_checksums() {
+        assert!(cpio(&archive(0o120777, 647), 10).unwrap().warnings.is_empty());
+        for bytes in [archive(0o120777, 646), archive(0o100644, 0)] {
+            assert!(cpio(&bytes, 10).unwrap().warnings.iter().any(|w| w.contains("checksum mismatch")));
+        }
+    }
+}
+
+// Ported from Craft Anything tar_pax_size_precedence.rs (RRFZ).
+mod tar_pax_size_precedence {
+    use crate::testkit::tar_entries;
+    use crate::{member_data, tar};
+
+    /// Make an octal size unreadable while leaving the enclosing TAR header checksum valid.
+    fn corrupt_size(archive: &mut [u8], offset: usize) {
+        let header = &mut archive[offset..offset + 512];
+        header[124] = b'9';
+        header[148..156].fill(b' ');
+        let sum: u32 = header.iter().map(|&byte| u32::from(byte)).sum();
+        header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+    }
+
+    /// Local and inherited size records override the bad field and keep the following header aligned.
+    #[test]
+    fn valid_pax_size_controls_the_member_extent() {
+        for extension in *b"xg" {
+            let mut archive = tar_entries(&[("PaxHeader", extension, b"10 size=3\n", ""), ("file", b'0', b"abc", ""), ("next", b'0', b"def", "")]);
+            corrupt_size(&mut archive, 1024);
+            let list = tar(&archive, 10).unwrap();
+            assert!(list.complete, "{:?}", list.warnings);
+            assert_eq!(list.members.len(), 2);
+            assert_eq!(member_data(&archive, &list.members[0]), Some(b"abc".as_slice()));
+            assert_eq!(member_data(&archive, &list.members[1]), Some(b"def".as_slice()));
+        }
+    }
+
+    /// A local zero overrides a global size and does not consume the next header.
+    #[test]
+    fn a_local_zero_size_overrides_the_global_value() {
+        let mut archive = tar_entries(&[
+            ("Global", b'g', b"12 size=600\n", ""),
+            ("Local", b'x', b"10 size=0\n", ""),
+            ("empty", b'0', b"", ""),
+            ("next", b'0', &[b'a'; 600], ""),
+        ]);
+        corrupt_size(&mut archive, 2048);
+        let list = tar(&archive, 10).unwrap();
+        assert!(list.complete, "{:?}", list.warnings);
+        assert_eq!(list.members.iter().map(|m| m.size).collect::<Vec<_>>(), [0, 600]);
+    }
+
+    /// An ordinary header without an override and a PAX header itself still need readable sizes.
+    #[test]
+    fn rejects_bad_sizes_without_an_applicable_override() {
+        let mut plain = tar_entries(&[("file", b'0', b"abc", "")]);
+        corrupt_size(&mut plain, 0);
+        let mut with_global = tar_entries(&[("Global", b'g', b"10 size=3\n", ""), ("Local", b'x', b"10 size=0\n", ""), ("file", b'0', b"", "")]);
+        corrupt_size(&mut with_global, 1024);
+        for archive in [plain, with_global] {
+            let list = tar(&archive, 10).unwrap();
+            assert!(!list.complete);
+            assert!(list.members.is_empty());
+            assert!(list.warnings.iter().any(|warning| warning.contains("unreadable size")));
+        }
+    }
+}
