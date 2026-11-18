@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# A fraction of the fuzz-style cases, as in the Workspace gate; nightly.yml runs them in full.
+env:
+  CRAFT_HOSTILE_DIVISOR: "8"
+  PROPTEST_CASES: "64"
+
 concurrency:
   group: shared-video-${{ github.ref }}
   cancel-in-progress: true
@@ -18,7 +23,8 @@ concurrency:
 jobs:
   lint:
     timeout-minutes: 20
-    name: Video lint, feature sets, docs, WASM
+    # fmt and clippy with all features run in the Workspace gate on every OS.
+    name: Video feature sets, docs, WASM
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
@@ -31,12 +37,8 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: "1.95"
-          components: rustfmt, clippy
+          components: clippy
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-video-lint
-      - run: cargo fmt -p craft-video --check
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
@@ -45,19 +47,15 @@ jobs:
             cargo clippy -p craft-video --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
           done
-      - run: cargo clippy -p craft-video --all-targets --locked --all-features -- -D warnings
       - run: cargo doc -p craft-video --all-features --no-deps --locked
         env:
           RUSTDOCFLAGS: "-D warnings"
       - run: cargo check -p craft-video --all-features --locked --target wasm32-unknown-unknown
   test:
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    name: Video tests (${{ matrix.os }})
+    # The Workspace gate runs these tests on every OS without ffmpeg; this runs them with it.
+    runs-on: ubuntu-latest
+    name: Video tests with ffmpeg
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -69,11 +67,7 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: "1.95"
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-video-${{ matrix.os }}
-      - name: Install ffmpeg (Linux)
-        if: runner.os == 'Linux'
+      - name: Install ffmpeg
         run: |
           sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg

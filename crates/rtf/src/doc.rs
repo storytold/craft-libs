@@ -22,7 +22,10 @@
 //! code page's bytes stream through one decoder, so a lead byte and its trail byte decode
 //! together and a run that looks like a UTF-8 BOM is not mistaken for one; the formatting words
 //! above, stylesheet-based
-//! headings and `\outlinelevel`, lists through `\ls`/`\ilvl`, fields, bookmarks, pictures and
+//! headings and `\outlinelevel`, lists through `\ls`/`\ilvl`, fields (in `import`, a page field
+//! such as `PAGE` or `NUMPAGES` whose result is plain text in one paragraph stays a field,
+//! `\fldlock` locking it, and `\chpgn` is a `PAGE` field; otherwise a field is its result's text),
+//! bookmarks, pictures and
 //! tables, footnotes, endnotes (`\footnote` with `\ftnalt`) and comments (author, initials, date,
 //! text, the commented range), drawing shapes and text boxes (`\shp`: rectangles, ellipses,
 //! triangles, diamonds, block arrows and text boxes from `\shpinst`, with their place, wrapping,
@@ -42,6 +45,7 @@ use craft_flow::{self as model, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, L
 
 use crate::date;
 mod export;
+mod field;
 mod parse;
 mod reader;
 mod shape;
@@ -63,5 +67,7 @@ use word::hyperlink;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_fields;
 #[cfg(test)]
 mod tests_shapes;

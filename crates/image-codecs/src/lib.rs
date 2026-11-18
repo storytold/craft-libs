@@ -45,6 +45,7 @@ pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
+pub use crate::codecs::jpeg::validate_jpeg_rgba8;
 pub use crate::codecs::png::{
     PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed,
     encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,
@@ -305,6 +306,15 @@ pub struct JpegInfo {
 /// [`JpegInfo`] of `bytes`; `None` without a readable frame of 1, 3 or 4 components.
 pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
     jpeg::info(bytes)
+}
+
+/// Bytes of DCT coefficients to budget for a JPEG before decoding it: never less than
+/// [`JpegInfo::held_coefficients`] nor than the whole-picture estimate of every progressive
+/// frame header (SOF2, SOF6, SOF10, SOF14 at any precision, sampling clamped to 1..=4), and the
+/// costliest frame at the first size read when the header can't be followed. 0 without a
+/// readable frame. See the function body's rules for the precise charges.
+pub fn jpeg_worst_case_coefficients(bytes: &[u8]) -> u64 {
+    jpeg::worst_case_coefficients(bytes)
 }
 
 /// PCX's dimensions are available from its fixed-size header without decoding the RLE rows.

@@ -39,12 +39,14 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `alac-encode` | `alac::Encoder`; `encode`, `FileEncoder` for ALAC in M4A | craft-media `isobmff` |
 | `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::Encoder` | none |
 | `vorbis-encode` | `vorbis::encoder::Encoder` (pure Rust); `encode_ogg_vorbis`, `encode_ogg` and `encode` for Ogg Vorbis files (whole buffer; not `FileEncoder`) | craft-media `ogg` |
+| `vorbis-decode` | `vorbis::decoder::Decoder` (packets), `vorbis::decoder::decode_ogg` (whole Ogg Vorbis files); native Vorbis I: floors 0 and 1, residues 0 to 2, channel coupling, both block sizes. `decode` still reads Vorbis files through symphonia | craft-media `ogg` |
 | `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | craft-media `bitstream` |
 | `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder`; `encode`, `FileEncoder` for AC-3 and E-AC-3 streams | craft-media `bitstream` |
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
 | `mp3-decode` | `mp3::Decoder`, `mp3::InfoTag` | `mpa-decode` |
 | `mp3-encode` | `mp3::Encoder`; `encode`, `FileEncoder` for MP3 | craft-media `bitstream` |
 | `mpa-encode` | `mpa::encoder::Encoder` (Layer II / MP2 frames) | `mpa-decode`, `mp3-encode` |
+| `adpcm` | `adpcm::{ima, ms, yamaha, swf}`: decoders and encoders for IMA WAV, Microsoft, Yamaha and Flash ADPCM | craft-media `bitstream` |
 | `gsm-decode`, `gsm-encode` (`gsm`) | `gsm::Decoder`, `gsm::Encoder`, `gsm::decode`, `gsm::encode`: GSM 06.10 full-rate speech, bit-exact, raw `.gsm` and WAV (GSM 6.10) packings | none |
 | `vmd-decode` | `vmd::Decoder`: Sierra VMD sound (8-bit PCM and 16-bit DPCM), frame by frame from `craft_media::vmd` | none |
 | `peaks` | `peaks::Peaks` | none |
