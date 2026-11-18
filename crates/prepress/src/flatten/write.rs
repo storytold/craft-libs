@@ -596,9 +596,21 @@ impl<'a> Painter<'a, '_> {
         })
     }
 
-    /// `mesh` with its corners in one color space, as a Type 6 shading needs.
+    /// `mesh` with its corners in one color space, as a Type 6 shading needs. Patches are split
+    /// where [`InkSet::resolve`] isn't linear (tints combining on one plate), so the written
+    /// blend follows the resolved colors as the image path's samples do.
     fn mesh(&self, mesh: &Mesh, overprint: Overprint, ctm: Affine) -> Result<KPaint, WriteError> {
-        let colors = self.one_space(mesh.patches.iter().flat_map(|p| &p.colors), overprint, "a mesh corner of the All or None colorant")?;
+        let mut resolve = |color: &InkColor| match self.inks.resolve(color, self.cms) {
+            InkColor::Tints(tints) => Some(merged(tints).into_values().collect()),
+            _ => None,
+        };
+        let all_or_none = "a mesh corner of the All or None colorant";
+        if mesh.patches.iter().flat_map(|p| &p.colors).any(|c| !matches!(c, InkColor::Tints(_))) {
+            return Err(WriteError::Unsupported(all_or_none));
+        }
+        // No image fallback here: past the limit the blend would be wrong, so it isn't written.
+        let mesh = &super::mesh::resolved(mesh, &mut resolve).ok_or(WriteError::Unsupported("a mesh whose inks combine past the patch limit"))?;
+        let colors = self.one_space(mesh.patches.iter().flat_map(|p| &p.colors), overprint, all_or_none)?;
         let points = |p: &super::MeshPatch| p.points.map(|q| (q.x as f32, q.y as f32));
         let patches = mesh.patches.iter().zip(colors.as_chunks::<4>().0);
         let patches = patches.map(|(p, c)| MeshPatch { points: points(p), colors: c.clone(), opacities: [NormalizedF32::ONE; 4] });
@@ -612,12 +624,7 @@ impl<'a> Painter<'a, '_> {
         let mut resolved: Vec<(BTreeMap<InkId, f32>, &InkColor)> = Vec::new();
         for color in colors {
             let InkColor::Tints(tints) = self.inks.resolve(color, self.cms) else { return Err(WriteError::Unsupported(what)) };
-            let mut merged = BTreeMap::new();
-            for (id, t) in tints {
-                let v = merged.entry(id).or_insert(0.0);
-                *v = 1.0 - (1.0 - *v) * (1.0 - unit(t));
-            }
-            resolved.push((merged, color));
+            resolved.push((merged(tints), color));
         }
         let all: BTreeSet<InkId> = resolved.iter().flat_map(|(m, _)| m.keys().copied()).collect();
         self.fits(all.len())?;
@@ -729,6 +736,16 @@ fn to_path(path: &BezPath) -> Option<Path> {
         }
     }
     b.finish()
+}
+
+/// `tints` by ink, tints on one ink combined as overlapping halftones.
+fn merged(tints: Vec<(InkId, f32)>) -> BTreeMap<InkId, f32> {
+    let mut merged = BTreeMap::new();
+    for (id, t) in tints {
+        let v = merged.entry(id).or_insert(0.0);
+        *v = 1.0 - (1.0 - *v) * (1.0 - unit(t));
+    }
+    merged
 }
 
 fn unit(v: f32) -> f32 {

@@ -15,6 +15,7 @@ use craft_plate_test::reference::{self, Context};
 use craft_plate_test::scene;
 use craft_prepress::flatten::kurbo::{BezPath, PathEl, Point, Shape};
 use craft_prepress::flatten::pdf::{ReadOptions, ReadReport, read_page};
+use craft_prepress::flatten::write::{WriteError, page_pdf};
 use craft_prepress::flatten::{
     BlendMode, DisplayList, FillItem, FillRule, GradientGeometry, GroupItem, ImageItem, ImageSpace, Item, MaskKind, Paint,
 };
@@ -655,6 +656,86 @@ fn meshes_that_cant_be_vectors_stay_images() {
     ];
     let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &objects));
     assert_eq!((report.vector_meshes, report.rasterized_shadings, images(&list).len()), (0, 1, 1));
+}
+
+#[test]
+fn a_narrow_band_in_a_mesh_function_is_kept() {
+    // Cyan only for t in 0.125..0.375, a band no corner, edge midpoint or center of the
+    // patch samples.
+    let constant = |c: &str| format!("<< /FunctionType 2 /Domain [0 1] /C0 [{c}] /C1 [{c}] /N 1 >>");
+    let (zero, cyan) = (constant("0 0 0 0"), constant("1 0 0 0"));
+    let band = format!("/Function << /FunctionType 3 /Domain [0 1] /Bounds [0.125 0.375] /Encode [0 1 0 1 0 1] /Functions [{zero} {cyan} {zero}] >>");
+    let mesh = coons_square(&format!("/DeviceCMYK {band}"), "0 1", "00 FF FF 00");
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[mesh]);
+    let source = plates(&pdf, 0, 72.0, &Options::default()).unwrap();
+    // t = 0.25, 85 pt up from the page's top edge.
+    assert_eq!(source.tint(ink(Process::Cyan), 60, 85), Some(255));
+    separates_like_the_source(&pdf);
+    // The band's edges are jumps, which no piece fits, so the shading is read as an image.
+    let (_, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (0, 1));
+
+    // A linear function stays one patch.
+    let ramp = "/Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 0 0 0] /N 1 >>";
+    let mesh = coons_square(&format!("/DeviceCMYK {ramp}"), "0 1", "00 FF FF 00");
+    let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert_eq!(meshes(&list)[0].patches.len(), 1);
+}
+
+#[test]
+fn spots_aliased_onto_one_ink_combine_across_the_mesh() {
+    // Gold and Silver both run 0 to 1 along v; on one plate they combine as overlapping
+    // halftones, 1 - (1 - v)^2, which a single patch's bilinear blend doesn't follow.
+    let spots = coons_square("[/DeviceN [/Gold /Silver] /DeviceCMYK 6 0 R]", "0 1 0 1", "0000 FFFF FFFF 0000");
+    let tint = stream("/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1]", "{ pop pop 0 0 0 1 }");
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[spots, tint]);
+    let (mut list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert_eq!(meshes(&list)[0].patches.len(), 1, "the spots are the mesh's inks");
+    let (gold, silver) = (list.inks.lookup("Gold").unwrap(), list.inks.lookup("Silver").unwrap());
+    assert!(list.inks.alias(gold, ink(Process::Cyan)) && list.inks.alias(silver, ink(Process::Cyan)));
+    let out = page_pdf(&list, Default::default(), &CmsConversion::fogra39()).unwrap();
+    assert!(!shadings(&out).1, "still a mesh, not an image");
+    let written = plates(&out, 0, 72.0, &Options::default()).unwrap();
+    for y in (15..110).step_by(10) {
+        let v = (110.0 - y as f32) / 100.0;
+        let want = (255.0 * (1.0 - (1.0 - v) * (1.0 - v))).round() as i32;
+        let got = i32::from(written.tint(ink(Process::Cyan), 60, y).unwrap());
+        assert!((got - want).abs() <= 3, "v = {v}: {got}, not {want}");
+    }
+
+    // The writer has no image fallback: a mesh it can't split within the patch limit, or
+    // with an All corner, is an error, each with its own message.
+    fn each_mesh(items: &mut [Item], edit: &dyn Fn(&mut Mesh)) -> usize {
+        let mut n = 0;
+        for item in items {
+            match item {
+                Item::Group(g) => n += each_mesh(&mut g.children, edit),
+                Item::Fill(f) => {
+                    if let Paint::Mesh(m) = &mut f.paint {
+                        edit(Arc::make_mut(m));
+                        n += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        n
+    }
+    let edited = |list: &DisplayList, edit: &dyn Fn(&mut Mesh)| {
+        let mut list = list.clone();
+        assert_eq!(each_mesh(&mut list.items, edit), 1);
+        page_pdf(&list, Default::default(), &CmsConversion::fogra39())
+    };
+    let error = |r: Result<Vec<u8>, WriteError>| match r {
+        Err(WriteError::Unsupported(what)) => what,
+        other => panic!("{:?}", other.map(|_| ())),
+    };
+    let many = edited(&list, &|m| m.patches = vec![m.patches[0].clone(); 65536]);
+    assert_eq!(error(many), "a mesh whose inks combine past the patch limit");
+    let all = edited(&list, &|m| m.patches[0].colors[0] = InkColor::All(1.0));
+    assert_eq!(error(all), "a mesh corner of the All or None colorant");
 }
 
 fn hex_image_free(dict: &str, hex: &str) -> String {

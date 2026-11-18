@@ -8,8 +8,18 @@
 //! of its converted corners, and its inner points are within [`NET_TOLERANCE`] of the ones its
 //! boundary implies. Each piece is written as the Coons patch of its boundary.
 //!
+//! A parametric mesh (one with a function) is also checked against the function on a grid of
+//! [`GRID`] steps over the parameter range of the whole mesh: a piece is kept only when every
+//! grid point in its range is within [`TOLERANCE`] of the line through its lowest and highest
+//! corners (the extremes of a bilinear parameter). The grid is the whole mesh's, so a feature
+//! narrower than one step, or inside a patch whose range lies between two grid points, can
+//! still be missed.
+//!
 //! A piece still out at [`MAX_DEPTH`], or more than [`MAX_MESH_PATCHES`] pieces, gives `None`:
-//! the caller reads the shading as an image.
+//! the caller reads the shading as an image. A piece across a jump in the function never
+//! passes, so such a mesh is an image, as when a probe lands on either side of the jump.
+//!
+//! [`resolved`] splits a mesh the same way for a conversion applied when it is written.
 //!
 //! [`Paint::Mesh`]: super::Paint::Mesh
 
@@ -19,6 +29,7 @@ use kurbo::{Affine, Point};
 
 use super::shade::{self, STOP_TOLERANCE, StopInks};
 use super::{Mesh, MeshPatch};
+use crate::ink::{InkColor, InkId};
 
 /// The most patches a mesh paint holds.
 pub(super) const MAX_MESH_PATCHES: usize = 1 << 16;
@@ -31,6 +42,9 @@ const NET_TOLERANCE: f64 = 0.01;
 
 /// The most times a source patch is halved in each direction.
 const MAX_DEPTH: u8 = 8;
+
+/// Steps of a parametric mesh's function grid over the mesh's parameter range.
+const GRID: usize = 256;
 
 /// Control points `net[i][j]`: `i` steps along u, `j` along v.
 type Net = [[Point; 4]; 4];
@@ -50,26 +64,138 @@ struct Piece {
 /// what the values mean. `None` for other types and when the mesh must stay an image.
 pub(super) fn mesh(shading: &ShadingType, matrix: Affine, kind: &StopInks, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> Option<Mesh> {
     let sources = source_nets(shading, matrix)?;
+    let grid = match parametric(shading) {
+        true => Some(Grid::new(&sources, convert)?),
+        false => None,
+    };
     let mut patches = Vec::new();
     let mut pending = sources.len();
     for (net, source) in sources {
         pending = pending.saturating_sub(1);
         let ink = convert_all(&source, convert)?;
-        let mut stack = vec![Piece { net, source, ink, depth: 0 }];
-        while let Some(piece) = stack.pop() {
-            match refine(piece, convert)? {
-                Refined::Done(piece) => patches.push(coons(&piece, kind)),
-                Refined::Split(children) => {
-                    if patches.len().saturating_add(stack.len()).saturating_add(pending).saturating_add(children.len()) > MAX_MESH_PATCHES {
-                        return None;
-                    }
-                    // Popped in order: (u low, v low) first.
-                    stack.extend(children.into_iter().rev());
-                }
-            }
+        let room = MAX_MESH_PATCHES.checked_sub(patches.len().saturating_add(pending))?;
+        for piece in pieces(Piece { net, source, ink, depth: 0 }, convert, grid.as_ref(), room)? {
+            patches.push(coons(&piece, kind));
         }
     }
     (!patches.is_empty()).then_some(Mesh { patches })
+}
+
+/// `mesh` with each patch split until `convert` of its colors is within [`TOLERANCE`] of the
+/// blend of its converted corners, the colors blending over the patch as its corners do; a
+/// patch of a linear conversion stays whole. `convert` gives values of a fixed list of inks.
+/// `None` past [`MAX_DEPTH`] or [`MAX_MESH_PATCHES`], or when a conversion fails.
+pub(super) fn resolved(mesh: &Mesh, convert: &mut dyn FnMut(&InkColor) -> Option<Vec<f32>>) -> Option<Mesh> {
+    let mut patches = Vec::with_capacity(mesh.patches.len());
+    let mut pending = mesh.patches.len();
+    for patch in &mesh.patches {
+        pending = pending.saturating_sub(1);
+        let ids = patch_inks(patch)?;
+        let source = patch.colors.each_ref().map(|c| tints_of(c, &ids));
+        let mut by_values = |v: &[f32]| convert(&InkColor::Tints(ids.iter().copied().zip(v.iter().copied()).collect()));
+        let ink = convert_all(&source, &mut by_values)?;
+        let room = MAX_MESH_PATCHES.checked_sub(patches.len().saturating_add(pending))?;
+        for piece in pieces(Piece { net: implied_net(&patch.points), source, ink, depth: 0 }, &mut by_values, None, room)? {
+            let colors = piece.source.map(|v| InkColor::Tints(ids.iter().copied().zip(v).collect()));
+            patches.push(MeshPatch { points: BOUNDARY.map(|(i, j)| piece.net[i][j]), colors });
+        }
+    }
+    Some(Mesh { patches })
+}
+
+/// Every ink a corner of `patch` lists, in the order they first appear; `None` for a corner
+/// that isn't tints.
+fn patch_inks(patch: &MeshPatch) -> Option<Vec<InkId>> {
+    let mut ids = Vec::new();
+    for color in &patch.colors {
+        let InkColor::Tints(tints) = color else { return None };
+        for (id, _) in tints {
+            if !ids.contains(id) {
+                ids.push(*id);
+            }
+        }
+    }
+    Some(ids)
+}
+
+/// `color`'s tint of each of `ids`, an ink listed twice combined as overlapping halftones;
+/// an ink it doesn't list is 0.
+fn tints_of(color: &InkColor, ids: &[InkId]) -> Vec<f32> {
+    let InkColor::Tints(tints) = color else { return vec![0.0; ids.len()] };
+    let tint = |id: &InkId| tints.iter().filter(|(i, _)| i == id).fold(0.0, |v, (_, t)| 1.0 - (1.0 - v) * (1.0 - t));
+    ids.iter().map(tint).collect()
+}
+
+/// `first` split into pieces within tolerance, (u low, v low) first; `None` past `room`
+/// pieces, past [`MAX_DEPTH`], or when a conversion fails.
+fn pieces(first: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, grid: Option<&Grid>, room: usize) -> Option<Vec<Piece>> {
+    let (mut done, mut stack) = (Vec::new(), vec![first]);
+    while let Some(piece) = stack.pop() {
+        match refine(piece, convert, grid)? {
+            Refined::Done(piece) => done.push(*piece),
+            Refined::Split(children) => {
+                if done.len().saturating_add(stack.len()).saturating_add(children.len()) > room {
+                    return None;
+                }
+                stack.extend(children.into_iter().rev());
+            }
+        }
+    }
+    Some(done)
+}
+
+/// Whether `shading`'s corner colors are a parameter of its function.
+fn parametric(shading: &ShadingType) -> bool {
+    match shading {
+        ShadingType::TriangleMesh { function, .. }
+        | ShadingType::CoonsPatchMesh { function, .. }
+        | ShadingType::TensorProductPatchMesh { function, .. } => function.is_some(),
+        ShadingType::FunctionBased { .. } | ShadingType::RadialAxial { .. } | ShadingType::Dummy => false,
+    }
+}
+
+/// A parametric mesh's converted colors at [`GRID`] steps over its corners' parameter range.
+struct Grid {
+    /// `(t, values)`, `t` increasing.
+    samples: Vec<(f32, Vec<f32>)>,
+}
+
+impl Grid {
+    /// `None` when a conversion fails or gives a value that isn't finite.
+    fn new(sources: &[(Net, Corners)], convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> Option<Self> {
+        let ts = sources.iter().flat_map(|(_, c)| c.iter().filter_map(|v| v.first().copied()));
+        let (lo, hi) = ts.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), t| (lo.min(t), hi.max(t)));
+        let mut samples = Vec::new();
+        if lo < hi {
+            samples.reserve(GRID.saturating_add(1));
+            for k in 0..=GRID {
+                let t = lo + (hi - lo) * (k as f32 / GRID as f32);
+                samples.push((t, convert(&[t]).filter(|v| v.iter().all(|x| x.is_finite()))?));
+            }
+        }
+        Some(Self { samples })
+    }
+
+    /// The most a grid value strictly between `piece`'s lowest and highest corner parameters
+    /// is from the line through those corners' values.
+    fn off(&self, piece: &Piece) -> f32 {
+        let t = |k: usize| piece.source.get(k).and_then(|v| v.first().copied()).unwrap_or(0.0);
+        let (lo, hi) = (0..4).fold((0, 0), |(lo, hi), k| (if t(k) < t(lo) { k } else { lo }, if t(k) > t(hi) { k } else { hi }));
+        let (t_lo, t_hi) = (t(lo), t(hi));
+        let (Some(f_lo), Some(f_hi)) = (piece.ink.get(lo), piece.ink.get(hi)) else { return 0.0 };
+        if t_hi <= t_lo {
+            return 0.0;
+        }
+        let (a, b) = (self.samples.partition_point(|(s, _)| *s <= t_lo), self.samples.partition_point(|(s, _)| *s < t_hi));
+        let mut off = 0.0_f32;
+        for (s, values) in self.samples.get(a..b).unwrap_or_default() {
+            let w = (s - t_lo) / (t_hi - t_lo);
+            for ((x, y), v) in f_lo.iter().zip(f_hi).zip(values) {
+                off = off.max((x + (y - x) * w - v).abs());
+            }
+        }
+        off
+    }
 }
 
 /// Every source patch as a page-space net with its corner components; `None` past
@@ -168,7 +294,7 @@ enum Refined {
 
 /// `piece` as it is, or its four halves; `None` when it must be split past [`MAX_DEPTH`] or a
 /// conversion fails.
-fn refine(piece: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> Option<Refined> {
+fn refine(piece: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, grid: Option<&Grid>) -> Option<Refined> {
     let [c0, c1, c2, c3] = &piece.source;
     // Edge midpoints (u = 0, v = 1, u = 1, v = 0) and the center, in source components.
     let source = [blend(&[c0, c1]), blend(&[c1, c2]), blend(&[c2, c3]), blend(&[c3, c0]), blend(&[c0, c1, c2, c3])];
@@ -182,6 +308,7 @@ fn refine(piece: Piece, convert: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> 
         }
         off = got.iter().zip(want).map(|(g, w)| (g - w).abs()).fold(off, f32::max);
     }
+    let off = grid.map_or(off, |g| off.max(g.off(&piece)));
     let within = off <= TOLERANCE && net_deviation(&piece.net) <= NET_TOLERANCE;
     if within {
         return Some(Refined::Done(Box::new(piece)));
@@ -354,6 +481,37 @@ mod tests {
         assert!(mesh(&ShadingType::CoonsPatchMesh { patches: one, function: None }, Affine::IDENTITY, &kind, linear).is_none());
     }
 
+    #[test]
+    fn a_resolution_that_combines_inks_splits_the_written_mesh() {
+        let ink = |id: Process| InkId::process(id);
+        let (c, m) = (ink(Process::Cyan), ink(Process::Magenta));
+        let patch = |a: f32, b: f32| MeshPatch { points: square(10.0), colors: [a, b, b, a].map(|t| InkColor::Tints(vec![(c, t), (m, t)])) };
+        let both = |n: usize| Mesh { patches: vec![patch(0.0, 1.0); n] };
+        let tint = |color: &InkColor, id: InkId| match color {
+            InkColor::Tints(t) => t.iter().find(|(i, _)| *i == id).map_or(0.0, |(_, v)| *v),
+            _ => f32::NAN,
+        };
+        // One-to-one: every patch stays whole.
+        let one_to_one = &mut |color: &InkColor| Some(vec![tint(color, c), tint(color, m)]);
+        assert_eq!(resolved(&both(3), one_to_one).unwrap(), both(3));
+        // Both on one plate.
+        let combined = &mut |color: &InkColor| Some(vec![1.0 - (1.0 - tint(color, c)) * (1.0 - tint(color, m))]);
+        let split = resolved(&both(1), combined).unwrap();
+        assert!(split.patches.len() > 4, "{}", split.patches.len());
+        for p in &split.patches {
+            let [a, b, ..] = p.colors.each_ref().map(|k| tint(k, c));
+            let (on, mid) = (|t: f32| 1.0 - (1.0 - t) * (1.0 - t), (a + b) / 2.0);
+            assert!((on(mid) - (on(a) + on(b)) / 2.0).abs() <= TOLERANCE + 1e-6, "{a} {b}");
+        }
+        // An ink listed twice overlaps itself.
+        assert_eq!(tints_of(&InkColor::Tints(vec![(c, 0.5), (c, 0.5)]), &[c]), vec![0.75]);
+        // Past the patch limit, and with a corner that isn't tints.
+        assert!(resolved(&both(MAX_MESH_PATCHES), combined).is_none());
+        let mut all = both(1);
+        all.patches[0].colors[0] = InkColor::All(1.0);
+        assert!(resolved(&all, one_to_one).is_none());
+    }
+
     /// A tensor patch on a 90 pt square whose (1, 1) point is pulled in by `pull`.
     fn tensor(pull: f64) -> TensorProductPatch {
         let mut net = implied_net(&square(90.0));
@@ -391,7 +549,7 @@ mod tests {
         // The same refinement, keeping each piece's net.
         let (mut stack, mut done) = (vec![Piece { net, source: corners(&patch.colors), ink: corners(&patch.colors), depth: 0 }], Vec::new());
         while let Some(piece) = stack.pop() {
-            match refine(piece, linear).unwrap() {
+            match refine(piece, linear, None).unwrap() {
                 Refined::Done(piece) => done.push(piece),
                 Refined::Split(children) => stack.extend(children),
             }
