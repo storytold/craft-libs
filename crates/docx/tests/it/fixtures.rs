@@ -702,6 +702,11 @@ fn spanning_cells_size_a_gridless_table_as_in_word() {
     let Block::Table(t) = &*d.body[0] else { panic!() };
     assert_eq!(t.grid.len(), 63);
     assert_eq!(t.grid[62], 50.0);
+    // With no width of its own there, the kept column takes its share of the span, not all of it.
+    let d = read_body(&format!("<w:tbl><w:tblPr/><w:tr>{ones}</w:tr><w:tr>{ones}{}</w:tr></w:tbl><w:p/>", tc(300, 2)));
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid.len(), 63);
+    assert_eq!(t.grid[62], 150.0);
 }
 
 #[test]
