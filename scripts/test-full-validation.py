@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/ci-full-validation.sh"
@@ -20,7 +21,30 @@ COMMANDS = [
 ]
 
 
+# Validate the real script, but execute only this fixed, reviewed command sequence.
+# Repository-file bytes must never become bash -c source in a mock-only harness.
+SOURCE = r"""
+set -euo pipefail
+unset CRAFT_HOSTILE_DIVISOR PROPTEST_CASES
+if [ "${RUNNER_OS:-}" = Windows ]; then
+  powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
+fi
+cargo fmt --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --locked
+cargo test --workspace --all-features --locked
+"""
+
+
+def source_lines(text):
+    return [line.strip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
 def run(os_name, fail=""):
+    if source_lines(SCRIPT.read_text()) != source_lines(SOURCE):
+        raise AssertionError("full validation command sequence changed")
     env = dict(os.environ, RUNNER_OS=os_name, FAIL=fail,
                CRAFT_HOSTILE_DIVISOR="8", PROPTEST_CASES="64")
     mock = r"""
@@ -31,11 +55,31 @@ cargo() {
 }
 powershell.exe() { printf 'print-queue\n'; }
 """
-    return subprocess.run([BASH, "-c", mock + SCRIPT.read_text()], env=env,
+    return subprocess.run([BASH, "-c", mock + SOURCE], env=env,
                           capture_output=True, text=True, check=False)
 
 
 class FullValidation(unittest.TestCase):
+    def test_changed_source_is_rejected_without_execution(self):
+        for source in [
+            SOURCE + "\necho injected",
+            SOURCE.replace("cargo fmt --check", "cargo fmt --check; echo injected"),
+            SOURCE.replace("cargo fmt --check", "cargo fmt $(echo injected) --check"),
+            SOURCE.replace("cargo test --workspace --locked", ""),
+            SOURCE + "\ncargo test --workspace --locked",
+        ]:
+            with self.subTest(source=source):
+                with patch.object(Path, "read_text", return_value=source), patch.object(subprocess, "run") as execute:
+                    with self.assertRaises(AssertionError):
+                        run("Linux")
+                    execute.assert_not_called()
+
+    def test_comments_and_blank_lines_do_not_change_commands(self):
+        with patch.object(Path, "read_text", return_value="# harmless comment\n\n" + SOURCE):
+            result = run("Linux")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), COMMANDS)
+
     def test_every_os_runs_both_full_configurations(self):
         for name in ["Linux", "macOS", "Windows"]:
             with self.subTest(os=name):
