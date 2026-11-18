@@ -227,7 +227,7 @@ impl Container for PreviewLayer<'_> {
         let pager = self.pager.clone();
         let mut close = false;
         Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
-            match pager.show(ui) {
+            match pager.clone().show(ui) {
                 Some(PagerStep::Back) => step.set(step.get() - 1),
                 Some(PagerStep::Next) => step.set(step.get() + 1),
                 None => {}
