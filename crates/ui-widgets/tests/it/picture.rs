@@ -23,9 +23,9 @@ fn a_device_pixel_picture_keeps_one_texel_to_a_pixel_at_every_scale() {
         let size = Rc::new(Cell::new(Vec2::ZERO));
         let seen = size.clone();
         let mut fixture = Fixture::new(move |ui| {
-            seen.set(Picture::new("Gradient", 1, &image).extent(PictureSize::DevicePixels).show(ui).response.rect.size());
+            seen.set(Picture::new("Gradient", 1, &image).extent(PictureSize::DevicePixels).show(ui).rect.size());
         });
-        fixture.scale(Scale(scale));
+        fixture.scale(Scale::new(scale));
         fixture.settle();
         let device = size.get() * scale;
         assert!(
