@@ -166,6 +166,8 @@ pub(crate) struct ScopeNode {
     pub unnamed: Option<Finding>,
     /// The first focus stop inside a control that has none of its own: where a click on its label moves focus.
     pub inner_stop: Option<crate::runtime::focus::FocusTarget>,
+    /// The node takes key focus itself.
+    pub focusable: bool,
     /// The control is disabled: a label that names only disabled controls is disabled too.
     pub disabled: bool,
 }
@@ -572,8 +574,10 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
                 let named = patches.iter().any(|patch| matches!(patch, LabelPatch::LabelledBy { node: id, .. } if *id == node.id));
                 report_unnamed(ctx, node.unnamed.clone().filter(|_| !named));
             }
-            // A click on a label, as on any form label, moves focus to its one control.
-            if let (true, [only]) = (label.activated, &scope.nodes[..])
+            // A click on a label, as on any form label, moves focus to its one control. A node that takes no focus
+            // beside it (the unit text after a number field) is not a control the click could mean.
+            let mut controls = scope.nodes.iter().filter(|node| node.focusable || node.inner_stop.is_some());
+            if let (true, Some(only), None) = (label.activated, controls.next(), controls.next())
                 && !only.disabled
             {
                 crate::runtime::focus::request(ctx, only.inner_stop.unwrap_or(crate::runtime::focus::FocusTarget::Id(only.id)));
