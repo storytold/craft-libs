@@ -2658,7 +2658,8 @@ name = "craft-gpu"
 version = "0.1.0"
 dependencies = [
  "egui-wgpu",
- "pollster 0.4.0",
+ "log",
+ "pollster 1.0.1",
 ]
 
 [[package]]

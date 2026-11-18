@@ -9,10 +9,16 @@ repository.workspace = true
 
 [dependencies]
 # A `[patch.crates-io]` row at the framework root points egui-wgpu at the pinned egui fork; it is not a workspace dependency.
-egui-wgpu = "0.37"
+# Its `wgpu` re-export is the wgpu eframe draws with.
+egui-wgpu = { version = "0.37", default-features = false }
+log = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-pollster = "0.4"
+# Waits for the DirectX 12 adapter list of the start-up probe.
+pollster = "1"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

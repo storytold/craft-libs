@@ -8,3 +8,6 @@
 mod device;
 
 pub use device::configure;
+
+#[cfg(test)]
+mod device_tests;
