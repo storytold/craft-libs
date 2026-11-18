@@ -1,0 +1,329 @@
+//! The ribbon: the fit rule, keyed group levels, a collapsed group's popover, the tab-change slide and the run model.
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use craft_behavior::{IconId, MotionMode};
+use craft_keymap::CommandRef;
+use craft_menu::{GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonRow, RibbonTab, plan};
+use craft_ui::buttons::{Arrangement, Button, SplitButton};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::runtime::env::{Direction, Env};
+use craft_ui::testing::{Fixture, is_measuring, last_pass_measuring_runs, trial};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
+
+/// How collapsed a level is: 0 full, 1 compact, 2 collapsed.
+fn rank(level: GroupLevel) -> u8 {
+    match level {
+        GroupLevel::Full => 0,
+        GroupLevel::Compact => 1,
+        _ => 2,
+    }
+}
+
+/// The width of `group` at `level`.
+fn width_at(group: &GroupWidths, level: GroupLevel) -> f32 {
+    match rank(level) {
+        0 => group.full,
+        1 => group.compact,
+        _ => group.collapsed,
+    }
+}
+
+/// The width of the row with each group at its level.
+fn total(widths: &[GroupWidths], levels: &[GroupLevel]) -> f32 {
+    widths.iter().zip(levels).map(|(group, level)| width_at(group, *level)).sum()
+}
+
+/// The width of `group` one level wider than `level`.
+fn wider(group: &GroupWidths, level: GroupLevel) -> f32 {
+    if rank(level) == 2 { group.compact } else { group.full }
+}
+
+/// The fit shrinks the groups from the end, first to compact and then to collapsed, stopping as soon as the row
+/// fits, and then gives a level back from the start while the row still fits.
+#[trial]
+fn the_plan_compacts_then_collapses_from_the_end_and_gives_back_from_the_start() {
+    let even = [GroupWidths { full: 100.0, compact: 80.0, collapsed: 40.0 }; 4];
+    let mut last_collapsed = 0;
+    for available in (0..=40).rev().map(|step| step as f32 * 10.0) {
+        let levels = plan(&even, available);
+        let collapsed: u8 = levels.iter().map(|level| rank(*level)).sum();
+        assert!(collapsed >= last_collapsed, "a narrower row never shows more of a group ({available})");
+        last_collapsed = collapsed;
+        if available >= 160.0 {
+            assert!(total(&even, &levels) <= available, "the row fits whenever it can ({available})");
+        } else {
+            assert!(levels.iter().all(|level| rank(*level) == 2), "a row nothing fits in shows every group collapsed ({available})");
+        }
+        assert!(levels.windows(2).all(|pair| rank(pair[0]) <= rank(pair[1])), "the groups at the end give up first ({available}): {levels:?}");
+        for (group, level) in even.iter().zip(&levels) {
+            if rank(*level) > 0 {
+                let given_back = total(&even, &levels) - width_at(group, *level) + wider(group, *level);
+                assert!(given_back > available, "nothing more can be given back ({available})");
+            }
+        }
+    }
+    let roomy = plan(&even, 400.0);
+    assert!(roomy.iter().all(|level| rank(*level) == 0), "a row that fits shows every group in full");
+
+    // A wide group that shrinks frees room: the groups the shrinking passed over give back what they gave up.
+    let uneven = [
+        GroupWidths { full: 300.0, compact: 250.0, collapsed: 60.0 },
+        GroupWidths { full: 500.0, compact: 500.0, collapsed: 60.0 },
+        GroupWidths { full: 60.0, compact: 60.0, collapsed: 60.0 },
+        GroupWidths { full: 60.0, compact: 60.0, collapsed: 60.0 },
+    ];
+    let levels = plan(&uneven, 800.0);
+    assert!(total(&uneven, &levels) <= 800.0, "the row fits");
+    assert_eq!(levels.iter().map(|level| rank(*level)).collect::<Vec<_>>(), vec![0, 2, 0, 0], "only the wide group stays collapsed");
+}
+
+/// A group named `title` whose content is `labels` as stacked buttons.
+fn group(row: &mut RibbonRow<'_>, key: &'static str, title: &'static str, labels: &[&'static str]) {
+    row.group(RibbonGroup::new(key, title, IconId::new("list").into()), |ui| {
+        for label in labels {
+            Button::new(*label).arrangement(Arrangement::Stacked).show(ui);
+        }
+    });
+}
+
+const WIDE: [&str; 12] = ["Alpha1", "Alpha2", "Alpha3", "Alpha4", "Alpha5", "Alpha6", "Alpha7", "Alpha8", "Alpha9", "Alpha10", "Alpha11", "Alpha12"];
+
+/// Two groups with one title, shown in either order, each keep their own level: the wide one collapses, the narrow
+/// one stays whole, and re-ordering does not swap them.
+#[trial]
+fn groups_with_the_same_title_keep_their_own_level() {
+    let swapped = Rc::new(Cell::new(false));
+    let flag = swapped.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            if flag.get() {
+                group(row, "narrow", "Group", &["Only"]);
+                group(row, "wide", "Group", &WIDE);
+            } else {
+                group(row, "wide", "Group", &WIDE);
+                group(row, "narrow", "Group", &["Only"]);
+            }
+        });
+    });
+    fixture.room(vec2(420.0, 300.0));
+    fixture.settle();
+    assert!(fixture.by_label("Alpha1").is_none(), "the wide group is collapsed");
+    assert!(fixture.by_label("Only").is_some(), "the narrow group of the same title stays whole");
+    swapped.set(true);
+    fixture.settle();
+    assert!(fixture.by_label("Alpha1").is_none(), "the wide group stays collapsed after the groups swap places");
+    assert!(fixture.by_label("Only").is_some(), "the narrow group stays whole after the groups swap places");
+}
+
+/// A collapsed group opens a popover; a menu opened from a split button inside it and a pick from that menu leave
+/// the popover open, and a press outside closes it.
+#[trial]
+fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
+    let picked: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = picked.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let entries = [Entry::new(1_usize, "Keep text only"), Entry::new(2, "Paste values")];
+        let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            row.group(RibbonGroup::new("clip", "Clipboard", IconId::new("list").into()), |ui| {
+                if let Some(entry) = SplitButton::new("Paste", &entries).show(ui).chosen {
+                    seen.borrow_mut().push(entry);
+                }
+            });
+            group(row, "wide", "Wide", &WIDE);
+        });
+    });
+    fixture.room(vec2(260.0, 300.0));
+    fixture.settle();
+    assert!(fixture.by_label("Paste").is_none(), "the group is collapsed");
+    let button = fixture.by_label("Clipboard").expect("the collapsed group's button");
+    fixture.click(&button).idle(3);
+    assert!(fixture.by_label("Paste").is_some(), "the button opens the group's popover");
+    fixture.key(Key::ArrowDown, Modifiers::ALT).idle(3);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(3);
+    assert_eq!(picked.borrow().clone(), vec![1], "the split button's menu picked its first row");
+    assert!(fixture.by_label("Paste").is_some(), "the group's popover is still open after a pick from a menu opened inside it");
+    fixture.click_at(Pos2::new(255.0, 295.0)).idle(3);
+    assert!(fixture.by_label("Paste").is_none(), "a press outside closes the popover");
+}
+
+/// The painted x of the group titled `title`, once the fixture has run a frame.
+fn group_x(fixture: &Fixture, title: &str) -> f32 {
+    fixture.by_label(title).map_or(f32::NAN, |target| target.rect.left())
+}
+
+/// A ribbon of three tabs with one group each, showing the tab `shown` holds.
+fn slide_rig(shown: &Rc<Cell<usize>>, direction: Direction, motion: MotionMode) -> Fixture {
+    let state = shown.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "One"), RibbonTab::new(1, "Two"), RibbonTab::new(2, "Three")];
+        let out = Ribbon::new("Ribbon", &tabs, Bind::given(state.get())).show(ui, |row, tab| match tab {
+            0 => group(row, "a", "Alpha", &["First"]),
+            1 => group(row, "b", "Beta", &["Second"]),
+            _ => group(row, "c", "Gamma", &["Third"]),
+        });
+        if let Some(next) = out.shown {
+            state.set(next);
+        }
+    });
+    fixture.direction(direction).motion(motion).room(vec2(600.0, 300.0));
+    fixture.settle();
+    fixture
+}
+
+/// The x of the group of tab `to` on the first frame it shows after a click on its tab while tab `from` showed, and
+/// at rest. The click's release reports the tab through `RibbonOutput::shown`; the rig applies it, so the frame after
+/// the release (the click's idle frame) is the first that shows the new row.
+fn slide(direction: Direction, motion: MotionMode, from: usize, to: usize) -> (f32, f32) {
+    let shown = Rc::new(Cell::new(from));
+    let mut fixture = slide_rig(&shown, direction, motion);
+    let tab = fixture.by_label(["One", "Two", "Three"][to]).expect("the tab to change to");
+    fixture.click(&tab);
+    assert_eq!(shown.get(), to, "the click on the tab showed it");
+    let title = ["Alpha", "Beta", "Gamma"][to];
+    let first = group_x(&fixture, title);
+    fixture.idle(120);
+    (first, group_x(&fixture, title))
+}
+
+/// A tab change slides the new group row in from the side of the new tab (mirrored in right-to-left) and reaches
+/// rest; with reduced motion the row is at rest on the first frame.
+#[trial]
+fn a_tab_change_slides_the_row_in_from_the_new_tabs_side_and_shows_at_rest_under_reduced_motion() {
+    let (first, rest) = slide(Direction::Ltr, MotionMode::Full, 0, 2);
+    assert!(first > rest + 1.0, "a later tab's row starts toward the end side: {first} vs {rest}");
+    let (first, rest) = slide(Direction::Ltr, MotionMode::Full, 2, 0);
+    assert!(first < rest - 1.0, "an earlier tab's row starts toward the start side: {first} vs {rest}");
+    let (first, rest) = slide(Direction::Rtl, MotionMode::Full, 0, 2);
+    assert!(first < rest - 1.0, "under right-to-left the sides mirror: {first} vs {rest}");
+    let (first, rest) = slide(Direction::Rtl, MotionMode::Full, 2, 0);
+    assert!(first > rest + 1.0, "under right-to-left the sides mirror: {first} vs {rest}");
+    let (first, rest) = slide(Direction::Ltr, MotionMode::Reduced, 0, 2);
+    assert!((first - rest).abs() < 0.5, "with reduced motion the row shows at rest at once: {first} vs {rest}");
+}
+
+/// What each group's content did, by the group's key: how many times it ran in a measuring run since the counts were
+/// cleared, and the level its last real run showed it at.
+type Runs = Rc<RefCell<HashMap<&'static str, (u32, GroupLevel)>>>;
+
+/// A group like [`group`] whose content counts its runs in `runs`.
+fn counted(row: &mut RibbonRow<'_>, runs: &Runs, key: &'static str, labels: [&'static str; 2]) {
+    let runs = runs.clone();
+    row.group(RibbonGroup::new(key, key, IconId::new("list").into()), move |ui| {
+        let level = Env::of(ui).get::<GroupLevel>();
+        let measuring = is_measuring(ui.ctx());
+        let mut runs = runs.borrow_mut();
+        let entry = runs.entry(key).or_insert((0, level));
+        if measuring {
+            entry.0 += 1;
+        } else {
+            entry.1 = level;
+        }
+        for label in labels {
+            Button::new(label).arrangement(Arrangement::Stacked).show(ui);
+        }
+    });
+}
+
+/// The measuring runs of `key`'s content since the counts were cleared.
+fn measured(runs: &Runs, key: &str) -> u32 {
+    runs.borrow().get(key).map_or(0, |(count, _)| *count)
+}
+
+/// The level `key`'s group last showed at.
+fn level(runs: &Runs, key: &str) -> GroupLevel {
+    runs.borrow().get(key).map_or(GroupLevel::Full, |(_, level)| *level)
+}
+
+/// Clears the measuring counts, keeping the levels.
+fn clear(runs: &Runs) {
+    for (count, _) in runs.borrow_mut().values_mut() {
+        *count = 0;
+    }
+}
+
+const KEYS: [&str; 4] = ["one", "two", "three", "four"];
+
+/// Count trial of the run model: a settled ribbon runs no group's content in a measuring run (each shows once, at its
+/// kept level), and narrowing the room until one group changes level runs only that group's content to measure it.
+#[trial]
+fn a_settled_ribbon_runs_no_group_body_again_and_a_level_change_runs_only_that_group() {
+    let runs: Runs = Rc::new(RefCell::new(HashMap::new()));
+    let seen = runs.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            counted(row, &seen, "one", ["Alpha", "Beta"]);
+            counted(row, &seen, "two", ["Gamma", "Delta"]);
+            counted(row, &seen, "three", ["Epsilon", "Zeta"]);
+            counted(row, &seen, "four", ["Eta", "Theta"]);
+        });
+    });
+    let mut room = 900.0;
+    fixture.room(vec2(room, 300.0));
+    fixture.settle();
+    assert!(KEYS.iter().all(|key| level(&runs, key) == GroupLevel::Full), "every group shows in full in a wide room");
+    clear(&runs);
+    fixture.idle(1);
+    assert!(KEYS.iter().all(|key| measured(&runs, key) == 0), "a pass with unchanged inputs measures no group: {:?}", runs.borrow());
+    assert!(last_pass_measuring_runs(fixture.ctx()).is_empty(), "a pass with unchanged inputs runs no measuring run");
+
+    // Narrow the room a step at a time until a group changes level; the fit gives way from the end, so it is the last.
+    loop {
+        room -= 10.0;
+        assert!(room > 100.0, "narrowing the room changes some group's level");
+        clear(&runs);
+        fixture.room(vec2(room, 300.0));
+        fixture.idle(1);
+        if level(&runs, "four") != GroupLevel::Full {
+            break;
+        }
+    }
+    assert!(KEYS[..3].iter().all(|key| level(&runs, key) == GroupLevel::Full), "only the last group gave way");
+    assert!(measured(&runs, "four") > 0, "the group that changed level ran its content to measure it");
+    assert!(
+        KEYS[..3].iter().all(|key| measured(&runs, key) == 0),
+        "the groups that kept their level ran no content to measure: {:?}",
+        runs.borrow()
+    );
+}
+
+/// Presses and releases the secondary button at `at`, a frame each.
+fn right_click(fixture: &mut Fixture, at: Pos2) {
+    let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![Event::PointerMoved(at), button(true)]);
+    fixture.frame(vec![button(false)]);
+    fixture.idle(1);
+}
+
+/// A right click on a ribbon control reaches the row's region, which asks for the menu with the control's bound
+/// command and returns focus to it; a right click on a tab asks for the tab's menu, with no command.
+#[trial]
+fn a_right_click_on_a_control_asks_for_its_menu_with_its_command() {
+    let menus: Rc<RefCell<Vec<Option<CommandRef>>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = menus.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home"), RibbonTab::new(1, "Insert")];
+        let out = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            row.group(RibbonGroup::new("clip", "Clipboard", IconId::new("list").into()), |ui| {
+                Button::new("Paste").command(CommandRef::new("edit.paste")).arrangement(Arrangement::Stacked).show(ui);
+            });
+        });
+        if let Some(menu) = out.menu {
+            seen.borrow_mut().push(menu.command);
+        }
+    });
+    fixture.room(vec2(600.0, 300.0));
+    fixture.settle();
+    let paste = fixture.by_label("Paste").expect("the control");
+    right_click(&mut fixture, paste.rect.center());
+    assert_eq!(menus.borrow().clone(), vec![Some(CommandRef::new("edit.paste"))], "the control's request carries its command");
+    menus.borrow_mut().clear();
+    let tab = fixture.by_label("Insert").expect("a tab");
+    right_click(&mut fixture, tab.rect.center());
+    assert_eq!(menus.borrow().clone(), vec![None], "a tab's request carries no command");
+}

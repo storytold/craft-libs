@@ -284,6 +284,14 @@ impl<C: Component> Cx<'_, C> {
         crate::runtime::keys::context_request(&self.core.ctx, self.core.id).is_some()
     }
 
+    /// The context requests made in this pass so far, in order: each component asked and the rect its menu opens at
+    /// (its part's, when it was made at one). A container reads in `finish` those its body's components made, which
+    /// ran before it finished: a secondary click or the Menu key on a child reaches the region around it this way,
+    /// whatever the child does with its own request.
+    pub fn context_requests(&self) -> Vec<(Id, Rect)> {
+        crate::runtime::keys::context_requests(&self.core.ctx)
+    }
+
     /// Names the member of this container's roving group (`ContainerProps.roving`) that Tab arrives at; the
     /// first member when none is named.
     pub fn roving_arrival(&mut self, member: Id) {

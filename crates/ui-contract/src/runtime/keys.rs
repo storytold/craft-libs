@@ -40,7 +40,7 @@ pub use intents::settle;
 pub use intents::take_submit;
 pub use intents::with_window_intents;
 pub(crate) use intents::{
-    Lent, context_part, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_every_escape,
+    Lent, context_part, context_request, context_requests, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_every_escape,
     take_window_cancel,
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};

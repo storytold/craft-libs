@@ -1,8 +1,11 @@
 //! The integration binary of craft-menu: every test is a registered trial.
 
+mod keytips;
 mod layout;
 mod mnemonic;
 mod native;
+mod ribbon;
+mod ribbon_gallery;
 mod sample;
 mod shortcuts;
 

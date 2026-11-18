@@ -764,6 +764,14 @@ impl<T: Hash> Hash for Sub<T> {
     }
 }
 
+/// A salt for an id made from `key`, a value that is only `Hash`: the ids egui makes also ask for `Debug`, which an
+/// app's key type need not have. Equal keys give equal salts within a run, so the id stays the same from pass to pass.
+pub fn key_salt(key: &impl Hash) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// The runtime sub-id of `base` for `tag`: the one derivation of every id the runtime makes from a component
 /// id (body, children, header, footer, layer, rows, items, popups, the gesture, `memory_at` slots, animation
 /// slots, edge and transform widgets, text and access sub-nodes).

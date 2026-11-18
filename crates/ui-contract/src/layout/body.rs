@@ -250,7 +250,8 @@ pub(crate) fn counting_fills(ui: &Ui, axis: Axis) -> bool {
 /// What a unit of a shrinking row reported in the first sweep: its id, the width it took there, the width it asks for
 /// in no room, the least at which its content shows whole and the least it shrinks to, and whether its content is
 /// made to be cut (`Component::cut_first`). A body unit reports what it took as all three; the row asks it for its
-/// least (`Shrink::Least`) only when the row is short.
+/// least (`Shrink::Least`) only when the row is short. A levelled unit (`levelled_unit`) reports its width at each of
+/// its levels, widest first, in `levels`; a continuous unit leaves it empty.
 struct Reported {
     leaf: Id,
     took: f32,
@@ -258,6 +259,7 @@ struct Reported {
     whole: f32,
     body: bool,
     cut_first: bool,
+    levels: Vec<f32>,
 }
 
 /// The widths of a unit of a row that shrinks to fit: the width it asks for and the least it narrows to.
@@ -290,8 +292,112 @@ pub(crate) struct LeastReports(IdMap<IdMap<f32>>);
 pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, whole_least: Option<(f32, f32)>, cut_first: bool) {
     let (whole, least) = whole_least.map_or((ideal, ideal), |(whole, least)| (whole.min(ideal), least.min(ideal)));
     let widths = ShrinkUnit { ideal, least: least.min(whole) };
-    let leaf = Reported { leaf, took, widths, whole, body: whole_least.is_none(), cut_first };
+    let leaf = Reported { leaf, took, widths, whole, body: whole_least.is_none(), cut_first, levels: Vec::new() };
     pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
+}
+
+/// Reports the widths of the levelled unit `unit` of the row `row` that counts them, one per level, widest first. The
+/// unit took the first (widest) in the counting sweep.
+fn report_levels(ctx: &egui::Context, row: Id, unit: Id, levels: Vec<f32>) {
+    let ideal = levels.first().copied().unwrap_or_default();
+    let least = levels.last().copied().unwrap_or_default().min(ideal);
+    let leaf = Reported { leaf: unit, took: ideal, widths: ShrinkUnit { ideal, least }, whole: ideal, body: false, cut_first: false, levels };
+    pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
+}
+
+/// The level of each unit of a row whose units show in discrete levels, for `room`. `units` holds each unit's width
+/// at each of its levels, widest (level 0) first. The units give way from the end: first each steps down to its level
+/// 1, then each to its level 2, and so on, stopping as soon as the row fits. Then, from the start, each unit takes back
+/// a level while the row still fits: stepping a wide unit down can free room an earlier unit no longer needed to give
+/// up. A unit with fewer levels stays at its last. A width that is not a number never fits, so it gives nothing back.
+///
+/// Worked through for units `[300, 250, 60]`, `[500, 500, 60]`, `[60]`, `[60]` in 800: the total 920 does not fit;
+/// stepping to level 1 from the end leaves 870, still too wide; stepping to level 2 from the end reaches the second
+/// unit (60), and the row fits at 430. Giving back from the start: the first unit takes level 0 (480); the second
+/// cannot (920 > 800). The levels are `[0, 2, 0, 0]`.
+pub fn plan_levels(units: &[Vec<f32>], room: f32) -> Vec<usize> {
+    let width = |unit: &[f32], level: usize| unit.get(level).or(unit.last()).copied().unwrap_or_default();
+    let deepest = units.iter().map(|unit| unit.len().saturating_sub(1)).max().unwrap_or_default();
+    let mut levels = vec![0; units.len()];
+    let mut total: f32 = units.iter().map(|unit| width(unit, 0)).sum();
+    for target in 1..=deepest {
+        for (unit, level) in units.iter().zip(levels.iter_mut()).rev() {
+            if total <= room {
+                break;
+            }
+            if target < unit.len() {
+                total += width(unit, target) - width(unit, *level);
+                *level = target;
+            }
+        }
+    }
+    for (unit, level) in units.iter().zip(levels.iter_mut()) {
+        while *level > 0 {
+            let next = total + width(unit, *level - 1) - width(unit, *level);
+            if !next.is_finite() || next > room {
+                break;
+            }
+            total = next;
+            *level -= 1;
+        }
+    }
+    levels
+}
+
+/// Shows `show`, one unit of the unwrapped `Row` body around it that fits in discrete levels (a ribbon group: full,
+/// compact, collapsed), at the level the row's shrink step gave it. `levels` is how many levels the unit has; `show`
+/// shows it at a level from 0 (the widest) to `levels - 1`, and must be free of side effects in a measuring run, as
+/// every row body is: the row's counting sweep runs it once per level to measure each, in an invisible sizing pass.
+/// `key` names the unit within its row and stays the same in every pass.
+///
+/// The row gives its levelled units their levels before its continuous units narrow (`plan_levels`, in the room the
+/// continuous units leave at their least), and the continuous units narrow by their own rule in what is left. The level
+/// is kept with the row's measuring run, so a pass without one (nothing the row measures changed) shows each unit once,
+/// at its kept level. Outside a shrinking row the unit shows at level 0.
+pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&mut Ui, usize)) {
+    let ctx = ui.ctx().clone();
+    let shrink = Env::of(ui).shrink;
+    // The unit's content is no unit of the row: it runs in a room of its own.
+    let own_room = Env::of(ui).derive_local(|scoped| scoped.start_room());
+    match shrink {
+        Some(Shrink::Count(row)) => {
+            let rtl = Env::of(ui).direction.is_rtl();
+            let mut widths = Vec::with_capacity(levels);
+            let mut widest = Vec2::ZERO;
+            for level in 0..levels.max(1) {
+                let installed = Env::install_for(ui, own_room.clone());
+                let (_, took) = crate::runtime::egui::sizing::run_sized(ui, f32::INFINITY, child::column_layout(rtl), |ui| show(ui, level));
+                Env::restore(&ctx, installed);
+                if level == 0 {
+                    widest = took;
+                }
+                widths.push(took.x);
+            }
+            // The counting sweep places the unit at its widest; the row sweeps again at the levels it gives.
+            alloc::space(ui, widest);
+            report_levels(&ctx, row, key, widths);
+        }
+        // The probe for the leasts of body units asks nothing of a levelled unit: its least is its last level.
+        Some(Shrink::Least(_)) => {}
+        Some(Shrink::Apply(row)) => {
+            let level = level_of(&ctx, row, key).min(levels.saturating_sub(1));
+            let installed = Env::install_for(ui, own_room);
+            show(ui, level);
+            Env::restore(&ctx, installed);
+        }
+        Some(Shrink::Fit) | None => {
+            let installed = Env::install_for(ui, own_room);
+            show(ui, 0);
+            Env::restore(&ctx, installed);
+        }
+    }
+}
+
+/// The level the shrink step of the row `row` gave its levelled unit `unit`: 0 without a record. The record keeps the
+/// level as the measure's height, which a row's shrink record has no other use for.
+fn level_of(ctx: &egui::Context, row: Id, unit: Id) -> usize {
+    // A level is a small whole number written as `level as f32`: the cast back is exact.
+    layout_memory::shrink(ctx, shrink_key(row, unit)).map_or(0, |(found, _)| found.took.y.max(0.0) as usize)
 }
 
 /// Reports the least width of the body unit `body` of the row `row` that asks for it.
@@ -485,22 +591,40 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     let room = shrink_room(ui);
     let order = if Env::of(ui).values.get::<InBar>().0 { ShrinkOrder::FromEnd } else { ShrinkOrder::Even };
     let (drops, gap) = (view_room(ui, Axis::X).is_none(), ui.spacing().item_spacing.x);
-    // Records the width each unit gets, and returns whether one took another width in the first sweep.
+    // Records the width each unit gets, and returns whether one took another width in the first sweep. The levelled
+    // units take their levels first, in the room the continuous units leave at their least; the continuous units then
+    // narrow by their own rule with the levelled units' widths held. A row without levelled units holds nothing more.
     let settle = |leaves: &[Reported], fixed: f32| {
-        let units: Vec<ShrinkUnit> = leaves.iter().map(|leaf| leaf.widths).collect();
-        let whole: Vec<f32> = leaves.iter().map(|leaf| leaf.whole).collect();
-        let first: Vec<bool> = leaves.iter().map(|leaf| leaf.cut_first).collect();
+        let (levelled, continuous): (Vec<&Reported>, Vec<&Reported>) = leaves.iter().partition(|leaf| !leaf.levels.is_empty());
+        let units: Vec<ShrinkUnit> = continuous.iter().map(|leaf| leaf.widths).collect();
+        let whole: Vec<f32> = continuous.iter().map(|leaf| leaf.whole).collect();
+        let first: Vec<bool> = continuous.iter().map(|leaf| leaf.cut_first).collect();
+        let level_widths: Vec<Vec<f32>> = levelled.iter().map(|leaf| leaf.levels.clone()).collect();
+        let levels = if room.is_finite() {
+            plan_levels(&level_widths, room - fixed - units.iter().map(|unit| unit.least).sum::<f32>())
+        } else {
+            vec![0; levelled.len()]
+        };
+        let width_at = |leaf: &Reported, level: usize| leaf.levels.get(level).copied().unwrap_or_default();
+        let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(*leaf, *level)).sum();
         let widths = if room.is_finite() {
-            shrink_or_drop(&units, &whole, &first, (fixed, gap), room, order, drops)
+            shrink_or_drop(&units, &whole, &first, (fixed + held, gap), room, order, drops)
         } else {
             units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false }).collect()
         };
-        let mut again = false;
-        for (leaf, cap) in leaves.iter().zip(widths) {
+        // A levelled unit took no place of its own content in the first sweep (it measured each level apart), so the
+        // records its content's run leaves for the real run come from a sweep at the levels given.
+        let mut again = !levelled.is_empty();
+        for (leaf, cap) in continuous.iter().zip(widths) {
             let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(cap.width, 0.0));
             layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, cap.dropped);
             // Half a point: less than a pixel shows at any scale the box runs.
             again |= (leaf.took - cap.width).abs() >= 0.5;
+        }
+        for (leaf, level) in levelled.iter().zip(levels) {
+            // The level travels as the record's height (`level_of`).
+            let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width_at(*leaf, level), level as f32));
+            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, false);
         }
         again
     };

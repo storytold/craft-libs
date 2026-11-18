@@ -237,12 +237,14 @@ impl Deref for Scoped {
 /// each leaf, and each body that does not fill the row, is a unit the row narrows to fit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Shrink {
-    /// The first sweep of a measuring run of the row: each unit reports its widths to the row (`layout::report_shrink`).
+    /// The first sweep of a measuring run of the row: each unit reports its widths to the row (`layout::report_shrink`),
+    /// a levelled unit its width at each level (`layout::levelled_unit`).
     Count(Id),
     /// The sweep of a short row that asks each body unit for its least width (`layout::report_least`): it measures its
     /// content unbounded along x, every leaf at its least, and leaves no record.
     Least(Id),
-    /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`).
+    /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`), a levelled unit
+    /// at the level the row gave it.
     Apply(Id),
     /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
     Fit,

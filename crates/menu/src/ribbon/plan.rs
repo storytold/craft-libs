@@ -1,6 +1,7 @@
 //! The fit rule: how much of each group shows at each width.
 
 use super::GroupLevel;
+use super::group::LEVELS;
 
 /// The widths of one group at each of its levels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -13,8 +14,12 @@ pub struct GroupWidths {
     pub collapsed: f32,
 }
 
-/// The level of each group for `available` width, by production's fit rule.
+/// The level of each group for `available` width, by the rule of a row's levelled units
+/// (`craft_ui::layout::plan_levels`), which the ribbon's row applies to its groups. Groups shrink from the end: first
+/// each to compact, then each to collapsed, stopping as soon as the row fits. Then, from the start, each group takes
+/// back a level while the row still fits: shrinking a wide group can free room an earlier group no longer needed to
+/// give up. A width that is not a number never fits, so it gives nothing back.
 pub fn plan(widths: &[GroupWidths], available: f32) -> Vec<GroupLevel> {
-    let _ = (widths, available);
-    todo!("rb.R12")
+    let units: Vec<Vec<f32>> = widths.iter().map(|group| vec![group.full, group.compact, group.collapsed]).collect();
+    craft_ui::layout::plan_levels(&units, available).into_iter().map(|at| LEVELS.get(at).copied().unwrap_or(GroupLevel::Collapsed)).collect()
 }

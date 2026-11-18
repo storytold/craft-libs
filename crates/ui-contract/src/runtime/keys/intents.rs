@@ -500,6 +500,11 @@ pub(crate) fn context_request(ctx: &Context, id: Id) -> Option<egui::Rect> {
     current(ctx, |stage| stage.contexts.iter().find(|(owner, ..)| *owner == id).map(|(_, rect, _)| *rect))
 }
 
+/// Every context request of this pass so far, in the order they were made: the component and the rect it opens at.
+pub(crate) fn context_requests(ctx: &Context) -> Vec<(Id, egui::Rect)> {
+    current(ctx, |stage| stage.contexts.iter().map(|(owner, rect, _)| (*owner, *rect)).collect())
+}
+
 /// The part of `id` its context request of this pass was made at, when it made one at a part.
 pub(crate) fn context_part(ctx: &Context, id: Id) -> Option<PartRef> {
     current(ctx, |stage| stage.contexts.iter().find(|(owner, ..)| *owner == id).and_then(|(.., part)| *part))

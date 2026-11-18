@@ -2,5 +2,6 @@
 
 mod elide;
 mod faces;
+mod levelled;
 mod measure;
 mod state_looks;

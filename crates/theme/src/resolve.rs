@@ -219,6 +219,7 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
             r#move: motion(move_),
             caret: motion_ms(values::MOTION_CARET_MS, values::MOTION_CARET_EASING),
             outline: motion_ms(values::MOTION_OUTLINE_MS, values::MOTION_OUTLINE_EASING),
+            slide: values::MOTION_SLIDE_PT,
             reduced: appearance.reduced_motion,
         },
     };
