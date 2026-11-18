@@ -153,6 +153,13 @@ impl Warp {
             let cols = quilt_patches(&slice_x)?;
             let rows = quilt_patches(&slice_y)?;
             if !slice_x.is_empty() || !slice_y.is_empty() {
+                // Defaulting a missing or nonnumeric side to zero would invent an
+                // explicit rectangle. Numeric nonfinite sides still follow finite().
+                if d.get("bounds").is_some()
+                    && !d.get_object("bounds").is_some_and(|b| ["Left", "Top ", "Rght", "Btom"].iter().all(|key| b.get_number(key).is_some()))
+                {
+                    return Err(PsdError::Unsupported("incomplete explicit quilt bounds".into()));
+                }
                 // The evaluator normalizes over bounds, not stored slice coordinates.
                 // Infer an absent rectangle only when both explicit axes define it.
                 if !valid_bounds(w.bounds) {
@@ -1175,6 +1182,41 @@ mod tests {
         // Even the absent slice axis needs a finite normalization extent.
         let overflow = missing.with("bounds", Value::Descriptor(bounds(-f64::MAX, f64::MAX)));
         assert!(Warp::try_from_descriptor(&overflow).is_err());
+    }
+    #[test]
+    fn explicit_quilt_bounds_require_every_numeric_side() {
+        let sides = [("Left", 0.0), ("Top ", 0.0), ("Rght", 20.0), ("Btom", 10.0)];
+        for omit_y in [false, true] {
+            let mut quilt = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]);
+            if omit_y {
+                let Value::Descriptor(env) = &mut quilt.items.iter_mut().find(|(key, _)| key.is("customEnvelopeWarp")).unwrap().1 else {
+                    panic!("envelope")
+                };
+                env.items.retain(|(key, _)| !key.is("quiltSliceY"));
+            }
+            let complete = sides.iter().fold(Descriptor::new("bounds"), |d, (key, value)| d.with(key, Value::Double(*value)));
+            assert!(Warp::try_from_descriptor(&quilt.clone().with("bounds", Value::Descriptor(complete))).unwrap().is_some());
+            for (side, _) in sides {
+                for missing in [true, false] {
+                    let bounds = sides.iter().fold(Descriptor::new("bounds"), |d, (key, value)| {
+                        if *key != side {
+                            d.with(key, Value::Double(*value))
+                        } else if missing {
+                            d
+                        } else {
+                            d.with(key, Value::Text(UnicodeString::new("not a number")))
+                        }
+                    });
+                    let invalid = quilt.clone().with("bounds", Value::Descriptor(bounds));
+                    assert!(
+                        matches!(Warp::try_from_descriptor(&invalid), Err(PsdError::Unsupported(_))),
+                        "{side}, missing={missing}, omit_y={omit_y}"
+                    );
+                    let bytes = placed_layer_data("incomplete", [0.0; 8], |d| d.with("quiltWarp", Value::Descriptor(invalid)));
+                    assert!(matches!(SmartObject::from_placed_layer_data(&bytes), Err(PsdError::Unsupported(_))));
+                }
+            }
+        }
     }
     #[test]
     fn finite_warp_views_preserve_raw_descriptor_values() {
