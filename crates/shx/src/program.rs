@@ -158,6 +158,11 @@ fn direction(d: u8) -> Point {
     Point::new(x, y)
 }
 
+/// Whether a pen position is within the coordinate bound.
+fn bounded(p: Point) -> bool {
+    p.is_finite() && p.x.abs().max(p.y.abs()) <= MAX_COORD
+}
+
 /// A two's complement operand byte.
 fn signed(b: u8) -> f64 {
     f64::from(i8::from_le_bytes([b]))
@@ -193,7 +198,7 @@ impl Pen<'_> {
 
     /// Move the pen by `d` font units (already scaled), drawing when the pen is down.
     fn to(&mut self, target: Point) -> Res {
-        if !target.is_finite() || target.x.abs().max(target.y.abs()) > MAX_COORD {
+        if !bounded(target) {
             return Err(Broken);
         }
         if self.down {
@@ -382,8 +387,12 @@ impl Pen<'_> {
                 }
                 let (pos, axes, down) = (self.pos, self.axes, self.down);
                 let cell = self.cell();
+                let at = pos + Point::new(x * axes.x, y * axes.y) * self.scale;
+                if !bounded(at) {
+                    return Err(Broken);
+                }
                 self.flush();
-                self.pos = pos + Point::new(x * axes.x, y * axes.y) * self.scale;
+                self.pos = at;
                 self.axes = Point::new(axes.x * w / cell.x, axes.y * h / cell.y);
                 let res = self.run(n, depth + 1);
                 self.flush();
@@ -439,6 +448,19 @@ mod tests {
         let bytes = crate::compile("*1,3,A\n7,1,0\n").unwrap();
         let font = crate::parse::parse(&bytes).unwrap();
         assert!(outline(&font, 1, false).is_err());
+    }
+    #[test]
+    fn a_far_extended_subshape_cell_is_cut_off() {
+        // Hostile: nested cells 255 units out put the pen 255^4 units away; a location pushed there
+        // and popped at the top became the advance.
+        let mut src = String::from("*BIGFONT 6,1,081,09F\n*0,5,far\n1,0,0,1,0\n");
+        for k in 1..=3 {
+            src.push_str(&format!("*08F0{k},10,L\n7,0,08F0{},255,0,255,255,0\n", k + 1));
+        }
+        src.push_str("*08F04,2,PUSH\n5,0\n*082A0,10,T\n7,0,08F01,255,0,255,255,6,0\n*082A1,10,NEAR\n7,0,08F04,255,0,255,255,6,0\n");
+        let font = crate::parse::parse(&crate::compile(&src).unwrap()).unwrap();
+        assert!(outline(&font, 0x82A0, false).is_err());
+        assert_eq!(outline(&font, 0x82A1, false).unwrap().advance, Point::new(255.0, 0.0));
     }
 }
 
