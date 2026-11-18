@@ -587,8 +587,9 @@ pub(crate) fn is_straight(c: &CubicBez, tol: f64) -> bool {
     to_chord(c, c.p1) <= tol && to_chord(c, c.p2) <= tol
 }
 
-/// Sample a cubic at `n+1` evenly spaced parameters (including both ends).
+/// Sample a cubic at `n+1` evenly spaced parameters (including both ends); no intervals are one, so the two ends.
 pub(crate) fn sample(c: &CubicBez, n: usize, out: &mut Vec<Point>, include_start: bool) {
+    let n = n.max(1);
     let start = if include_start { 0 } else { 1 };
     for i in start..=n {
         out.push(c.eval(i as f64 / n as f64));
@@ -748,6 +749,21 @@ mod tests {
         // A quadratic that goes out along a line and back (to 2 and from it, at the middle of its parameters) has the length it has.
         let back = PathSeg::Quad(kurbo::QuadBez::new((0.0, 0.0), (4.0, 0.0), (0.0, 0.0)));
         assert!(measured_arclen(&back, 1e-9).is_some_and(|l| (l - 4.0).abs() < 1e-6), "{:?}", measured_arclen(&back, 1e-9));
+    }
+
+    /// No intervals are one, and are no division of 0 by 0: the two ends of the cubic, or the last of them.
+    #[test]
+    fn a_sample_in_no_intervals_is_the_ends_and_not_a_point_that_is_not_a_number() {
+        let c = CubicBez::new((0.0, 0.0), (1.0, 2.0), (3.0, 2.0), (4.0, 0.0));
+        let (mut with, mut without) = (Vec::new(), Vec::new());
+        sample(&c, 0, &mut with, true);
+        sample(&c, 0, &mut without, false);
+        assert_eq!(with, [c.p0, c.p3]);
+        assert_eq!(without, [c.p3]);
+        // The intervals are as many as asked for.
+        let mut four = Vec::new();
+        sample(&c, 4, &mut four, true);
+        assert_eq!(four.len(), 5);
     }
 
     #[test]
