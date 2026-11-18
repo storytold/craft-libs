@@ -236,6 +236,7 @@ fn escape_and_a_press_outside_close_the_in_place_face_and_the_fallback_row_carri
     // With a match, the fallback row is the last one and a click on it hands the query back.
     *handed.borrow_mut() = None;
     open.set(true);
+    fixture.settle();
     fixture.type_text("flip").settle();
     let listed = rows(&fixture);
     assert_eq!(listed.len(), 2, "the match and the fallback row: {listed:?}");
