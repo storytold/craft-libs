@@ -401,6 +401,7 @@ pub fn complete_with(
     // A patch wider than the image has no place to be copied from, which is the `None` the search below
     // would reach anyway. Said here, before `2 * r + 1` and `r as i32` can overflow on an absurd radius.
     if r > (w.min(h) - 1) / 2 {
+        check()?;
         return Ok(None);
     }
     let psz = 2 * r + 1;

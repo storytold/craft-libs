@@ -57,6 +57,9 @@ mod tests {
             let p = CompleteParams { patch_radius, ..CompleteParams::default() };
             assert_eq!(complete(32, 32, 1, &[0.5; 32 * 32], &hole, &p), None, "radius {patch_radius}");
         }
+        // Cancelled is still cancelled, not "nothing to copy from".
+        let p = CompleteParams { patch_radius: 16, ..CompleteParams::default() };
+        assert_eq!(complete_with(32, 32, 1, &[0.5; 32 * 32], &hole, &p, &|| true), Err(Cancelled));
         // A radius the image has room for still fills.
         let p = CompleteParams { patch_radius: 5, ..CompleteParams::default() };
         assert!(complete(32, 32, 1, &[0.5; 32 * 32], &hole, &p).is_some());
