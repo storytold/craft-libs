@@ -697,7 +697,8 @@ def app_main(top, packages, command, rest):
     if command == "test":
         app_test(top, packages, rest)
     if command == "check":
-        app_package(name)
+        if name != "all":
+            app_package(name)
         run(top, ["check", "--lib", "--tests"] + app_selected() + args)
     if command == "build":
         # An example builds in the dev profile with the dev-dependencies' features, the units the test build resolved.
