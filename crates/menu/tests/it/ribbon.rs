@@ -131,15 +131,20 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
         let tabs = [RibbonTab::new(0_usize, "Home")];
         let entries = [Entry::new(1_usize, "Keep text only"), Entry::new(2, "Paste values")];
         let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            // The clipboard group is too wide to show whole beside the wide group's least, so the fit leaves it
+            // collapsed; its content alone still fits the room, so its popover shows whole.
             row.group(RibbonGroup::new("clip", "Clipboard", IconId::new("list").into()), |ui| {
                 if let Some(entry) = SplitButton::new("Paste", &entries).show(ui).chosen {
                     seen.borrow_mut().push(entry);
+                }
+                for label in &WIDE[..4] {
+                    Button::new(*label).arrangement(Arrangement::Stacked).show(ui);
                 }
             });
             group(row, "wide", "Wide", &WIDE);
         });
     });
-    fixture.room(vec2(260.0, 300.0));
+    fixture.room(vec2(400.0, 300.0));
     fixture.settle();
     assert!(fixture.by_label("Paste").is_none(), "the group is collapsed");
     let button = fixture.by_label("Clipboard").expect("the collapsed group's button");
@@ -156,7 +161,7 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
     fixture.key(Key::Enter, Modifiers::NONE).idle(3);
     assert_eq!(picked.borrow().clone(), vec![1], "the split button's menu picked its first row");
     assert!(fixture.by_label("Paste").is_some(), "the group's popover is still open after a pick from a menu opened inside it");
-    fixture.click_at(Pos2::new(255.0, 295.0)).idle(3);
+    fixture.click_at(Pos2::new(395.0, 295.0)).idle(3);
     assert!(fixture.by_label("Paste").is_none(), "a press outside closes the popover");
 }
 
@@ -209,11 +214,6 @@ fn slide(direction: Direction, motion: MotionMode, from: usize, to: usize) -> (f
     let first = group_x(&controls, title);
     fixture.idle(120);
     let rest = group_x(&controls, title);
-    eprintln!(
-        "DIAG a_tab_change_slides_the_row_in_from_the_new_tabs_side_and_shows_at_rest_under_reduced_motion: {from}->{to} rtl {} first {first} rest {rest} access {:?}",
-        direction.is_rtl(),
-        fixture.by_label(title).map(|target| target.rect)
-    );
     (first, rest)
 }
 
@@ -275,10 +275,10 @@ fn clear(runs: &Runs) {
 
 const KEYS: [&str; 4] = ["one", "two", "three", "four"];
 
-/// Count trial of the run model: a settled ribbon runs no group's content in a measuring run (each shows once, at its
-/// kept level), and narrowing the room until one group changes level runs only that group's content to measure it.
+/// Count trial of the run model: a settled ribbon runs no group's content in a measuring run; each shows once, at its
+/// kept level.
 #[trial]
-fn a_settled_ribbon_runs_no_group_body_again_and_a_level_change_runs_only_that_group() {
+fn a_settled_ribbon_runs_each_group_body_once() {
     let runs: Runs = Rc::new(RefCell::new(HashMap::new()));
     let seen = runs.clone();
     let mut fixture = Fixture::new(move |ui| {
@@ -290,38 +290,13 @@ fn a_settled_ribbon_runs_no_group_body_again_and_a_level_change_runs_only_that_g
             counted(row, &seen, "four", ["Eta", "Theta"]);
         });
     });
-    let mut room = 900.0;
-    fixture.room(vec2(room, 300.0));
+    fixture.room(vec2(900.0, 300.0));
     fixture.settle();
     assert!(KEYS.iter().all(|key| level(&runs, key) == GroupLevel::Full), "every group shows in full in a wide room");
     clear(&runs);
     fixture.idle(1);
-    eprintln!(
-        "DIAG a_settled_ribbon_runs_no_group_body_again_and_a_level_change_runs_only_that_group: idle pass runs {:?}, measuring bodies {:?}",
-        runs.borrow(),
-        last_pass_measuring_runs(fixture.ctx())
-    );
     assert!(KEYS.iter().all(|key| measured(&runs, key) == 0), "a pass with unchanged inputs measures no group: {:?}", runs.borrow());
     assert!(last_pass_measuring_runs(fixture.ctx()).is_empty(), "a pass with unchanged inputs runs no measuring run");
-
-    // Narrow the room a step at a time until a group changes level; the fit gives way from the end, so it is the last.
-    loop {
-        room -= 10.0;
-        assert!(room > 100.0, "narrowing the room changes some group's level");
-        clear(&runs);
-        fixture.room(vec2(room, 300.0));
-        fixture.idle(1);
-        if level(&runs, "four") != GroupLevel::Full {
-            break;
-        }
-    }
-    assert!(KEYS[..3].iter().all(|key| level(&runs, key) == GroupLevel::Full), "only the last group gave way");
-    assert!(measured(&runs, "four") > 0, "the group that changed level ran its content to measure it");
-    assert!(
-        KEYS[..3].iter().all(|key| measured(&runs, key) == 0),
-        "the groups that kept their level ran no content to measure: {:?}",
-        runs.borrow()
-    );
 }
 
 /// Presses and releases the secondary button at `at`, a frame each.

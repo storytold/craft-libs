@@ -613,9 +613,6 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         } else {
             vec![0; levelled.len()]
         };
-        if !levelled.is_empty() {
-            eprintln!("DIAG groups_with_the_same_title_keep_their_own_level: row {id:?} room {room} fixed {fixed} level widths {level_widths:?} levels {levels:?}");
-        }
         let width_at = |leaf: &Reported, level: usize| leaf.levels.get(level).copied().unwrap_or_default();
         let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(*leaf, *level)).sum();
         let widths = if room.is_finite() {
