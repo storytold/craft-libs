@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 # rPGP: the OpenPGP packets and the cryptography (MIT OR Apache-2.0). Pinned: every size cap in
 # this crate was written against this version's parser.
-pgp = { version = "=0.21.0", default-features = false }
+pgp = { version = "=0.21.1", default-features = false }
 thiserror = { workspace = true }
 # rPGP's generation of RustCrypto digests (MIT OR Apache-2.0).
 sha2 = { version = "0.10", default-features = false }
@@ -27,6 +27,6 @@ pgp = { version = "=0.21.0", default-features = false, features = ["wasm"] }
 proptest = { workspace = true }
 # Keys and signatures made in the tests, from a seed: the random numbers rPGP 0.21 takes.
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-sha1 = { version = "0.10", default-features = false }
+sha1 = { version = "0.11", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
 rsa = { version = "0.9", default-features = false }
