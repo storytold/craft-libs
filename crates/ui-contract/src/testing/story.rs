@@ -574,18 +574,17 @@ where
     only_item(ui, row, None)
 }
 
-/// Shows `row` as the only item of a collection at `rect`, as a collection shows its rows across its columns: a row
-/// with column cells spans the cells it is given, where in the flow it would take its own width.
-pub fn show_as_only_item_at<C>(ui: &mut Ui, row: C, rect: egui::Rect) -> C::Output
+/// Shows `row` as the only item of a collection across `span`, as a collection shows its rows across its columns: a
+/// row with column cells spans the cells it is given, where in the flow it would take its own width. The row is as
+/// high as it measures at the span's width, as a collection measures it.
+pub fn show_as_only_item_across<C>(ui: &mut Ui, row: C, span: egui::Rangef) -> C::Output
 where
     C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
 {
-    let shown = only_item(ui, row, Some(rect));
-    ui.advance_cursor_after_rect(rect);
-    shown
+    only_item(ui, row, Some(span))
 }
 
-fn only_item<C>(ui: &mut Ui, row: C, rect: Option<egui::Rect>) -> C::Output
+fn only_item<C>(ui: &mut Ui, row: C, span: Option<egui::Rangef>) -> C::Output
 where
     C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
 {
@@ -605,9 +604,16 @@ where
         ui,
         crate::runtime::env::Env::of(ui).derive_local(|scoped| scoped.item_facts = Some(std::sync::Arc::new(facts))),
     );
-    let row = row.id(id);
-    let shown = match rect {
-        Some(rect) => row.show_at(ui, rect),
+    let mut row = row.id(id);
+    let shown = match span {
+        Some(span) => {
+            let height = row.measure_in(ui, craft_behavior::Proposal::Width(span.span())).y;
+            let top = ui.cursor().min.y;
+            let rect = egui::Rect::from_x_y_ranges(span, top..=top + height);
+            let shown = row.show_at(ui, rect);
+            ui.advance_cursor_after_rect(rect);
+            shown
+        }
         None => row.show(ui),
     };
     crate::runtime::env::Env::restore(ui.ctx(), installed);

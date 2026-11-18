@@ -105,23 +105,24 @@ fn show(
 }
 
 /// The window losing focus while a value is typed keeps the draft and commits nothing; back in the window, typing
-/// goes on from the draft.
+/// goes on from the draft. The draft is a sum, which applies only on commit (a plain number applies as typed), so
+/// the value tells whether the blur committed it.
 #[trial]
 fn a_window_blur_mid_typing_keeps_the_typed_draft() {
     let mut rig = Rig::new(5.0, None);
     rig.focus();
     rig.key(Key::A, Modifiers::COMMAND);
-    rig.frame(vec![Event::Text("1".into())]);
+    rig.frame(vec![Event::Text("1+1".into())]);
     rig.idle(1);
     rig.frame(vec![Event::WindowFocused(false)]);
     rig.idle(2);
     assert_eq!(rig.value(), Some(5.0), "the blur commits nothing");
-    assert!(rig.frames.texts().iter().any(|text| text.text == "1"), "the field still shows the typed draft");
+    assert!(rig.frames.texts().iter().any(|text| text.text == "1+1"), "the field still shows the typed draft");
     rig.frame(vec![Event::WindowFocused(true)]);
     rig.idle(1);
-    rig.frame(vec![Event::Text("2".into())]);
+    rig.frame(vec![Event::Text("0".into())]);
     rig.key(Key::Enter, Modifiers::NONE);
-    assert_eq!(rig.value(), Some(12.0), "typing went on from the draft");
+    assert_eq!(rig.value(), Some(11.0), "typing went on from the draft");
 }
 
 /// An arrow goes to the next multiple of the step in its direction, Shift moves ten steps, and the range holds.
