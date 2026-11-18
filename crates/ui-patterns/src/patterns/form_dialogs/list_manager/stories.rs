@@ -8,6 +8,7 @@ use crate::layout_components::Stack;
 use crate::runtime::env::Env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
+use std::cell::Cell;
 
 fn entries() -> Vec<ListManagerEntry> {
     vec![
@@ -29,6 +30,35 @@ fn list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .opened(Bind::bound(data.value("open", true)))
         .show(ui)
         .into()
+}
+
+/// A list manager whose name box the caller owns: the story keeps the name, and a button under the list sets it on
+/// the next pass, as a script sets the Macros dialog's name. The dialog opens from its button.
+#[story(ListManager<'static>, covers = [], drive = Drive::Never)]
+fn list_manager_name_box(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<ListManagerWords>();
+    let mut name = data.value("name", String::new()).clone();
+    let mut open = *data.value("open", false);
+    if clicked(&Button::new("Macros…").show(ui)) {
+        open = true;
+    }
+    let first = Cell::new(false);
+    let actions = vec![ListManagerAction::run(&words), ListManagerAction::create(&words)];
+    let shown = ListManager::new("Macros", "Macro name:", entries(), actions)
+        .name_box(Bind::bound(&mut name))
+        .under_list(|ui| {
+            if clicked(&Button::new("Name the first macro").show(ui)) {
+                first.set(true);
+            }
+        })
+        .opened(Bind::bound(&mut open))
+        .show(ui);
+    if first.get() {
+        name = "Align Layers".to_owned();
+    }
+    *data.value("name", String::new()) = name;
+    *data.value("open", false) = open;
+    shown.into()
 }
 
 /// A bookmark name is valid while it is not empty and fits the name box.

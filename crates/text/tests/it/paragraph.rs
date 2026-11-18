@@ -1,4 +1,5 @@
-//! The Word Paragraph dialog's pages: a check box whose paragraphs differ stays mixed across page switches until clicked.
+//! The Word Paragraph dialog's pages: a check box whose paragraphs differ stays mixed across page switches until clicked;
+//! the contextual spacing box.
 
 use craft_behavior::Mixed;
 use craft_text::ui::character::{AsianTypography, LineBreakOptions, ParagraphDialog, ParagraphFormat, ParagraphTab};
@@ -43,4 +44,28 @@ fn word_paragraph_tabs_leave_mixed_boxes_unset_until_clicked() {
     assert_eq!(breaks.keep_with_next, Some(true));
     assert_eq!(breaks.widow_control, None, "a box left alone stays unset");
     assert_eq!(answer.format.asian.expect("the page is answered").kinsoku, None);
+}
+
+/// "Don't add space between paragraphs of the same style" under the spacing rows: shown mixed for paragraphs that
+/// differ, a click turns it on, and the answer carries it.
+#[trial]
+fn a_mixed_contextual_spacing_box_clicked_is_on_in_the_answer() {
+    const LABEL: &str = "Don't add space between paragraphs of the same style";
+    let mut format = ParagraphFormat::default();
+    format.contextual_spacing = Some(None);
+    let dialog = Rc::new(RefCell::new(ParagraphDialog::new(format).word(true).held_ok()));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(30);
+    assert!(matches!(toggled(&fixture, LABEL), Some(Mixed::Mixed)), "paragraphs that differ show the box mixed");
+    let boxed = fixture.by_label(LABEL).expect("the box is shown");
+    fixture.click(&boxed).idle(4);
+    assert!(matches!(toggled(&fixture, LABEL), Some(Mixed::Same(true))), "a click turns the mixed box on");
+
+    let ok = fixture.by_label("OK").expect("OK is shown");
+    fixture.click(&ok).idle(4);
+    let answer = dialog.borrow_mut().take_ok().expect("OK filed its answer");
+    assert_eq!(answer.format.contextual_spacing, Some(Some(true)), "the answer carries the box");
 }

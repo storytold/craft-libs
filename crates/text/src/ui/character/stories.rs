@@ -146,6 +146,13 @@ fn indents_and_spacing(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     StoryOutput::default()
 }
 
+/// Paragraphs that differ in "Don't add space between paragraphs of the same style": the box under the spacing rows is
+/// mixed.
+#[story(ParagraphDialog, covers = [], drive = Drive::Never)]
+fn contextual_spacing_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || ParagraphDialog::new(ParagraphFormat { contextual_spacing: Some(None), ..indented() }).word(true))
+}
+
 #[story(ParagraphDialog, covers = [], drive = Drive::Never)]
 fn line_and_page_breaks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     hosted(ui, data, (), || ParagraphDialog::new(indented()).word(true).tab(ParagraphTab::LineAndPageBreaks))

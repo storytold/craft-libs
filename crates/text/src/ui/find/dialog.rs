@@ -271,11 +271,29 @@ impl FindReplaceDialog {
         self
     }
 
-    /// Sets the starting options for Match case, Whole words and the rest.
+    /// Sets the starting options for Match case, Whole words and the rest. An option that only Search Options shows
+    /// (Match prefix, Match suffix, Ignore punctuation, Ignore white-space, Regular expressions) opens Search Options,
+    /// so an option that is on is never hidden.
     #[must_use]
     pub fn options(mut self, options: FindOptions) -> Self {
         self.options = options;
+        self.more |= options.prefix || options.suffix || options.ignore_punctuation || options.ignore_space || options.regex;
         self
+    }
+
+    /// Shows `tab` in the open dialog, and puts `query` in Find what when given (Find or Replace asked again with a
+    /// selection). Replace with, the options, Search Options and the Go To target stay as they are.
+    pub fn show_tab(&mut self, tab: FindTab, query: Option<String>) {
+        self.tab = tab;
+        if let Some(query) = query {
+            self.query = query;
+        }
+    }
+
+    /// Replaces Go To's kinds in the open dialog (the document's bookmarks changed, say); the chosen kind and target
+    /// stay.
+    pub fn set_go_to_kinds(&mut self, kinds: Vec<GoToKind>) {
+        self.go_to_kinds = kinds;
     }
 
     /// Go To's kinds (Page, Section, Line, Bookmark, Comment, …), the app's.

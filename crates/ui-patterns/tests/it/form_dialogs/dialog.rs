@@ -6,10 +6,11 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::choice::Checkbox;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::testing::relations::{above, left_of};
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -280,6 +281,80 @@ fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     assert_eq!(held.borrow().state(), None, "the held state is idle again");
     let ok = fixture.by_label("OK").expect("the dialog is still open");
     assert!(!fixture.tree().is_disabled_key(ok.node), "OK is enabled again");
+}
+
+// The body's activation is the OK press: under `held`, a double click on a cell that calls `FormCx::accept` files the
+// values once, in a frame that runs twice too, and the dialog stays open waiting with OK disabled.
+#[trial]
+fn a_body_accept_files_a_held_ok_once_and_waits() {
+    let (held, twice, filed, closed) =
+        (Rc::new(RefCell::new(HeldAnswer::<String>::new())), Rc::new(Cell::new(false)), Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(false)));
+    let (state, again, files, ended) = (Rc::clone(&held), Rc::clone(&twice), Rc::clone(&filed), Rc::clone(&closed));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = state.borrow_mut();
+        let shown = FormDialog::own("Insert Symbol").held(&mut held).show(ui, |ui, cx, value: &mut String| {
+            let cell = Button::new("Sun").show(ui);
+            if clicked(&cell) {
+                *value = "Sun".to_owned();
+            }
+            if cell.clicks == 2 {
+                cx.accept();
+            }
+            !value.is_empty()
+        });
+        if let Some(values) = held.take() {
+            files.borrow_mut().push(values);
+        }
+        if shown.closed.is_some() {
+            ended.set(true);
+        }
+        if again.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the frame runs twice");
+        }
+    });
+    fixture.idle(10);
+    let cell = fixture.by_label("Sun").expect("the body's cell");
+    fixture.click(&cell);
+    assert!(filed.borrow().is_empty(), "a single click files nothing");
+    twice.set(true);
+    fixture.click(&cell);
+    assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+    twice.set(false);
+    fixture.idle(4);
+    assert_eq!(*filed.borrow(), ["Sun"], "the double click files the values once");
+    assert!(held.borrow().is_waiting(), "the filed values wait for the app's answer");
+    assert!(!closed.get(), "a held accept keeps the dialog open");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK waits disabled for the answer");
+}
+
+// A form without OK shows none, and Enter picks its one Accept-role extra, which keeps its index after Close.
+#[trial]
+fn a_form_without_ok_shows_none_and_enter_picks_its_accept_extra() {
+    let (picked, closed) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(false)));
+    let (picks, ended) = (Rc::clone(&picked), Rc::clone(&closed));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = FormDialog::own("Mark Entry")
+            .buttons(FormButtons::Close)
+            .extra_buttons([FooterButton::new("Mark All", DialogRole::Other), FooterButton::new("Mark", DialogRole::Accept)])
+            .show(ui, |ui, _, value: &mut bool| {
+                Checkbox::new(Bind::bound(value)).label("Bold").show(ui);
+                true
+            });
+        picks.borrow_mut().extend(shown.picked);
+        if shown.closed.is_some() {
+            ended.set(true);
+        }
+    });
+    fixture.idle(10);
+    assert!(fixture.by_label("OK").is_none(), "a form without OK shows none");
+    assert!(fixture.by_label("Close").is_some(), "its one closing button is Close");
+    // Focus on the check box, so Enter goes to the footer's default button rather than a focused one.
+    let bold = fixture.by_label("Bold").expect("the body's check box");
+    fixture.click(&bold).idle(2);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert_eq!(*picked.borrow(), [3], "Enter picks Mark, the second extra");
+    assert!(!closed.get(), "the extra keeps the dialog open");
 }
 
 // A dialog the app opens again under the same key, in the pass it takes the first one's Cancel, shows and answers.

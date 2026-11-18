@@ -1,10 +1,12 @@
 //! `ListManager`'s action rules: a name check, a button that never enables, the Cancel label and the section under
-//! the list.
+//! the list; a name box the caller binds.
 
 use craft_ui::patterns::form_dialogs::{ActionEnabled, ListManager, ListManagerAction, ListManagerEntry};
 use craft_ui::display::Text;
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::{Fixture, trial};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// A name is valid while it is not empty and holds no digit.
 fn plain_name(name: &str) -> bool {
@@ -67,4 +69,30 @@ fn a_valid_name_action_follows_the_name_check_and_a_never_action_stays_off() {
 
     assert!(fixture.by_label("Close").is_some(), "cancel_label names the second button");
     assert!(fixture.by_label("Cancel").is_none(), "Cancel is replaced");
+}
+
+// A bound name box is the caller's string both ways: a caller write shows in the box on the next pass and the buttons
+// follow it, and what the user types lands in the caller's string.
+#[trial]
+fn a_bound_name_box_shows_the_callers_writes_and_takes_the_typed_name() {
+    let name = Rc::new(RefCell::new(String::new()));
+    let held = Rc::clone(&name);
+    let mut fixture = Fixture::new(move |ui| {
+        let actions = vec![ListManagerAction::new("add", "Add", ActionEnabled::OnNewName).keeps_open()];
+        let entries = vec![ListManagerEntry::new("a", "Alpha")];
+        let mut name = held.borrow_mut();
+        let _ = ListManager::new("Marks", "Name:", entries, actions).name_box(Bind::bound(&mut *name)).show(ui);
+    });
+    fixture.idle(10);
+    *name.borrow_mut() = "Gamma".to_owned();
+    fixture.idle(4);
+    let field = fixture.by_label("Name:").expect("the name box");
+    assert_eq!(fixture.tree().value_of(field.node), Some("Gamma"), "the caller's write shows in the box");
+    assert!(enabled(&fixture, "Add"), "the buttons follow the caller's name");
+
+    fixture.click(&field).idle(2);
+    fixture.key(egui::Key::A, egui::Modifiers::COMMAND).idle(2);
+    fixture.type_text("Alpha").idle(4);
+    assert_eq!(*name.borrow(), "Alpha", "the typed name is in the caller's string");
+    assert!(!enabled(&fixture, "Add"), "an existing name disables Add");
 }

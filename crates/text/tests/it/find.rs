@@ -1,5 +1,6 @@
-//! Go To in Find and Replace: the requests the app glue answers.
+//! Go To in Find and Replace: the requests the app glue answers; the dialog asked for again while open.
 
+use craft_text::find::FindOptions;
 use craft_text::ui::find::{FindReplaceDialog, FindRequest, FindTab, GoToKind};
 use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::runtime::access::Role;
@@ -60,4 +61,37 @@ fn go_to_steps_on_an_empty_page_and_names_a_bookmark() {
     let go = button(&fixture, "Go To").expect("Go To is shown");
     fixture.click(&go).idle(4);
     assert_eq!(dialog.borrow_mut().take_request(), None, "Go To is disabled without names");
+}
+
+// Find and Replace asked for again while open: `show_tab` switches the tab and puts a given Find what in, keeping
+// Replace with, the options and Search Options; `set_go_to_kinds` replaces the open dialog's kinds. An option only
+// Search Options shows opens it from the start.
+#[trial]
+fn a_reopened_find_switches_its_tab_and_keeps_what_the_user_set() {
+    let options = FindOptions { regex: true, ..FindOptions::default() };
+    let dialog = Rc::new(RefCell::new(FindReplaceDialog::new("cat", FindTab::Replace).word(true).options(options)));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(30);
+    assert!(fixture.by_label("Regular expressions").is_some(), "an option only Search Options shows opens Search Options");
+    let with = fixture.by_role(Role::TEXT_INPUT).get(1).copied().expect("the Replace with field");
+    fixture.click(&with).type_text("dog").idle(4);
+
+    dialog.borrow_mut().show_tab(FindTab::Find, Some("bird".to_owned()));
+    fixture.idle(4);
+    let fields = dialog.borrow().json_fields().expect("the dialog's fields");
+    assert_eq!(fields["tab"], "find", "the tab switches");
+    assert_eq!(fields["query"], "bird", "a given query replaces Find what");
+    assert_eq!(fields["with"], "dog", "Replace with stays");
+    assert_eq!(fields["regex"], true, "the options stay");
+    assert_eq!(fields["more"], true, "Search Options stays open");
+
+    dialog.borrow_mut().show_tab(FindTab::GoTo, None);
+    dialog.borrow_mut().set_go_to_kinds(vec![GoToKind::named("Bookmark", vec!["Intro".to_owned()], "No bookmarks")]);
+    fixture.idle(10);
+    let fields = dialog.borrow().json_fields().expect("the dialog's fields");
+    assert_eq!(fields["query"], "bird", "without a query Find what stays");
+    assert_eq!(fields["goToTarget"], "Intro", "the new kinds show: the target names the new bookmark");
 }
