@@ -307,6 +307,49 @@ fn a_link_granted_after_the_sheet_moved_on_is_not_copied() {
     assert!(copied(&ctx).is_empty(), "nor after the sheet closed");
 }
 
+fn destinations_asked(backend: &Silent) -> usize {
+    backend.seen().iter().filter(|r| **r == Request::Destinations).count()
+}
+
+fn last_link(dialog: &ShareDialog) -> u64 {
+    dialog.open.as_ref().and_then(|s| s.linking.last().copied()).expect("asked")
+}
+
+#[test]
+fn an_account_linked_for_a_sheet_that_moved_on_asks_for_nothing() {
+    let (ctx, mut dialog, _) = ready();
+    dialog.apply(&ctx, vec![Act::Link("drive".into())]);
+    let first = last_link(&dialog);
+    // A second destination is clicked before the first one answers.
+    dialog.apply(&ctx, vec![Act::Link("mail".into())]);
+    let second = last_link(&dialog);
+    dialog.receive(&ctx, first, Ok(Answer::Linked));
+    let sheet = dialog.open.as_ref().expect("open");
+    assert!(sheet.destinations_seq.is_some(), "the sheet that asked fetches its destinations again");
+    assert_eq!(sheet.linking, [second], "the later link is still in flight");
+    dialog.receive(&ctx, second, Err("no account".into()));
+    let sheet = dialog.open.as_ref().expect("open");
+    assert!(sheet.linking.is_empty());
+    assert_eq!(sheet.save_error.as_deref(), Some("no account"));
+
+    let (ctx, mut dialog, backend) = ready();
+    dialog.apply(&ctx, vec![Act::Link("drive".into())]);
+    let linking = last_link(&dialog);
+    dialog.close();
+    dialog.open("files/plan.docx", "Plan");
+    let before = destinations_asked(&backend);
+    dialog.receive(&ctx, linking, Ok(Answer::Linked));
+    assert_eq!(destinations_asked(&backend), before, "the budget's link answer must not ask anything for the plan");
+
+    let (ctx, mut dialog, backend) = ready();
+    dialog.apply(&ctx, vec![Act::Link("drive".into())]);
+    let linking = last_link(&dialog);
+    dialog.signed_out();
+    let before = destinations_asked(&backend);
+    dialog.receive(&ctx, linking, Ok(Answer::Linked));
+    assert_eq!(destinations_asked(&backend), before, "nothing is asked for an account that signed out");
+}
+
 /// Whether one frame of the sheet offers "Get a link" as a button that can
 /// be pressed, read off the accessibility tree.
 fn link_button_enabled(dialog: &mut ShareDialog) -> Option<bool> {
