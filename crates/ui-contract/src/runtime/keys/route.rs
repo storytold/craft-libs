@@ -97,7 +97,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     }
     let focused = target.as_ref().map(|rec| rec.stop.id);
     let root = target.as_ref().filter(|rec| rec.stop.root != rec.stop.id && !rec.stop.text).map(|rec| rec.stop.root);
-    let menu = focus::record(ctx, crate::runtime::egui::pass::current_viewport(ctx)).menu;
+    let record = focus::record(ctx, crate::runtime::egui::pass::current_viewport(ctx));
+    let (menu, menu_bar) = (record.menu, record.menu_bar);
     // The web sends a chord's key press and its clipboard event: the command reaches the component once.
     let mut clips = batch.clips.clone();
     clips.dedup();
@@ -129,10 +130,10 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             Some(intent) => push(&mut routed, driven.map(|driven| driven.list), intent, false),
             None => {
                 // A capture's owner, else the claim's: the focused component's own, then its arena root's, then its
-                // menu level's.
+                // menu level's, then the registered menu bar's (keytips hold their letters with no focus).
                 let held = |owner: Option<Id>| held_claims.iter().find(|(id, held)| Some(*id) == owner && held == chord).map(|(id, _)| *id);
                 let owner = captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner);
-                claimed.extend(owner.or_else(|| held(focused)).or_else(|| held(root)).or_else(|| held(menu)).or(focused).map(|id| (id, *chord)));
+                claimed.extend(owner.or_else(|| held(focused)).or_else(|| held(root)).or_else(|| held(menu)).or_else(|| held(menu_bar)).or(focused).map(|id| (id, *chord)));
             }
         }
     }
