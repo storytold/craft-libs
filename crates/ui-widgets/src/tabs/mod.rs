@@ -15,5 +15,5 @@ mod document;
 mod strip;
 
 pub use document::{DocumentTab, DocumentTabs, DocumentTabsEvent, DocumentTabsOutput};
-pub use strip::{StripEnd, StripLayout, TabStrip, TabStripOutput, TabStripStyle, TornOff};
+pub use strip::{StripEnd, StripLayout, TabRoles, TabStrip, TabStripOutput, TabStripStyle, TornOff};
 pub use words::StripWords;

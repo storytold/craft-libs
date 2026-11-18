@@ -48,7 +48,7 @@ craft_ui::words! {
 
 /// What the picker keeps across opens and runs (`Remembered` under the scope `colorPicker.memory`): the component the
 /// field shows and Only Web Colors, as Photoshop. Stored when the dialog closes with OK.
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ColorPickerMemory {
@@ -56,6 +56,10 @@ pub struct ColorPickerMemory {
     pub mode: AreaMode,
     /// Only Web Colors: snap to the 216 web-safe colours.
     pub web_colors: bool,
+    /// The tab a tabbed dialog showed last.
+    pub tab: ColorPickerTab,
+    /// The id of the model the Custom tab's model switch showed last; `None` while no switch shows.
+    pub model: Option<String>,
 }
 
 /// The remembered scope of [`ColorPickerMemory`].

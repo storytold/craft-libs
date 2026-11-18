@@ -6,9 +6,19 @@ use super::collection::{CollectionEvent, ColumnLayout, LeadSource, ShownRow};
 use super::{Collection, ItemFn};
 use crate::runtime::egui::areas;
 use craft_behavior::{Axis, GestureId, ItemSource, ScrollPos, TypeAhead};
-use egui::{Pos2, Rect, Vec2};
+use egui::{Pos2, Rect, Ui, Vec2};
 use std::ops::Range;
 use std::sync::Arc;
+
+/// Shows `item` in `rect` as the item at `at` of a set, with the item facts a collection installs: the one path the
+/// item step, `show_as_only_item` and the comment balloons place an item through.
+pub fn show_item<C>(ui: &mut Ui, rect: Rect, item: C, at: crate::runtime::access::SetPosition) -> C::Output
+where
+    C: super::Component + super::Props + super::Show,
+{
+    let _ = (ui, rect, item, at);
+    todo!("cv.K39")
+}
 
 mod drag;
 mod edge;

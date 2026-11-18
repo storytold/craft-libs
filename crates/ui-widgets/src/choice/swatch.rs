@@ -79,6 +79,17 @@ impl SwatchStyle {
     }
 }
 
+/// The shape of a swatch's well.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SwatchShape {
+    /// A square well.
+    #[default]
+    Square,
+    /// A hexagon well, for a honeycomb of touching cells.
+    Hexagon,
+}
+
 /// What a swatch reports.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -143,6 +154,9 @@ pub struct Swatch<T: Value + 'static = ()> {
     /// A thin edge in the text colour just inside the outline.
     #[prop(flag)]
     marked: bool,
+    /// The shape of the well.
+    #[prop]
+    shape: SwatchShape,
     /// The key of the `ColorRequest` a click files.
     #[prop(into)]
     picker: Option<String>,
@@ -160,6 +174,7 @@ impl Swatch<()> {
             cell: false,
             well: false,
             marked: false,
+            shape: SwatchShape::default(),
             picker: None,
             checked: false,
             activation: None,
@@ -178,6 +193,7 @@ impl<T: Value + 'static> Swatch<T> {
             cell: self.cell,
             well: self.well,
             marked: self.marked,
+            shape: self.shape,
             picker: self.picker,
             checked: false,
             activation: None,

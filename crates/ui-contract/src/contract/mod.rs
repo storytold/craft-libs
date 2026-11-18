@@ -80,6 +80,7 @@ pub use hosted::{Hosted, HostedKey, Hosting};
 pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;
+pub use items::show_item;
 pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_rename, section_part};
 #[doc(hidden)]
 pub use label::colon_of;
@@ -537,6 +538,9 @@ pub trait Container: Component + HasProps + Meta<Shape = shape::Body> {
     /// Fills the footer region.
     fn footer(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
+    /// Fills the region under the body and above the footer, whatever the footer's place.
+    fn body_end(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
     /// Fills the end region, after the body.
     fn end(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
@@ -651,11 +655,15 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
-    /// Hosts a component in the header cell of `column`, in `rect`, and returns whether it did: the header then paints
-    /// no label for that column.
-    fn header_cell(&mut self, _ui: &mut Ui, _column: &ColumnKey, _rect: Rect) -> bool {
+    /// Whether the collection hosts a component in the header cell of `column`: the header then calls `header_cell`
+    /// for it and paints no label.
+    fn hosts_header(&self, _column: &ColumnKey) -> bool {
         false
     }
+
+    /// Hosts a component in the header cell of `column`, in `rect`. Called only for a column `hosts_header` answers
+    /// `true` for.
+    fn header_cell(&mut self, _ui: &mut Ui, _column: &ColumnKey, _rect: Rect) {}
 
     /// The text the rename field of the item `key` opens with; `None` for the item's own text.
     fn rename_draft(&self, _key: &Self::Key) -> Option<String> {

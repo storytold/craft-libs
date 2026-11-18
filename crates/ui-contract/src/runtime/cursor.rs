@@ -47,6 +47,13 @@ pub(crate) struct State {
     image: Option<(Box<dyn Any + Send + Sync>, f32, CursorBitmap)>,
 }
 
+/// The window image of the painted pointer `cursor` at `scale` device pixels per point, rasterised from the art the
+/// ghost paints; `None` when the art does not fit a cursor image.
+pub fn painted_image(env: &crate::runtime::env::Env, cursor: &PaintedCursor, scale: f32) -> Option<CursorBitmap> {
+    let _ = (env, cursor, scale);
+    todo!("cv.K29")
+}
+
 /// Requests `cursor` for the running pass of this viewport.
 #[doc(hidden)]
 pub fn request(ctx: &Context, cursor: Cursor, priority: CursorPriority) {

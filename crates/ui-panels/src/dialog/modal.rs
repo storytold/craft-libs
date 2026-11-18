@@ -184,10 +184,11 @@ impl<'a> Dialog<'a> {
         self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::corner_at(at, corner))))
     }
 
-    /// Shows `reason` as an inline bad-tone notice at the body's end, above the footer: the one display of a held
-    /// answer's refusal. `None` shows none.
+    /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
+    /// display of a held answer's refusal. The closure is called once in that hook, after the body ran; `None` shows no
+    /// notice.
     #[must_use]
-    pub fn refusal(self, reason: Option<&Label>) -> Self {
+    pub fn refusal(self, reason: impl FnOnce() -> Option<Label> + 'a) -> Self {
         let _ = reason;
         todo!("dg.F1")
     }

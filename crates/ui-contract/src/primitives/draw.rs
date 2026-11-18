@@ -331,6 +331,11 @@ impl<'a> Draw<'a> {
         run.layout(self.painter.ctx(), &self.text_env(), max_width)
     }
 
+    /// Records that the face dropped its label, so the component's tooltip text does not count it.
+    pub fn drop_label(&self) {
+        todo!("rb.R6")
+    }
+
     /// Paints a laid-out run at `pos`. Records the first baseline and, when the layout cut text, the full text, as
     /// `text` does.
     pub fn galley(&self, pos: Pos2, layout: &TextLayout) {

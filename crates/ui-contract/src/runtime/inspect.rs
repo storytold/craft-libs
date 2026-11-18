@@ -163,9 +163,11 @@ pub struct HitArea {
 }
 
 /// What an inspected region showed in a pass.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Recorded {
+    /// The region's layer, which the rects of its elements and hit areas are in.
+    pub layer: egui::LayerId,
     /// The elements in tree order: a component before what it shows, its parts right after it.
     pub elements: Vec<Element>,
     /// The hit areas, in the tree order of their components, a component's from the top start.
@@ -178,6 +180,12 @@ impl Recorded {
         let element = self.elements.get(index)?;
         let hit = self.hits.iter().find(|hit| hit.owner == element.id && hit.part == element.part);
         Some(hit.map_or(element.rect, |hit| hit.rect))
+    }
+
+    /// The stop rect of the element at `index` (as [`Recorded::stop_rect`]) mapped into the layer `target`.
+    pub fn rect_in(&self, ctx: &Context, index: usize, target: egui::LayerId) -> Option<Rect> {
+        let _ = (ctx, index, target);
+        todo!("rb.R17")
     }
 }
 
@@ -339,7 +347,7 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
         };
         elements[index].stop = Some(at + 1);
     }
-    Recorded { elements, hits }
+    Recorded { layer: open.layer, elements, hits }
 }
 
 /// Names each node without a name of its own by the nodes of the region that label it, as a screen reader reads it.

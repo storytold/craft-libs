@@ -19,6 +19,7 @@ pub use registry::{SetEntry, sets};
 pub use board::declare_child;
 #[doc(hidden)]
 pub use board::focus_within;
+pub use board::keymap;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use board::keymap_builds;

@@ -101,9 +101,10 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
             Box::pin(async move {
                 // P3(platform-w4): pf.C-F4
                 match crate::portal::save_as(request, &crate::portal::Cancel::default()) {
-                    Ok(Some(path)) => Answer::Paths(vec![path]),
-                    Ok(None) => Answer::Cancelled,
-                    Err(e) => {
+                    crate::portal::SaveOutcome::Saved(path) => Answer::Paths(vec![path]),
+                    crate::portal::SaveOutcome::Cancelled => Answer::Cancelled,
+                    crate::portal::SaveOutcome::Unavailable(why) => Answer::Unavailable(why),
+                    crate::portal::SaveOutcome::UseRfd(e) => {
                         log::info!("portal save dialog unavailable ({e}), using rfd");
                         one(dialog.save_file().await)
                     }

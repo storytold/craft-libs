@@ -18,6 +18,8 @@ pub enum Anchor {
     /// A corner or edge of a rect in the opener's layer space, inset by the panel padding and kept inside the safe
     /// rect: the body a toast stack sits in.
     Corner(Rect, Align2),
+    /// The placed panel rect of the parent layer the overlay opened from.
+    Parent,
 }
 
 /// Where a floating layer sits.

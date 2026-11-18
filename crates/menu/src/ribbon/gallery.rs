@@ -1,7 +1,6 @@
 //! `Gallery`: an in-ribbon gallery with stepping and a More button.
 
 use std::marker::PhantomData;
-use std::num::NonZeroU8;
 
 use craft_keymap::CommandRef;
 use craft_ui::contract::ContextMenuRequest;
@@ -25,8 +24,8 @@ impl<'a, K> Gallery<'a, K> {
         todo!("rb.R13")
     }
 
-    /// How many tiles show at the full and the compact level.
-    pub fn tiles(self, full: NonZeroU8, compact: NonZeroU8) -> Self {
+    /// How many tiles show at the full and the compact level, each at least 1.
+    pub fn tiles(self, full: u8, compact: u8) -> Self {
         let _ = (self, full, compact);
         todo!("rb.R13")
     }

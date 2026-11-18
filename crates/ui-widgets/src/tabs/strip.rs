@@ -14,7 +14,7 @@ pub use end::StripEnd;
 
 use super::rules::{FitMode, OverflowMenu, OverflowPlace, TabKind};
 use super::words::StripWords;
-use super::{Tab, TabPartEvent};
+use super::{Tab, TabPartEvent, TabRole};
 use crate::buttons::IconButton;
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, ContextMenuRequest,
@@ -254,6 +254,23 @@ impl<K: Send + Sync + 'static> WindowDropTarget<ListDrag<K>> for TearOff {
     }
 }
 
+/// The role of the tab of a key: `TabStrip::roles`.
+pub struct TabRoles<'a, K>(Box<dyn Fn(&K) -> TabRole + 'a>);
+
+impl<'a, K> TabRoles<'a, K> {
+    /// The roles `roles` gives.
+    pub fn new(roles: impl Fn(&K) -> TabRole + 'a) -> Self {
+        TabRoles(Box::new(roles))
+    }
+}
+
+impl<K> TabRoles<'_, K> {
+    #[doc(hidden)]
+    pub fn role(&self, key: &K) -> TabRole {
+        (self.0)(key)
+    }
+}
+
 /// A strip of tabs: one Tab stop, arrows move the lead without showing its tab, a click, Space or Enter shows the tab,
 /// Enter and a double click activate, Cmd/Ctrl+] and [ (or a drag) move the tab later and earlier, Shift to the ends, the menu key
 /// asks for the tab's context menu.
@@ -289,6 +306,9 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
+    /// The role of each tab, an input of the fit: contextual tabs are kept ahead of plain tabs.
+    #[prop(func = "Fn(&K) -> TabRole")]
+    roles: Option<TabRoles<'a, K>>,
     /// What the strip takes from drags that did not start in it, in order.
     drops: Vec<DropKind<'a, K>>,
     /// Where the strip's own drag may land: the test gets the drag, the tab under the pointer and the position before which the
@@ -335,6 +355,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             tear_off: false,
             wheel_selects: false,
             can_drag: None,
+            roles: None,
             drops: Vec::new(),
             accepts: None,
             held: Bind::kept(),

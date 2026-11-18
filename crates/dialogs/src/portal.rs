@@ -90,6 +90,20 @@ impl Cancel {
     }
 }
 
+/// How a portal Save ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // P3(platform-w4): pf.C-F4
+pub(crate) enum SaveOutcome {
+    /// The user saved to this path.
+    Saved(PathBuf),
+    /// The user cancelled, or the Save was cancelled.
+    Cancelled,
+    /// The portal could not show the dialog: the caller shows rfd's.
+    UseRfd(String),
+    /// The file type picked is ambiguous: no dialog can answer.
+    Unavailable(String),
+}
+
 /// What a portal response means for a Save.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // P3(platform-w4): pf.C-F4
@@ -283,7 +297,17 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
 /// name, so the portal asks before replacing it (it asked only about the typed name). Connects to
 /// the session bus; `Err` when the portal can't be reached, and the caller shows rfd's dialog.
 // pc: apps/photocraft/src/portal_save.rs:174 save_as, services.rs:244-280
-pub(crate) fn save_as(mut req: SaveRequest, cancel: &Cancel) -> Result<Option<PathBuf>, String> {
+pub(crate) fn save_as(req: SaveRequest, cancel: &Cancel) -> SaveOutcome {
+    // P3(platform-w4): pf.C-F4 — the existing body, converted at the boundary.
+    match save_loop(req, cancel) {
+        Ok(Some(path)) => SaveOutcome::Saved(path),
+        Ok(None) => SaveOutcome::Cancelled,
+        Err(why) => SaveOutcome::UseRfd(why),
+    }
+}
+
+/// The existing portal Save loop of [`save_as`].
+fn save_loop(mut req: SaveRequest, cancel: &Cancel) -> Result<Option<PathBuf>, String> {
     let conn = zbus::blocking::connection::Builder::session().and_then(|b| b.build()).map_err(|e| e.to_string())?;
     loop {
         let Some(saved) = save_file(&conn, &req, cancel)? else { return Ok(None) };

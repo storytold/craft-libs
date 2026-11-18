@@ -189,6 +189,15 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         Self::of(label, value)
     }
 
+    /// The lengths the field keeps and shows, as [`NumberField::length`] gives them: a named-number field reads and
+    /// shows lengths through the one units path.
+    #[must_use]
+    pub fn lengths(mut self, lengths: LengthUnits) -> Self {
+        let _ = &mut self;
+        let _ = lengths;
+        todo!("dg.F33")
+    }
+
     fn of(label: impl Into<Label>, value: Bind<'a, V>) -> Self {
         NumberField {
             common: Common::new(),

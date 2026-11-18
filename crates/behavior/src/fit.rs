@@ -124,7 +124,8 @@ fn fit_keeping_selected(natural: &[f32], selected: usize, available: f32, minimu
 ///
 /// Dimensions are sanitized as in [`fit`], and the shown widths plus `overflow_width` never
 /// exceed the sanitized available width. Work and storage are linear in the input count.
-pub fn fit_whole(natural: &[f32], selected: usize, available: f32, overflow_width: f32) -> TabFit {
+pub fn fit_whole(natural: &[f32], selected: usize, kept: &[bool], available: f32, overflow_width: f32) -> TabFit {
+    let _ = kept; // P3(ribbon-w1): rb.R2
     let available = tab_extent(available);
     let natural: Vec<f32> = natural.iter().map(|&w| tab_extent(w)).collect();
     if natural.iter().map(|&w| f64::from(w)).sum::<f64>() <= f64::from(available) {

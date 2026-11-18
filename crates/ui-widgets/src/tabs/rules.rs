@@ -39,7 +39,7 @@ impl FitMode {
     /// shrinking tab becomes and `overflow` the width of the overflow button.
     pub fn fit(self, natural: &[f32], selected: usize, available: f32, minimum: f32, overflow: f32) -> TabFit {
         match self {
-            FitMode::Whole => fit_whole(natural, selected, available, overflow),
+            FitMode::Whole => fit_whole(natural, selected, &[], available, overflow), // P3(ribbon-w1): rb.R2
             FitMode::Shrink { keep_selected } => fit(natural, selected, available, minimum, overflow, keep_selected),
         }
     }

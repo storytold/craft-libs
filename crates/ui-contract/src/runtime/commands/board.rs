@@ -659,6 +659,13 @@ pub(crate) fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command)))
 }
 
+/// The window's own keymap: the registry scopes, the app catalog, the window shortcuts and the app's overrides, as the
+/// board resolves keys with it; none before the first frame builds one.
+pub fn keymap(ctx: &Context) -> Option<Arc<Keymap>> {
+    let _ = ctx;
+    todo!("ch.C22")
+}
+
 /// The command that holds `chord` in the window's keymap (`Keymap::holder`); none before the first frame builds one.
 pub(crate) fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.holder(chord)))

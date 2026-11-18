@@ -188,6 +188,13 @@ impl<'a> StyleCx<'a> {
         f(&StyleCx::of_env(ctx, &env))
     }
 
+    /// The size `face` has, measured from the `Ui` the collection hook fills this context from, so a collection's
+    /// `item_layout` measures a button's label and icon in the pass it lays out in.
+    pub fn face<S: crate::contract::Show>(&self, face: S) -> egui::Vec2 {
+        let _ = face;
+        todo!("rb.R25")
+    }
+
     /// The same context with another variant.
     #[doc(hidden)]
     pub fn with_variant(&self, variant: Variant) -> StyleCx<'a> {

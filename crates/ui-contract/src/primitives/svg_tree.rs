@@ -29,6 +29,14 @@ fn icon_limits() -> Limits {
 /// The render tree of `svg`, or why it was refused.
 #[doc(hidden)]
 pub fn parse(svg: &[u8]) -> Result<usvg::Tree, String> {
+    parse_styled(svg, None)
+}
+
+/// The render tree of `svg` under the injected style sheet `style_sheet`, or why it was refused: the one bounded
+/// parser, so a layer by class is read by the SVG engine's own selectors.
+#[doc(hidden)]
+pub fn parse_styled(svg: &[u8], style_sheet: Option<&str>) -> Result<usvg::Tree, String> {
+    let _ = style_sheet; // P3(ribbon-w6): rb.R19
     if svg.starts_with(&GZIP_MAGIC) {
         return Err("compressed SVG".to_owned());
     }
