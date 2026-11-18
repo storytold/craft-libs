@@ -1890,6 +1890,7 @@ dependencies = [
  "craft-texture",
  "craft-tga",
  "craft-theme",
+ "craft-theme-editor",
  "craft-theme-store",
  "craft-tiff",
  "craft-time",
@@ -3950,6 +3951,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-theme-editor"
+version = "0.1.0"
+dependencies = [
+ "craft-behavior",
+ "craft-theme",
+ "craft-ui",
+ "egui",
+]
+
+[[package]]
 name = "craft-theme-store"
 version = "0.1.0"
 dependencies = [
@@ -4110,6 +4121,7 @@ dependencies = [
  "craft-table",
  "craft-text",
  "craft-theme",
+ "craft-theme-editor",
  "craft-theme-store",
  "craft-timeline",
  "craft-ui",

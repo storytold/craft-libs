@@ -11,7 +11,7 @@ use crate::primitives::sensing::{self, MemberSpec, RootSpec};
 use crate::primitives::{PaintRecord, PartResult};
 use crate::runtime::access::{self, Politeness, Role, SetPosition, scope};
 use crate::runtime::commands::ResolvedCommand;
-use crate::runtime::env::{AppValues, ColumnSweep, Env, EnvView};
+use crate::runtime::env::{AppValues, ColumnSweep, Env, EnvView, ThemeScope};
 use crate::runtime::layout_memory::{Call, Inputs};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
@@ -251,6 +251,11 @@ pub(crate) trait ShapeHooks<C: Component> {
 
     /// The command scope the component is an instance of: its own `Cx` and the items below see it in the chain.
     fn instance_scope(&self, _comp: &C) -> Option<commands::CommandScope> {
+        None
+    }
+
+    /// The token scope of the component and everything it shows (`ContainerProps::theme`).
+    fn theme_scope(&self, _comp: &C) -> Option<ThemeScope> {
         None
     }
 
@@ -502,6 +507,7 @@ pub(crate) trait Erased {
     fn declares_parts(&self) -> bool;
     fn read(&mut self, stage: &mut MemoryStage, id: Id, env: &Env);
     fn instance_scope(&self) -> Option<commands::CommandScope>;
+    fn theme_scope(&self) -> Option<ThemeScope>;
     fn memory_owner(&self) -> Option<Id>;
     fn in_flow(&self) -> bool;
     /// Whether the shape fills the width of the room it is shown in (a body not sized from its content).
@@ -1471,8 +1477,9 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
     let sizing = ui.is_sizing_pass();
     // The inspector flag is read once per run.
     let recording = !sizing && inspect::recording(&ctx);
-    // 1 env: `Common` moves out of the component; `Resolved` borrows it.
-    let env = Env::of(ui);
+    // 1 env: `Common` moves out of the component; `Resolved` borrows it. A themed component resolves its own look in its
+    // scope, and everything it shows inherits it.
+    let env = scoped_env(&ctx, Env::of(ui), t.theme_scope());
     let common: Common = t.take_common();
     let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
     // 2 style
@@ -1792,6 +1799,14 @@ fn finish_passes(run: &mut Pass<'_, '_, '_>, host: &dyn Host, begun: &Begun) -> 
     real
 }
 
+/// `env` with a component's token scope applied, the one place a `ThemeScope` takes effect.
+fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
+    match theme {
+        Some(theme) => env.derive(|scoped| theme.apply(ctx, scoped)),
+        None => env,
+    }
+}
+
 /// Measures the component in `t` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would
 /// use next (or `id`). It reads memory through a peek, registers no id and applies nothing. `under` is the
 /// composite's resolved `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
@@ -1801,6 +1816,7 @@ pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposa
         Some(under) => super::cx::child_env(&Env::of(ui), under),
         None => Env::of(ui),
     };
+    let env = scoped_env(ui.ctx(), env, t.theme_scope());
     let id = id.unwrap_or_else(|| steps::id(ui, &t.common().id, false, false, facts.style_key, facts.name));
     let common = t.common().clone();
     let step1 = steps::env(ui.ctx(), &env, &common, t.variants(common.variant));

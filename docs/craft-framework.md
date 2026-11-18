@@ -492,7 +492,7 @@ The Text size setting scales the roles only (0.83x, 1x, 1.17x, 1.33x), rounded t
 
 ### 5.3 Iconography
 
-- **Sets.** Phosphor is the base set. The gallery's active set defaults to Lucide. A theme may supply an icon pack that replaces the base icons it covers; missing icons fall back to the base set.
+- **Sets.** Phosphor is the base set: it draws every icon. The suite's default set is Lucide, which falls back to Phosphor. A theme picks its set with `icon_pack` ([suite-themes.md](suite-themes.md)): a built-in set (`craft.lucide`, `craft.phosphor`, `craft.carbon`, `craft.tabler`) or a pack in the suite library that replaces the icons it covers. Missing icons fall back to the base set, a library pack's to the default set. The resolved tokens carry the set, so every icon drawn under a theme, a theme scope included, follows it.
 - **Strokes.** 1.25 pt at the small size, 1.5 pt at medium and large.
 
 ### 5.4 Dimensions

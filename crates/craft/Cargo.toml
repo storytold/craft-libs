@@ -55,6 +55,7 @@ craft-review = { workspace = true, optional = true }
 craft-table = { workspace = true, optional = true }
 craft-text = { workspace = true, optional = true }
 craft-timeline = { workspace = true, optional = true }
+craft-theme-editor = { workspace = true, optional = true }
 craft-theme-store = { workspace = true, optional = true }
 craft-update = { workspace = true, optional = true }
 craft-vectorcraft-format = { workspace = true, optional = true }
@@ -244,6 +245,7 @@ screen-testing = [
     "craft-review?/screen-testing",
     "craft-table?/screen-testing",
     "craft-text?/screen-testing",
+    "craft-theme-editor?/screen-testing",
     "craft-theme-store?/screen-testing",
     "craft-timeline?/screen-testing",
     "craft-update?/screen-testing",
@@ -802,6 +804,8 @@ texture-dds = ["texture", "craft-texture/dds"]
 texture-parallel = ["texture", "craft-texture/parallel"]
 
 tga = ["dep:craft-tga"]
+
+theme-editor = ["dep:craft-theme-editor"]
 
 theme-store = ["dep:craft-theme-store"]
 
