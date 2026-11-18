@@ -320,9 +320,14 @@ impl<'a> Epub<'a> {
     /// resource listed here cannot be used as it is read: fonts are usually only obfuscated
     /// ([`crate::Encrypted::is_font_obfuscation`]), anything else is DRM.
     pub fn encryption(&mut self) -> Result<Vec<crate::Encrypted>, Error> {
+        self.encryption_telling().map(|(list, _)| list)
+    }
+
+    /// [`Epub::encryption`], and whether the list was cut at its limit.
+    pub(crate) fn encryption_telling(&mut self) -> Result<(Vec<crate::Encrypted>, bool), Error> {
         match self.read("META-INF/encryption.xml")? {
-            Some(xml) => crate::parse_encryption(&xml),
-            None => Ok(Vec::new()),
+            Some(xml) => crate::toc::parse_encryption_telling(&xml),
+            None => Ok((Vec::new(), false)),
         }
     }
 

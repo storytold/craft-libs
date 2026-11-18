@@ -51,7 +51,8 @@ pub enum Error {
     #[error("the EPUB package has {found} entries (at most {limit})")]
     TooManyEntries { found: usize, limit: usize },
     /// A resource is encrypted (DRM), or obfuscated without the manifest listing it as a font: its
-    /// content cannot be read. `doc::read_book` refuses such a package.
+    /// content cannot be read. `doc::read_book` refuses such a package, and one whose
+    /// `encryption.xml` (then `path`) lists more than the crate reads of it.
     #[error("EPUB part {path} is encrypted")]
     Encrypted { path: String },
     /// The book given to [`write`] cannot be a valid package.

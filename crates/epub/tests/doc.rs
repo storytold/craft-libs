@@ -441,3 +441,88 @@ fn table_of_contents_entries_map_to_the_flows_bookmarks() {
     assert_eq!(book.bookmark("OEBPS/b.xhtml", Some("café")).as_deref(), Some("c2-café"));
     assert_eq!(book.bookmark("OEBPS/gone.xhtml", None), None);
 }
+
+/// The numbering of each list item of `flow` once it is a document, in order.
+fn list_numbers(flow: &Flow) -> Vec<u32> {
+    craft_flow::to_doc(flow)
+        .body
+        .iter()
+        .filter_map(|b| match &**b {
+            craft_wordmodel::Block::Para(p) => p.props.numbering.map(|n| n.num),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_list_ending_one_chapter_does_not_continue_into_the_next() {
+    let list = chapter("<ol><li>One</li><li>Two</li></ol>");
+    let bytes = package(
+        &[xhtml("a", "a.xhtml"), xhtml("b", "b.xhtml")].concat(),
+        r#"><itemref idref="a"/><itemref idref="b"/>"#,
+        &[("OEBPS/a.xhtml", &list), ("OEBPS/b.xhtml", &list)],
+    );
+    let book = read(&bytes);
+    for at in [Boundary::PageBreak, Boundary::Continuous] {
+        let numbers = list_numbers(&book.join(at));
+        assert_eq!(numbers.len(), 4, "{at:?}");
+        assert_eq!((numbers[0], numbers[2]), (numbers[1], numbers[3]), "{at:?}: each chapter's items stay one list");
+        assert_ne!(numbers[1], numbers[2], "{at:?}: the second chapter starts its own list");
+    }
+}
+
+#[test]
+fn a_cut_off_encryption_list_refuses_the_book() {
+    // 10,000 obfuscated fonts, then the chapter encrypted: a list read only up to its limit would
+    // never see the last record.
+    let font = r#"<enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/font.otf"/></enc:CipherData></enc:EncryptedData>"#;
+    let drm = r#"<enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/a.xhtml"/></enc:CipherData></enc:EncryptedData>"#;
+    let encryption = format!(
+        r#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">{}{drm}</encryption>"#,
+        font.repeat(10_000)
+    );
+    let bytes = package(
+        &[xhtml("a", "a.xhtml"), r#"<item id="f" href="font.otf" media-type="font/otf"/>"#.into()].concat(),
+        r#"><itemref idref="a"/>"#,
+        &[("META-INF/encryption.xml", encryption.as_bytes()), ("OEBPS/a.xhtml", &chapter("<p>A</p>")), ("OEBPS/font.otf", b"font")],
+    );
+    assert_eq!(read_book(&bytes, &BookOptions::default()), Err(Error::Encrypted { path: "META-INF/encryption.xml".into() }));
+}
+
+#[test]
+fn a_navigation_document_in_the_spine_is_read_once() {
+    // The navigation document and another chapter fit the budget once each, not the navigation
+    // document twice.
+    let nav = format!(
+        r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="a.xhtml">A</a></li></ol></nav><p>{}</p></body></html>"#,
+        "n".repeat(1_200)
+    );
+    let a = chapter(&format!("<p>{}</p>", "a".repeat(1_000)));
+    let bytes = package(
+        &[r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#.to_string(), xhtml("a", "a.xhtml")].concat(),
+        r#"><itemref idref="nav"/><itemref idref="a"/>"#,
+        &[("OEBPS/nav.xhtml", nav.as_bytes()), ("OEBPS/a.xhtml", &a)],
+    );
+    // What opening the package costs (its container and package document), then each document once.
+    let opened = Limits::DEFAULT.max_total_bytes - craft_epub::Epub::open(&bytes).unwrap().budget_left();
+    let once = opened + (nav.len() + a.len()) as u64;
+    let opts = BookOptions { limits: Limits { max_total_bytes: once + nav.len() as u64 / 2, ..Limits::DEFAULT }, ..BookOptions::default() };
+    let book = read_book(&bytes, &opts).unwrap();
+    assert_eq!(paths(&book), ["OEBPS/nav.xhtml", "OEBPS/a.xhtml"]);
+    assert_eq!(book.toc.len(), 1);
+}
+
+#[test]
+fn an_image_the_reader_cannot_keep_is_a_warning() {
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#;
+    let body = r#"<p>A<img src="pic.svg"/><img src="pic.png"/><img src="pic.svg"/></p>"#;
+    let bytes = package(
+        &[xhtml("a", "a.xhtml"), r#"<item id="cover" href="pic.svg" media-type="image/svg+xml" properties="cover-image"/>"#.into()].concat(),
+        r#"><itemref idref="a"/>"#,
+        &[("OEBPS/a.xhtml", &chapter(body)), ("OEBPS/pic.svg", svg), ("OEBPS/pic.png", &png("png"))],
+    );
+    let book = read(&bytes);
+    assert_eq!(images(&book.chapters[0].flow).len(), 1, "the PNG is kept");
+    assert_eq!(book.cover.as_deref().map(Vec::as_slice), Some(&svg[..]), "the cover's bytes are carried whatever their format");
+    assert_eq!(book.warnings, [Warning::UnsupportedImage { path: "OEBPS/pic.svg".into(), from: "OEBPS/a.xhtml".into() }]);
+}

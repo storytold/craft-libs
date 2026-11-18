@@ -51,6 +51,9 @@ pub enum Warning {
     /// An image (or the cover) larger than [`Limits::max_entry_bytes`], named in the document at
     /// `from`.
     ImageTooLarge { path: String, from: String },
+    /// An image in a format the flow cannot hold (an SVG, say: the formats are those
+    /// `craft_flow::sniff_image` knows), named in the document at `from`. It is left out.
+    UnsupportedImage { path: String, from: String },
     /// The package declares the whole book fixed layout (pre-paginated); it is read as flowing
     /// text and its pages' geometry is lost. `path` is the package document. A spine item's own
     /// `rendition:layout` is not read.
@@ -102,13 +105,17 @@ pub enum Boundary {
 
 impl BookFlow {
     /// Every chapter, in order (non-linear ones too), as one flow with the book's title and
-    /// creators.
+    /// creators. A list that ends one chapter does not run on into a list that starts the next.
     pub fn join(&self, at: Boundary) -> Flow {
         let meta = Meta { title: self.package.title.clone(), author: self.package.creators.join(", "), ..Meta::default() };
         let mut flow = Flow { blocks: Vec::new(), meta };
+        let mut lists = 0;
         for (n, chapter) in self.chapters.iter().enumerate() {
             let start = flow.blocks.len();
             flow.blocks.extend(chapter.flow.blocks.iter().cloned());
+            if let Some(blocks) = flow.blocks.get_mut(start..) {
+                lists = own_lists(blocks, lists);
+            }
             if n > 0
                 && at == Boundary::PageBreak
                 && let Some(FBlock::Para(p)) = flow.blocks.get_mut(start)
@@ -126,6 +133,45 @@ impl BookFlow {
     pub fn bookmark(&self, path: &str, fragment: Option<&str>) -> Option<String> {
         self.targets.bookmark(path, fragment)
     }
+}
+
+/// Gives the top-level list paragraphs of one chapter's `blocks` list identities above `used`,
+/// which no other chapter has, keeping each list together: a list the source numbers
+/// ([`craft_flow::ListInfo::list`]) keeps one identity, and each run of unnumbered items, as
+/// `craft_flow::to_doc` groups them, gets its own. (Unnumbered items of two chapters that meet
+/// would otherwise be one list.) Returns the highest identity given.
+fn own_lists(blocks: &mut [FBlock], used: u32) -> u32 {
+    let numbered = blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { p.list.map(|l| l.list) } else { None }).max().unwrap_or(0);
+    let mut next = used.saturating_add(numbered);
+    // The unnumbered run being given an identity: that identity, and whether its top-level items
+    // are numbered (a change of kind there starts another list).
+    let mut run: Option<(u32, Option<bool>)> = None;
+    for block in blocks {
+        let Some(li) = (match block {
+            FBlock::Para(p) => p.list.as_mut(),
+            FBlock::Table(_) => None,
+        }) else {
+            run = None;
+            continue;
+        };
+        if li.list != 0 {
+            li.list = li.list.saturating_add(used);
+            run = None;
+            continue;
+        }
+        let kind_changes = li.level == 0 && run.is_some_and(|(_, top)| top.is_some_and(|t| t != li.ordered));
+        let id = match run {
+            Some((id, _)) if !kind_changes => id,
+            _ => {
+                next = next.saturating_add(1);
+                next
+            }
+        };
+        let top = if li.level == 0 { Some(li.ordered) } else { run.and_then(|(_, t)| t) };
+        run = Some((id, top));
+        li.list = id;
+    }
+    next
 }
 
 /// Each chapter read, by archive entry: its key and its bookmarks as written.
@@ -159,13 +205,20 @@ fn is_font(media_type: &str) -> bool {
 /// Refused: what [`Epub::open_with`] refuses, a package with anything encrypted but fonts the
 /// manifest lists as fonts under a font obfuscation algorithm ([`Error::Encrypted`]), a chapter
 /// larger than [`Limits::max_entry_bytes`], and parts past the total byte budget
-/// ([`Error::TooLarge`]). A missing or broken chapter, a missing or oversized image, a spine
+/// ([`Error::TooLarge`]). A package whose `encryption.xml` lists more than the crate reads of
+/// it (10,000 records) is refused too, as [`Error::Encrypted`] with that file's path: what is
+/// past the limit is not known to be fonts. A missing or broken chapter, a missing, oversized or
+/// unsupported image, a spine
 /// item that is not XHTML and a fixed-layout book are [`Warning`]s. Links into documents that
 /// were not read (missing, not XHTML, past [`BookOptions::max_chapters`]) are left as written.
 pub fn read_book(bytes: &[u8], opts: &BookOptions) -> Result<BookFlow, Error> {
     craft_flow::begin_import();
     let mut epub = Epub::open_with(bytes, opts.limits)?;
-    for e in epub.encryption()? {
+    let (encrypted, cut) = epub.encryption_telling()?;
+    if cut {
+        return Err(Error::Encrypted { path: "META-INF/encryption.xml".into() });
+    }
+    for e in encrypted {
         let font = epub.package.manifest.iter().find(|i| i.path == e.path).is_some_and(|i| is_font(&i.media_type));
         if !(font && e.is_font_obfuscation()) {
             return Err(Error::Encrypted { path: e.path });
@@ -175,14 +228,22 @@ pub fn read_book(bytes: &[u8], opts: &BookOptions) -> Result<BookFlow, Error> {
     if epub.package.pre_paginated {
         warnings.push(Warning::FixedLayout { path: epub.opf_path.clone() });
     }
-    let toc = match epub.toc() {
-        Ok(toc) => toc,
-        Err(Error::Part { part, msg }) => {
-            warnings.push(Warning::Unreadable { path: part, msg });
-            Vec::new()
-        }
-        Err(e) => return Err(e),
-    };
+    // The table of contents as `Epub::toc` reads it, but with the navigation document's bytes
+    // kept: when it is also in the spine it is not read (and charged to the budget) twice.
+    let mut nav: Option<(String, Vec<u8>)> = None;
+    let mut toc = Vec::new();
+    if let Some(path) = epub.package.nav().map(|i| i.path.clone())
+        && let Some(Some(xml)) = soft(epub.read(&path), &mut warnings)?
+    {
+        toc = soft(crate::parse_nav(&xml, &path), &mut warnings)?.unwrap_or_default();
+        nav = Some((path, xml));
+    }
+    if toc.is_empty()
+        && let Some(path) = epub.package.ncx.clone()
+        && let Some(Some(xml)) = soft(epub.read(&path), &mut warnings)?
+    {
+        toc = soft(crate::parse_ncx(&xml, &path), &mut warnings)?.unwrap_or_default();
+    }
     let package = std::mem::take(&mut epub.package);
     let opf_path = epub.opf_path.clone();
 
@@ -212,8 +273,15 @@ pub fn read_book(bytes: &[u8], opts: &BookOptions) -> Result<BookFlow, Error> {
         }
         planned.push((&item.path, s.linear));
     }
+    let mut nav = nav.filter(|(path, _)| planned.iter().any(|(p, _)| p == path));
 
-    let images = Images { epub: RefCell::new(epub), cache: RefCell::default(), warnings: RefCell::default(), error: RefCell::default() };
+    let images = Images {
+        epub: RefCell::new(epub),
+        cache: RefCell::default(),
+        unsupported: RefCell::default(),
+        warnings: RefCell::default(),
+        error: RefCell::default(),
+    };
     let cover = match package.cover_image() {
         Some(item) => images.get(&item.path, &opf_path)?,
         None => None,
@@ -228,7 +296,11 @@ pub fn read_book(bytes: &[u8], opts: &BookOptions) -> Result<BookFlow, Error> {
     let mut chapters = Vec::new();
     let mut targets = Targets::default();
     for (n, (path, linear)) in planned.into_iter().enumerate() {
-        let bytes = match images.read(path)? {
+        let read = match nav.take_if(|(p, _)| p == path) {
+            Some((_, bytes)) => Read::Bytes(bytes),
+            None => images.read(path)?,
+        };
+        let bytes = match read {
             Read::Bytes(bytes) => bytes,
             Read::Missing => {
                 warnings.push(Warning::MissingChapter { path: path.to_string() });
@@ -271,6 +343,19 @@ pub fn read_book(bytes: &[u8], opts: &BookOptions) -> Result<BookFlow, Error> {
     Ok(BookFlow { package, toc, cover, chapters, warnings, targets })
 }
 
+/// `result`, with a broken part (`Error::Part`) turned into a warning and `None`; other errors
+/// are the book's.
+fn soft<T>(result: Result<T, Error>, warnings: &mut Vec<Warning>) -> Result<Option<T>, Error> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(Error::Part { part, msg }) => {
+            warnings.push(Warning::Unreadable { path: part, msg });
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// An archive entry, read.
 enum Read {
     Bytes(Vec<u8>),
@@ -287,6 +372,8 @@ struct Images<'a> {
     epub: RefCell<Epub<'a>>,
     /// By archive entry (or `src`, for one outside the package); `None` for one not read.
     cache: RefCell<HashMap<String, Option<Arc<Vec<u8>>>>>,
+    /// Images read whose format the flow cannot hold, already said.
+    unsupported: RefCell<HashSet<String>>,
     warnings: RefCell<Vec<Warning>>,
     /// A spent budget, met while craft-html was loading an image: the book's error.
     error: RefCell<Option<Error>>,
@@ -356,12 +443,21 @@ impl Images<'_> {
             }
             return None;
         }
-        self.get(&path, from).unwrap_or_else(|e| {
+        let image = self.get(&path, from).unwrap_or_else(|e| {
             if let Ok(mut error) = self.error.try_borrow_mut() {
                 *error = Some(e);
             }
             None
-        })
+        })?;
+        // craft-html would drop it without a word (`make_img` takes only what this knows); the
+        // cover keeps its bytes whatever their format.
+        if craft_flow::sniff_image(&image).is_none() {
+            if self.unsupported.try_borrow_mut().is_ok_and(|mut said| said.insert(path.clone())) {
+                self.warn(Warning::UnsupportedImage { path, from: from.to_string() });
+            }
+            return None;
+        }
+        Some(image)
     }
 }
 

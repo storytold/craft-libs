@@ -128,9 +128,10 @@ let whole = book.join(Boundary::PageBreak);
 ```
 
 - The spine is read in order, each document once. `linear="no"` items are kept in place and
-  flagged; `join` keeps them too, and an app that wants otherwise composes from `chapters`.
+  flagged; `join` keeps them too, and an app that wants otherwise composes from `chapters`. In
+  `join`, a list that ends one chapter does not run on into one that starts the next.
 - Images resolve against the chapter that names them and are read once for the whole book, inside
-  the package's byte budgets.
+  the package's byte budgets. A navigation document that is also in the spine is read once too.
 - Each chapter has a key: `c` and its position among the content documents planned from the spine
   (`c1`, `c2`, …), so one that turns out missing leaves a gap. Its bookmarks become `{key}-{id}`
   and a bookmark `{key}` marks its start, so the chapters' ids stay distinct when joined. A link to
@@ -143,13 +144,15 @@ let whole = book.join(Boundary::PageBreak);
 - `BookFlow::package` is the package document as read, `toc` the table of contents, `cover` the
   cover image's bytes.
 - Refused: a package with anything encrypted other than fonts that the manifest lists as fonts
-  under a font obfuscation algorithm (`Error::Encrypted`), a chapter larger than
-  `max_entry_bytes`, and parts past the total byte budget (`Error::TooLarge`).
+  under a font obfuscation algorithm (`Error::Encrypted`), an `encryption.xml` with more records
+  than the crate reads of it (10,000; also `Error::Encrypted`, naming that file), a chapter
+  larger than `max_entry_bytes`, and parts past the total byte budget (`Error::TooLarge`).
 - Warnings, with the rest still read, grouped by kind rather than in spine order: a missing or
-  broken chapter or image, an image over `max_entry_bytes`, a spine item that is not XHTML (its
-  manifest `fallback` is not followed), a fixed-layout book (flagged when the package declares it
-  for the whole book; a spine item's own `rendition:layout` is not read), and chapters past
-  `BookOptions::max_chapters` (10,000).
+  broken chapter or image, an image over `max_entry_bytes`, an image in a format the flow cannot
+  hold (an SVG; the cover's bytes are carried whatever their format), a spine item that is not
+  XHTML (its manifest `fallback` is not followed), a fixed-layout book (flagged when the package
+  declares it for the whole book; a spine item's own `rendition:layout` is not read), and
+  chapters past `BookOptions::max_chapters` (10,000).
 - craft-html keeps bookmarks only from `<a id>` and `<a name>`, does not read linked style
   sheets, and reads notes as ordinary text.
 
