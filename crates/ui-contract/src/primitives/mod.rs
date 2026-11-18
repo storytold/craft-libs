@@ -32,8 +32,7 @@ mod text_input;
 pub mod textures;
 mod tool;
 
-pub(crate) use auto_scroll_mark::auto_scroll_mark_look;
-pub use auto_scroll_mark::{AutoScrollMark, AutoScrollMarkLook};
+pub use auto_scroll_mark::AutoScrollMark;
 pub use content::{ContentPainterCx, DocRun, DocText};
 pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokeWidth, WellFill};
 pub use faces::FacesCx;

@@ -1,37 +1,40 @@
 //! `AutoScrollMark`: the mark a latched middle-button auto-scroll shows at its anchor: a ring on the panel fill, a dot
 //! and two arrowheads in text ink.
 
-use crate::style::{StyleColor, UiTokens};
-use egui::{Pos2, Shape};
+use crate::style::AutoScrollMarkLook;
+use egui::{Pos2, Shape, Stroke, vec2};
 
-/// The auto-scroll mark's colours and sizes.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct AutoScrollMarkLook {
-    /// The ring colour.
-    pub ring: StyleColor,
-    /// The fill inside the ring.
-    pub fill: StyleColor,
-    /// The ink of the dot and the arrowheads.
-    pub ink: StyleColor,
-    /// The ring's line width.
-    pub ring_width: f32,
-    /// The mark's diameter.
-    pub diameter: f32,
-}
-
-pub(crate) fn auto_scroll_mark_look(tokens: &UiTokens) -> AutoScrollMarkLook {
-    let _ = tokens;
-    todo!("CV-C9")
-}
+/// The dot's radius, as a share of the mark's radius.
+const DOT: f32 = 2.0 / 13.0;
+/// Half an arrowhead's base, as a share of the mark's radius.
+const ARROW_HALF_WIDTH: f32 = 4.0 / 13.0;
+/// How far an arrowhead's base sits from the centre, as a share of the mark's radius.
+const ARROW_BASE: f32 = 6.0 / 13.0;
+/// How far an arrowhead's tip sits from the centre, as a share of the mark's radius.
+const ARROW_TIP: f32 = 10.0 / 13.0;
 
 /// The auto-scroll mark painter.
 pub struct AutoScrollMark;
 
 impl AutoScrollMark {
-    /// The mark centred on `anchor`, from the look's tokens.
+    /// The mark centred on `anchor`: the ring, the dot, and an arrowhead above and below, all sized from the look's
+    /// diameter.
     pub fn shapes(look: &AutoScrollMarkLook, anchor: Pos2) -> Vec<Shape> {
-        let _ = (look, anchor);
-        todo!("CV-C9")
+        let radius = look.diameter / 2.0;
+        let ink = look.ink.egui();
+        let mut shapes = vec![
+            Shape::circle_filled(anchor, radius, look.fill.egui()),
+            Shape::circle_stroke(anchor, radius - look.ring_width, Stroke::new(look.ring_width, look.ring.egui())),
+            Shape::circle_filled(anchor, radius * DOT, ink),
+        ];
+        let (half, base, tip) = (radius * ARROW_HALF_WIDTH, radius * ARROW_BASE, radius * ARROW_TIP);
+        for direction in [-1.0, 1.0] {
+            shapes.push(Shape::convex_polygon(
+                vec![anchor + vec2(-half, direction * base), anchor + vec2(half, direction * base), anchor + vec2(0.0, direction * tip)],
+                ink,
+                Stroke::NONE,
+            ));
+        }
+        shapes
     }
 }
