@@ -86,6 +86,15 @@ pub(crate) fn exposed(ctx: &Context, widget: Id) -> bool {
     adapter::enabled(ctx, widget)
 }
 
+/// Folds the node egui gives the focus widget `widget` of an editor part into the node of `owner`, which stands for
+/// its key focus, for a pass whose editor reported no text facts (its view describes its text): the widget's bare
+/// node, focusable and unnamed, never shows beside the owner's.
+pub(crate) fn fold_editor(ctx: &Context, widget: Id, owner: Id) {
+    if exposed(ctx, widget) {
+        adapter::fold_widget(ctx, widget, owner);
+    }
+}
+
 /// Adds the text facts to the node of `owner` and fills its run nodes. The owner's node is the one node of the text:
 /// the widget's own node folds into it, so a component whose root edits its value through the text (a text field, a
 /// spin button, an editable combo box) is one node that takes focus and the text actions. Call it after the node's
