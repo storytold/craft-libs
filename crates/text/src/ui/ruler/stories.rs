@@ -88,7 +88,8 @@ const THREE_GAPS: [(f32, f32); 3] = [(108.0, 126.0), (225.0, 243.0), (342.0, 360
 #[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
 fn page_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = data.value("values", word());
-    let (strip, _) = Rulers::strips(ui, craft_ui::testing::stage(ui));
+    let stage = craft_ui::testing::stage(ui);
+    let (strip, _) = Rulers::strips(ui, stage);
     TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN)
         .unit(inches())
         .origin(strip.min.x + PAGE_MARGIN)
