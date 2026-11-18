@@ -294,9 +294,6 @@ impl TextRun<'_> {
             if span.underline {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, color);
             }
-            if span.strikethrough {
-                format.strikethrough = egui::Stroke::new(env.tokens.stroke.thin, color);
-            }
             job.append(text_part, 0.0, format);
         }
         job
