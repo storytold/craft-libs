@@ -240,6 +240,12 @@ impl WindowHost {
         injected::idle(&self.ctx)
     }
 
+    /// [`injected_idle`](Self::injected_idle) asked at the end of a pass, after its UI ran: the step the running pass
+    /// carried counts as run, unless egui runs the pass again. Outside a pass it is `injected_idle`.
+    pub fn injected_idle_at_pass_end(&self) -> bool {
+        injected::idle_at_pass_end(&self.ctx)
+    }
+
     /// Whether an injected step was withdrawn since the last call.
     pub fn take_injected_withdrawn(&self) -> bool {
         injected::take_withdrawn(&self.ctx)
