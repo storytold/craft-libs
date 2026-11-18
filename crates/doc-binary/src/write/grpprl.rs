@@ -554,6 +554,7 @@ fn brc_type(s: BorderStyle) -> u8 {
         BorderStyle::Double => 0x03,
         BorderStyle::Dotted => 0x06,
         BorderStyle::Dashed => 0x07,
+        BorderStyle::DashSmallGap => 0x16,
         BorderStyle::DotDash => 0x08,
         BorderStyle::Triple => 0x0A,
         BorderStyle::Wave => 0x14,
