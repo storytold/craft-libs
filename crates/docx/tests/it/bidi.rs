@@ -195,12 +195,14 @@ fn thai_pieces_are_written_complex_script() {
     assert_eq!(run_cs(ps[0]), vec![("ประชุม ", Some(true)), ("WordCraft ", None), ("วันที่ ", Some(true)), ("29 ", None), ("ตุลาคม", Some(true))]);
     assert!(ps[0].runs.iter().all(|run| run.props.font == font.font), "the Latin font is kept");
 
-    // A file whose Thai runs don't say it (as WPS writes them) gets it when saved.
+    // A file whose Thai runs don't say it (as WPS writes them): Word draws that Thai in the run's
+    // own font and size (measured, #1280), so the run reads as saying it isn't complex script,
+    // and a save keeps it so, looking the same in Word.
     let wps = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:cs="TH SarabunPSK"/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้</w:t></w:r></w:p>"#);
     let read = craft_docx::read(&wps).unwrap();
-    assert_eq!(paras(&read)[0].runs[0].props.cs, None);
+    assert_eq!(paras(&read)[0].runs[0].props.cs, Some(false));
     let xml = document_xml(&craft_docx::write(&read).unwrap());
-    assert_eq!(xml.matches("<w:cs/>").count(), 1, "{xml}");
+    assert_eq!(xml.matches("<w:cs/>").count(), 0, "{xml}");
 
     // A run that says `w:cs="0"` keeps it.
     let off = docx(r#"<w:p><w:r><w:rPr><w:cs w:val="0"/></w:rPr><w:t>ไทย</w:t></w:r></w:p>"#);
@@ -275,7 +277,7 @@ fn a_run_already_marked_complex_script_round_trips_unchanged() {
     assert_eq!(props(&again)[0].font, props(&first)[0].font);
     assert_eq!((props(&again)[0].bold, props(&again)[0].size, props(&again)[0].italic), (None, None, None), "no formatting added");
     assert_eq!(document_xml(&craft_docx::write(&again).unwrap()), xml, "a second save writes the same document");
-    // The WPS run the save marks keeps its complex-script font too.
+    // The WPS run, left unmarked, keeps its complex-script font too.
     let wps = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:cs="TH SarabunPSK"/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้</w:t></w:r></w:p>"#);
     let xml = document_xml(&craft_docx::write(&craft_docx::read(&wps).unwrap()).unwrap());
     assert!(run_xml(&xml, "ตามที่ได้แจ้งไว้").contains(r#"w:cs="TH SarabunPSK""#), "{xml}");
