@@ -1,6 +1,6 @@
 //! Building the chains: for each family, which faces come in which order.
 
-use craft_fonts_build::{EmbeddedFace, SIGNATURE_ROLE, ServedFace};
+use craft_fonts_build::{EmbeddedFace, MONO_ROLE, SIGNATURE_ROLE, ServedFace};
 use craft_i18n::Han;
 use craft_theme::InterfaceFont;
 use egui::{FontData, FontDefinitions, FontFamily};
@@ -58,10 +58,11 @@ fn han_region(face: &EmbeddedFace) -> Option<Han> {
     })
 }
 
-/// Whether `face` is craft-fonts' signature face, which draws only in the signature family's lead: as a fallback for a
-/// script it would set interface text in handwriting.
-fn signature_face(face: &EmbeddedFace) -> bool {
-    face.role == Some(SIGNATURE_ROLE)
+/// Whether `face` draws only where its role leads a family: craft-fonts' monospace face leads the monospaced families
+/// and its signature face the signature family. As a fallback for a script either would set interface text in
+/// fixed-width letters or in handwriting.
+fn lead_only(face: &EmbeddedFace) -> bool {
+    matches!(face.role, Some(MONO_ROLE | SIGNATURE_ROLE))
 }
 
 /// `0` for the style a family of `weight` wants, `1` for an acceptable stand-in.
@@ -289,7 +290,7 @@ impl UiFonts<'_> {
             .craft_faces
             .iter()
             .enumerate()
-            .filter(|(_, face)| !signature_face(face))
+            .filter(|(_, face)| !lead_only(face))
             .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
             .collect();
         rest.sort();
@@ -386,7 +387,7 @@ impl UiFonts<'_> {
             .craft_faces
             .iter()
             .enumerate()
-            .filter(|(_, face)| covers(face.scripts, script) && !signature_face(face))
+            .filter(|(_, face)| covers(face.scripts, script) && !lead_only(face))
             .filter_map(|(i, face)| {
                 let style = style_rank(face, weight)?;
                 let region = if script == "Hani" { region_rank(han_region(face), han) } else { 0 };

@@ -6,7 +6,7 @@ use crate::canvas::RasterSource as _;
 use crate::canvas::testing::canvas_story::{StoryDocument, show_document};
 use crate::contract::{Bind, ShowContainer as _, Validity};
 use crate::runtime::env::Message;
-use crate::tabs::{DocumentTab, DocumentTabs};
+use crate::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
@@ -127,10 +127,23 @@ fn splits_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound_mixed(at), SplitAt::default())
 }
 
+/// The documents the tab story opens with.
+const DOCUMENTS: [(usize, &str); 2] = [(0, "Untitled-1"), (1, "Photo.psd")];
+
 #[story(SplitViews<'static, ()>, covers = [Default], drive = Drive::Custom(drag_tab_onto_views))]
 fn drop_a_tab_to_split(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let tabs = [DocumentTab::new(0_usize, "Untitled-1"), DocumentTab::new(1, "Photo.psd")];
-    let _tabs = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).tear_off(true).show(ui);
+    // The story hosts the strip as an app does: a selected or picked tab shows, a closed one goes.
+    let open = data.value("open", DOCUMENTS.map(|(id, _)| id).to_vec()).clone();
+    let tabs: Vec<DocumentTab<usize>> = DOCUMENTS.iter().filter(|(id, _)| open.contains(id)).map(|&(id, name)| DocumentTab::new(id, name)).collect();
+    let selected = *data.value("selected", 0_usize);
+    let strip = DocumentTabs::new("Documents", &tabs).selected(selected).reorderable(true).tear_off(true).show(ui);
+    for event in strip.events {
+        match event {
+            DocumentTabsEvent::Selected(id) | DocumentTabsEvent::Picked(id) => *data.value("selected", 0_usize) = id,
+            DocumentTabsEvent::CloseRequested(id) => data.value("open", Vec::<usize>::new()).retain(|open| *open != id),
+            _ => {}
+        }
+    }
     let at = data.value("split", SplitAt::default());
     let shown = at.clone();
     let layout = SplitLayout::Tile;

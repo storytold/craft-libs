@@ -64,8 +64,15 @@ fn swipe(fixture: &mut Fixture, per_frame: f32, pause: f64) {
 #[trial]
 fn a_touchpad_glide_stops_in_the_pass_the_edge_clamp_leaves_the_view_where_it_was() {
     let (mut fixture, view) = glide_rig(true);
+    let start = view.get();
     swipe(&mut fixture, 30.0, 0.0);
     let lifted = view.get().center.x;
+    eprintln!(
+        "DIAG a_touchpad_glide_stops_in_the_pass_the_edge_clamp_leaves_the_view_where_it_was: start x {} width {} zoom {}, lifted x {lifted}",
+        start.center.x,
+        start.rect.width(),
+        start.zoom
+    );
     fixture.frame(vec![]);
     let mut last = view.get().center.x;
     assert!(last > lifted, "a fast lift glides on over later passes: {lifted} -> {last}");
@@ -89,7 +96,9 @@ fn a_touchpad_glide_stops_in_the_pass_the_edge_clamp_leaves_the_view_where_it_wa
     fixture.idle(2);
     assert_eq!(view.get().center.x, back.center.x, "the glide ended at the edge");
 
-    for (case, glide, per_frame, pause) in [("a slow lift", true, 1.0, 0.0), ("a lift after a pause", true, 30.0, 0.2), ("Touchpad Glide off", false, 30.0, 0.0)] {
+    for (case, glide, per_frame, pause) in
+        [("a slow lift", true, 1.0, 0.0), ("a lift after a pause", true, 30.0, 0.2), ("Touchpad Glide off", false, 30.0, 0.0)]
+    {
         let (mut fixture, view) = glide_rig(glide);
         swipe(&mut fixture, per_frame, pause);
         let lifted = view.get().center.x;
@@ -323,7 +332,10 @@ fn the_wheel_line_sets_the_scroll_but_not_the_zoom_per_notch_in_the_acrobat_sche
         let before = view.get();
         wheel_line(&mut fixture, &view, -1.0, scroll);
         let panned = view.get();
-        assert!((panned.center.y - before.center.y - f64::from(LINE)).abs() < 1e-3, "{scheme:?}: a line scrolls the wheel line: {before:?} -> {panned:?}");
+        assert!(
+            (panned.center.y - before.center.y - f64::from(LINE)).abs() < 1e-3,
+            "{scheme:?}: a line scrolls the wheel line: {before:?} -> {panned:?}"
+        );
         assert_eq!(panned.zoom, before.zoom, "{scheme:?}: a scrolling line does not zoom");
         wheel_line(&mut fixture, &view, 1.0, zoom);
         let ratio = view.get().zoom / panned.zoom;
@@ -392,7 +404,15 @@ fn a_latched_middle_scroll_ends_on_escape_a_second_press_or_the_wheel_and_a_held
     };
 
     latch(&mut fixture);
-    assert!(fixture.focused_stop().is_some_and(|(id, _)| Some(id) == canvas.get()), "the middle press focuses the canvas, which its Escape claim needs");
+    eprintln!(
+        "DIAG a_latched_middle_scroll_ends_on_escape_a_second_press_or_the_wheel_and_a_held_press_scrolls_until_its_release: focused {:?}, canvas {:?}",
+        fixture.focused_stop(),
+        canvas.get()
+    );
+    assert!(
+        fixture.focused_stop().is_some_and(|(id, _)| Some(id) == canvas.get()),
+        "the middle press focuses the canvas, which its Escape claim needs"
+    );
     assert!(scrolls(&mut fixture, &view), "a latched scroll moves the view");
     fixture.key(Key::Escape, Modifiers::NONE);
     assert!(!scrolls(&mut fixture, &view), "Escape ends the latch");

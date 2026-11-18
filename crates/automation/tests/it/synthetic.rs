@@ -313,11 +313,11 @@ fn bad_input_params_are_refused_before_anything_is_queued() {
     assert!(Click::from_params(&json!({"label": "Save", "button": "secondary"})).is_ok());
 }
 
-/// A key whose press moves the focus (Tab from one field to the next) still has its release reach egui in a pass of
-/// its own: the release is not withdrawn as input whose focus changed, no key stays down, and the waiter is answered
-/// as processed, not cancelled.
+/// A key whose press moves the focus (Tab from one field to the next) still has its release carried out: the release
+/// is not cancelled as input whose focus changed, no key stays down, and the waiter is answered as processed. The
+/// framework takes the Tab press it acts on out of egui's input, so egui's fields never read it.
 #[trial]
-fn a_key_release_reaches_egui_after_its_press_moves_focus() {
+fn a_key_release_is_carried_out_after_its_press_moves_focus() {
     use craft_automation::control::{ControlChannel, ControlRequest, Reply};
 
     let passes: Rc<RefCell<Vec<Seen>>> = Rc::default();
@@ -359,10 +359,8 @@ fn a_key_release_reaches_egui_after_its_press_moves_focus() {
     assert_eq!(answer["ok"], true, "processed, not cancelled: {answer}");
     assert!(rig.fx.focused().is_some() && rig.fx.focused() != before, "the press moved the focus");
     let passes = rig.take();
-    let tab = |pressed: bool| move |event: &Event| matches!(event, Event::Key { key: Key::Tab, pressed: p, .. } if *p == pressed);
-    let press = passes.iter().position(|pass| pass.events.iter().any(tab(true))).expect("a pass saw the press");
-    let release = passes.iter().position(|pass| pass.events.iter().any(tab(false))).expect("a pass saw the release");
-    assert!(press < release, "the release has a pass of its own, after the press's");
+    let tab = |event: &Event| matches!(event, Event::Key { key: Key::Tab, pressed: true, .. });
+    assert!(!passes.iter().any(|pass| pass.events.iter().any(tab)), "the Tab press the framework took reaches no field in egui");
     assert!(passes.last().is_some_and(|pass| !pass.any_key_down), "no key stays down");
 }
 

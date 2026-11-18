@@ -26,8 +26,8 @@ mod tool_groups;
 mod tool_host;
 
 pub use crate::canvas_data::{Guide, GuideColor, GuideDrag, GuideKey, GuideLine, NavigatorOptions, NavigatorSettings, ProxyColor};
-pub use crop::{CropOutside, CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
 pub use craft_behavior::{FRAME_STEP_MAX, frame_step};
+pub use crop::{CropOutside, CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::{ShowReadouts, hud, readout};
 pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned};
@@ -102,7 +102,6 @@ pub mod navigator_panel;
 use crate::contract::{
     Bind, Common, Component, Container, ContainerProps, Cx, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
 };
-use crate::style::AutoScrollMarkLook;
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
@@ -110,6 +109,7 @@ use crate::runtime::frame;
 use crate::runtime::lock_keys;
 use crate::runtime::measure;
 use crate::runtime::motion::{Animate as _, spec};
+use crate::style::AutoScrollMarkLook;
 use crate::style::{ComponentStyle, Stateful, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
@@ -487,7 +487,12 @@ impl<'a> Canvas<'a> {
         let latching = middle && !on_region && self.navigation.middle_button == MiddleButton::AutoScroll;
         let held = latching && press.phase.button_down();
         match press.phase {
-            PressPhase::Down { start, .. } if latching => motion.middle.press(start.origin, area.contains(start.origin)),
+            // The latch lives while the canvas holds the focus, and the focus service moves focus on primary presses
+            // only: the middle press that latches it takes the focus itself.
+            PressPhase::Down { start, .. } if latching => {
+                motion.middle.press(start.origin, area.contains(start.origin));
+                cx.focus_own();
+            }
             PressPhase::Release { .. } if latching => motion.middle.release(),
             PressPhase::Cancel { .. } if latching => motion.middle.cancel(),
             // Any other press on the background ends a latch.

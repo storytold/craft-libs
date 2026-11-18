@@ -277,9 +277,9 @@ impl<'a> CropOverlay<'a> {
         if self.outside != CropOutside::Apply {
             return None;
         }
-        let corners = self.area.or_else(|| {
-            self.bounds.map(|b| [Point::new(b.x0, b.y0), Point::new(b.x1, b.y0), Point::new(b.x1, b.y1), Point::new(b.x0, b.y1)])
-        })?;
+        let corners = self
+            .area
+            .or_else(|| self.bounds.map(|b| [Point::new(b.x0, b.y0), Point::new(b.x1, b.y0), Point::new(b.x1, b.y1), Point::new(b.x0, b.y1)]))?;
         let q = corners.map(|p| view.to_screen(p));
         (!degenerate(&q)).then_some(q)
     }
@@ -651,14 +651,14 @@ impl Component for CropOverlay<'_> {
             CropOutside::Apply => {
                 cx.part(OUTSIDE, HitShape::Rect(rect))
                     .sense(Sense::CLICK | Sense::CONTEXT_CLICK)
-                    .priority(outside)
+                    .priority(HitPriority::new(HitLevel::Background, u8::MAX - 1))
                     .pointer_only("Enter applies the crop");
                 // One step stronger than the outside, below the frame's parts: a press between the frame and the
                 // area's outline lands here.
                 if let Some(cut) = self.cut_area(&view) {
                     cx.part(CUT, HitShape::Polygon(cut.to_vec()))
                         .sense(Sense::DRAG | Sense::CLICK)
-                        .priority(HitPriority::new(HitLevel::Background, u8::MAX - 1))
+                        .priority(outside)
                         .pointer_only("a press on the cut-away area does nothing, so it has no keyboard path");
                 }
             }
@@ -681,7 +681,8 @@ impl Component for CropOverlay<'_> {
             return;
         }
         let mut live = cx.memory::<Live>().clone();
-        let grabs = [Grab::Line, Grab::Turn, Grab::Outside, Grab::Cut].into_iter().chain((0..=8).filter_map(frame_part).map(Grab::Part)).collect::<Vec<_>>();
+        let grabs =
+            [Grab::Line, Grab::Turn, Grab::Outside, Grab::Cut].into_iter().chain((0..=8).filter_map(frame_part).map(Grab::Part)).collect::<Vec<_>>();
         for grab in grabs {
             let (key, index) = grab.key();
             let part = match index {
