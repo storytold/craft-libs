@@ -154,7 +154,7 @@ impl EditorHandle {
             .collect();
         let text = state.lines.iter().map(|line| line.text).collect::<Vec<_>>().join("\n");
         let selection = state.selection.or(Some((state.caret_at, state.caret_at)));
-        Some(TextFacts { widget: self.widget, text, masked, editable: !self.read_only, lines, selection })
+        Some(TextFacts { widget: self.widget, text, masked, editable: !self.read_only, disabled: false, lines, selection })
     }
 }
 

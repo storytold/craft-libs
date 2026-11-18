@@ -158,7 +158,9 @@ fn a_style_tile_samples_its_parameter_from_the_start_point_outward() {
         assert!(t(tile, 0.5, 0.5) < t(tile, 0.6, 0.5) && t(tile, 0.6, 0.5) < t(tile, 0.9, 0.5));
         assert!((t(tile, 0.7, 0.5) - t(tile, 0.5, 0.3)).abs() < 1e-4);
     }
-    // A corner-ward step along the diagonal is farther in a circle than in a rectangle.
-    assert!(t(circle, 0.7, 0.7) > t(rect, 0.7, 0.7) + 0.05);
+    // Both reach 1 at the farthest corner, so a diagonal step reads the same in both; along an axis the rectangle's
+    // square isoline is nearer the centre than the circle's, so it rises faster there.
+    assert!((t(circle, 0.7, 0.7) - t(rect, 0.7, 0.7)).abs() < 1e-4, "both outlines reach the corner together");
+    assert!(t(rect, 0.9, 0.5) > t(circle, 0.9, 0.5) + 0.05, "along an axis a rectangle rises faster than a circle");
     assert!((t(rect, 0.7, 0.7) - t(rect, 0.7, 0.5)).abs() < 1e-4, "a rectangle's isoline is square");
 }

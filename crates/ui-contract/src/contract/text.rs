@@ -316,6 +316,7 @@ fn facts<C: Component>(
     rect: Rect,
     masked: bool,
     read_only: bool,
+    enabled: bool,
 ) {
     if !text_access::exposed(&cx.core.ctx, widget) {
         state.rows = None;
@@ -325,7 +326,7 @@ fn facts<C: Component>(
     let text = out.layout.full.clone();
     let selection = adapter::selection(&cx.core.ctx, widget).map(|(caret, anchor)| (rows.pos(&text, anchor), rows.pos(&text, caret)));
     *cx.core.text_access.borrow_mut() =
-        Some(text_access::TextFacts { widget, text, masked, editable: !read_only, lines: rows.lines.clone(), selection });
+        Some(text_access::TextFacts { widget, text, masked, editable: !read_only, disabled: !enabled, lines: rows.lines.clone(), selection });
     state.rows = Some(rows);
 }
 
@@ -508,7 +509,7 @@ pub(crate) fn run<C: Component>(
     if let Some(baseline) = out.baseline {
         cx.core.paint.borrow_mut().baseline.get_or_insert(baseline);
     }
-    facts(cx, &mut state, widget, &out, decl.rect, decl.options.mask, read_only);
+    facts(cx, &mut state, widget, &out, decl.rect, decl.options.mask, read_only, enabled);
     cx.core.text_invalid = state.invalid;
     cx.core.text_unparsed = decl.options.unparsed.clone().filter(|_| state.invalid);
     cx.core.escape_to_list = state.completions.open || list_open;

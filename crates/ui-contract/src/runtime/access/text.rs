@@ -43,6 +43,8 @@ pub(crate) struct TextFacts {
     /// A password: the node carries no value and exposes no runs.
     pub masked: bool,
     pub editable: bool,
+    /// The text part is disabled (its component may not be): the owner's node stands for the part and says so.
+    pub disabled: bool,
     pub lines: Vec<Line>,
     /// The anchor and focus as a line index and a byte offset in the line.
     pub selection: Option<(TextPos, TextPos)>,
@@ -112,7 +114,7 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
         Some((anchor_node, anchor_at, focus_node, focus_at))
     });
     let value = (!facts.masked).then_some(facts.text.as_str());
-    adapter::write_text(ctx, owner, &TextNode { value, editable: facts.editable, selection });
+    adapter::write_text(ctx, owner, &TextNode { value, editable: facts.editable, disabled: facts.disabled, selection });
     Service::<Tables>::run(ctx, |tables| tables.0.insert(owner, entries));
 }
 
