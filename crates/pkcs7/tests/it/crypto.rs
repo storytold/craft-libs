@@ -498,9 +498,17 @@ fn a_responder_that_copies_the_issuers_name_does_not_answer_for_it() {
     let single = der::seq(&[&cert_id, &revoked, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
     let by_key = der::tlv(tag::ctx(2), &der::octets(&DigestAlg::Sha1.digest(&[&impostor.public_key.key_bits()])));
     // RFC 6960's `[0] EXPLICIT SEQUENCE OF Certificate`, and the certificate directly in `[0]`.
-    for certs in [der::explicit(0, &der::seq(&[&impostor.raw])), der::explicit(0, &impostor.raw)] {
+    for certs in [
+        der::explicit(0, &der::seq(&[&impostor.raw])),
+        der::explicit(0, &impostor.raw),
+        // An unreadable entry must not hide the first readable certificate; later entries
+        // must not replace it. Parsing it still does not authorize the impostor.
+        der::explicit(0, &der::seq(&[&der::seq(&[]), &impostor.raw, &issuer.raw])),
+    ] {
         let forged = OcspResponse::parse(&signed_ocsp(&key, &by_key, Some(&certs), &single, this)).unwrap();
         assert_eq!(forged.check(issuer, issuer, mid_june()), RevocationStatus::Unknown);
+        // Rejection must follow verification policy, not failure to read the embedded certificate.
+        assert_eq!(forged.into_parts().responder_cert.map(|cert| cert.raw), Some(impostor.raw.clone()));
     }
 }
 
