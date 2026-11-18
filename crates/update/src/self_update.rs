@@ -878,7 +878,15 @@ pub fn prepare_update_with_options(
         match install {
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
-                let existing = Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None };
+                let existing = Installed {
+                    version: None,
+                    source: InstallSource::MacApp,
+                    location: bundle.display().to_string(),
+                    package: None,
+                    externally_managed: false,
+                    origin: None,
+                    installation: None,
+                };
                 let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
                 let placed =
                     install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
@@ -2381,7 +2389,7 @@ mod tests {
         let (src, image, mount) = (dir.path().join("src"), dir.path().join("test.dmg"), dir.path().join("mount"));
         launcher_bundle(&src);
         std::fs::create_dir(&mount).unwrap();
-        let _one_at_a_time = crate::install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _one_at_a_time = crate::install::macos::disk_image_turn();
         let text = std::ffi::OsStr::new;
         let created = hdiutil(
             &[text("create"), text("-quiet"), text("-format"), text("UDZO"), text("-srcfolder"), src.as_os_str(), image.as_os_str()],
@@ -3524,7 +3532,7 @@ mod tests {
         let src = dir.path().join("src");
         bundle(&src, "0.2.0");
         let dmg = dir.path().join("artcraft-launcher-0.2.0-macos-universal.dmg");
-        let one_at_a_time = install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let one_at_a_time = install::macos::disk_image_turn();
         let ok = std::process::Command::new("hdiutil")
             .args(["create", "-quiet", "-format", "UDZO", "-volname", "ArtCraft Launcher 0.2.0", "-srcfolder"])
             .arg(&src)
@@ -3535,11 +3543,20 @@ mod tests {
         assert!(ok, "hdiutil create failed");
         drop(one_at_a_time);
         let current = apps.join("ArtCraft Launcher.app");
-        let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
+        let existing = Installed {
+            version: None,
+            source: InstallSource::MacApp,
+            location: current.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         // An unsigned test bundle: the signature check has its own tests in `install`.
         let expect = install::macos::Expect { team: None, version: None, quit_first: false };
         let stop = Stop::default();
         let wait = install::macos::CheckTurn { stop: &stop, phase: &mut |_| {} };
+        let _other_processes = install::macos::other_test_processes_wait();
         let placed =
             install::macos::install_dmg(&crate::suite::LAUNCHER, &dmg, Some(&existing), None, false, &Paths::under(dir.path()), &expect, wait)
                 .unwrap();
@@ -3568,7 +3585,7 @@ mod tests {
         .unwrap();
         std::fs::write(contents.join("MacOS/ArtCraft Launcher"), version).unwrap();
         let dmg = dir.join(format!("built-{version}.dmg"));
-        let one_at_a_time = install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let one_at_a_time = install::macos::disk_image_turn();
         let ok = std::process::Command::new("hdiutil")
             .args(["create", "-quiet", "-format", "UDZO", "-volname", "ArtCraft Launcher", "-srcfolder"])
             .arg(dir.join(format!("src-{version}")))
@@ -3630,6 +3647,8 @@ mod tests {
         let (url, requests) = serve(body.clone(), vec![Reply::Full, Reply::Full]);
         let release = launcher_release("0.2.0", &body, url, dir.path());
         let kept = install::download_path(&paths, &release.assets[0]);
+        // The updates below open the disk image.
+        let _other_processes = install::macos::other_test_processes_wait();
         for _ in 0..2 {
             let error = prepare_update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &|| Ok(()), None)
                 .unwrap_err();

@@ -42,6 +42,9 @@
 //!   existing English fallback.
 //! - **German** ([`ProofLang::De`]): hyphenation by `hyph-utf8`'s German patterns (reformed
 //!   spelling, MIT); no spelling or grammar marks yet.
+//! - **French** (a [`ProofLang::Pack`] locale; module [`fr`]): the pack dictionary with French
+//!   elisions and accent-oriented suggestions, plus conservative typography and basic checks.
+//!   France and Canada retain their regional tags; Quebec uses its own punctuation spacing.
 //! - **Any other language** ([`ProofLang::Pack`], module [`packs`]): spelling and suggestions
 //!   from its Hunspell dictionary (an installed Language pack, the dictionaries folder or the
 //!   system's) with default tuning, hyphenation from its pack, no grammar rules; without a
@@ -73,6 +76,7 @@ pub mod dict;
 pub mod en_variants;
 mod english;
 pub mod es;
+pub mod fr;
 pub mod he;
 pub mod hr;
 pub mod hunspell;
@@ -868,34 +872,42 @@ fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options
 }
 
 /// Words extracted for spell checking. For Hebrew text, keeps gershayim (U+05F4 / `"`), geresh
-/// (U+05F3 / `'`), and maqaf (U+05BE / `-`) within the token so acronyms (`צה״ל`, `ק"ק`),
-/// abbreviations (`וכו'`), and hyphenated compounds are checked as whole units.
+/// (U+05F3 / `'`), and maqaf (U+05BE / `-`) within same-script tokens so acronyms (`צה״ל`, `ק"ק`),
+/// abbreviations (`וכו'`), and hyphenated compounds stay whole while mixed-script hyphens (`teh-שלום`) split.
 fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(usize, usize)> {
     if !text.chars().any(crate::he::is_hebrew_letter) {
         return words(text);
     }
-    // Check if character at index i can join adjacent characters into a Hebrew word (quotes/gershayim/maqaf)
+    let prev_base = |idx: usize| -> Option<char> {
+        text.get(..idx)
+            .and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+    };
+    let next_base = |idx: usize, c: char| -> Option<char> {
+        text.get(idx + c.len_utf8()..)
+            .and_then(|s| s.chars().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+    };
+    // Check if character at index i can join adjacent characters into a word (quotes/gershayim/maqaf/hyphen)
     // Skipping vowel marks / combining marks (e.g. צָהָ"ל, וכוּ')
     let is_hebrew_joiner = |idx: usize, c: char| -> bool {
         match c {
-            '״' | '־' => true,
+            '״' => true,
+            '-' | '־' => {
+                // Only join across hyphen/maqaf when both sides are alphanumeric of matching Hebrew/non-Hebrew script.
+                match (prev_base(idx), next_base(idx, c)) {
+                    (Some(p), Some(n)) if p.is_alphanumeric() && n.is_alphanumeric() => {
+                        crate::he::is_hebrew_letter(p) == crate::he::is_hebrew_letter(n)
+                    }
+                    _ => false,
+                }
+            }
             '"' | '”' | '“' => {
                 // Only join ASCII/curly double quotes if bordered by Hebrew letters (skipping niqqud)
-                let prev_he = text
-                    .get(..idx)
-                    .and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
-                    .is_some_and(crate::he::is_hebrew_letter);
-                let next_he = text
-                    .get(idx + c.len_utf8()..)
-                    .and_then(|s| s.chars().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
-                    .is_some_and(crate::he::is_hebrew_letter);
-                prev_he && next_he
+                prev_base(idx).is_some_and(crate::he::is_hebrew_letter)
+                    && next_base(idx, c).is_some_and(crate::he::is_hebrew_letter)
             }
             '\'' | '’' | '׳' => {
                 // Geresh/apostrophe can follow or join Hebrew letters (skipping niqqud)
-                text.get(..idx)
-                    .and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
-                    .is_some_and(crate::he::is_hebrew_letter)
+                prev_base(idx).is_some_and(crate::he::is_hebrew_letter)
             }
             _ => false,
         }
@@ -904,9 +916,10 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     for (i, c) in text.char_indices() {
-        // Keep ''' and '-' as general word characters as words() does, so English words in mixed paragraphs
-        // (like doesn't, co-operate) are not split.
-        let is_w = c.is_alphanumeric() || c == '\'' || c == '-' || unicode_normalization::char::is_combining_mark(c) || is_hebrew_joiner(i, c);
+        // Keep ''' as a general word character as words() does, so English contractions in mixed paragraphs
+        // (like doesn't) are not split; '-' and '־' are handled by is_hebrew_joiner so same-script compounds
+        // (co-operate, בית-ספר) stay whole while mixed-script compounds (teh-שלום) split.
+        let is_w = c.is_alphanumeric() || c == '\'' || unicode_normalization::char::is_combining_mark(c) || is_hebrew_joiner(i, c);
         match (start, is_w) {
             (None, true) => start = Some(i),
             (Some(s), false) => {
@@ -1058,6 +1071,7 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
     match lang {
         ProofLang::En => grammar_en(text, capital_first),
         ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa => grammar_en(text, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect(),
+        ProofLang::Pack(locale) if locale.primary() == "fr" => fr::grammar::check_in(text, lang),
         // `pt-pt` shares Portuguese's rules, its issues in its own language.
         _ => language(lang.built_in())
             .map_or_else(Vec::new, |l| (l.grammar)(text, lang, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect()),
@@ -3161,6 +3175,20 @@ mod tests {
         let texts_eng: Vec<&str> = words_eng.iter().map(|&(a, b)| &text_mixed[a..b]).collect();
         assert!(texts_eng.contains(&"doesn't"), "doesn't should be preserved: {texts_eng:?}");
         assert!(texts_eng.contains(&"co-operate"), "co-operate should be preserved: {texts_eng:?}");
+
+        // Same-script Hebrew hyphen/maqaf compounds stay whole, while mixed-script compounds (teh-שלום) split
+        let text_compounds = "בית-ספר בית־ספר teh-שלום";
+        let he_start = text_compounds.find("שלום").unwrap();
+        let words_cmp = words_for_spelling(text_compounds, &|idx| if idx >= he_start { ProofLang::He } else { ProofLang::En });
+        let texts_cmp: Vec<&str> = words_cmp.iter().map(|&(a, b)| &text_compounds[a..b]).collect();
+        assert!(texts_cmp.contains(&"בית-ספר"), "Hebrew hyphen compound should stay whole: {texts_cmp:?}");
+        assert!(texts_cmp.contains(&"בית־ספר"), "Hebrew maqaf compound should stay whole: {texts_cmp:?}");
+        assert!(texts_cmp.contains(&"teh"), "Mixed-script compound should split Latin part: {texts_cmp:?}");
+        assert!(texts_cmp.contains(&"שלום"), "Mixed-script compound should split Hebrew part: {texts_cmp:?}");
+
+        let mixed_issues = spelling_issues("teh-שלום", |idx| if idx >= 4 { ProofLang::He } else { ProofLang::En }, &Options::default());
+        assert_eq!(mixed_issues.len(), 1, "expected only 'teh' to be flagged: {mixed_issues:?}");
+        assert_eq!((mixed_issues[0].start, mixed_issues[0].end), (0, 3));
     }
 
     #[test]
