@@ -65,7 +65,10 @@ impl FontRef {
         FontRef(family)
     }
 
-    pub(crate) fn family(&self) -> FontFamily {
+    /// The egui family that lays the face out, for a layout job an app builds itself: the open paragraph of a text
+    /// editor, whose galley its `TextEditorHost` lays out. Content painters lay document runs out through `DocText`,
+    /// which takes the `FontRef` itself.
+    pub fn family(&self) -> FontFamily {
         self.0.clone()
     }
 }

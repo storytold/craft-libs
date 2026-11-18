@@ -1,7 +1,7 @@
 //! A collection's output: `CollectionResponse`, the rows it showed and the gestures it allows.
 
 use super::drops::DropAt;
-use super::events::{CollectionEvent, ReorderMove};
+use super::events::{CollectionEvent, ContextMenuRequest, ReorderMove};
 use super::props::{CollectionProps, SelectMode};
 use craft_behavior::ColumnKey;
 use egui::Response;
@@ -33,6 +33,11 @@ pub struct CollectionResponse<K, E> {
     pub pending_drop: Option<PendingDrop<K>>,
     /// The row under the pointer this pass; `None` during a drag.
     pub hovered: Option<K>,
+    /// The request of the item whose context menu is open: this pass's `CollectionEvent::ContextMenu`, else the last
+    /// one while a menu hung from the collection's response (`Menu::context`) stays open. `None` once that menu
+    /// closes, and once the item is no longer in the collection. A menu's rows read their item here, in every pass
+    /// the menu stays open.
+    pub menu: Option<ContextMenuRequest<K>>,
 }
 
 /// The drop a release would make on a collection now.
@@ -48,7 +53,7 @@ pub enum PendingDrop<K> {
 impl<K, E> CollectionResponse<K, E> {
     pub(crate) fn new(
         response: Response,
-        ItemsOut { events, shown, activation_clicks, pending_drop, hovered }: ItemsOut<K, E>,
+        ItemsOut { events, shown, activation_clicks, pending_drop, hovered, menu }: ItemsOut<K, E>,
         visible: Range<usize>,
         gestures: Gestures,
     ) -> Self {
@@ -63,6 +68,7 @@ impl<K, E> CollectionResponse<K, E> {
             activation_clicks,
             pending_drop,
             hovered,
+            menu,
         }
     }
 
@@ -80,11 +86,12 @@ pub(crate) struct ItemsOut<K, E> {
     pub(crate) activation_clicks: u8,
     pub(crate) pending_drop: Option<PendingDrop<K>>,
     pub(crate) hovered: Option<K>,
+    pub(crate) menu: Option<ContextMenuRequest<K>>,
 }
 
 impl<K, E> Default for ItemsOut<K, E> {
     fn default() -> Self {
-        ItemsOut { events: Vec::new(), shown: Vec::new(), activation_clicks: 0, pending_drop: None, hovered: None }
+        ItemsOut { events: Vec::new(), shown: Vec::new(), activation_clicks: 0, pending_drop: None, hovered: None, menu: None }
     }
 }
 

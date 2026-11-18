@@ -3,6 +3,11 @@
 //! One registry per context serves every caller, so the faces of a frame are counted together. A face is added a few
 //! per frame; past [`MAX_DOCUMENT_FACES`] the faces the previous frame did not draw are taken out again, which keeps
 //! memory to the faces on screen. Faces still on screen stay, however many there are.
+//!
+//! A face may name a chain of other document faces ([`FaceBytes::chain`]): a font split over several subsets (Word
+//! embeds one subset per run of characters) draws each character from the first subset that has it, before the
+//! interface family. The chains are linked in the begin-pass step after a face was added or taken out, when egui has
+//! applied every face the pass before added.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -20,7 +25,8 @@ pub const DOCUMENT_FACES_PER_PASS: usize = 6;
 /// The faces kept before the ones the previous frame did not draw are taken out.
 pub const MAX_DOCUMENT_FACES: usize = 64;
 
-/// The bytes of a face, its index in a collection and its variation coordinates (axis tag, value).
+/// The bytes of a face, its index in a collection, its variation coordinates (axis tag, value) and the faces that
+/// draw what it lacks.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct FaceBytes {
@@ -30,12 +36,25 @@ pub struct FaceBytes {
     pub index: u32,
     /// The variation coordinates the face is drawn at.
     pub coords: Vec<([u8; 4], f32)>,
+    /// The keys of the document faces that draw the characters this face has no glyph for, in order, before the
+    /// interface family.
+    pub chain: Vec<String>,
 }
 
 impl FaceBytes {
-    /// Face `index` of the file `bytes`, at its default coordinates.
+    /// Face `index` of the file `bytes`, at its default coordinates, with no chain.
     pub fn new(bytes: Arc<[u8]>, index: u32) -> Self {
-        FaceBytes { bytes, index, coords: Vec::new() }
+        FaceBytes { bytes, index, coords: Vec::new(), chain: Vec::new() }
+    }
+
+    /// The face followed by the document faces of `keys`, in order, for the characters it has no glyph for: the
+    /// sibling subsets of a font split over several (Word). Each key is a face asked for with `document_face` on its
+    /// own; one not registered, unavailable or taken out is skipped, and the face's own key is ignored. Drawing the
+    /// face marks its chain drawn too, so a sibling the face relies on stays while the face does.
+    #[must_use]
+    pub fn chain(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.chain = keys.into_iter().map(Into::into).collect();
+        self
     }
 
     /// The face drawn at `coords`.
@@ -64,10 +83,11 @@ pub enum FaceState {
     Unavailable,
 }
 
-/// A registered face: the frame it was last drawn in and the frame it was added in.
+/// A registered face: the frame it was last drawn in, the frame it was added in and the keys of its chain.
 struct Registered {
     used: u64,
     added: u64,
+    chain: Vec<String>,
 }
 
 /// The context's document faces.
@@ -80,6 +100,8 @@ struct Registry {
     begun: bool,
     evicted: Option<u64>,
     hooked: bool,
+    /// A face was added or taken out since the chains were last linked.
+    relink: bool,
 }
 
 impl Registry {
@@ -103,7 +125,33 @@ impl Registry {
         for key in &stale {
             self.faces.remove(key);
         }
+        self.relink |= !stale.is_empty();
         stale.iter().map(|key| family_name(key)).collect()
+    }
+
+    /// The family of every face with a chain, with the families of its chain's registered faces in order.
+    fn chains(&self) -> Vec<(String, Vec<String>)> {
+        self.faces
+            .iter()
+            .filter(|(_, face)| !face.chain.is_empty())
+            .map(|(key, face)| {
+                let chain = face.chain.iter().filter(|link| *link != key && self.faces.contains_key(*link)).map(|link| family_name(link)).collect();
+                (family_name(key), chain)
+            })
+            .collect()
+    }
+
+    /// Marks the face `key` and the faces of its chain drawn in this frame.
+    fn mark_drawn(&mut self, key: &str) {
+        let frame = self.frame;
+        let Some(face) = self.faces.get_mut(key) else { return };
+        face.used = frame;
+        let chain = face.chain.clone();
+        for link in &chain {
+            if let Some(face) = self.faces.get_mut(link) {
+                face.used = frame;
+            }
+        }
     }
 }
 
@@ -118,16 +166,18 @@ enum Known {
     New,
 }
 
-/// The begin-pass step: starts the frame and evicts the faces past the cap. Eviction happens only here, before any
-/// install of the pass can queue its definitions, because it rebuilds them from the applied ones.
+/// The begin-pass step: starts the frame, evicts the faces past the cap and, after a face was added or taken out,
+/// links the chains. Both happen only here, before any install of the pass can queue its definitions, because they
+/// rebuild them from the applied ones; egui has applied the faces the previous pass added before this step runs.
 fn begin_pass(ctx: &Context) {
     let now = pass::root_frame_nr(ctx);
-    let stale = memory::with::<Registry, _>(ctx, |registry| {
+    let changed = memory::with::<Registry, _>(ctx, |registry| {
         registry.begin(now);
-        registry.evict(now)
+        let stale = registry.evict(now);
+        std::mem::take(&mut registry.relink).then(|| (stale, registry.chains()))
     });
-    if !stale.is_empty() {
-        egui_fonts::remove_faces(ctx, &stale);
+    if let Some((stale, chains)) = changed {
+        egui_fonts::set_document_faces(ctx, &stale, &chains);
     }
 }
 
@@ -155,9 +205,9 @@ impl DocumentFaces {
         let (now, known) = memory::with::<Registry, _>(ctx, |registry| {
             let known = if registry.failed.contains(key) {
                 Known::Failed
-            } else if let Some(face) = registry.faces.get_mut(key) {
-                face.used = registry.frame;
-                Known::Added(face.added)
+            } else if let Some(added) = registry.faces.get(key).map(|face| face.added) {
+                registry.mark_drawn(key);
+                Known::Added(added)
             } else {
                 Known::New
             };
@@ -189,7 +239,10 @@ impl DocumentFaces {
             return FaceState::Unavailable;
         };
         egui_fonts::add_family_face(ctx, &family, bytes.data());
-        memory::with::<Registry, _>(ctx, |registry| registry.faces.insert(key.to_owned(), Registered { used: now, added: now }));
+        memory::with::<Registry, _>(ctx, |registry| {
+            registry.faces.insert(key.to_owned(), Registered { used: now, added: now, chain: bytes.chain });
+            registry.relink = true;
+        });
         FaceState::Loading
     }
 }

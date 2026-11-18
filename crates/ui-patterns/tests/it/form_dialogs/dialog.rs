@@ -1,5 +1,6 @@
 //! `ParamDialog` and `HostedParamDialog`: the dialog's own undo history, the Preview box's hold-to-compare, Enter in
-//! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, reopening under the same key, the
+//! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, the host's notes and OK state,
+//! reopening under the same key, the
 //! request slots and the rows an edit changed, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
@@ -249,6 +250,42 @@ fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     fixture.idle(4);
     let answered = host.borrow_mut().take_keyed::<HostedParamDialog>().map(|(result, _)| result).and_then(DialogResult::ok);
     assert_eq!(answered.map(|result| result.fields), Some(filed.fields), "the accepted OK closes the dialog with the held values");
+}
+
+/// A note the host's job gives the dialog.
+const CHECKING: &str = "Checking pages…";
+
+/// Why the host holds OK back.
+const NOT_READY: &str = "The pages are still being checked.";
+
+// The notes and the OK state the host sets between passes show in the next pass: the note under the rows and OK
+// disabled, with `confirm` refused too; `Ok` and an empty list put OK and the rows back in the pass after.
+#[trial]
+fn notes_and_the_ok_state_the_host_sets_show_in_the_next_pass() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(4);
+    on_dialog(&host, |dialog| {
+        dialog.set_notes(vec![Label::from(CHECKING)]);
+        dialog.set_ready(Err(Label::from(NOT_READY)));
+    });
+    fixture.idle(1);
+    assert!(fixture.by_label(CHECKING).is_some(), "the note shows in the next pass");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK is disabled in the next pass");
+    let ctx = fixture.ctx().clone();
+    assert!(!host.borrow_mut().confirm::<HostedParamDialog>(&ctx), "confirm answers nothing while the host holds OK");
+    assert!(host.borrow().is_open::<HostedParamDialog>(), "the dialog stays open");
+
+    on_dialog(&host, |dialog| {
+        dialog.set_notes(Vec::new());
+        dialog.set_ready(Ok(()));
+    });
+    fixture.idle(1);
+    assert!(fixture.by_label(CHECKING).is_none(), "an empty list shows no note");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(!fixture.tree().is_disabled_key(ok.node), "`Ok` leaves OK to the build again");
 }
 
 // A dialog the app opens again under the same key, in the pass it takes the first one's Cancel, shows and answers.

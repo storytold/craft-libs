@@ -291,8 +291,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             None
         };
         let menu_row = menu_at.map(|pos| (pos, layout.hit(local(pos), offset)));
-        // A secondary release on the empty space asks for the collection's own menu.
+        // A secondary release on the empty space asks for the collection's own menu, which no item's menu is.
         if let Some((pos, None)) = menu_row {
+            self.drags.menu = None;
             self.events.push(CollectionEvent::EmptyContextMenu { at: pos });
         }
         if let Some((pos, Some(at))) = menu_row
@@ -350,7 +351,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Reports a request for the menu of a row; the row keeps its menu button shown while a menu hung from the
     /// collection is open (`RowState::menu_open`).
     pub(super) fn ask_menu(&mut self, request: ContextMenuRequest<C::Key>) {
-        self.drags.menu = Some(request.key.clone());
+        self.drags.menu = Some(request.clone());
         self.events.push(CollectionEvent::ContextMenu(request));
     }
 

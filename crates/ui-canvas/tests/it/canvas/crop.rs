@@ -5,7 +5,9 @@ use craft_behavior::geometry::{
 };
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Axis, CancelReason, CanvasView, EditEvent};
-use craft_ui::canvas::{Canvas, CanvasTool, CropOutside, CropOverlay, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass};
+use craft_ui::canvas::{
+    Canvas, CanvasTool, CropApply, CropOutside, CropOverlay, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass,
+};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
@@ -90,7 +92,7 @@ impl Setup {
 /// What the overlay reported across the passes.
 #[derive(Default)]
 struct Seen {
-    applied: bool,
+    applied: Option<CropApply>,
     discarded: bool,
     straightened: Option<f64>,
     snapped: Vec<SnapLine>,
@@ -190,7 +192,7 @@ impl Rig {
                         seen.events.push(kind);
                     }
                 }
-                seen.applied |= out.apply;
+                seen.applied = out.apply.or(seen.applied);
                 seen.discarded |= out.discard;
                 seen.straightened = out.straightened.or(seen.straightened);
                 seen.snapped = out.snapped;
@@ -756,12 +758,12 @@ fn a_placed_picture_crop_applies_on_a_click_away_keeps_the_cut_area_and_stops_at
     let cut = rig.at(200.0, 95.0);
     rig.click(cut);
     rig.drag(cut, cut + Vec2::new(30.0, 0.0), Modifiers::NONE);
-    assert!(!rig.seen.borrow().applied, "a press in the cut-away area does not apply");
+    assert_eq!(rig.seen.borrow().applied, None, "a press in the cut-away area does not apply");
     assert_eq!(rig.crop(), start, "nothing turned or moved");
     assert!(rig.events().is_empty(), "{:?}", rig.events());
     // Away from the picture: a click applies, the frame as it was.
     rig.click(rig.at(40.0, 40.0));
-    assert!(rig.seen.borrow().applied, "a click away from the picture applies");
+    assert_eq!(rig.seen.borrow().applied, Some(CropApply::Away), "a click away from the picture applies and says it was an away click");
     assert_eq!(rig.crop(), start);
     // A corner dragged past the minimum side stops at the last step that kept it: narrower than it was, not under the
     // minimum, the opposite corner where it was.
@@ -830,7 +832,7 @@ fn a_corner_drag_on_an_area_smaller_than_the_minimum_side_changes_nothing_and_do
     assert_eq!(events.first(), Some(&"begin"), "the grip was taken: {events:?}");
     assert_eq!(events.last(), Some(&"cancel"), "a release under the minimum cancels: {events:?}");
     assert!(!events.contains(&"commit"), "{events:?}");
-    assert!(!rig.seen.borrow().applied, "a grip drag does not apply");
+    assert_eq!(rig.seen.borrow().applied, None, "a grip drag does not apply");
 }
 
 #[trial]

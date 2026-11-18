@@ -559,7 +559,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
                     pointer_over: over_at.is_some_and(|pos| row.contains(pos)),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
-                    menu_open: self.drags.menu.as_ref() == Some(&key) && menu_open,
+                    menu_open: self.drags.menu.as_ref().is_some_and(|request| request.key == key) && menu_open,
                     sub_row: self.source.sub_row(at),
                     continued: at + 1 < len && self.source.sub_row(at + 1).is_some(),
                     last: at + 1 == len,
@@ -835,6 +835,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             bind.apply(&EditEvent::set(Mixed::Same(before), self.header.layout().clone(), label, doc_key));
         }
         *cx.core.memory.session::<HeaderMemory>(sub(id, "columns")) = self.header.persist();
+        // The menu a request of this pass asks for opens after the collection shows, so it counts as open in this
+        // pass; an older request goes once no menu hung from the collection is open.
+        let asked = self.events.iter().any(|event| matches!(event, CollectionEvent::ContextMenu(_)));
+        if !asked && !crate::contract::overlay::container_open::opened_from(&cx.core.ctx, id) {
+            self.drags.menu = None;
+        }
         *cx.core.memory.session::<Drags<C::Key>>(sub(id, "drags")) = self.drags.clone();
         self.header.report(&cx.core.ctx, id, cx);
         *cx.core.memory.session::<Renaming<C::Key>>(sub(id, "rename")) = self.renaming.clone();
@@ -845,6 +851,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             activation_clicks: self.activation_clicks,
             pending_drop: self.drags.pending.clone(),
             hovered: self.hovered.take(),
+            menu: self.drags.menu.clone().filter(|request| self.index_of(&request.key).is_some()),
         }));
         cx.core.visible_rows = self.visible.clone();
         cx.core.gestures = Gestures::of(comp.items());

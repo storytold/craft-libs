@@ -34,9 +34,10 @@ use craft_behavior::{
 };
 use craft_ui::canvas::{canvas_space, context_click};
 use craft_ui::contract::{
-    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome,
-    PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
+    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, FacesCx, Focus as _, MeasureCx,
+    Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
 };
+use craft_ui::fonts::{FaceBytes, FaceState};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::ClipItem;
 use craft_ui::runtime::env::Label;
@@ -211,6 +212,30 @@ impl HostLine {
     }
 }
 
+/// What the editor gives its host to lay the text out with ([`TextEditorHost::lay_out`]): the document faces of the
+/// editor's context, through [`FacesCx`].
+pub struct HostCx<'a> {
+    faces: &'a dyn Faces,
+}
+
+impl FacesCx for HostCx<'_> {
+    fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState {
+        let mut load = Some(load);
+        self.faces.face(key, &mut || load.take().and_then(|load| load()))
+    }
+}
+
+/// [`FacesCx`] behind a reference: the editor's context, whose type names the editor's lifetimes.
+trait Faces {
+    fn face(&self, key: &str, load: &mut dyn FnMut() -> Option<FaceBytes>) -> FaceState;
+}
+
+impl<T: FacesCx> Faces for T {
+    fn face(&self, key: &str, load: &mut dyn FnMut() -> Option<FaceBytes>) -> FaceState {
+        self.document_face(key, load)
+    }
+}
+
 /// The app's text as the editor sees it. Implemented over the edited text object (a type layer, a text frame, a
 /// cell) for one editing session.
 ///
@@ -220,10 +245,17 @@ pub trait TextEditorHost {
     /// The whole text, including the marked text while composing.
     fn text(&self) -> &str;
 
+    /// Lays the text out for the pass, before the editor asks for anything else in it. `cx` reaches the document
+    /// faces of the editor's context ([`FacesCx`]): a host whose text is set in a document's own fonts asks for them
+    /// here, wherever the editor is shown (over a canvas, in a page view's body). The default lays out nothing.
+    fn lay_out(&mut self, _cx: &HostCx<'_>) {}
+
     /// Replace the chars `range` with `text`. The host applies its insertion style (the style the Character panel
-    /// set at the caret), records history (one step per editing session) and lays the text out again. `false` when
-    /// it refused (a locked layer): the editor leaves its selection as it was.
-    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> bool;
+    /// set at the caret), records history (one step per editing session) and lays the text out again. It returns the
+    /// chars it inserted in place of `text`: fewer when it kept only part of it (a field's maximum length), and the
+    /// editor puts the caret after them. `None` when it refused (a locked layer): the editor leaves its selection as
+    /// it was.
+    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> Option<usize>;
 
     /// The char offset nearest `at`, and the laid-out line it is on.
     fn hit(&mut self, at: Point) -> (usize, usize);
@@ -549,6 +581,8 @@ impl Component for TextEditor<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // Update runs before paint, so one layout serves the pass's edits and its paint.
+        self.host.lay_out(&HostCx { faces: &*cx });
         let space = Space::of(&cx.env);
         let before = cx.value().copied().unwrap_or_default();
         let inputs: Vec<EditorInput> = cx.editor_input().collect();

@@ -153,6 +153,47 @@ fn a_tab_dropped_on_the_views_splits_or_moves_to_the_other_pane() {
     assert_eq!(drops, vec![(vec![0], TabDropTarget::Pane(1))], "the pane the rule takes still reports the drop");
 }
 
+/// Each pane's body shows at its pane as the views lay it out in the pass: mid-drag, the bodies sit where the value the
+/// drag gives in that same pass puts the panes, pane 0 at the start edge under either direction.
+#[trial]
+fn each_pane_body_shows_at_its_pane_in_the_pass_a_divider_moves() {
+    use craft_ui::testing::pointer;
+    for rtl in [false, true] {
+        let seen = Rc::new(RefCell::new((Vec::<(usize, Rect)>::new(), Rect::NOTHING, SplitAt::default(), None::<egui::Id>)));
+        let held = seen.clone();
+        let mut at = SplitAt::default();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut bodies = Vec::new();
+            let views = SplitViews::new("Views", SplitLayout::TwoUpVertical, Bind::bound(&mut at)).count(2).show_panes(ui, |ui, _, pane| {
+                // A body has a measuring run before its real run: keep the last run's panes.
+                if pane.index == 0 {
+                    bodies.clear();
+                }
+                bodies.push((pane.index, ui.max_rect()));
+            });
+            *held.borrow_mut() = (bodies, views.output.edit.response.rect, at.clone(), Some(views.output.edit.response.id));
+        });
+        fixture.direction(if rtl { Direction::Rtl } else { Direction::Ltr }).room(ROOM).settle();
+        let id = seen.borrow().3.unwrap_or_else(|| panic!("the split views were shown"));
+        let from = fixture.part(id, DIVIDER.at(0)).unwrap_or_else(|| panic!("the divider is shown")).center();
+        fixture.frame(vec![pointer::moved(from)]);
+        fixture.frame(vec![pointer::press(from)]);
+        for step in 1..=4 {
+            fixture.frame(vec![pointer::moved(from + Vec2::new(15.0 * step as f32, 0.0))]);
+        }
+        let (bodies, full, at, _) = seen.borrow().clone();
+        assert_ne!(at, SplitAt::default(), "the drag moved the divider (rtl {rtl})");
+        let panes = at.placed(SplitLayout::TwoUpVertical, 2, full, rtl);
+        assert_eq!(bodies.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1], "one body per pane, in reading order");
+        for (index, rect) in &bodies {
+            let pane = panes[*index];
+            assert!(near(rect.left(), pane.left()) && near(rect.right(), pane.right()), "body {index} is its pane this pass: {rect:?} {pane:?}");
+        }
+        assert_eq!(bodies[0].1.center().x > bodies[1].1.center().x, rtl, "pane 0's body sits at the start edge (rtl {rtl})");
+        fixture.frame(vec![pointer::release(from + Vec2::new(60.0, 0.0))]);
+    }
+}
+
 #[trial]
 fn grid_and_stacked_splits_lay_out_and_drag_their_dividers() {
     // Tile with five documents: three columns, two rows, the last row two cells.

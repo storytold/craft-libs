@@ -10,7 +10,8 @@
 use super::ItemsHooks;
 use super::marquee::MarqueeDrag;
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnKind, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove, ToggleColumn, ToggleEdit,
+    CollectionEvent, CollectionProps, ColumnKind, ContextMenuRequest, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove,
+    ToggleColumn, ToggleEdit,
 };
 use crate::contract::reorder;
 use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer as _};
@@ -186,9 +187,9 @@ pub(super) struct Drags<K> {
     pub(super) slow: Option<SlowClick<K>>,
     /// The row a press an item part won landed on, and whether the row held the lead when the press began.
     pub(super) part_press: Option<(K, bool)>,
-    /// The row the collection last asked a menu for: it shows as the menu's row while a menu hung from the collection
-    /// is open.
-    pub(super) menu: Option<K>,
+    /// The request the collection last made for a row's menu: the row shows as the menu's row, and the response
+    /// reports the request (`CollectionResponse::menu`), while a menu hung from the collection is open.
+    pub(super) menu: Option<ContextMenuRequest<K>>,
 }
 
 /// A press that opens a rename when it ends as a click on the item's label and no second press follows within the

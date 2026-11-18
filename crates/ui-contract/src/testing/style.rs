@@ -151,6 +151,12 @@ pub fn report_os_contrast(ctx: &Context, contrast: craft_theme::Contrast) {
     crate::runtime::env::system::report_contrast(ctx, contrast);
 }
 
+/// Reports `scale` as the OS's text scale on `ctx` (`None`: no scaling), as a desktop source would;
+/// [`crate::runtime::env::system_text_scale`] answers it.
+pub fn report_os_text_scale(ctx: &Context, scale: Option<f32>) {
+    crate::runtime::env::system::report_text_scale(ctx, scale);
+}
+
 /// Reports `dark` as the OS's colour scheme on `ctx` through the host's reader, as a desktop source would; the
 /// integration sends no `Event::SystemTheme` (Linux without the settings portal).
 pub fn report_os_theme(ctx: &Context, dark: bool) {

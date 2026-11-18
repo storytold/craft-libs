@@ -3,15 +3,17 @@
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_text::quotes::QuoteStyle;
-use craft_text::ui::editor::{CaretLine, EditKind, EditorEnd, EditorMode, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
+use craft_text::ui::editor::{CaretLine, EditKind, EditorEnd, EditorMode, HostCx, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
 use craft_ui::canvas::Canvas;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, FacesCx as _, Show as _, ShowContainer as _};
+use craft_ui::fonts::{FaceBytes, FaceState};
 use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Event, ImeEvent, Key, Modifiers, Rect, pos2, vec2};
+use egui::{Event, FontId, ImeEvent, Key, Modifiers, Rect, pos2, vec2};
 
 #[derive(Default)]
 struct Host {
@@ -23,6 +25,12 @@ struct Host {
     styles: Vec<StyleKey>,
     /// The editor is shown with Esc cancelling (`TextEditor::esc_commits(false)`).
     esc_cancels: bool,
+    /// The most chars the host keeps: it inserts the start of a text that fits, as a field with a maximum length.
+    max_chars: Option<usize>,
+    /// The host's text is set in a document face, which it asks for when it lays the text out.
+    document_face: bool,
+    /// What the last layout found of the document face.
+    face: Option<FaceState>,
 }
 
 /// The chars of one line.
@@ -37,11 +45,21 @@ impl TextEditorHost for Host {
         self.vertical
     }
 
-    fn replace(&mut self, range: Range<usize>, text: &str, _: EditKind) -> bool {
+    fn lay_out(&mut self, cx: &HostCx<'_>) {
+        if self.document_face {
+            let hack =
+                || craft_ui::fonts::deflated_default_definitions().font_data.get("Hack").map(|data| FaceBytes::new(Arc::from(data.bytes()), 0));
+            self.face = Some(cx.document_face("editor-trial-face", hack));
+        }
+    }
+
+    fn replace(&mut self, range: Range<usize>, text: &str, _: EditKind) -> Option<usize> {
         let byte = |chars: usize| self.text.char_indices().nth(chars).map_or(self.text.len(), |(at, _)| at);
         let (from, to) = (byte(range.start), byte(range.end));
-        self.text.replace_range(from..to, text);
-        true
+        let room = self.max_chars.map_or(usize::MAX, |max| max.saturating_sub(self.text.chars().count().saturating_sub(range.len())));
+        let kept: String = text.chars().take(room).collect();
+        self.text.replace_range(from..to, &kept);
+        Some(kept.chars().count())
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
@@ -407,4 +425,28 @@ fn a_masked_editor_copies_and_cuts_nothing() {
     assert!(masked.fixture.copied().is_empty(), "Cut puts nothing on the clipboard: {:?}", masked.fixture.copied());
     masked.fixture.settle();
     assert_eq!(masked.text(), "abc", "Cut keeps the text");
+}
+
+/// A host that keeps only part of a paste (a field's maximum length) reports what it kept, and the caret goes after
+/// the kept chars rather than after the whole paste.
+#[trial]
+fn the_caret_follows_the_part_of_a_paste_the_host_kept() {
+    let mut editor = session_on(Host { text: "abc".to_owned(), max_chars: Some(5), ..Host::default() }, None, false, EditorMode::FieldLine, false);
+    editor.focus();
+    *editor.selection.borrow_mut() = TextSelection::caret_at(1);
+    editor.fixture.settle();
+    editor.fixture.frame(vec![Event::Paste("defgh".to_owned())]).settle();
+    assert_eq!(editor.text(), "adebc", "the host keeps what fits");
+    assert_eq!(*editor.selection.borrow(), TextSelection::caret_at(3), "the caret is after the kept chars");
+}
+
+/// The editor hands its host the document faces of its context when the host lays the text out: a face the host asks
+/// for there becomes ready, and its family lays text out.
+#[trial]
+fn the_host_lays_its_text_out_in_a_document_face_it_asks_the_editor_for() {
+    let editor = session_on(Host { text: "abc".to_owned(), document_face: true, ..Host::default() }, None, false, EditorMode::Canvas, false);
+    let state = editor.host.borrow().face.clone();
+    let Some(FaceState::Ready(face)) = state.clone() else { panic!("the face is ready once the editor settles: {state:?}") };
+    let font = FontId::new(14.0, face.family());
+    assert!(editor.fixture.ctx().fonts_mut(|fonts| fonts.has_glyph(&font, 'a')), "the face's family lays the text out");
 }

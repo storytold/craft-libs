@@ -22,6 +22,19 @@ pub enum Initial {
     KeepAnchor,
 }
 
+/// A one-shot request for focus on a component's stop (`Props::request_focus`), for what opens without a layer of its
+/// own (an inline editor, a view's search field): a layer names its stop with `Initial` instead. The component
+/// sends it in the one pass it asks for focus, and the focus service takes it there once the component's stops
+/// are registered; the press that opened the component then leaves the focus where the request put it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FocusRequest {
+    /// The component's stop takes the focus.
+    Take,
+    /// The component's stop takes the focus when nothing holds it.
+    WhenNone,
+}
+
 /// What Enter does in a scope after the focused component declined it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

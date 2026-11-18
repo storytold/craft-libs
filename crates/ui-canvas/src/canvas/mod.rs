@@ -27,7 +27,7 @@ mod tool_host;
 
 pub use crate::canvas_data::{Guide, GuideColor, GuideDrag, GuideKey, GuideLine, NavigatorOptions, NavigatorSettings, ProxyColor};
 pub use craft_behavior::{FRAME_STEP_MAX, frame_step};
-pub use crop::{CropOutside, CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
+pub use crop::{CropApply, CropOutside, CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::{ShowReadouts, hud, readout};
 pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned};
@@ -45,7 +45,7 @@ pub use raster_source::{PixelRect, RasterSource};
 mod pasteboard;
 mod split;
 pub use pasteboard::{PageBorder, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
-pub use split::{SplitAt, SplitLayout, SplitPane, SplitStyle, SplitViews, SplitViewsOutput, TabDrop, TabDropTarget};
+pub use split::{SplitAt, SplitLayout, SplitPane, SplitPaneAt, SplitStyle, SplitViews, SplitViewsOutput, TabDrop, TabDropTarget};
 pub use words::SplitWords;
 
 mod app_paint;

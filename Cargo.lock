@@ -3362,6 +3362,7 @@ dependencies = [
  "craft-atomic",
  "craft-docpath",
  "craft-host",
+ "craft-i18n",
  "craft-theme",
  "futures-lite",
  "js-sys",

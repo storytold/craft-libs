@@ -34,7 +34,8 @@ web-time = "1.1"
 craft-atomic = { workspace = true }
 craft-docpath = { workspace = true }
 craft-host = { workspace = true }
-serde = { workspace = true }
+craft-i18n = { workspace = true }
+serde ={ workspace = true }
 serde_json = { workspace = true }
 
 # Version eframe already pulls in; image data only (no default features beyond it).

@@ -1,9 +1,9 @@
 //! The style cache, the env key and app style replacements.
 
 use craft_theme::{Contrast, ContrastChoice, ControlSize, Mode, ModeChoice, Variant};
-use craft_ui::runtime::env::{Env, RootEnv, system_appearance};
+use craft_ui::runtime::env::{Env, RootEnv, system_appearance, system_text_scale};
 use craft_ui::style::{ComponentStyle, Metrics, StyleCx, StyleKey};
-use craft_ui::testing::style::{report_os_contrast, root_token_resolves, style_of, tokens, with_cx};
+use craft_ui::testing::style::{report_os_contrast, report_os_text_scale, root_token_resolves, style_of, tokens, with_cx};
 use craft_ui::testing::{Frames, trial};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -76,4 +76,23 @@ fn the_os_appearance_re_resolves_the_root_tokens_only_when_it_changes() {
     frames.idle(3, |_| {});
     assert_eq!(system_appearance(&frames.ctx).generation, os.generation, "a repeated scheme is no change");
     assert_eq!(root_token_resolves(&frames.ctx), resolves + 2, "frames with nothing new resolve nothing");
+}
+
+/// The reader's text scale is what apps scale their zoom by under Auto: a reported scale reaches
+/// `system_text_scale` and raises the generation once, and `None` takes it back.
+#[trial]
+fn a_reported_text_scale_reaches_the_systems_text_scale_and_raises_the_generation() {
+    let frames = Frames::new();
+    let generation = system_appearance(&frames.ctx).generation;
+    assert_eq!(system_text_scale(&frames.ctx), None, "a reader with no source gives no scale");
+
+    report_os_text_scale(&frames.ctx, Some(1.25));
+    assert_eq!(system_text_scale(&frames.ctx), Some(1.25));
+    let raised = system_appearance(&frames.ctx).generation;
+    assert!(raised > generation, "a new scale is a change");
+    report_os_text_scale(&frames.ctx, Some(1.25));
+    assert_eq!(system_appearance(&frames.ctx).generation, raised, "the same scale is no change");
+
+    report_os_text_scale(&frames.ctx, None);
+    assert_eq!(system_text_scale(&frames.ctx), None);
 }

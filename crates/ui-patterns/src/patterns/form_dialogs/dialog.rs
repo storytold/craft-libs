@@ -400,6 +400,9 @@ pub struct ParamDialog<'a> {
     /// The colours the colour rows show in place of their values in this pass, by row key.
     #[prop(vis = "pub(crate)")]
     preview_colors: Vec<(String, Srgba)>,
+    /// The lines the host shows under the rows, after `below` ([`HostedParamDialog::set_notes`]).
+    #[prop(vis = "pub(crate)")]
+    host_notes: Vec<Label>,
 }
 
 /// What `ParamDialog::shaped` applies to the built [`Dialog`].
@@ -464,6 +467,7 @@ impl<'a> ParamDialog<'a> {
             refusal: None,
             centre: None,
             preview_colors: Vec::new(),
+            host_notes: Vec::new(),
         }
     }
 
@@ -577,6 +581,7 @@ impl<'a> ParamDialog<'a> {
             refusal,
             centre,
             preview_colors,
+            host_notes,
         } = self;
         let env = Env::of(ui);
         let preview_label = env.words::<FormDialogWords>().preview.clone();
@@ -758,6 +763,9 @@ impl<'a> ParamDialog<'a> {
             }
             if let Some(BelowRows(draw)) = &below {
                 draw(ui, values);
+            }
+            for note in &host_notes {
+                Text::new(note.clone()).show(ui);
             }
             *cx.memory::<Live>() = live.clone();
             latest = Some(values.clone());
@@ -1073,6 +1081,9 @@ type Build = dyn for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send;
 /// - The preview picture comes from [`set_preview`](HostedParamDialog::set_preview) between passes, since `build` cannot
 ///   capture a picture that changes; [`is_previewing`](HostedParamDialog::is_previewing) and
 ///   [`is_comparing`](HostedParamDialog::is_comparing) say what to render.
+/// - What the host's jobs find about the values comes the same way: the lines under the rows from
+///   [`set_notes`](HostedParamDialog::set_notes), and whether OK can be pressed from
+///   [`set_ready`](HostedParamDialog::set_ready). What the values alone decide stays in `build`.
 /// - With [`held_ok`](HostedParamDialog::held_ok), OK files its answer for the host to check
 ///   ([`take_ok`](HostedParamDialog::take_ok)) and the dialog waits, OK disabled, for
 ///   [`answer_ok`](HostedParamDialog::answer_ok).
@@ -1107,6 +1118,10 @@ pub struct HostedParamDialog {
     overlay: Option<SharedOverlay>,
     /// The tint of the preview picture (`set_preview_tint`).
     tint: Option<DataColor>,
+    /// The lines under the rows the host last gave (`set_notes`).
+    notes: Vec<Label>,
+    /// Whether the host lets OK be pressed, and why not (`set_ready`).
+    ready: Result<(), Label>,
     /// The tab a tabbed dialog shows: bound to the dialog's `tab` prop, so the host sets it before a pass.
     tab: usize,
     /// What the dialog showed in its last pass.
@@ -1158,6 +1173,8 @@ impl HostedParamDialog {
             pager: None,
             overlay: None,
             tint: None,
+            notes: Vec::new(),
+            ready: Ok(()),
             tab: 0,
             shown: ShownState::default(),
             hold: false,
@@ -1243,6 +1260,20 @@ impl HostedParamDialog {
     /// untinted.
     pub fn set_preview_tint(&mut self, tint: Option<DataColor>) {
         self.tint = tint;
+    }
+
+    /// Sets the lines shown under the rows, after the build's `below` section, from the next pass on: what the host's
+    /// jobs found about the values (pages still being checked, pages a picture covers), which `build` cannot capture
+    /// as they change. An empty list shows none.
+    pub fn set_notes(&mut self, notes: Vec<Label>) {
+        self.notes = notes;
+    }
+
+    /// Sets whether the host lets OK be pressed from the next pass on: `Err` disables OK, Enter and `confirm`, with
+    /// the label as the disabled button's tooltip, whatever `build` allows; `Ok` leaves OK to `build`. A host whose
+    /// jobs decide OK (a check that runs over the document) sets it as their results come in.
+    pub fn set_ready(&mut self, ready: Result<(), Label>) {
+        self.ready = ready;
     }
 
     /// The step the preview pager took, once.
@@ -1486,6 +1517,12 @@ impl StackDialog for HostedParamDialog {
         if self.held.is_waiting() {
             dialog = dialog.ok_enabled(false);
         }
+        if let Err(reason) = &self.ready {
+            dialog = dialog.ok_enabled(false).ok_reason(reason.clone());
+        }
+        if !self.notes.is_empty() {
+            dialog = dialog.host_notes(self.notes.clone());
+        }
         if let Some(picture) = self.picture.clone() {
             dialog = dialog.preview(picture);
         }
@@ -1558,7 +1595,7 @@ impl StackDialog for HostedParamDialog {
             return None;
         }
         let ParamDialog { key, params, tabs, remember, ok_enabled, read_only, .. } = (self.build)(&mut self.fields);
-        if !ok_enabled {
+        if !ok_enabled || self.ready.is_err() {
             return None;
         }
         let params = every_param(params, &tabs).into_owned();

@@ -72,6 +72,12 @@ pub(crate) fn report_theme(ctx: &Context, dark: bool) {
     Service::<Source>::run(ctx, |source| source.0.report_theme(if dark { Theme::Dark } else { Theme::Light }));
 }
 
+/// Reports `scale` as the OS's text scale (`None`: no scaling), as a desktop source would.
+#[cfg(feature = "testing")]
+pub(crate) fn report_text_scale(ctx: &Context, scale: Option<f32>) {
+    Service::<Source>::run(ctx, |source| source.0.report_text_scale(scale));
+}
+
 /// Reports `contrast` as the OS's, as a desktop source would.
 #[cfg(feature = "testing")]
 pub(crate) fn report_contrast(ctx: &Context, contrast: craft_theme::Contrast) {

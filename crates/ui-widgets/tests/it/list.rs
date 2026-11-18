@@ -382,33 +382,27 @@ fn the_leading_text_takes_its_double_click_and_a_part_click_tells_whether_its_ro
     assert_eq!(was_lead(&seen), Some(true), "the press moved the lead there, so the next click finds it the lead");
 }
 
-/// A click on a row's "More" button opens the host's context menu at the button; the button stays shown while the
-/// menu is open with the pointer away from the row; the menu's Rename opens that row's rename field.
+/// A click on a row's "More" button opens the host's context menu at the button, and the list reports the row's
+/// request in every pass the menu stays open, with no event in those passes: the button stays shown with the pointer
+/// away from the row, and the menu's Rename, picked passes later, opens that row's rename field. Once the menu closes
+/// the list reports no request.
 #[trial]
-fn the_row_menu_opens_the_host_menu_keeps_its_button_and_renames_the_row() {
+fn the_row_menu_reads_its_row_from_the_list_while_open_and_renames_it() {
     use craft_ui::contract::{Entry, Role};
     use craft_ui::menu::Menu;
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let held = seen.clone();
-    let menu_row = Rc::new(RefCell::new(None::<usize>));
+    let reported = Rc::new(RefCell::new(None::<usize>));
+    let (held, menu_of) = (seen.clone(), reported.clone());
     let mut fixture = Fixture::new(move |ui| {
         let keys = [0_usize, 1, 2];
         let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
         let out = List::new("Artboards").rename(true).row_menu().show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
-        for event in &out.events {
-            if let CollectionEvent::ContextMenu(request) = event {
-                *menu_row.borrow_mut() = Some(request.key);
-            }
-        }
-        let row = *menu_row.borrow();
-        if let Some(row) = row {
+        *menu_of.borrow_mut() = out.menu.as_ref().map(|request| request.key);
+        if let Some(row) = out.menu.as_ref().map(|request| request.key) {
             let entries = [Entry::new(String::from("rename"), "Rename"), Entry::new(String::from("delete"), "Delete")];
             let menu = Menu::context("Artboard", &out.response).pick(ui, &entries);
             if menu.picked.as_deref() == Some("rename") {
                 request_rename(ui.ctx(), out.response.id, &row);
-            }
-            if menu.closed.is_some() {
-                *menu_row.borrow_mut() = None;
             }
         }
         held.borrow_mut().extend(out.events);
@@ -418,10 +412,13 @@ fn the_row_menu_opens_the_host_menu_keeps_its_button_and_renames_the_row() {
     let button = fixture.by_label(&format!("More ({})", NAMES[0])).expect("the row has its menu button").center();
     fixture.click_at(button).settle();
     assert!(!fixture.by_role(Role::MENU).is_empty(), "the host's menu opens from the button");
+    seen.borrow_mut().clear();
     let away = fixture.by_label(NAMES[2]).expect("the last row shows").rect.center_bottom() + Vec2::new(0.0, 40.0);
     fixture.frame(vec![craft_ui::testing::pointer::moved(away)]);
     let shapes = fixture.frame_shapes();
     assert!(drawn_at(&shapes, button) > 0, "the button stays shown while its menu is open");
+    assert!(!seen.borrow().iter().any(|event| matches!(event, CollectionEvent::ContextMenu(_))), "no new request in the later pass");
+    assert_eq!(*reported.borrow(), Some(0), "the list still reports the row's request");
     let rename = fixture.by_label("Rename").expect("the menu has Rename");
     fixture.click(&rename).settle();
     assert!(
@@ -431,6 +428,8 @@ fn the_row_menu_opens_the_host_menu_keeps_its_button_and_renames_the_row() {
         "Rename opens the row's rename field: {:?}",
         seen.borrow()
     );
+    assert!(fixture.by_role(Role::MENU).is_empty(), "the menu closed");
+    assert_eq!(*reported.borrow(), None, "a closed menu has no request");
 }
 
 /// A cell field shows in its column's cell in place of the cell's text, and in the label's column in the label's place

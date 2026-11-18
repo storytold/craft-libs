@@ -70,14 +70,35 @@ pub(crate) fn has_family(ctx: &Context, family: &FontRef) -> bool {
     ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family.family()))
 }
 
-/// Takes the faces called `names`, and the families of those names, out of egui's definitions.
+/// Takes the faces called `gone`, and the families of those names, out of egui's definitions and out of every family
+/// that lists them. Then each `(name, chain)` family of a face named after it lists its own face first, then the
+/// faces of `chain` that egui holds, in order, then the faces it listed besides (those script coverage added).
 /// It rebuilds the definitions from the applied ones, so call it only from a begin-pass step, before an install of the
 /// pass can queue its own.
-pub(crate) fn remove_faces(ctx: &Context, names: &[String]) {
+pub(crate) fn set_document_faces(ctx: &Context, gone: &[String], chains: &[(String, Vec<String>)]) {
     let mut definitions = ctx.fonts(|fonts| fonts.definitions().clone());
-    definitions.font_data.retain(|name, _| !names.contains(name));
-    definitions.families.retain(|family, _| !matches!(family, FontFamily::Name(name) if names.iter().any(|gone| gone.as_str() == &**name)));
-    set_definitions(ctx, definitions);
+    let mut changed = !gone.is_empty();
+    definitions.font_data.retain(|name, _| !gone.contains(name));
+    definitions.families.retain(|family, _| !matches!(family, FontFamily::Name(name) if gone.iter().any(|g| g.as_str() == &**name)));
+    for names in definitions.families.values_mut() {
+        names.retain(|name| !gone.contains(name));
+    }
+    for (name, chain) in chains {
+        if !definitions.font_data.contains_key(name) {
+            continue;
+        }
+        let linked: Vec<&String> = chain.iter().filter(|link| *link != name && definitions.font_data.contains_key(*link)).collect();
+        let Some(names) = definitions.families.get_mut(&FontFamily::Name(name.as_str().into())) else { continue };
+        let besides = names.iter().filter(|known| *known != name && !linked.contains(known));
+        let ordered: Vec<String> = std::iter::once(name).chain(linked.iter().copied()).chain(besides).cloned().collect();
+        if *names != ordered {
+            *names = ordered;
+            changed = true;
+        }
+    }
+    if changed {
+        set_definitions(ctx, definitions);
+    }
 }
 
 /// Whether egui's definitions hold the face called `name`.

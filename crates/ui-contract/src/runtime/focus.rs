@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use crate::runtime::keys::Intents;
 pub use craft_behavior::{Letters, Roving};
-pub use policy::{ActivateKeys, EditSet, EndKey, EnterRule, FocusPolicy, FocusTarget, Initial, KeepKeys, KeyUse, TabReach};
+pub use policy::{ActivateKeys, EditSet, EndKey, EnterRule, FocusPolicy, FocusRequest, FocusTarget, Initial, KeepKeys, KeyUse, TabReach};
 
 /// The shape the focus ring takes around a part.
 #[derive(Clone, Debug, PartialEq)]
@@ -550,6 +550,26 @@ pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     with(ctx, |state| state.pending = Some(target));
     crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
     true
+}
+
+/// Takes the one-shot request of the component `id` (`Props::request_focus`) right after its stops registered in the
+/// running pass: its own stop, else its first part stop, takes the focus as a layer's initial stop does, so the press
+/// of the pass does not take it back. A component with no stop this pass (a disabled one) takes none, and a
+/// measuring run moves nothing.
+pub(crate) fn take_request(ctx: &Context, id: Id, request: FocusRequest) {
+    if !crate::runtime::measure::effect(ctx, "focus::take_request") {
+        return;
+    }
+    if request == FocusRequest::WhenNone && egui_focus::focused(ctx).is_some() {
+        return;
+    }
+    let acts = with(ctx, |state| {
+        let own = state.stops.iter().find(|rec| rec.stop.key() == (id, None));
+        let Some(rec) = own.or_else(|| state.stops.iter().find(|rec| rec.stop.id == id)).cloned() else { return Vec::new() };
+        state.entered = true;
+        state.focus_stop(rec)
+    });
+    apply(ctx, acts);
 }
 
 /// Applies `target` now, for an AccessKit `Focus` action, which moves focus in the pass that carries it.

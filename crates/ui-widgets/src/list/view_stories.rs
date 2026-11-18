@@ -443,7 +443,8 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// Rows with the "More" button of `row_menu`, shown on the hovered and the selected row: a click on it opens the host's
-/// row menu, whose Rename opens the row's rename field.
+/// row menu, whose rows act on the row the list reports for the open menu (`CollectionResponse::menu`); its Rename
+/// opens that row's rename field.
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
 fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = names(4);
@@ -452,13 +453,7 @@ fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .row_menu()
         .selection(Bind::bound(data.value("selection", Selection::single(1_usize))))
         .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
-    let menu_row = data.value("menu", None::<usize>);
-    for event in &out.events {
-        if let CollectionEvent::ContextMenu(request) = event {
-            *menu_row = Some(request.key);
-        }
-    }
-    if let Some(row) = *menu_row {
+    if let Some(row) = out.menu.as_ref().map(|request| request.key) {
         let entries = [
             Entry::new(String::from("rename"), "Rename"),
             Entry::new(String::from("duplicate"), "Duplicate"),
@@ -467,9 +462,6 @@ fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         let menu = Menu::context("Layer", &out.response).pick(ui, &entries);
         if menu.picked.as_deref() == Some("rename") {
             request_rename(ui.ctx(), out.response.id, &row);
-        }
-        if menu.closed.is_some() {
-            *menu_row = None;
         }
     }
     out.into()

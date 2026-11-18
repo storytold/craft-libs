@@ -111,6 +111,28 @@ fn hosted_param_dialog_with_a_refused_ok(ui: &mut Ui, data: &mut StoryData) -> S
     })
 }
 
+/// The note the story's host gives while its check runs.
+const CHECKING: &str = "Checking pages…";
+
+/// Why the story's host holds OK back while its check runs.
+const CHECK_RUNS: &str = "The pages are still being checked.";
+
+/// The host's job notes under the rows and OK held back with its reason, as a host sets them between passes while a
+/// check over the document runs.
+#[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
+fn hosted_param_dialog_with_host_notes(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let ctx = ui.ctx().clone();
+    let open = move || {
+        let mut dialog = HostedParamDialog::new(&ctx, "blur", DialogFields::new(), |fields| {
+            ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).values(Bind::bound(fields))
+        });
+        dialog.set_notes(vec![Label::from(CHECKING)]);
+        dialog.set_ready(Err(Label::from(CHECK_RUNS)));
+        dialog
+    };
+    hosted_with(ui, data, (), open, |_| {})
+}
+
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn command_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamDialog::command("fit-image", "Fit Image", Param::parse_list(COMMAND_SPEC)).opened(Bind::bound(data.value("open", true))).show(ui).into()

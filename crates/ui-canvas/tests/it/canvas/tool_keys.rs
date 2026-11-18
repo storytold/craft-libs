@@ -141,7 +141,7 @@ fn session(frame: bool) -> (ToolFixture<Taker>, Rc<RefCell<CropBox>>, Reports) {
         }
         let out = CropOverlay::new("Crop", Bind::bound(&mut *c.borrow_mut())).show_at(ui, body.rect);
         let (applied, discarded) = r.get();
-        r.set((applied || out.apply, discarded || out.discard));
+        r.set((applied || out.apply.is_some(), discarded || out.discard));
     });
     (canvas, crop, reports)
 }

@@ -899,6 +899,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             }
         }
         response.events = kept;
+        // A tail row has no menu: its request is dropped above, and so is the request the grid would carry for it.
+        response.menu = response.menu.filter(|request| !is_tail(&request.key));
         TileGridOutput { response, events }
     }
 }

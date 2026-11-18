@@ -3,7 +3,7 @@
 //! and the colour scheme the windowing integration reports.
 
 use super::{Contrast, Theme, Watcher};
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 /// What the OS reports now. `None` is no answer; the host decides the fallback.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -42,12 +42,13 @@ pub struct SystemReader {
 }
 
 /// What the host reported. Codes: 0 no answer; theme 1 dark, 2 light; contrast 1 standard,
-/// 2 high; motion 1 animations allowed, 2 reduced.
+/// 2 high; motion 1 animations allowed, 2 reduced; text scale the factor's bits, 0 no scaling.
 #[derive(Default)]
 struct Reported {
     theme: AtomicU8,
     contrast: AtomicU8,
     motion: AtomicU8,
+    text_scale: AtomicU32,
     /// Raised on each change of a reported value.
     generation: AtomicU64,
 }
@@ -55,6 +56,13 @@ struct Reported {
 impl Reported {
     fn set(&self, slot: &AtomicU8, code: u8) {
         if slot.swap(code, Ordering::AcqRel) != code {
+            self.generation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    #[cfg(feature = "testing")]
+    fn set_text_scale(&self, bits: u32) {
+        if self.text_scale.swap(bits, Ordering::AcqRel) != bits {
             self.generation.fetch_add(1, Ordering::AcqRel);
         }
     }
@@ -108,6 +116,13 @@ impl SystemReader {
         reported.set(&reported.motion, if reduced { 2 } else { 1 });
     }
 
+    /// Takes a desktop text scale in place of an OS source; `None` is no scaling. A value that is not a positive,
+    /// finite factor is no scaling, as the watcher treats an out-of-range one.
+    #[cfg(feature = "testing")]
+    pub fn report_text_scale(&self, scale: Option<f32>) {
+        self.reported.set_text_scale(scale.filter(|scale| scale.is_finite() && *scale > 0.0).map_or(0, f32::to_bits));
+    }
+
     /// Rises each time a preference [`SystemReader::read`] or [`SystemReader::text_scale`] answers
     /// from changes, as its source reports it: the watcher's theme, contrast, reduced motion or text
     /// scale, or a reported value. Read
@@ -132,7 +147,8 @@ impl SystemReader {
     /// The desktop text scale as the watcher last heard it; see [`Watcher::text_scale`]. `None` where the platform
     /// does not say, on the web and where no watcher runs; the host then applies no text scaling.
     pub fn text_scale(&self) -> Option<f32> {
-        self.watcher.as_ref().and_then(Watcher::text_scale)
+        let reported = self.reported.text_scale.load(Ordering::Acquire);
+        self.watcher.as_ref().and_then(Watcher::text_scale).or_else(|| (reported != 0).then(|| f32::from_bits(reported)))
     }
 
     /// The preferences now, without blocking.

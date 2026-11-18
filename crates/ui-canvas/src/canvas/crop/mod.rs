@@ -95,7 +95,7 @@ const GUIDE_FADE: f32 = 0.55;
 /// What the overlay reports beyond the edit.
 #[derive(Clone, Debug, Default)]
 struct Report {
-    apply: bool,
+    apply: Option<CropApply>,
     discard: bool,
     straightened: Option<f64>,
     view: Option<CanvasView>,
@@ -446,7 +446,7 @@ impl CropOverlay<'_> {
             return;
         }
         if cx.intents().take(Intent::Submit) {
-            self.report.apply = true;
+            self.report.apply = Some(CropApply::Enter);
         }
         // Escape drops an armed Straighten first; else it discards a started crop. The untouched default frame has
         // nothing to discard and leaves Escape to the window.
@@ -488,6 +488,18 @@ impl CropOverlay<'_> {
     }
 }
 
+/// Why the overlay asks to apply the crop ([`CropOverlayOutput::apply`]): a host that lets the selection go on a click
+/// away keeps it for the others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CropApply {
+    /// Enter, the overlay's Submit key.
+    Enter,
+    /// A double click inside a drawn frame.
+    DoubleClick,
+    /// A primary click outside the frame and its cut-away area, with [`CropOutside::Apply`].
+    Away,
+}
+
 /// What the overlay reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -495,9 +507,9 @@ pub struct CropOverlayOutput {
     /// The edit of the frame: a drag is one `Begin` to `Commit` (a `Cancel` on Escape or when a side ends under the
     /// minimum side); a key is a `Set`.
     pub edit: EditResponse<CropBox>,
-    /// Apply the crop: Enter (see the overlay's keys), a double click inside a drawn frame (not a handle, not the
-    /// default frame), or with [`CropOutside::Apply`] a primary click outside the frame and its cut-away area.
-    pub apply: bool,
+    /// Apply the crop, and why: Enter (see the overlay's keys), a double click inside a drawn frame (not a handle, not
+    /// the default frame), or with [`CropOutside::Apply`] a primary click outside the frame and its cut-away area.
+    pub apply: Option<CropApply>,
     /// Close the frame without applying it: Escape with no drag.
     pub discard: bool,
     /// A released Straighten line's frame angle; the line itself sends no edit.
@@ -695,7 +707,7 @@ impl Component for CropOverlay<'_> {
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     if grab == Grab::Part(BoxPart::Inside) && press.double_pressed() && !self.draws() {
-                        self.report.apply = true;
+                        self.report.apply = Some(CropApply::DoubleClick);
                     }
                 }
                 PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
@@ -717,8 +729,9 @@ impl Component for CropOverlay<'_> {
                         self.report.context = Some((at, press.mods));
                     }
                     self.report.straighten_ended |= grab == Grab::Line && start.button == PointerButton::Primary;
-                    self.report.apply |=
-                        click && grab == Grab::Outside && self.outside == CropOutside::Apply && start.button == PointerButton::Primary;
+                    if click && grab == Grab::Outside && self.outside == CropOutside::Apply && start.button == PointerButton::Primary {
+                        self.report.apply = Some(CropApply::Away);
+                    }
                     if !click && let Some(drag) = live.drag.take() {
                         self.finish(cx, &space, drag);
                     }

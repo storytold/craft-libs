@@ -1,6 +1,8 @@
 //! [`PlatformText`]: a user-visible message of a platform service, with its catalog id and
 //! English text. craft-platform has no catalog; the app looks the id up in its own.
 
+use craft_i18n::Word;
+
 /// A message with `{name}`-style placeholders the app fills after looking `id` up (the
 /// English is the fallback). The open, clipboard, watch, default-app and temp services and
 /// craft-dialogs' save flow word their messages with these, so every app shows the same text.
@@ -16,6 +18,12 @@ impl PlatformText {
     /// What a catalog lookup uses: the id.
     pub const fn key(&self) -> &'static str {
         self.id
+    }
+
+    /// The message as a catalog word, keyed by its id with the English text as the fallback: the app's `Words`
+    /// resolve it (`words.get(text.word())`) and fill its placeholders with `WordTemplate`.
+    pub const fn word(&self) -> Word {
+        Word::keyed(self.id, self.english)
     }
 }
 

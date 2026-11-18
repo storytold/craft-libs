@@ -37,6 +37,8 @@ pub(crate) struct StopsIn<'a> {
     pub item: bool,
     /// The component's stop is its scope's default.
     pub default_stop: bool,
+    /// The component's one-shot focus request of this pass, taken once its stops are registered.
+    pub focus_request: Option<focus::FocusRequest>,
     /// The component's resolved document key: `FocusTarget::Doc` with it focuses the component.
     pub doc_key: Option<DocKey>,
 }
@@ -75,7 +77,9 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     // reads no group and the part group joins flat for that frame; the lead decides where the body group registers.
     let joined = group.and_then(|parts| focus::registration::part_group(ctx, parts));
     let nested = match (joined, input.parts.rovings.first()) {
-        (Some(body), Some(roving)) => focus::with(ctx, |state| state.current_group(body)).is_some_and(|body| crosses(roving.arrows, body.roving.arrows)),
+        (Some(body), Some(roving)) => {
+            focus::with(ctx, |state| state.current_group(body)).is_some_and(|body| crosses(roving.arrows, body.roving.arrows))
+        }
         _ => false,
     };
     if let (Some(group), Some(roving)) = (group, input.parts.rovings.first()) {
@@ -123,6 +127,9 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
                 focus::register_stop(ctx, stop);
             }
         }
+    }
+    if let Some(request) = input.focus_request {
+        focus::take_request(ctx, input.id, request);
     }
     after_header
 }

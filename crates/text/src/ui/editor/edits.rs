@@ -182,13 +182,15 @@ impl Edits<'_> {
         self.clamp_selection();
     }
 
-    /// Replace `range` through the host and put the caret after the new text.
-    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> bool {
-        if !self.host.replace(range.clone(), text, kind) {
-            return false;
-        }
-        self.selection = TextSelection::caret_at(range.start + text.chars().count());
-        true
+    /// Replace `range` through the host and put the caret after the chars the host inserted. Returns them, `None`
+    /// when the host refused.
+    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> Option<Range<usize>> {
+        let kept = self.host.replace(range.clone(), text, kind)?;
+        let chars = self.chars();
+        let start = range.start.min(chars);
+        let end = start.saturating_add(kept).min(chars);
+        self.selection = TextSelection::caret_at(end);
+        Some(start..end)
     }
 
     /// Replace the selection with `text` (line endings become `\n`). An application edit ends a live composition.
@@ -198,7 +200,7 @@ impl Edits<'_> {
         if range.is_empty() && text.is_empty() {
             return false;
         }
-        if !self.replace(range, &text, kind) {
+        if self.replace(range, &text, kind).is_none() {
             return false;
         }
         self.end_composition();
@@ -225,7 +227,7 @@ impl Edits<'_> {
     /// Delete the selection ([`EditKind::Deleted`]); the caller has copied it.
     pub fn delete_selection(&mut self) -> bool {
         let range = self.clamped();
-        !range.is_empty() && self.replace(range, "", EditKind::Deleted)
+        !range.is_empty() && self.replace(range, "", EditKind::Deleted).is_some()
     }
 
     /// New marked text (or its end, with empty `text`). Returns the range of marked text that ended, for a commit
@@ -240,10 +242,11 @@ impl Edits<'_> {
         }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let range = marked.unwrap_or_else(|| self.clamped());
-        if self.replace(range.clone(), &text, EditKind::Composing) {
-            self.session.preedit = Some(range.start..range.start + text.chars().count());
-            self.session.preedit_text = text;
-            self.session.preedit_active = active;
+        if let Some(written) = self.replace(range, &text, EditKind::Composing) {
+            // The marked text is what the host kept of it.
+            self.session.preedit_text = char_slice(self.host.text(), &written);
+            self.session.preedit_active = active.filter(|a| a.end <= written.len());
+            self.session.preedit = Some(written);
             self.done.changed = true;
         }
         None
@@ -252,14 +255,14 @@ impl Edits<'_> {
     /// The text a composition committed, replacing its `marked` range.
     pub fn commit_marked(&mut self, marked: Range<usize>, text: &str) {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        if self.replace(marked, &text, EditKind::Committed) {
+        if self.replace(marked, &text, EditKind::Committed).is_some() {
             self.done.changed = true;
         }
     }
 
     /// The marked text that ended without a commit is deleted.
     pub fn drop_marked(&mut self, marked: Range<usize>) {
-        if self.replace(marked, "", EditKind::Composing) {
+        if self.replace(marked, "", EditKind::Composing).is_some() {
             self.done.changed = true;
         }
     }
@@ -280,10 +283,10 @@ impl Edits<'_> {
             return false;
         }
         // The trailing run first, so the leading run's offsets stay valid.
-        if end < to && !self.host.replace(end..to, "", EditKind::Deleted) {
+        if end < to && self.host.replace(end..to, "", EditKind::Deleted).is_none() {
             return false;
         }
-        if from < start && !self.host.replace(from..start, "", EditKind::Deleted) {
+        if from < start && self.host.replace(from..start, "", EditKind::Deleted).is_none() {
             return false;
         }
         let shift = start - from;
@@ -369,7 +372,7 @@ impl Edits<'_> {
         if range.is_empty() {
             return false;
         }
-        self.replace(range, "", EditKind::Deleted)
+        self.replace(range, "", EditKind::Deleted).is_some()
     }
 
     /// Select everything.

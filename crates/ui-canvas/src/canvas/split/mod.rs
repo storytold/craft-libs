@@ -4,8 +4,8 @@
 //! focused, with the arrow keys.
 //!
 //! The panes are the cells [`arrange_rects`] gives for the arrangement the caller names, with the dividers moved to
-//! the [`SplitAt`] the caller binds ([`SplitAt::placed`]). A linked pane follows the active view's zoom and position
-//! ([`SplitViews::follow`]).
+//! the [`SplitAt`] the caller binds. [`SplitViews::show_panes`] gives each pane its own body, at the pane's rect as the
+//! views lay it out in the pass. A linked pane follows the active view's zoom and position ([`SplitViews::follow`]).
 //!
 //! With [`SplitViews::takes_tabs`] the views take a dragged document strip tab: an unsplit body offers its reading-end
 //! half, a split body each whole pane, and the drop comes back in [`SplitViewsOutput::tab_drop`].
@@ -15,18 +15,19 @@ mod stories;
 
 use super::words::SplitWords;
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, Edit as _, EditResponse, ListDrag,
-    Name, Outcome, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing, WordSetCx as _,
+    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, Edit as _, EditResponse,
+    Inner, ListDrag, Name, Outcome, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::docking::divider::{self, Divider, Drag};
 use crate::docking::{DockSizes, Splitter};
 use crate::primitives::{PaintShape, StrokeWidth};
-use crate::runtime::env::Label;
+use crate::runtime::env::{AppValues, EnvValue, Label};
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
 use craft_behavior::dock::arrange_rects;
 use craft_behavior::{Axis, CanvasView, Flow, HitLevel, HitPriority, Metrics, PartKey, Sense};
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Ui, UiBuilder, Vec2};
+use std::sync::Arc;
 
 const DIVIDER: PartKey = PartKey::new("divider");
 const PANE: PartKey = PartKey::new("pane");
@@ -193,6 +194,28 @@ impl SplitPane {
     }
 }
 
+/// One pane as [`SplitViews::show_panes`] gives it to the pane's body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SplitPaneAt {
+    /// The pane's number in reading order, as [`SplitViewsOutput::activated`] and [`TabDropTarget::Pane`] count it.
+    pub index: usize,
+    /// The pane's rect in this pass, placed for the layout direction: where the dividers lie as the views draw them.
+    pub rect: Rect,
+    /// The pane is the active one.
+    pub active: bool,
+}
+
+/// The panes of the innermost split views, as the views laid them out in the pass, for their body.
+#[derive(Clone, Debug, PartialEq)]
+struct SplitPanes(Arc<[SplitPaneAt]>);
+
+impl EnvValue for SplitPanes {
+    fn root() -> Self {
+        SplitPanes(Arc::from(Vec::new()))
+    }
+}
+
 /// The dividers of `laid` in `rect`: the column lines first, then the row lines, each in order. Each can move until
 /// the panes on both sides of it are `least_pane` points across; a line with no room for that stays where it is.
 fn dividers(laid: &Laid, rect: Rect, sizes: &DockSizes) -> Vec<Divider> {
@@ -342,7 +365,7 @@ pub struct SplitViews<'a, D: Clone + Send + Sync + 'static = ()> {
     #[prop]
     active: usize,
     /// The documents a tile arrangement shows, one pane each (0 by default); the n-up arrangements show their own
-    /// number of panes. Pass the same number to [`SplitAt::placed`] for the body's panes.
+    /// number of panes. [`show_panes`](Self::show_panes) gives each of them a body.
     #[prop]
     count: usize,
     activated: Option<usize>,
@@ -384,6 +407,24 @@ impl<D: Clone + Send + Sync + 'static> SplitViews<'_, D> {
     /// The layout laid out in `rect` with the lines at `at`.
     fn laid(&self, at: &SplitAt, rect: Rect) -> Laid {
         lay_out(self.layout, self.count, at, rect)
+    }
+
+    /// Shows the views with a body per pane: `pane` runs once for each pane, in reading order, in a `Ui` held to the
+    /// pane's rect and clipped to it, with the pane ([`SplitPaneAt`]) as the views lay it out in this pass, so a
+    /// divider drag moves the panes' content in the pass it moves the divider. The results come back in that order.
+    pub fn show_panes<R>(self, ui: &mut Ui, mut pane: impl FnMut(&mut Ui, &mut BodyCx<'_>, SplitPaneAt) -> R) -> Inner<SplitViewsOutput<D>, Vec<R>> {
+        self.show(ui, |ui, body| {
+            let panes = body.env.get::<SplitPanes>().0;
+            let mut shown = Vec::with_capacity(panes.len());
+            for &at in panes.iter() {
+                let inner = ui.scope_builder(UiBuilder::new().max_rect(at.rect), |ui| {
+                    ui.shrink_clip_rect(at.rect);
+                    pane(ui, body, at)
+                });
+                shown.push(inner.inner);
+            }
+            shown
+        })
     }
 }
 
@@ -484,6 +525,21 @@ impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
             let target = TabTarget { areas, accepts };
             self.tab_drop = cx.drop_target::<ListDrag<D>, _>(&target).map(|(drop, _)| drop);
         }
+    }
+
+    /// The body reads the panes as this pass lays them out: after the dividers' edits of `update`.
+    fn content_env(&self, cx: &Cx<'_, Self>, values: &mut AppValues) {
+        let at = cx.value().cloned().unwrap_or_default();
+        let flow = Flow::new(cx.rect, cx.flow.is_rtl());
+        let active = self.active_pane();
+        let panes: Vec<SplitPaneAt> = self
+            .laid(&at, cx.rect)
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(index, rect)| SplitPaneAt { index, rect: flow.to_physical(*rect), active: index == active })
+            .collect();
+        values.set(SplitPanes(Arc::from(panes)));
     }
 
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

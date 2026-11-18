@@ -125,7 +125,9 @@ impl<K> OpenChange<K> {
     }
 }
 
-/// A request for the context menu of an item. Collections never open menus: the app does.
+/// A request for the context menu of an item. Collections never open menus: the app does, hung from the collection's
+/// response (`Menu::context`). The collection keeps the request while that menu stays open and reports it in every
+/// such pass as `CollectionResponse::menu`, so the menu's rows read their item from there.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ContextMenuRequest<K> {

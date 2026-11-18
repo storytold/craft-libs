@@ -68,3 +68,46 @@ fn a_letter_typed_into_a_field_is_its_own() {
     assert_eq!(*text.borrow(), "t", "the field gets the text");
     assert!(!app_read.borrow().contains(&Key::T), "and the app reads no press of it");
 }
+
+/// A field a click opens with a `Take` request, sent in that one pass, takes the typed keys at once: the press on
+/// the opening button does not take the focus back. A field shown later with a `WhenNone` request leaves the focus
+/// where it is.
+#[trial]
+fn a_one_shot_focus_request_takes_the_keys_and_when_none_leaves_a_held_focus() {
+    use craft_ui::buttons::Button;
+    use craft_ui::runtime::focus::FocusRequest;
+    let (inline, search) = (Rc::new(RefCell::new(String::new())), Rc::new(RefCell::new(String::new())));
+    let (open, show_search) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+    let (typed, found, opened, searching) = (inline.clone(), search.clone(), open.clone(), show_search.clone());
+    let search_sent = Rc::new(Cell::new(false));
+    let mut fixture = Fixture::new(move |ui| {
+        let clicked = Button::new("Edit").show(ui).clicks > 0;
+        if opened.get() || clicked {
+            let mut typed = typed.borrow_mut();
+            let field = TextField::new("Inline", Bind::bound(&mut *typed)).id_salt("inline");
+            let field = if clicked && !opened.get() { field.request_focus(FocusRequest::Take) } else { field };
+            field.show(ui);
+            opened.set(true);
+        }
+        if searching.get() {
+            let mut found = found.borrow_mut();
+            let field = TextField::new("Search", Bind::bound(&mut *found)).id_salt("search");
+            let field = if search_sent.replace(true) { field } else { field.request_focus(FocusRequest::WhenNone) };
+            field.show(ui);
+        }
+    });
+    fixture.settle();
+    let edit = fixture.by_label("Edit").expect("the button shows");
+    fixture.click(&edit).settle();
+    assert!(open.get(), "the click opened the field");
+    fixture.type_text("abc");
+    fixture.idle(2);
+    assert_eq!(*inline.borrow(), "abc", "the opened field takes the keys at once");
+
+    show_search.set(true);
+    fixture.settle();
+    fixture.type_text("d");
+    fixture.idle(2);
+    assert_eq!(*inline.borrow(), "abcd", "the focused field keeps the keys");
+    assert_eq!(*search.borrow(), "", "a `WhenNone` request takes no focus a field holds");
+}
