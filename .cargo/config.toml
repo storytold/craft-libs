@@ -1,2 +1,0 @@
-[lints]
-cargo.unused_workspace_dependencies = "allow"

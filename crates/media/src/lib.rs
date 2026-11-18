@@ -12,16 +12,21 @@
 //! - `mxf` (feature `mxf`, enables `chrono`): a clean-room MXF demuxer and writer (OP1a, OP-Atom).
 //! - `mpegts` (feature `mpegts`): a clean-room MPEG-2 Systems demuxer (transport streams and
 //!   program streams).
+//! - `vmd` (feature `vmd`): a clean-room Sierra VMD (Video and Music Data) demuxer.
 //! - [`Container`] and [`CodecId`] (no feature): the identifiers the codec crates report a file's
 //!   container and codec with.
+//! - `FileReader` (native): a pooled file `ByteSource` so many clips can be open without holding a
+//!   descriptor each.
 //!
-//! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi`, `mxf` and `mpegts` are opt-in. A crate that needs
+//! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi`, `mxf`, `mpegts` and `vmd` are opt-in. A crate that needs
 //! only bit I/O uses `default-features = false, features = ["bitstream"]`.
 
 #[cfg(feature = "avi")]
 pub mod avi;
 #[cfg(feature = "bitstream")]
 pub mod bitstream;
+#[cfg(not(target_arch = "wasm32"))]
+mod file;
 mod id;
 #[cfg(feature = "isobmff")]
 pub mod isobmff;
@@ -34,6 +39,11 @@ pub mod mxf;
 #[cfg(feature = "ogg")]
 pub mod ogg;
 pub mod source;
+#[cfg(feature = "vmd")]
+pub mod vmd;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use file::{FileReader, MAX_OPEN_FILES};
 
 pub use id::{CodecId, CodecParams, Container, PcmFormat, xiph_lace};
 pub use source::{ByteSource, ReadSeekSource};

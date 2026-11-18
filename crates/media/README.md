@@ -2,7 +2,7 @@
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
 clean-room ISO BMFF (MP4), QuickTime (MOV), Matroska (MKV, WebM), MXF and AVI demuxers and muxers, and
-Ogg and MPEG-2 Systems (transport and program stream) demuxers, written from the public specifications. No `unsafe`, no panics on malformed
+Ogg, MPEG-2 Systems (transport and program stream) and Sierra VMD demuxers, written from the public specifications. No `unsafe`, no panics on malformed
 input, builds for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `chrono`
 (for `mxf`), `serde` (optional).
 
@@ -22,12 +22,13 @@ that codec crates use to describe a file and configure a decoder.
 | `avi` | `craft_media::avi` | none |
 | `mxf` | `craft_media::mxf` | `chrono` |
 | `mpegts` | `craft_media::mpegts` | none |
+| `vmd` | `craft_media::vmd` | none |
 | (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg`, `avi`, `mxf` and `mpegts` are opt-in as well. The features are independent.
+do not read Matroska. `ogg`, `avi`, `mxf`, `mpegts` and `vmd` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -447,7 +448,13 @@ page yet. Damage recovery may read bytes again up to twice the file's length plu
 is read at most about three times over; the packets kept and the header packets of a stream are
 bounded too, with a warning when a bound is reached.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
-No muxer.
+
+The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
+(storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued
+packets, granule positions, BOS/EOS, CRC-32), puts each header packet on pages of its own, closes
+audio pages at a byte or packet target, and can replace the final granule position for Ogg Opus
+end trimming. `opus_tags` and `vorbis_comment` build the comment headers; tag names that are not
+valid field names (Vorbis I §5.2.1) are left out.
 
 ## `avi`
 
@@ -655,6 +662,7 @@ Implemented from the SMPTE documents (editions used):
 | SMPTE ST 386 | 2004 | D-10 (IMX) mapping: container label, sound element type |
 | SMPTE ST 2019-4 | 2009 | VC-3 (DNxHD / DNxHR) mapping |
 | SMPTE RDD 44 | 2017 | Apple ProRes mapping |
+| Adobe CinemaDNG Image Data Format Specification | 1.0.0.0 (September 2009), §7 | CinemaDNG in MXF: frame-wrapped DNG picture elements (element type 42h), the essence container labels for CFA / LinearRaw content, RGBA descriptor; the labels are the specification's **provisional** values from Adobe's experimental range (byte 9 = 0Fh), not SMPTE-registered |
 | SMPTE RP 224 / RP 210 | registers | labels: data definitions, picture coding, essence containers, operational patterns; property labels of the primer pack (writer) |
 | SMPTE ST 330 | 2011 | basic UMIDs of the written packages |
 
@@ -696,7 +704,10 @@ let pcm = mxf.read_pcm(&file, a, 48_000, 1920)?; // planar f32, sample-exact
   orders by the bitstream (the AVC picture order counts).
 - **Codecs.** From the picture essence coding label, then the essence container label, then the
   essence bytes: AVC / AVC-Intra, VC-3, ProRes (profile from the label), MPEG-2,
-  MPEG-4 visual, JPEG 2000, DV, uncompressed.
+  MPEG-4 visual, JPEG 2000, DV, uncompressed, CinemaDNG (the CinemaDNG container labels, the
+  registered MXF-GC TIFF/EP container and TIFF/EP picture coding labels, a 42h picture element
+  type, or a TIFF header with the DNGVersion tag at the start of the essence; the DNG pictures
+  themselves are decoded by `craft-raw`).
 - **Sound.** PCM chunks (frame- or clip-wrapped) with sample counts; `read_pcm` decodes
   little-endian 8/16/24/32-bit PCM (wave / AES3 descriptors) and ST 331 AES3 elements (D-10).
 - **Timecode.** The material package timecode component (start frame count, rounded base,
@@ -769,7 +780,10 @@ w.finish()?;
   element types 0x0C / 0x0D), ProRes (RDD 44: coding label profile byte, container `02 1C`),
   AVC byte stream (ST 381-3: container `02 10 60`, coding label from `profile_idc`; Annex B access
   units with in-band SPS / PPS — the AVC sub-descriptor is not written), Broadcast Wave PCM
-  (ST 382: container `02 06 01/02`, element types 0x01 / 0x02).
+  (ST 382: container `02 06 01/02`, element types 0x01 / 0x02), CinemaDNG (frame-wrapped DNG
+  datasets, element type 0x42, the provisional container label `0F 0A 0D 0B 02 7F 01/02 00`, an
+  RGBA descriptor with pixel layout and reference levels of the decoded 16-bit RGB picture and no
+  coding label; OP-Atom is refused because it is clip-wrapped here and DNG datasets cannot be).
 - `write_opatom_pcm(&OpAtomPcm, &[i32])` builds a complete in-memory OP-Atom PCM file (AAF media
   consolidation); `encode_pcm` interleaves planar f32 as little-endian PCM.
 
@@ -801,14 +815,64 @@ ffmpeg's decoded sound sample for sample; and files written by `MxfWriter` from 
 which ffprobe must describe like their source and ffmpeg must decode to the same pictures and
 sound.
 
+## `vmd`
+
+A clean-room demuxer for Sierra VMD (Video and Music Data), the video format of Sierra's and
+Coktel Vision's 1990s games (Phantasmagoria, Gabriel Knight 2, Shivers, …). There is no official
+specification; it is written from the public description at
+<https://wiki.multimedia.cx/index.php/VMD>.
+
+```rust
+use craft_media::vmd::{FrameKind, open};
+
+let file = open(&bytes)?;                    // header and table of contents
+let (num, den) = file.frame_rate();          // pictures a second, as a fraction
+for (i, frame) in file.frames.iter().enumerate() {
+    let data = file.read_frame(&bytes, i)?;  // one frame's data, read on demand
+    match frame.kind {
+        FrameKind::Video { new_palette, .. } => { /* file.picture_rect(i), craft_video::vmd */ }
+        FrameKind::Audio { flags } => { /* craft_audio::vmd */ }
+        FrameKind::Other(_) => {}
+    }
+}
+```
+
+- A file is a sequence of blocks, one picture period each (`Frame::block`). A block holds the
+  same number of frames in every block; a block with no picture has a frame of no data or of
+  type 0 in its place, and the picture stays as it was.
+- `frame_rate()`: a file with sound plays one block of sound a picture (sample rate over block
+  length); a file without plays 10 pictures a second.
+- Timing: the video frame of block `n` is shown at picture period `n`. Sound is one continuous
+  stream from the first picture on: decode the sound frames in file order and play the samples
+  end to end. The first sound frame holds many blocks (28 in most Phantasmagoria files), loaded
+  ahead by the player, so a later sound frame is heard that much later than the block it is
+  stored in, and the sound outlasts the pictures.
+- `video_params()` and `audio_params()` return `CodecParams` with `CodecId::VmdVideo` and
+  `CodecId::VmdAudio` and the 816-byte header as `extradata`, which is what
+  `craft_video::vmd::Decoder::new` and `craft_audio::vmd::Decoder::new` take.
+  `header_bytes()` is the same header.
+- `picture_rect(index)` places a video frame's update in the picture. Frame coordinates are
+  screen coordinates; a frame as large as the picture that is not at the screen's corner gives
+  the picture's position from then on, as ffmpeg was seen to do. A frame with no rectangle in
+  the picture can still carry a palette (`craft_video::vmd::Decoder::decode_palette`).
+
+Gaps: only the 816-byte header is read. The later Coktel Vision revisions with a longer header
+or one without a palette are refused (`Error::NotVmd`). Files with 16-bit, 24-bit or Indeo 3
+pictures, or with IMA ADPCM sound, open, and report `CodecId::Unknown` for that stream. `sniff`
+has only the two-byte header length to go by, so check the file extension too.
+
+Tests: unit tests on files from the test kit's VMD writer (`craft_media_testkit::vmd`; ffmpeg
+reads VMD but cannot write it), hostile input, and `tests/oracle_vmd.rs`, which compares the
+streams and picture rate with ffprobe's.
+
 ## Containers, codecs and codec parameters
 
 Always built, with no dependencies, so codec crates share them:
 
 - `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
-  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`), with `name()`.
+  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`, `Vmd`), with `name()`.
 - `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
-  `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, …, `Unknown`), with `name()`, `is_audio()`,
+  `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, `VmdVideo`, `VmdAudio`, …, `Unknown`), with `name()`, `is_audio()`,
   `is_video()`.
 - `PcmFormat`: the layout of uncompressed samples, built with `PcmFormat::int(bits, signed,
   big_endian)` or `PcmFormat::float(bits, big_endian)`.
@@ -820,7 +884,7 @@ Always built, with no dependencies, so codec crates share them:
   Matroska's `CodecPrivate`, as ffmpeg's extradata does: the `AudioSpecificConfig` for AAC, the
   `OpusHead` for Opus (MP4's `dOps` is converted), Xiph-laced headers for Vorbis (`xiph_lace`,
   `None` for more than 256 packets), `fLaC` + metadata blocks for FLAC, the
-  `avcC`/`hvcC`/`av1C`/`apvC` record for video.
+  `avcC`/`hvcC`/`av1C`/`apvC` record for video, the 816-byte file header for VMD video and sound.
 
 All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
@@ -828,7 +892,7 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
 `craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from. It is
 always built, so a crate that uses only `bitstream` can name it too. `isobmff::ByteSource`,
-`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource` and `mpegts::ByteSource` are the same trait. It is implemented for `[u8]`,
+`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource`, `mpegts::ByteSource` and `vmd::ByteSource` are the same trait. It is implemented for `[u8]`,
 `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.
