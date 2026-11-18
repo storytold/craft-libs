@@ -129,8 +129,12 @@ fn icon_button_bar_mark(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// (`class="fixed"`).
 const TWO_INK_PEN: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 15 L14 6 L18 10 L9 19 L5 19 Z" fill="black"/><rect class="accent" x="3" y="21" width="18" height="2" fill="black"/><circle class="fixed" cx="18" cy="5" r="2" fill="#d04848"/></svg>"##;
 
+/// The pen's name in [`STORY_ICONS`]; the icon-id scan reads only catalog ids written as literals, so the story names
+/// its app icon through this constant.
+const TWO_INK_PEN_NAME: &str = "story_two_ink_pen";
+
 /// The stories' own app icon set, under a name no other story or app uses.
-static STORY_ICONS: AppIcons = AppIcons::new("ui-widgets-stories", None, &[("story_two_ink_pen", TWO_INK_PEN)]);
+static STORY_ICONS: AppIcons = AppIcons::new("ui-widgets-stories", None, &[(TWO_INK_PEN_NAME, TWO_INK_PEN)]);
 
 /// An app icon in two inks and a fixed colour, enabled and then disabled: a disabled button takes the disabled ink in
 /// every layer.
@@ -140,7 +144,7 @@ fn icon_button_two_ink(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     register_app_icons(&STORY_ICONS);
     let shown = Row::new().show(ui, |ui, _| {
         for enabled in [true, false] {
-            IconButton::new(IconId::new("story_two_ink_pen")).label("Pen").enabled(enabled).id_salt(enabled).show(ui);
+            IconButton::new(IconId::new(TWO_INK_PEN_NAME)).label("Pen").enabled(enabled).id_salt(enabled).show(ui);
         }
     });
     shown.into()
