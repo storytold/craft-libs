@@ -2,10 +2,11 @@
 
 use super::item::{MenuItem, MenuItemOutput};
 use super::level::{LevelMemory, MenuLevel, level_env};
-use crate::contract::overlay::{Anchor, Dismiss, Outside, Popup};
+use super::words::MenuWords;
+use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, Popup};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
-    Overlay, POPUP_PAD, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, TooltipSpec, Trigger,
+    Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, TooltipSpec, Trigger,
 };
 use crate::display::Divider;
 use crate::runtime::env::{Env, Label};
@@ -13,6 +14,7 @@ use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::frame;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{Arrows, Metrics, NavShape, Roving, Sense, Value};
 use craft_keymap::{Chord, Key};
 use egui::{Response, Ui};
@@ -169,7 +171,6 @@ pub struct Menu<'a> {
     /// The Left or Right key a top-level level left unhandled.
     step: Option<MenuStep>,
     /// The bar shown above the menu in its own modeless layer.
-    #[allow(dead_code)] // P3(canvas-w8): cv.K40
     companion: Option<&'a mut dyn FnMut(&mut Ui)>,
 }
 
@@ -177,9 +178,9 @@ impl<'a> Menu<'a> {
     /// A modeless bar layer above the menu, in its press family; it closes with the menu, and Escape closes the top
     /// layer first.
     #[must_use]
-    pub fn companion(self, bar: &'a mut dyn FnMut(&mut Ui)) -> Self {
-        let _ = bar;
-        todo!("cv.K40")
+    pub fn companion(mut self, bar: &'a mut dyn FnMut(&mut Ui)) -> Self {
+        self.companion = Some(bar);
+        self
     }
 
     /// A menu named `label`. Its open state is the menu's slot until [`open`](Menu::open) binds it.
@@ -408,5 +409,86 @@ impl Container for Menu<'_> {
 
     fn closed(&mut self, why: CloseReason) {
         self.closed.get_or_insert(why);
+    }
+
+    /// The companion bar, shown as a child layer of the menu's: it is in the menu's press family and closes with the
+    /// menu.
+    fn end(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        let Some(bar) = self.companion.as_mut() else { return };
+        let label = Env::of(ui).words::<MenuWords>().bar_companion.clone();
+        let _ = CompanionLayer::new(label).show(ui, |ui, _| bar(ui));
+    }
+}
+
+/// The style of a menu's companion layer: the surface comes from the container.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+struct CompanionLayerStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// What a companion layer reports.
+#[derive(Debug)]
+struct CompanionOutput {
+    response: Response,
+}
+
+impl Outcome for CompanionOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// The modeless layer a menu's companion bar shows in, above the menu's panel. It takes no focus on open and has no
+/// opener of its own: it is open while the menu's body runs it.
+#[derive(crate::contract::Component)]
+#[component(container, unregistered)]
+struct CompanionLayer {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    open: Bind<'static, bool>,
+}
+
+impl CompanionLayer {
+    fn new(label: Label) -> Self {
+        let overlay = Overlay::floating()
+            .modeless()
+            .body_scroll(false)
+            .focus(FocusPolicy::TAB_LAYER)
+            .dismiss(Dismiss::new().outside(Outside::Keep))
+            .place(Place::anchored(Anchor::Parent, Side::Above, Align::Center));
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).pad(Pad::None).sizing(Sizing::Content);
+        CompanionLayer { common: Common::new(), props, open: Bind::given(true) }.label(label).id_salt("menu-companion")
+    }
+}
+
+impl Component for CompanionLayer {
+    const ROLE: Role = Role::GROUP;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    type Style = CompanionLayerStyle;
+    type Output = CompanionOutput;
+
+    fn style(_: &StyleCx<'_>, _: CompanionLayerStyleKey) -> CompanionLayerStyle {
+        CompanionLayerStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> CompanionOutput {
+        CompanionOutput { response: cx.response.clone() }
+    }
+}
+
+impl Container for CompanionLayer {
+    fn open(&mut self) -> Option<BindMut<'_, bool>> {
+        Some(self.open.reborrow())
     }
 }

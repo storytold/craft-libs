@@ -5,6 +5,7 @@ craft_ui::words! {
     pub struct MenuWords {
         bar_more: "menu.barMore" = "…";
         bar_all: "menu.barAll" = "Menu";
+        bar_companion: "menu.barCompanion" = "Menu bar";
         bar_search: "menu.barSearch" = "Search menus";
         bar_no_matches: "menu.barNoMatches" = "No matching commands";
         edit: "menu.edit" = "Edit";

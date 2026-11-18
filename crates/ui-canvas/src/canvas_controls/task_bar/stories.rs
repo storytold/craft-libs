@@ -1,12 +1,13 @@
 //! Stories of `TaskBar`.
 
-use super::{TaskBar, TaskBarPlace};
+use super::{TaskBar, TaskBarDismiss, TaskBarPlace};
 use crate::buttons::{Button, IconButton};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
 use crate::contract::{Bind, Props as _, Show as _};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
 use craft_behavior::kurbo::{Point, Vec2};
+use craft_behavior::overlay::Side;
 use egui::Ui;
 
 /// The corners of a crop frame turned by a few degrees about the document's middle: the Crop tool hangs its bar from
@@ -15,6 +16,49 @@ fn turned_frame() -> [Point; 4] {
     let centre = StoryDocument::STANDARD.centre();
     let (sin, cos) = 0.2_f64.sin_cos();
     [(-220.0, -130.0), (220.0, -130.0), (220.0, 130.0), (-220.0, 130.0)].map(|(x, y)| centre + Vec2::new(x * cos - y * sin, x * sin + y * cos))
+}
+
+/// A strip of document at its top edge, where a bar above it has no room.
+fn top_strip() -> [Point; 4] {
+    [(120.0, 0.0), (520.0, 0.0), (520.0, 30.0), (120.0, 30.0)].map(|(x, y)| Point::new(x, y))
+}
+
+/// The members of a selection bar.
+fn formatting(ui: &mut Ui) {
+    for (icon, name) in [("rotate_ccw", "Rotate left"), ("rotate_cw", "Rotate right")] {
+        let _ = IconButton::new(IconId::new(icon)).label(name).show(ui);
+    }
+    let _ = Button::new("Done").show(ui);
+}
+
+/// A selection bar over a selection: above it, centred.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn selection_bar_over_a_selection(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let corners = turned_frame();
+    on_canvas(ui, |ui, area, _| TaskBar::selection("Selection", &corners).show(ui, area, |ui, _| formatting(ui)).output)
+}
+
+/// A selection bar flips below its selection when there is no room above it.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn selection_bar_flipped_near_the_top_edge(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let strip = top_strip();
+    on_canvas(ui, |ui, area, _| TaskBar::selection("Selection", &strip).show(ui, area, |ui, _| formatting(ui)).output)
+}
+
+/// A selection bar on the other side of its selection: after it in reading order.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn selection_bar_on_the_other_side(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let corners = turned_frame();
+    on_canvas(ui, |ui, area, _| TaskBar::selection("Selection", &corners).side(Side::End).show(ui, area, |ui, _| formatting(ui)).output)
+}
+
+/// A selection bar that survives presses outside it while its graphic is selected.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn selection_bar_kept_while_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let corners = turned_frame();
+    on_canvas(ui, |ui, area, _| {
+        TaskBar::selection("Selection", &corners).dismiss(TaskBarDismiss::Keep).show(ui, area, |ui, _| formatting(ui)).output
+    })
 }
 
 /// The Crop tool's bar: three buttons, the More menu, then Cancel and Done after it.
